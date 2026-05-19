@@ -229,7 +229,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <>
-        <Header title="Dashboard" subtitle="Resumen de operaciones — Mayo 2026" />
+        <Header title="Dashboard" subtitle="Resumen de operaciones" />
         <div className="flex items-center justify-center h-96">
           <div className="flex flex-col items-center gap-3 text-zinc-400">
             <Loader2 className="h-8 w-8 animate-spin" />
@@ -242,7 +242,7 @@ export default function DashboardPage() {
 
   return (
     <>
-      <Header title="Dashboard" subtitle="Resumen de operaciones — Mayo 2026" />
+      <Header title="Dashboard" subtitle="Resumen de operaciones" />
       <div className="p-8 space-y-8">
         {/* KPIs */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
