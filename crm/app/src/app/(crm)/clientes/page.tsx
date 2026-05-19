@@ -8,8 +8,9 @@ import { formatCurrency } from "@/lib/utils";
 import { mockClients } from "@/lib/mock-data";
 import { mockUsers } from "@/lib/mock-data";
 import type { Client } from "@/lib/types";
-import { Search, Filter, Download, Building2, MapPin, Phone, Mail } from "lucide-react";
-import { useState } from "react";
+import { supabase } from "@/lib/supabase/client";
+import { Search, Filter, Download, Building2, MapPin, Phone, Mail, Loader2 } from "lucide-react";
+import { useState, useEffect } from "react";
 
 const condicionLabels: Record<string, string> = {
   RI: "Resp. Inscripto",
@@ -18,11 +19,71 @@ const condicionLabels: Record<string, string> = {
   CF: "Cons. Final",
 };
 
+/** Map a Supabase snake_case row to the camelCase Client type the UI expects. */
+function mapSupabaseCliente(row: Record<string, unknown>): Client {
+  return {
+    id: row.id as string,
+    type: (row.type as Client["type"]) ?? "empresa",
+    razonSocial: (row.razon_social as string) ?? "",
+    cuit: (row.cuit as string) ?? "",
+    condicionIva: (row.condicion_iva as Client["condicionIva"]) ?? "RI",
+    email: (row.email as string) ?? "",
+    telefono: (row.telefono as string) ?? "",
+    direccion: (row.direccion as string) ?? "",
+    localidad: (row.localidad as string) ?? "",
+    provincia: (row.provincia as string) ?? "",
+    cp: (row.cp as string) ?? "",
+    listaPrecio: (row.lista_precio as string) ?? "",
+    diasCuentaCorriente: Number(row.dias_cuenta_corriente) || 0,
+    formaPago: (row.forma_pago as string) ?? "",
+    limiteCredito: Number(row.limite_credito) || 0,
+    saldoCuentaCorriente: Number(row.saldo_cuenta_corriente) || 0,
+    notas: (row.notas as string) ?? "",
+    activo: row.activo as boolean ?? true,
+    assignedTo: (row.assigned_to as string) ?? undefined,
+    createdAt: (row.created_at as string) ?? "",
+    updatedAt: (row.updated_at as string) ?? "",
+    contactos: Array.isArray(row.contactos) ? row.contactos : [],
+    sucursales: Array.isArray(row.cliente_sucursales) ? row.cliente_sucursales : [],
+  };
+}
+
 export default function ClientesPage() {
   const [view, setView] = useState<"table" | "cards">("table");
   const [search, setSearch] = useState("");
+  const [clientes, setClientes] = useState<Client[]>(mockClients);
+  const [loading, setLoading] = useState(true);
 
-  const filtered = mockClients.filter(
+  useEffect(() => {
+    async function fetchClientes() {
+      try {
+        const { data, error } = await supabase
+          .from("clientes")
+          .select(`*, contactos(*), cliente_sucursales(*)`)
+          .order("razon_social");
+
+        if (error) {
+          console.error("Error fetching clientes:", error);
+          // Keep mock data as fallback
+          setClientes(mockClients);
+        } else if (data && data.length > 0) {
+          setClientes(data.map((row) => mapSupabaseCliente(row as Record<string, unknown>)));
+        } else {
+          // Supabase returned empty — use mock data as fallback
+          setClientes(mockClients);
+        }
+      } catch (err) {
+        console.error("Error fetching clientes:", err);
+        setClientes(mockClients);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchClientes();
+  }, []);
+
+  const filtered = clientes.filter(
     (c) =>
       c.razonSocial.toLowerCase().includes(search.toLowerCase()) ||
       c.cuit.includes(search)
@@ -30,11 +91,27 @@ export default function ClientesPage() {
 
   const vendedorName = (id?: string) => mockUsers.find((u) => u.id === id)?.name ?? "—";
 
+  if (loading) {
+    return (
+      <>
+        <Header
+          title="Clientes"
+          subtitle="Cargando..."
+          action={{ label: "Nuevo cliente", onClick: () => {} }}
+        />
+        <div className="flex items-center justify-center p-24">
+          <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
+          <span className="ml-3 text-sm text-zinc-500">Cargando clientes...</span>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <Header
         title="Clientes"
-        subtitle={`${mockClients.length} clientes activos`}
+        subtitle={`${clientes.length} clientes activos`}
         action={{ label: "Nuevo cliente", onClick: () => {} }}
       />
       <div className="p-8 space-y-6">
@@ -44,7 +121,7 @@ export default function ClientesPage() {
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
               type="text"
-              placeholder="Buscar por razón social o CUIT..."
+              placeholder="Buscar por razon social o CUIT..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900"
@@ -66,19 +143,19 @@ export default function ClientesPage() {
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Total clientes</p>
-            <p className="mt-1 text-2xl font-bold">{mockClients.length}</p>
+            <p className="mt-1 text-2xl font-bold">{clientes.length}</p>
           </div>
           <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Saldo total CC</p>
-            <p className="mt-1 text-2xl font-bold">{formatCurrency(mockClients.reduce((a, c) => a + c.saldoCuentaCorriente, 0))}</p>
+            <p className="mt-1 text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.saldoCuentaCorriente, 0))}</p>
           </div>
           <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Crédito otorgado</p>
-            <p className="mt-1 text-2xl font-bold">{formatCurrency(mockClients.reduce((a, c) => a + c.limiteCredito, 0))}</p>
+            <p className="text-xs text-zinc-500">Credito otorgado</p>
+            <p className="mt-1 text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.limiteCredito, 0))}</p>
           </div>
           <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Provincias</p>
-            <p className="mt-1 text-2xl font-bold">{new Set(mockClients.map((c) => c.provincia)).size}</p>
+            <p className="mt-1 text-2xl font-bold">{new Set(clientes.map((c) => c.provincia)).size}</p>
           </div>
         </div>
 
@@ -87,7 +164,7 @@ export default function ClientesPage() {
             <DataTable<Client>
               columns={[
                 {
-                  key: "razonSocial", label: "Razón social",
+                  key: "razonSocial", label: "Razon social",
                   render: (row) => (
                     <div className="flex items-center gap-3">
                       <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-xs">
@@ -101,7 +178,7 @@ export default function ClientesPage() {
                   ),
                 },
                 { key: "condicionIva", label: "IVA", render: (row) => <Badge variant="outline">{condicionLabels[row.condicionIva]}</Badge> },
-                { key: "localidad", label: "Ubicación", render: (row) => <span className="text-zinc-500">{row.localidad}, {row.provincia}</span> },
+                { key: "localidad", label: "Ubicacion", render: (row) => <span className="text-zinc-500">{row.localidad}, {row.provincia}</span> },
                 { key: "listaPrecio", label: "Lista", render: (row) => <Badge variant="info">{row.listaPrecio}</Badge> },
                 { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", render: (row) => <span className="font-mono block text-right">{formatCurrency(row.saldoCuentaCorriente)}</span> },
                 { key: "assignedTo", label: "Vendedor", render: (row) => <span className="text-zinc-500 text-xs">{vendedorName(row.assignedTo)}</span> },

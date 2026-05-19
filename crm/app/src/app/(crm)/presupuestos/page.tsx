@@ -7,8 +7,90 @@ import { DataTable } from "@/components/ui/data-table";
 import { formatCurrency } from "@/lib/utils";
 import { mockPresupuestos } from "@/lib/mock-data";
 import type { Presupuesto, PRStatus } from "@/lib/types";
-import { Search, Filter, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock, PauseCircle, Edit3 } from "lucide-react";
-import { useState } from "react";
+import { supabase } from "@/lib/supabase/client";
+import { Search, Filter, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock, PauseCircle, Edit3, Loader2 } from "lucide-react";
+import { useState, useEffect } from "react";
+
+// Shape of a row coming from Supabase (snake_case + nested joins)
+interface SupabasePresupuesto {
+  id: string;
+  numero: string;
+  cliente_id: string;
+  fecha: string;
+  vencimiento: string;
+  estado: PRStatus;
+  motivo_rechazo?: string | null;
+  markup_general: number;
+  subtotal: number;
+  iva: number;
+  total: number;
+  moneda: "USD" | "ARS";
+  observaciones: string;
+  enviado_at?: string | null;
+  respondido_at?: string | null;
+  version?: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  clientes?: { razon_social: string; cuit: string } | null;
+  created_by_profile?: { full_name: string } | null;
+  presupuesto_items?: {
+    id?: string;
+    codigo: string;
+    descripcion: string;
+    categoria: string;
+    cantidad: number;
+    unidad: string;
+    precio_costo: number;
+    markup_porcentaje: number;
+    precio_venta: number;
+    subtotal: number;
+    iva_porcentaje?: number;
+    iva: number;
+    total: number;
+    orden?: number;
+  }[];
+}
+
+// Map a Supabase row to the local Presupuesto type so the UI stays compatible
+function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
+  return {
+    id: row.id,
+    numero: row.numero,
+    clienteId: row.cliente_id,
+    clienteNombre: row.clientes?.razon_social ?? "",
+    fecha: row.fecha,
+    vencimiento: row.vencimiento,
+    estado: row.estado,
+    motivoRechazo: row.motivo_rechazo ?? undefined,
+    markupGeneral: row.markup_general,
+    items: (row.presupuesto_items ?? []).map((it, idx) => ({
+      id: (it as any).id ?? `item-${idx}`,
+      productoId: "",
+      codigo: it.codigo,
+      descripcion: it.descripcion,
+      categoria: it.categoria,
+      cantidad: it.cantidad,
+      unidad: it.unidad,
+      precioCosto: it.precio_costo,
+      markupPorcentaje: it.markup_porcentaje,
+      precioVenta: it.precio_venta,
+      subtotal: it.subtotal,
+      iva: it.iva,
+      total: it.total,
+    })),
+    subtotal: row.subtotal,
+    iva: row.iva,
+    total: row.total,
+    moneda: row.moneda,
+    observaciones: row.observaciones ?? "",
+    creadoPor: row.created_by_profile?.full_name ?? row.created_by ?? "",
+    enviadoAt: row.enviado_at ?? undefined,
+    respondidoAt: row.respondido_at ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
 const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info"; icon: typeof Clock }> = {
   borrador: { label: "Borrador", variant: "outline", icon: Edit3 },
@@ -22,21 +104,65 @@ const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warn
 export default function PresupuestosPage() {
   const [filter, setFilter] = useState<PRStatus | "todos">("todos");
   const [search, setSearch] = useState("");
+  const [presupuestos, setPresupuestos] = useState<Presupuesto[]>(mockPresupuestos);
+  const [loading, setLoading] = useState(true);
 
-  const filtered = mockPresupuestos.filter((pr) => {
+  useEffect(() => {
+    async function fetchPresupuestos() {
+      try {
+        const { data, error } = await supabase
+          .from("presupuestos")
+          .select(`
+            *,
+            clientes(razon_social, cuit),
+            created_by_profile:created_by(full_name),
+            presupuesto_items(*)
+          `)
+          .order("fecha", { ascending: false });
+
+        if (!error && data && data.length > 0) {
+          setPresupuestos((data as unknown as SupabasePresupuesto[]).map(mapToPresupuesto));
+        }
+        // If data is empty or there's an error, keep mock data as fallback
+      } catch {
+        // Keep mock data as fallback
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchPresupuestos();
+  }, []);
+
+  const filtered = presupuestos.filter((pr) => {
     if (filter !== "todos" && pr.estado !== filter) return false;
     if (search && !pr.numero.toLowerCase().includes(search.toLowerCase()) && !pr.clienteNombre.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
 
-  const counts: Record<string, number> = { todos: mockPresupuestos.length };
-  mockPresupuestos.forEach((pr) => { counts[pr.estado] = (counts[pr.estado] || 0) + 1; });
+  const counts: Record<string, number> = { todos: presupuestos.length };
+  presupuestos.forEach((pr) => { counts[pr.estado] = (counts[pr.estado] || 0) + 1; });
+
+  if (loading) {
+    return (
+      <>
+        <Header
+          title="Presupuestos"
+          subtitle="Cargando..."
+          action={{ label: "Nuevo PR", onClick: () => {} }}
+        />
+        <div className="flex items-center justify-center p-16">
+          <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
       <Header
         title="Presupuestos"
-        subtitle={`${mockPresupuestos.length} presupuestos totales`}
+        subtitle={`${presupuestos.length} presupuestos totales`}
         action={{ label: "Nuevo PR", onClick: () => {} }}
       />
       <div className="p-8 space-y-6">
@@ -146,13 +272,13 @@ export default function PresupuestosPage() {
         </Card>
 
         {/* Motivos de rechazo */}
-        {mockPresupuestos.some((pr) => pr.motivoRechazo) && (
+        {presupuestos.some((pr) => pr.motivoRechazo) && (
           <Card>
             <CardHeader>
               <CardTitle>Motivos de rechazo recientes</CardTitle>
             </CardHeader>
             <div className="space-y-3">
-              {mockPresupuestos
+              {presupuestos
                 .filter((pr) => pr.motivoRechazo)
                 .map((pr) => (
                   <div key={pr.id} className="flex items-start gap-3 rounded-lg bg-red-50 p-3 dark:bg-red-950/30">

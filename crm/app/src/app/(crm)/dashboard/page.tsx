@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { Header } from "@/components/layout/header";
 import { StatCard } from "@/components/ui/stat-card";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,12 +9,19 @@ import { DataTable } from "@/components/ui/data-table";
 import {
   DollarSign, FileText, Users, Package, TrendingUp, Percent,
   ArrowRight, Clock, AlertTriangle, CheckCircle2, XCircle, PauseCircle,
+  Loader2,
 } from "lucide-react";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import {
-  dashboardKPIs, mockPresupuestos, mockActivity, mockAlerts,
-  ventasPorMes, presupuestosPorEstado, topClientes,
+  dashboardKPIs as mockKPIs,
+  mockPresupuestos,
+  mockActivity,
+  mockAlerts,
+  ventasPorMes as mockVentasPorMes,
+  presupuestosPorEstado as mockPresupuestosPorEstado,
+  topClientes as mockTopClientes,
 } from "@/lib/mock-data";
+import { supabase } from "@/lib/supabase/client";
 import type { Presupuesto, ActivityLog, Alert } from "@/lib/types";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info" }> = {
@@ -33,8 +41,204 @@ const alertIcons: Record<string, typeof AlertTriangle> = {
   cc_vencida: AlertTriangle,
 };
 
+const estadoColorMap: Record<string, string> = {
+  aprobado: "#22c55e",
+  pendiente: "#f59e0b",
+  rechazado: "#ef4444",
+  postergado: "#8b5cf6",
+  borrador: "#a1a1aa",
+  vencido: "#dc2626",
+};
+
+const estadoLabelMap: Record<string, string> = {
+  aprobado: "Aprobados",
+  pendiente: "Pendientes",
+  rechazado: "Rechazados",
+  postergado: "Postergados",
+  borrador: "Borradores",
+  vencido: "Vencidos",
+};
+
 export default function DashboardPage() {
-  const kpi = dashboardKPIs;
+  const [loading, setLoading] = useState(true);
+
+  // KPIs
+  const [kpi, setKpi] = useState(mockKPIs);
+
+  // Presupuestos por estado
+  const [presupuestosPorEstado, setPresupuestosPorEstado] = useState(mockPresupuestosPorEstado);
+
+  // Ventas por mes (chart)
+  const [ventasPorMes, setVentasPorMes] = useState(mockVentasPorMes);
+
+  // Ultimos presupuestos
+  const [presupuestos, setPresupuestos] = useState(mockPresupuestos.slice(0, 5));
+
+  // Alertas
+  const [alerts, setAlerts] = useState(mockAlerts);
+
+  // Top clientes
+  const [topClientes, setTopClientes] = useState(mockTopClientes);
+
+  // Actividad reciente
+  const [activity, setActivity] = useState(mockActivity);
+
+  useEffect(() => {
+    async function fetchAll() {
+      try {
+        // Fetch all data in parallel
+        const [
+          kpiResult,
+          presupuestosEstadoResult,
+          presupuestosRecentResult,
+          alertasResult,
+          topClientesResult,
+          activityResult,
+        ] = await Promise.all([
+          // KPIs via RPC
+          supabase.rpc("get_dashboard_kpis"),
+          // Presupuestos por estado
+          supabase.from("presupuestos").select("estado"),
+          // Ultimos presupuestos
+          supabase
+            .from("presupuestos")
+            .select("id, numero, cliente_id, total, estado, fecha, clientes(razon_social)")
+            .order("created_at", { ascending: false })
+            .limit(5),
+          // Alertas
+          supabase
+            .from("alertas")
+            .select("*")
+            .eq("read", false)
+            .order("created_at", { ascending: false }),
+          // Top clientes (facturas)
+          supabase
+            .from("facturas")
+            .select("cliente_id, clientes(razon_social), total")
+            .neq("estado", "anulada"),
+          // Actividad reciente
+          supabase
+            .from("activity_log")
+            .select("*, profiles:user_id(full_name)")
+            .order("created_at", { ascending: false })
+            .limit(10),
+        ]);
+
+        // --- KPIs ---
+        if (!kpiResult.error && kpiResult.data) {
+          const d = kpiResult.data as Record<string, number>;
+          setKpi({
+            ventasMes: d.ventas_mes ?? mockKPIs.ventasMes,
+            ventasMesAnterior: d.ventas_mes_anterior ?? mockKPIs.ventasMesAnterior,
+            presupuestosActivos: d.presupuestos_activos ?? mockKPIs.presupuestosActivos,
+            presupuestosPendientes: d.presupuestos_pendientes ?? mockKPIs.presupuestosPendientes,
+            tasaConversion: d.tasa_conversion ?? mockKPIs.tasaConversion,
+            tasaConversionAnterior: mockKPIs.tasaConversionAnterior, // not returned by RPC, keep mock
+            cobranzasMes: d.cobranzas_mes ?? mockKPIs.cobranzasMes,
+            cobranzasPendientes: d.cobranzas_pendientes ?? mockKPIs.cobranzasPendientes,
+            clientesActivos: d.clientes_activos ?? mockKPIs.clientesActivos,
+            stockBajo: d.stock_bajo ?? mockKPIs.stockBajo,
+            facturadoMes: d.facturado_mes ?? mockKPIs.facturadoMes,
+            margenPromedio: d.margen_promedio ?? mockKPIs.margenPromedio,
+          });
+        }
+
+        // --- Presupuestos por estado ---
+        if (!presupuestosEstadoResult.error && presupuestosEstadoResult.data && presupuestosEstadoResult.data.length > 0) {
+          const counts: Record<string, number> = {};
+          presupuestosEstadoResult.data.forEach((p: { estado: string }) => {
+            counts[p.estado] = (counts[p.estado] || 0) + 1;
+          });
+          const mapped = Object.entries(counts).map(([estado, cantidad]) => ({
+            estado: estadoLabelMap[estado] || estado,
+            cantidad,
+            color: estadoColorMap[estado] || "#a1a1aa",
+          }));
+          if (mapped.length > 0) {
+            setPresupuestosPorEstado(mapped);
+          }
+        }
+
+        // --- Ultimos presupuestos ---
+        if (!presupuestosRecentResult.error && presupuestosRecentResult.data && presupuestosRecentResult.data.length > 0) {
+          const mapped = presupuestosRecentResult.data.map((p: any) => ({
+            ...p,
+            clienteNombre: p.clientes?.razon_social || "N/A",
+          }));
+          setPresupuestos(mapped);
+        }
+
+        // --- Alertas ---
+        if (!alertasResult.error && alertasResult.data && alertasResult.data.length > 0) {
+          const mapped = alertasResult.data.map((a: any) => ({
+            id: a.id,
+            type: a.tipo,
+            title: a.title,
+            description: a.description,
+            entityId: a.entity_id,
+            module: a.module,
+            read: a.read,
+            createdAt: a.created_at,
+          }));
+          setAlerts(mapped);
+        }
+
+        // --- Top clientes ---
+        if (!topClientesResult.error && topClientesResult.data && topClientesResult.data.length > 0) {
+          const totals: Record<string, { nombre: string; facturado: number }> = {};
+          topClientesResult.data.forEach((f: any) => {
+            const id = f.cliente_id;
+            if (!totals[id]) {
+              totals[id] = { nombre: f.clientes?.razon_social || "N/A", facturado: 0 };
+            }
+            totals[id].facturado += Number(f.total);
+          });
+          const sorted = Object.values(totals)
+            .sort((a, b) => b.facturado - a.facturado)
+            .slice(0, 5);
+          if (sorted.length > 0) {
+            setTopClientes(sorted);
+          }
+        }
+
+        // --- Actividad reciente ---
+        if (!activityResult.error && activityResult.data && activityResult.data.length > 0) {
+          const mapped = activityResult.data.map((a: any) => ({
+            id: a.id,
+            userId: a.user_id,
+            userName: a.profiles?.full_name || "Usuario",
+            action: a.action,
+            module: a.module,
+            entityId: a.entity_id,
+            details: a.details,
+            createdAt: a.created_at,
+          }));
+          setActivity(mapped);
+        }
+      } catch (e) {
+        // On any error, keep mock data as fallback
+        console.error("Error fetching dashboard data:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchAll();
+  }, []);
+
+  if (loading) {
+    return (
+      <>
+        <Header title="Dashboard" subtitle="Resumen de operaciones — Mayo 2026" />
+        <div className="flex items-center justify-center h-96">
+          <div className="flex flex-col items-center gap-3 text-zinc-400">
+            <Loader2 className="h-8 w-8 animate-spin" />
+            <span className="text-sm">Cargando dashboard...</span>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -58,7 +262,7 @@ export default function DashboardPage() {
             iconColor="text-blue-600"
           />
           <StatCard
-            title="Tasa de conversión"
+            title="Tasa de conversion"
             value={`${kpi.tasaConversion}%`}
             change={kpi.tasaConversion - kpi.tasaConversionAnterior}
             changeLabel="vs. mes anterior"
@@ -77,8 +281,8 @@ export default function DashboardPage() {
           {/* Ventas por mes - Chart placeholder */}
           <Card className="lg:col-span-2">
             <CardHeader>
-              <CardTitle>Facturación mensual</CardTitle>
-              <span className="text-xs text-zinc-400">Últimos 6 meses</span>
+              <CardTitle>Facturacion mensual</CardTitle>
+              <span className="text-xs text-zinc-400">Ultimos 6 meses</span>
             </CardHeader>
             <div className="flex items-end gap-3 h-48 px-2">
               {ventasPorMes.map((item) => {
@@ -134,10 +338,10 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {/* Últimos presupuestos */}
+          {/* Ultimos presupuestos */}
           <Card className="lg:col-span-2">
             <CardHeader>
-              <CardTitle>Últimos presupuestos</CardTitle>
+              <CardTitle>Ultimos presupuestos</CardTitle>
               <button className="flex items-center gap-1 text-xs font-medium text-orange-500 hover:text-orange-600">
                 Ver todos <ArrowRight className="h-3 w-3" />
               </button>
@@ -151,12 +355,12 @@ export default function DashboardPage() {
                   key: "estado", label: "Estado",
                   render: (row) => {
                     const cfg = statusConfig[row.estado];
-                    return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+                    return cfg ? <Badge variant={cfg.variant}>{cfg.label}</Badge> : <Badge variant="outline">{row.estado}</Badge>;
                   },
                 },
                 { key: "fecha", label: "Fecha", render: (row) => <span className="text-zinc-400">{row.fecha}</span> },
               ]}
-              data={mockPresupuestos.slice(0, 5)}
+              data={presupuestos}
             />
           </Card>
 
@@ -164,10 +368,10 @@ export default function DashboardPage() {
           <Card>
             <CardHeader>
               <CardTitle>Alertas</CardTitle>
-              <Badge variant="danger">{mockAlerts.filter((a) => !a.read).length} nuevas</Badge>
+              <Badge variant="danger">{alerts.filter((a) => !a.read).length} nuevas</Badge>
             </CardHeader>
             <div className="space-y-3">
-              {mockAlerts.map((alert) => {
+              {alerts.map((alert) => {
                 const Icon = alertIcons[alert.type] || AlertTriangle;
                 return (
                   <div
@@ -222,7 +426,7 @@ export default function DashboardPage() {
               <CardTitle>Actividad reciente</CardTitle>
             </CardHeader>
             <div className="space-y-4">
-              {mockActivity.map((a) => (
+              {activity.map((a) => (
                 <div key={a.id} className="flex gap-3 text-sm">
                   <div className="mt-1 h-2 w-2 shrink-0 rounded-full bg-orange-400" />
                   <div>

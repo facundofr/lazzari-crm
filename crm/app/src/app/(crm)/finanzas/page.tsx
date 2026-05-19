@@ -6,10 +6,11 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency } from "@/lib/utils";
-import { mockMovimientos, mockClients, mockProveedores, dashboardKPIs, mockExtractos, mockLineasCredito } from "@/lib/mock-data";
+import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory } from "lucide-react";
-import { useState } from "react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2 } from "lucide-react";
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase/client";
 
 const tipoConfig: Record<string, { label: string; variant: "success" | "danger" | "warning" | "info" | "outline"; icon: typeof ArrowDownLeft }> = {
   cobro: { label: "Cobro", variant: "success", icon: ArrowDownLeft },
@@ -22,20 +23,269 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
 
 type FinanzasTab = "movimientos" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito";
 
+// ── Helper types for Supabase rows (snake_case) ──
+interface MovimientoRow {
+  id: string;
+  tipo: Movimiento["tipo"];
+  cliente_id?: string;
+  proveedor_id?: string;
+  descripcion: string;
+  monto: number;
+  moneda?: string;
+  fecha: string;
+  factura_id?: string;
+  conciliado: boolean;
+  created_at: string;
+  clientes?: { razon_social: string } | null;
+  proveedores?: { razon_social: string } | null;
+}
+
+interface CCRow {
+  id: string;
+  razon_social: string;
+  cuit: string;
+  rubro?: string;
+  dias_cuenta_corriente: number;
+  forma_pago: string;
+  limite_credito: number;
+  saldo_cuenta_corriente: number;
+}
+
+interface ExtractoMovimientoRow {
+  id: string;
+  fecha: string;
+  descripcion: string;
+  referencia: string;
+  monto: number;
+  tipo: "credito" | "debito";
+  estado: "matcheado" | "pendiente" | "ignorado";
+  match_cliente_id?: string;
+  match_proveedor_id?: string;
+  match_factura_id?: string;
+}
+
+interface ExtractoRow {
+  id: string;
+  banco: string;
+  cuenta: string;
+  periodo: string;
+  total_creditos: number;
+  total_debitos: number;
+  estado: "procesando" | "parcial" | "conciliado";
+  created_at: string;
+  extracto_movimientos: ExtractoMovimientoRow[];
+}
+
+interface LineaCreditoRow {
+  id: string;
+  entidad: string;
+  tipo: "bancaria" | "proveedor";
+  proveedor_id?: string;
+  monto_total: number;
+  monto_utilizado: number;
+  monto_disponible: number;
+  moneda: "USD" | "ARS";
+  tasa?: number;
+  vencimiento: string;
+  estado: "activa" | "vencida" | "suspendida";
+  notas?: string;
+  created_at?: string;
+  proveedores?: { razon_social: string } | null;
+}
+
 export default function FinanzasPage() {
   const [tab, setTab] = useState<FinanzasTab>("movimientos");
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
+  const [loading, setLoading] = useState(true);
 
-  const totalCobros = mockMovimientos.filter((m) => ["cobro", "cheque_recibido", "transferencia"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const totalPagos = mockMovimientos.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const sinConciliar = mockMovimientos.filter((m) => !m.conciliado).length;
+  // Data state — initialised with mock data as fallback
+  const [movimientos, setMovimientos] = useState<MovimientoRow[]>([]);
+  const [ccClientes, setCcClientes] = useState<CCRow[]>([]);
+  const [ccProveedores, setCcProveedores] = useState<CCRow[]>([]);
+  const [extractos, setExtractos] = useState<ExtractoRow[]>([]);
+  const [lineasCredito, setLineasCredito] = useState<LineaCreditoRow[]>([]);
 
-  const extracto = mockExtractos[0];
-  const movsFiltrados = extracto ? extracto.movimientos.filter((m) => filterExtracto === "todos" || m.estado === filterExtracto) : [];
+  useEffect(() => {
+    async function fetchData() {
+      setLoading(true);
+      try {
+        const [movRes, ccCliRes, ccProvRes, extRes, lcRes] = await Promise.all([
+          supabase
+            .from("movimientos")
+            .select(`*, clientes(razon_social), proveedores(razon_social)`)
+            .order("fecha", { ascending: false }),
+          supabase
+            .from("v_cuenta_corriente_clientes")
+            .select("*"),
+          supabase
+            .from("v_cuenta_corriente_proveedores")
+            .select("*"),
+          supabase
+            .from("extractos_bancarios")
+            .select(`*, extracto_movimientos(*)`)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("lineas_credito")
+            .select(`*, proveedores(razon_social)`)
+            .order("vencimiento"),
+        ]);
 
-  const totalDisponibleCredito = mockLineasCredito.reduce((a, lc) => a + lc.montoDisponible, 0);
-  const totalUtilizadoCredito = mockLineasCredito.reduce((a, lc) => a + lc.montoUtilizado, 0);
-  const totalLineas = mockLineasCredito.reduce((a, lc) => a + lc.montoTotal, 0);
+        // Use Supabase data if available, otherwise fall back to mock data mapped to snake_case
+        if (movRes.data && movRes.data.length > 0) {
+          setMovimientos(movRes.data as MovimientoRow[]);
+        } else {
+          setMovimientos(
+            mockMovimientos.map((m) => ({
+              id: m.id,
+              tipo: m.tipo,
+              cliente_id: m.clienteId,
+              proveedor_id: m.proveedorId,
+              descripcion: m.descripcion,
+              monto: m.monto,
+              fecha: m.fecha,
+              factura_id: m.facturaId,
+              conciliado: m.conciliado,
+              created_at: m.createdAt,
+              clientes: null,
+              proveedores: null,
+            }))
+          );
+        }
+
+        if (ccCliRes.data && ccCliRes.data.length > 0) {
+          setCcClientes(ccCliRes.data.map((r: any) => ({
+            id: r.id,
+            razon_social: r.razon_social,
+            cuit: r.cuit,
+            dias_cuenta_corriente: r.dias_cuenta_corriente,
+            forma_pago: r.forma_pago,
+            limite_credito: r.limite_credito,
+            saldo_cuenta_corriente: r.saldo ?? r.saldo_cuenta_corriente ?? 0,
+          })));
+        } else {
+          setCcClientes(
+            mockClients.map((c) => ({
+              id: c.id,
+              razon_social: c.razonSocial,
+              cuit: c.cuit,
+              dias_cuenta_corriente: c.diasCuentaCorriente,
+              forma_pago: c.formaPago,
+              limite_credito: c.limiteCredito,
+              saldo_cuenta_corriente: c.saldoCuentaCorriente,
+            }))
+          );
+        }
+
+        if (ccProvRes.data && ccProvRes.data.length > 0) {
+          setCcProveedores(ccProvRes.data.map((r: any) => ({
+            id: r.id,
+            razon_social: r.razon_social,
+            cuit: r.cuit,
+            rubro: r.rubro,
+            dias_cuenta_corriente: r.dias_cuenta_corriente,
+            forma_pago: r.forma_pago,
+            limite_credito: r.limite_credito,
+            saldo_cuenta_corriente: r.saldo ?? r.saldo_cuenta_corriente ?? 0,
+          })));
+        } else {
+          setCcProveedores(
+            mockProveedores.map((p) => ({
+              id: p.id,
+              razon_social: p.razonSocial,
+              cuit: p.cuit,
+              rubro: p.rubro,
+              dias_cuenta_corriente: p.diasCuentaCorriente,
+              forma_pago: p.formaPago,
+              limite_credito: p.limiteCredito,
+              saldo_cuenta_corriente: p.saldoCuentaCorriente,
+            }))
+          );
+        }
+
+        if (extRes.data && extRes.data.length > 0) {
+          setExtractos(extRes.data as ExtractoRow[]);
+        } else {
+          setExtractos(
+            mockExtractos.map((e) => ({
+              id: e.id,
+              banco: e.banco,
+              cuenta: e.cuenta,
+              periodo: e.periodo,
+              total_creditos: e.totalCreditos,
+              total_debitos: e.totalDebitos,
+              estado: e.estado,
+              created_at: e.fechaUpload,
+              extracto_movimientos: e.movimientos.map((em) => ({
+                id: em.id,
+                fecha: em.fecha,
+                descripcion: em.descripcion,
+                referencia: em.referencia,
+                monto: em.monto,
+                tipo: em.tipo,
+                estado: em.estado,
+                match_cliente_id: em.matchClienteId,
+                match_proveedor_id: em.matchProveedorId,
+                match_factura_id: em.matchFacturaId,
+              })),
+            }))
+          );
+        }
+
+        if (lcRes.data && lcRes.data.length > 0) {
+          setLineasCredito(lcRes.data as LineaCreditoRow[]);
+        } else {
+          setLineasCredito(
+            mockLineasCredito.map((lc) => ({
+              id: lc.id,
+              entidad: lc.entidad,
+              tipo: lc.tipo,
+              proveedor_id: lc.proveedorId,
+              monto_total: lc.montoTotal,
+              monto_utilizado: lc.montoUtilizado,
+              monto_disponible: lc.montoDisponible,
+              moneda: lc.moneda,
+              tasa: lc.tasa,
+              vencimiento: lc.vencimiento,
+              estado: lc.estado,
+              notas: lc.notas,
+              created_at: lc.createdAt,
+              proveedores: null,
+            }))
+          );
+        }
+      } catch (err) {
+        console.error("Error fetching finanzas data:", err);
+        // On error, mock data fallback is already set above (or stays empty).
+        // Re-map mock data so the page still works.
+        setMovimientos(
+          mockMovimientos.map((m) => ({
+            id: m.id, tipo: m.tipo, cliente_id: m.clienteId, proveedor_id: m.proveedorId,
+            descripcion: m.descripcion, monto: m.monto, fecha: m.fecha, factura_id: m.facturaId,
+            conciliado: m.conciliado, created_at: m.createdAt, clientes: null, proveedores: null,
+          }))
+        );
+        setCcClientes(mockClients.map((c) => ({ id: c.id, razon_social: c.razonSocial, cuit: c.cuit, dias_cuenta_corriente: c.diasCuentaCorriente, forma_pago: c.formaPago, limite_credito: c.limiteCredito, saldo_cuenta_corriente: c.saldoCuentaCorriente })));
+        setCcProveedores(mockProveedores.map((p) => ({ id: p.id, razon_social: p.razonSocial, cuit: p.cuit, rubro: p.rubro, dias_cuenta_corriente: p.diasCuentaCorriente, forma_pago: p.formaPago, limite_credito: p.limiteCredito, saldo_cuenta_corriente: p.saldoCuentaCorriente })));
+        setExtractos(mockExtractos.map((e) => ({ id: e.id, banco: e.banco, cuenta: e.cuenta, periodo: e.periodo, total_creditos: e.totalCreditos, total_debitos: e.totalDebitos, estado: e.estado, created_at: e.fechaUpload, extracto_movimientos: e.movimientos.map((em) => ({ id: em.id, fecha: em.fecha, descripcion: em.descripcion, referencia: em.referencia, monto: em.monto, tipo: em.tipo, estado: em.estado, match_cliente_id: em.matchClienteId, match_proveedor_id: em.matchProveedorId, match_factura_id: em.matchFacturaId })) })));
+        setLineasCredito(mockLineasCredito.map((lc) => ({ id: lc.id, entidad: lc.entidad, tipo: lc.tipo, proveedor_id: lc.proveedorId, monto_total: lc.montoTotal, monto_utilizado: lc.montoUtilizado, monto_disponible: lc.montoDisponible, moneda: lc.moneda, tasa: lc.tasa, vencimiento: lc.vencimiento, estado: lc.estado, notas: lc.notas, created_at: lc.createdAt, proveedores: null })));
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchData();
+  }, []);
+
+  // ── Derived calculations ──
+  const totalCobros = movimientos.filter((m) => ["cobro", "cheque_recibido", "transferencia"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const totalPagos = movimientos.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const sinConciliar = movimientos.filter((m) => !m.conciliado).length;
+
+  const extracto = extractos[0] ?? null;
+  const movsFiltrados = extracto ? extracto.extracto_movimientos.filter((m) => filterExtracto === "todos" || m.estado === filterExtracto) : [];
+
+  const totalDisponibleCredito = lineasCredito.reduce((a, lc) => a + lc.monto_disponible, 0);
+  const totalUtilizadoCredito = lineasCredito.reduce((a, lc) => a + lc.monto_utilizado, 0);
+  const totalLineas = lineasCredito.reduce((a, lc) => a + lc.monto_total, 0);
 
   const tabs: { id: FinanzasTab; label: string }[] = [
     { id: "movimientos", label: "Movimientos" },
@@ -43,18 +293,30 @@ export default function FinanzasPage() {
     { id: "cc_proveedores", label: "CC Proveedores" },
     { id: "cheques", label: "E-Cheques" },
     { id: "extractos", label: "Extractos" },
-    { id: "lineas_credito", label: "Líneas crédito" },
+    { id: "lineas_credito", label: "Lineas credito" },
   ];
+
+  if (loading) {
+    return (
+      <>
+        <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => {} }} />
+        <div className="flex items-center justify-center p-24">
+          <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
+          <span className="ml-3 text-zinc-500">Cargando datos financieros...</span>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
-      <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliación y crédito" action={{ label: "Nuevo movimiento", onClick: () => {} }} />
+      <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => {} }} />
       <div className="p-8 space-y-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard title="Cobros del mes" value={formatCurrency(totalCobros)} icon={ArrowDownLeft} iconColor="text-emerald-600" />
           <StatCard title="Pagos del mes" value={formatCurrency(totalPagos)} icon={ArrowUpRight} iconColor="text-red-500" />
-          <StatCard title="Saldo CC clientes" value={formatCurrency(mockClients.reduce((a, c) => a + c.saldoCuentaCorriente, 0))} icon={Wallet} iconColor="text-blue-600" />
-          <StatCard title="Crédito disponible" value={formatCurrency(totalDisponibleCredito)} icon={CreditCard} iconColor="text-emerald-600" />
+          <StatCard title="Saldo CC clientes" value={formatCurrency(ccClientes.reduce((a, c) => a + c.saldo_cuenta_corriente, 0))} icon={Wallet} iconColor="text-blue-600" />
+          <StatCard title="Credito disponible" value={formatCurrency(totalDisponibleCredito)} icon={CreditCard} iconColor="text-emerald-600" />
         </div>
 
         {/* Tabs */}
@@ -72,18 +334,18 @@ export default function FinanzasPage() {
         {/* ── Movimientos ── */}
         {tab === "movimientos" && (
           <Card className="p-0 overflow-hidden">
-            <DataTable<Movimiento>
+            <DataTable<MovimientoRow>
               columns={[
                 { key: "tipo", label: "Tipo", render: (row) => { const cfg = tipoConfig[row.tipo]; const Icon = cfg.icon; return (<div className="flex items-center gap-2"><Icon className="h-4 w-4 text-zinc-400" /><Badge variant={cfg.variant}>{cfg.label}</Badge></div>); }},
-                { key: "descripcion", label: "Descripción", render: (row) => <span className="font-medium">{row.descripcion}</span> },
+                { key: "descripcion", label: "Descripcion", render: (row) => <span className="font-medium">{row.descripcion}</span> },
                 { key: "fecha", label: "Fecha", render: (row) => <span className="text-zinc-500">{row.fecha}</span> },
                 { key: "monto", label: "Monto", className: "text-right", render: (row) => {
                   const isIngreso = ["cobro", "cheque_recibido", "transferencia"].includes(row.tipo);
                   return <span className={`font-mono font-semibold block text-right ${isIngreso ? "text-emerald-600" : "text-red-600"}`}>{isIngreso ? "+" : "-"}{formatCurrency(row.monto)}</span>;
                 }},
-                { key: "conciliado", label: "Conciliado", render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Sí" : "Pendiente"}</Badge> },
+                { key: "conciliado", label: "Conciliado", render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Si" : "Pendiente"}</Badge> },
               ]}
-              data={mockMovimientos}
+              data={movimientos}
             />
           </Card>
         )}
@@ -91,19 +353,19 @@ export default function FinanzasPage() {
         {/* ── CC Clientes ── */}
         {tab === "cc_clientes" && (
           <Card className="p-0 overflow-hidden">
-            <DataTable<(typeof mockClients)[0]>
+            <DataTable<CCRow>
               columns={[
-                { key: "razonSocial", label: "Cliente", render: (row) => <span className="font-medium">{row.razonSocial}</span> },
+                { key: "razon_social", label: "Cliente", render: (row) => <span className="font-medium">{row.razon_social}</span> },
                 { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
-                { key: "diasCuentaCorriente", label: "Días CC", render: (row) => <span>{row.diasCuentaCorriente} días</span> },
-                { key: "formaPago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.formaPago}</Badge> },
-                { key: "limiteCredito", label: "Límite", className: "text-right", render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limiteCredito)}</span> },
-                { key: "saldoCuentaCorriente", label: "Saldo", className: "text-right", render: (row) => {
-                  const pct = (row.saldoCuentaCorriente / row.limiteCredito) * 100;
-                  return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldoCuentaCorriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                { key: "dias_cuenta_corriente", label: "Dias CC", render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
+                { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
+                { key: "limite_credito", label: "Limite", className: "text-right", render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
+                { key: "saldo_cuenta_corriente", label: "Saldo", className: "text-right", render: (row) => {
+                  const pct = (row.saldo_cuenta_corriente / row.limite_credito) * 100;
+                  return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
                 }},
               ]}
-              data={mockClients}
+              data={ccClientes}
             />
           </Card>
         )}
@@ -111,20 +373,20 @@ export default function FinanzasPage() {
         {/* ── CC Proveedores ── */}
         {tab === "cc_proveedores" && (
           <Card className="p-0 overflow-hidden">
-            <DataTable<(typeof mockProveedores)[0]>
+            <DataTable<CCRow>
               columns={[
-                { key: "razonSocial", label: "Proveedor", render: (row) => <span className="font-medium">{row.razonSocial}</span> },
+                { key: "razon_social", label: "Proveedor", render: (row) => <span className="font-medium">{row.razon_social}</span> },
                 { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
-                { key: "rubro", label: "Rubro", render: (row) => <Badge variant="info">{row.rubro.split(" ")[0]}</Badge> },
-                { key: "diasCuentaCorriente", label: "Días CC", render: (row) => <span>{row.diasCuentaCorriente} días</span> },
-                { key: "formaPago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.formaPago}</Badge> },
-                { key: "limiteCredito", label: "Límite", className: "text-right", render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limiteCredito)}</span> },
-                { key: "saldoCuentaCorriente", label: "Deuda", className: "text-right", render: (row) => {
-                  const pct = (row.saldoCuentaCorriente / row.limiteCredito) * 100;
-                  return (<div className="text-right"><span className={`font-mono font-semibold text-red-600`}>{formatCurrency(row.saldoCuentaCorriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                { key: "rubro", label: "Rubro", render: (row) => <Badge variant="info">{(row.rubro ?? "").split(" ")[0]}</Badge> },
+                { key: "dias_cuenta_corriente", label: "Dias CC", render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
+                { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
+                { key: "limite_credito", label: "Limite", className: "text-right", render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
+                { key: "saldo_cuenta_corriente", label: "Deuda", className: "text-right", render: (row) => {
+                  const pct = (row.saldo_cuenta_corriente / row.limite_credito) * 100;
+                  return (<div className="text-right"><span className={`font-mono font-semibold text-red-600`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
                 }},
               ]}
-              data={mockProveedores}
+              data={ccProveedores}
             />
           </Card>
         )}
@@ -136,13 +398,13 @@ export default function FinanzasPage() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="rounded-lg border border-zinc-200 p-4">
                 <p className="text-xs font-medium text-zinc-500 mb-3">Cheques recibidos</p>
-                {mockMovimientos.filter((m) => m.tipo === "cheque_recibido").map((m) => (
+                {movimientos.filter((m) => m.tipo === "cheque_recibido").map((m) => (
                   <div key={m.id} className="flex items-center justify-between rounded-lg bg-blue-50 p-3 mb-2"><div><p className="text-sm font-medium">{m.descripcion}</p><p className="text-xs text-zinc-400">{m.fecha}</p></div><span className="font-mono font-semibold text-blue-600">{formatCurrency(m.monto)}</span></div>
                 ))}
               </div>
               <div className="rounded-lg border border-zinc-200 p-4">
                 <p className="text-xs font-medium text-zinc-500 mb-3">Cheques emitidos</p>
-                {mockMovimientos.filter((m) => m.tipo === "cheque_emitido").map((m) => (
+                {movimientos.filter((m) => m.tipo === "cheque_emitido").map((m) => (
                   <div key={m.id} className="flex items-center justify-between rounded-lg bg-amber-50 p-3 mb-2"><div><p className="text-sm font-medium">{m.descripcion}</p><p className="text-xs text-zinc-400">{m.fecha}</p></div><span className="font-mono font-semibold text-amber-600">{formatCurrency(m.monto)}</span></div>
                 ))}
               </div>
@@ -155,31 +417,31 @@ export default function FinanzasPage() {
           <>
             <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-white p-6 text-center">
               <Upload className="mx-auto h-8 w-8 text-zinc-300" />
-              <p className="mt-2 font-medium text-zinc-700">Arrastrá un extracto o hacé click para subir</p>
+              <p className="mt-2 font-medium text-zinc-700">Arrastra un extracto o hace click para subir</p>
               <p className="text-sm text-zinc-400">Formatos: .xlsx, .xls, .csv, .pdf</p>
               <button className="mt-3 rounded-lg bg-orange-500 px-5 py-2 text-sm font-medium text-white hover:bg-orange-600">Seleccionar archivo</button>
             </div>
 
             <Card>
               <CardHeader>
-                <div><CardTitle>{extracto.banco} — {extracto.cuenta}</CardTitle><p className="text-sm text-zinc-500 mt-1">{extracto.periodo} — {extracto.archivo}</p></div>
+                <div><CardTitle>{extracto.banco} — {extracto.cuenta}</CardTitle><p className="text-sm text-zinc-500 mt-1">{extracto.periodo}</p></div>
                 <div className="flex items-center gap-2">
-                  <Badge variant="success">Matcheados: {extracto.matcheados}</Badge>
-                  <Badge variant="warning">Pendientes: {extracto.pendientes}</Badge>
+                  <Badge variant="success">Matcheados: {extracto.extracto_movimientos.filter(m => m.estado === "matcheado").length}</Badge>
+                  <Badge variant="warning">Pendientes: {extracto.extracto_movimientos.filter(m => m.estado === "pendiente").length}</Badge>
                 </div>
               </CardHeader>
 
               <div className="flex gap-2 mb-4">
                 {(["todos", "matcheado", "pendiente"] as const).map((f) => {
-                  const count = f === "todos" ? extracto.movimientos.length : extracto.movimientos.filter(m => m.estado === f).length;
+                  const count = f === "todos" ? extracto.extracto_movimientos.length : extracto.extracto_movimientos.filter(m => m.estado === f).length;
                   return (<button key={f} onClick={() => setFilterExtracto(f)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filterExtracto === f ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"}`}>{f === "todos" ? "Todos" : f === "matcheado" ? "Matcheados" : "Pendientes"} ({count})</button>);
                 })}
               </div>
 
-              <DataTable<ExtractoMovimiento>
+              <DataTable<ExtractoMovimientoRow>
                 columns={[
                   { key: "fecha", label: "Fecha", render: (row) => <span className="text-zinc-500">{row.fecha}</span> },
-                  { key: "descripcion", label: "Descripción", render: (row) => <span className="font-medium text-xs">{row.descripcion}</span> },
+                  { key: "descripcion", label: "Descripcion", render: (row) => <span className="font-medium text-xs">{row.descripcion}</span> },
                   { key: "referencia", label: "Ref.", render: (row) => <span className="font-mono text-xs text-zinc-400">{row.referencia}</span> },
                   { key: "monto", label: "Monto", className: "text-right", render: (row) => (
                     <div className="flex items-center justify-end gap-1.5">
@@ -198,19 +460,19 @@ export default function FinanzasPage() {
           </>
         )}
 
-        {/* ── Líneas de crédito ── */}
+        {/* ── Lineas de credito ── */}
         {tab === "lineas_credito" && (
           <>
             <Card>
-              <CardHeader><CardTitle>Uso global de crédito</CardTitle><span className="text-sm text-zinc-500">{Math.round((totalUtilizadoCredito / totalLineas) * 100)}% utilizado</span></CardHeader>
-              <div className="h-4 rounded-full bg-zinc-100"><div className="h-4 rounded-full bg-gradient-to-r from-orange-500 to-red-500" style={{ width: `${(totalUtilizadoCredito / totalLineas) * 100}%` }} /></div>
+              <CardHeader><CardTitle>Uso global de credito</CardTitle><span className="text-sm text-zinc-500">{totalLineas > 0 ? Math.round((totalUtilizadoCredito / totalLineas) * 100) : 0}% utilizado</span></CardHeader>
+              <div className="h-4 rounded-full bg-zinc-100"><div className="h-4 rounded-full bg-gradient-to-r from-orange-500 to-red-500" style={{ width: `${totalLineas > 0 ? (totalUtilizadoCredito / totalLineas) * 100 : 0}%` }} /></div>
               <div className="mt-2 flex justify-between text-xs text-zinc-400"><span>Utilizado: {formatCurrency(totalUtilizadoCredito)}</span><span>Disponible: {formatCurrency(totalDisponibleCredito)}</span></div>
             </Card>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {mockLineasCredito.map((lc) => {
-                const pctUsado = Math.round((lc.montoUtilizado / lc.montoTotal) * 100);
-                const isAgotada = lc.montoDisponible === 0;
+              {lineasCredito.map((lc) => {
+                const pctUsado = lc.monto_total > 0 ? Math.round((lc.monto_utilizado / lc.monto_total) * 100) : 0;
+                const isAgotada = lc.monto_disponible === 0;
                 return (
                   <Card key={lc.id} className={isAgotada ? "border-red-200" : ""}>
                     <div className="flex items-start justify-between">
@@ -231,11 +493,11 @@ export default function FinanzasPage() {
                     </div>
                     <div className="mt-4 space-y-3">
                       <div>
-                        <div className="flex items-center justify-between text-xs mb-1.5"><span className="text-zinc-500">{pctUsado}% utilizado</span><span className="font-mono text-zinc-600">{formatCurrency(lc.montoUtilizado)} / {formatCurrency(lc.montoTotal)}</span></div>
+                        <div className="flex items-center justify-between text-xs mb-1.5"><span className="text-zinc-500">{pctUsado}% utilizado</span><span className="font-mono text-zinc-600">{formatCurrency(lc.monto_utilizado)} / {formatCurrency(lc.monto_total)}</span></div>
                         <div className="h-2.5 rounded-full bg-zinc-100"><div className={`h-2.5 rounded-full ${pctUsado >= 100 ? "bg-red-500" : pctUsado >= 80 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pctUsado, 100)}%` }} /></div>
                       </div>
                       <div className="flex items-center justify-between pt-2 border-t border-zinc-100">
-                        <div><p className="text-xs text-zinc-400">Disponible</p><p className={`font-mono font-bold text-lg ${isAgotada ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(lc.montoDisponible)}</p></div>
+                        <div><p className="text-xs text-zinc-400">Disponible</p><p className={`font-mono font-bold text-lg ${isAgotada ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(lc.monto_disponible)}</p></div>
                         <div className="text-right"><p className="text-xs text-zinc-400">Vencimiento</p><p className="text-sm font-medium text-zinc-600">{lc.vencimiento}</p></div>
                       </div>
                       {lc.notas && <p className="text-xs text-zinc-400 pt-2 border-t border-zinc-100">{lc.notas}</p>}
