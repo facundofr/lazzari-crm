@@ -53,3 +53,19 @@ export async function getLineasCredito() {
   if (error) throw error;
   return data;
 }
+
+export async function createMovimiento(data: Record<string, unknown>) {
+  const { data: result, error } = await supabase.from("movimientos").insert(data as any).select().single();
+  if (error) throw error;
+  return result;
+}
+
+export async function conciliarMovimiento(id: string) {
+  const { error } = await supabase.from("movimientos").update({ conciliado: true }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteMovimiento(id: string) {
+  const { error } = await supabase.from("movimientos").delete().eq("id", id);
+  if (error) throw error;
+}

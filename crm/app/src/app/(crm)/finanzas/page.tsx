@@ -8,9 +8,10 @@ import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { formatDate } from "@/lib/utils";
 
 const tipoConfig: Record<string, { label: string; variant: "success" | "danger" | "warning" | "info" | "outline"; icon: typeof ArrowDownLeft }> = {
   cobro: { label: "Cobro", variant: "success", icon: ArrowDownLeft },
@@ -93,10 +94,24 @@ interface LineaCreditoRow {
   proveedores?: { razon_social: string } | null;
 }
 
+const emptyMovForm = {
+  tipo: "cobro" as "cobro" | "pago" | "cheque_emitido" | "cheque_recibido" | "transferencia" | "efectivo",
+  descripcion: "",
+  monto: 0,
+  fecha: new Date().toISOString().slice(0, 10),
+  moneda: "ARS" as "USD" | "ARS",
+};
+
 export default function FinanzasPage() {
   const [tab, setTab] = useState<FinanzasTab>("movimientos");
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
   const [loading, setLoading] = useState(true);
+
+  // Modal
+  const [modalOpen, setModalOpen] = useState(false);
+  const [movForm, setMovForm] = useState(emptyMovForm);
+  const [formError, setFormError] = useState("");
+  const [saving, setSaving] = useState(false);
 
   // Data state — initialised with mock data as fallback
   const [movimientos, setMovimientos] = useState<MovimientoRow[]>([]);
@@ -105,8 +120,7 @@ export default function FinanzasPage() {
   const [extractos, setExtractos] = useState<ExtractoRow[]>([]);
   const [lineasCredito, setLineasCredito] = useState<LineaCreditoRow[]>([]);
 
-  useEffect(() => {
-    async function fetchData() {
+  const fetchData = useCallback(async () => {
       setLoading(true);
       try {
         const [movRes, ccCliRes, ccProvRes, extRes, lcRes] = await Promise.all([
@@ -271,9 +285,48 @@ export default function FinanzasPage() {
       } finally {
         setLoading(false);
       }
-    }
-    fetchData();
   }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  async function handleCreateMov() {
+    if (!movForm.descripcion.trim()) { setFormError("La descripcion es obligatoria"); return; }
+    if (movForm.monto <= 0) { setFormError("El monto debe ser mayor a 0"); return; }
+    setSaving(true);
+    setFormError("");
+    try {
+      const { error } = await supabase.from("movimientos").insert(movForm);
+      if (error) throw error;
+      setModalOpen(false);
+      setMovForm(emptyMovForm);
+      await fetchData();
+    } catch (err: unknown) {
+      setFormError(err instanceof Error ? err.message : "Error al guardar");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleConciliar(id: string) {
+    try {
+      await supabase.from("movimientos").update({ conciliado: true }).eq("id", id);
+      await fetchData();
+    } catch (err) {
+      console.error("Error conciliando:", err);
+    }
+  }
+
+  async function handleDeleteMov(id: string) {
+    if (!confirm("¿Seguro que queres eliminar este movimiento?")) return;
+    try {
+      await supabase.from("movimientos").delete().eq("id", id);
+      await fetchData();
+    } catch (err) {
+      console.error("Error eliminando:", err);
+    }
+  }
 
   // ── Derived calculations ──
   const totalCobros = movimientos.filter((m) => ["cobro", "cheque_recibido", "transferencia"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
@@ -310,7 +363,7 @@ export default function FinanzasPage() {
 
   return (
     <>
-      <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => {} }} />
+      <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setMovForm(emptyMovForm); setFormError(""); setModalOpen(true); } }} />
       <div className="p-8 space-y-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard title="Cobros del mes" value={formatCurrency(totalCobros)} icon={ArrowDownLeft} iconColor="text-emerald-600" />
@@ -324,7 +377,7 @@ export default function FinanzasPage() {
           {tabs.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`rounded-md px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                tab === t.id ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700"
+                tab === t.id ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
               }`}>
               {t.label}
             </button>
@@ -336,14 +389,32 @@ export default function FinanzasPage() {
           <Card className="p-0 overflow-hidden">
             <DataTable<MovimientoRow>
               columns={[
-                { key: "tipo", label: "Tipo", render: (row) => { const cfg = tipoConfig[row.tipo]; const Icon = cfg.icon; return (<div className="flex items-center gap-2"><Icon className="h-4 w-4 text-zinc-400" /><Badge variant={cfg.variant}>{cfg.label}</Badge></div>); }},
-                { key: "descripcion", label: "Descripcion", render: (row) => <span className="font-medium">{row.descripcion}</span> },
-                { key: "fecha", label: "Fecha", render: (row) => <span className="text-zinc-500">{row.fecha}</span> },
-                { key: "monto", label: "Monto", className: "text-right", render: (row) => {
+                { key: "tipo", label: "Tipo", sortable: true, render: (row) => { const cfg = tipoConfig[row.tipo]; const Icon = cfg.icon; return (<div className="flex items-center gap-2"><Icon className="h-4 w-4 text-zinc-400" /><Badge variant={cfg.variant}>{cfg.label}</Badge></div>); }},
+                { key: "descripcion", label: "Descripcion", sortable: true, render: (row) => (
+                  <div>
+                    <span className="font-medium">{row.descripcion}</span>
+                    {row.clientes?.razon_social && <p className="text-xs text-zinc-400">{row.clientes.razon_social}</p>}
+                    {row.proveedores?.razon_social && <p className="text-xs text-zinc-400">{row.proveedores.razon_social}</p>}
+                  </div>
+                )},
+                { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
+                { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => {
                   const isIngreso = ["cobro", "cheque_recibido", "transferencia"].includes(row.tipo);
                   return <span className={`font-mono font-semibold block text-right ${isIngreso ? "text-emerald-600" : "text-red-600"}`}>{isIngreso ? "+" : "-"}{formatCurrency(row.monto)}</span>;
                 }},
-                { key: "conciliado", label: "Conciliado", render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Si" : "Pendiente"}</Badge> },
+                { key: "conciliado", label: "Conciliado", sortable: true, render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Si" : "Pendiente"}</Badge> },
+                { key: "actions", label: "", sortable: false, render: (row) => (
+                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    {!row.conciliado && (
+                      <button onClick={() => handleConciliar(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Conciliar">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    <button onClick={() => handleDeleteMov(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )},
               ]}
               data={movimientos}
             />
@@ -362,7 +433,7 @@ export default function FinanzasPage() {
                 { key: "limite_credito", label: "Limite", className: "text-right", render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
                 { key: "saldo_cuenta_corriente", label: "Saldo", className: "text-right", render: (row) => {
                   const pct = (row.saldo_cuenta_corriente / row.limite_credito) * 100;
-                  return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                  return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
                 }},
               ]}
               data={ccClientes}
@@ -383,7 +454,7 @@ export default function FinanzasPage() {
                 { key: "limite_credito", label: "Limite", className: "text-right", render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
                 { key: "saldo_cuenta_corriente", label: "Deuda", className: "text-right", render: (row) => {
                   const pct = (row.saldo_cuenta_corriente / row.limite_credito) * 100;
-                  return (<div className="text-right"><span className={`font-mono font-semibold text-red-600`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                  return (<div className="text-right"><span className={`font-mono font-semibold text-red-600`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
                 }},
               ]}
               data={ccProveedores}
@@ -396,13 +467,13 @@ export default function FinanzasPage() {
           <Card>
             <CardHeader><CardTitle>E-Cheques</CardTitle></CardHeader>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="rounded-lg border border-zinc-200 p-4">
+              <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
                 <p className="text-xs font-medium text-zinc-500 mb-3">Cheques recibidos</p>
                 {movimientos.filter((m) => m.tipo === "cheque_recibido").map((m) => (
                   <div key={m.id} className="flex items-center justify-between rounded-lg bg-blue-50 p-3 mb-2"><div><p className="text-sm font-medium">{m.descripcion}</p><p className="text-xs text-zinc-400">{m.fecha}</p></div><span className="font-mono font-semibold text-blue-600">{formatCurrency(m.monto)}</span></div>
                 ))}
               </div>
-              <div className="rounded-lg border border-zinc-200 p-4">
+              <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
                 <p className="text-xs font-medium text-zinc-500 mb-3">Cheques emitidos</p>
                 {movimientos.filter((m) => m.tipo === "cheque_emitido").map((m) => (
                   <div key={m.id} className="flex items-center justify-between rounded-lg bg-amber-50 p-3 mb-2"><div><p className="text-sm font-medium">{m.descripcion}</p><p className="text-xs text-zinc-400">{m.fecha}</p></div><span className="font-mono font-semibold text-amber-600">{formatCurrency(m.monto)}</span></div>
@@ -415,9 +486,9 @@ export default function FinanzasPage() {
         {/* ── Extractos bancarios ── */}
         {tab === "extractos" && extracto && (
           <>
-            <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-white p-6 text-center">
+            <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-white p-6 text-center dark:border-zinc-600 dark:bg-zinc-900">
               <Upload className="mx-auto h-8 w-8 text-zinc-300" />
-              <p className="mt-2 font-medium text-zinc-700">Arrastra un extracto o hace click para subir</p>
+              <p className="mt-2 font-medium text-zinc-700 dark:text-zinc-300">Arrastra un extracto o hace click para subir</p>
               <p className="text-sm text-zinc-400">Formatos: .xlsx, .xls, .csv, .pdf</p>
               <button className="mt-3 rounded-lg bg-orange-500 px-5 py-2 text-sm font-medium text-white hover:bg-orange-600">Seleccionar archivo</button>
             </div>
@@ -434,7 +505,7 @@ export default function FinanzasPage() {
               <div className="flex gap-2 mb-4">
                 {(["todos", "matcheado", "pendiente"] as const).map((f) => {
                   const count = f === "todos" ? extracto.extracto_movimientos.length : extracto.extracto_movimientos.filter(m => m.estado === f).length;
-                  return (<button key={f} onClick={() => setFilterExtracto(f)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filterExtracto === f ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"}`}>{f === "todos" ? "Todos" : f === "matcheado" ? "Matcheados" : "Pendientes"} ({count})</button>);
+                  return (<button key={f} onClick={() => setFilterExtracto(f)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filterExtracto === f ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"}`}>{f === "todos" ? "Todos" : f === "matcheado" ? "Matcheados" : "Pendientes"} ({count})</button>);
                 })}
               </div>
 
@@ -465,7 +536,7 @@ export default function FinanzasPage() {
           <>
             <Card>
               <CardHeader><CardTitle>Uso global de credito</CardTitle><span className="text-sm text-zinc-500">{totalLineas > 0 ? Math.round((totalUtilizadoCredito / totalLineas) * 100) : 0}% utilizado</span></CardHeader>
-              <div className="h-4 rounded-full bg-zinc-100"><div className="h-4 rounded-full bg-gradient-to-r from-orange-500 to-red-500" style={{ width: `${totalLineas > 0 ? (totalUtilizadoCredito / totalLineas) * 100 : 0}%` }} /></div>
+              <div className="h-4 rounded-full bg-zinc-100 dark:bg-zinc-700"><div className="h-4 rounded-full bg-gradient-to-r from-orange-500 to-red-500" style={{ width: `${totalLineas > 0 ? (totalUtilizadoCredito / totalLineas) * 100 : 0}%` }} /></div>
               <div className="mt-2 flex justify-between text-xs text-zinc-400"><span>Utilizado: {formatCurrency(totalUtilizadoCredito)}</span><span>Disponible: {formatCurrency(totalDisponibleCredito)}</span></div>
             </Card>
 
@@ -481,7 +552,7 @@ export default function FinanzasPage() {
                           {lc.tipo === "bancaria" ? <Landmark className="h-5 w-5" /> : <Factory className="h-5 w-5" />}
                         </div>
                         <div>
-                          <h3 className="font-semibold text-zinc-900">{lc.entidad}</h3>
+                          <h3 className="font-semibold text-zinc-900 dark:text-white">{lc.entidad}</h3>
                           <div className="flex items-center gap-2 mt-0.5">
                             <Badge variant={lc.estado === "activa" ? "success" : "danger"}>{lc.estado}</Badge>
                             <Badge variant="outline">{lc.tipo === "bancaria" ? "Bancaria" : "Proveedor"}</Badge>
@@ -493,12 +564,12 @@ export default function FinanzasPage() {
                     </div>
                     <div className="mt-4 space-y-3">
                       <div>
-                        <div className="flex items-center justify-between text-xs mb-1.5"><span className="text-zinc-500">{pctUsado}% utilizado</span><span className="font-mono text-zinc-600">{formatCurrency(lc.monto_utilizado)} / {formatCurrency(lc.monto_total)}</span></div>
-                        <div className="h-2.5 rounded-full bg-zinc-100"><div className={`h-2.5 rounded-full ${pctUsado >= 100 ? "bg-red-500" : pctUsado >= 80 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pctUsado, 100)}%` }} /></div>
+                        <div className="flex items-center justify-between text-xs mb-1.5"><span className="text-zinc-500">{pctUsado}% utilizado</span><span className="font-mono text-zinc-600 dark:text-zinc-300">{formatCurrency(lc.monto_utilizado)} / {formatCurrency(lc.monto_total)}</span></div>
+                        <div className="h-2.5 rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-2.5 rounded-full ${pctUsado >= 100 ? "bg-red-500" : pctUsado >= 80 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pctUsado, 100)}%` }} /></div>
                       </div>
-                      <div className="flex items-center justify-between pt-2 border-t border-zinc-100">
+                      <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-700">
                         <div><p className="text-xs text-zinc-400">Disponible</p><p className={`font-mono font-bold text-lg ${isAgotada ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(lc.monto_disponible)}</p></div>
-                        <div className="text-right"><p className="text-xs text-zinc-400">Vencimiento</p><p className="text-sm font-medium text-zinc-600">{lc.vencimiento}</p></div>
+                        <div className="text-right"><p className="text-xs text-zinc-400">Vencimiento</p><p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">{lc.vencimiento}</p></div>
                       </div>
                       {lc.notas && <p className="text-xs text-zinc-400 pt-2 border-t border-zinc-100">{lc.notas}</p>}
                     </div>
@@ -509,6 +580,58 @@ export default function FinanzasPage() {
           </>
         )}
       </div>
+
+      {/* Nuevo movimiento modal */}
+      {modalOpen && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setModalOpen(false)} />
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-bold dark:text-white">Nuevo movimiento</h2>
+              <button onClick={() => setModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </div>
+            {formError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{formError}</div>}
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Tipo</label>
+                <select value={movForm.tipo} onChange={(e) => setMovForm({ ...movForm, tipo: e.target.value as typeof movForm.tipo })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  {Object.entries(tipoConfig).map(([k, v]) => (
+                    <option key={k} value={k}>{v.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Descripcion *</label>
+                <input value={movForm.descripcion} onChange={(e) => setMovForm({ ...movForm, descripcion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Monto *</label>
+                  <input type="number" value={movForm.monto} onChange={(e) => setMovForm({ ...movForm, monto: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Moneda</label>
+                  <select value={movForm.moneda} onChange={(e) => setMovForm({ ...movForm, moneda: e.target.value as "ARS" | "USD" })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    <option value="ARS">ARS</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Fecha</label>
+                <input type="date" value={movForm.fecha} onChange={(e) => setMovForm({ ...movForm, fecha: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+              <button onClick={() => setModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
+              <button onClick={handleCreateMov} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                Crear movimiento
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }

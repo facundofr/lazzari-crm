@@ -24,3 +24,25 @@ export async function getRemitos() {
   if (error) throw error;
   return data;
 }
+
+export async function createFactura(data: Record<string, unknown>) {
+  const { data: result, error } = await supabase.from("facturas").insert(data as any).select().single();
+  if (error) throw error;
+  return result;
+}
+
+export async function anularFactura(id: string) {
+  const { error } = await supabase.from("facturas").update({ estado: "anulada" }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function createRemito(data: Record<string, unknown>) {
+  const { data: result, error } = await supabase.from("remitos").insert(data as any).select().single();
+  if (error) throw error;
+  return result;
+}
+
+export async function updateRemitoEstado(id: string, estado: string) {
+  const { error } = await supabase.from("remitos").update({ estado } as any).eq("id", id);
+  if (error) throw error;
+}

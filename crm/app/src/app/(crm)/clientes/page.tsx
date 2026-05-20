@@ -6,11 +6,13 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { formatCurrency } from "@/lib/utils";
 import { mockClients } from "@/lib/mock-data";
-import { mockUsers } from "@/lib/mock-data";
 import type { Client } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
-import { Search, Filter, Download, Building2, MapPin, Phone, Mail, Loader2 } from "lucide-react";
-import { useState, useEffect } from "react";
+import {
+  Search, Filter, Download, MapPin, Phone, Mail, Loader2,
+  Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight, ChevronDown,
+} from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
 
 const condicionLabels: Record<string, string> = {
   RI: "Resp. Inscripto",
@@ -19,86 +21,270 @@ const condicionLabels: Record<string, string> = {
   CF: "Cons. Final",
 };
 
-/** Map a Supabase snake_case row to the camelCase Client type the UI expects. */
-function mapSupabaseCliente(row: Record<string, unknown>): Client {
+const provincias = [
+  "Buenos Aires", "CABA", "Catamarca", "Chaco", "Chubut", "Córdoba",
+  "Corrientes", "Entre Ríos", "Formosa", "Jujuy", "La Pampa", "La Rioja",
+  "Mendoza", "Misiones", "Neuquén", "Río Negro", "Salta", "San Juan",
+  "San Luis", "Santa Cruz", "Santa Fe", "Santiago del Estero",
+  "Tierra del Fuego", "Tucumán",
+];
+
+interface ClienteRow {
+  id: string;
+  type: string;
+  razon_social: string;
+  cuit: string;
+  condicion_iva: string;
+  email: string;
+  telefono: string;
+  direccion: string;
+  localidad: string;
+  provincia: string;
+  cp: string;
+  lista_precio: string;
+  dias_cuenta_corriente: number;
+  forma_pago: string;
+  limite_credito: number;
+  saldo_cuenta_corriente: number;
+  notas: string;
+  activo: boolean;
+  assigned_to: string | null;
+  created_at: string;
+  updated_at: string;
+  assigned_profile: { full_name: string } | null;
+  contactos: unknown[];
+  cliente_sucursales: unknown[];
+}
+
+function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
   return {
-    id: row.id as string,
+    id: row.id,
     type: (row.type as Client["type"]) ?? "empresa",
-    razonSocial: (row.razon_social as string) ?? "",
-    cuit: (row.cuit as string) ?? "",
+    razonSocial: row.razon_social ?? "",
+    cuit: row.cuit ?? "",
     condicionIva: (row.condicion_iva as Client["condicionIva"]) ?? "RI",
-    email: (row.email as string) ?? "",
-    telefono: (row.telefono as string) ?? "",
-    direccion: (row.direccion as string) ?? "",
-    localidad: (row.localidad as string) ?? "",
-    provincia: (row.provincia as string) ?? "",
-    cp: (row.cp as string) ?? "",
-    listaPrecio: (row.lista_precio as string) ?? "",
+    email: row.email ?? "",
+    telefono: row.telefono ?? "",
+    direccion: row.direccion ?? "",
+    localidad: row.localidad ?? "",
+    provincia: row.provincia ?? "",
+    cp: row.cp ?? "",
+    listaPrecio: row.lista_precio ?? "",
     diasCuentaCorriente: Number(row.dias_cuenta_corriente) || 0,
-    formaPago: (row.forma_pago as string) ?? "",
+    formaPago: row.forma_pago ?? "",
     limiteCredito: Number(row.limite_credito) || 0,
     saldoCuentaCorriente: Number(row.saldo_cuenta_corriente) || 0,
-    notas: (row.notas as string) ?? "",
-    activo: row.activo as boolean ?? true,
-    assignedTo: (row.assigned_to as string) ?? undefined,
-    createdAt: (row.created_at as string) ?? "",
-    updatedAt: (row.updated_at as string) ?? "",
-    contactos: Array.isArray(row.contactos) ? row.contactos : [],
-    sucursales: Array.isArray(row.cliente_sucursales) ? row.cliente_sucursales : [],
+    notas: row.notas ?? "",
+    activo: row.activo ?? true,
+    assignedTo: row.assigned_to ?? undefined,
+    createdAt: row.created_at ?? "",
+    updatedAt: row.updated_at ?? "",
+    contactos: Array.isArray(row.contactos) ? row.contactos as Client["contactos"] : [],
+    sucursales: Array.isArray(row.cliente_sucursales) ? row.cliente_sucursales as Client["sucursales"] : [],
+    vendedorNombre: row.assigned_profile?.full_name ?? "—",
   };
 }
+
+type ClienteExt = Client & { vendedorNombre: string };
+
+const emptyForm = {
+  razon_social: "",
+  cuit: "",
+  type: "empresa" as string,
+  condicion_iva: "RI" as string,
+  email: "",
+  telefono: "",
+  direccion: "",
+  localidad: "",
+  provincia: "",
+  cp: "",
+  lista_precio: "A",
+  dias_cuenta_corriente: 30,
+  forma_pago: "Transferencia",
+  limite_credito: 0,
+  notas: "",
+};
 
 export default function ClientesPage() {
   const [view, setView] = useState<"table" | "cards">("table");
   const [search, setSearch] = useState("");
-  const [clientes, setClientes] = useState<Client[]>(mockClients);
+  const [clientes, setClientes] = useState<ClienteExt[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    async function fetchClientes() {
-      try {
-        const { data, error } = await supabase
-          .from("clientes")
-          .select(`*, contactos(*), cliente_sucursales(*)`)
-          .order("razon_social");
+  // Filters
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterCondicion, setFilterCondicion] = useState("");
+  const [filterProvincia, setFilterProvincia] = useState("");
+  const [filterEstado, setFilterEstado] = useState<"" | "activo" | "inactivo">("");
 
-        if (error) {
-          console.error("Error fetching clientes:", error);
-          // Keep mock data as fallback
-          setClientes(mockClients);
-        } else if (data && data.length > 0) {
-          setClientes(data.map((row) => mapSupabaseCliente(row as Record<string, unknown>)));
-        } else {
-          // Supabase returned empty — use mock data as fallback
-          setClientes(mockClients);
-        }
-      } catch (err) {
-        console.error("Error fetching clientes:", err);
-        setClientes(mockClients);
-      } finally {
-        setLoading(false);
+  // Modal
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState(emptyForm);
+  const [formError, setFormError] = useState("");
+
+  // Detail
+  const [selectedCliente, setSelectedCliente] = useState<ClienteExt | null>(null);
+
+  const fetchClientes = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("clientes")
+        .select(`*, assigned_profile:assigned_to(full_name), contactos(*), cliente_sucursales(*)`)
+        .order("razon_social");
+
+      if (error) {
+        console.error("Error fetching clientes:", error);
+        setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—" })));
+      } else if (data && data.length > 0) {
+        setClientes(data.map((row) => mapRow(row as unknown as ClienteRow)));
+      } else {
+        setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—" })));
       }
+    } catch (err) {
+      console.error("Error fetching clientes:", err);
+      setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—" })));
+    } finally {
+      setLoading(false);
     }
-
-    fetchClientes();
   }, []);
 
-  const filtered = clientes.filter(
-    (c) =>
-      c.razonSocial.toLowerCase().includes(search.toLowerCase()) ||
-      c.cuit.includes(search)
-  );
+  useEffect(() => {
+    fetchClientes();
+  }, [fetchClientes]);
 
-  const vendedorName = (id?: string) => mockUsers.find((u) => u.id === id)?.name ?? "—";
+  const filtered = clientes.filter((c) => {
+    const matchSearch =
+      c.razonSocial.toLowerCase().includes(search.toLowerCase()) ||
+      c.cuit.includes(search) ||
+      c.email.toLowerCase().includes(search.toLowerCase());
+    const matchCondicion = !filterCondicion || c.condicionIva === filterCondicion;
+    const matchProvincia = !filterProvincia || c.provincia === filterProvincia;
+    const matchEstado =
+      !filterEstado ||
+      (filterEstado === "activo" && c.activo) ||
+      (filterEstado === "inactivo" && !c.activo);
+    return matchSearch && matchCondicion && matchProvincia && matchEstado;
+  });
+
+  const activos = clientes.filter((c) => c.activo).length;
+
+  // CSV Export
+  function exportCSV() {
+    const headers = ["Razon Social", "CUIT", "Condicion IVA", "Email", "Telefono", "Localidad", "Provincia", "Lista Precio", "Saldo CC", "Limite Credito", "Estado"];
+    const rows = filtered.map((c) => [
+      c.razonSocial, c.cuit, condicionLabels[c.condicionIva] || c.condicionIva,
+      c.email, c.telefono, c.localidad, c.provincia, c.listaPrecio,
+      c.saldoCuentaCorriente, c.limiteCredito, c.activo ? "Activo" : "Inactivo",
+    ]);
+    const csv = [headers, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `clientes_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Modal handlers
+  function openCreate() {
+    setEditingId(null);
+    setForm(emptyForm);
+    setFormError("");
+    setModalOpen(true);
+  }
+
+  function openEdit(c: ClienteExt) {
+    setEditingId(c.id);
+    setForm({
+      razon_social: c.razonSocial,
+      cuit: c.cuit,
+      type: c.type,
+      condicion_iva: c.condicionIva,
+      email: c.email,
+      telefono: c.telefono,
+      direccion: c.direccion,
+      localidad: c.localidad,
+      provincia: c.provincia,
+      cp: c.cp,
+      lista_precio: c.listaPrecio,
+      dias_cuenta_corriente: c.diasCuentaCorriente,
+      forma_pago: c.formaPago,
+      limite_credito: c.limiteCredito,
+      notas: c.notas,
+    });
+    setFormError("");
+    setModalOpen(true);
+  }
+
+  async function handleSave() {
+    if (!form.razon_social.trim()) {
+      setFormError("La razon social es obligatoria");
+      return;
+    }
+    if (!form.cuit.trim()) {
+      setFormError("El CUIT es obligatorio");
+      return;
+    }
+    setSaving(true);
+    setFormError("");
+    try {
+      if (editingId) {
+        const { error } = await supabase
+          .from("clientes")
+          .update(form as any)
+          .eq("id", editingId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("clientes")
+          .insert(form as any);
+        if (error) throw error;
+      }
+      setModalOpen(false);
+      await fetchClientes();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error al guardar";
+      setFormError(msg);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleToggleActivo(c: ClienteExt) {
+    try {
+      await supabase.from("clientes").update({ activo: !c.activo }).eq("id", c.id);
+      await fetchClientes();
+    } catch (err) {
+      console.error("Error toggling activo:", err);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!confirm("¿Seguro que queres eliminar este cliente? Esta accion no se puede deshacer.")) return;
+    try {
+      await supabase.from("clientes").delete().eq("id", id);
+      setSelectedCliente(null);
+      await fetchClientes();
+    } catch (err) {
+      console.error("Error deleting cliente:", err);
+    }
+  }
+
+  function clearFilters() {
+    setFilterCondicion("");
+    setFilterProvincia("");
+    setFilterEstado("");
+  }
+
+  const hasFilters = filterCondicion || filterProvincia || filterEstado;
 
   if (loading) {
     return (
       <>
-        <Header
-          title="Clientes"
-          subtitle="Cargando..."
-          action={{ label: "Nuevo cliente", onClick: () => {} }}
-        />
+        <Header title="Clientes" subtitle="Cargando..." action={{ label: "Nuevo cliente", onClick: () => {} }} />
         <div className="flex items-center justify-center p-24">
           <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
           <span className="ml-3 text-sm text-zinc-500">Cargando clientes...</span>
@@ -111,8 +297,8 @@ export default function ClientesPage() {
     <>
       <Header
         title="Clientes"
-        subtitle={`${clientes.length} clientes activos`}
-        action={{ label: "Nuevo cliente", onClick: () => {} }}
+        subtitle={`${activos} clientes activos`}
+        action={{ label: "Nuevo cliente", onClick: openCreate }}
       />
       <div className="p-8 space-y-6">
         {/* Filters bar */}
@@ -121,21 +307,69 @@ export default function ClientesPage() {
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
               type="text"
-              placeholder="Buscar por razon social o CUIT..."
+              placeholder="Buscar por razon social, CUIT o email..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900"
+              className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             />
           </div>
-          <button className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
-            <Filter className="h-4 w-4" /> Filtros
-          </button>
-          <button className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900">
+          <div className="relative">
+            <button
+              onClick={() => setFilterOpen(!filterOpen)}
+              className={`flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
+                hasFilters
+                  ? "border-orange-300 bg-orange-50 text-orange-700"
+                  : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900"
+              }`}
+            >
+              <Filter className="h-4 w-4" /> Filtros {hasFilters && <Badge variant="warning">!</Badge>}
+              <ChevronDown className="h-3 w-3" />
+            </button>
+            {filterOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setFilterOpen(false)} />
+                <div className="absolute left-0 top-full z-50 mt-2 w-72 rounded-xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Condicion IVA</label>
+                    <select value={filterCondicion} onChange={(e) => setFilterCondicion(e.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                      <option value="">Todas</option>
+                      {Object.entries(condicionLabels).map(([k, v]) => (
+                        <option key={k} value={k}>{v}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Provincia</label>
+                    <select value={filterProvincia} onChange={(e) => setFilterProvincia(e.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                      <option value="">Todas</option>
+                      {provincias.map((p) => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Estado</label>
+                    <select value={filterEstado} onChange={(e) => setFilterEstado(e.target.value as "" | "activo" | "inactivo")} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                      <option value="">Todos</option>
+                      <option value="activo">Activo</option>
+                      <option value="inactivo">Inactivo</option>
+                    </select>
+                  </div>
+                  {hasFilters && (
+                    <button onClick={clearFilters} className="w-full rounded-lg py-2 text-xs font-medium text-orange-500 hover:bg-orange-50">
+                      Limpiar filtros
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          <button onClick={exportCSV} className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800">
             <Download className="h-4 w-4" /> Exportar
           </button>
           <div className="flex rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-            <button onClick={() => setView("table")} className={`px-3 py-2 text-xs font-medium ${view === "table" ? "bg-zinc-100 text-zinc-800" : "bg-white text-zinc-400"}`}>Tabla</button>
-            <button onClick={() => setView("cards")} className={`px-3 py-2 text-xs font-medium ${view === "cards" ? "bg-zinc-100 text-zinc-800" : "bg-white text-zinc-400"}`}>Tarjetas</button>
+            <button onClick={() => setView("table")} className={`px-3 py-2 text-xs font-medium ${view === "table" ? "bg-zinc-100 text-zinc-800 dark:bg-zinc-700 dark:text-white" : "bg-white text-zinc-400 dark:bg-zinc-900"}`}>Tabla</button>
+            <button onClick={() => setView("cards")} className={`px-3 py-2 text-xs font-medium ${view === "cards" ? "bg-zinc-100 text-zinc-800 dark:bg-zinc-700 dark:text-white" : "bg-white text-zinc-400 dark:bg-zinc-900"}`}>Tarjetas</button>
           </div>
         </div>
 
@@ -161,10 +395,10 @@ export default function ClientesPage() {
 
         {view === "table" ? (
           <Card className="p-0 overflow-hidden">
-            <DataTable<Client>
+            <DataTable<ClienteExt>
               columns={[
                 {
-                  key: "razonSocial", label: "Razon social",
+                  key: "razonSocial", label: "Razon social", sortable: true,
                   render: (row) => (
                     <div className="flex items-center gap-3">
                       <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-xs">
@@ -177,21 +411,34 @@ export default function ClientesPage() {
                     </div>
                   ),
                 },
-                { key: "condicionIva", label: "IVA", render: (row) => <Badge variant="outline">{condicionLabels[row.condicionIva]}</Badge> },
-                { key: "localidad", label: "Ubicacion", render: (row) => <span className="text-zinc-500">{row.localidad}, {row.provincia}</span> },
-                { key: "listaPrecio", label: "Lista", render: (row) => <Badge variant="info">{row.listaPrecio}</Badge> },
-                { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", render: (row) => <span className="font-mono block text-right">{formatCurrency(row.saldoCuentaCorriente)}</span> },
-                { key: "assignedTo", label: "Vendedor", render: (row) => <span className="text-zinc-500 text-xs">{vendedorName(row.assignedTo)}</span> },
-                { key: "activo", label: "Estado", render: (row) => <Badge variant={row.activo ? "success" : "danger"}>{row.activo ? "Activo" : "Inactivo"}</Badge> },
+                { key: "condicionIva", label: "IVA", sortable: true, render: (row) => <Badge variant="outline">{condicionLabels[row.condicionIva]}</Badge> },
+                { key: "localidad", label: "Ubicacion", sortable: true, render: (row) => <span className="text-zinc-500">{row.localidad}{row.provincia ? `, ${row.provincia}` : ""}</span> },
+                { key: "listaPrecio", label: "Lista", sortable: true, render: (row) => <Badge variant="info">{row.listaPrecio || "—"}</Badge> },
+                { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.saldoCuentaCorriente)}</span> },
+                { key: "vendedorNombre", label: "Vendedor", sortable: true, render: (row) => <span className="text-zinc-500 text-xs">{row.vendedorNombre}</span> },
+                { key: "activo", label: "Estado", sortable: true, render: (row) => <Badge variant={row.activo ? "success" : "danger"}>{row.activo ? "Activo" : "Inactivo"}</Badge> },
+                {
+                  key: "actions", label: "", sortable: false,
+                  render: (row) => (
+                    <div className="flex items-center gap-1">
+                      <button onClick={(e) => { e.stopPropagation(); openEdit(row); }} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Editar">
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); handleToggleActivo(row); }} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title={row.activo ? "Desactivar" : "Activar"}>
+                        {row.activo ? <ToggleRight className="h-3.5 w-3.5 text-green-500" /> : <ToggleLeft className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  ),
+                },
               ]}
               data={filtered}
-              onRowClick={() => {}}
+              onRowClick={(row) => setSelectedCliente(row)}
             />
           </Card>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {filtered.map((client) => (
-              <Card key={client.id} className="cursor-pointer hover:shadow-md transition-shadow">
+              <Card key={client.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => setSelectedCliente(client)}>
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-sm">
@@ -208,8 +455,8 @@ export default function ClientesPage() {
                 </div>
                 <div className="mt-4 space-y-2 text-sm text-zinc-500">
                   <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5" /> {client.localidad}, {client.provincia}</div>
-                  <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5" /> {client.telefono}</div>
-                  <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5" /> {client.email}</div>
+                  <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5" /> {client.telefono || "—"}</div>
+                  <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5" /> {client.email || "—"}</div>
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4 dark:border-zinc-800">
                   <div>
@@ -218,7 +465,7 @@ export default function ClientesPage() {
                   </div>
                   <div className="text-right">
                     <p className="text-xs text-zinc-400">Lista</p>
-                    <Badge variant="info">{client.listaPrecio}</Badge>
+                    <Badge variant="info">{client.listaPrecio || "—"}</Badge>
                   </div>
                 </div>
               </Card>
@@ -226,6 +473,213 @@ export default function ClientesPage() {
           </div>
         )}
       </div>
+
+      {/* Detail side panel */}
+      {selectedCliente && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setSelectedCliente(null)} />
+          <div className="fixed right-0 top-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between border-b border-zinc-200 p-6 dark:border-zinc-700">
+              <div>
+                <h2 className="text-lg font-bold text-zinc-900 dark:text-white">{selectedCliente.razonSocial}</h2>
+                <p className="text-sm text-zinc-500">{selectedCliente.cuit}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
+                  <Pencil className="h-4 w-4" />
+                </button>
+                <button onClick={() => handleDelete(selectedCliente.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500">
+                  <Trash2 className="h-4 w-4" />
+                </button>
+                <button onClick={() => setSelectedCliente(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 space-y-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-xs text-zinc-500">Condicion IVA</p>
+                  <p className="text-sm font-medium">{condicionLabels[selectedCliente.condicionIva]}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500">Tipo</p>
+                  <p className="text-sm font-medium capitalize">{selectedCliente.type}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500">Email</p>
+                  <p className="text-sm font-medium">{selectedCliente.email || "—"}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500">Telefono</p>
+                  <p className="text-sm font-medium">{selectedCliente.telefono || "—"}</p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-xs text-zinc-500">Direccion</p>
+                  <p className="text-sm font-medium">{selectedCliente.direccion || "—"}, {selectedCliente.localidad}, {selectedCliente.provincia} {selectedCliente.cp}</p>
+                </div>
+              </div>
+              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3">Comercial</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs text-zinc-500">Lista de precios</p>
+                    <p className="text-sm font-medium">{selectedCliente.listaPrecio || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-500">Forma de pago</p>
+                    <p className="text-sm font-medium">{selectedCliente.formaPago || "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-500">Dias CC</p>
+                    <p className="text-sm font-medium">{selectedCliente.diasCuentaCorriente}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-500">Limite credito</p>
+                    <p className="text-sm font-medium">{formatCurrency(selectedCliente.limiteCredito)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-500">Saldo CC</p>
+                    <p className="text-sm font-medium">{formatCurrency(selectedCliente.saldoCuentaCorriente)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-500">Vendedor</p>
+                    <p className="text-sm font-medium">{selectedCliente.vendedorNombre}</p>
+                  </div>
+                </div>
+              </div>
+              {selectedCliente.notas && (
+                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Notas</h3>
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{selectedCliente.notas}</p>
+                </div>
+              )}
+              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                <Badge variant={selectedCliente.activo ? "success" : "danger"}>
+                  {selectedCliente.activo ? "Activo" : "Inactivo"}
+                </Badge>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Create/Edit Modal */}
+      {modalOpen && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setModalOpen(false)} />
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-bold text-zinc-900 dark:text-white">
+                {editingId ? "Editar cliente" : "Nuevo cliente"}
+              </h2>
+              <button onClick={() => setModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {formError && (
+              <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">
+                {formError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="col-span-2">
+                <label className="text-xs font-medium text-zinc-500">Razon social *</label>
+                <input value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">CUIT *</label>
+                <input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} placeholder="XX-XXXXXXXX-X" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Tipo</label>
+                <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="empresa">Empresa</option>
+                  <option value="persona">Persona</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Condicion IVA</label>
+                <select value={form.condicion_iva} onChange={(e) => setForm({ ...form, condicion_iva: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  {Object.entries(condicionLabels).map(([k, v]) => (
+                    <option key={k} value={k}>{v}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Email</label>
+                <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Telefono</label>
+                <input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Direccion</label>
+                <input value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Localidad</label>
+                <input value={form.localidad} onChange={(e) => setForm({ ...form, localidad: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Provincia</label>
+                <select value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="">Seleccionar...</option>
+                  {provincias.map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Codigo Postal</label>
+                <input value={form.cp} onChange={(e) => setForm({ ...form, cp: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Lista de precios</label>
+                <select value={form.lista_precio} onChange={(e) => setForm({ ...form, lista_precio: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="A">Lista A</option>
+                  <option value="B">Lista B</option>
+                  <option value="C">Lista C</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Forma de pago</label>
+                <select value={form.forma_pago} onChange={(e) => setForm({ ...form, forma_pago: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="Transferencia">Transferencia</option>
+                  <option value="Cheque">Cheque</option>
+                  <option value="Efectivo">Efectivo</option>
+                  <option value="Cuenta corriente">Cuenta corriente</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Dias cuenta corriente</label>
+                <input type="number" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Limite de credito</label>
+                <input type="number" value={form.limite_credito} onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs font-medium text-zinc-500">Notas</label>
+                <textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={3} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+              <button onClick={() => setModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                Cancelar
+              </button>
+              <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                {editingId ? "Guardar cambios" : "Crear cliente"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }

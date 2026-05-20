@@ -33,3 +33,20 @@ export async function getComparadorPrecios() {
   if (error) throw error;
   return data;
 }
+
+export async function createProveedor(data: Record<string, unknown>) {
+  const { data: result, error } = await supabase.from("proveedores").insert(data as any).select().single();
+  if (error) throw error;
+  return result;
+}
+
+export async function updateProveedor(id: string, data: Record<string, unknown>) {
+  const { data: result, error } = await supabase.from("proveedores").update(data as any).eq("id", id).select().single();
+  if (error) throw error;
+  return result;
+}
+
+export async function deleteProveedor(id: string) {
+  const { error } = await supabase.from("proveedores").delete().eq("id", id);
+  if (error) throw error;
+}

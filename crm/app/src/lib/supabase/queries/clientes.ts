@@ -44,3 +44,40 @@ export async function getClienteStats() {
     creditoTotal: data.reduce((sum, c) => sum + Number(c.limite_credito), 0),
   };
 }
+
+export async function createCliente(data: Record<string, unknown>) {
+  const { data: result, error } = await supabase
+    .from("clientes")
+    .insert(data as any)
+    .select()
+    .single();
+  if (error) throw error;
+  return result;
+}
+
+export async function updateCliente(id: string, data: Record<string, unknown>) {
+  const { data: result, error } = await supabase
+    .from("clientes")
+    .update(data as any)
+    .eq("id", id)
+    .select()
+    .single();
+  if (error) throw error;
+  return result;
+}
+
+export async function deleteCliente(id: string) {
+  const { error } = await supabase
+    .from("clientes")
+    .delete()
+    .eq("id", id);
+  if (error) throw error;
+}
+
+export async function toggleClienteActivo(id: string, activo: boolean) {
+  const { error } = await supabase
+    .from("clientes")
+    .update({ activo })
+    .eq("id", id);
+  if (error) throw error;
+}

@@ -19,10 +19,11 @@ import {
   ShoppingCart,
   Loader2,
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
 import type { Role } from "@/lib/types";
 import { ROLE_PERMISSIONS } from "@/lib/types";
+import { useUser } from "@/lib/auth-context";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
@@ -42,23 +43,16 @@ function hasModuleAccess(role: Role, module: string): boolean {
   return permissions.some((p) => p.module === "*" || p.module === module);
 }
 
-export function Sidebar({ role = "admin" }: { role?: Role }) {
+export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const [collapsed, setCollapsed] = useState(false);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const { profile, role, sidebarCollapsed: collapsed, setSidebarCollapsed: setCollapsed } = useUser();
   const [loggingOut, setLoggingOut] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      setUserEmail(user?.email ?? null);
-    });
-  }, []);
 
   async function handleLogout() {
     setLoggingOut(true);
@@ -67,13 +61,12 @@ export function Sidebar({ role = "admin" }: { role?: Role }) {
     router.refresh();
   }
 
-  const initials = userEmail
-    ? userEmail.split("@")[0].slice(0, 2).toUpperCase()
-    : "??";
+  const displayName = profile?.full_name
+    || profile?.email?.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+    || "Usuario";
 
-  const displayName = userEmail
-    ? userEmail.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
-    : "Usuario";
+  const initials = displayName.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+  const email = profile?.email ?? "";
 
   return (
     <aside
@@ -165,7 +158,7 @@ export function Sidebar({ role = "admin" }: { role?: Role }) {
           {!collapsed && (
             <div className="flex-1 min-w-0">
               <p className="truncate text-sm font-medium text-zinc-900 dark:text-white">{displayName}</p>
-              <p className="truncate text-xs text-zinc-400">{userEmail ?? ""}</p>
+              <p className="truncate text-xs text-zinc-400">{email}</p>
             </div>
           )}
           {!collapsed && (

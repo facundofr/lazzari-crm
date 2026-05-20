@@ -7,11 +7,16 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import {
-  DollarSign, FileText, Users, Package, TrendingUp, Percent,
-  ArrowRight, Clock, AlertTriangle, CheckCircle2, XCircle, PauseCircle,
+  DollarSign, FileText, TrendingUp, Percent,
+  ArrowRight, Clock, AlertTriangle, Package,
   Loader2,
 } from "lucide-react";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell,
+} from "recharts";
+import Link from "next/link";
 import {
   dashboardKPIs as mockKPIs,
   mockPresupuestos,
@@ -59,34 +64,24 @@ const estadoLabelMap: Record<string, string> = {
   vencido: "Vencidos",
 };
 
+function calcChange(current: number, previous: number): number | undefined {
+  if (!previous || previous === 0) return undefined;
+  return Math.round(((current - previous) / previous) * 100);
+}
+
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
-
-  // KPIs
   const [kpi, setKpi] = useState(mockKPIs);
-
-  // Presupuestos por estado
   const [presupuestosPorEstado, setPresupuestosPorEstado] = useState(mockPresupuestosPorEstado);
-
-  // Ventas por mes (chart)
   const [ventasPorMes, setVentasPorMes] = useState(mockVentasPorMes);
-
-  // Ultimos presupuestos
   const [presupuestos, setPresupuestos] = useState(mockPresupuestos.slice(0, 5));
-
-  // Alertas
   const [alerts, setAlerts] = useState(mockAlerts);
-
-  // Top clientes
   const [topClientes, setTopClientes] = useState(mockTopClientes);
-
-  // Actividad reciente
   const [activity, setActivity] = useState(mockActivity);
 
   useEffect(() => {
     async function fetchAll() {
       try {
-        // Fetch all data in parallel
         const [
           kpiResult,
           presupuestosEstadoResult,
@@ -94,34 +89,34 @@ export default function DashboardPage() {
           alertasResult,
           topClientesResult,
           activityResult,
+          facturasResult,
         ] = await Promise.all([
-          // KPIs via RPC
           supabase.rpc("get_dashboard_kpis"),
-          // Presupuestos por estado
           supabase.from("presupuestos").select("estado"),
-          // Ultimos presupuestos
           supabase
             .from("presupuestos")
             .select("id, numero, cliente_id, total, estado, fecha, clientes(razon_social)")
             .order("created_at", { ascending: false })
             .limit(5),
-          // Alertas
           supabase
             .from("alertas")
             .select("*")
             .eq("read", false)
             .order("created_at", { ascending: false }),
-          // Top clientes (facturas)
           supabase
             .from("facturas")
             .select("cliente_id, clientes(razon_social), total")
             .neq("estado", "anulada"),
-          // Actividad reciente
           supabase
             .from("activity_log")
             .select("*, profiles:user_id(full_name)")
             .order("created_at", { ascending: false })
             .limit(10),
+          // Facturación mensual
+          supabase
+            .from("facturas")
+            .select("fecha, total")
+            .neq("estado", "anulada"),
         ]);
 
         // --- KPIs ---
@@ -133,7 +128,7 @@ export default function DashboardPage() {
             presupuestosActivos: d.presupuestos_activos ?? mockKPIs.presupuestosActivos,
             presupuestosPendientes: d.presupuestos_pendientes ?? mockKPIs.presupuestosPendientes,
             tasaConversion: d.tasa_conversion ?? mockKPIs.tasaConversion,
-            tasaConversionAnterior: mockKPIs.tasaConversionAnterior, // not returned by RPC, keep mock
+            tasaConversionAnterior: d.tasa_conversion_anterior ?? mockKPIs.tasaConversionAnterior,
             cobranzasMes: d.cobranzas_mes ?? mockKPIs.cobranzasMes,
             cobranzasPendientes: d.cobranzas_pendientes ?? mockKPIs.cobranzasPendientes,
             clientesActivos: d.clientes_activos ?? mockKPIs.clientesActivos,
@@ -144,7 +139,7 @@ export default function DashboardPage() {
         }
 
         // --- Presupuestos por estado ---
-        if (!presupuestosEstadoResult.error && presupuestosEstadoResult.data && presupuestosEstadoResult.data.length > 0) {
+        if (!presupuestosEstadoResult.error && presupuestosEstadoResult.data?.length) {
           const counts: Record<string, number> = {};
           presupuestosEstadoResult.data.forEach((p: { estado: string }) => {
             counts[p.estado] = (counts[p.estado] || 0) + 1;
@@ -154,75 +149,70 @@ export default function DashboardPage() {
             cantidad,
             color: estadoColorMap[estado] || "#a1a1aa",
           }));
-          if (mapped.length > 0) {
-            setPresupuestosPorEstado(mapped);
-          }
+          if (mapped.length > 0) setPresupuestosPorEstado(mapped);
+        }
+
+        // --- Facturacion mensual ---
+        if (!facturasResult.error && facturasResult.data?.length) {
+          const monthNames = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
+          const byMonth: Record<string, number> = {};
+          facturasResult.data.forEach((f: { fecha: string; total: number }) => {
+            const d = new Date(f.fecha);
+            const key = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, "0")}`;
+            byMonth[key] = (byMonth[key] || 0) + Number(f.total);
+          });
+          const sorted = Object.entries(byMonth)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .slice(-6)
+            .map(([key, monto]) => ({
+              mes: monthNames[parseInt(key.split("-")[1])],
+              monto,
+            }));
+          if (sorted.length > 0) setVentasPorMes(sorted);
         }
 
         // --- Ultimos presupuestos ---
-        if (!presupuestosRecentResult.error && presupuestosRecentResult.data && presupuestosRecentResult.data.length > 0) {
-          const mapped = presupuestosRecentResult.data.map((p: any) => ({
+        if (!presupuestosRecentResult.error && presupuestosRecentResult.data?.length) {
+          setPresupuestos(presupuestosRecentResult.data.map((p: any) => ({
             ...p,
             clienteNombre: p.clientes?.razon_social || "N/A",
-          }));
-          setPresupuestos(mapped);
+          })));
         }
 
         // --- Alertas ---
-        if (!alertasResult.error && alertasResult.data && alertasResult.data.length > 0) {
-          const mapped = alertasResult.data.map((a: any) => ({
-            id: a.id,
-            type: a.tipo,
-            title: a.title,
-            description: a.description,
-            entityId: a.entity_id,
-            module: a.module,
-            read: a.read,
-            createdAt: a.created_at,
-          }));
-          setAlerts(mapped);
+        if (!alertasResult.error && alertasResult.data?.length) {
+          setAlerts(alertasResult.data.map((a: any) => ({
+            id: a.id, type: a.tipo, title: a.title, description: a.description,
+            entityId: a.entity_id, module: a.module, read: a.read, createdAt: a.created_at,
+          })));
         }
 
         // --- Top clientes ---
-        if (!topClientesResult.error && topClientesResult.data && topClientesResult.data.length > 0) {
+        if (!topClientesResult.error && topClientesResult.data?.length) {
           const totals: Record<string, { nombre: string; facturado: number }> = {};
           topClientesResult.data.forEach((f: any) => {
             const id = f.cliente_id;
-            if (!totals[id]) {
-              totals[id] = { nombre: f.clientes?.razon_social || "N/A", facturado: 0 };
-            }
+            if (!totals[id]) totals[id] = { nombre: f.clientes?.razon_social || "N/A", facturado: 0 };
             totals[id].facturado += Number(f.total);
           });
-          const sorted = Object.values(totals)
-            .sort((a, b) => b.facturado - a.facturado)
-            .slice(0, 5);
-          if (sorted.length > 0) {
-            setTopClientes(sorted);
-          }
+          const sorted = Object.values(totals).sort((a, b) => b.facturado - a.facturado).slice(0, 5);
+          if (sorted.length > 0) setTopClientes(sorted);
         }
 
         // --- Actividad reciente ---
-        if (!activityResult.error && activityResult.data && activityResult.data.length > 0) {
-          const mapped = activityResult.data.map((a: any) => ({
-            id: a.id,
-            userId: a.user_id,
-            userName: a.profiles?.full_name || "Usuario",
-            action: a.action,
-            module: a.module,
-            entityId: a.entity_id,
-            details: a.details,
-            createdAt: a.created_at,
-          }));
-          setActivity(mapped);
+        if (!activityResult.error && activityResult.data?.length) {
+          setActivity(activityResult.data.map((a: any) => ({
+            id: a.id, userId: a.user_id, userName: a.profiles?.full_name || "Usuario",
+            action: a.action, module: a.module, entityId: a.entity_id,
+            details: a.details, createdAt: a.created_at,
+          })));
         }
       } catch (e) {
-        // On any error, keep mock data as fallback
         console.error("Error fetching dashboard data:", e);
       } finally {
         setLoading(false);
       }
     }
-
     fetchAll();
   }, []);
 
@@ -240,6 +230,9 @@ export default function DashboardPage() {
     );
   }
 
+  const facturadoChange = calcChange(kpi.facturadoMes, kpi.ventasMesAnterior);
+  const conversionChange = calcChange(kpi.tasaConversion, kpi.tasaConversionAnterior);
+
   return (
     <>
       <Header title="Dashboard" subtitle="Resumen de operaciones" />
@@ -249,7 +242,7 @@ export default function DashboardPage() {
           <StatCard
             title="Facturado este mes"
             value={formatCurrency(kpi.facturadoMes)}
-            change={31}
+            change={facturadoChange}
             changeLabel="vs. mes anterior"
             icon={DollarSign}
             iconColor="text-emerald-600"
@@ -257,14 +250,13 @@ export default function DashboardPage() {
           <StatCard
             title="Presupuestos activos"
             value={String(kpi.presupuestosActivos)}
-            change={12}
             icon={FileText}
             iconColor="text-blue-600"
           />
           <StatCard
             title="Tasa de conversion"
             value={`${kpi.tasaConversion}%`}
-            change={kpi.tasaConversion - kpi.tasaConversionAnterior}
+            change={conversionChange}
             changeLabel="vs. mes anterior"
             icon={Percent}
             iconColor="text-orange-500"
@@ -278,61 +270,58 @@ export default function DashboardPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {/* Ventas por mes - Chart placeholder */}
+          {/* Facturación mensual - Recharts BarChart */}
           <Card className="lg:col-span-2">
             <CardHeader>
               <CardTitle>Facturacion mensual</CardTitle>
               <span className="text-xs text-zinc-400">Ultimos 6 meses</span>
             </CardHeader>
-            <div className="flex items-end gap-3 h-48 px-2">
-              {ventasPorMes.map((item) => {
-                const maxMonto = Math.max(...ventasPorMes.map((v) => v.monto));
-                const heightPct = (item.monto / maxMonto) * 100;
-                const isCurrentMonth = item.mes === "May";
-                return (
-                  <div key={item.mes} className="flex flex-1 flex-col items-center gap-2">
-                    <span className="text-xs font-medium text-zinc-500">
-                      {formatCurrency(item.monto).replace(",00", "")}
-                    </span>
-                    <div
-                      className={`w-full rounded-t-lg transition-all ${
-                        isCurrentMonth ? "bg-orange-500" : "bg-zinc-200 dark:bg-zinc-700"
-                      }`}
-                      style={{ height: `${heightPct}%` }}
-                    />
-                    <span className={`text-xs font-medium ${isCurrentMonth ? "text-orange-500" : "text-zinc-400"}`}>
-                      {item.mes}
-                    </span>
-                  </div>
-                );
-              })}
+            <div className="h-56 px-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={ventasPorMes} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
+                  <XAxis dataKey="mes" tick={{ fontSize: 12, fill: "#a1a1aa" }} />
+                  <YAxis tick={{ fontSize: 11, fill: "#a1a1aa" }} tickFormatter={(v) => `$${(v / 1000000).toFixed(1)}M`} />
+                  <Tooltip formatter={(value) => [formatCurrency(Number(value)), "Facturado"]} />
+                  <Bar dataKey="monto" fill="#f97316" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
             </div>
           </Card>
 
-          {/* PR por estado */}
+          {/* PR por estado - Recharts PieChart */}
           <Card>
             <CardHeader>
               <CardTitle>Presupuestos por estado</CardTitle>
             </CardHeader>
-            <div className="space-y-4">
-              {presupuestosPorEstado.map((item) => {
-                const total = presupuestosPorEstado.reduce((acc, i) => acc + i.cantidad, 0);
-                const pct = Math.round((item.cantidad / total) * 100);
-                return (
-                  <div key={item.estado} className="space-y-1.5">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-600 dark:text-zinc-400">{item.estado}</span>
-                      <span className="font-medium text-zinc-900 dark:text-white">{item.cantidad} ({pct}%)</span>
-                    </div>
-                    <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800">
-                      <div
-                        className="h-2 rounded-full transition-all"
-                        style={{ width: `${pct}%`, backgroundColor: item.color }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="h-48">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={presupuestosPorEstado}
+                    dataKey="cantidad"
+                    nameKey="estado"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={40}
+                    outerRadius={70}
+                    paddingAngle={2}
+                  >
+                    {presupuestosPorEstado.map((entry, idx) => (
+                      <Cell key={idx} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex flex-wrap gap-2 px-6 pb-4">
+              {presupuestosPorEstado.map((item) => (
+                <div key={item.estado} className="flex items-center gap-1.5 text-xs">
+                  <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                  <span className="text-zinc-500">{item.estado} ({item.cantidad})</span>
+                </div>
+              ))}
             </div>
           </Card>
         </div>
@@ -342,9 +331,9 @@ export default function DashboardPage() {
           <Card className="lg:col-span-2">
             <CardHeader>
               <CardTitle>Ultimos presupuestos</CardTitle>
-              <button className="flex items-center gap-1 text-xs font-medium text-orange-500 hover:text-orange-600">
+              <Link href="/presupuestos" className="flex items-center gap-1 text-xs font-medium text-orange-500 hover:text-orange-600">
                 Ver todos <ArrowRight className="h-3 w-3" />
-              </button>
+              </Link>
             </CardHeader>
             <DataTable<Presupuesto>
               columns={[
@@ -361,6 +350,7 @@ export default function DashboardPage() {
                 { key: "fecha", label: "Fecha", render: (row) => <span className="text-zinc-400">{row.fecha}</span> },
               ]}
               data={presupuestos}
+              pageSize={5}
             />
           </Card>
 
@@ -373,10 +363,12 @@ export default function DashboardPage() {
             <div className="space-y-3">
               {alerts.map((alert) => {
                 const Icon = alertIcons[alert.type] || AlertTriangle;
+                const moduleLink = alert.module === "presupuestos" ? "/presupuestos" : alert.module === "stock" ? "/stock" : `/${alert.module}`;
                 return (
-                  <div
+                  <Link
                     key={alert.id}
-                    className={`flex gap-3 rounded-lg p-3 text-sm transition-colors ${
+                    href={moduleLink}
+                    className={`flex gap-3 rounded-lg p-3 text-sm transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800 ${
                       alert.read ? "bg-transparent" : "bg-amber-50 dark:bg-amber-950/30"
                     }`}
                   >
@@ -385,7 +377,7 @@ export default function DashboardPage() {
                       <p className="font-medium text-zinc-800 dark:text-zinc-200">{alert.title}</p>
                       <p className="mt-0.5 text-xs text-zinc-500">{alert.description}</p>
                     </div>
-                  </div>
+                  </Link>
                 );
               })}
             </div>
@@ -400,7 +392,7 @@ export default function DashboardPage() {
             </CardHeader>
             <div className="space-y-3">
               {topClientes.map((c, i) => {
-                const maxFacturado = topClientes[0].facturado;
+                const maxFacturado = topClientes[0]?.facturado || 1;
                 const pct = (c.facturado / maxFacturado) * 100;
                 return (
                   <div key={c.nombre} className="flex items-center gap-3">
