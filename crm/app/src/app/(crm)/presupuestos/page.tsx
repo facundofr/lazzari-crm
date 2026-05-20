@@ -119,15 +119,29 @@ export default function PresupuestosPage() {
 
   const fetchPresupuestos = useCallback(async () => {
     try {
-      const { data, error } = await supabase
+      // First try with items
+      let res: { data: any; error: any } = await supabase
         .from("presupuestos")
-        .select(`
-          *,
-          clientes(razon_social, cuit),
-          presupuesto_items(*)
-        `)
+        .select(`*, clientes(razon_social, cuit), presupuesto_items(*)`)
         .order("fecha", { ascending: false });
 
+      // If that fails, try without items
+      if (res.error) {
+        res = await supabase
+          .from("presupuestos")
+          .select(`*, clientes(razon_social, cuit)`)
+          .order("fecha", { ascending: false });
+      }
+
+      // If still fails, try minimal
+      if (res.error) {
+        res = await supabase
+          .from("presupuestos")
+          .select(`*`)
+          .order("fecha", { ascending: false });
+      }
+
+      const { data, error } = res;
       if (!error && data && data.length > 0) {
         setPresupuestos((data as unknown as SupabasePresupuesto[]).map(mapToPresupuesto));
       } else {
