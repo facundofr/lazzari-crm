@@ -172,6 +172,7 @@ export default function PresupuestosPage() {
       }
     } catch (err) {
       console.error("Error updating estado:", err);
+      alert("Error al cambiar estado. Probá cerrar sesión y volver a entrar.");
     }
   }
 
