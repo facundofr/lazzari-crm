@@ -87,7 +87,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     total: row.total,
     moneda: row.moneda,
     observaciones: row.observaciones ?? "",
-    creadoPor: row.created_by_profile?.full_name ?? row.created_by ?? "",
+    creadoPor: (row as any).created_by_profile?.full_name ?? row.created_by ?? "",
     enviadoAt: row.enviado_at ?? undefined,
     respondidoAt: row.respondido_at ?? undefined,
     createdAt: row.created_at,
@@ -124,7 +124,6 @@ export default function PresupuestosPage() {
         .select(`
           *,
           clientes(razon_social, cuit),
-          created_by_profile:created_by(full_name),
           presupuesto_items(*)
         `)
         .order("fecha", { ascending: false });
