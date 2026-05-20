@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard,
@@ -17,8 +17,10 @@ import {
   ChevronLeft,
   Factory,
   ShoppingCart,
+  Loader2,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { createBrowserClient } from "@supabase/ssr";
 import type { Role } from "@/lib/types";
 import { ROLE_PERMISSIONS } from "@/lib/types";
 
@@ -42,7 +44,36 @@ function hasModuleAccess(role: Role, module: string): boolean {
 
 export function Sidebar({ role = "admin" }: { role?: Role }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setUserEmail(user?.email ?? null);
+    });
+  }, []);
+
+  async function handleLogout() {
+    setLoggingOut(true);
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
+  }
+
+  const initials = userEmail
+    ? userEmail.split("@")[0].slice(0, 2).toUpperCase()
+    : "??";
+
+  const displayName = userEmail
+    ? userEmail.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
+    : "Usuario";
 
   return (
     <aside
@@ -129,17 +160,26 @@ export function Sidebar({ role = "admin" }: { role?: Role }) {
         {/* User */}
         <div className={cn("mt-2 flex items-center gap-3 rounded-lg px-3 py-2.5", collapsed && "justify-center")}>
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-xs font-bold text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
-            ML
+            {initials}
           </div>
           {!collapsed && (
             <div className="flex-1 min-w-0">
-              <p className="truncate text-sm font-medium text-zinc-900 dark:text-white">Martín Lazzari</p>
-              <p className="truncate text-xs text-zinc-400">Administrador</p>
+              <p className="truncate text-sm font-medium text-zinc-900 dark:text-white">{displayName}</p>
+              <p className="truncate text-xs text-zinc-400">{userEmail ?? ""}</p>
             </div>
           )}
           {!collapsed && (
-            <button className="text-zinc-400 hover:text-zinc-600">
-              <LogOut className="h-4 w-4" />
+            <button
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="text-zinc-400 hover:text-red-500 transition-colors"
+              title="Cerrar sesión"
+            >
+              {loggingOut ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <LogOut className="h-4 w-4" />
+              )}
             </button>
           )}
         </div>
