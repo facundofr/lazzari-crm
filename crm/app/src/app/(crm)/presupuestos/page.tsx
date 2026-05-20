@@ -161,18 +161,19 @@ export default function PresupuestosPage() {
       if (estado === "pendiente") update.enviado_at = new Date().toISOString();
       if (["aprobado", "rechazado", "postergado"].includes(estado)) update.respondido_at = new Date().toISOString();
 
-      const { error } = await supabase
+      const { error, status, statusText } = await supabase
         .from("presupuestos")
         .update(update as any)
         .eq("id", id);
-      if (error) throw error;
+      if (error) throw new Error(`${error.message} (${error.code}) [${status} ${statusText}]`);
       await fetchPresupuestos();
       if (selected?.id === id) {
         setSelected((prev) => prev ? { ...prev, estado, motivoRechazo: motivo ?? prev.motivoRechazo } : null);
       }
-    } catch (err) {
-      console.error("Error updating estado:", err);
-      alert("Error al cambiar estado. Probá cerrar sesión y volver a entrar.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : JSON.stringify(err);
+      console.error("Error updating estado:", msg);
+      alert(`Error al cambiar estado: ${msg}`);
     }
   }
 
