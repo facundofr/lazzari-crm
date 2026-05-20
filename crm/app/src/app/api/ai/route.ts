@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
     if (!apiKey) {
       return Response.json(
         { error: "ANTHROPIC_API_KEY no está configurada" },
