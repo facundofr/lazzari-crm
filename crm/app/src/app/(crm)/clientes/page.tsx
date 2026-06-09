@@ -558,9 +558,10 @@ export default function ClientesPage() {
                     </div>
                   ),
                 },
-                { key: "condicionIva", label: "IVA", sortable: true, render: (row) => <Badge variant="outline">{condicionLabels[row.condicionIva]}</Badge> },
-                { key: "localidad", label: "Ubicacion", sortable: true, render: (row) => <span className="text-zinc-500">{row.localidad}{row.provincia ? `, ${row.provincia}` : ""}</span> },
-                { key: "sucursales", label: "Sucursales", sortable: false, render: (row) => {
+                { key: "localidad", label: "Ubicación", sortable: true, render: (row) => (
+                  <span className="text-xs text-zinc-500">{row.localidad}{row.provincia ? `, ${row.provincia}` : ""}</span>
+                )},
+                { key: "sucursales", label: "Suc.", sortable: false, render: (row) => {
                   const n = row.sucursales?.length || 0;
                   return n > 0 ? (
                     <div className="flex items-center gap-1 text-xs text-zinc-500">
@@ -568,9 +569,7 @@ export default function ClientesPage() {
                     </div>
                   ) : <span className="text-zinc-300">—</span>;
                 }},
-                { key: "listaPrecio", label: "Lista", sortable: true, render: (row) => <Badge variant="info">{row.listaPrecio || "—"}</Badge> },
-                { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.saldoCuentaCorriente)}</span> },
-                { key: "vendedorNombre", label: "Vendedor", sortable: true, render: (row) => <span className="text-zinc-500 text-xs">{row.vendedorNombre}</span> },
+                { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono text-xs block text-right">{formatCurrency(row.saldoCuentaCorriente)}</span> },
                 { key: "activo", label: "Estado", sortable: true, render: (row) => <Badge variant={row.activo ? "success" : "danger"}>{row.activo ? "Activo" : "Inactivo"}</Badge> },
                 {
                   key: "actions", label: "", sortable: false,
