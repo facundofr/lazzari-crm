@@ -491,7 +491,7 @@
   <h1>Lazzari CRM — Mapa de Proyecto</h1>
   <p>Relevamiento completo del sistema para revision v1</p>
   <div class="meta">
-    <span>Fecha: 8 junio 2026</span>
+    <span>Fecha: 9 junio 2026</span>
     <span>Stack: Next.js 15 + Supabase + Vercel</span>
     <span>11 modulos CRM</span>
     <span>Proyecto: ycuzszzskqatlegtbgbq</span>
@@ -638,6 +638,9 @@
             <li><span class="icon done">&#10003;</span> Exportar CSV</li>
             <li><span class="icon done">&#10003;</span> Stats rapidos (total, saldo CC, credito)</li>
             <li><span class="icon done">&#10003;</span> Formulario completo: IVA, direccion, forma pago, credito</li>
+            <li><span class="icon done">&#10003;</span> Relevamiento de consumo: categorias, frecuencia, ultimo pedido</li>
+            <li><span class="icon done">&#10003;</span> Barras visuales de consumo por categoria en panel detalle</li>
+            <li><span class="icon done">&#10003;</span> Total facturado y frecuencia de compra por cliente</li>
             <li><span class="icon warn">!</span> Contactos y sucursales se cargan pero no se muestran en detalle</li>
           </ul>
           <div class="data-source"><span class="dot-sm live"></span> Supabase con fallback mock</div>
@@ -727,12 +730,15 @@
         </div>
         <div class="card-body">
           <ul class="feature-list">
-            <li><span class="icon done">&#10003;</span> 6 sub-tabs: Movimientos, CC Clientes, CC Proveedores, E-Cheques, Extractos, Lineas credito</li>
+            <li><span class="icon done">&#10003;</span> 7 sub-tabs: Movimientos, CC Clientes, CC Proveedores, E-Cheques, Extractos, Lineas credito, Vencimientos</li>
             <li><span class="icon done">&#10003;</span> CRUD de movimientos (cobro, pago, cheque, transferencia)</li>
             <li><span class="icon done">&#10003;</span> Conciliacion de movimientos</li>
             <li><span class="icon done">&#10003;</span> CC con barra de progreso y color-code</li>
             <li><span class="icon done">&#10003;</span> Lineas de credito con disponible/utilizado visual</li>
             <li><span class="icon done">&#10003;</span> E-Cheques: vista split emitidos vs recibidos</li>
+            <li><span class="icon done">&#10003;</span> Tab Vencimientos: calendario de deudas con urgencia visual</li>
+            <li><span class="icon done">&#10003;</span> Agrupacion temporal: vencido, esta semana, proxima, +2 semanas</li>
+            <li><span class="icon done">&#10003;</span> KPIs: total vencido, a pagar esta semana, proximo mes</li>
             <li><span class="icon warn">!</span> Extractos: UI de upload sin implementacion real</li>
             <li><span class="icon warn">!</span> Matcheo de extractos: boton placeholder</li>
           </ul>
@@ -758,6 +764,10 @@
             <li><span class="icon done">&#10003;</span> Alerta de listas vencidas</li>
             <li><span class="icon done">&#10003;</span> Vista tabla / tarjetas + export CSV</li>
             <li><span class="icon done">&#10003;</span> Panel lateral de detalle</li>
+            <li><span class="icon done">&#10003;</span> Clasificacion con tags: Buen precio, Entrega lenta, Buena calidad, etc.</li>
+            <li><span class="icon done">&#10003;</span> Campo Marcas que maneja el proveedor</li>
+            <li><span class="icon done">&#10003;</span> Notas de clasificacion (texto libre)</li>
+            <li><span class="icon done">&#10003;</span> Tags visibles en tabla, tarjetas y panel detalle</li>
             <li><span class="icon warn">!</span> Contactos cargados pero no mostrados</li>
           </ul>
           <div class="data-source"><span class="dot-sm live"></span> Supabase con fallback mock</div>
@@ -827,6 +837,10 @@
             <li><span class="icon done">&#10003;</span> KPIs con tendencia vs. periodo anterior</li>
             <li><span class="icon done">&#10003;</span> Analisis de motivos de rechazo (categorizacion automatica)</li>
             <li><span class="icon done">&#10003;</span> Ranking top clientes con barras de progreso</li>
+            <li><span class="icon done">&#10003;</span> Tab Comisiones: calculo por vendedor (3% venta neta + 10% margen)</li>
+            <li><span class="icon done">&#10003;</span> KPIs de comisiones: total, por venta, por margen, vendedores activos</li>
+            <li><span class="icon done">&#10003;</span> Grafico comparativo de comisiones por vendedor</li>
+            <li><span class="icon done">&#10003;</span> Detalle expandido por vendedor: presupuestos, margen, desglose</li>
             <li><span class="icon miss">&#10007;</span> Botones de exportar no funcionales</li>
             <li><span class="icon miss">&#10007;</span> Tarjetas de categorias de reporte no son clickeables (sin drill-down)</li>
             <li><span class="icon info">i</span> Solo lectura — suficiente para v1</li>
@@ -883,6 +897,7 @@
             <li><span class="icon done">&#10003;</span> Filtrado por rol (solo muestra modulos permitidos)</li>
             <li><span class="icon done">&#10003;</span> Perfil de usuario + logout</li>
             <li><span class="icon done">&#10003;</span> Indicador de ruta activa</li>
+            <li><span class="icon done">&#10003;</span> Toggle Dark/Light theme con persistencia (localStorage)</li>
             <li><span class="icon warn">!</span> Sin tooltips cuando esta colapsado</li>
             <li><span class="icon warn">!</span> Sin version mobile (drawer/hamburguesa)</li>
           </ul>
@@ -1096,6 +1111,11 @@
           <li>- Mostrar busqueda global (Cmd+K) con datos reales</li>
           <li>- Mostrar el asistente IA generando un remito</li>
           <li>- Mostrar cambio de rol (vendedor ve menos modulos)</li>
+          <li>- Mostrar Reportes > Comisiones (desglose por vendedor)</li>
+          <li>- Mostrar Finanzas > Vencimientos (calendario de deudas)</li>
+          <li>- Mostrar clasificacion de un proveedor (tags + marcas)</li>
+          <li>- Mostrar consumo de un cliente en panel detalle</li>
+          <li>- Mostrar toggle dark/light en sidebar</li>
           <li>- NO mostrar Configuracion en profundidad (mock)</li>
           <li>- NO hacer click en "Exportar" de Reportes</li>
         </ul>
@@ -1108,7 +1128,11 @@
           <li>- Sistema de roles con 5 niveles</li>
           <li>- Doble moneda USD/ARS</li>
           <li>- Busqueda global cross-modulo</li>
-          <li>- Dark mode</li>
+          <li>- Dark/Light theme con persistencia</li>
+          <li>- Comisiones por vendedor (venta neta + margen)</li>
+          <li>- Calendario de vencimientos de deudas</li>
+          <li>- Clasificacion de proveedores (tags + marcas + notas)</li>
+          <li>- Relevamiento de consumo por cliente</li>
           <li>- Presupuestos con workflow completo de estados</li>
         </ul>
       </div>
