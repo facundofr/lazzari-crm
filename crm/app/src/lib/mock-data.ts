@@ -200,6 +200,7 @@ export const mockProveedores: Proveedor[] = [
     rubro: "Válvulas y grifería industrial", formaPago: "Cheque 60 días", diasCuentaCorriente: 60,
     limiteCredito: 8000000, saldoCuentaCorriente: 2350000,
     listasDePrecios: ["lp1"], notas: "Proveedor principal de válvulas. Descuento especial > 50 unidades.",
+    clasificacionTags: ["Buen precio", "Buena calidad"], marcas: "Giacomini", clasificacionNota: "Excelente relacion precio-calidad en válvulas",
     activo: true, createdAt: "2023-01-15", updatedAt: "2026-05-10",
   },
   {
@@ -210,6 +211,7 @@ export const mockProveedores: Proveedor[] = [
     rubro: "Tubos de acero y conexiones", formaPago: "Transferencia 30 días", diasCuentaCorriente: 30,
     limiteCredito: 20000000, saldoCuentaCorriente: 7800000,
     listasDePrecios: ["lp2"], notas: "Pedido mínimo 10 unidades. Entrega desde planta Campana.",
+    clasificacionTags: ["Precio alto", "Buena calidad", "Stock permanente"], marcas: "Tenaris, Siderca", clasificacionNota: "",
     activo: true, createdAt: "2022-06-01", updatedAt: "2026-05-15",
   },
   {
@@ -220,6 +222,7 @@ export const mockProveedores: Proveedor[] = [
     rubro: "Bridas y fittings", formaPago: "Cheque 30 días", diasCuentaCorriente: 30,
     limiteCredito: 5000000, saldoCuentaCorriente: 1200000,
     listasDePrecios: ["lp3"], notas: "",
+    clasificacionTags: ["Buen precio", "Entrega lenta"], marcas: "Duo Matic", clasificacionNota: "",
     activo: true, createdAt: "2023-09-20", updatedAt: "2026-05-08",
   },
   {
@@ -230,6 +233,7 @@ export const mockProveedores: Proveedor[] = [
     rubro: "Juntas y sellos industriales", formaPago: "Transferencia", diasCuentaCorriente: 45,
     limiteCredito: 3000000, saldoCuentaCorriente: 450000,
     listasDePrecios: ["lp4"], notas: "Importador directo. Plazo de entrega 15-20 días hábiles.",
+    clasificacionTags: ["Importador", "Entrega lenta"], marcas: "Flexitallic, Garlock", clasificacionNota: "Importador directo, plazo largo pero buena calidad",
     activo: true, createdAt: "2024-02-10", updatedAt: "2026-04-30",
   },
   {
@@ -240,6 +244,7 @@ export const mockProveedores: Proveedor[] = [
     rubro: "Bulonería y fijaciones", formaPago: "E-cheque 30 días", diasCuentaCorriente: 30,
     limiteCredito: 2000000, saldoCuentaCorriente: 380000,
     listasDePrecios: ["lp5"], notas: "Stock permanente. Entrega en 48hs.",
+    clasificacionTags: ["Buen precio", "Entrega rapida", "Stock permanente", "Nacional"], marcas: "Bulmax", clasificacionNota: "Muy buen proveedor, stock permanente y entrega rapida",
     activo: true, createdAt: "2024-05-01", updatedAt: "2026-05-12",
   },
   {
@@ -250,6 +255,7 @@ export const mockProveedores: Proveedor[] = [
     rubro: "Instrumentación industrial", formaPago: "Transferencia 45 días", diasCuentaCorriente: 45,
     limiteCredito: 4000000, saldoCuentaCorriente: 920000,
     listasDePrecios: ["lp6"], notas: "Productos importados. Cotizar en USD.",
+    clasificacionTags: ["Importador", "Buena calidad"], marcas: "WIKA", clasificacionNota: "Productos importados, cotizar en USD",
     activo: true, createdAt: "2023-11-15", updatedAt: "2026-05-05",
   },
 ];

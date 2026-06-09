@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Lazzari Soluciones Industriales — three integrated components: institutional website (`web/`), visual identity (`diseno/`), and CRM/management system (`crm/`). The CRM is the core deliverable (USD 3,500).
+Lazzari Soluciones Industriales — three integrated components: institutional website (`web/`), visual identity (`diseno/`), and CRM/management system (`crm/`). The CRM is the core deliverable.
 
 **Client:** Industrial solutions company (valves, pipes, industrial equipment) based in Argentina.
 
@@ -28,58 +28,33 @@ No test framework is configured yet.
 - **Framework:** Next.js 15 (App Router) + React 18 + TypeScript + Tailwind CSS 4
 - **Backend:** Supabase (Auth, Postgres, Storage, Realtime, Edge Functions)
 - **Deployment:** Vercel (root directory: `crm/app`)
-- **Charts:** Recharts
-- **Icons:** Lucide React
+- **Key deps:** Recharts (charts), Lucide React (icons), date-fns (dates), @anthropic-ai/sdk (AI widget)
 - **UI utilities:** clsx, tailwind-merge, class-variance-authority (CVA)
 
-### Directory Structure
+### Key Directories
 
 ```
 crm/app/src/
-  app/
-    layout.tsx              # Root layout (lang="es")
-    page.tsx                # Root redirect
-    login/page.tsx          # Auth page (email+password via Supabase)
-    (crm)/                  # Route group — all CRM pages behind auth
-      layout.tsx            # Sidebar + AIWidget wrapper
-      dashboard/page.tsx
-      clientes/page.tsx
-      presupuestos/page.tsx
-      facturacion/page.tsx
-      remitos/page.tsx
-      stock/page.tsx
-      finanzas/page.tsx
-      proveedores/page.tsx
-      ordenes-compra/page.tsx
-      reportes/page.tsx
-      configuracion/page.tsx
-  components/
-    layout/                 # Sidebar, Header, AIWidget
-    ui/                     # Reusable: Badge, Card, StatCard, DataTable
-  lib/
-    types.ts                # All TypeScript interfaces and role permissions
-    mock-data.ts            # Mock data (being replaced by Supabase queries)
-    utils.ts                # cn() helper (clsx + tailwind-merge)
-    supabase/
-      client.ts             # Browser client (createClient)
-      server.ts             # Server Component client (createServerClient + cookies)
-      middleware.ts          # Auth session refresh + route protection
-      database.types.ts     # Auto-generated Supabase types
-      queries/              # Data access layer per module
-  middleware.ts             # Next.js middleware entry — delegates to supabase/middleware
+  app/(crm)/              # Route group — all CRM pages behind auth (11 modules)
+  components/layout/      # Sidebar, Header, AIWidget
+  components/ui/          # Reusable: Badge, Card, StatCard, DataTable
+  lib/supabase/queries/   # Data access layer — one file per module
+  lib/auth-context.tsx    # UserProvider context (profile, role, sidebar state)
+  lib/types.ts            # TypeScript interfaces, Role type, ROLE_PERMISSIONS map
 ```
 
-### Auth Flow
+### Auth & Session Flow
 
-1. Supabase Auth with email+password (invite-only planned)
-2. Middleware (`src/middleware.ts`) checks session on every request
-3. Unauthenticated users redirect to `/login`; authenticated users on `/login` redirect to `/dashboard`
-4. Server components use `createSupabaseServer()` from `lib/supabase/server.ts`
-5. Client components use `createBrowserClient()` from `@supabase/ssr`
+1. Middleware (`src/middleware.ts` → `lib/supabase/middleware.ts`) checks session on every request via `supabase.auth.getUser()`
+2. Unauthenticated → `/login`; authenticated on `/login` → `/dashboard`
+3. `(crm)/layout.tsx` wraps all CRM pages in `<UserProvider>` which fetches profile from `profiles` table
+4. **Server components:** use `createSupabaseServer()` from `lib/supabase/server.ts` (async, reads cookies)
+5. **Client components:** use the singleton `supabase` from `lib/supabase/client.ts` (browser client)
+6. **Query files** (`lib/supabase/queries/*`) currently use the browser client directly — they run client-side
 
 ### Role System
 
-Five roles defined in `lib/types.ts`: `super_admin`, `admin`, `vendedor`, `administrativo`, `viewer`. Permissions are enforced both client-side (via `ROLE_PERMISSIONS` map) and server-side (via Supabase RLS policies on the `profiles.role` column).
+Five roles defined in `lib/types.ts`: `super_admin`, `admin`, `vendedor`, `administrativo`, `viewer`. Permissions enforced client-side via `ROLE_PERMISSIONS` map and server-side via Supabase RLS policies on `profiles.role`.
 
 ### Database
 
@@ -89,6 +64,7 @@ Supabase project ID: `ycuzszzskqatlegtbgbq`. Full schema plan in `SUPABASE_PLAN.
 - Prices frozen at presupuesto creation time (not FK references)
 - Auto-numbering via PG function `generate_document_number()` (e.g., `PR-2026-0049`)
 - RLS enabled on all tables; role-based access from `profiles`
+- Some FK joins (e.g., `created_by`) may be null — avoid inner joins on nullable FKs
 
 ### Environment Variables
 
@@ -107,11 +83,13 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY
 - **Styling:** Tailwind utility classes; dark mode supported via `dark:` prefix
 - **Color palette:** Orange `#FF4500` (primary), zinc scale for neutrals
 - **Components:** CVA for variant-based component styling (see `badge.tsx`, `card.tsx`)
-- **Data queries:** One file per module in `lib/supabase/queries/`, using the Supabase JS client
+- **Data queries:** One file per module in `lib/supabase/queries/`, using the Supabase JS client. Pattern: query, throw on error, return data.
 - **Currency:** Dual currency support (USD/ARS) throughout
+- **Next.js version warning:** This is Next.js 15 — APIs may differ from training data. Read docs in `node_modules/next/dist/docs/` before using new APIs (see `crm/app/AGENTS.md`).
 
 ## Key Files
 
 - `SUPABASE_PLAN.md` — Complete database schema, RLS policies, triggers, views, indexes, and migration plan
 - `PROJECT.md` — Full project scope, modules, and timeline
-- `crm/app/AGENTS.md` — Next.js version warning (read docs in `node_modules/next/dist/docs/` before using new APIs)
+- `crm/app/src/lib/types.ts` — All roles, permissions, and TypeScript interfaces
+- `crm/app/src/lib/auth-context.tsx` — User/profile context provider used by all CRM pages

@@ -5,12 +5,13 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { formatCurrency } from "@/lib/utils";
-import { mockClients } from "@/lib/mock-data";
+import { mockClients, mockPresupuestos, mockFacturas } from "@/lib/mock-data";
 import type { Client } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import {
   Search, Filter, Download, MapPin, Phone, Mail, Loader2,
   Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight, ChevronDown,
+  BarChart3, ShoppingBag, CalendarDays, TrendingUp,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 
@@ -87,6 +88,20 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
 
 type ClienteExt = Client & { vendedorNombre: string };
 
+interface ConsumoCategory {
+  categoria: string;
+  cantidad: number;
+  total: number;
+}
+
+interface ConsumoData {
+  categorias: ConsumoCategory[];
+  totalFacturado: number;
+  cantidadPresupuestos: number;
+  ultimaCompra: string | null;
+  loading: boolean;
+}
+
 const emptyForm = {
   razon_social: "",
   cuit: "",
@@ -126,6 +141,118 @@ export default function ClientesPage() {
 
   // Detail
   const [selectedCliente, setSelectedCliente] = useState<ClienteExt | null>(null);
+
+  // Consumo analysis
+  const [consumoData, setConsumoData] = useState<ConsumoData>({
+    categorias: [],
+    totalFacturado: 0,
+    cantidadPresupuestos: 0,
+    ultimaCompra: null,
+    loading: false,
+  });
+
+  useEffect(() => {
+    if (!selectedCliente) return;
+    const clienteId = selectedCliente.id;
+
+    async function fetchConsumo() {
+      setConsumoData((prev) => ({ ...prev, loading: true }));
+
+      try {
+        // Fetch approved presupuestos with items for this client
+        const { data: presupuestos, error: presError } = await supabase
+          .from("presupuestos")
+          .select("id, fecha, total, presupuesto_items(categoria, cantidad, total)")
+          .eq("cliente_id", clienteId)
+          .eq("estado", "aprobado")
+          .order("fecha", { ascending: false });
+
+        // Fetch facturas total for this client
+        const { data: facturas, error: facError } = await supabase
+          .from("facturas")
+          .select("total")
+          .eq("cliente_id", clienteId);
+
+        const useMock = presError || facError || !presupuestos || presupuestos.length === 0;
+
+        if (useMock) {
+          // Fallback to mock data
+          const mockPres = mockPresupuestos.filter(
+            (p) => p.clienteId === clienteId && p.estado === "aprobado"
+          );
+          const catMap = new Map<string, { cantidad: number; total: number }>();
+          for (const p of mockPres) {
+            for (const item of p.items) {
+              const cat = item.categoria || "Sin categoría";
+              const existing = catMap.get(cat) || { cantidad: 0, total: 0 };
+              catMap.set(cat, {
+                cantidad: existing.cantidad + item.cantidad,
+                total: existing.total + (item.total || item.subtotal || 0),
+              });
+            }
+          }
+          const categorias = Array.from(catMap.entries())
+            .map(([categoria, data]) => ({ categoria, ...data }))
+            .sort((a, b) => b.total - a.total);
+
+          const mockFact = mockFacturas.filter((f) => f.clienteId === clienteId);
+          const totalFact = mockFact.reduce((sum, f) => sum + f.total, 0);
+          const ultimaFecha = mockPres.length > 0 ? mockPres[0].fecha : null;
+
+          setConsumoData({
+            categorias,
+            totalFacturado: totalFact,
+            cantidadPresupuestos: mockPres.length,
+            ultimaCompra: ultimaFecha,
+            loading: false,
+          });
+          return;
+        }
+
+        // Process real Supabase data
+        const catMap = new Map<string, { cantidad: number; total: number }>();
+        for (const p of presupuestos) {
+          const items = (p as any).presupuesto_items || [];
+          for (const item of items) {
+            const cat = item.categoria || "Sin categoría";
+            const existing = catMap.get(cat) || { cantidad: 0, total: 0 };
+            catMap.set(cat, {
+              cantidad: existing.cantidad + (item.cantidad || 0),
+              total: existing.total + (item.total || 0),
+            });
+          }
+        }
+        const categorias = Array.from(catMap.entries())
+          .map(([categoria, data]) => ({ categoria, ...data }))
+          .sort((a, b) => b.total - a.total);
+
+        const totalFact = facturas
+          ? facturas.reduce((sum, f) => sum + (f.total || 0), 0)
+          : 0;
+
+        const ultimaFecha = presupuestos.length > 0 ? presupuestos[0].fecha : null;
+
+        setConsumoData({
+          categorias,
+          totalFacturado: totalFact,
+          cantidadPresupuestos: presupuestos.length,
+          ultimaCompra: ultimaFecha,
+          loading: false,
+        });
+      } catch (err) {
+        console.error("Error fetching consumo:", err);
+        setConsumoData({
+          categorias: [],
+          totalFacturado: 0,
+          cantidadPresupuestos: 0,
+          ultimaCompra: null,
+          loading: false,
+        });
+      }
+    }
+
+    fetchConsumo();
+  }, [selectedCliente]);
 
   const fetchClientes = useCallback(async () => {
     try {
@@ -554,6 +681,91 @@ export default function ClientesPage() {
                   <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{selectedCliente.notas}</p>
                 </div>
               )}
+
+              {/* Relevamiento de consumo */}
+              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4 text-orange-500" />
+                  Relevamiento de consumo
+                </h3>
+
+                {consumoData.loading ? (
+                  <div className="flex items-center gap-2 py-4">
+                    <Loader2 className="h-4 w-4 animate-spin text-orange-500" />
+                    <span className="text-xs text-zinc-500">Analizando consumo...</span>
+                  </div>
+                ) : consumoData.categorias.length === 0 && consumoData.cantidadPresupuestos === 0 ? (
+                  <div className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-4 text-center dark:border-zinc-700 dark:bg-zinc-800/50">
+                    <ShoppingBag className="mx-auto h-6 w-6 text-zinc-300 dark:text-zinc-600" />
+                    <p className="mt-2 text-xs text-zinc-400">Sin presupuestos aprobados para este cliente</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Summary stats */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="rounded-lg bg-orange-50 p-3 dark:bg-orange-900/20">
+                        <div className="flex items-center gap-1.5">
+                          <TrendingUp className="h-3.5 w-3.5 text-orange-500" />
+                          <p className="text-xs text-orange-600 dark:text-orange-400">Total facturado</p>
+                        </div>
+                        <p className="mt-1 text-sm font-bold text-orange-700 dark:text-orange-300">
+                          {formatCurrency(consumoData.totalFacturado)}
+                        </p>
+                      </div>
+                      <div className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800">
+                        <div className="flex items-center gap-1.5">
+                          <CalendarDays className="h-3.5 w-3.5 text-zinc-400" />
+                          <p className="text-xs text-zinc-500">Frecuencia</p>
+                        </div>
+                        <p className="mt-1 text-sm font-bold text-zinc-700 dark:text-zinc-200">
+                          {consumoData.cantidadPresupuestos} presupuesto{consumoData.cantidadPresupuestos !== 1 ? "s" : ""} aprobado{consumoData.cantidadPresupuestos !== 1 ? "s" : ""}
+                        </p>
+                      </div>
+                    </div>
+
+                    {consumoData.ultimaCompra && (
+                      <div>
+                        <p className="text-xs text-zinc-500">Ultima compra aprobada</p>
+                        <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                          {new Date(consumoData.ultimaCompra + "T00:00:00").toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric" })}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Category breakdown with bars */}
+                    {consumoData.categorias.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium text-zinc-500 mb-2">Categorias compradas</p>
+                        <div className="space-y-2.5">
+                          {consumoData.categorias.map((cat) => {
+                            const maxTotal = consumoData.categorias[0].total;
+                            const pct = maxTotal > 0 ? (cat.total / maxTotal) * 100 : 0;
+                            return (
+                              <div key={cat.categoria}>
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                                    {cat.categoria}
+                                  </span>
+                                  <span className="text-xs text-zinc-500">
+                                    {cat.cantidad} u. &middot; {formatCurrency(cat.total)}
+                                  </span>
+                                </div>
+                                <div className="h-2 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full bg-gradient-to-r from-orange-400 to-orange-500 transition-all duration-500"
+                                    style={{ width: `${pct}%` }}
+                                  />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                 <Badge variant={selectedCliente.activo ? "success" : "danger"}>
                   {selectedCliente.activo ? "Activo" : "Inactivo"}

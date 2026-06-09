@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #fafafa;
   --foreground: #171717;
@@ -15,11 +17,9 @@
   --color-orange-950: #1A0A00;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #09090b;
-    --foreground: #fafafa;
-  }
+.dark {
+  --background: #09090b;
+  --foreground: #fafafa;
 }
 
 body {

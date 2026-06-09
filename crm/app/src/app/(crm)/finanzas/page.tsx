@@ -8,7 +8,7 @@ import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2 } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
@@ -22,7 +22,7 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   efectivo: { label: "Efectivo", variant: "outline", icon: Wallet },
 };
 
-type FinanzasTab = "movimientos" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito";
+type FinanzasTab = "movimientos" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito" | "vencimientos";
 
 // ── Helper types for Supabase rows (snake_case) ──
 interface MovimientoRow {
@@ -347,6 +347,7 @@ export default function FinanzasPage() {
     { id: "cheques", label: "E-Cheques" },
     { id: "extractos", label: "Extractos" },
     { id: "lineas_credito", label: "Lineas credito" },
+    { id: "vencimientos", label: "Vencimientos" },
   ];
 
   if (loading) {
@@ -579,6 +580,226 @@ export default function FinanzasPage() {
             </div>
           </>
         )}
+
+        {/* ── Vencimientos ── */}
+        {tab === "vencimientos" && (() => {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const endOfWeek = new Date(today);
+          endOfWeek.setDate(today.getDate() + (7 - today.getDay()));
+          const endOfNextWeek = new Date(endOfWeek);
+          endOfNextWeek.setDate(endOfNextWeek.getDate() + 7);
+          const endOf2Weeks = new Date(endOfNextWeek);
+          endOf2Weeks.setDate(endOf2Weeks.getDate() + 7);
+
+          interface VencimientoItem {
+            id: string;
+            fecha: Date;
+            fechaStr: string;
+            entidad: string;
+            descripcion: string;
+            monto: number;
+            tipo: "cheque" | "factura" | "cc_vencimiento" | "linea_credito";
+          }
+
+          const tipoVencConfig: Record<string, { label: string; variant: "warning" | "danger" | "info" | "outline" }> = {
+            cheque: { label: "Cheque", variant: "warning" },
+            factura: { label: "Factura", variant: "danger" },
+            cc_vencimiento: { label: "CC Vencimiento", variant: "info" },
+            linea_credito: { label: "Linea credito", variant: "outline" },
+          };
+
+          // Build vencimientos from existing data
+          const items: VencimientoItem[] = [];
+
+          // Pagos pendientes (not conciliados, tipo pago/cheque_emitido)
+          movimientos
+            .filter((m) => !m.conciliado && ["pago", "cheque_emitido"].includes(m.tipo))
+            .forEach((m) => {
+              items.push({
+                id: m.id,
+                fecha: new Date(m.fecha),
+                fechaStr: m.fecha,
+                entidad: m.proveedores?.razon_social || m.clientes?.razon_social || "—",
+                descripcion: m.descripcion,
+                monto: m.monto,
+                tipo: m.tipo === "cheque_emitido" ? "cheque" : "factura",
+              });
+            });
+
+          // Lineas de credito con vencimiento
+          lineasCredito
+            .filter((lc) => lc.estado === "activa" && lc.monto_utilizado > 0)
+            .forEach((lc) => {
+              items.push({
+                id: `lc-${lc.id}`,
+                fecha: new Date(lc.vencimiento),
+                fechaStr: lc.vencimiento,
+                entidad: lc.entidad,
+                descripcion: `Linea ${lc.tipo === "bancaria" ? "bancaria" : "proveedor"} — ${formatCurrency(lc.monto_utilizado)} utilizado`,
+                monto: lc.monto_utilizado,
+                tipo: "linea_credito",
+              });
+            });
+
+          // CC proveedores con saldo (simulate vencimiento based on dias_cuenta_corriente)
+          ccProveedores
+            .filter((p) => p.saldo_cuenta_corriente > 0)
+            .forEach((p) => {
+              const venc = new Date(today);
+              venc.setDate(venc.getDate() + p.dias_cuenta_corriente);
+              items.push({
+                id: `cc-${p.id}`,
+                fecha: venc,
+                fechaStr: venc.toISOString().slice(0, 10),
+                entidad: p.razon_social,
+                descripcion: `Cuenta corriente — ${p.dias_cuenta_corriente} dias`,
+                monto: p.saldo_cuenta_corriente,
+                tipo: "cc_vencimiento",
+              });
+            });
+
+          // Mock data fallback if no items found
+          if (items.length === 0) {
+            items.push(
+              { id: "mock-1", fecha: new Date("2026-06-15"), fechaStr: "2026-06-15", entidad: "Tenaris", descripcion: "Cheque emitido #4521", monto: 3855000, tipo: "cheque" },
+              { id: "mock-2", fecha: new Date("2026-06-16"), fechaStr: "2026-06-16", entidad: "Duo Matic", descripcion: "FC proveedor A-0012-00045821", monto: 1200000, tipo: "factura" },
+              { id: "mock-3", fecha: new Date("2026-06-30"), fechaStr: "2026-06-30", entidad: "Banco Nacion", descripcion: "Linea de credito bancaria — cuota mensual", monto: 3000000, tipo: "linea_credito" },
+              { id: "mock-4", fecha: new Date("2026-06-20"), fechaStr: "2026-06-20", entidad: "Flexitallic", descripcion: "FC proveedor A-0008-00012390", monto: 450000, tipo: "factura" },
+            );
+          }
+
+          // Sort by date
+          items.sort((a, b) => a.fecha.getTime() - b.fecha.getTime());
+
+          // Group by week
+          const groups: { label: string; items: VencimientoItem[] }[] = [
+            { label: "Vencido", items: [] },
+            { label: "Esta semana", items: [] },
+            { label: "Proxima semana", items: [] },
+            { label: "Proximas 2 semanas", items: [] },
+            { label: "Mas adelante", items: [] },
+          ];
+          items.forEach((item) => {
+            const d = new Date(item.fecha);
+            d.setHours(0, 0, 0, 0);
+            if (d < today) groups[0].items.push(item);
+            else if (d <= endOfWeek) groups[1].items.push(item);
+            else if (d <= endOfNextWeek) groups[2].items.push(item);
+            else if (d <= endOf2Weeks) groups[3].items.push(item);
+            else groups[4].items.push(item);
+          });
+
+          const totalVencido = groups[0].items.reduce((a, i) => a + i.monto, 0);
+          const totalEstaSemana = groups[1].items.reduce((a, i) => a + i.monto, 0);
+          const totalProximoMes = items.filter((i) => {
+            const d = new Date(i.fecha);
+            return d >= today && d <= new Date(today.getFullYear(), today.getMonth() + 1, today.getDate());
+          }).reduce((a, i) => a + i.monto, 0);
+
+          function getUrgencyClasses(fecha: Date): { border: string; bg: string; icon: typeof AlertTriangle; iconColor: string } {
+            const d = new Date(fecha);
+            d.setHours(0, 0, 0, 0);
+            if (d <= today) return { border: "border-red-300 dark:border-red-700", bg: "bg-red-50 dark:bg-red-950/30", icon: AlertTriangle, iconColor: "text-red-500" };
+            if (d <= endOfWeek) return { border: "border-amber-300 dark:border-amber-700", bg: "bg-amber-50 dark:bg-amber-950/30", icon: Clock, iconColor: "text-amber-500" };
+            return { border: "border-emerald-200 dark:border-emerald-800", bg: "bg-emerald-50 dark:bg-emerald-950/20", icon: CalendarDays, iconColor: "text-emerald-500" };
+          }
+
+          return (
+            <>
+              {/* Summary cards */}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <Card className={`${totalVencido > 0 ? "border-red-300 dark:border-red-700" : ""}`}>
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-lg bg-red-50 p-2.5 dark:bg-red-950/30">
+                      <AlertTriangle className="h-5 w-5 text-red-500" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-zinc-500">Total vencido</p>
+                      <p className={`text-xl font-bold font-mono ${totalVencido > 0 ? "text-red-600" : "text-zinc-400"}`}>{formatCurrency(totalVencido)}</p>
+                    </div>
+                  </div>
+                </Card>
+                <Card>
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-lg bg-amber-50 p-2.5 dark:bg-amber-950/30">
+                      <Clock className="h-5 w-5 text-amber-500" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-zinc-500">A pagar esta semana</p>
+                      <p className="text-xl font-bold font-mono text-amber-600">{formatCurrency(totalEstaSemana)}</p>
+                    </div>
+                  </div>
+                </Card>
+                <Card>
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-lg bg-blue-50 p-2.5 dark:bg-blue-950/30">
+                      <CalendarDays className="h-5 w-5 text-blue-500" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-zinc-500">Total proximo mes</p>
+                      <p className="text-xl font-bold font-mono text-zinc-700 dark:text-zinc-200">{formatCurrency(totalProximoMes)}</p>
+                    </div>
+                  </div>
+                </Card>
+              </div>
+
+              {/* Timeline grouped by week */}
+              <div className="space-y-6">
+                {groups.filter((g) => g.items.length > 0).map((group) => (
+                  <div key={group.label}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">{group.label}</h3>
+                      <span className="text-xs text-zinc-400 font-mono">
+                        ({group.items.length} {group.items.length === 1 ? "pago" : "pagos"} — {formatCurrency(group.items.reduce((a, i) => a + i.monto, 0))})
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {group.items.map((item) => {
+                        const urgency = getUrgencyClasses(item.fecha);
+                        const UrgencyIcon = urgency.icon;
+                        const cfg = tipoVencConfig[item.tipo];
+                        return (
+                          <div key={item.id} className={`flex items-center gap-4 rounded-lg border p-4 ${urgency.border} ${urgency.bg}`}>
+                            <div className={`flex-shrink-0 rounded-lg p-2 ${urgency.bg}`}>
+                              <UrgencyIcon className={`h-5 w-5 ${urgency.iconColor}`} />
+                            </div>
+                            <div className="flex-shrink-0 w-24">
+                              <p className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">{formatDate(item.fechaStr)}</p>
+                              <p className="text-xs text-zinc-400">{(() => {
+                                const d = new Date(item.fecha);
+                                d.setHours(0, 0, 0, 0);
+                                const diff = Math.ceil((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                                if (diff < 0) return `Hace ${Math.abs(diff)} dia${Math.abs(diff) !== 1 ? "s" : ""}`;
+                                if (diff === 0) return "Hoy";
+                                if (diff === 1) return "Manana";
+                                return `En ${diff} dias`;
+                              })()}</p>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold text-zinc-900 dark:text-white truncate">{item.entidad}</p>
+                              <p className="text-xs text-zinc-500 truncate">{item.descripcion}</p>
+                            </div>
+                            <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                            <span className="flex-shrink-0 font-mono font-bold text-base text-red-600 dark:text-red-400">
+                              {formatCurrency(item.monto)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                {items.length === 0 && (
+                  <Card className="text-center py-12">
+                    <CalendarDays className="mx-auto h-10 w-10 text-zinc-300 dark:text-zinc-600" />
+                    <p className="mt-3 text-sm text-zinc-500">No hay vencimientos pendientes</p>
+                  </Card>
+                )}
+              </div>
+            </>
+          );
+        })()}
       </div>
 
       {/* Nuevo movimiento modal */}

@@ -288,6 +288,9 @@ export interface Proveedor {
   saldoCuentaCorriente: number;
   listasDePrecios: string[]; // IDs de listas asociadas
   notas: string;
+  clasificacionTags: string[];
+  marcas: string;
+  clasificacionNota: string;
   activo: boolean;
   createdAt: string;
   updatedAt: string;

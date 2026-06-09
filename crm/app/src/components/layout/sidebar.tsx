@@ -18,12 +18,15 @@ import {
   Factory,
   ShoppingCart,
   Loader2,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
 import type { Role } from "@/lib/types";
 import { ROLE_PERMISSIONS } from "@/lib/types";
 import { useUser } from "@/lib/auth-context";
+import { useTheme } from "@/lib/theme-context";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
@@ -47,6 +50,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const { profile, role, sidebarCollapsed: collapsed, setSidebarCollapsed: setCollapsed } = useUser();
+  const { theme, toggleTheme } = useTheme();
   const [loggingOut, setLoggingOut] = useState(false);
 
   const supabase = createBrowserClient(
@@ -149,6 +153,19 @@ export function Sidebar() {
             {!collapsed && <span>Configuración</span>}
           </Link>
         )}
+
+        {/* Theme toggle */}
+        <button
+          onClick={toggleTheme}
+          className={cn(
+            "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white w-full",
+            collapsed && "justify-center"
+          )}
+          title={theme === "dark" ? "Modo claro" : "Modo oscuro"}
+        >
+          {theme === "dark" ? <Sun className="h-5 w-5 shrink-0" /> : <Moon className="h-5 w-5 shrink-0" />}
+          {!collapsed && <span>{theme === "dark" ? "Modo claro" : "Modo oscuro"}</span>}
+        </button>
 
         {/* User */}
         <div className={cn("mt-2 flex items-center gap-3 rounded-lg px-3 py-2.5", collapsed && "justify-center")}>

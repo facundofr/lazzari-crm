@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lazzari CRM — Mapa de Proyecto v1</title>
+<style>
+  :root {
+    --orange: #FF4500;
+    --orange-light: #FF6B35;
+    --green: #22c55e;
+    --green-bg: #f0fdf4;
+    --yellow: #eab308;
+    --yellow-bg: #fefce8;
+    --red: #ef4444;
+    --red-bg: #fef2f2;
+    --blue: #3b82f6;
+    --blue-bg: #eff6ff;
+    --zinc-50: #fafafa;
+    --zinc-100: #f4f4f5;
+    --zinc-200: #e4e4e7;
+    --zinc-300: #d4d4d8;
+    --zinc-500: #71717a;
+    --zinc-600: #52525b;
+    --zinc-700: #3f3f46;
+    --zinc-800: #27272a;
+    --zinc-900: #18181b;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--zinc-50);
+    color: var(--zinc-800);
+    line-height: 1.5;
+  }
+
+  .header {
+    background: var(--zinc-900);
+    color: white;
+    padding: 32px 40px;
+    border-bottom: 4px solid var(--orange);
+  }
+
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .header p {
+    color: var(--zinc-300);
+    font-size: 15px;
+  }
+
+  .header .meta {
+    display: flex;
+    gap: 24px;
+    margin-top: 16px;
+    font-size: 13px;
+    color: var(--zinc-500);
+  }
+
+  .header .meta span {
+    background: var(--zinc-800);
+    padding: 4px 12px;
+    border-radius: 6px;
+  }
+
+  .container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 32px 40px;
+  }
+
+  /* Score strip */
+  .score-strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+
+  .score-card {
+    background: white;
+    border-radius: 12px;
+    padding: 20px 24px;
+    border: 1px solid var(--zinc-200);
+  }
+
+  .score-card .label {
+    font-size: 13px;
+    color: var(--zinc-500);
+    font-weight: 500;
+    margin-bottom: 4px;
+  }
+
+  .score-card .value {
+    font-size: 32px;
+    font-weight: 700;
+  }
+
+  .score-card .sub {
+    font-size: 12px;
+    color: var(--zinc-500);
+    margin-top: 2px;
+  }
+
+  .score-card.green .value { color: var(--green); }
+  .score-card.yellow .value { color: var(--yellow); }
+  .score-card.orange .value { color: var(--orange); }
+  .score-card.blue .value { color: var(--blue); }
+
+  /* Section */
+  .section {
+    margin-bottom: 40px;
+  }
+
+  .section-title {
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .section-title .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  /* Module cards */
+  .modules-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+    gap: 16px;
+  }
+
+  .module-card {
+    background: white;
+    border-radius: 12px;
+    border: 1px solid var(--zinc-200);
+    overflow: hidden;
+    transition: box-shadow 0.2s;
+  }
+
+  .module-card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  }
+
+  .module-card .card-header {
+    padding: 16px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 1px solid var(--zinc-100);
+  }
+
+  .module-card .card-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .module-card .card-header .route {
+    font-size: 12px;
+    color: var(--zinc-500);
+    font-family: monospace;
+    margin-top: 2px;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+
+  .badge.ready { background: var(--green-bg); color: #15803d; }
+  .badge.partial { background: var(--yellow-bg); color: #a16207; }
+  .badge.incomplete { background: var(--red-bg); color: #dc2626; }
+  .badge.mock { background: var(--blue-bg); color: #2563eb; }
+
+  .module-card .card-body {
+    padding: 16px 20px;
+  }
+
+  .feature-list {
+    list-style: none;
+    margin-bottom: 12px;
+  }
+
+  .feature-list li {
+    font-size: 13px;
+    padding: 3px 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .feature-list li .icon {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    margin-top: 1px;
+  }
+
+  .icon.done { background: var(--green-bg); color: var(--green); }
+  .icon.warn { background: var(--yellow-bg); color: var(--yellow); }
+  .icon.miss { background: var(--red-bg); color: var(--red); }
+  .icon.info { background: var(--blue-bg); color: var(--blue); }
+
+  .data-source {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--zinc-100);
+    color: var(--zinc-600);
+    margin-top: 8px;
+  }
+
+  .data-source .dot-sm {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .data-source .dot-sm.live { background: var(--green); }
+  .data-source .dot-sm.fallback { background: var(--yellow); }
+  .data-source .dot-sm.mock-only { background: var(--red); }
+
+  /* Issues table */
+  .issues-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--zinc-200);
+  }
+
+  .issues-table th {
+    background: var(--zinc-100);
+    text-align: left;
+    padding: 10px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--zinc-600);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .issues-table td {
+    padding: 10px 16px;
+    font-size: 13px;
+    border-top: 1px solid var(--zinc-100);
+    vertical-align: top;
+  }
+
+  .issues-table tr:hover td {
+    background: var(--zinc-50);
+  }
+
+  .priority-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .priority-badge.critical { background: var(--red-bg); color: var(--red); }
+  .priority-badge.high { background: #fff7ed; color: #ea580c; }
+  .priority-badge.medium { background: var(--yellow-bg); color: #a16207; }
+  .priority-badge.low { background: var(--zinc-100); color: var(--zinc-600); }
+
+  /* Architecture diagram */
+  .arch-diagram {
+    background: white;
+    border: 1px solid var(--zinc-200);
+    border-radius: 12px;
+    padding: 32px;
+    overflow-x: auto;
+  }
+
+  .arch-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+    align-items: stretch;
+  }
+
+  .arch-box {
+    flex: 1;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    text-align: center;
+    min-width: 100px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+  }
+
+  .arch-box.frontend { background: #fef3c7; border: 1px solid #fcd34d; }
+  .arch-box.backend { background: #dbeafe; border: 1px solid #93c5fd; }
+  .arch-box.infra { background: #f3e8ff; border: 1px solid #c4b5fd; }
+  .arch-box.data { background: #dcfce7; border: 1px solid #86efac; }
+
+  .arch-box .arch-label {
+    font-weight: 700;
+    font-size: 12px;
+  }
+
+  .arch-box .arch-sub {
+    font-size: 11px;
+    color: var(--zinc-600);
+  }
+
+  .arch-arrow {
+    text-align: center;
+    color: var(--zinc-400);
+    font-size: 20px;
+    margin: 4px 0;
+  }
+
+  .arch-section-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--zinc-500);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+    padding-left: 4px;
+  }
+
+  /* Progress bar */
+  .progress-bar {
+    height: 8px;
+    background: var(--zinc-200);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 6px;
+  }
+
+  .progress-bar .fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s;
+  }
+
+  .fill.green { background: var(--green); }
+  .fill.yellow { background: var(--yellow); }
+  .fill.orange { background: var(--orange); }
+
+  /* Tab nav for filtering */
+  .tab-nav {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  .tab-btn {
+    padding: 6px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    border: 1px solid var(--zinc-200);
+    background: white;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .tab-btn:hover { border-color: var(--orange); color: var(--orange); }
+  .tab-btn.active { background: var(--orange); color: white; border-color: var(--orange); }
+
+  /* Collapsible */
+  .collapsible-header {
+    cursor: pointer;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .collapsible-header .chevron {
+    transition: transform 0.2s;
+    font-size: 14px;
+    color: var(--zinc-500);
+  }
+
+  .collapsible-header.open .chevron {
+    transform: rotate(90deg);
+  }
+
+  .print-only { display: none; }
+
+  @media print {
+    .header { padding: 20px; }
+    .container { padding: 20px; }
+    .module-card { break-inside: avoid; }
+    .no-print { display: none; }
+    .print-only { display: block; }
+  }
+
+  @media (max-width: 900px) {
+    .score-strip { grid-template-columns: repeat(2, 1fr); }
+    .modules-grid { grid-template-columns: 1fr; }
+    .container { padding: 20px; }
+    .header { padding: 20px; }
+  }
+
+  .legend {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+    font-size: 12px;
+    color: var(--zinc-600);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* UX checklist */
+  .ux-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+  }
+
+  .ux-card {
+    background: white;
+    border: 1px solid var(--zinc-200);
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+
+  .ux-card h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .ux-card ul {
+    list-style: none;
+    font-size: 13px;
+  }
+
+  .ux-card ul li {
+    padding: 2px 0;
+  }
+
+  .tag {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .tag.v1 { background: var(--green-bg); color: #15803d; }
+  .tag.v2 { background: var(--zinc-100); color: var(--zinc-600); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Lazzari CRM — Mapa de Proyecto</h1>
+  <p>Relevamiento completo del sistema para revision v1</p>
+  <div class="meta">
+    <span>Fecha: 8 junio 2026</span>
+    <span>Stack: Next.js 15 + Supabase + Vercel</span>
+    <span>11 modulos CRM</span>
+    <span>Proyecto: ycuzszzskqatlegtbgbq</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Score cards -->
+  <div class="score-strip">
+    <div class="score-card green">
+      <div class="label">Modulos listos para demo</div>
+      <div class="value">8 / 11</div>
+      <div class="sub">Dashboard, Clientes, Presupuestos, Remitos, Stock, Proveedores, OC, Finanzas</div>
+    </div>
+    <div class="score-card yellow">
+      <div class="label">Parcialmente completos</div>
+      <div class="value">2</div>
+      <div class="sub">Facturacion (falta AFIP), Reportes (falta export/drill-down)</div>
+    </div>
+    <div class="score-card orange">
+      <div class="label">Solo UI (sin backend)</div>
+      <div class="value">1</div>
+      <div class="sub">Configuracion (mock data, sin persistencia)</div>
+    </div>
+    <div class="score-card blue">
+      <div class="label">Queries Supabase</div>
+      <div class="value">52</div>
+      <div class="sub">8 archivos de queries, 4 vistas DB, 1 RPC</div>
+    </div>
+  </div>
+
+  <!-- Architecture -->
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:var(--blue)"></span> Arquitectura del Sistema</div>
+    <div class="arch-diagram">
+      <div class="arch-section-label">Frontend</div>
+      <div class="arch-row">
+        <div class="arch-box frontend"><span class="arch-label">Login</span><span class="arch-sub">Supabase Auth</span></div>
+        <div class="arch-box frontend"><span class="arch-label">Dashboard</span><span class="arch-sub">KPIs + Charts</span></div>
+        <div class="arch-box frontend"><span class="arch-label">Clientes</span><span class="arch-sub">CRUD + Detalle</span></div>
+        <div class="arch-box frontend"><span class="arch-label">Presupuestos</span><span class="arch-sub">Estados + Items</span></div>
+        <div class="arch-box frontend"><span class="arch-label">Facturacion</span><span class="arch-sub">Comprobantes</span></div>
+        <div class="arch-box frontend"><span class="arch-label">Remitos</span><span class="arch-sub">IA asistida</span></div>
+      </div>
+      <div class="arch-row">
+        <div class="arch-box frontend"><span class="arch-label">Stock</span><span class="arch-sub">Productos + Alertas</span></div>
+        <div class="arch-box frontend"><span class="arch-label">Finanzas</span><span class="arch-sub">6 sub-tabs</span></div>
+        <div class="arch-box frontend"><span class="arch-label">Proveedores</span><span class="arch-sub">+ Listas precio</span></div>
+        <div class="arch-box frontend"><span class="arch-label">Ordenes Compra</span><span class="arch-sub">Recepcion</span></div>
+        <div class="arch-box frontend"><span class="arch-label">Reportes</span><span class="arch-sub">Graficos</span></div>
+        <div class="arch-box frontend"><span class="arch-label">Config</span><span class="arch-sub">Usuarios/Roles</span></div>
+      </div>
+
+      <div class="arch-arrow">|</div>
+
+      <div class="arch-section-label">Capa de datos (lib/supabase/queries/)</div>
+      <div class="arch-row">
+        <div class="arch-box backend"><span class="arch-label">dashboard.ts</span><span class="arch-sub">5 funciones</span></div>
+        <div class="arch-box backend"><span class="arch-label">clientes.ts</span><span class="arch-sub">7 funciones</span></div>
+        <div class="arch-box backend"><span class="arch-label">presupuestos.ts</span><span class="arch-sub">11 funciones</span></div>
+        <div class="arch-box backend"><span class="arch-label">facturacion.ts</span><span class="arch-sub">6 funciones</span></div>
+      </div>
+      <div class="arch-row">
+        <div class="arch-box backend"><span class="arch-label">productos.ts</span><span class="arch-sub">7 funciones</span></div>
+        <div class="arch-box backend"><span class="arch-label">finanzas.ts</span><span class="arch-sub">8 funciones</span></div>
+        <div class="arch-box backend"><span class="arch-label">proveedores.ts</span><span class="arch-sub">6 funciones</span></div>
+        <div class="arch-box backend"><span class="arch-label">ordenes-compra.ts</span><span class="arch-sub">6 funciones</span></div>
+      </div>
+
+      <div class="arch-arrow">|</div>
+
+      <div class="arch-section-label">Backend (Supabase)</div>
+      <div class="arch-row">
+        <div class="arch-box data"><span class="arch-label">Auth</span><span class="arch-sub">Email + Password</span></div>
+        <div class="arch-box data"><span class="arch-label">Postgres</span><span class="arch-sub">27 tablas + RLS</span></div>
+        <div class="arch-box data"><span class="arch-label">4 Vistas</span><span class="arch-sub">CC, Stock, Precios, OC</span></div>
+        <div class="arch-box data"><span class="arch-label">RPC</span><span class="arch-sub">get_dashboard_kpis</span></div>
+        <div class="arch-box infra"><span class="arch-label">Vercel</span><span class="arch-sub">Deploy + CDN</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modules detail -->
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:var(--green)"></span> Detalle por Modulo</div>
+
+    <div class="legend">
+      <div class="legend-item"><span class="icon done" style="width:14px;height:14px;font-size:9px">&#10003;</span> Implementado</div>
+      <div class="legend-item"><span class="icon warn" style="width:14px;height:14px;font-size:9px">!</span> Parcial / Mejorable</div>
+      <div class="legend-item"><span class="icon miss" style="width:14px;height:14px;font-size:9px">&#10007;</span> Faltante</div>
+      <div class="legend-item"><span class="icon info" style="width:14px;height:14px;font-size:9px">i</span> Info / v2</div>
+    </div>
+
+    <div id="filter-nav" class="tab-nav no-print">
+      <button class="tab-btn active" onclick="filterModules('all')">Todos</button>
+      <button class="tab-btn" onclick="filterModules('ready')">Listos</button>
+      <button class="tab-btn" onclick="filterModules('partial')">Parciales</button>
+      <button class="tab-btn" onclick="filterModules('incomplete')">Incompletos</button>
+    </div>
+
+    <div class="modules-grid" id="modules-grid">
+
+      <!-- Dashboard -->
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Dashboard</h3>
+            <div class="route">/dashboard</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> 5 KPIs principales (facturacion, presupuestos, clientes, CC, alertas)</li>
+            <li><span class="icon done">&#10003;</span> Grafico barras: facturacion ultimos 6 meses</li>
+            <li><span class="icon done">&#10003;</span> Grafico torta: presupuestos por estado</li>
+            <li><span class="icon done">&#10003;</span> Tabla presupuestos recientes con link</li>
+            <li><span class="icon done">&#10003;</span> Panel de alertas (stock bajo, vencimientos, CC)</li>
+            <li><span class="icon done">&#10003;</span> Top 5 clientes por facturacion</li>
+            <li><span class="icon done">&#10003;</span> Actividad reciente con log</li>
+            <li><span class="icon done">&#10003;</span> Fallback a mock data si Supabase falla</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm live"></span> Supabase (RPC + queries) con fallback mock</div>
+        </div>
+      </div>
+
+      <!-- Clientes -->
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Clientes</h3>
+            <div class="route">/clientes</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> CRUD completo (crear, editar, eliminar, toggle activo)</li>
+            <li><span class="icon done">&#10003;</span> Busqueda (razon social, CUIT, email)</li>
+            <li><span class="icon done">&#10003;</span> Filtros: condicion IVA, provincia, estado activo</li>
+            <li><span class="icon done">&#10003;</span> Vista tabla / tarjetas toggle</li>
+            <li><span class="icon done">&#10003;</span> Panel lateral de detalle</li>
+            <li><span class="icon done">&#10003;</span> Exportar CSV</li>
+            <li><span class="icon done">&#10003;</span> Stats rapidos (total, saldo CC, credito)</li>
+            <li><span class="icon done">&#10003;</span> Formulario completo: IVA, direccion, forma pago, credito</li>
+            <li><span class="icon warn">!</span> Contactos y sucursales se cargan pero no se muestran en detalle</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm live"></span> Supabase con fallback mock</div>
+        </div>
+      </div>
+
+      <!-- Presupuestos -->
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Presupuestos</h3>
+            <div class="route">/presupuestos</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> Listado con filtro por estado (7 estados)</li>
+            <li><span class="icon done">&#10003;</span> Busqueda por numero PR o cliente</li>
+            <li><span class="icon done">&#10003;</span> Panel detalle: items, totales, observaciones</li>
+            <li><span class="icon done">&#10003;</span> Cambio de estado: enviar, aprobar, rechazar, postergar</li>
+            <li><span class="icon done">&#10003;</span> Modal de rechazo con motivo obligatorio</li>
+            <li><span class="icon done">&#10003;</span> Duplicar presupuesto (copia items)</li>
+            <li><span class="icon done">&#10003;</span> Eliminar (solo en borrador)</li>
+            <li><span class="icon done">&#10003;</span> Timestamps automaticos (enviado_at, respondido_at)</li>
+            <li><span class="icon done">&#10003;</span> Fallback en cascada (3 niveles de query antes de mock)</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm live"></span> Supabase con fallback cascada</div>
+        </div>
+      </div>
+
+      <!-- Remitos -->
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Remitos</h3>
+            <div class="route">/remitos</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> Listado de remitos con estado y cliente</li>
+            <li><span class="icon done">&#10003;</span> Crear remito manual</li>
+            <li><span class="icon done">&#10003;</span> Cambio de estado (pendiente, parcial, entregado)</li>
+            <li><span class="icon done">&#10003;</span> Generacion IA: seleccionar PR aprobado y auto-generar remito</li>
+            <li><span class="icon done">&#10003;</span> Banner destacado de funcion IA</li>
+            <li><span class="icon done">&#10003;</span> Auto-numeracion R-0001-00000001</li>
+            <li><span class="icon done">&#10003;</span> Vinculacion con presupuesto de origen</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm live"></span> Supabase con fallback mock</div>
+        </div>
+      </div>
+
+      <!-- Stock -->
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Stock / Productos</h3>
+            <div class="route">/stock</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> CRUD completo de articulos</li>
+            <li><span class="icon done">&#10003;</span> Busqueda (codigo, nombre, categoria)</li>
+            <li><span class="icon done">&#10003;</span> Filtro por categoria y stock bajo</li>
+            <li><span class="icon done">&#10003;</span> Ajuste de stock (+/-, o fijar cantidad)</li>
+            <li><span class="icon done">&#10003;</span> Alerta de stock bajo con top 5</li>
+            <li><span class="icon done">&#10003;</span> Stats: total articulos, valor stock, categorias</li>
+            <li><span class="icon done">&#10003;</span> Color-coded: rojo si stock &lt; minimo</li>
+            <li><span class="icon done">&#10003;</span> Soporte doble moneda (USD/ARS)</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm live"></span> Supabase con fallback mock</div>
+        </div>
+      </div>
+
+      <!-- Finanzas -->
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Finanzas</h3>
+            <div class="route">/finanzas</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> 6 sub-tabs: Movimientos, CC Clientes, CC Proveedores, E-Cheques, Extractos, Lineas credito</li>
+            <li><span class="icon done">&#10003;</span> CRUD de movimientos (cobro, pago, cheque, transferencia)</li>
+            <li><span class="icon done">&#10003;</span> Conciliacion de movimientos</li>
+            <li><span class="icon done">&#10003;</span> CC con barra de progreso y color-code</li>
+            <li><span class="icon done">&#10003;</span> Lineas de credito con disponible/utilizado visual</li>
+            <li><span class="icon done">&#10003;</span> E-Cheques: vista split emitidos vs recibidos</li>
+            <li><span class="icon warn">!</span> Extractos: UI de upload sin implementacion real</li>
+            <li><span class="icon warn">!</span> Matcheo de extractos: boton placeholder</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm live"></span> Supabase (vistas + queries) con fallback mock</div>
+        </div>
+      </div>
+
+      <!-- Proveedores -->
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Proveedores</h3>
+            <div class="route">/proveedores</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> CRUD completo de proveedores</li>
+            <li><span class="icon done">&#10003;</span> Tab Listas de Precios: expandibles con items detallados</li>
+            <li><span class="icon done">&#10003;</span> Items con precio tachado + descuento + precio neto</li>
+            <li><span class="icon done">&#10003;</span> Filtro por estado de lista (vigente, vencida, borrador)</li>
+            <li><span class="icon done">&#10003;</span> Alerta de listas vencidas</li>
+            <li><span class="icon done">&#10003;</span> Vista tabla / tarjetas + export CSV</li>
+            <li><span class="icon done">&#10003;</span> Panel lateral de detalle</li>
+            <li><span class="icon warn">!</span> Contactos cargados pero no mostrados</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm live"></span> Supabase con fallback mock</div>
+        </div>
+      </div>
+
+      <!-- Ordenes de Compra -->
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Ordenes de Compra</h3>
+            <div class="route">/ordenes-compra</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> CRUD con flujo de estados (borrador, enviada, confirmada, recibida)</li>
+            <li><span class="icon done">&#10003;</span> Filtro por estado (7 opciones)</li>
+            <li><span class="icon done">&#10003;</span> Panel detalle con items y totales</li>
+            <li><span class="icon done">&#10003;</span> Barra progreso de recepcion (%)</li>
+            <li><span class="icon done">&#10003;</span> Cancelacion con validacion de estado</li>
+            <li><span class="icon done">&#10003;</span> Items cargados lazy (on-demand)</li>
+            <li><span class="icon done">&#10003;</span> Vinculacion con presupuesto de origen</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm live"></span> Supabase (vista + queries) con fallback mock</div>
+        </div>
+      </div>
+
+      <!-- Facturacion -->
+      <div class="module-card" data-status="partial">
+        <div class="card-header">
+          <div>
+            <h3>Facturacion</h3>
+            <div class="route">/facturacion</div>
+          </div>
+          <span class="badge partial">Parcial</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> Listado de comprobantes con tipo formateado (FA, NCA, etc.)</li>
+            <li><span class="icon done">&#10003;</span> Crear factura con calculo IVA automatico</li>
+            <li><span class="icon done">&#10003;</span> Anular factura (solo si emitida)</li>
+            <li><span class="icon done">&#10003;</span> Stats: facturado mes, comprobantes, pendientes cobro</li>
+            <li><span class="icon warn">!</span> IVA hardcodeado al 21% (no soporta 10.5% o 27%)</li>
+            <li><span class="icon miss">&#10007;</span> Integracion AFIP no implementada (requiere certificado digital)</li>
+            <li><span class="icon miss">&#10007;</span> Boton "Nueva factura" en header no funciona</li>
+            <li><span class="icon miss">&#10007;</span> Notas de credito/debito: solo tipo visual, sin logica especifica</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm live"></span> Supabase con fallback mock</div>
+        </div>
+      </div>
+
+      <!-- Reportes -->
+      <div class="module-card" data-status="partial">
+        <div class="card-header">
+          <div>
+            <h3>Reportes</h3>
+            <div class="route">/reportes</div>
+          </div>
+          <span class="badge partial">Parcial</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> Grafico barras: ventas mensuales (6 meses)</li>
+            <li><span class="icon done">&#10003;</span> Grafico torta: presupuestos por estado</li>
+            <li><span class="icon done">&#10003;</span> KPIs con tendencia vs. periodo anterior</li>
+            <li><span class="icon done">&#10003;</span> Analisis de motivos de rechazo (categorizacion automatica)</li>
+            <li><span class="icon done">&#10003;</span> Ranking top clientes con barras de progreso</li>
+            <li><span class="icon miss">&#10007;</span> Botones de exportar no funcionales</li>
+            <li><span class="icon miss">&#10007;</span> Tarjetas de categorias de reporte no son clickeables (sin drill-down)</li>
+            <li><span class="icon info">i</span> Solo lectura — suficiente para v1</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm live"></span> Supabase con fallback mock</div>
+        </div>
+      </div>
+
+      <!-- Configuracion -->
+      <div class="module-card" data-status="incomplete">
+        <div class="card-header">
+          <div>
+            <h3>Configuracion</h3>
+            <div class="route">/configuracion</div>
+          </div>
+          <span class="badge incomplete">Incompleto</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> UI de 5 tabs: Usuarios, Roles, Empresa, Integraciones, Notificaciones</li>
+            <li><span class="icon done">&#10003;</span> Matriz de permisos visual por rol</li>
+            <li><span class="icon done">&#10003;</span> Formulario datos empresa (editable en UI)</li>
+            <li><span class="icon done">&#10003;</span> 6 cards de integraciones (AFIP, banco, email, Claude AI)</li>
+            <li><span class="icon miss">&#10007;</span> SIN backend — todo es mock data y estado local</li>
+            <li><span class="icon miss">&#10007;</span> Invitar usuario: boton sin implementacion</li>
+            <li><span class="icon miss">&#10007;</span> Guardar datos empresa: simulado con timeout</li>
+            <li><span class="icon miss">&#10007;</span> Notificaciones: toggles no persisten</li>
+            <li><span class="icon info">i</span> Integraciones AFIP marcadas como "No configurado"</li>
+          </ul>
+          <div class="data-source"><span class="dot-sm mock-only"></span> Solo mock data / estado local</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Components transversales -->
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:var(--orange)"></span> Componentes Transversales</div>
+    <div class="modules-grid">
+
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Sidebar</h3>
+            <div class="route">components/layout/sidebar.tsx</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> Navegacion por modulo con iconos</li>
+            <li><span class="icon done">&#10003;</span> Colapsable (68px / 250px)</li>
+            <li><span class="icon done">&#10003;</span> Filtrado por rol (solo muestra modulos permitidos)</li>
+            <li><span class="icon done">&#10003;</span> Perfil de usuario + logout</li>
+            <li><span class="icon done">&#10003;</span> Indicador de ruta activa</li>
+            <li><span class="icon warn">!</span> Sin tooltips cuando esta colapsado</li>
+            <li><span class="icon warn">!</span> Sin version mobile (drawer/hamburguesa)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Header / Busqueda Global</h3>
+            <div class="route">components/layout/header.tsx</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> Titulo + subtitulo + accion principal</li>
+            <li><span class="icon done">&#10003;</span> Busqueda global: clientes, PR, facturas, productos</li>
+            <li><span class="icon done">&#10003;</span> Debounce 300ms, max 3 resultados por categoria</li>
+            <li><span class="icon done">&#10003;</span> Atajo teclado Cmd+K</li>
+            <li><span class="icon done">&#10003;</span> Campana de alertas con badge de no leidas</li>
+            <li><span class="icon warn">!</span> Click en resultado lleva al modulo, no a la entidad especifica</li>
+            <li><span class="icon warn">!</span> Busqueda oculta en mobile (hidden md:block)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>Asistente IA (Claude)</h3>
+            <div class="route">components/layout/ai-widget.tsx</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> Chat flotante bottom-right</li>
+            <li><span class="icon done">&#10003;</span> Acciones rapidas: generar remito, importar facturas, analizar rechazos</li>
+            <li><span class="icon done">&#10003;</span> Integrado con Anthropic SDK (@anthropic-ai/sdk)</li>
+            <li><span class="icon done">&#10003;</span> Minimizable / expandible</li>
+            <li><span class="icon warn">!</span> No persiste historial entre recargas</li>
+            <li><span class="icon warn">!</span> Ancho fijo 384px — se rompe en mobile</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="module-card" data-status="ready">
+        <div class="card-header">
+          <div>
+            <h3>DataTable</h3>
+            <div class="route">components/ui/data-table.tsx</div>
+          </div>
+          <span class="badge ready">Listo</span>
+        </div>
+        <div class="card-body">
+          <ul class="feature-list">
+            <li><span class="icon done">&#10003;</span> Ordenamiento por columna (click header)</li>
+            <li><span class="icon done">&#10003;</span> Paginacion (10 items default)</li>
+            <li><span class="icon done">&#10003;</span> Locale es-AR para comparacion de strings</li>
+            <li><span class="icon done">&#10003;</span> Estado vacio personalizable</li>
+            <li><span class="icon done">&#10003;</span> Click en fila para detalle</li>
+            <li><span class="icon warn">!</span> Sin estado de carga (loading skeleton)</li>
+            <li><span class="icon info">i</span> Sort client-side — OK para v1</li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Auth & Security -->
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:#8b5cf6"></span> Autenticacion y Seguridad</div>
+    <div class="arch-diagram">
+      <ul class="feature-list" style="columns:2;column-gap:40px;">
+        <li><span class="icon done">&#10003;</span> Login con email + password (Supabase Auth)</li>
+        <li><span class="icon done">&#10003;</span> Middleware de sesion en cada request</li>
+        <li><span class="icon done">&#10003;</span> Redirect automatico: no autenticado a /login, autenticado a /dashboard</li>
+        <li><span class="icon done">&#10003;</span> UserProvider context: profile, role, sidebar state</li>
+        <li><span class="icon done">&#10003;</span> 5 roles: super_admin, admin, vendedor, administrativo, viewer</li>
+        <li><span class="icon done">&#10003;</span> Permisos client-side via ROLE_PERMISSIONS por modulo</li>
+        <li><span class="icon done">&#10003;</span> RLS en todas las tablas (Supabase)</li>
+        <li><span class="icon done">&#10003;</span> Sidebar filtrado por permisos de rol</li>
+        <li><span class="icon warn">!</span> Si profile falla, usuario cae a rol "viewer" silenciosamente</li>
+        <li><span class="icon info">i</span> Invite-only planificado para v2</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- Issues prioritized -->
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:var(--red)"></span> Issues para Resolver (priorizados)</div>
+
+    <table class="issues-table">
+      <thead>
+        <tr>
+          <th>Prioridad</th>
+          <th>Modulo</th>
+          <th>Issue</th>
+          <th>Impacto</th>
+          <th>Sugerencia</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="priority-badge critical">CRITICO</span></td>
+          <td>Configuracion</td>
+          <td>Modulo entero sin backend — mock data, nada persiste</td>
+          <td>El cliente va a intentar guardar datos y no pasa nada</td>
+          <td>Conectar al menos "Datos empresa" y "Usuarios" a Supabase <span class="tag v1">v1</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge critical">CRITICO</span></td>
+          <td>Facturacion</td>
+          <td>Boton "Nueva factura" del header no hace nada</td>
+          <td>Click sin respuesta = mala impresion</td>
+          <td>Vincular al modal existente de crear factura <span class="tag v1">v1</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge high">ALTO</span></td>
+          <td>Layout</td>
+          <td>Sin responsive mobile: sidebar, AI widget, y busqueda se rompen en pantallas chicas</td>
+          <td>Si el cliente mira desde celular, la app no funciona</td>
+          <td>Agregar drawer mobile para sidebar + ocultar AI widget en mobile <span class="tag v1">v1</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge high">ALTO</span></td>
+          <td>Sidebar</td>
+          <td>Sin tooltips cuando esta colapsado — no se sabe que es cada icono</td>
+          <td>Usabilidad degradada en modo colapsado</td>
+          <td>Agregar tooltip on-hover con nombre del modulo <span class="tag v1">v1</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge high">ALTO</span></td>
+          <td>Reportes</td>
+          <td>Botones de exportar no funcionan</td>
+          <td>Feature visible que no hace nada</td>
+          <td>Ocultar botones o implementar export CSV basico <span class="tag v1">v1</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge medium">MEDIO</span></td>
+          <td>Facturacion</td>
+          <td>IVA hardcodeado al 21%</td>
+          <td>No soporta productos con 10.5% o 27%</td>
+          <td>Agregar selector de alicuota IVA <span class="tag v2">v2</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge medium">MEDIO</span></td>
+          <td>Header</td>
+          <td>Click en resultado de busqueda lleva al modulo, no a la entidad</td>
+          <td>Buscar "Metalurgica" y no poder ir directo al cliente</td>
+          <td>Navegar a /clientes?id=xxx o abrir panel lateral <span class="tag v1">v1</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge medium">MEDIO</span></td>
+          <td>Clientes / Proveedores</td>
+          <td>Contactos cargados de DB pero no mostrados en UI</td>
+          <td>Datos existen pero el usuario no los ve</td>
+          <td>Agregar seccion de contactos en panel detalle <span class="tag v2">v2</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge medium">MEDIO</span></td>
+          <td>Finanzas</td>
+          <td>Upload de extractos y matcheo: UI existe pero no funciona</td>
+          <td>Boton visible sin accion</td>
+          <td>Ocultar o marcar como "Proximamente" <span class="tag v1">v1</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge low">BAJO</span></td>
+          <td>DataTable</td>
+          <td>Sin loading skeleton — tabla desaparece mientras carga</td>
+          <td>Flash de contenido vacio</td>
+          <td>Agregar skeleton o spinner <span class="tag v2">v2</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge low">BAJO</span></td>
+          <td>Auth</td>
+          <td>Si profile falla, rol cae a "viewer" sin aviso</td>
+          <td>Admin podria perder acceso temporalmente</td>
+          <td>Mostrar toast de error y retry <span class="tag v2">v2</span></td>
+        </tr>
+        <tr>
+          <td><span class="priority-badge low">BAJO</span></td>
+          <td>Queries</td>
+          <td>Sin paginacion — todas las queries cargan todo en memoria</td>
+          <td>OK para demo, problematico con +500 registros</td>
+          <td>Agregar limit/offset cuando haya volumen real <span class="tag v2">v2</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Usability quick wins -->
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:var(--yellow)"></span> Quick Wins para la Demo</div>
+    <div class="ux-grid">
+      <div class="ux-card">
+        <h4>Antes de mostrar</h4>
+        <ul>
+          <li>- Cargar datos reales en Supabase (al menos 10 clientes, 5 PR, 3 facturas)</li>
+          <li>- Verificar que el dashboard muestre datos reales, no mock</li>
+          <li>- Probar login con usuario admin y vendedor para mostrar filtro de sidebar</li>
+          <li>- Verificar que las alertas tengan contenido real</li>
+        </ul>
+      </div>
+      <div class="ux-card">
+        <h4>Durante la demo</h4>
+        <ul>
+          <li>- Mostrar flujo completo: crear cliente, crear PR, aprobar, generar remito</li>
+          <li>- Mostrar busqueda global (Cmd+K) con datos reales</li>
+          <li>- Mostrar el asistente IA generando un remito</li>
+          <li>- Mostrar cambio de rol (vendedor ve menos modulos)</li>
+          <li>- NO mostrar Configuracion en profundidad (mock)</li>
+          <li>- NO hacer click en "Exportar" de Reportes</li>
+        </ul>
+      </div>
+      <div class="ux-card">
+        <h4>Puntos fuertes para destacar</h4>
+        <ul>
+          <li>- 11 modulos funcionales con datos reales</li>
+          <li>- Asistente IA integrado (Claude)</li>
+          <li>- Sistema de roles con 5 niveles</li>
+          <li>- Doble moneda USD/ARS</li>
+          <li>- Busqueda global cross-modulo</li>
+          <li>- Dark mode</li>
+          <li>- Presupuestos con workflow completo de estados</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Roadmap -->
+  <div class="section">
+    <div class="section-title"><span class="dot" style="background:var(--zinc-700)"></span> Roadmap Post-Demo</div>
+    <div class="arch-diagram">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:24px;">
+        <div>
+          <h4 style="font-size:14px;margin-bottom:10px;color:var(--orange)">Sprint 1 — Pre-entrega</h4>
+          <ul class="feature-list">
+            <li><span class="icon miss" style="font-size:10px">&#10007;</span> Fix boton factura header</li>
+            <li><span class="icon miss" style="font-size:10px">&#10007;</span> Tooltips sidebar colapsado</li>
+            <li><span class="icon miss" style="font-size:10px">&#10007;</span> Ocultar/deshabilitar features no implementadas</li>
+            <li><span class="icon miss" style="font-size:10px">&#10007;</span> Responsive basico mobile</li>
+            <li><span class="icon miss" style="font-size:10px">&#10007;</span> Conectar Configuracion > Empresa a DB</li>
+          </ul>
+        </div>
+        <div>
+          <h4 style="font-size:14px;margin-bottom:10px;color:var(--zinc-600)">Sprint 2 — Post-feedback</h4>
+          <ul class="feature-list">
+            <li><span class="icon info" style="font-size:10px">i</span> AFIP integracion (certificado digital)</li>
+            <li><span class="icon info" style="font-size:10px">i</span> Contactos y sucursales en detalle</li>
+            <li><span class="icon info" style="font-size:10px">i</span> Export CSV/PDF en reportes</li>
+            <li><span class="icon info" style="font-size:10px">i</span> Paginacion server-side</li>
+            <li><span class="icon info" style="font-size:10px">i</span> Loading skeletons</li>
+          </ul>
+        </div>
+        <div>
+          <h4 style="font-size:14px;margin-bottom:10px;color:var(--zinc-500)">Sprint 3 — Produccion</h4>
+          <ul class="feature-list">
+            <li><span class="icon info" style="font-size:10px">i</span> Invite-only user management</li>
+            <li><span class="icon info" style="font-size:10px">i</span> Extractos bancarios (upload + match)</li>
+            <li><span class="icon info" style="font-size:10px">i</span> Notificaciones en tiempo real</li>
+            <li><span class="icon info" style="font-size:10px">i</span> PDF generation (PR, facturas)</li>
+            <li><span class="icon info" style="font-size:10px">i</span> Audit log completo</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function filterModules(status) {
+  const cards = document.querySelectorAll('#modules-grid .module-card');
+  const buttons = document.querySelectorAll('#filter-nav .tab-btn');
+
+  buttons.forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+
+  cards.forEach(card => {
+    if (status === 'all') {
+      card.style.display = '';
+    } else {
+      const map = { ready: 'ready', partial: 'partial', incomplete: 'incomplete' };
+      card.style.display = card.dataset.status === map[status] ? '' : 'none';
+    }
+  });
+}
+</script>
+
+</body>
+</html>
