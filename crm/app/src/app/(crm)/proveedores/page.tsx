@@ -4,6 +4,7 @@ import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
+import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { formatCurrency } from "@/lib/utils";
 import { mockProveedores, mockListasPrecios } from "@/lib/mock-data";
 import { supabase } from "@/lib/supabase/client";
@@ -118,6 +119,12 @@ const emptyForm = {
 export default function ProveedoresPage() {
   const [tab, setTab] = useState<"proveedores" | "listas">("proveedores");
   const [search, setSearch] = useState("");
+  const [filterValues, setFilterValues] = useState<FilterValues>({
+    rubro: "",
+    provincia: "",
+    saldo: {},
+    formaPago: "",
+  });
   const [view, setView] = useState<"table" | "cards">("table");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filterLista, setFilterLista] = useState<string>("todas");
@@ -165,9 +172,59 @@ export default function ProveedoresPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  const filteredProveedores = proveedores.filter(
-    (p) => p.razonSocial.toLowerCase().includes(search.toLowerCase()) || p.cuit.includes(search) || p.rubro.toLowerCase().includes(search.toLowerCase())
-  );
+  // Build filter configs dynamically from current data
+  const filterConfigs: FilterConfig[] = [
+    {
+      key: "rubro",
+      label: "Rubro",
+      type: "select",
+      options: Array.from(new Set(proveedores.map((p) => p.rubro).filter(Boolean)))
+        .sort()
+        .map((r) => ({ value: r, label: r })),
+    },
+    {
+      key: "provincia",
+      label: "Provincia",
+      type: "select",
+      options: Array.from(new Set(proveedores.map((p) => p.provincia).filter(Boolean)))
+        .sort()
+        .map((p) => ({ value: p, label: p })),
+    },
+    {
+      key: "saldo",
+      label: "Saldo CC",
+      type: "number-range",
+    },
+    {
+      key: "formaPago",
+      label: "Forma de pago",
+      type: "select",
+      options: [
+        { value: "Contado", label: "Contado" },
+        { value: "Cuenta corriente", label: "Cuenta corriente" },
+        { value: "Cheque", label: "Cheque" },
+        { value: "Transferencia", label: "Transferencia" },
+      ],
+    },
+  ];
+
+  const filteredProveedores = proveedores.filter((p) => {
+    // Text search
+    if (search) {
+      const q = search.toLowerCase();
+      if (!p.razonSocial.toLowerCase().includes(q) && !p.cuit.includes(search) && !p.rubro.toLowerCase().includes(q)) return false;
+    }
+    // Smart filters
+    if (filterValues.rubro && (filterValues.rubro as string) !== "" && p.rubro !== filterValues.rubro) return false;
+    if (filterValues.provincia && (filterValues.provincia as string) !== "" && p.provincia !== filterValues.provincia) return false;
+    if (filterValues.formaPago && (filterValues.formaPago as string) !== "" && p.formaPago !== filterValues.formaPago) return false;
+    const saldoRange = filterValues.saldo as { min?: number; max?: number } | undefined;
+    if (saldoRange) {
+      if (saldoRange.min !== undefined && p.saldoCuentaCorriente < saldoRange.min) return false;
+      if (saldoRange.max !== undefined && p.saldoCuentaCorriente > saldoRange.max) return false;
+    }
+    return true;
+  });
 
   const filteredListas = listas.filter((lp) => {
     if (filterLista !== "todas" && lp.estado !== filterLista) return false;
@@ -305,6 +362,8 @@ export default function ProveedoresPage() {
                 <button onClick={() => setView("cards")} className={`px-3 py-2 text-xs font-medium ${view === "cards" ? "bg-zinc-100 text-zinc-800 dark:bg-zinc-700 dark:text-white" : "bg-white text-zinc-400 dark:bg-zinc-900"}`}>Tarjetas</button>
               </div>
             </div>
+
+            <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
 
             {view === "table" ? (
               <Card className="p-0 overflow-hidden">

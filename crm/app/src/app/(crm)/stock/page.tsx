@@ -5,14 +5,15 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
+import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { formatCurrency } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { mockProducts } from "@/lib/mock-data";
 import {
   Package, AlertTriangle, Search, Loader2, X, Pencil, Plus, Minus,
-  Filter, ChevronDown,
+  History,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 
 interface ProductRow {
   id: string;
@@ -28,6 +29,19 @@ interface ProductRow {
   activo: boolean;
   proveedor_id: string | null;
   proveedores: { razon_social: string } | null;
+  updated_at: string | null;
+}
+
+interface PrecioHistorialRow {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  precio_anterior: number | null;
+  precio_nuevo: number;
+  moneda: string | null;
+  changed_by: string | null;
+  created_at: string;
+  profiles: { full_name: string } | null;
 }
 
 const emptyForm = {
@@ -48,10 +62,16 @@ export default function StockPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Filters
-  const [filterOpen, setFilterOpen] = useState(false);
-  const [filterCategoria, setFilterCategoria] = useState("");
+  // Filters (legacy)
   const [filterStockBajo, setFilterStockBajo] = useState(false);
+
+  // SmartFilters
+  const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
+    fecha: { from: "", to: "" },
+    moneda: "",
+    precio: {},
+    proveedor: "",
+  });
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -63,6 +83,10 @@ export default function StockPage() {
   const [adjustModal, setAdjustModal] = useState<ProductRow | null>(null);
   const [adjustAmount, setAdjustAmount] = useState(0);
   const [adjustMode, setAdjustMode] = useState<"add" | "set">("add");
+
+  // Price history
+  const [precioHistorial, setPrecioHistorial] = useState<PrecioHistorialRow[]>([]);
+  const [loadingHistorial, setLoadingHistorial] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -79,6 +103,7 @@ export default function StockPage() {
           precio_costo: p.precioCosto, moneda_costo: p.monedaCosto, unidad: p.unidad,
           iva: p.iva, stock: p.stock, stock_minimo: p.stockMinimo, activo: p.activo,
           proveedor_id: null, proveedores: { razon_social: p.proveedor },
+          updated_at: null,
         })));
       }
     } catch {
@@ -87,6 +112,7 @@ export default function StockPage() {
         precio_costo: p.precioCosto, moneda_costo: p.monedaCosto, unidad: p.unidad,
         iva: p.iva, stock: p.stock, stock_minimo: p.stockMinimo, activo: p.activo,
         proveedor_id: null, proveedores: { razon_social: p.proveedor },
+        updated_at: null,
       })));
     } finally {
       setLoading(false);
@@ -97,18 +123,100 @@ export default function StockPage() {
 
   const categorias = [...new Set(productos.map((p) => p.categoria).filter(Boolean))] as string[];
 
+  const proveedorOptions = useMemo(() => {
+    const unique = [...new Set(productos.map((p) => p.proveedores?.razon_social).filter(Boolean))] as string[];
+    return unique.sort().map((name) => ({ value: name, label: name }));
+  }, [productos]);
+
+  const smartFilterConfigs: FilterConfig[] = useMemo(() => [
+    { key: "fecha", label: "Fecha actualización", type: "date-range" },
+    {
+      key: "moneda", label: "Moneda", type: "select",
+      options: [{ value: "USD", label: "USD" }, { value: "ARS", label: "ARS" }],
+    },
+    { key: "precio", label: "Precio costo", type: "number-range" },
+    { key: "proveedor", label: "Proveedor", type: "select", options: proveedorOptions },
+  ], [proveedorOptions]);
+
   const filtered = productos.filter((p) => {
     const matchSearch =
       p.nombre.toLowerCase().includes(search.toLowerCase()) ||
       p.codigo.toLowerCase().includes(search.toLowerCase()) ||
       (p.categoria || "").toLowerCase().includes(search.toLowerCase());
-    const matchCategoria = !filterCategoria || p.categoria === filterCategoria;
     const matchStockBajo = !filterStockBajo || p.stock < p.stock_minimo;
-    return matchSearch && matchCategoria && matchStockBajo;
+
+    // SmartFilter: fecha (date-range on updated_at)
+    const fechaFilter = smartFilterValues.fecha as { from?: string; to?: string } | undefined;
+    let matchFecha = true;
+    if (fechaFilter?.from && p.updated_at) {
+      matchFecha = p.updated_at >= fechaFilter.from;
+    }
+    if (matchFecha && fechaFilter?.to && p.updated_at) {
+      matchFecha = p.updated_at <= fechaFilter.to + "T23:59:59";
+    }
+
+    // SmartFilter: moneda
+    const monedaFilter = smartFilterValues.moneda as string;
+    const matchMoneda = !monedaFilter || p.moneda_costo === monedaFilter;
+
+    // SmartFilter: precio (number-range on precio_costo)
+    const precioFilter = smartFilterValues.precio as { min?: number; max?: number } | undefined;
+    let matchPrecio = true;
+    if (precioFilter?.min !== undefined) {
+      matchPrecio = Number(p.precio_costo) >= precioFilter.min;
+    }
+    if (matchPrecio && precioFilter?.max !== undefined) {
+      matchPrecio = Number(p.precio_costo) <= precioFilter.max;
+    }
+
+    // SmartFilter: proveedor
+    const proveedorFilter = smartFilterValues.proveedor as string;
+    const matchProveedor = !proveedorFilter || p.proveedores?.razon_social === proveedorFilter;
+
+    return matchSearch && matchStockBajo && matchFecha && matchMoneda && matchPrecio && matchProveedor;
   });
 
   const stockBajo = productos.filter((p) => p.stock < p.stock_minimo);
   const valorStock = productos.reduce((acc, p) => acc + Number(p.precio_costo) * p.stock, 0);
+
+  // Fetch price history when a product is selected for adjustment
+  const fetchPrecioHistorial = useCallback(async (productId: string) => {
+    setLoadingHistorial(true);
+    setPrecioHistorial([]);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("precio_historial")
+        .select("*, profiles:changed_by(full_name)")
+        .eq("entity_type", "producto")
+        .eq("entity_id", productId)
+        .order("created_at", { ascending: false })
+        .limit(10);
+      if (!error && data) {
+        setPrecioHistorial(data as unknown as PrecioHistorialRow[]);
+      }
+    } catch {
+      // Table may not exist yet — silently ignore
+    } finally {
+      setLoadingHistorial(false);
+    }
+  }, []);
+
+  // Trigger fetch when adjustModal or editingId changes
+  useEffect(() => {
+    if (adjustModal) {
+      fetchPrecioHistorial(adjustModal.id);
+    } else {
+      setPrecioHistorial([]);
+    }
+  }, [adjustModal, fetchPrecioHistorial]);
+
+  useEffect(() => {
+    if (editingId) {
+      fetchPrecioHistorial(editingId);
+    } else {
+      setPrecioHistorial([]);
+    }
+  }, [editingId, fetchPrecioHistorial]);
 
   function openCreate() {
     setEditingId(null);
@@ -179,8 +287,6 @@ export default function StockPage() {
     }
   }
 
-  const hasFilters = filterCategoria || filterStockBajo;
-
   if (loading) {
     return (
       <>
@@ -224,7 +330,7 @@ export default function StockPage() {
           </div>
         )}
 
-        <div className="flex gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
@@ -235,40 +341,17 @@ export default function StockPage() {
               className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             />
           </div>
-          <div className="relative">
-            <button
-              onClick={() => setFilterOpen(!filterOpen)}
-              className={`flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium ${
-                hasFilters ? "border-orange-300 bg-orange-50 text-orange-700" : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              }`}
-            >
-              <Filter className="h-4 w-4" /> Filtros <ChevronDown className="h-3 w-3" />
-            </button>
-            {filterOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setFilterOpen(false)} />
-                <div className="absolute left-0 top-full z-50 mt-2 w-64 rounded-xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 space-y-3">
-                  <div>
-                    <label className="text-xs font-medium text-zinc-500">Categoria</label>
-                    <select value={filterCategoria} onChange={(e) => setFilterCategoria(e.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                      <option value="">Todas</option>
-                      {categorias.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select>
-                  </div>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={filterStockBajo} onChange={(e) => setFilterStockBajo(e.target.checked)} className="rounded" />
-                    Solo stock bajo
-                  </label>
-                  {hasFilters && (
-                    <button onClick={() => { setFilterCategoria(""); setFilterStockBajo(false); }} className="w-full rounded-lg py-2 text-xs font-medium text-orange-500 hover:bg-orange-50">
-                      Limpiar filtros
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
+          <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+            <input type="checkbox" checked={filterStockBajo} onChange={(e) => setFilterStockBajo(e.target.checked)} className="rounded" />
+            Solo stock bajo
+          </label>
         </div>
+
+        <SmartFilters
+          filters={smartFilterConfigs}
+          values={smartFilterValues}
+          onChange={setSmartFilterValues}
+        />
 
         <Card className="p-0 overflow-hidden">
           <DataTable<ProductRow>
@@ -376,6 +459,51 @@ export default function StockPage() {
                 <input type="number" value={form.stock_minimo} onChange={(e) => setForm({ ...form, stock_minimo: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
               </div>
             </div>
+            {/* Historial de precios */}
+            {editingId && precioHistorial.length > 0 && (
+              <div className="mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+                <div className="flex items-center gap-2 mb-3">
+                  <History className="h-4 w-4 text-zinc-400" />
+                  <h4 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Historial de precios</h4>
+                </div>
+                <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-700">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-zinc-50 dark:bg-zinc-800">
+                        <th className="px-3 py-2 text-left font-medium text-zinc-500">Fecha</th>
+                        <th className="px-3 py-2 text-right font-medium text-zinc-500">Anterior</th>
+                        <th className="px-3 py-2 text-right font-medium text-zinc-500">Nuevo</th>
+                        <th className="px-3 py-2 text-left font-medium text-zinc-500">Quién</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {precioHistorial.map((h) => (
+                        <tr key={h.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                          <td className="px-3 py-1.5 text-zinc-600 dark:text-zinc-400">
+                            {new Date(h.created_at).toLocaleDateString("es-AR")}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-mono text-zinc-500">
+                            {h.precio_anterior != null ? formatCurrency(h.precio_anterior) : "—"}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-mono font-medium text-zinc-700 dark:text-zinc-300">
+                            {formatCurrency(h.precio_nuevo)}
+                          </td>
+                          <td className="px-3 py-1.5 text-zinc-500 dark:text-zinc-400">
+                            {h.profiles?.full_name || "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {editingId && loadingHistorial && (
+              <div className="mt-4 flex items-center gap-2 text-xs text-zinc-400">
+                <Loader2 className="h-3 w-3 animate-spin" /> Cargando historial...
+              </div>
+            )}
+
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
               <button onClick={() => setModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
               <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
@@ -433,6 +561,51 @@ export default function StockPage() {
               <p className="text-center text-sm text-zinc-500 mt-2">
                 Resultado: <span className="font-mono font-bold">{Math.max(0, adjustModal.stock + adjustAmount)}</span> {adjustModal.unidad}
               </p>
+            )}
+
+            {/* Historial de precios in adjust modal */}
+            {precioHistorial.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+                <div className="flex items-center gap-2 mb-2">
+                  <History className="h-3.5 w-3.5 text-zinc-400" />
+                  <h4 className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Historial de precios</h4>
+                </div>
+                <div className="overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-700 max-h-40 overflow-y-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="bg-zinc-50 dark:bg-zinc-800">
+                        <th className="px-2 py-1.5 text-left font-medium text-zinc-500">Fecha</th>
+                        <th className="px-2 py-1.5 text-right font-medium text-zinc-500">Anterior</th>
+                        <th className="px-2 py-1.5 text-right font-medium text-zinc-500">Nuevo</th>
+                        <th className="px-2 py-1.5 text-left font-medium text-zinc-500">Quién</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {precioHistorial.map((h) => (
+                        <tr key={h.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                          <td className="px-2 py-1 text-zinc-600 dark:text-zinc-400">
+                            {new Date(h.created_at).toLocaleDateString("es-AR")}
+                          </td>
+                          <td className="px-2 py-1 text-right font-mono text-zinc-500">
+                            {h.precio_anterior != null ? formatCurrency(h.precio_anterior) : "—"}
+                          </td>
+                          <td className="px-2 py-1 text-right font-mono font-medium text-zinc-700 dark:text-zinc-300">
+                            {formatCurrency(h.precio_nuevo)}
+                          </td>
+                          <td className="px-2 py-1 text-zinc-500 dark:text-zinc-400">
+                            {h.profiles?.full_name || "—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {loadingHistorial && (
+              <div className="mt-3 flex items-center gap-2 text-xs text-zinc-400">
+                <Loader2 className="h-3 w-3 animate-spin" /> Cargando historial...
+              </div>
             )}
 
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200">

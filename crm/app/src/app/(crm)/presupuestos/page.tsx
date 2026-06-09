@@ -10,9 +10,10 @@ import type { Presupuesto, PRStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
-  PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight,
+  PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 
 interface SupabasePresupuesto {
   id: string;
@@ -34,8 +35,10 @@ interface SupabasePresupuesto {
   created_by: string;
   created_at: string;
   updated_at: string;
+  vendedor_id: string | null;
   clientes?: { razon_social: string; cuit: string } | null;
   created_by_profile?: { full_name: string } | null;
+  vendedor_profile?: { full_name: string; avatar_url: string | null } | null;
   presupuesto_items?: PresupuestoItem[];
 }
 
@@ -92,7 +95,10 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     respondidoAt: row.respondido_at ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  };
+    vendedorNombre: row.vendedor_profile?.full_name ?? "",
+    vendedorAvatar: row.vendedor_profile?.avatar_url ?? null,
+    vendedorId: row.vendedor_id ?? null,
+  } as any;
 }
 
 const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info"; icon: typeof Clock }> = {
@@ -113,23 +119,35 @@ export default function PresupuestosPage() {
   // Detail panel
   const [selected, setSelected] = useState<Presupuesto | null>(null);
 
+  // Vendedor filter
+  const [vendedorFilter, setVendedorFilter] = useState<string>("");
+  const [vendedores, setVendedores] = useState<{id: string; full_name: string}[]>([]);
+
   // Rechazo modal
   const [rechazoModal, setRechazoModal] = useState<string | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState("");
 
+  // Smart filters
+  const filterConfigs: FilterConfig[] = [
+    { key: "fecha", label: "Fecha", type: "date-range" },
+    { key: "moneda", label: "Moneda", type: "select", options: [{ value: "USD", label: "USD" }, { value: "ARS", label: "ARS" }] },
+    { key: "monto", label: "Monto total", type: "number-range" },
+  ];
+  const [filterValues, setFilterValues] = useState<FilterValues>({ fecha: { from: "", to: "" }, moneda: "", monto: {} });
+
   const fetchPresupuestos = useCallback(async () => {
     try {
-      // First try with items
+      // First try with items + vendedor profile
       let res: { data: any; error: any } = await supabase
         .from("presupuestos")
-        .select(`*, clientes(razon_social, cuit), presupuesto_items(*)`)
+        .select(`*, clientes(razon_social, cuit), vendedor_profile:vendedor_id(full_name, avatar_url), presupuesto_items(*)`)
         .order("fecha", { ascending: false });
 
       // If that fails, try without items
       if (res.error) {
         res = await supabase
           .from("presupuestos")
-          .select(`*, clientes(razon_social, cuit)`)
+          .select(`*, clientes(razon_social, cuit), vendedor_id`)
           .order("fecha", { ascending: false });
       }
 
@@ -137,7 +155,7 @@ export default function PresupuestosPage() {
       if (res.error) {
         res = await supabase
           .from("presupuestos")
-          .select(`*`)
+          .select(`*, vendedor_id`)
           .order("fecha", { ascending: false });
       }
 
@@ -158,9 +176,37 @@ export default function PresupuestosPage() {
     fetchPresupuestos();
   }, [fetchPresupuestos]);
 
+  useEffect(() => {
+    async function fetchVendedores() {
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id, full_name")
+          .in("role", ["vendedor", "admin", "super_admin"])
+          .order("full_name");
+        if (!error && data) {
+          setVendedores(data as { id: string; full_name: string }[]);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    fetchVendedores();
+  }, []);
+
   const filtered = presupuestos.filter((pr) => {
     if (filter !== "todos" && pr.estado !== filter) return false;
     if (search && !pr.numero.toLowerCase().includes(search.toLowerCase()) && !pr.clienteNombre.toLowerCase().includes(search.toLowerCase())) return false;
+    if (vendedorFilter && (pr as any).vendedorId !== vendedorFilter) return false;
+    // Smart filters
+    const fechaFilter = filterValues.fecha as { from?: string; to?: string } | undefined;
+    if (fechaFilter?.from && pr.fecha < fechaFilter.from) return false;
+    if (fechaFilter?.to && pr.fecha > fechaFilter.to) return false;
+    const monedaFilter = filterValues.moneda as string;
+    if (monedaFilter && pr.moneda !== monedaFilter) return false;
+    const montoFilter = filterValues.monto as { min?: number; max?: number } | undefined;
+    if (montoFilter?.min !== undefined && pr.total < montoFilter.min) return false;
+    if (montoFilter?.max !== undefined && pr.total > montoFilter.max) return false;
     return true;
   });
 
@@ -295,7 +341,7 @@ export default function PresupuestosPage() {
           ))}
         </div>
 
-        {/* Search */}
+        {/* Search + Vendedor filter */}
         <div className="flex gap-3">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
@@ -307,7 +353,20 @@ export default function PresupuestosPage() {
               className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             />
           </div>
+          <select
+            value={vendedorFilter}
+            onChange={(e) => setVendedorFilter(e.target.value)}
+            className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+          >
+            <option value="">Todos los vendedores</option>
+            {vendedores.map((v) => (
+              <option key={v.id} value={v.id}>{v.full_name}</option>
+            ))}
+          </select>
         </div>
+
+        {/* Smart filters */}
+        <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
 
         {/* Table */}
         <Card className="p-0 overflow-hidden">
@@ -337,6 +396,26 @@ export default function PresupuestosPage() {
                     {formatCurrency(row.total, row.moneda)}
                   </span>
                 ),
+              },
+              {
+                key: "vendedorNombre" as any, label: "Vendedor", sortable: true,
+                render: (row) => {
+                  const nombre = (row as any).vendedorNombre;
+                  const avatar = (row as any).vendedorAvatar;
+                  if (!nombre) return <span className="text-zinc-400">&mdash;</span>;
+                  return (
+                    <div className="flex items-center gap-2">
+                      {avatar ? (
+                        <img src={avatar} alt="" className="h-6 w-6 rounded-full object-cover" />
+                      ) : (
+                        <div className="h-6 w-6 rounded-full bg-orange-100 flex items-center justify-center text-xs font-bold text-orange-600">
+                          {nombre.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <span className="text-sm">{nombre}</span>
+                    </div>
+                  );
+                },
               },
               {
                 key: "estado", label: "Estado", sortable: true,
@@ -470,6 +549,23 @@ export default function PresupuestosPage() {
                   <p className="text-sm font-medium">{selected.creadoPor}</p>
                 </div>
                 <div>
+                  <p className="text-xs text-zinc-500">Vendedor</p>
+                  {(selected as any).vendedorNombre ? (
+                    <div className="flex items-center gap-2 mt-0.5">
+                      {(selected as any).vendedorAvatar ? (
+                        <img src={(selected as any).vendedorAvatar} alt="" className="h-5 w-5 rounded-full object-cover" />
+                      ) : (
+                        <div className="h-5 w-5 rounded-full bg-orange-100 flex items-center justify-center text-[10px] font-bold text-orange-600">
+                          {(selected as any).vendedorNombre.charAt(0).toUpperCase()}
+                        </div>
+                      )}
+                      <p className="text-sm font-medium">{(selected as any).vendedorNombre}</p>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-zinc-400">&mdash;</p>
+                  )}
+                </div>
+                <div>
                   <p className="text-xs text-zinc-500">Moneda</p>
                   <p className="text-sm font-medium">{selected.moneda}</p>
                 </div>
@@ -488,6 +584,15 @@ export default function PresupuestosPage() {
               {/* Items table */}
               <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                 <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3">Items ({selected.items.length})</h3>
+                {(() => {
+                  const belowCostCount = selected.items.filter((item) => item.precioVenta < item.precioCosto).length;
+                  return belowCostCount > 0 ? (
+                    <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400 mb-3">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span>Atención: {belowCostCount} item(s) con precio de venta menor al costo</span>
+                    </div>
+                  ) : null;
+                })()}
                 <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
                   <table className="w-full text-sm">
                     <thead>
@@ -502,17 +607,25 @@ export default function PresupuestosPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                      {selected.items.map((item) => (
-                        <tr key={item.id}>
+                      {selected.items.map((item) => {
+                        const belowCost = item.precioVenta < item.precioCosto;
+                        return (
+                        <tr key={item.id} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
                           <td className="px-3 py-2">{item.descripcion}</td>
                           <td className="px-3 py-2 text-right">{item.cantidad} {item.unidad}</td>
                           <td className="px-3 py-2 text-right font-mono">{formatCurrency(item.precioCosto)}</td>
                           <td className="px-3 py-2 text-right">{item.markupPorcentaje}%</td>
-                          <td className="px-3 py-2 text-right font-mono">{formatCurrency(item.precioVenta)}</td>
+                          <td className={`px-3 py-2 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
+                            <span className="inline-flex items-center gap-1">
+                              {belowCost && <AlertTriangle className="h-3 w-3 shrink-0" />}
+                              {formatCurrency(item.precioVenta)}
+                            </span>
+                          </td>
                           <td className="px-3 py-2 text-right font-mono font-semibold">{formatCurrency(item.total)}</td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

@@ -116,6 +116,8 @@ export interface Sucursal {
   localidad: string;
   provincia: string;
   telefono: string;
+  email?: string;
+  cp?: string;
 }
 
 export interface Contacto {
@@ -125,6 +127,9 @@ export interface Contacto {
   email: string;
   telefono: string;
   principal: boolean;
+  fechaCumpleanos?: string | null;
+  notas?: string | null;
+  sucursalId?: string | null;
 }
 
 // ── Productos / Articulos ────────────────────────────────────────
@@ -164,6 +169,9 @@ export interface Presupuesto {
   moneda: "USD" | "ARS";
   observaciones: string;
   creadoPor: string;
+  vendedorId?: string;
+  vendedorNombre?: string;
+  vendedorAvatar?: string | null;
   enviadoAt?: string;
   respondidoAt?: string;
   createdAt: string;

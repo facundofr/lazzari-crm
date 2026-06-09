@@ -9,6 +9,7 @@ import { mockRemitos } from "@/lib/mock-data";
 import { Sparkles, Truck, Loader2, CheckCircle2, Package, X } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { formatDate } from "@/lib/utils";
+import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 
 const estadoConfig: Record<string, { label: string; variant: "success" | "warning" | "info" }> = {
   pendiente: { label: "Pendiente", variant: "warning" },
@@ -60,6 +61,36 @@ export default function RemitosPage() {
   const [selectedPresupuestos, setSelectedPresupuestos] = useState<Set<string>>(new Set());
   const [generatingIA, setGeneratingIA] = useState(false);
   const [iaSuccess, setIaSuccess] = useState("");
+
+  // SmartFilters state
+  const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
+    fecha: { from: "", to: "" },
+    estado: "",
+    vinculado: "",
+  });
+
+  const smartFilterConfigs: FilterConfig[] = [
+    { key: "fecha", label: "Fecha", type: "date-range" },
+    {
+      key: "estado",
+      label: "Estado",
+      type: "select",
+      options: [
+        { value: "pendiente", label: "Pendiente" },
+        { value: "entregado", label: "Entregado" },
+        { value: "parcial", label: "Parcial" },
+      ],
+    },
+    {
+      key: "vinculado",
+      label: "Vinculado a PR",
+      type: "select",
+      options: [
+        { value: "si", label: "Sí" },
+        { value: "no", label: "No" },
+      ],
+    },
+  ];
 
   const fetchData = useCallback(async () => {
       try {
@@ -236,6 +267,12 @@ export default function RemitosPage() {
           </button>
         </div>
 
+        <SmartFilters
+          filters={smartFilterConfigs}
+          values={smartFilterValues}
+          onChange={setSmartFilterValues}
+        />
+
         <Card className="p-0 overflow-hidden">
           <DataTable<RemitoRow>
             columns={[
@@ -282,7 +319,20 @@ export default function RemitosPage() {
                 ),
               },
             ]}
-            data={remitos}
+            data={remitos.filter((r) => {
+              // fecha filter
+              const fechaFilter = smartFilterValues.fecha as { from?: string; to?: string } | undefined;
+              if (fechaFilter?.from && r.fecha < fechaFilter.from) return false;
+              if (fechaFilter?.to && r.fecha > fechaFilter.to) return false;
+              // estado filter
+              const estadoFilter = smartFilterValues.estado as string;
+              if (estadoFilter && r.estado !== estadoFilter) return false;
+              // vinculado filter
+              const vinculadoFilter = smartFilterValues.vinculado as string;
+              if (vinculadoFilter === "si" && !r.presupuesto_id) return false;
+              if (vinculadoFilter === "no" && r.presupuesto_id) return false;
+              return true;
+            })}
           />
         </Card>
       </div>

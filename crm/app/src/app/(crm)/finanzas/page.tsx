@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
+import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { formatCurrency } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito } from "@/lib/types";
@@ -119,6 +120,40 @@ export default function FinanzasPage() {
   const [ccProveedores, setCcProveedores] = useState<CCRow[]>([]);
   const [extractos, setExtractos] = useState<ExtractoRow[]>([]);
   const [lineasCredito, setLineasCredito] = useState<LineaCreditoRow[]>([]);
+
+  // ── SmartFilters for Movimientos tab ──
+  const movFilterConfigs: FilterConfig[] = [
+    { key: "fecha", label: "Fecha", type: "date-range" },
+    {
+      key: "tipo",
+      label: "Tipo",
+      type: "select",
+      options: [
+        { value: "cobro", label: "Cobro" },
+        { value: "pago", label: "Pago" },
+        { value: "cheque_emitido", label: "Cheque emitido" },
+        { value: "cheque_recibido", label: "Cheque recibido" },
+        { value: "transferencia", label: "Transferencia" },
+        { value: "efectivo", label: "Efectivo" },
+      ],
+    },
+    {
+      key: "conciliado",
+      label: "Conciliado",
+      type: "select",
+      options: [
+        { value: "si", label: "Si" },
+        { value: "no", label: "No" },
+      ],
+    },
+    { key: "monto", label: "Monto", type: "number-range" },
+  ];
+  const [movFilterValues, setMovFilterValues] = useState<FilterValues>({
+    fecha: { from: "", to: "" },
+    tipo: "",
+    conciliado: "",
+    monto: {},
+  });
 
   const fetchData = useCallback(async () => {
       setLoading(true);
@@ -333,6 +368,30 @@ export default function FinanzasPage() {
   const totalPagos = movimientos.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
   const sinConciliar = movimientos.filter((m) => !m.conciliado).length;
 
+  // ── Apply SmartFilters to movimientos ──
+  const filteredMovimientos = movimientos.filter((m) => {
+    // Date range filter
+    const fechaFilter = movFilterValues.fecha as { from?: string; to?: string } | undefined;
+    if (fechaFilter?.from && m.fecha < fechaFilter.from) return false;
+    if (fechaFilter?.to && m.fecha > fechaFilter.to) return false;
+
+    // Tipo filter
+    const tipoFilter = movFilterValues.tipo as string;
+    if (tipoFilter && m.tipo !== tipoFilter) return false;
+
+    // Conciliado filter
+    const conciliadoFilter = movFilterValues.conciliado as string;
+    if (conciliadoFilter === "si" && !m.conciliado) return false;
+    if (conciliadoFilter === "no" && m.conciliado) return false;
+
+    // Monto range filter
+    const montoFilter = movFilterValues.monto as { min?: number; max?: number } | undefined;
+    if (montoFilter?.min !== undefined && m.monto < montoFilter.min) return false;
+    if (montoFilter?.max !== undefined && m.monto > montoFilter.max) return false;
+
+    return true;
+  });
+
   const extracto = extractos[0] ?? null;
   const movsFiltrados = extracto ? extracto.extracto_movimientos.filter((m) => filterExtracto === "todos" || m.estado === filterExtracto) : [];
 
@@ -387,6 +446,12 @@ export default function FinanzasPage() {
 
         {/* ── Movimientos ── */}
         {tab === "movimientos" && (
+          <>
+          <SmartFilters
+            filters={movFilterConfigs}
+            values={movFilterValues}
+            onChange={setMovFilterValues}
+          />
           <Card className="p-0 overflow-hidden">
             <DataTable<MovimientoRow>
               columns={[
@@ -417,9 +482,10 @@ export default function FinanzasPage() {
                   </div>
                 )},
               ]}
-              data={movimientos}
+              data={filteredMovimientos}
             />
           </Card>
+          </>
         )}
 
         {/* ── CC Clientes ── */}

@@ -4,6 +4,7 @@ import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
+import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
@@ -51,6 +52,64 @@ export default function FacturacionPage() {
     subtotal: 0,
     iva: 0,
     total: 0,
+  });
+
+  const filterConfigs: FilterConfig[] = [
+    { key: "fecha", label: "Fecha", type: "date-range" },
+    {
+      key: "tipo",
+      label: "Tipo",
+      type: "select",
+      options: [
+        { value: "FA", label: "FA" },
+        { value: "FB", label: "FB" },
+        { value: "FC", label: "FC" },
+        { value: "NCA", label: "NCA" },
+        { value: "NCB", label: "NCB" },
+        { value: "NCC", label: "NCC" },
+      ],
+    },
+    {
+      key: "estado",
+      label: "Estado",
+      type: "select",
+      options: [
+        { value: "emitida", label: "Emitida" },
+        { value: "pagada", label: "Pagada" },
+        { value: "anulada", label: "Anulada" },
+        { value: "vencida", label: "Vencida" },
+      ],
+    },
+    { key: "monto", label: "Monto", type: "number-range" },
+  ];
+
+  const [filterValues, setFilterValues] = useState<FilterValues>({
+    fecha: { from: "", to: "" },
+    tipo: "",
+    estado: "",
+    monto: {},
+  });
+
+  const filteredFacturas = facturas.filter((f) => {
+    // fecha filter
+    const fechaFilter = filterValues.fecha as { from?: string; to?: string } | undefined;
+    if (fechaFilter?.from && f.fecha < fechaFilter.from) return false;
+    if (fechaFilter?.to && f.fecha > fechaFilter.to) return false;
+
+    // tipo filter
+    const tipoFilter = filterValues.tipo as string;
+    if (tipoFilter && f.tipo !== tipoFilter) return false;
+
+    // estado filter
+    const estadoFilter = filterValues.estado as string;
+    if (estadoFilter && f.estado !== estadoFilter) return false;
+
+    // monto filter
+    const montoFilter = filterValues.monto as { min?: number; max?: number } | undefined;
+    if (montoFilter?.min !== undefined && Number(f.total) < montoFilter.min) return false;
+    if (montoFilter?.max !== undefined && Number(f.total) > montoFilter.max) return false;
+
+    return true;
   });
 
   const fetchData = useCallback(async () => {
@@ -182,8 +241,13 @@ export default function FacturacionPage() {
         </div>
 
         <Card className="p-0 overflow-hidden">
-          <div className="border-b border-zinc-200 p-4 dark:border-zinc-800">
+          <div className="border-b border-zinc-200 p-4 dark:border-zinc-800 space-y-3">
             <h3 className="font-semibold text-zinc-900 dark:text-white">Comprobantes emitidos</h3>
+            <SmartFilters
+              filters={filterConfigs}
+              values={filterValues}
+              onChange={setFilterValues}
+            />
           </div>
           <DataTable<FacturaRow>
             columns={[
@@ -215,7 +279,7 @@ export default function FacturacionPage() {
                 ) : null,
               },
             ]}
-            data={facturas}
+            data={filteredFacturas}
           />
         </Card>
 

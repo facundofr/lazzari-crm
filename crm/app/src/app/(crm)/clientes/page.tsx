@@ -4,14 +4,15 @@ import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
+import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { formatCurrency } from "@/lib/utils";
 import { mockClients, mockPresupuestos, mockFacturas } from "@/lib/mock-data";
 import type { Client } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import {
-  Search, Filter, Download, MapPin, Phone, Mail, Loader2,
-  Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight, ChevronDown,
-  BarChart3, ShoppingBag, CalendarDays, TrendingUp,
+  Search, Download, MapPin, Phone, Mail, Loader2,
+  Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight,
+  BarChart3, ShoppingBag, CalendarDays, TrendingUp, Cake,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 
@@ -80,7 +81,17 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
     assignedTo: row.assigned_to ?? undefined,
     createdAt: row.created_at ?? "",
     updatedAt: row.updated_at ?? "",
-    contactos: Array.isArray(row.contactos) ? row.contactos as Client["contactos"] : [],
+    contactos: Array.isArray(row.contactos) ? (row.contactos as Array<Record<string, unknown>>).map((c) => ({
+      id: c.id as string,
+      nombre: (c.nombre as string) ?? "",
+      cargo: (c.cargo as string) ?? "",
+      email: (c.email as string) ?? "",
+      telefono: (c.telefono as string) ?? "",
+      principal: (c.principal as boolean) ?? false,
+      fechaCumpleanos: (c.fecha_cumpleanos as string) ?? null,
+      notas: (c.notas as string) ?? null,
+      sucursalId: (c.sucursal_id as string) ?? null,
+    })) : [],
     sucursales: Array.isArray(row.cliente_sucursales) ? row.cliente_sucursales as Client["sucursales"] : [],
     vendedorNombre: row.assigned_profile?.full_name ?? "—",
   };
@@ -128,10 +139,23 @@ export default function ClientesPage() {
   const [saving, setSaving] = useState(false);
 
   // Filters
-  const [filterOpen, setFilterOpen] = useState(false);
-  const [filterCondicion, setFilterCondicion] = useState("");
-  const [filterProvincia, setFilterProvincia] = useState("");
-  const [filterEstado, setFilterEstado] = useState<"" | "activo" | "inactivo">("");
+  const filterConfigs: FilterConfig[] = [
+    { key: "fecha", label: "Fecha alta", type: "date-range" },
+    { key: "provincia", label: "Provincia", type: "select", options: provincias.map(p => ({ value: p, label: p })) },
+    { key: "condicionIva", label: "Condición IVA", type: "select", options: [
+      { value: "RI", label: "Resp. Inscripto" }, { value: "Monotributo", label: "Monotributo" },
+      { value: "Exento", label: "Exento" }, { value: "CF", label: "Cons. Final" }
+    ]},
+    { key: "formaPago", label: "Forma de pago", type: "select", options: [
+      { value: "Contado", label: "Contado" }, { value: "Cuenta corriente", label: "Cuenta corriente" },
+      { value: "Cheque", label: "Cheque" }, { value: "Transferencia", label: "Transferencia" }
+    ]},
+    { key: "saldo", label: "Saldo CC", type: "number-range" },
+    { key: "estado", label: "Estado", type: "select", options: [
+      { value: "activo", label: "Activo" }, { value: "inactivo", label: "Inactivo" }
+    ]},
+  ];
+  const [filterValues, setFilterValues] = useState<FilterValues>({ fecha: { from: "", to: "" }, provincia: "", condicionIva: "", formaPago: "", saldo: {}, estado: "" });
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -286,13 +310,24 @@ export default function ClientesPage() {
       c.razonSocial.toLowerCase().includes(search.toLowerCase()) ||
       c.cuit.includes(search) ||
       c.email.toLowerCase().includes(search.toLowerCase());
-    const matchCondicion = !filterCondicion || c.condicionIva === filterCondicion;
-    const matchProvincia = !filterProvincia || c.provincia === filterProvincia;
+    const fProvincia = filterValues.provincia as string;
+    const matchProvincia = !fProvincia || c.provincia === fProvincia;
+    const fCondicion = filterValues.condicionIva as string;
+    const matchCondicion = !fCondicion || c.condicionIva === fCondicion;
+    const fFormaPago = filterValues.formaPago as string;
+    const matchFormaPago = !fFormaPago || c.formaPago === fFormaPago;
+    const fEstado = filterValues.estado as string;
     const matchEstado =
-      !filterEstado ||
-      (filterEstado === "activo" && c.activo) ||
-      (filterEstado === "inactivo" && !c.activo);
-    return matchSearch && matchCondicion && matchProvincia && matchEstado;
+      !fEstado ||
+      (fEstado === "activo" && c.activo) ||
+      (fEstado === "inactivo" && !c.activo);
+    const fFecha = filterValues.fecha as { from?: string; to?: string };
+    const matchFechaFrom = !fFecha?.from || c.createdAt >= fFecha.from;
+    const matchFechaTo = !fFecha?.to || c.createdAt.slice(0, 10) <= fFecha.to;
+    const fSaldo = filterValues.saldo as { min?: number; max?: number };
+    const matchSaldoMin = fSaldo?.min === undefined || c.saldoCuentaCorriente >= fSaldo.min;
+    const matchSaldoMax = fSaldo?.max === undefined || c.saldoCuentaCorriente <= fSaldo.max;
+    return matchSearch && matchProvincia && matchCondicion && matchFormaPago && matchEstado && matchFechaFrom && matchFechaTo && matchSaldoMin && matchSaldoMax;
   });
 
   const activos = clientes.filter((c) => c.activo).length;
@@ -400,13 +435,6 @@ export default function ClientesPage() {
     }
   }
 
-  function clearFilters() {
-    setFilterCondicion("");
-    setFilterProvincia("");
-    setFilterEstado("");
-  }
-
-  const hasFilters = filterCondicion || filterProvincia || filterEstado;
 
   if (loading) {
     return (
@@ -440,57 +468,6 @@ export default function ClientesPage() {
               className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             />
           </div>
-          <div className="relative">
-            <button
-              onClick={() => setFilterOpen(!filterOpen)}
-              className={`flex items-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
-                hasFilters
-                  ? "border-orange-300 bg-orange-50 text-orange-700"
-                  : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900"
-              }`}
-            >
-              <Filter className="h-4 w-4" /> Filtros {hasFilters && <Badge variant="warning">!</Badge>}
-              <ChevronDown className="h-3 w-3" />
-            </button>
-            {filterOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setFilterOpen(false)} />
-                <div className="absolute left-0 top-full z-50 mt-2 w-72 rounded-xl border border-zinc-200 bg-white p-4 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 space-y-3">
-                  <div>
-                    <label className="text-xs font-medium text-zinc-500">Condicion IVA</label>
-                    <select value={filterCondicion} onChange={(e) => setFilterCondicion(e.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                      <option value="">Todas</option>
-                      {Object.entries(condicionLabels).map(([k, v]) => (
-                        <option key={k} value={k}>{v}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-zinc-500">Provincia</label>
-                    <select value={filterProvincia} onChange={(e) => setFilterProvincia(e.target.value)} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                      <option value="">Todas</option>
-                      {provincias.map((p) => (
-                        <option key={p} value={p}>{p}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-zinc-500">Estado</label>
-                    <select value={filterEstado} onChange={(e) => setFilterEstado(e.target.value as "" | "activo" | "inactivo")} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                      <option value="">Todos</option>
-                      <option value="activo">Activo</option>
-                      <option value="inactivo">Inactivo</option>
-                    </select>
-                  </div>
-                  {hasFilters && (
-                    <button onClick={clearFilters} className="w-full rounded-lg py-2 text-xs font-medium text-orange-500 hover:bg-orange-50">
-                      Limpiar filtros
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
           <button onClick={exportCSV} className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800">
             <Download className="h-4 w-4" /> Exportar
           </button>
@@ -499,6 +476,8 @@ export default function ClientesPage() {
             <button onClick={() => setView("cards")} className={`px-3 py-2 text-xs font-medium ${view === "cards" ? "bg-zinc-100 text-zinc-800 dark:bg-zinc-700 dark:text-white" : "bg-white text-zinc-400 dark:bg-zinc-900"}`}>Tarjetas</button>
           </div>
         </div>
+
+        <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
 
         {/* Quick stats */}
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -679,6 +658,47 @@ export default function ClientesPage() {
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                   <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Notas</h3>
                   <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{selectedCliente.notas}</p>
+                </div>
+              )}
+
+              {/* Contactos */}
+              {selectedCliente.contactos && selectedCliente.contactos.length > 0 && (
+                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3">Contactos</h3>
+                  <div className="space-y-3">
+                    {selectedCliente.contactos.map((c) => (
+                      <div key={c.id} className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-800/50">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium text-zinc-900 dark:text-white">{c.nombre}</p>
+                          {c.principal && <Badge variant="info">Principal</Badge>}
+                        </div>
+                        {c.cargo && <p className="text-xs text-zinc-500 mt-0.5">{c.cargo}</p>}
+                        <div className="mt-2 space-y-1">
+                          {c.email && (
+                            <div className="flex items-center gap-2 text-xs text-zinc-500">
+                              <Mail className="h-3 w-3" /> {c.email}
+                            </div>
+                          )}
+                          {c.telefono && (
+                            <div className="flex items-center gap-2 text-xs text-zinc-500">
+                              <Phone className="h-3 w-3" /> {c.telefono}
+                            </div>
+                          )}
+                          {c.fechaCumpleanos && (
+                            <div className="flex items-center gap-2 text-xs text-zinc-500">
+                              <Cake className="h-3 w-3" /> Cumpleaños: {(() => {
+                                const d = new Date(c.fechaCumpleanos + "T00:00:00");
+                                return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+                              })()}
+                            </div>
+                          )}
+                        </div>
+                        {c.notas && (
+                          <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">{c.notas}</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 

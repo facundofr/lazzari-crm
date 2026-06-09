@@ -40,7 +40,9 @@ crm/app/src/
   components/ui/          # Reusable: Badge, Card, StatCard, DataTable
   lib/supabase/queries/   # Data access layer — one file per module
   lib/auth-context.tsx    # UserProvider context (profile, role, sidebar state)
+  lib/theme-context.tsx   # ThemeProvider for dark/light mode toggle
   lib/types.ts            # TypeScript interfaces, Role type, ROLE_PERMISSIONS map
+  lib/mock-data.ts        # Fallback mock data used when Supabase queries fail
 ```
 
 ### Auth & Session Flow
@@ -51,6 +53,10 @@ crm/app/src/
 4. **Server components:** use `createSupabaseServer()` from `lib/supabase/server.ts` (async, reads cookies)
 5. **Client components:** use the singleton `supabase` from `lib/supabase/client.ts` (browser client)
 6. **Query files** (`lib/supabase/queries/*`) currently use the browser client directly — they run client-side
+
+### Data Fetching Pattern
+
+All pages use a **hybrid fallback approach**: attempt Supabase query → fall back to mock data on error. Some pages (like presupuestos) have progressive degradation: try with joins → try without joins → try minimal select → mock. When adding new features, maintain this pattern. Each page maps Supabase snake_case rows to TypeScript camelCase interfaces via local `mapTo*()` functions defined in the page file itself.
 
 ### Role System
 
@@ -65,6 +71,7 @@ Supabase project ID: `ycuzszzskqatlegtbgbq`. Full schema plan in `SUPABASE_PLAN.
 - Auto-numbering via PG function `generate_document_number()` (e.g., `PR-2026-0049`)
 - RLS enabled on all tables; role-based access from `profiles`
 - Some FK joins (e.g., `created_by`) may be null — avoid inner joins on nullable FKs
+- Polimorphic contacts table: `contactos` with `entity_type` (cliente/proveedor) and `entity_id`
 
 ### Environment Variables
 
@@ -80,11 +87,13 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY
 ## Conventions
 
 - **Language:** All UI text, labels, and user-facing content in Spanish (Argentina)
-- **Styling:** Tailwind utility classes; dark mode supported via `dark:` prefix
+- **Styling:** Tailwind utility classes; dark mode supported via `dark:` prefix and `ThemeProvider`
 - **Color palette:** Orange `#FF4500` (primary), zinc scale for neutrals
 - **Components:** CVA for variant-based component styling (see `badge.tsx`, `card.tsx`)
 - **Data queries:** One file per module in `lib/supabase/queries/`, using the Supabase JS client. Pattern: query, throw on error, return data.
-- **Currency:** Dual currency support (USD/ARS) throughout
+- **Page structure:** Each page is `"use client"`, fetches data in `useEffect`, maps DB rows to TS interfaces, renders with `DataTable` + detail side panel
+- **Currency:** Dual currency support (USD/ARS) throughout. `formatCurrency()` from `lib/utils.ts`
+- **Dates:** `formatDate()` from `lib/utils.ts` using `date-fns`
 - **Next.js version warning:** This is Next.js 15 — APIs may differ from training data. Read docs in `node_modules/next/dist/docs/` before using new APIs (see `crm/app/AGENTS.md`).
 
 ## Key Files
@@ -93,3 +102,5 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY
 - `PROJECT.md` — Full project scope, modules, and timeline
 - `crm/app/src/lib/types.ts` — All roles, permissions, and TypeScript interfaces
 - `crm/app/src/lib/auth-context.tsx` — User/profile context provider used by all CRM pages
+- `crm/app/src/lib/mock-data.ts` — Comprehensive mock dataset (5 clients, 8 products, 6 suppliers, etc.)
+- `crm/app/src/components/ui/data-table.tsx` — Generic sortable/paginated table used by all pages

@@ -14,6 +14,7 @@ import {
   X, Send, XCircle,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" | "outline" | "purple" }> = {
   borrador: { label: "Borrador", variant: "outline" },
@@ -82,6 +83,27 @@ export default function OrdenesCompraPage() {
   const [filter, setFilter] = useState<OCStatus | "todas">("todas");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // SmartFilters state
+  const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
+    fecha: { from: "", to: "" },
+    moneda: "",
+    monto: {},
+  });
+
+  const smartFilterConfigs: FilterConfig[] = [
+    { key: "fecha", label: "Fecha", type: "date-range" },
+    {
+      key: "moneda",
+      label: "Moneda",
+      type: "select",
+      options: [
+        { value: "USD", label: "USD" },
+        { value: "ARS", label: "ARS" },
+      ],
+    },
+    { key: "monto", label: "Monto total", type: "number-range" },
+  ];
 
   // Create modal
   const [createOpen, setCreateOpen] = useState(false);
@@ -240,7 +262,22 @@ export default function OrdenesCompraPage() {
   };
 
   // ── Computed ─────────────────────────────────────────────────────
-  const filtered = ordenes.filter((oc) => filter === "todas" || oc.estado === filter);
+  const filtered = ordenes.filter((oc) => {
+    // existing estado tab filter
+    if (filter !== "todas" && oc.estado !== filter) return false;
+    // fecha filter
+    const fechaFilter = smartFilterValues.fecha as { from?: string; to?: string } | undefined;
+    if (fechaFilter?.from && oc.fecha < fechaFilter.from) return false;
+    if (fechaFilter?.to && oc.fecha > fechaFilter.to) return false;
+    // moneda filter
+    const monedaFilter = smartFilterValues.moneda as string;
+    if (monedaFilter && oc.moneda !== monedaFilter) return false;
+    // monto filter
+    const montoFilter = smartFilterValues.monto as { min?: number; max?: number } | undefined;
+    if (montoFilter?.min !== undefined && Number(oc.total) < montoFilter.min) return false;
+    if (montoFilter?.max !== undefined && Number(oc.total) > montoFilter.max) return false;
+    return true;
+  });
 
   const now = new Date();
   const currentMonth = now.getMonth();
@@ -309,6 +346,12 @@ export default function OrdenesCompraPage() {
             );
           })}
         </div>
+
+        <SmartFilters
+          filters={smartFilterConfigs}
+          values={smartFilterValues}
+          onChange={setSmartFilterValues}
+        />
 
         {/* Data table */}
         <Card className="p-0 overflow-hidden">
