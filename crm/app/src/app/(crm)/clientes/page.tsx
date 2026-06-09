@@ -709,76 +709,130 @@ export default function ClientesPage() {
                 </div>
               )}
 
-              {/* Sucursales */}
-              {selectedCliente.sucursales && selectedCliente.sucursales.length > 0 && (
+              {/* Sucursales y Contactos agrupados */}
+              {((selectedCliente.sucursales && selectedCliente.sucursales.length > 0) || (selectedCliente.contactos && selectedCliente.contactos.length > 0)) && (
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                   <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
                     <Building2 className="h-4 w-4 text-orange-500" />
-                    Sucursales ({selectedCliente.sucursales.length})
+                    Sucursales y Contactos
                   </h3>
-                  <div className="grid gap-2">
-                    {selectedCliente.sucursales.map((s) => (
-                      <div key={s.id} className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-800/50">
-                        <p className="text-sm font-medium text-zinc-900 dark:text-white">{s.nombre}</p>
-                        {(s.direccion || s.localidad || s.provincia) && (
-                          <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
-                            <MapPin className="h-3 w-3" />
-                            {[s.direccion, s.localidad, s.provincia].filter(Boolean).join(", ")}
-                          </div>
-                        )}
-                        {s.telefono && (
-                          <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
-                            <Phone className="h-3 w-3" /> {s.telefono}
-                          </div>
-                        )}
-                        {s.email && (
-                          <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
-                            <Mail className="h-3 w-3" /> {s.email}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Contactos */}
-              {selectedCliente.contactos && selectedCliente.contactos.length > 0 && (
-                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3">Contactos</h3>
                   <div className="space-y-3">
-                    {selectedCliente.contactos.map((c) => (
-                      <div key={c.id} className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-800/50">
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium text-zinc-900 dark:text-white">{c.nombre}</p>
-                          {c.principal && <Badge variant="info">Principal</Badge>}
+                    {/* Sucursales con sus contactos */}
+                    {(selectedCliente.sucursales ?? []).map((s) => {
+                      const contactosSuc = (selectedCliente.contactos ?? []).filter((c) => c.sucursalId === s.id);
+                      return (
+                        <div key={s.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                          <div className="bg-zinc-50 p-3 dark:bg-zinc-800/50">
+                            <p className="text-sm font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
+                              <Building2 className="h-3.5 w-3.5 text-orange-500" />
+                              {s.nombre}
+                            </p>
+                            {(s.direccion || s.localidad || s.provincia) && (
+                              <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
+                                <MapPin className="h-3 w-3" />
+                                {[s.direccion, s.localidad, s.provincia].filter(Boolean).join(", ")}
+                              </div>
+                            )}
+                            <div className="flex gap-4 mt-1">
+                              {s.telefono && (
+                                <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                  <Phone className="h-3 w-3" /> {s.telefono}
+                                </div>
+                              )}
+                              {s.email && (
+                                <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                  <Mail className="h-3 w-3" /> {s.email}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          {contactosSuc.length > 0 && (
+                            <div className="border-t border-zinc-100 dark:border-zinc-700 divide-y divide-zinc-100 dark:divide-zinc-700">
+                              {contactosSuc.map((c) => (
+                                <div key={c.id} className="px-3 py-2.5 bg-white dark:bg-zinc-900">
+                                  <div className="flex items-center justify-between">
+                                    <p className="text-sm font-medium text-zinc-900 dark:text-white">{c.nombre}</p>
+                                    {c.principal && <Badge variant="info">Principal</Badge>}
+                                  </div>
+                                  {c.cargo && <p className="text-xs text-zinc-500 mt-0.5">{c.cargo}</p>}
+                                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                                    {c.email && (
+                                      <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                        <Mail className="h-3 w-3" /> {c.email}
+                                      </div>
+                                    )}
+                                    {c.telefono && (
+                                      <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                        <Phone className="h-3 w-3" /> {c.telefono}
+                                      </div>
+                                    )}
+                                    {c.fechaCumpleanos && (
+                                      <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                        <Cake className="h-3 w-3" /> {(() => {
+                                          const d = new Date(c.fechaCumpleanos + "T00:00:00");
+                                          return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+                                        })()}
+                                      </div>
+                                    )}
+                                  </div>
+                                  {c.notas && <p className="mt-1.5 text-xs text-zinc-400 dark:text-zinc-500">{c.notas}</p>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {contactosSuc.length === 0 && (
+                            <div className="px-3 py-2 bg-white dark:bg-zinc-900 text-xs text-zinc-400 italic">Sin contactos asignados</div>
+                          )}
                         </div>
-                        {c.cargo && <p className="text-xs text-zinc-500 mt-0.5">{c.cargo}</p>}
-                        <div className="mt-2 space-y-1">
-                          {c.email && (
-                            <div className="flex items-center gap-2 text-xs text-zinc-500">
-                              <Mail className="h-3 w-3" /> {c.email}
-                            </div>
-                          )}
-                          {c.telefono && (
-                            <div className="flex items-center gap-2 text-xs text-zinc-500">
-                              <Phone className="h-3 w-3" /> {c.telefono}
-                            </div>
-                          )}
-                          {c.fechaCumpleanos && (
-                            <div className="flex items-center gap-2 text-xs text-zinc-500">
-                              <Cake className="h-3 w-3" /> Cumpleaños: {(() => {
-                                const d = new Date(c.fechaCumpleanos + "T00:00:00");
-                                return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
-                              })()}
-                            </div>
-                          )}
+                      );
+                    })}
+
+                    {/* Contactos sin sucursal */}
+                    {(() => {
+                      const sinSucursal = (selectedCliente.contactos ?? []).filter(
+                        (c) => !c.sucursalId || !(selectedCliente.sucursales ?? []).some((s) => s.id === c.sucursalId)
+                      );
+                      if (sinSucursal.length === 0) return null;
+                      return (
+                        <div className="rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                          <div className="bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
+                            <p className="text-xs font-medium text-zinc-500">Contactos generales (sin sucursal)</p>
+                          </div>
+                          <div className="divide-y divide-zinc-100 dark:divide-zinc-700">
+                            {sinSucursal.map((c) => (
+                              <div key={c.id} className="px-3 py-2.5 bg-white dark:bg-zinc-900">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-sm font-medium text-zinc-900 dark:text-white">{c.nombre}</p>
+                                  {c.principal && <Badge variant="info">Principal</Badge>}
+                                </div>
+                                {c.cargo && <p className="text-xs text-zinc-500 mt-0.5">{c.cargo}</p>}
+                                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                                  {c.email && (
+                                    <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                      <Mail className="h-3 w-3" /> {c.email}
+                                    </div>
+                                  )}
+                                  {c.telefono && (
+                                    <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                      <Phone className="h-3 w-3" /> {c.telefono}
+                                    </div>
+                                  )}
+                                  {c.fechaCumpleanos && (
+                                    <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                      <Cake className="h-3 w-3" /> {(() => {
+                                        const d = new Date(c.fechaCumpleanos + "T00:00:00");
+                                        return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+                                      })()}
+                                    </div>
+                                  )}
+                                </div>
+                                {c.notas && <p className="mt-1.5 text-xs text-zinc-400 dark:text-zinc-500">{c.notas}</p>}
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                        {c.notas && (
-                          <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">{c.notas}</p>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })()}
                   </div>
                 </div>
               )}

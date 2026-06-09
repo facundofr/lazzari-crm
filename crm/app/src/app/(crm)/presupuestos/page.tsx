@@ -10,10 +10,11 @@ import type { Presupuesto, PRStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
-  PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle,
+  PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
+import { useUser } from "@/lib/auth-context";
 
 interface SupabasePresupuesto {
   id: string;
@@ -110,7 +111,31 @@ const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warn
   vencido: { label: "Vencido", variant: "danger", icon: Clock },
 };
 
+interface NewPRItem {
+  codigo: string;
+  descripcion: string;
+  categoria: string;
+  cantidad: number;
+  unidad: string;
+  precio_costo: number;
+  markup_porcentaje: number;
+  precio_venta: number;
+  iva_porcentaje: number;
+}
+
+function calcItemTotals(item: NewPRItem) {
+  const subtotal = item.cantidad * item.precio_venta;
+  const iva = subtotal * (item.iva_porcentaje / 100);
+  return { subtotal, iva, total: subtotal + iva };
+}
+
+const emptyItem: NewPRItem = {
+  codigo: "", descripcion: "", categoria: "", cantidad: 1, unidad: "UN",
+  precio_costo: 0, markup_porcentaje: 0, precio_venta: 0, iva_porcentaje: 21,
+};
+
 export default function PresupuestosPage() {
+  const { profile } = useUser();
   const [filter, setFilter] = useState<PRStatus | "todos">("todos");
   const [search, setSearch] = useState("");
   const [presupuestos, setPresupuestos] = useState<Presupuesto[]>([]);
@@ -126,6 +151,19 @@ export default function PresupuestosPage() {
   // Rechazo modal
   const [rechazoModal, setRechazoModal] = useState<string | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState("");
+
+  // Nuevo PR modal
+  const [showNewPR, setShowNewPR] = useState(false);
+  const [newPRSaving, setNewPRSaving] = useState(false);
+  const [clientes, setClientes] = useState<{id: string; razon_social: string}[]>([]);
+  const [newPR, setNewPR] = useState({
+    cliente_id: "",
+    vendedor_id: "",
+    moneda: "USD" as "USD" | "ARS",
+    markup_general: 30,
+    observaciones: "",
+    items: [{ ...emptyItem }] as NewPRItem[],
+  });
 
   // Smart filters
   const filterConfigs: FilterConfig[] = [
@@ -193,6 +231,111 @@ export default function PresupuestosPage() {
     }
     fetchVendedores();
   }, []);
+
+  useEffect(() => {
+    if (!showNewPR) return;
+    async function fetchClientes() {
+      try {
+        const { data } = await supabase
+          .from("clientes")
+          .select("id, razon_social")
+          .eq("activo", true)
+          .order("razon_social");
+        if (data) setClientes(data);
+      } catch { /* ignore */ }
+    }
+    fetchClientes();
+  }, [showNewPR]);
+
+  function updateNewPRItem(index: number, field: keyof NewPRItem, value: string | number) {
+    setNewPR((prev) => {
+      const items = [...prev.items];
+      const item = { ...items[index], [field]: value };
+      // Auto-calc precio_venta when costo or markup change
+      if (field === "precio_costo" || field === "markup_porcentaje") {
+        item.precio_venta = Number((item.precio_costo * (1 + item.markup_porcentaje / 100)).toFixed(2));
+      }
+      items[index] = item;
+      return { ...prev, items };
+    });
+  }
+
+  async function handleCreatePR() {
+    if (!newPR.cliente_id || !newPR.vendedor_id) {
+      alert("Seleccioná un cliente y un vendedor");
+      return;
+    }
+    const validItems = newPR.items.filter((it) => it.descripcion.trim() && it.cantidad > 0);
+    if (validItems.length === 0) {
+      alert("Agregá al menos un item");
+      return;
+    }
+    setNewPRSaving(true);
+    try {
+      // Calculate totals
+      let subtotal = 0;
+      let ivaTotal = 0;
+      const itemsWithTotals = validItems.map((it, idx) => {
+        const t = calcItemTotals(it);
+        subtotal += t.subtotal;
+        ivaTotal += t.iva;
+        return { ...it, subtotal: t.subtotal, iva: t.iva, total: t.total, orden: idx + 1 };
+      });
+
+      const today = new Date().toISOString().split("T")[0];
+      const vencimiento = new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0];
+
+      const { data: newRow, error } = await supabase
+        .from("presupuestos")
+        .insert({
+          cliente_id: newPR.cliente_id,
+          vendedor_id: newPR.vendedor_id,
+          created_by: profile?.id,
+          fecha: today,
+          vencimiento,
+          estado: "borrador",
+          markup_general: newPR.markup_general,
+          subtotal,
+          iva: ivaTotal,
+          total: subtotal + ivaTotal,
+          moneda: newPR.moneda,
+          observaciones: newPR.observaciones,
+        } as any)
+        .select()
+        .single();
+
+      if (error) throw new Error(error.message);
+
+      if (newRow && itemsWithTotals.length > 0) {
+        const items = itemsWithTotals.map((it) => ({
+          presupuesto_id: newRow.id,
+          codigo: it.codigo,
+          descripcion: it.descripcion,
+          categoria: it.categoria,
+          cantidad: it.cantidad,
+          unidad: it.unidad,
+          precio_costo: it.precio_costo,
+          markup_porcentaje: it.markup_porcentaje,
+          precio_venta: it.precio_venta,
+          subtotal: it.subtotal,
+          iva_porcentaje: it.iva_porcentaje,
+          iva: it.iva,
+          total: it.total,
+          orden: it.orden,
+        }));
+        await supabase.from("presupuesto_items").insert(items);
+      }
+
+      setShowNewPR(false);
+      setNewPR({ cliente_id: "", vendedor_id: "", moneda: "USD", markup_general: 30, observaciones: "", items: [{ ...emptyItem }] });
+      await fetchPresupuestos();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : JSON.stringify(err);
+      alert(`Error al crear presupuesto: ${msg}`);
+    } finally {
+      setNewPRSaving(false);
+    }
+  }
 
   const filtered = presupuestos.filter((pr) => {
     if (filter !== "todos" && pr.estado !== filter) return false;
@@ -316,7 +459,7 @@ export default function PresupuestosPage() {
       <Header
         title="Presupuestos"
         subtitle={`${presupuestos.length} presupuestos totales`}
-        action={{ label: "Nuevo PR", onClick: () => {} }}
+        action={{ label: "Nuevo PR", onClick: () => setShowNewPR(true) }}
       />
       <div className="p-8 space-y-6">
         {/* Status tabs */}
@@ -709,6 +852,198 @@ export default function PresupuestosPage() {
                   </div>
                 )}
               </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Nuevo PR modal */}
+      {showNewPR && (
+        <>
+          <div className="fixed inset-0 z-[60] bg-black/40" onClick={() => setShowNewPR(false)} />
+          <div className="fixed inset-4 z-[60] m-auto h-fit max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-lg font-bold text-zinc-900 dark:text-white">Nuevo Presupuesto</h3>
+              <button onClick={() => setShowNewPR(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Creado por (auto) */}
+            <div className="mb-4 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800">
+              <span className="text-zinc-500">Creado por:</span>{" "}
+              <span className="font-medium text-zinc-900 dark:text-white">{profile?.full_name ?? profile?.email ?? "—"}</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              {/* Cliente */}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-zinc-500">Cliente *</label>
+                <select
+                  value={newPR.cliente_id}
+                  onChange={(e) => setNewPR((p) => ({ ...p, cliente_id: e.target.value }))}
+                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                >
+                  <option value="">Seleccionar cliente...</option>
+                  {clientes.map((c) => <option key={c.id} value={c.id}>{c.razon_social}</option>)}
+                </select>
+              </div>
+              {/* Vendedor */}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-zinc-500">Vendedor *</label>
+                <select
+                  value={newPR.vendedor_id}
+                  onChange={(e) => setNewPR((p) => ({ ...p, vendedor_id: e.target.value }))}
+                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                >
+                  <option value="">Seleccionar vendedor...</option>
+                  {vendedores.map((v) => <option key={v.id} value={v.id}>{v.full_name}</option>)}
+                </select>
+              </div>
+              {/* Moneda */}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-zinc-500">Moneda</label>
+                <select
+                  value={newPR.moneda}
+                  onChange={(e) => setNewPR((p) => ({ ...p, moneda: e.target.value as "USD" | "ARS" }))}
+                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                >
+                  <option value="USD">USD</option>
+                  <option value="ARS">ARS</option>
+                </select>
+              </div>
+              {/* Markup general */}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-zinc-500">Markup general %</label>
+                <input
+                  type="number"
+                  value={newPR.markup_general}
+                  onChange={(e) => setNewPR((p) => ({ ...p, markup_general: Number(e.target.value) }))}
+                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                />
+              </div>
+            </div>
+
+            {/* Items */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Items</label>
+                <button
+                  onClick={() => setNewPR((p) => ({ ...p, items: [...p.items, { ...emptyItem, markup_porcentaje: p.markup_general }] }))}
+                  className="flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
+                >
+                  <Plus className="h-3 w-3" /> Agregar item
+                </button>
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
+                      <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-20">Código</th>
+                      <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500">Descripción</th>
+                      <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-16">Cant.</th>
+                      <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Costo</th>
+                      <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">Markup%</th>
+                      <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Venta</th>
+                      <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">IVA%</th>
+                      <th className="px-2 py-2 w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                    {newPR.items.map((item, idx) => {
+                      const belowCost = item.precio_venta > 0 && item.precio_venta < item.precio_costo;
+                      return (
+                        <tr key={idx} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
+                          <td className="px-2 py-1.5">
+                            <input value={item.codigo} onChange={(e) => updateNewPRItem(idx, "codigo", e.target.value)}
+                              className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input value={item.descripcion} onChange={(e) => updateNewPRItem(idx, "descripcion", e.target.value)}
+                              placeholder="Descripción del item..."
+                              className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input type="number" value={item.cantidad} onChange={(e) => updateNewPRItem(idx, "cantidad", Number(e.target.value))}
+                              className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input type="number" value={item.precio_costo || ""} onChange={(e) => updateNewPRItem(idx, "precio_costo", Number(e.target.value))}
+                              className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <input type="number" value={item.markup_porcentaje || ""} onChange={(e) => updateNewPRItem(idx, "markup_porcentaje", Number(e.target.value))}
+                              className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <div className="relative">
+                              <input type="number" value={item.precio_venta || ""} onChange={(e) => updateNewPRItem(idx, "precio_venta", Number(e.target.value))}
+                                className={`w-full rounded border px-1.5 py-1 text-xs text-right dark:bg-zinc-800 dark:text-white ${belowCost ? "border-red-300 dark:border-red-700" : "border-zinc-200 dark:border-zinc-700"}`} />
+                              {belowCost && <AlertTriangle className="absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 text-red-500" />}
+                            </div>
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <select value={item.iva_porcentaje} onChange={(e) => updateNewPRItem(idx, "iva_porcentaje", Number(e.target.value))}
+                              className="w-full rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                              <option value={21}>21</option>
+                              <option value={10.5}>10.5</option>
+                              <option value={27}>27</option>
+                              <option value={0}>0</option>
+                            </select>
+                          </td>
+                          <td className="px-2 py-1.5">
+                            {newPR.items.length > 1 && (
+                              <button onClick={() => setNewPR((p) => ({ ...p, items: p.items.filter((_, i) => i !== idx) }))}
+                                className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-500">
+                                <Minus className="h-3 w-3" />
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              {/* Items totals preview */}
+              {(() => {
+                let sub = 0, iva = 0;
+                newPR.items.forEach((it) => { const t = calcItemTotals(it); sub += t.subtotal; iva += t.iva; });
+                return (
+                  <div className="flex justify-end mt-3">
+                    <div className="w-56 space-y-1 text-sm">
+                      <div className="flex justify-between"><span className="text-zinc-500">Subtotal</span><span className="font-mono">{formatCurrency(sub, newPR.moneda)}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(iva, newPR.moneda)}</span></div>
+                      <div className="flex justify-between font-bold border-t border-zinc-200 pt-1 dark:border-zinc-700"><span>Total</span><span className="font-mono">{formatCurrency(sub + iva, newPR.moneda)}</span></div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Observaciones */}
+            <div className="mb-6">
+              <label className="mb-1 block text-xs font-medium text-zinc-500">Observaciones</label>
+              <textarea
+                value={newPR.observaciones}
+                onChange={(e) => setNewPR((p) => ({ ...p, observaciones: e.target.value }))}
+                rows={2}
+                className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                placeholder="Notas internas o para el cliente..."
+              />
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setShowNewPR(false)}
+                className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">
+                Cancelar
+              </button>
+              <button onClick={handleCreatePR} disabled={newPRSaving}
+                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                {newPRSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+                Crear Presupuesto
+              </button>
             </div>
           </div>
         </>
