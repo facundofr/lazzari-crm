@@ -278,18 +278,50 @@ export default function ClientesPage() {
     fetchConsumo();
   }, [selectedCliente]);
 
+  // Fetch contactos when a client is selected (polymorphic table, no FK join)
+  useEffect(() => {
+    if (!selectedCliente) return;
+    async function fetchContactos() {
+      try {
+        const { data } = await supabase
+          .from("contactos")
+          .select("*")
+          .eq("entity_type", "cliente")
+          .eq("entity_id", selectedCliente!.id);
+        if (data && data.length > 0) {
+          const mapped = data.map((c: Record<string, unknown>) => ({
+            id: c.id as string,
+            nombre: (c.nombre as string) ?? "",
+            cargo: (c.cargo as string) ?? "",
+            email: (c.email as string) ?? "",
+            telefono: (c.telefono as string) ?? "",
+            principal: (c.principal as boolean) ?? false,
+            fechaCumpleanos: (c.fecha_cumpleanos as string) ?? null,
+            notas: (c.notas as string) ?? null,
+            sucursalId: (c.sucursal_id as string) ?? null,
+          }));
+          setSelectedCliente((prev) => prev ? { ...prev, contactos: mapped } : prev);
+        }
+      } catch (err) {
+        console.error("Error fetching contactos:", err);
+      }
+    }
+    fetchContactos();
+  }, [selectedCliente?.id]);
+
   const fetchClientes = useCallback(async () => {
     try {
+      // contactos is polymorphic (no FK to clientes), so we fetch it separately
       const { data, error } = await supabase
         .from("clientes")
-        .select(`*, assigned_profile:assigned_to(full_name), contactos(*), cliente_sucursales(*)`)
+        .select(`*, assigned_profile:assigned_to(full_name), cliente_sucursales(*)`)
         .order("razon_social");
 
       if (error) {
         console.error("Error fetching clientes:", error);
         setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—" })));
       } else if (data && data.length > 0) {
-        setClientes(data.map((row) => mapRow(row as unknown as ClienteRow)));
+        setClientes(data.map((row) => mapRow({ ...row, contactos: [] } as unknown as ClienteRow)));
       } else {
         setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—" })));
       }

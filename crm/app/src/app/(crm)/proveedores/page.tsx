@@ -147,7 +147,7 @@ export default function ProveedoresPage() {
     setLoading(true);
     try {
       const [provRes, listasRes] = await Promise.all([
-        supabase.from("proveedores").select(`*, contactos(*), listas_precios(id, nombre, moneda, vigencia_hasta, estado)`).order("razon_social"),
+        supabase.from("proveedores").select(`*, listas_precios(id, nombre, moneda, vigencia_hasta, estado)`).order("razon_social"),
         supabase.from("listas_precios").select(`*, proveedores(razon_social), lista_precios_items(*)`).order("created_at", { ascending: false }),
       ]);
 
@@ -171,6 +171,31 @@ export default function ProveedoresPage() {
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Fetch contactos when a proveedor is selected (polymorphic table, no FK join)
+  useEffect(() => {
+    if (!selectedProv) return;
+    async function fetchContactos() {
+      try {
+        const { data } = await supabase
+          .from("contactos")
+          .select("*")
+          .eq("entity_type", "proveedor")
+          .eq("entity_id", selectedProv!.id);
+        if (data && data.length > 0) {
+          const mapped = data.map((c: Record<string, unknown>) => ({
+            id: c.id as string, nombre: (c.nombre as string) ?? "",
+            cargo: (c.cargo as string) ?? "", email: (c.email as string) ?? "",
+            telefono: (c.telefono as string) ?? "", principal: (c.principal as boolean) ?? false,
+          }));
+          setSelectedProv((prev) => prev ? { ...prev, contactos: mapped } : prev);
+        }
+      } catch (err) {
+        console.error("Error fetching contactos:", err);
+      }
+    }
+    fetchContactos();
+  }, [selectedProv?.id]);
 
   // Build filter configs dynamically from current data
   const filterConfigs: FilterConfig[] = [
