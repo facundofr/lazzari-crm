@@ -10,7 +10,7 @@ import { mockClients, mockPresupuestos, mockFacturas } from "@/lib/mock-data";
 import type { Client } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import {
-  Search, Download, MapPin, Phone, Mail, Loader2,
+  Search, Download, MapPin, Phone, Mail, Loader2, Building2,
   Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight,
   BarChart3, ShoppingBag, CalendarDays, TrendingUp, Cake,
 } from "lucide-react";
@@ -92,7 +92,16 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
       notas: (c.notas as string) ?? null,
       sucursalId: (c.sucursal_id as string) ?? null,
     })) : [],
-    sucursales: Array.isArray(row.cliente_sucursales) ? row.cliente_sucursales as Client["sucursales"] : [],
+    sucursales: Array.isArray(row.cliente_sucursales) ? (row.cliente_sucursales as Array<Record<string, unknown>>).map((s) => ({
+      id: (s.id as string) ?? "",
+      nombre: (s.nombre as string) ?? "",
+      direccion: (s.direccion as string) ?? "",
+      localidad: (s.localidad as string) ?? "",
+      provincia: (s.provincia as string) ?? "",
+      telefono: (s.telefono as string) ?? "",
+      email: (s.email as string) ?? "",
+      cp: (s.cp as string) ?? "",
+    })) : [],
     vendedorNombre: row.assigned_profile?.full_name ?? "—",
   };
 }
@@ -551,6 +560,14 @@ export default function ClientesPage() {
                 },
                 { key: "condicionIva", label: "IVA", sortable: true, render: (row) => <Badge variant="outline">{condicionLabels[row.condicionIva]}</Badge> },
                 { key: "localidad", label: "Ubicacion", sortable: true, render: (row) => <span className="text-zinc-500">{row.localidad}{row.provincia ? `, ${row.provincia}` : ""}</span> },
+                { key: "sucursales", label: "Sucursales", sortable: false, render: (row) => {
+                  const n = row.sucursales?.length || 0;
+                  return n > 0 ? (
+                    <div className="flex items-center gap-1 text-xs text-zinc-500">
+                      <Building2 className="h-3 w-3" /> {n}
+                    </div>
+                  ) : <span className="text-zinc-300">—</span>;
+                }},
                 { key: "listaPrecio", label: "Lista", sortable: true, render: (row) => <Badge variant="info">{row.listaPrecio || "—"}</Badge> },
                 { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.saldoCuentaCorriente)}</span> },
                 { key: "vendedorNombre", label: "Vendedor", sortable: true, render: (row) => <span className="text-zinc-500 text-xs">{row.vendedorNombre}</span> },
@@ -690,6 +707,39 @@ export default function ClientesPage() {
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                   <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Notas</h3>
                   <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{selectedCliente.notas}</p>
+                </div>
+              )}
+
+              {/* Sucursales */}
+              {selectedCliente.sucursales && selectedCliente.sucursales.length > 0 && (
+                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
+                    <Building2 className="h-4 w-4 text-orange-500" />
+                    Sucursales ({selectedCliente.sucursales.length})
+                  </h3>
+                  <div className="grid gap-2">
+                    {selectedCliente.sucursales.map((s) => (
+                      <div key={s.id} className="rounded-lg border border-zinc-100 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-800/50">
+                        <p className="text-sm font-medium text-zinc-900 dark:text-white">{s.nombre}</p>
+                        {(s.direccion || s.localidad || s.provincia) && (
+                          <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
+                            <MapPin className="h-3 w-3" />
+                            {[s.direccion, s.localidad, s.provincia].filter(Boolean).join(", ")}
+                          </div>
+                        )}
+                        {s.telefono && (
+                          <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
+                            <Phone className="h-3 w-3" /> {s.telefono}
+                          </div>
+                        )}
+                        {s.email && (
+                          <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
+                            <Mail className="h-3 w-3" /> {s.email}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
