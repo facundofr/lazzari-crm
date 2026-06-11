@@ -21,6 +21,7 @@ const TABLE_ACCESS: Record<string, string[]> = {
   write_super: ["profiles", "alertas"],
 };
 
+// Role hierarchy for permission checks
 const ROLE_HIERARCHY: Record<string, number> = {
   viewer: 0,
   vendedor: 1,
