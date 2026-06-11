@@ -4,6 +4,9 @@ import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
+import { Modal } from "@/components/ui/modal";
+import { Input, Select, Textarea } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { mockPresupuestos } from "@/lib/mock-data";
 import type { Presupuesto, PRStatus } from "@/lib/types";
@@ -11,6 +14,7 @@ import { supabase } from "@/lib/supabase/client";
 import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
+  Printer,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -136,6 +140,7 @@ const emptyItem: NewPRItem = {
 
 export default function PresupuestosPage() {
   const { profile } = useUser();
+  const { toast } = useToast();
   const [filter, setFilter] = useState<PRStatus | "todos">("todos");
   const [search, setSearch] = useState("");
   const [presupuestos, setPresupuestos] = useState<Presupuesto[]>([]);
@@ -262,12 +267,12 @@ export default function PresupuestosPage() {
 
   async function handleCreatePR() {
     if (!newPR.cliente_id || !newPR.vendedor_id) {
-      alert("Seleccioná un cliente y un vendedor");
+      toast.warning("Selecciona un cliente y un vendedor");
       return;
     }
     const validItems = newPR.items.filter((it) => it.descripcion.trim() && it.cantidad > 0);
     if (validItems.length === 0) {
-      alert("Agregá al menos un item");
+      toast.warning("Agrega al menos un item");
       return;
     }
     setNewPRSaving(true);
@@ -328,10 +333,11 @@ export default function PresupuestosPage() {
 
       setShowNewPR(false);
       setNewPR({ cliente_id: "", vendedor_id: "", moneda: "USD", markup_general: 30, observaciones: "", items: [{ ...emptyItem }] });
+      toast.success("Presupuesto creado correctamente");
       await fetchPresupuestos();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : JSON.stringify(err);
-      alert(`Error al crear presupuesto: ${msg}`);
+      toast.error(`Error al crear presupuesto: ${msg}`);
     } finally {
       setNewPRSaving(false);
     }
@@ -372,10 +378,18 @@ export default function PresupuestosPage() {
       if (selected?.id === id) {
         setSelected((prev) => prev ? { ...prev, estado, motivoRechazo: motivo ?? prev.motivoRechazo } : null);
       }
+
+      const statusLabels: Record<string, string> = {
+        pendiente: "enviado al cliente",
+        aprobado: "aprobado",
+        rechazado: "rechazado",
+        postergado: "postergado",
+      };
+      toast.success(`Presupuesto ${statusLabels[estado] ?? estado}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : JSON.stringify(err);
       console.error("Error updating estado:", msg);
-      alert(`Error al cambiar estado: ${msg}`);
+      toast.error(`Error al cambiar estado: ${msg}`);
     }
   }
 
@@ -393,45 +407,51 @@ export default function PresupuestosPage() {
 
       if (error || !fullPR) {
         console.error("Error fetching PR for duplicate:", error);
+        toast.error("Error al duplicar presupuesto");
         return;
       }
 
       const { id: _id, numero: _num, created_at: _ca, updated_at: _ua, enviado_at: _ea, respondido_at: _ra, presupuesto_items, ...rest } = fullPR;
 
-      const { data: newPR, error: insertError } = await supabase
+      const { data: newPRRow, error: insertError } = await supabase
         .from("presupuestos")
         .insert({ ...rest, estado: "borrador", version: 1 } as any)
         .select()
         .single();
 
-      if (insertError || !newPR) {
+      if (insertError || !newPRRow) {
         console.error("Error duplicating:", insertError);
+        toast.error("Error al duplicar presupuesto");
         return;
       }
 
       if (presupuesto_items && presupuesto_items.length > 0) {
         const items = presupuesto_items.map(({ id: _iid, presupuesto_id: _pid, created_at: _ica, ...itemRest }: Record<string, unknown>) => ({
           ...itemRest,
-          presupuesto_id: newPR.id,
+          presupuesto_id: newPRRow.id,
         }));
         await supabase.from("presupuesto_items").insert(items as any);
       }
 
+      toast.success("Presupuesto duplicado correctamente");
       await fetchPresupuestos();
     } catch (err) {
       console.error("Error duplicating PR:", err);
+      toast.error("Error al duplicar presupuesto");
     }
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("¿Seguro que queres eliminar este presupuesto?")) return;
+    if (!confirm("Seguro que queres eliminar este presupuesto?")) return;
     try {
       await supabase.from("presupuesto_items").delete().eq("presupuesto_id", id);
       await supabase.from("presupuestos").delete().eq("id", id);
       setSelected(null);
+      toast.success("Presupuesto eliminado");
       await fetchPresupuestos();
     } catch (err) {
       console.error("Error deleting:", err);
+      toast.error("Error al eliminar presupuesto");
     }
   }
 
@@ -440,6 +460,42 @@ export default function PresupuestosPage() {
       handleEstadoChange(rechazoModal, "rechazado", motivoRechazo.trim());
       setRechazoModal(null);
       setMotivoRechazo("");
+    }
+  }
+
+  function handlePrint(pr: Presupuesto) {
+    // Build a printable window
+    const items = pr.items
+      .map(
+        (it) =>
+          `<tr>
+            <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-family:monospace;font-size:12px">${it.codigo}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-size:13px">${it.descripcion}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-size:13px">${it.cantidad} ${it.unidad}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace;font-size:13px">${formatCurrency(it.precioVenta, pr.moneda)}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace;font-size:13px;font-weight:600">${formatCurrency(it.total, pr.moneda)}</td>
+          </tr>`
+      )
+      .join("");
+
+    const html = `<!DOCTYPE html><html><head><title>PR ${pr.numero}</title><style>body{font-family:system-ui,sans-serif;margin:40px;color:#18181b}table{width:100%;border-collapse:collapse}th{text-align:left;padding:8px;border-bottom:2px solid #18181b;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:#71717a}@media print{body{margin:20px}}</style></head><body>
+      <h1 style="font-size:20px;margin-bottom:4px">Presupuesto ${pr.numero}</h1>
+      <p style="color:#71717a;font-size:14px;margin-top:0">${pr.clienteNombre} &mdash; ${formatDate(pr.fecha)}</p>
+      <hr style="border:none;border-top:1px solid #e4e4e7;margin:16px 0"/>
+      <table><thead><tr><th>Codigo</th><th>Descripcion</th><th style="text-align:right">Cant.</th><th style="text-align:right">P. Venta</th><th style="text-align:right">Total</th></tr></thead><tbody>${items}</tbody></table>
+      <div style="text-align:right;margin-top:16px;font-size:14px">
+        <p>Subtotal: <strong>${formatCurrency(pr.subtotal, pr.moneda)}</strong></p>
+        <p>IVA: <strong>${formatCurrency(pr.iva, pr.moneda)}</strong></p>
+        <p style="font-size:18px;font-weight:bold;margin-top:8px;border-top:2px solid #18181b;padding-top:8px">Total: ${formatCurrency(pr.total, pr.moneda)}</p>
+      </div>
+      ${pr.observaciones ? `<hr style="border:none;border-top:1px solid #e4e4e7;margin:16px 0"/><p style="font-size:13px;color:#52525b"><strong>Observaciones:</strong> ${pr.observaciones}</p>` : ""}
+      <script>window.print()</script>
+    </body></html>`;
+
+    const w = window.open("", "_blank");
+    if (w) {
+      w.document.write(html);
+      w.document.close();
     }
   }
 
@@ -454,6 +510,15 @@ export default function PresupuestosPage() {
     );
   }
 
+  // Totals for the new PR form
+  let newPRSub = 0;
+  let newPRIva = 0;
+  newPR.items.forEach((it) => {
+    const t = calcItemTotals(it);
+    newPRSub += t.subtotal;
+    newPRIva += t.iva;
+  });
+
   return (
     <>
       <Header
@@ -461,7 +526,7 @@ export default function PresupuestosPage() {
         subtitle={`${presupuestos.length} presupuestos totales`}
         action={{ label: "Nuevo PR", onClick: () => setShowNewPR(true) }}
       />
-      <div className="p-8 space-y-6">
+      <div className="p-4 sm:p-8 space-y-6">
         {/* Status tabs */}
         <div className="flex gap-2 overflow-x-auto pb-1">
           {(["todos", "borrador", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as const).map((status) => (
@@ -471,7 +536,7 @@ export default function PresupuestosPage() {
               className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
                 filter === status
                   ? "bg-orange-500 text-white shadow-sm"
-                  : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700"
+                  : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
               }`}
             >
               {status === "todos" ? "Todos" : statusConfig[status].label}
@@ -485,12 +550,12 @@ export default function PresupuestosPage() {
         </div>
 
         {/* Search + Vendedor filter */}
-        <div className="flex gap-3">
+        <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
               type="text"
-              placeholder="Buscar por N° PR o cliente..."
+              placeholder="Buscar por N de PR o cliente..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
@@ -516,7 +581,7 @@ export default function PresupuestosPage() {
           <DataTable<Presupuesto>
             columns={[
               {
-                key: "numero", label: "N° PR", sortable: true,
+                key: "numero", label: "N PR", sortable: true,
                 render: (row) => (
                   <div className="flex items-center gap-2">
                     <FileText className="h-4 w-4 text-zinc-400" />
@@ -586,26 +651,26 @@ export default function PresupuestosPage() {
                 key: "actions", label: "", sortable: false,
                 render: (row) => (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    <button onClick={() => setSelected(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Ver">
+                    <button onClick={() => setSelected(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Ver">
                       <Eye className="h-4 w-4" />
                     </button>
-                    <button onClick={() => handleDuplicate(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Duplicar">
+                    <button onClick={() => handleDuplicate(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                       <Copy className="h-4 w-4" />
                     </button>
                     {(row.estado === "borrador" || row.estado === "postergado") && (
-                      <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600" title="Enviar">
+                      <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-950/40" title="Enviar">
                         <Send className="h-4 w-4" />
                       </button>
                     )}
                     {row.estado === "pendiente" && (
                       <>
-                        <button onClick={() => handleEstadoChange(row.id, "aprobado")} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Aprobar">
+                        <button onClick={() => handleEstadoChange(row.id, "aprobado")} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600 dark:hover:bg-green-950/40" title="Aprobar">
                           <CheckCircle2 className="h-4 w-4" />
                         </button>
-                        <button onClick={() => { setRechazoModal(row.id); setMotivoRechazo(""); }} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-600" title="Rechazar">
+                        <button onClick={() => { setRechazoModal(row.id); setMotivoRechazo(""); }} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-950/40" title="Rechazar">
                           <XCircle className="h-4 w-4" />
                         </button>
-                        <button onClick={() => handleEstadoChange(row.id, "postergado")} className="rounded p-1.5 text-zinc-400 hover:bg-purple-100 hover:text-purple-600" title="Postergar">
+                        <button onClick={() => handleEstadoChange(row.id, "postergado")} className="rounded p-1.5 text-zinc-400 hover:bg-purple-100 hover:text-purple-600 dark:hover:bg-purple-950/40" title="Postergar">
                           <PauseCircle className="h-4 w-4" />
                         </button>
                       </>
@@ -646,12 +711,16 @@ export default function PresupuestosPage() {
         )}
       </div>
 
-      {/* Detail side panel */}
+      {/* ==================== DETAIL SIDE PANEL ==================== */}
       {selected && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setSelected(null)} />
-          <div className="fixed right-0 top-0 z-50 h-full w-full max-w-2xl overflow-y-auto bg-white shadow-xl dark:bg-zinc-900">
-            <div className="flex items-center justify-between border-b border-zinc-200 p-6 dark:border-zinc-700">
+          <div
+            className="fixed inset-0 z-40 bg-black/20 transition-opacity"
+            onClick={() => setSelected(null)}
+          />
+          <div className="fixed right-0 top-0 z-50 h-full w-full max-w-2xl overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right">
+            {/* Panel header */}
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-200 bg-white/95 backdrop-blur-sm px-4 sm:px-6 py-4 dark:border-zinc-700 dark:bg-zinc-900/95">
               <div>
                 <div className="flex items-center gap-3">
                   <h2 className="text-lg font-bold text-zinc-900 dark:text-white">PR {selected.numero}</h2>
@@ -660,25 +729,29 @@ export default function PresupuestosPage() {
                     return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
                   })()}
                 </div>
-                <p className="text-sm text-zinc-500">{selected.clienteNombre}</p>
+                <p className="text-sm text-zinc-500 mt-0.5">{selected.clienteNombre}</p>
               </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Duplicar">
+              <div className="flex items-center gap-1">
+                <button onClick={() => handlePrint(selected)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Imprimir">
+                  <Printer className="h-4 w-4" />
+                </button>
+                <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                   <Copy className="h-4 w-4" />
                 </button>
                 {selected.estado === "borrador" && (
-                  <button onClick={() => handleDelete(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500" title="Eliminar">
+                  <button onClick={() => handleDelete(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 )}
-                <button onClick={() => setSelected(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
-                  <X className="h-4 w-4" />
+                <button onClick={() => setSelected(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800">
+                  <X className="h-5 w-5" />
                 </button>
               </div>
             </div>
-            <div className="p-6 space-y-6">
+
+            <div className="p-4 sm:p-6 space-y-6">
               {/* Info grid */}
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
                 <div>
                   <p className="text-xs text-zinc-500">Fecha</p>
                   <p className="text-sm font-medium">{formatDate(selected.fecha)}</p>
@@ -732,7 +805,7 @@ export default function PresupuestosPage() {
                   return belowCostCount > 0 ? (
                     <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400 mb-3">
                       <AlertTriangle className="h-4 w-4 shrink-0" />
-                      <span>Atención: {belowCostCount} item(s) con precio de venta menor al costo</span>
+                      <span>Atencion: {belowCostCount} item(s) con precio de venta menor al costo</span>
                     </div>
                   ) : null;
                 })()}
@@ -743,8 +816,8 @@ export default function PresupuestosPage() {
                         <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-500">Codigo</th>
                         <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-500">Descripcion</th>
                         <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Cant.</th>
-                        <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">P. Costo</th>
-                        <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Markup</th>
+                        <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">P. Costo</th>
+                        <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">Markup</th>
                         <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">P. Venta</th>
                         <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Total</th>
                       </tr>
@@ -757,8 +830,8 @@ export default function PresupuestosPage() {
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
                           <td className="px-3 py-2">{item.descripcion}</td>
                           <td className="px-3 py-2 text-right">{item.cantidad} {item.unidad}</td>
-                          <td className="px-3 py-2 text-right font-mono">{formatCurrency(item.precioCosto)}</td>
-                          <td className="px-3 py-2 text-right">{item.markupPorcentaje}%</td>
+                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">{formatCurrency(item.precioCosto)}</td>
+                          <td className="px-3 py-2 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>
                           <td className={`px-3 py-2 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
                             <span className="inline-flex items-center gap-1">
                               {belowCost && <AlertTriangle className="h-3 w-3 shrink-0" />}
@@ -776,7 +849,7 @@ export default function PresupuestosPage() {
 
               {/* Totals */}
               <div className="flex justify-end">
-                <div className="w-64 space-y-2">
+                <div className="w-64 space-y-2 rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50">
                   <div className="flex justify-between text-sm">
                     <span className="text-zinc-500">Subtotal</span>
                     <span className="font-mono">{formatCurrency(selected.subtotal, selected.moneda)}</span>
@@ -785,9 +858,9 @@ export default function PresupuestosPage() {
                     <span className="text-zinc-500">IVA</span>
                     <span className="font-mono">{formatCurrency(selected.iva, selected.moneda)}</span>
                   </div>
-                  <div className="flex justify-between text-sm font-bold border-t border-zinc-200 pt-2 dark:border-zinc-700">
+                  <div className="flex justify-between text-base font-bold border-t border-zinc-200 pt-2 dark:border-zinc-700">
                     <span>Total</span>
-                    <span className="font-mono">{formatCurrency(selected.total, selected.moneda)}</span>
+                    <span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(selected.total, selected.moneda)}</span>
                   </div>
                 </div>
               </div>
@@ -816,7 +889,7 @@ export default function PresupuestosPage() {
                 {(selected.estado === "borrador" || selected.estado === "postergado") && (
                   <button
                     onClick={() => { handleEstadoChange(selected.id, "pendiente"); }}
-                    className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600"
+                    className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
                   >
                     <Send className="h-4 w-4" /> Enviar al cliente
                   </button>
@@ -825,19 +898,19 @@ export default function PresupuestosPage() {
                   <>
                     <button
                       onClick={() => handleEstadoChange(selected.id, "aprobado")}
-                      className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+                      className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 transition-colors"
                     >
                       <CheckCircle2 className="h-4 w-4" /> Aprobar
                     </button>
                     <button
                       onClick={() => { setRechazoModal(selected.id); setMotivoRechazo(""); }}
-                      className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
+                      className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors"
                     >
                       <XCircle className="h-4 w-4" /> Rechazar
                     </button>
                     <button
                       onClick={() => handleEstadoChange(selected.id, "postergado")}
-                      className="flex items-center gap-2 rounded-lg border border-purple-300 px-4 py-2 text-sm font-medium text-purple-700 hover:bg-purple-50"
+                      className="flex items-center gap-2 rounded-lg border border-purple-300 px-4 py-2 text-sm font-medium text-purple-700 hover:bg-purple-50 transition-colors dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-950/30"
                     >
                       <PauseCircle className="h-4 w-4" /> Postergar
                     </button>
@@ -857,227 +930,201 @@ export default function PresupuestosPage() {
         </>
       )}
 
-      {/* Nuevo PR modal */}
-      {showNewPR && (
-        <>
-          <div className="fixed inset-0 z-[60] bg-black/40" onClick={() => setShowNewPR(false)} />
-          <div className="fixed inset-4 z-[60] m-auto h-fit max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-bold text-zinc-900 dark:text-white">Nuevo Presupuesto</h3>
-              <button onClick={() => setShowNewPR(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+      {/* ==================== NUEVO PR MODAL ==================== */}
+      <Modal
+        open={showNewPR}
+        onClose={() => setShowNewPR(false)}
+        title="Nuevo Presupuesto"
+        description="Completa los datos para crear un nuevo presupuesto"
+        size="xl"
+        footer={
+          <>
+            <button
+              onClick={() => setShowNewPR(false)}
+              className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleCreatePR}
+              disabled={newPRSaving}
+              className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+            >
+              {newPRSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+              Crear Presupuesto
+            </button>
+          </>
+        }
+      >
+        {/* Creado por (auto) */}
+        <div className="mb-5 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800">
+          <span className="text-zinc-500">Creado por:</span>{" "}
+          <span className="font-medium text-zinc-900 dark:text-white">{profile?.full_name ?? profile?.email ?? "---"}</span>
+        </div>
 
-            {/* Creado por (auto) */}
-            <div className="mb-4 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800">
-              <span className="text-zinc-500">Creado por:</span>{" "}
-              <span className="font-medium text-zinc-900 dark:text-white">{profile?.full_name ?? profile?.email ?? "—"}</span>
-            </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+          <Select
+            label="Cliente *"
+            value={newPR.cliente_id}
+            onChange={(e) => setNewPR((p) => ({ ...p, cliente_id: e.target.value }))}
+            placeholder="Seleccionar cliente..."
+            options={clientes.map((c) => ({ value: c.id, label: c.razon_social }))}
+          />
+          <Select
+            label="Vendedor *"
+            value={newPR.vendedor_id}
+            onChange={(e) => setNewPR((p) => ({ ...p, vendedor_id: e.target.value }))}
+            placeholder="Seleccionar vendedor..."
+            options={vendedores.map((v) => ({ value: v.id, label: v.full_name }))}
+          />
+          <Select
+            label="Moneda"
+            value={newPR.moneda}
+            onChange={(e) => setNewPR((p) => ({ ...p, moneda: e.target.value as "USD" | "ARS" }))}
+            options={[{ value: "USD", label: "USD" }, { value: "ARS", label: "ARS" }]}
+          />
+          <Input
+            label="Markup general %"
+            type="number"
+            value={newPR.markup_general}
+            onChange={(e) => setNewPR((p) => ({ ...p, markup_general: Number(e.target.value) }))}
+          />
+        </div>
 
-            <div className="grid grid-cols-2 gap-4 mb-6">
-              {/* Cliente */}
-              <div>
-                <label className="mb-1 block text-xs font-medium text-zinc-500">Cliente *</label>
-                <select
-                  value={newPR.cliente_id}
-                  onChange={(e) => setNewPR((p) => ({ ...p, cliente_id: e.target.value }))}
-                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                >
-                  <option value="">Seleccionar cliente...</option>
-                  {clientes.map((c) => <option key={c.id} value={c.id}>{c.razon_social}</option>)}
-                </select>
-              </div>
-              {/* Vendedor */}
-              <div>
-                <label className="mb-1 block text-xs font-medium text-zinc-500">Vendedor *</label>
-                <select
-                  value={newPR.vendedor_id}
-                  onChange={(e) => setNewPR((p) => ({ ...p, vendedor_id: e.target.value }))}
-                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                >
-                  <option value="">Seleccionar vendedor...</option>
-                  {vendedores.map((v) => <option key={v.id} value={v.id}>{v.full_name}</option>)}
-                </select>
-              </div>
-              {/* Moneda */}
-              <div>
-                <label className="mb-1 block text-xs font-medium text-zinc-500">Moneda</label>
-                <select
-                  value={newPR.moneda}
-                  onChange={(e) => setNewPR((p) => ({ ...p, moneda: e.target.value as "USD" | "ARS" }))}
-                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                >
-                  <option value="USD">USD</option>
-                  <option value="ARS">ARS</option>
-                </select>
-              </div>
-              {/* Markup general */}
-              <div>
-                <label className="mb-1 block text-xs font-medium text-zinc-500">Markup general %</label>
-                <input
-                  type="number"
-                  value={newPR.markup_general}
-                  onChange={(e) => setNewPR((p) => ({ ...p, markup_general: Number(e.target.value) }))}
-                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                />
-              </div>
-            </div>
-
-            {/* Items */}
-            <div className="mb-4">
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Items</label>
-                <button
-                  onClick={() => setNewPR((p) => ({ ...p, items: [...p.items, { ...emptyItem, markup_porcentaje: p.markup_general }] }))}
-                  className="flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
-                >
-                  <Plus className="h-3 w-3" /> Agregar item
-                </button>
-              </div>
-              <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
-                      <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-20">Código</th>
-                      <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500">Descripción</th>
-                      <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-16">Cant.</th>
-                      <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Costo</th>
-                      <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">Markup%</th>
-                      <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Venta</th>
-                      <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">IVA%</th>
-                      <th className="px-2 py-2 w-8"></th>
+        {/* Items */}
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Items</label>
+            <button
+              onClick={() => setNewPR((p) => ({ ...p, items: [...p.items, { ...emptyItem, markup_porcentaje: p.markup_general }] }))}
+              className="flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+            >
+              <Plus className="h-3 w-3" /> Agregar item
+            </button>
+          </div>
+          <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
+                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-20">Codigo</th>
+                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500">Descripcion</th>
+                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-16">Cant.</th>
+                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Costo</th>
+                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">Markup%</th>
+                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Venta</th>
+                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">IVA%</th>
+                  <th className="px-2 py-2 w-8"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {newPR.items.map((item, idx) => {
+                  const belowCost = item.precio_venta > 0 && item.precio_venta < item.precio_costo;
+                  return (
+                    <tr key={idx} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
+                      <td className="px-2 py-1.5">
+                        <input value={item.codigo} onChange={(e) => updateNewPRItem(idx, "codigo", e.target.value)}
+                          className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input value={item.descripcion} onChange={(e) => updateNewPRItem(idx, "descripcion", e.target.value)}
+                          placeholder="Descripcion del item..."
+                          className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input type="number" value={item.cantidad} onChange={(e) => updateNewPRItem(idx, "cantidad", Number(e.target.value))}
+                          className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input type="number" value={item.precio_costo || ""} onChange={(e) => updateNewPRItem(idx, "precio_costo", Number(e.target.value))}
+                          className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input type="number" value={item.markup_porcentaje || ""} onChange={(e) => updateNewPRItem(idx, "markup_porcentaje", Number(e.target.value))}
+                          className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <div className="relative">
+                          <input type="number" value={item.precio_venta || ""} onChange={(e) => updateNewPRItem(idx, "precio_venta", Number(e.target.value))}
+                            className={`w-full rounded border px-1.5 py-1 text-xs text-right dark:bg-zinc-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-orange-100 ${belowCost ? "border-red-300 dark:border-red-700 focus:border-red-400" : "border-zinc-200 dark:border-zinc-700 focus:border-orange-400"}`} />
+                          {belowCost && <AlertTriangle className="absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 text-red-500" />}
+                        </div>
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <select value={item.iva_porcentaje} onChange={(e) => updateNewPRItem(idx, "iva_porcentaje", Number(e.target.value))}
+                          className="w-full rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100">
+                          <option value={21}>21</option>
+                          <option value={10.5}>10.5</option>
+                          <option value={27}>27</option>
+                          <option value={0}>0</option>
+                        </select>
+                      </td>
+                      <td className="px-2 py-1.5">
+                        {newPR.items.length > 1 && (
+                          <button onClick={() => setNewPR((p) => ({ ...p, items: p.items.filter((_, i) => i !== idx) }))}
+                            className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40 transition-colors">
+                            <Minus className="h-3 w-3" />
+                          </button>
+                        )}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                    {newPR.items.map((item, idx) => {
-                      const belowCost = item.precio_venta > 0 && item.precio_venta < item.precio_costo;
-                      return (
-                        <tr key={idx} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
-                          <td className="px-2 py-1.5">
-                            <input value={item.codigo} onChange={(e) => updateNewPRItem(idx, "codigo", e.target.value)}
-                              className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input value={item.descripcion} onChange={(e) => updateNewPRItem(idx, "descripcion", e.target.value)}
-                              placeholder="Descripción del item..."
-                              className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input type="number" value={item.cantidad} onChange={(e) => updateNewPRItem(idx, "cantidad", Number(e.target.value))}
-                              className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input type="number" value={item.precio_costo || ""} onChange={(e) => updateNewPRItem(idx, "precio_costo", Number(e.target.value))}
-                              className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <input type="number" value={item.markup_porcentaje || ""} onChange={(e) => updateNewPRItem(idx, "markup_porcentaje", Number(e.target.value))}
-                              className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <div className="relative">
-                              <input type="number" value={item.precio_venta || ""} onChange={(e) => updateNewPRItem(idx, "precio_venta", Number(e.target.value))}
-                                className={`w-full rounded border px-1.5 py-1 text-xs text-right dark:bg-zinc-800 dark:text-white ${belowCost ? "border-red-300 dark:border-red-700" : "border-zinc-200 dark:border-zinc-700"}`} />
-                              {belowCost && <AlertTriangle className="absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 text-red-500" />}
-                            </div>
-                          </td>
-                          <td className="px-2 py-1.5">
-                            <select value={item.iva_porcentaje} onChange={(e) => updateNewPRItem(idx, "iva_porcentaje", Number(e.target.value))}
-                              className="w-full rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                              <option value={21}>21</option>
-                              <option value={10.5}>10.5</option>
-                              <option value={27}>27</option>
-                              <option value={0}>0</option>
-                            </select>
-                          </td>
-                          <td className="px-2 py-1.5">
-                            {newPR.items.length > 1 && (
-                              <button onClick={() => setNewPR((p) => ({ ...p, items: p.items.filter((_, i) => i !== idx) }))}
-                                className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-500">
-                                <Minus className="h-3 w-3" />
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              {/* Items totals preview */}
-              {(() => {
-                let sub = 0, iva = 0;
-                newPR.items.forEach((it) => { const t = calcItemTotals(it); sub += t.subtotal; iva += t.iva; });
-                return (
-                  <div className="flex justify-end mt-3">
-                    <div className="w-56 space-y-1 text-sm">
-                      <div className="flex justify-between"><span className="text-zinc-500">Subtotal</span><span className="font-mono">{formatCurrency(sub, newPR.moneda)}</span></div>
-                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(iva, newPR.moneda)}</span></div>
-                      <div className="flex justify-between font-bold border-t border-zinc-200 pt-1 dark:border-zinc-700"><span>Total</span><span className="font-mono">{formatCurrency(sub + iva, newPR.moneda)}</span></div>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* Observaciones */}
-            <div className="mb-6">
-              <label className="mb-1 block text-xs font-medium text-zinc-500">Observaciones</label>
-              <textarea
-                value={newPR.observaciones}
-                onChange={(e) => setNewPR((p) => ({ ...p, observaciones: e.target.value }))}
-                rows={2}
-                className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                placeholder="Notas internas o para el cliente..."
-              />
-            </div>
-
-            {/* Actions */}
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setShowNewPR(false)}
-                className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">
-                Cancelar
-              </button>
-              <button onClick={handleCreatePR} disabled={newPRSaving}
-                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
-                {newPRSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-                Crear Presupuesto
-              </button>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {/* Items totals preview */}
+          <div className="flex justify-end mt-3">
+            <div className="w-56 space-y-1 text-sm rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800/50">
+              <div className="flex justify-between"><span className="text-zinc-500">Subtotal</span><span className="font-mono">{formatCurrency(newPRSub, newPR.moneda)}</span></div>
+              <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(newPRIva, newPR.moneda)}</span></div>
+              <div className="flex justify-between font-bold border-t border-zinc-200 pt-1 dark:border-zinc-700"><span>Total</span><span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(newPRSub + newPRIva, newPR.moneda)}</span></div>
             </div>
           </div>
-        </>
-      )}
+        </div>
 
-      {/* Rechazo modal */}
-      {rechazoModal && (
-        <>
-          <div className="fixed inset-0 z-[60] bg-black/40" onClick={() => setRechazoModal(null)} />
-          <div className="fixed inset-4 z-[60] m-auto h-fit max-h-[50vh] w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
-            <h3 className="text-lg font-bold text-zinc-900 dark:text-white mb-4">Motivo de rechazo</h3>
-            <textarea
-              value={motivoRechazo}
-              onChange={(e) => setMotivoRechazo(e.target.value)}
-              placeholder="Ingresa el motivo del rechazo..."
-              rows={4}
-              className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-              autoFocus
-            />
-            <div className="flex justify-end gap-3 mt-4">
-              <button onClick={() => setRechazoModal(null)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-                Cancelar
-              </button>
-              <button
-                onClick={handleRechazoConfirm}
-                disabled={!motivoRechazo.trim()}
-                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
-              >
-                Confirmar rechazo
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+        {/* Observaciones */}
+        <Textarea
+          label="Observaciones"
+          value={newPR.observaciones}
+          onChange={(e) => setNewPR((p) => ({ ...p, observaciones: e.target.value }))}
+          rows={2}
+          placeholder="Notas internas o para el cliente..."
+        />
+      </Modal>
+
+      {/* ==================== RECHAZO MODAL ==================== */}
+      <Modal
+        open={!!rechazoModal}
+        onClose={() => setRechazoModal(null)}
+        title="Motivo de rechazo"
+        description="Ingresa el motivo por el cual se rechaza este presupuesto"
+        size="sm"
+        footer={
+          <>
+            <button
+              onClick={() => setRechazoModal(null)}
+              className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleRechazoConfirm}
+              disabled={!motivoRechazo.trim()}
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+            >
+              Confirmar rechazo
+            </button>
+          </>
+        }
+      >
+        <Textarea
+          value={motivoRechazo}
+          onChange={(e) => setMotivoRechazo(e.target.value)}
+          placeholder="Ingresa el motivo del rechazo..."
+          rows={4}
+          autoFocus
+        />
+      </Modal>
     </>
   );
 }

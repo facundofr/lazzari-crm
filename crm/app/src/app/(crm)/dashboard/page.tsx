@@ -9,7 +9,7 @@ import { DataTable } from "@/components/ui/data-table";
 import {
   DollarSign, FileText, TrendingUp, Percent,
   ArrowRight, Clock, AlertTriangle, Package,
-  Loader2,
+  Loader2, Users,
 } from "lucide-react";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import {
@@ -17,6 +17,7 @@ import {
   PieChart, Pie, Cell,
 } from "recharts";
 import Link from "next/link";
+import { useUser } from "@/lib/auth-context";
 import {
   dashboardKPIs as mockKPIs,
   mockPresupuestos,
@@ -69,7 +70,15 @@ function calcChange(current: number, previous: number): number | undefined {
   return Math.round(((current - previous) / previous) * 100);
 }
 
+function getGreeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return "Buenos dias";
+  if (h < 19) return "Buenas tardes";
+  return "Buenas noches";
+}
+
 export default function DashboardPage() {
+  const { profile } = useUser();
   const [loading, setLoading] = useState(true);
   const [kpi, setKpi] = useState(mockKPIs);
   const [presupuestosPorEstado, setPresupuestosPorEstado] = useState(mockPresupuestosPorEstado);
@@ -220,10 +229,30 @@ export default function DashboardPage() {
     return (
       <>
         <Header title="Dashboard" subtitle="Resumen de operaciones" />
-        <div className="flex items-center justify-center h-96">
-          <div className="flex flex-col items-center gap-3 text-zinc-400">
-            <Loader2 className="h-8 w-8 animate-spin" />
-            <span className="text-sm">Cargando dashboard...</span>
+        <div className="p-4 sm:p-8 space-y-6">
+          {/* Skeleton KPIs */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+                <div className="flex items-center justify-between">
+                  <div className="h-4 w-24 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
+                  <div className="h-8 w-8 animate-pulse rounded-lg bg-zinc-100 dark:bg-zinc-800" />
+                </div>
+                <div className="mt-3 h-7 w-32 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" />
+                <div className="mt-3 h-3 w-20 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+              </div>
+            ))}
+          </div>
+          {/* Skeleton charts */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <div className="lg:col-span-2 rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="h-4 w-40 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700 mb-4" />
+              <div className="h-56 animate-pulse rounded bg-zinc-100 dark:bg-zinc-800" />
+            </div>
+            <div className="rounded-xl border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="h-4 w-40 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700 mb-4" />
+              <div className="h-48 animate-pulse rounded-full mx-auto w-36 bg-zinc-100 dark:bg-zinc-800" />
+            </div>
           </div>
         </div>
       </>
@@ -233,10 +262,40 @@ export default function DashboardPage() {
   const facturadoChange = calcChange(kpi.facturadoMes, kpi.ventasMesAnterior);
   const conversionChange = calcChange(kpi.tasaConversion, kpi.tasaConversionAnterior);
 
+  const firstName = profile?.full_name?.split(" ")[0] || "Usuario";
+
   return (
     <>
       <Header title="Dashboard" subtitle="Resumen de operaciones" />
-      <div className="p-8 space-y-8">
+      <div className="p-4 sm:p-8 space-y-6 sm:space-y-8">
+        {/* Greeting */}
+        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-xl sm:text-2xl font-bold text-zinc-900 dark:text-white">
+              {getGreeting()}, {firstName}
+            </h2>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              {new Date().toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long" })}
+            </p>
+          </div>
+          <div className="flex gap-2 mt-2 sm:mt-0">
+            <Link
+              href="/presupuestos"
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+            >
+              <FileText className="h-4 w-4" />
+              <span className="hidden sm:inline">Nuevo PR</span>
+            </Link>
+            <Link
+              href="/clientes"
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+            >
+              <Users className="h-4 w-4" />
+              <span className="hidden sm:inline">Clientes</span>
+            </Link>
+          </div>
+        </div>
+
         {/* KPIs */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
@@ -269,7 +328,7 @@ export default function DashboardPage() {
           />
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
           {/* Facturación mensual - Recharts BarChart */}
           <Card className="lg:col-span-2">
             <CardHeader>
@@ -326,7 +385,7 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
           {/* Ultimos presupuestos */}
           <Card className="lg:col-span-2">
             <CardHeader>
@@ -384,7 +443,7 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
           {/* Top clientes */}
           <Card>
             <CardHeader>

@@ -4,9 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Lazzari Soluciones Industriales — three integrated components: institutional website (`web/`), visual identity (`diseno/`), and CRM/management system (`crm/`). The CRM is the core deliverable.
-
-**Client:** Industrial solutions company (valves, pipes, industrial equipment) based in Argentina.
+Lazzari Soluciones Industriales — CRM/management system for an industrial solutions company (valves, pipes, industrial equipment) based in Argentina.
 
 ## Commands
 
@@ -28,22 +26,27 @@ No test framework is configured yet.
 - **Framework:** Next.js 15 (App Router) + React 18 + TypeScript + Tailwind CSS 4
 - **Backend:** Supabase (Auth, Postgres, Storage, Realtime, Edge Functions)
 - **Deployment:** Vercel (root directory: `crm/app`)
-- **Key deps:** Recharts (charts), Lucide React (icons), date-fns (dates), @anthropic-ai/sdk (AI widget)
+- **Key deps:** Recharts (charts), Lucide React (icons), date-fns, @anthropic-ai/sdk (AI widget)
 - **UI utilities:** clsx, tailwind-merge, class-variance-authority (CVA)
 
 ### Key Directories
 
 ```
 crm/app/src/
-  app/(crm)/              # Route group — all CRM pages behind auth (11 modules)
+  app/(crm)/              # Route group — 11 CRM modules behind auth
   components/layout/      # Sidebar, Header, AIWidget
-  components/ui/          # Reusable: Badge, Card, StatCard, DataTable
+  components/ui/          # Reusable: Badge, Card, StatCard, DataTable, SmartFilters
   lib/supabase/queries/   # Data access layer — one file per module
   lib/auth-context.tsx    # UserProvider context (profile, role, sidebar state)
   lib/theme-context.tsx   # ThemeProvider for dark/light mode toggle
   lib/types.ts            # TypeScript interfaces, Role type, ROLE_PERMISSIONS map
   lib/mock-data.ts        # Fallback mock data used when Supabase queries fail
+  lib/utils.ts            # cn(), formatCurrency(), formatDate(), formatDateTime(), getInitials()
 ```
+
+### CRM Modules (routes under `app/(crm)/`)
+
+dashboard, clientes, proveedores, presupuestos, ordenes-compra, stock, facturacion, remitos, finanzas, reportes, configuracion
 
 ### Auth & Session Flow
 
@@ -93,7 +96,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY
 - **Data queries:** One file per module in `lib/supabase/queries/`, using the Supabase JS client. Pattern: query, throw on error, return data.
 - **Page structure:** Each page is `"use client"`, fetches data in `useEffect`, maps DB rows to TS interfaces, renders with `DataTable` + detail side panel
 - **Currency:** Dual currency support (USD/ARS) throughout. `formatCurrency()` from `lib/utils.ts`
-- **Dates:** `formatDate()` from `lib/utils.ts` using `date-fns`
+- **Dates:** `formatDate()` / `formatDateTime()` from `lib/utils.ts` using `Intl.DateTimeFormat("es-AR")`
 - **Next.js version warning:** This is Next.js 15 — APIs may differ from training data. Read docs in `node_modules/next/dist/docs/` before using new APIs (see `crm/app/AGENTS.md`).
 
 ## Key Files
@@ -104,3 +107,5 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY
 - `crm/app/src/lib/auth-context.tsx` — User/profile context provider used by all CRM pages
 - `crm/app/src/lib/mock-data.ts` — Comprehensive mock dataset (5 clients, 8 products, 6 suppliers, etc.)
 - `crm/app/src/components/ui/data-table.tsx` — Generic sortable/paginated table used by all pages
+- `crm/app/src/components/ui/smart-filters.tsx` — Reusable filter bar (select, date-range, number-range)
+- `crm/app/AGENTS.md` — Next.js 15 warning: read `node_modules/next/dist/docs/` before using new APIs

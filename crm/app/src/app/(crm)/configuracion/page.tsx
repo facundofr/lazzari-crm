@@ -72,7 +72,7 @@ export default function ConfiguracionPage() {
   return (
     <>
       <Header title="Configuracion" subtitle="Administracion del sistema" />
-      <div className="p-8 space-y-6">
+      <div className="p-4 sm:p-8 space-y-6">
         <div className="flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
           {tabs.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}

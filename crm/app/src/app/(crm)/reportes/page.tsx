@@ -307,7 +307,7 @@ export default function ReportesPage() {
 
       {/* Tab: Analisis comercial */}
       {activeTab === "comercial" && (
-      <div className="p-8 space-y-6">
+      <div className="p-4 sm:p-8 space-y-6">
         {/* Report categories */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {[
@@ -474,7 +474,7 @@ export default function ReportesPage() {
 
       {/* Tab: Comisiones */}
       {activeTab === "comisiones" && (
-      <div className="p-8 space-y-6">
+      <div className="p-4 sm:p-8 space-y-6">
         {comisionesLoading ? (
           <div className="flex items-center justify-center p-16">
             <Loader2 className="h-8 w-8 animate-spin text-orange-500" />

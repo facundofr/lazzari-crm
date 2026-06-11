@@ -13,12 +13,14 @@ import {
   Users,
   Receipt,
   Loader2,
+  Menu,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createBrowserClient } from "@supabase/ssr";
 import { formatDateTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { mockAlerts } from "@/lib/mock-data";
+import { useUser } from "@/lib/auth-context";
 
 interface HeaderProps {
   title: string;
@@ -89,6 +91,7 @@ const alertVariant: Record<string, "danger" | "warning" | "info" | "purple"> = {
 };
 
 export function Header({ title, subtitle, action }: HeaderProps) {
+  const { setMobileSidebarOpen } = useUser();
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [search, setSearch] = useState("");
@@ -275,14 +278,23 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   }
 
   return (
-    <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-8 py-5 dark:border-zinc-800 dark:bg-zinc-950">
-      <div>
-        <h1 className="text-xl font-bold text-zinc-900 dark:text-white">{title}</h1>
+    <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-4 sm:px-8 sm:py-5 dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="flex items-center gap-3">
+        {/* Hamburger menu - mobile only */}
+        <button
+          onClick={() => setMobileSidebarOpen(true)}
+          className="rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 lg:hidden dark:hover:bg-zinc-800"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+        <div>
+          <h1 className="text-lg sm:text-xl font-bold text-zinc-900 dark:text-white">{title}</h1>
         {subtitle && (
           <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">{subtitle}</p>
         )}
+        </div>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-3">
         {/* Search */}
         <div className="relative hidden md:block" ref={searchContainerRef}>
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
@@ -454,7 +466,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
           {alertsOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setAlertsOpen(false)} />
-              <div className="absolute right-0 top-full z-50 mt-2 w-96 rounded-xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+              <div className="absolute right-0 top-full z-50 mt-2 w-[calc(100vw-2rem)] sm:w-96 max-w-96 rounded-xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
                 <div className="flex items-center justify-between border-b border-zinc-200 p-4 dark:border-zinc-700">
                   <div className="flex items-center gap-2">
                     <h3 className="font-semibold text-zinc-900 dark:text-white">Alertas</h3>
@@ -509,10 +521,10 @@ export function Header({ title, subtitle, action }: HeaderProps) {
         {action && (
           <button
             onClick={action.onClick}
-            className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-orange-600 transition-colors"
+            className="flex items-center gap-2 rounded-lg bg-orange-500 px-3 py-2 sm:px-4 text-sm font-medium text-white shadow-sm hover:bg-orange-600 transition-colors"
           >
             <Plus className="h-4 w-4" />
-            {action.label}
+            <span className="hidden sm:inline">{action.label}</span>
           </button>
         )}
       </div>

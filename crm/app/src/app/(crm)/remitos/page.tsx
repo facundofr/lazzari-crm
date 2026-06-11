@@ -251,7 +251,7 @@ export default function RemitosPage() {
         subtitle="Remitos con CAE — asistidos por IA"
         action={{ label: "Nuevo remito", onClick: openCreateModal }}
       />
-      <div className="p-8 space-y-6">
+      <div className="p-4 sm:p-8 space-y-6">
         <div className="flex items-center gap-4 rounded-xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-800 dark:bg-violet-950/30">
           <div className="rounded-lg bg-violet-100 p-2 dark:bg-violet-900">
             <Sparkles className="h-5 w-5 text-violet-600" />

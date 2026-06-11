@@ -342,7 +342,7 @@ export default function ProveedoresPage() {
         subtitle={`${proveedores.length} proveedores — ${listas.length} listas de precios`}
         action={{ label: tab === "proveedores" ? "Nuevo proveedor" : "Cargar lista", onClick: tab === "proveedores" ? openCreate : () => {} }}
       />
-      <div className="p-8 space-y-6">
+      <div className="p-4 sm:p-8 space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
           <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">

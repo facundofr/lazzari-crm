@@ -20,6 +20,7 @@ import {
   Loader2,
   Sun,
   Moon,
+  X,
 } from "lucide-react";
 import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -49,7 +50,11 @@ function hasModuleAccess(role: Role, module: string): boolean {
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { profile, role, sidebarCollapsed: collapsed, setSidebarCollapsed: setCollapsed } = useUser();
+  const {
+    profile, role,
+    sidebarCollapsed: collapsed, setSidebarCollapsed: setCollapsed,
+    mobileSidebarOpen, setMobileSidebarOpen,
+  } = useUser();
   const { theme, toggleTheme } = useTheme();
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -65,6 +70,11 @@ export function Sidebar() {
     router.refresh();
   }
 
+  function handleNavClick() {
+    // Close mobile sidebar on navigation
+    setMobileSidebarOpen(false);
+  }
+
   const displayName = profile?.full_name
     || profile?.email?.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
     || "Usuario";
@@ -76,13 +86,18 @@ export function Sidebar() {
     <aside
       className={cn(
         "fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-zinc-200 bg-white transition-all duration-200 dark:border-zinc-800 dark:bg-zinc-950",
-        collapsed ? "w-[68px]" : "w-[250px]"
+        // Desktop: normal behavior
+        collapsed ? "lg:w-[68px]" : "lg:w-[250px]",
+        // Mobile: off-screen by default, slide in when open
+        mobileSidebarOpen
+          ? "w-[280px] translate-x-0"
+          : "-translate-x-full lg:translate-x-0",
       )}
     >
       {/* Logo */}
       <div className="flex h-16 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
-        {!collapsed && (
-          <Link href="/dashboard" className="flex items-center gap-2">
+        {(!collapsed || mobileSidebarOpen) && (
+          <Link href="/dashboard" className="flex items-center gap-2" onClick={handleNavClick}>
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-500 font-bold text-white text-sm">
               L
             </div>
@@ -92,19 +107,30 @@ export function Sidebar() {
             <span className="text-xs text-zinc-400 font-medium">CRM</span>
           </Link>
         )}
-        {collapsed && (
+        {collapsed && !mobileSidebarOpen && (
           <Link href="/dashboard" className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-orange-500 font-bold text-white text-sm">
             L
           </Link>
         )}
+        {/* Close button on mobile */}
         <button
-          onClick={() => setCollapsed(!collapsed)}
+          onClick={() => {
+            if (mobileSidebarOpen) {
+              setMobileSidebarOpen(false);
+            } else {
+              setCollapsed(!collapsed);
+            }
+          }}
           className={cn(
             "rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800",
-            collapsed && "mx-auto mt-2"
+            collapsed && !mobileSidebarOpen && "mx-auto mt-2"
           )}
         >
-          <ChevronLeft className={cn("h-4 w-4 transition-transform", collapsed && "rotate-180")} />
+          {mobileSidebarOpen ? (
+            <X className="h-4 w-4" />
+          ) : (
+            <ChevronLeft className={cn("h-4 w-4 transition-transform", collapsed && "rotate-180")} />
+          )}
         </button>
       </div>
 
@@ -115,20 +141,22 @@ export function Sidebar() {
             .filter((item) => hasModuleAccess(role, item.module))
             .map((item) => {
               const isActive = pathname.startsWith(item.href);
+              const showLabel = !collapsed || mobileSidebarOpen;
               return (
                 <li key={item.name}>
                   <Link
                     href={item.href}
+                    onClick={handleNavClick}
                     className={cn(
                       "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
                       isActive
                         ? "bg-orange-50 text-orange-600 dark:bg-orange-950/50 dark:text-orange-400"
                         : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white"
                     )}
-                    title={collapsed ? item.name : undefined}
+                    title={!showLabel ? item.name : undefined}
                   >
                     <item.icon className={cn("h-5 w-5 shrink-0", isActive && "text-orange-500")} />
-                    {!collapsed && <span>{item.name}</span>}
+                    {showLabel && <span>{item.name}</span>}
                   </Link>
                 </li>
               );
@@ -141,16 +169,17 @@ export function Sidebar() {
         {hasModuleAccess(role, "configuracion") && (
           <Link
             href="/configuracion"
+            onClick={handleNavClick}
             className={cn(
               "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
               pathname.startsWith("/configuracion")
                 ? "bg-orange-50 text-orange-600"
                 : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
             )}
-            title={collapsed ? "Configuración" : undefined}
+            title={collapsed && !mobileSidebarOpen ? "Configuración" : undefined}
           >
             <Settings className="h-5 w-5" />
-            {!collapsed && <span>Configuración</span>}
+            {(!collapsed || mobileSidebarOpen) && <span>Configuración</span>}
           </Link>
         )}
 
@@ -159,26 +188,26 @@ export function Sidebar() {
           onClick={toggleTheme}
           className={cn(
             "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white w-full",
-            collapsed && "justify-center"
+            collapsed && !mobileSidebarOpen && "justify-center"
           )}
           title={theme === "dark" ? "Modo claro" : "Modo oscuro"}
         >
           {theme === "dark" ? <Sun className="h-5 w-5 shrink-0" /> : <Moon className="h-5 w-5 shrink-0" />}
-          {!collapsed && <span>{theme === "dark" ? "Modo claro" : "Modo oscuro"}</span>}
+          {(!collapsed || mobileSidebarOpen) && <span>{theme === "dark" ? "Modo claro" : "Modo oscuro"}</span>}
         </button>
 
         {/* User */}
-        <div className={cn("mt-2 flex items-center gap-3 rounded-lg px-3 py-2.5", collapsed && "justify-center")}>
+        <div className={cn("mt-2 flex items-center gap-3 rounded-lg px-3 py-2.5", collapsed && !mobileSidebarOpen && "justify-center")}>
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-xs font-bold text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
             {initials}
           </div>
-          {!collapsed && (
+          {(!collapsed || mobileSidebarOpen) && (
             <div className="flex-1 min-w-0">
               <p className="truncate text-sm font-medium text-zinc-900 dark:text-white">{displayName}</p>
               <p className="truncate text-xs text-zinc-400">{email}</p>
             </div>
           )}
-          {!collapsed && (
+          {(!collapsed || mobileSidebarOpen) && (
             <button
               onClick={handleLogout}
               disabled={loggingOut}

@@ -19,6 +19,7 @@ interface DataTableProps<T> {
   onRowClick?: (row: T) => void;
   emptyMessage?: string;
   pageSize?: number;
+  loading?: boolean;
 }
 
 type SortDir = "asc" | "desc";
@@ -29,6 +30,7 @@ export function DataTable<T extends { id: string }>({
   onRowClick,
   emptyMessage = "No hay datos para mostrar",
   pageSize = 10,
+  loading = false,
 }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
@@ -107,7 +109,17 @@ export function DataTable<T extends { id: string }>({
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {paged.length === 0 ? (
+            {loading ? (
+              Array.from({ length: Math.min(pageSize, 5) }).map((_, i) => (
+                <tr key={`skeleton-${i}`}>
+                  {columns.map((col) => (
+                    <td key={col.key} className={cn("px-4 py-3.5", col.className)}>
+                      <div className="h-4 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" style={{ width: `${60 + Math.random() * 30}%` }} />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : paged.length === 0 ? (
               <tr>
                 <td
                   colSpan={columns.length}
@@ -120,14 +132,15 @@ export function DataTable<T extends { id: string }>({
                 </td>
               </tr>
             ) : (
-              paged.map((row) => (
+              paged.map((row, rowIdx) => (
                 <tr
                   key={row.id}
                   onClick={() => onRowClick?.(row)}
                   className={cn(
                     "transition-colors",
+                    rowIdx % 2 === 1 && "bg-zinc-50/50 dark:bg-zinc-800/20",
                     onRowClick
-                      ? "cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                      ? "cursor-pointer hover:bg-orange-50/50 dark:hover:bg-orange-950/20"
                       : ""
                   )}
                 >

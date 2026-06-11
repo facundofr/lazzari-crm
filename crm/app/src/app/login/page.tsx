@@ -38,8 +38,12 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
-      <div className="w-full max-w-sm space-y-8 px-4">
+    <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950 relative overflow-hidden">
+      {/* Subtle background decoration */}
+      <div className="absolute -top-40 -right-40 h-80 w-80 rounded-full bg-orange-500/5 blur-3xl" />
+      <div className="absolute -bottom-40 -left-40 h-80 w-80 rounded-full bg-orange-500/5 blur-3xl" />
+
+      <div className="relative w-full max-w-sm space-y-8 px-4 animate-slide-up">
         {/* Logo */}
         <div className="flex flex-col items-center gap-3">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-orange-500 text-2xl font-bold text-white shadow-lg shadow-orange-500/25">
@@ -96,7 +100,7 @@ export default function LoginPage() {
           </div>
 
           {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400">
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400 animate-scale-in">
               {error}
             </div>
           )}

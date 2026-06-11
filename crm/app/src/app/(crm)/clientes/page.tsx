@@ -5,6 +5,9 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
+import { Modal } from "@/components/ui/modal";
+import { Input, Select, Textarea } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast";
 import { formatCurrency } from "@/lib/utils";
 import { mockClients, mockPresupuestos, mockFacturas } from "@/lib/mock-data";
 import type { Client } from "@/lib/types";
@@ -13,6 +16,7 @@ import {
   Search, Download, MapPin, Phone, Mail, Loader2, Building2,
   Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight,
   BarChart3, ShoppingBag, CalendarDays, TrendingUp, Cake,
+  User, FileText, CreditCard, StickyNote,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 
@@ -93,7 +97,7 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
       sucursalId: (c.sucursal_id as string) ?? null,
     })) : [],
     sucursales: Array.isArray(row.cliente_sucursales) ? (row.cliente_sucursales as Array<Record<string, unknown>>).map((s) => ({
-      id: (s.id as string) ?? "",
+      id: s.id as string,
       nombre: (s.nombre as string) ?? "",
       direccion: (s.direccion as string) ?? "",
       localidad: (s.localidad as string) ?? "",
@@ -140,12 +144,15 @@ const emptyForm = {
   notas: "",
 };
 
+type DetailTab = "datos" | "contactos" | "sucursales" | "historial";
+
 export default function ClientesPage() {
   const [view, setView] = useState<"table" | "cards">("table");
   const [search, setSearch] = useState("");
   const [clientes, setClientes] = useState<ClienteExt[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const { toast } = useToast();
 
   // Filters
   const filterConfigs: FilterConfig[] = [
@@ -156,7 +163,7 @@ export default function ClientesPage() {
       { value: "Exento", label: "Exento" }, { value: "CF", label: "Cons. Final" }
     ]},
     { key: "formaPago", label: "Forma de pago", type: "select", options: [
-      { value: "Contado", label: "Contado" }, { value: "Cuenta corriente", label: "Cuenta corriente" },
+      { value: "Efectivo", label: "Efectivo" }, { value: "Cuenta corriente", label: "Cuenta corriente" },
       { value: "Cheque", label: "Cheque" }, { value: "Transferencia", label: "Transferencia" }
     ]},
     { key: "saldo", label: "Saldo CC", type: "number-range" },
@@ -174,6 +181,7 @@ export default function ClientesPage() {
 
   // Detail
   const [selectedCliente, setSelectedCliente] = useState<ClienteExt | null>(null);
+  const [detailTab, setDetailTab] = useState<DetailTab>("datos");
 
   // Consumo analysis
   const [consumoData, setConsumoData] = useState<ConsumoData>({
@@ -201,14 +209,12 @@ export default function ClientesPage() {
           .order("fecha", { ascending: false });
 
         // Fetch facturas total for this client
-        const { data: facturas, error: facError } = await supabase
+        const { data: facturas, error: factError } = await supabase
           .from("facturas")
           .select("total")
           .eq("cliente_id", clienteId);
 
-        const useMock = presError || facError || !presupuestos || presupuestos.length === 0;
-
-        if (useMock) {
+        if (presError || factError) {
           // Fallback to mock data
           const mockPres = mockPresupuestos.filter(
             (p) => p.clienteId === clienteId && p.estado === "aprobado"
@@ -259,17 +265,15 @@ export default function ClientesPage() {
           .map(([categoria, data]) => ({ categoria, ...data }))
           .sort((a, b) => b.total - a.total);
 
-        const totalFact = facturas
+        const totalFacturado = facturas
           ? facturas.reduce((sum, f) => sum + (f.total || 0), 0)
           : 0;
 
-        const ultimaFecha = presupuestos.length > 0 ? presupuestos[0].fecha : null;
-
         setConsumoData({
           categorias,
-          totalFacturado: totalFact,
+          totalFacturado,
           cantidadPresupuestos: presupuestos.length,
-          ultimaCompra: ultimaFecha,
+          ultimaCompra: presupuestos.length > 0 ? (presupuestos[0] as any).fecha : null,
           loading: false,
         });
       } catch (err) {
@@ -440,17 +444,20 @@ export default function ClientesPage() {
           .update(form as any)
           .eq("id", editingId);
         if (error) throw error;
+        toast.success("Cliente actualizado correctamente");
       } else {
         const { error } = await supabase
           .from("clientes")
           .insert(form as any);
         if (error) throw error;
+        toast.success("Cliente creado correctamente");
       }
       setModalOpen(false);
       await fetchClientes();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Error al guardar";
       setFormError(msg);
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
@@ -459,9 +466,11 @@ export default function ClientesPage() {
   async function handleToggleActivo(c: ClienteExt) {
     try {
       await supabase.from("clientes").update({ activo: !c.activo }).eq("id", c.id);
+      toast.info(c.activo ? "Cliente desactivado" : "Cliente activado");
       await fetchClientes();
     } catch (err) {
       console.error("Error toggling activo:", err);
+      toast.error("Error al cambiar estado del cliente");
     }
   }
 
@@ -470,12 +479,18 @@ export default function ClientesPage() {
     try {
       await supabase.from("clientes").delete().eq("id", id);
       setSelectedCliente(null);
+      toast.success("Cliente eliminado");
       await fetchClientes();
     } catch (err) {
       console.error("Error deleting cliente:", err);
+      toast.error("Error al eliminar cliente");
     }
   }
 
+  // Helpers
+  function getInitials(name: string) {
+    return name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  }
 
   if (loading) {
     return (
@@ -489,6 +504,14 @@ export default function ClientesPage() {
     );
   }
 
+  // Detail panel tab configs
+  const detailTabs: { key: DetailTab; label: string; icon: React.ReactNode }[] = [
+    { key: "datos", label: "Datos", icon: <FileText className="h-3.5 w-3.5" /> },
+    { key: "contactos", label: "Contactos", icon: <User className="h-3.5 w-3.5" /> },
+    { key: "sucursales", label: "Sucursales", icon: <Building2 className="h-3.5 w-3.5" /> },
+    { key: "historial", label: "Historial", icon: <BarChart3 className="h-3.5 w-3.5" /> },
+  ];
+
   return (
     <>
       <Header
@@ -496,10 +519,10 @@ export default function ClientesPage() {
         subtitle={`${activos} clientes activos`}
         action={{ label: "Nuevo cliente", onClick: openCreate }}
       />
-      <div className="p-8 space-y-6">
+      <div className="p-4 sm:p-8 space-y-6">
         {/* Filters bar */}
         <div className="flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 max-w-md">
+          <div className="relative flex-1 min-w-[200px] max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
               type="text"
@@ -521,22 +544,22 @@ export default function ClientesPage() {
         <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
 
         {/* Quick stats */}
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-4">
+          <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Total clientes</p>
-            <p className="mt-1 text-2xl font-bold">{clientes.length}</p>
+            <p className="mt-1 text-xl sm:text-2xl font-bold">{clientes.length}</p>
           </div>
-          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Saldo total CC</p>
-            <p className="mt-1 text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.saldoCuentaCorriente, 0))}</p>
+            <p className="mt-1 text-xl sm:text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.saldoCuentaCorriente, 0))}</p>
           </div>
-          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Credito otorgado</p>
-            <p className="mt-1 text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.limiteCredito, 0))}</p>
+            <p className="mt-1 text-xl sm:text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.limiteCredito, 0))}</p>
           </div>
-          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+          <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Provincias</p>
-            <p className="mt-1 text-2xl font-bold">{new Set(clientes.map((c) => c.provincia)).size}</p>
+            <p className="mt-1 text-xl sm:text-2xl font-bold">{new Set(clientes.map((c) => c.provincia)).size}</p>
           </div>
         </div>
 
@@ -548,11 +571,11 @@ export default function ClientesPage() {
                   key: "razonSocial", label: "Razon social", sortable: true,
                   render: (row) => (
                     <div className="flex items-center gap-3">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-xs">
-                        {row.razonSocial.split(" ").map(w => w[0]).join("").slice(0, 2)}
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-xs dark:bg-orange-900/30 dark:text-orange-400">
+                        {getInitials(row.razonSocial)}
                       </div>
-                      <div>
-                        <p className="font-medium text-zinc-900 dark:text-white">{row.razonSocial}</p>
+                      <div className="min-w-0">
+                        <p className="font-medium text-zinc-900 dark:text-white truncate">{row.razonSocial}</p>
                         <p className="text-xs text-zinc-400">{row.cuit}</p>
                       </div>
                     </div>
@@ -567,7 +590,7 @@ export default function ClientesPage() {
                     <div className="flex items-center gap-1 text-xs text-zinc-500">
                       <Building2 className="h-3 w-3" /> {n}
                     </div>
-                  ) : <span className="text-zinc-300">—</span>;
+                  ) : <span className="text-zinc-300 dark:text-zinc-600">—</span>;
                 }},
                 { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono text-xs block text-right">{formatCurrency(row.saldoCuentaCorriente)}</span> },
                 { key: "activo", label: "Estado", sortable: true, render: (row) => <Badge variant={row.activo ? "success" : "danger"}>{row.activo ? "Activo" : "Inactivo"}</Badge> },
@@ -575,10 +598,10 @@ export default function ClientesPage() {
                   key: "actions", label: "", sortable: false,
                   render: (row) => (
                     <div className="flex items-center gap-1">
-                      <button onClick={(e) => { e.stopPropagation(); openEdit(row); }} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Editar">
+                      <button onClick={(e) => { e.stopPropagation(); openEdit(row); }} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300" title="Editar">
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
-                      <button onClick={(e) => { e.stopPropagation(); handleToggleActivo(row); }} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title={row.activo ? "Desactivar" : "Activar"}>
+                      <button onClick={(e) => { e.stopPropagation(); handleToggleActivo(row); }} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300" title={row.activo ? "Desactivar" : "Activar"}>
                         {row.activo ? <ToggleRight className="h-3.5 w-3.5 text-green-500" /> : <ToggleLeft className="h-3.5 w-3.5" />}
                       </button>
                     </div>
@@ -586,20 +609,20 @@ export default function ClientesPage() {
                 },
               ]}
               data={filtered}
-              onRowClick={(row) => setSelectedCliente(row)}
+              onRowClick={(row) => { setSelectedCliente(row); setDetailTab("datos"); }}
             />
           </Card>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {filtered.map((client) => (
-              <Card key={client.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => setSelectedCliente(client)}>
+              <Card key={client.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => { setSelectedCliente(client); setDetailTab("datos"); }}>
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-sm">
-                      {client.razonSocial.split(" ").map(w => w[0]).join("").slice(0, 2)}
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-sm dark:bg-orange-900/30 dark:text-orange-400">
+                      {getInitials(client.razonSocial)}
                     </div>
-                    <div>
-                      <p className="font-semibold text-zinc-900 dark:text-white">{client.razonSocial}</p>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-zinc-900 dark:text-white truncate">{client.razonSocial}</p>
                       <p className="text-xs text-zinc-400">{client.cuit}</p>
                     </div>
                   </div>
@@ -608,9 +631,9 @@ export default function ClientesPage() {
                   </Badge>
                 </div>
                 <div className="mt-4 space-y-2 text-sm text-zinc-500">
-                  <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5" /> {client.localidad}, {client.provincia}</div>
-                  <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5" /> {client.telefono || "—"}</div>
-                  <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5" /> {client.email || "—"}</div>
+                  <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{client.localidad}, {client.provincia}</span></div>
+                  <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 shrink-0" /> {client.telefono || "—"}</div>
+                  <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{client.email || "—"}</span></div>
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4 dark:border-zinc-800">
                   <div>
@@ -628,134 +651,156 @@ export default function ClientesPage() {
         )}
       </div>
 
-      {/* Detail side panel */}
+      {/* ===================== DETAIL SIDE PANEL ===================== */}
       {selectedCliente && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setSelectedCliente(null)} />
-          <div className="fixed right-0 top-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-xl dark:bg-zinc-900">
-            <div className="flex items-center justify-between border-b border-zinc-200 p-6 dark:border-zinc-700">
-              <div>
-                <h2 className="text-lg font-bold text-zinc-900 dark:text-white">{selectedCliente.razonSocial}</h2>
-                <p className="text-sm text-zinc-500">{selectedCliente.cuit}</p>
+          <div className="fixed inset-0 z-40 bg-black/20 animate-fade-in" onClick={() => setSelectedCliente(null)} />
+          <div className="fixed right-0 top-0 z-50 h-full w-full max-w-xl overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right">
+            {/* Panel header with avatar */}
+            <div className="sticky top-0 z-10 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-700">
+              <div className="flex items-center gap-4 p-4 sm:p-6">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 to-orange-600 text-white font-bold text-lg shadow-md">
+                  {getInitials(selectedCliente.razonSocial)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-lg font-bold text-zinc-900 dark:text-white truncate">{selectedCliente.razonSocial}</h2>
+                  <p className="text-sm text-zinc-500">{selectedCliente.cuit}</p>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors" title="Editar">
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button onClick={() => handleDelete(selectedCliente.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 transition-colors" title="Eliminar">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                  <button onClick={() => setSelectedCliente(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors" title="Cerrar">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
-                  <Pencil className="h-4 w-4" />
-                </button>
-                <button onClick={() => handleDelete(selectedCliente.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500">
-                  <Trash2 className="h-4 w-4" />
-                </button>
-                <button onClick={() => setSelectedCliente(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600">
-                  <X className="h-4 w-4" />
-                </button>
+
+              {/* Tabs */}
+              <div className="flex gap-0 px-4 sm:px-6">
+                {detailTabs.map((tab) => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setDetailTab(tab.key)}
+                    className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+                      detailTab === tab.key
+                        ? "border-orange-500 text-orange-600 dark:text-orange-400"
+                        : "border-transparent text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                    }`}
+                  >
+                    {tab.icon}
+                    <span className="hidden sm:inline">{tab.label}</span>
+                  </button>
+                ))}
               </div>
             </div>
-            <div className="p-6 space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-xs text-zinc-500">Condicion IVA</p>
-                  <p className="text-sm font-medium">{condicionLabels[selectedCliente.condicionIva]}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-zinc-500">Tipo</p>
-                  <p className="text-sm font-medium capitalize">{selectedCliente.type}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-zinc-500">Email</p>
-                  <p className="text-sm font-medium">{selectedCliente.email || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-zinc-500">Telefono</p>
-                  <p className="text-sm font-medium">{selectedCliente.telefono || "—"}</p>
-                </div>
-                <div className="col-span-2">
-                  <p className="text-xs text-zinc-500">Direccion</p>
-                  <p className="text-sm font-medium">{selectedCliente.direccion || "—"}, {selectedCliente.localidad}, {selectedCliente.provincia} {selectedCliente.cp}</p>
-                </div>
-              </div>
-              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3">Comercial</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-xs text-zinc-500">Lista de precios</p>
-                    <p className="text-sm font-medium">{selectedCliente.listaPrecio || "—"}</p>
+
+            {/* Tab content */}
+            <div className="p-4 sm:p-6 space-y-6">
+
+              {/* ---- TAB: DATOS ---- */}
+              {detailTab === "datos" && (
+                <>
+                  {/* Status + Type badges */}
+                  <div className="flex items-center gap-2">
+                    <Badge variant={selectedCliente.activo ? "success" : "danger"}>
+                      {selectedCliente.activo ? "Activo" : "Inactivo"}
+                    </Badge>
+                    <Badge variant="info">{selectedCliente.type === "empresa" ? "Empresa" : "Persona"}</Badge>
                   </div>
+
+                  {/* General info */}
                   <div>
-                    <p className="text-xs text-zinc-500">Forma de pago</p>
-                    <p className="text-sm font-medium">{selectedCliente.formaPago || "—"}</p>
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Informacion general</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <InfoField label="Condicion IVA" value={condicionLabels[selectedCliente.condicionIva]} />
+                      <InfoField label="Email" value={selectedCliente.email || "—"} />
+                      <InfoField label="Telefono" value={selectedCliente.telefono || "—"} />
+                      <InfoField label="Vendedor" value={selectedCliente.vendedorNombre} />
+                      <div className="sm:col-span-2">
+                        <InfoField
+                          label="Direccion"
+                          value={[selectedCliente.direccion, selectedCliente.localidad, selectedCliente.provincia, selectedCliente.cp].filter(Boolean).join(", ") || "—"}
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-xs text-zinc-500">Dias CC</p>
-                    <p className="text-sm font-medium">{selectedCliente.diasCuentaCorriente}</p>
+
+                  {/* Commercial info */}
+                  <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Datos comerciales</h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                      <InfoField label="Lista de precios" value={selectedCliente.listaPrecio || "—"} />
+                      <InfoField label="Forma de pago" value={selectedCliente.formaPago || "—"} />
+                      <InfoField label="Dias CC" value={String(selectedCliente.diasCuentaCorriente)} />
+                      <InfoField label="Limite credito" value={formatCurrency(selectedCliente.limiteCredito)} />
+                      <InfoField label="Saldo CC" value={formatCurrency(selectedCliente.saldoCuentaCorriente)} highlight />
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-xs text-zinc-500">Limite credito</p>
-                    <p className="text-sm font-medium">{formatCurrency(selectedCliente.limiteCredito)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-zinc-500">Saldo CC</p>
-                    <p className="text-sm font-medium">{formatCurrency(selectedCliente.saldoCuentaCorriente)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-zinc-500">Vendedor</p>
-                    <p className="text-sm font-medium">{selectedCliente.vendedorNombre}</p>
-                  </div>
-                </div>
-              </div>
-              {selectedCliente.notas && (
-                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Notas</h3>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{selectedCliente.notas}</p>
-                </div>
+
+                  {/* Notes */}
+                  {selectedCliente.notas && (
+                    <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2 flex items-center gap-1.5">
+                        <StickyNote className="h-3.5 w-3.5" /> Notas
+                      </h3>
+                      <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap bg-zinc-50 dark:bg-zinc-800/50 rounded-lg p-3">{selectedCliente.notas}</p>
+                    </div>
+                  )}
+                </>
               )}
 
-              {/* Sucursales y Contactos agrupados */}
-              {((selectedCliente.sucursales && selectedCliente.sucursales.length > 0) || (selectedCliente.contactos && selectedCliente.contactos.length > 0)) && (
-                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
-                    <Building2 className="h-4 w-4 text-orange-500" />
-                    Sucursales y Contactos
-                  </h3>
-                  <div className="space-y-3">
-                    {/* Sucursales con sus contactos */}
-                    {(selectedCliente.sucursales ?? []).map((s) => {
-                      const contactosSuc = (selectedCliente.contactos ?? []).filter((c) => c.sucursalId === s.id);
-                      return (
-                        <div key={s.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                          <div className="bg-zinc-50 p-3 dark:bg-zinc-800/50">
-                            <p className="text-sm font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
-                              <Building2 className="h-3.5 w-3.5 text-orange-500" />
-                              {s.nombre}
-                            </p>
-                            {(s.direccion || s.localidad || s.provincia) && (
-                              <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
-                                <MapPin className="h-3 w-3" />
-                                {[s.direccion, s.localidad, s.provincia].filter(Boolean).join(", ")}
-                              </div>
+              {/* ---- TAB: CONTACTOS ---- */}
+              {detailTab === "contactos" && (
+                <>
+                  {(!selectedCliente.contactos || selectedCliente.contactos.length === 0) ? (
+                    <EmptyState icon={<User className="h-6 w-6" />} text="Sin contactos registrados" />
+                  ) : (
+                    <div className="space-y-3">
+                      {/* Group by sucursal */}
+                      {(() => {
+                        const sucursalMap = new Map<string, string>();
+                        for (const s of selectedCliente.sucursales ?? []) {
+                          sucursalMap.set(s.id, s.nombre);
+                        }
+
+                        const grouped: Record<string, typeof selectedCliente.contactos> = {};
+                        for (const c of selectedCliente.contactos ?? []) {
+                          const key = c.sucursalId && sucursalMap.has(c.sucursalId) ? c.sucursalId : "__general__";
+                          if (!grouped[key]) grouped[key] = [];
+                          grouped[key].push(c);
+                        }
+
+                        return Object.entries(grouped).map(([key, contacts]) => (
+                          <div key={key}>
+                            {key !== "__general__" && (
+                              <p className="text-xs font-semibold text-zinc-500 mb-2 flex items-center gap-1.5">
+                                <Building2 className="h-3 w-3 text-orange-500" />
+                                {sucursalMap.get(key)}
+                              </p>
                             )}
-                            <div className="flex gap-4 mt-1">
-                              {s.telefono && (
-                                <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-                                  <Phone className="h-3 w-3" /> {s.telefono}
-                                </div>
-                              )}
-                              {s.email && (
-                                <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-                                  <Mail className="h-3 w-3" /> {s.email}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                          {contactosSuc.length > 0 && (
-                            <div className="border-t border-zinc-100 dark:border-zinc-700 divide-y divide-zinc-100 dark:divide-zinc-700">
-                              {contactosSuc.map((c) => (
-                                <div key={c.id} className="px-3 py-2.5 bg-white dark:bg-zinc-900">
+                            {key === "__general__" && Object.keys(grouped).length > 1 && (
+                              <p className="text-xs font-semibold text-zinc-500 mb-2">Contactos generales</p>
+                            )}
+                            <div className="space-y-2">
+                              {contacts.map((c) => (
+                                <div key={c.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 bg-white dark:bg-zinc-800/50">
                                   <div className="flex items-center justify-between">
-                                    <p className="text-sm font-medium text-zinc-900 dark:text-white">{c.nombre}</p>
+                                    <div className="flex items-center gap-2.5">
+                                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-zinc-500 font-medium text-xs dark:bg-zinc-700 dark:text-zinc-300">
+                                        {getInitials(c.nombre)}
+                                      </div>
+                                      <div>
+                                        <p className="text-sm font-medium text-zinc-900 dark:text-white">{c.nombre}</p>
+                                        {c.cargo && <p className="text-xs text-zinc-500">{c.cargo}</p>}
+                                      </div>
+                                    </div>
                                     {c.principal && <Badge variant="info">Principal</Badge>}
                                   </div>
-                                  {c.cargo && <p className="text-xs text-zinc-500 mt-0.5">{c.cargo}</p>}
-                                  <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 pl-10">
                                     {c.email && (
                                       <div className="flex items-center gap-1.5 text-xs text-zinc-500">
                                         <Mail className="h-3 w-3" /> {c.email}
@@ -775,278 +820,356 @@ export default function ClientesPage() {
                                       </div>
                                     )}
                                   </div>
-                                  {c.notas && <p className="mt-1.5 text-xs text-zinc-400 dark:text-zinc-500">{c.notas}</p>}
+                                  {c.notas && <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500 pl-10">{c.notas}</p>}
                                 </div>
                               ))}
                             </div>
-                          )}
-                          {contactosSuc.length === 0 && (
-                            <div className="px-3 py-2 bg-white dark:bg-zinc-900 text-xs text-zinc-400 italic">Sin contactos asignados</div>
-                          )}
-                        </div>
-                      );
-                    })}
-
-                    {/* Contactos sin sucursal */}
-                    {(() => {
-                      const sinSucursal = (selectedCliente.contactos ?? []).filter(
-                        (c) => !c.sucursalId || !(selectedCliente.sucursales ?? []).some((s) => s.id === c.sucursalId)
-                      );
-                      if (sinSucursal.length === 0) return null;
-                      return (
-                        <div className="rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                          <div className="bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
-                            <p className="text-xs font-medium text-zinc-500">Contactos generales (sin sucursal)</p>
                           </div>
-                          <div className="divide-y divide-zinc-100 dark:divide-zinc-700">
-                            {sinSucursal.map((c) => (
-                              <div key={c.id} className="px-3 py-2.5 bg-white dark:bg-zinc-900">
-                                <div className="flex items-center justify-between">
-                                  <p className="text-sm font-medium text-zinc-900 dark:text-white">{c.nombre}</p>
-                                  {c.principal && <Badge variant="info">Principal</Badge>}
-                                </div>
-                                {c.cargo && <p className="text-xs text-zinc-500 mt-0.5">{c.cargo}</p>}
-                                <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
-                                  {c.email && (
-                                    <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-                                      <Mail className="h-3 w-3" /> {c.email}
-                                    </div>
-                                  )}
-                                  {c.telefono && (
-                                    <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-                                      <Phone className="h-3 w-3" /> {c.telefono}
-                                    </div>
-                                  )}
-                                  {c.fechaCumpleanos && (
-                                    <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-                                      <Cake className="h-3 w-3" /> {(() => {
-                                        const d = new Date(c.fechaCumpleanos + "T00:00:00");
-                                        return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
-                                      })()}
-                                    </div>
-                                  )}
-                                </div>
-                                {c.notas && <p className="mt-1.5 text-xs text-zinc-400 dark:text-zinc-500">{c.notas}</p>}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                </div>
+                        ));
+                      })()}
+                    </div>
+                  )}
+                </>
               )}
 
-              {/* Relevamiento de consumo */}
-              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
-                  <BarChart3 className="h-4 w-4 text-orange-500" />
-                  Relevamiento de consumo
-                </h3>
-
-                {consumoData.loading ? (
-                  <div className="flex items-center gap-2 py-4">
-                    <Loader2 className="h-4 w-4 animate-spin text-orange-500" />
-                    <span className="text-xs text-zinc-500">Analizando consumo...</span>
-                  </div>
-                ) : consumoData.categorias.length === 0 && consumoData.cantidadPresupuestos === 0 ? (
-                  <div className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-4 text-center dark:border-zinc-700 dark:bg-zinc-800/50">
-                    <ShoppingBag className="mx-auto h-6 w-6 text-zinc-300 dark:text-zinc-600" />
-                    <p className="mt-2 text-xs text-zinc-400">Sin presupuestos aprobados para este cliente</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {/* Summary stats */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="rounded-lg bg-orange-50 p-3 dark:bg-orange-900/20">
-                        <div className="flex items-center gap-1.5">
-                          <TrendingUp className="h-3.5 w-3.5 text-orange-500" />
-                          <p className="text-xs text-orange-600 dark:text-orange-400">Total facturado</p>
-                        </div>
-                        <p className="mt-1 text-sm font-bold text-orange-700 dark:text-orange-300">
-                          {formatCurrency(consumoData.totalFacturado)}
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800">
-                        <div className="flex items-center gap-1.5">
-                          <CalendarDays className="h-3.5 w-3.5 text-zinc-400" />
-                          <p className="text-xs text-zinc-500">Frecuencia</p>
-                        </div>
-                        <p className="mt-1 text-sm font-bold text-zinc-700 dark:text-zinc-200">
-                          {consumoData.cantidadPresupuestos} presupuesto{consumoData.cantidadPresupuestos !== 1 ? "s" : ""} aprobado{consumoData.cantidadPresupuestos !== 1 ? "s" : ""}
-                        </p>
-                      </div>
-                    </div>
-
-                    {consumoData.ultimaCompra && (
-                      <div>
-                        <p className="text-xs text-zinc-500">Ultima compra aprobada</p>
-                        <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                          {new Date(consumoData.ultimaCompra + "T00:00:00").toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric" })}
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Category breakdown with bars */}
-                    {consumoData.categorias.length > 0 && (
-                      <div>
-                        <p className="text-xs font-medium text-zinc-500 mb-2">Categorias compradas</p>
-                        <div className="space-y-2.5">
-                          {consumoData.categorias.map((cat) => {
-                            const maxTotal = consumoData.categorias[0].total;
-                            const pct = maxTotal > 0 ? (cat.total / maxTotal) * 100 : 0;
-                            return (
-                              <div key={cat.categoria}>
-                                <div className="flex items-center justify-between mb-1">
-                                  <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                                    {cat.categoria}
-                                  </span>
-                                  <span className="text-xs text-zinc-500">
-                                    {cat.cantidad} u. &middot; {formatCurrency(cat.total)}
-                                  </span>
+              {/* ---- TAB: SUCURSALES ---- */}
+              {detailTab === "sucursales" && (
+                <>
+                  {(!selectedCliente.sucursales || selectedCliente.sucursales.length === 0) ? (
+                    <EmptyState icon={<Building2 className="h-6 w-6" />} text="Sin sucursales registradas" />
+                  ) : (
+                    <div className="space-y-3">
+                      {selectedCliente.sucursales.map((s) => {
+                        const contactosSuc = (selectedCliente.contactos ?? []).filter((c) => c.sucursalId === s.id);
+                        return (
+                          <div key={s.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                            <div className="bg-zinc-50 p-3 dark:bg-zinc-800/50">
+                              <p className="text-sm font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
+                                <Building2 className="h-3.5 w-3.5 text-orange-500" />
+                                {s.nombre}
+                              </p>
+                              {(s.direccion || s.localidad || s.provincia) && (
+                                <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
+                                  <MapPin className="h-3 w-3" />
+                                  {[s.direccion, s.localidad, s.provincia].filter(Boolean).join(", ")}
                                 </div>
-                                <div className="h-2 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
-                                  <div
-                                    className="h-full rounded-full bg-gradient-to-r from-orange-400 to-orange-500 transition-all duration-500"
-                                    style={{ width: `${pct}%` }}
-                                  />
-                                </div>
+                              )}
+                              <div className="flex gap-4 mt-1">
+                                {s.telefono && (
+                                  <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                    <Phone className="h-3 w-3" /> {s.telefono}
+                                  </div>
+                                )}
+                                {s.email && (
+                                  <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                    <Mail className="h-3 w-3" /> {s.email}
+                                  </div>
+                                )}
                               </div>
-                            );
-                          })}
+                            </div>
+                            {contactosSuc.length > 0 && (
+                              <div className="border-t border-zinc-100 dark:border-zinc-700 divide-y divide-zinc-100 dark:divide-zinc-700">
+                                {contactosSuc.map((c) => (
+                                  <div key={c.id} className="px-3 py-2.5 bg-white dark:bg-zinc-900">
+                                    <div className="flex items-center justify-between">
+                                      <p className="text-sm font-medium text-zinc-900 dark:text-white">{c.nombre}</p>
+                                      {c.principal && <Badge variant="info">Principal</Badge>}
+                                    </div>
+                                    {c.cargo && <p className="text-xs text-zinc-500 mt-0.5">{c.cargo}</p>}
+                                    <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                                      {c.email && (
+                                        <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                          <Mail className="h-3 w-3" /> {c.email}
+                                        </div>
+                                      )}
+                                      {c.telefono && (
+                                        <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+                                          <Phone className="h-3 w-3" /> {c.telefono}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {contactosSuc.length === 0 && (
+                              <div className="px-3 py-2 bg-white dark:bg-zinc-900 text-xs text-zinc-400 italic">Sin contactos asignados</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ---- TAB: HISTORIAL (Consumo) ---- */}
+              {detailTab === "historial" && (
+                <>
+                  {consumoData.loading ? (
+                    <div className="flex items-center gap-2 py-8 justify-center">
+                      <Loader2 className="h-4 w-4 animate-spin text-orange-500" />
+                      <span className="text-xs text-zinc-500">Analizando consumo...</span>
+                    </div>
+                  ) : consumoData.categorias.length === 0 && consumoData.cantidadPresupuestos === 0 ? (
+                    <EmptyState icon={<ShoppingBag className="h-6 w-6" />} text="Sin presupuestos aprobados para este cliente" />
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Summary stats */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="rounded-lg bg-orange-50 p-3 dark:bg-orange-900/20">
+                          <div className="flex items-center gap-1.5">
+                            <TrendingUp className="h-3.5 w-3.5 text-orange-500" />
+                            <p className="text-xs text-orange-600 dark:text-orange-400">Total facturado</p>
+                          </div>
+                          <p className="mt-1 text-sm font-bold text-orange-700 dark:text-orange-300">
+                            {formatCurrency(consumoData.totalFacturado)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800">
+                          <div className="flex items-center gap-1.5">
+                            <CalendarDays className="h-3.5 w-3.5 text-zinc-400" />
+                            <p className="text-xs text-zinc-500">Frecuencia</p>
+                          </div>
+                          <p className="mt-1 text-sm font-bold text-zinc-700 dark:text-zinc-200">
+                            {consumoData.cantidadPresupuestos} presupuesto{consumoData.cantidadPresupuestos !== 1 ? "s" : ""} aprobado{consumoData.cantidadPresupuestos !== 1 ? "s" : ""}
+                          </p>
                         </div>
                       </div>
-                    )}
-                  </div>
-                )}
-              </div>
 
-              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                <Badge variant={selectedCliente.activo ? "success" : "danger"}>
-                  {selectedCliente.activo ? "Activo" : "Inactivo"}
-                </Badge>
-              </div>
+                      {consumoData.ultimaCompra && (
+                        <div>
+                          <p className="text-xs text-zinc-500">Ultima compra aprobada</p>
+                          <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                            {new Date(consumoData.ultimaCompra + "T00:00:00").toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric" })}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Category breakdown with bars */}
+                      {consumoData.categorias.length > 0 && (
+                        <div>
+                          <p className="text-xs font-medium text-zinc-500 mb-2">Categorias compradas</p>
+                          <div className="space-y-2.5">
+                            {consumoData.categorias.map((cat) => {
+                              const maxTotal = consumoData.categorias[0].total;
+                              const pct = maxTotal > 0 ? (cat.total / maxTotal) * 100 : 0;
+                              return (
+                                <div key={cat.categoria}>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                                      {cat.categoria}
+                                    </span>
+                                    <span className="text-xs text-zinc-500">
+                                      {cat.cantidad} u. &middot; {formatCurrency(cat.total)}
+                                    </span>
+                                  </div>
+                                  <div className="h-2 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                                    <div
+                                      className="h-full rounded-full bg-gradient-to-r from-orange-400 to-orange-500 transition-all duration-500"
+                                      style={{ width: `${pct}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </>
       )}
 
-      {/* Create/Edit Modal */}
-      {modalOpen && (
-        <>
-          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setModalOpen(false)} />
-          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold text-zinc-900 dark:text-white">
-                {editingId ? "Editar cliente" : "Nuevo cliente"}
-              </h2>
-              <button onClick={() => setModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
+      {/* ===================== CREATE / EDIT MODAL ===================== */}
+      <Modal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editingId ? "Editar cliente" : "Nuevo cliente"}
+        description={editingId ? "Modifica los datos del cliente" : "Completa los datos para crear un nuevo cliente"}
+        size="lg"
+        footer={
+          <>
+            <button
+              onClick={() => setModalOpen(false)}
+              className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+            >
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              {editingId ? "Guardar cambios" : "Crear cliente"}
+            </button>
+          </>
+        }
+      >
+        {formError && (
+          <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">
+            {formError}
+          </div>
+        )}
 
-            {formError && (
-              <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">
-                {formError}
+        <div className="space-y-5">
+          {/* Section: Identificacion */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Identificacion</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="sm:col-span-2">
+                <Input
+                  label="Razon social *"
+                  value={form.razon_social}
+                  onChange={(e) => setForm({ ...form, razon_social: e.target.value })}
+                  placeholder="Nombre o razon social"
+                />
               </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="col-span-2">
-                <label className="text-xs font-medium text-zinc-500">Razon social *</label>
-                <input value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">CUIT *</label>
-                <input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} placeholder="XX-XXXXXXXX-X" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Tipo</label>
-                <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  <option value="empresa">Empresa</option>
-                  <option value="persona">Persona</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Condicion IVA</label>
-                <select value={form.condicion_iva} onChange={(e) => setForm({ ...form, condicion_iva: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  {Object.entries(condicionLabels).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Email</label>
-                <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Telefono</label>
-                <input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Direccion</label>
-                <input value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Localidad</label>
-                <input value={form.localidad} onChange={(e) => setForm({ ...form, localidad: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Provincia</label>
-                <select value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  <option value="">Seleccionar...</option>
-                  {provincias.map((p) => (
-                    <option key={p} value={p}>{p}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Codigo Postal</label>
-                <input value={form.cp} onChange={(e) => setForm({ ...form, cp: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Lista de precios</label>
-                <select value={form.lista_precio} onChange={(e) => setForm({ ...form, lista_precio: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  <option value="A">Lista A</option>
-                  <option value="B">Lista B</option>
-                  <option value="C">Lista C</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Forma de pago</label>
-                <select value={form.forma_pago} onChange={(e) => setForm({ ...form, forma_pago: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  <option value="Transferencia">Transferencia</option>
-                  <option value="Cheque">Cheque</option>
-                  <option value="Efectivo">Efectivo</option>
-                  <option value="Cuenta corriente">Cuenta corriente</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Dias cuenta corriente</label>
-                <input type="number" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Limite de credito</label>
-                <input type="number" value={form.limite_credito} onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              <div className="col-span-2">
-                <label className="text-xs font-medium text-zinc-500">Notas</label>
-                <textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={3} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
-              <button onClick={() => setModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-                Cancelar
-              </button>
-              <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
-                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                {editingId ? "Guardar cambios" : "Crear cliente"}
-              </button>
+              <Input
+                label="CUIT *"
+                value={form.cuit}
+                onChange={(e) => setForm({ ...form, cuit: e.target.value })}
+                placeholder="XX-XXXXXXXX-X"
+              />
+              <Select
+                label="Tipo"
+                value={form.type}
+                onChange={(e) => setForm({ ...form, type: e.target.value })}
+                options={[
+                  { value: "empresa", label: "Empresa" },
+                  { value: "persona", label: "Persona" },
+                ]}
+              />
+              <Select
+                label="Condicion IVA"
+                value={form.condicion_iva}
+                onChange={(e) => setForm({ ...form, condicion_iva: e.target.value })}
+                options={Object.entries(condicionLabels).map(([k, v]) => ({ value: k, label: v }))}
+              />
             </div>
           </div>
-        </>
-      )}
+
+          {/* Section: Contacto */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Contacto</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input
+                label="Email"
+                type="email"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+              />
+              <Input
+                label="Telefono"
+                value={form.telefono}
+                onChange={(e) => setForm({ ...form, telefono: e.target.value })}
+              />
+            </div>
+          </div>
+
+          {/* Section: Ubicacion */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Ubicacion</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input
+                label="Direccion"
+                value={form.direccion}
+                onChange={(e) => setForm({ ...form, direccion: e.target.value })}
+              />
+              <Input
+                label="Localidad"
+                value={form.localidad}
+                onChange={(e) => setForm({ ...form, localidad: e.target.value })}
+              />
+              <Select
+                label="Provincia"
+                value={form.provincia}
+                onChange={(e) => setForm({ ...form, provincia: e.target.value })}
+                options={provincias.map((p) => ({ value: p, label: p }))}
+                placeholder="Seleccionar..."
+              />
+              <Input
+                label="Codigo Postal"
+                value={form.cp}
+                onChange={(e) => setForm({ ...form, cp: e.target.value })}
+              />
+            </div>
+          </div>
+
+          {/* Section: Comercial */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Datos comerciales</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Select
+                label="Lista de precios"
+                value={form.lista_precio}
+                onChange={(e) => setForm({ ...form, lista_precio: e.target.value })}
+                options={[
+                  { value: "A", label: "Lista A" },
+                  { value: "B", label: "Lista B" },
+                  { value: "C", label: "Lista C" },
+                ]}
+              />
+              <Select
+                label="Forma de pago"
+                value={form.forma_pago}
+                onChange={(e) => setForm({ ...form, forma_pago: e.target.value })}
+                options={[
+                  { value: "Transferencia", label: "Transferencia" },
+                  { value: "Cheque", label: "Cheque" },
+                  { value: "Efectivo", label: "Efectivo" },
+                  { value: "Cuenta corriente", label: "Cuenta corriente" },
+                ]}
+              />
+              <Input
+                label="Dias cuenta corriente"
+                type="number"
+                value={String(form.dias_cuenta_corriente)}
+                onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })}
+              />
+              <Input
+                label="Limite de credito"
+                type="number"
+                value={String(form.limite_credito)}
+                onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+
+          {/* Notas */}
+          <Textarea
+            label="Notas"
+            value={form.notas}
+            onChange={(e) => setForm({ ...form, notas: e.target.value })}
+            rows={3}
+          />
+        </div>
+      </Modal>
     </>
+  );
+}
+
+/* ===================== HELPER COMPONENTS ===================== */
+
+function InfoField({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div>
+      <p className="text-xs text-zinc-500 dark:text-zinc-400">{label}</p>
+      <p className={`text-sm font-medium mt-0.5 ${highlight ? "text-orange-600 dark:text-orange-400 font-semibold" : "text-zinc-900 dark:text-white"}`}>{value}</p>
+    </div>
+  );
+}
+
+function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-8 text-center dark:border-zinc-700 dark:bg-zinc-800/50">
+      <div className="mx-auto text-zinc-300 dark:text-zinc-600">{icon}</div>
+      <p className="mt-2 text-sm text-zinc-400">{text}</p>
+    </div>
   );
 }

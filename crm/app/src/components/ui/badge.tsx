@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils";
 
-type BadgeVariant = "default" | "success" | "warning" | "danger" | "info" | "purple" | "outline";
+type BadgeVariant = "default" | "success" | "warning" | "danger" | "info" | "purple" | "orange" | "outline";
 
 const variantStyles: Record<BadgeVariant, string> = {
   default: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300",
@@ -11,6 +11,7 @@ const variantStyles: Record<BadgeVariant, string> = {
   danger: "bg-red-50 text-red-700 ring-1 ring-red-200 dark:bg-red-950 dark:text-red-400",
   info: "bg-blue-50 text-blue-700 ring-1 ring-blue-200 dark:bg-blue-950 dark:text-blue-400",
   purple: "bg-violet-50 text-violet-700 ring-1 ring-violet-200 dark:bg-violet-950 dark:text-violet-400",
+  orange: "bg-orange-50 text-orange-700 ring-1 ring-orange-200 dark:bg-orange-950 dark:text-orange-400",
   outline: "bg-transparent text-zinc-600 ring-1 ring-zinc-300 dark:text-zinc-400 dark:ring-zinc-600",
 };
 

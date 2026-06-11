@@ -19,6 +19,8 @@ interface UserContextValue {
   loading: boolean;
   sidebarCollapsed: boolean;
   setSidebarCollapsed: (v: boolean) => void;
+  mobileSidebarOpen: boolean;
+  setMobileSidebarOpen: (v: boolean) => void;
 }
 
 const UserContext = createContext<UserContextValue>({
@@ -27,6 +29,8 @@ const UserContext = createContext<UserContextValue>({
   loading: true,
   sidebarCollapsed: false,
   setSidebarCollapsed: () => {},
+  mobileSidebarOpen: false,
+  setMobileSidebarOpen: () => {},
 });
 
 export function useUser() {
@@ -37,6 +41,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -84,7 +89,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const role = profile?.role ?? "viewer";
 
   return (
-    <UserContext.Provider value={{ profile, role, loading, sidebarCollapsed, setSidebarCollapsed }}>
+    <UserContext.Provider value={{ profile, role, loading, sidebarCollapsed, setSidebarCollapsed, mobileSidebarOpen, setMobileSidebarOpen }}>
       {children}
     </UserContext.Provider>
   );
