@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
 
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 16000,
+      max_tokens: 32000,
       system: EXTRACTION_PROMPT,
       messages: [
         {
@@ -121,11 +121,30 @@ export async function POST(request: NextRequest) {
     const textBlock = response.content.find((block) => block.type === "text");
     const rawText = textBlock && textBlock.type === "text" ? textBlock.text : "";
 
-    // Parse the JSON response
-    // Try to extract JSON from the response (handle potential markdown wrapping)
+    // Extract JSON from the response — handle markdown wrapping, partial text, etc.
     let jsonText = rawText.trim();
-    if (jsonText.startsWith("```")) {
-      jsonText = jsonText.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+
+    // Remove markdown code fences
+    jsonText = jsonText.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?\s*```\s*$/i, "");
+
+    // If response has text before the JSON, extract just the JSON object
+    const jsonStart = jsonText.indexOf("{");
+    const jsonEnd = jsonText.lastIndexOf("}");
+    if (jsonStart !== -1 && jsonEnd !== -1 && jsonStart < jsonEnd) {
+      jsonText = jsonText.slice(jsonStart, jsonEnd + 1);
+    }
+
+    // If response was truncated (stop_reason = max_tokens), try to fix incomplete JSON
+    if (response.stop_reason === "max_tokens") {
+      // Close any open arrays and objects
+      const openBrackets = (jsonText.match(/\[/g) || []).length - (jsonText.match(/\]/g) || []).length;
+      const openBraces = (jsonText.match(/\{/g) || []).length - (jsonText.match(/\}/g) || []).length;
+
+      // Remove last potentially incomplete item (trailing comma + partial object)
+      jsonText = jsonText.replace(/,\s*\{[^}]*$/, "");
+
+      for (let i = 0; i < openBrackets; i++) jsonText += "]";
+      for (let i = 0; i < openBraces; i++) jsonText += "}";
     }
 
     const parsed = JSON.parse(jsonText);
@@ -134,13 +153,14 @@ export async function POST(request: NextRequest) {
       success: true,
       data: parsed,
       tokens_used: response.usage.input_tokens + response.usage.output_tokens,
+      truncated: response.stop_reason === "max_tokens",
     });
   } catch (error: unknown) {
     console.error("Error parsing lista de precios:", error);
 
     if (error instanceof SyntaxError) {
       return Response.json(
-        { error: "No se pudo interpretar la respuesta de la IA. Intentá con otro archivo." },
+        { error: "No se pudo interpretar la respuesta de la IA. El PDF puede ser demasiado grande o complejo. Probá con menos páginas." },
         { status: 422 }
       );
     }
