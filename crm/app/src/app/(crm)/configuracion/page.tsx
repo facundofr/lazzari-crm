@@ -92,7 +92,7 @@ export default function ConfiguracionPage() {
                 <h3 className="font-semibold text-zinc-900 dark:text-white">Usuarios del sistema</h3>
                 <p className="text-sm text-zinc-500">{mockUsers.length} usuarios registrados</p>
               </div>
-              <button className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
+              <button onClick={() => alert("Próximamente: invitación de usuarios por email")} className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
                 Invitar usuario
               </button>
             </div>
@@ -259,7 +259,7 @@ export default function ConfiguracionPage() {
                   </div>
                   <p className="mt-1 text-sm text-zinc-500">{integration.desc}</p>
                   {integration.note && <p className="mt-1 text-xs text-zinc-400">{integration.note}</p>}
-                  <button className="mt-3 text-xs font-medium text-orange-500 hover:text-orange-600">
+                  <button onClick={() => alert(`${integration.name}: próximamente`)} className="mt-3 text-xs font-medium text-orange-500 hover:text-orange-600">
                     {integration.connected ? "Configurar" : "Conectar"}
                   </button>
                 </div>

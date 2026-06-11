@@ -9,7 +9,7 @@ import {
   dashboardKPIs, presupuestosPorEstado, topClientes, mockPresupuestos, mockUsers,
 } from "@/lib/mock-data";
 import { TrendingUp, Users, FileText, Download, DollarSign, XCircle, Loader2, Percent } from "lucide-react";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
 } from "recharts";
@@ -71,6 +71,7 @@ export default function ReportesPage() {
 
   const now = new Date();
   const mesActual = now.toLocaleString("es-AR", { month: "long", year: "numeric" });
+
 
   useEffect(() => {
     async function fetchData() {
@@ -229,6 +230,37 @@ export default function ReportesPage() {
   const totalPR = mockPresupuestos.length;
   const ticketPromedio = totalPR > 0 ? mockPresupuestos.reduce((a, pr) => a + pr.total, 0) / totalPR : 0;
 
+  const downloadCSV = useCallback((filename: string, headers: string[], rows: string[][]) => {
+    const csv = [headers.join(","), ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${filename}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, []);
+
+  const exportMetricas = useCallback(() => {
+    const rows = [
+      ["Tasa de conversion", `${dashboardKPIs.tasaConversion}%`],
+      ["Margen promedio", `${dashboardKPIs.margenPromedio}%`],
+      ["Ticket promedio", String(ticketPromedio)],
+      ["Presupuestos emitidos", String(totalPR)],
+      ["Facturado", String(dashboardKPIs.facturadoMes)],
+    ];
+    downloadCSV(`metricas_${mesActual.replace(/ /g, "_")}`, ["Metrica", "Valor"], rows);
+  }, [downloadCSV, mesActual, ticketPromedio, totalPR]);
+
+  const exportComisiones = useCallback(() => {
+    const headers = ["Vendedor", "PR Aprobados", "Venta neta", "Costo", "Margen", "Com. venta", "Com. margen", "Total comision"];
+    const rows = comisionesData.map((v) => [
+      v.nombre, String(v.presupuestosAprobados), String(v.ventaNeta), String(v.costoTotal),
+      String(v.margen), String(v.comisionVenta), String(v.comisionMargen), String(v.totalComision),
+    ]);
+    downloadCSV("comisiones_vendedores", headers, rows);
+  }, [downloadCSV, comisionesData]);
+
   // Calc rejection percentages dynamically
   const motivoCounts: Record<string, number> = {};
   rechazados.forEach((pr) => {
@@ -371,7 +403,7 @@ export default function ReportesPage() {
           <Card>
             <CardHeader>
               <CardTitle>Metricas clave — {mesActual}</CardTitle>
-              <button className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
+              <button onClick={exportMetricas} className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
                 <Download className="h-3.5 w-3.5" /> Exportar
               </button>
             </CardHeader>
@@ -523,7 +555,7 @@ export default function ReportesPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Comisiones por vendedor</CardTitle>
-                <button className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
+                <button onClick={exportComisiones} className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
                   <Download className="h-3.5 w-3.5" /> Exportar
                 </button>
               </CardHeader>

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Sparkles, X, Send, Minimize2, Loader2 } from "lucide-react";
+import { useUser } from "@/lib/auth-context";
 
 interface Message {
   role: "user" | "assistant";
@@ -9,12 +10,14 @@ interface Message {
 }
 
 const QUICK_ACTIONS = [
-  { label: "Generar remito", prompt: "Necesito generar un remito a partir de un presupuesto aprobado. ¿Cómo procedo?" },
-  { label: "Importar FC", prompt: "Quiero importar una factura de compra de un proveedor. ¿Qué datos necesito?" },
-  { label: "Análisis rechazos", prompt: "Analizá los motivos de rechazo de presupuestos y sugerí estrategias para mejorar la tasa de aprobación." },
+  { label: "Resumen del dia", prompt: "Dame un resumen de la actividad de hoy: presupuestos nuevos, facturas, movimientos." },
+  { label: "Stock bajo", prompt: "Mostrá los productos con stock por debajo del mínimo." },
+  { label: "Clientes sin actividad", prompt: "¿Qué clientes activos no tienen presupuestos ni facturas en los últimos 90 días?" },
+  { label: "Top facturado", prompt: "¿Cuáles son los 5 clientes que más facturamos este año?" },
 ];
 
 export function AIWidget() {
+  const { profile, role } = useUser();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -40,7 +43,11 @@ export function AIWidget() {
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: newMessages }),
+        body: JSON.stringify({
+          messages: newMessages,
+          userRole: role,
+          userName: profile?.full_name || profile?.email || "Usuario",
+        }),
       });
 
       const data = await res.json();
@@ -63,6 +70,11 @@ export function AIWidget() {
     sendMessage(input);
   }
 
+  function clearChat() {
+    setMessages([]);
+    setError("");
+  }
+
   if (!open) {
     return (
       <button
@@ -76,15 +88,20 @@ export function AIWidget() {
   }
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 w-96 rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900 flex flex-col max-h-[500px]">
+    <div className="fixed bottom-6 right-6 z-50 w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900 flex flex-col max-h-[600px]">
       {/* Header */}
       <div className="flex items-center justify-between rounded-t-2xl bg-gradient-to-r from-violet-600 to-violet-500 px-4 py-3 shrink-0">
         <div className="flex items-center gap-2">
           <Sparkles className="h-5 w-5 text-white" />
-          <span className="font-semibold text-white">Asistente IA</span>
-          <span className="rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-medium text-white">Beta</span>
+          <span className="font-semibold text-white">Asistente Lazzari</span>
+          <span className="rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-medium text-white">DB</span>
         </div>
         <div className="flex items-center gap-1">
+          {messages.length > 0 && (
+            <button onClick={clearChat} className="rounded-md px-2 py-1 text-[10px] text-white/70 hover:bg-white/20 hover:text-white">
+              Limpiar
+            </button>
+          )}
           <button onClick={() => setOpen(false)} className="rounded-md p-1 text-white/70 hover:bg-white/20 hover:text-white">
             <Minimize2 className="h-4 w-4" />
           </button>
@@ -101,16 +118,19 @@ export function AIWidget() {
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-600">
               <Sparkles className="h-3.5 w-3.5" />
             </div>
-            <div className="rounded-lg bg-zinc-100 p-3 dark:bg-zinc-800 max-w-[280px]">
+            <div className="rounded-lg bg-zinc-100 p-3 dark:bg-zinc-800 max-w-[320px]">
               <p className="text-sm text-zinc-700 dark:text-zinc-300">
-                Hola, soy el asistente de Lazzari. Puedo ayudarte con:
+                Hola{profile?.full_name ? ` ${profile.full_name.split(" ")[0]}` : ""}! Tengo acceso a la base de datos del CRM. Puedo:
               </p>
               <ul className="mt-2 space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
-                <li>- Generar remitos desde PR aprobados</li>
-                <li>- Extraer datos de facturas de compra</li>
-                <li>- Analizar rechazos y sugerir precios</li>
-                <li>- Consultar historial de cotizaciones</li>
+                <li>- Consultar clientes, presupuestos, facturas, stock</li>
+                <li>- Crear y modificar registros</li>
+                <li>- Analizar datos y generar reportes</li>
+                <li>- Buscar información cruzada</li>
               </ul>
+              <p className="mt-2 text-[10px] text-zinc-400">
+                Rol: {role} — los permisos de escritura dependen de tu rol.
+              </p>
             </div>
           </div>
         )}
@@ -123,7 +143,7 @@ export function AIWidget() {
               </div>
             )}
             <div
-              className={`rounded-lg p-3 max-w-[280px] text-sm whitespace-pre-wrap ${
+              className={`rounded-lg p-3 max-w-[320px] text-sm whitespace-pre-wrap ${
                 msg.role === "user"
                   ? "bg-violet-600 text-white"
                   : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
@@ -140,7 +160,10 @@ export function AIWidget() {
               <Sparkles className="h-3.5 w-3.5" />
             </div>
             <div className="rounded-lg bg-zinc-100 p-3 dark:bg-zinc-800">
-              <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+                <span className="text-xs text-zinc-500">Consultando datos...</span>
+              </div>
             </div>
           </div>
         )}
@@ -174,7 +197,7 @@ export function AIWidget() {
         <form onSubmit={handleSubmit} className="flex items-center gap-2">
           <input
             type="text"
-            placeholder="Escribí tu consulta..."
+            placeholder="Preguntá o pedí algo..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
             disabled={loading}
