@@ -12,8 +12,11 @@ import type { Proveedor, ListaPrecios, ListaPreciosItem } from "@/lib/types";
 import {
   Search, Filter, Download, MapPin, Phone, Mail, ListOrdered, Upload,
   AlertTriangle, ChevronDown, ChevronRight, Loader2, X, Pencil, Tag,
+  Sparkles, FileUp, Check, Trash2, Eye,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Modal } from "@/components/ui/modal";
+import { useToast } from "@/components/ui/toast";
 
 const CLASIFICACION_TAGS = [
   "Buen precio", "Precio alto", "Entrega rapida", "Entrega lenta",
@@ -142,6 +145,33 @@ export default function ProveedoresPage() {
 
   // Detail
   const [selectedProv, setSelectedProv] = useState<Proveedor | null>(null);
+
+  // AI Upload
+  const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [aiFile, setAiFile] = useState<File | null>(null);
+  const [aiParsing, setAiParsing] = useState(false);
+  const [aiResult, setAiResult] = useState<{
+    nombre_lista: string;
+    proveedor: string;
+    moneda: string;
+    vigencia_desde: string | null;
+    vigencia_hasta: string | null;
+    notas: string;
+    items: Array<{
+      codigo: string;
+      descripcion: string;
+      categoria: string;
+      unidad: string;
+      precio: number;
+      descuento: number;
+      precio_neto: number;
+    }>;
+  } | null>(null);
+  const [aiError, setAiError] = useState("");
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiProveedorId, setAiProveedorId] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -309,6 +339,114 @@ export default function ProveedoresPage() {
     }
   }
 
+  function openAiUpload() {
+    setAiFile(null);
+    setAiResult(null);
+    setAiError("");
+    setAiProveedorId("");
+    setAiModalOpen(true);
+  }
+
+  async function handleAiParse() {
+    if (!aiFile) return;
+    setAiParsing(true);
+    setAiError("");
+    setAiResult(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", aiFile);
+
+      const res = await fetch("/api/parse-lista-precios", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setAiError(data.error || "Error al procesar el archivo");
+        return;
+      }
+
+      setAiResult(data.data);
+
+      // Auto-select proveedor if name matches
+      if (data.data.proveedor) {
+        const match = proveedores.find(
+          (p) => p.razonSocial.toLowerCase().includes(data.data.proveedor.toLowerCase())
+        );
+        if (match) setAiProveedorId(match.id);
+      }
+    } catch {
+      setAiError("Error de conexion. Intenta de nuevo.");
+    } finally {
+      setAiParsing(false);
+    }
+  }
+
+  async function handleAiSave() {
+    if (!aiResult || !aiProveedorId) return;
+    setAiSaving(true);
+
+    try {
+      // Create the lista
+      const { data: lista, error: listaError } = await supabase
+        .from("listas_precios")
+        .insert({
+          nombre: aiResult.nombre_lista || `Lista ${new Date().toLocaleDateString("es-AR")}`,
+          proveedor_id: aiProveedorId,
+          moneda: aiResult.moneda === "USD" ? "USD" : "ARS",
+          vigencia_desde: aiResult.vigencia_desde || new Date().toISOString().slice(0, 10),
+          vigencia_hasta: aiResult.vigencia_hasta || new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().slice(0, 10),
+          estado: "vigente",
+          archivo_origen: aiFile?.name || null,
+          notas: aiResult.notas || "",
+        })
+        .select("id")
+        .single();
+
+      if (listaError) throw listaError;
+
+      // Insert items
+      if (lista && aiResult.items.length > 0) {
+        const items = aiResult.items.map((item) => ({
+          lista_id: lista.id,
+          codigo: item.codigo,
+          descripcion: item.descripcion,
+          categoria: item.categoria,
+          unidad: item.unidad,
+          precio: item.precio,
+          descuento: item.descuento || 0,
+          precio_neto: item.precio_neto,
+        }));
+
+        const { error: itemsError } = await supabase
+          .from("lista_precios_items")
+          .insert(items);
+
+        if (itemsError) throw itemsError;
+      }
+
+      toast.success(`Lista creada con ${aiResult.items.length} articulos`);
+      setAiModalOpen(false);
+      await fetchData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error al guardar";
+      toast.error(msg);
+    } finally {
+      setAiSaving(false);
+    }
+  }
+
+  function removeAiItem(index: number) {
+    if (!aiResult) return;
+    setAiResult({
+      ...aiResult,
+      items: aiResult.items.filter((_, i) => i !== index),
+    });
+  }
+
   function exportCSV() {
     const headers = ["Razon Social", "CUIT", "Rubro", "Email", "Telefono", "Localidad", "Provincia", "Forma Pago", "Saldo CC", "Limite Credito"];
     const rows = filteredProveedores.map((p) => [
@@ -340,7 +478,7 @@ export default function ProveedoresPage() {
       <Header
         title="Proveedores"
         subtitle={`${proveedores.length} proveedores — ${listas.length} listas de precios`}
-        action={{ label: tab === "proveedores" ? "Nuevo proveedor" : "Cargar lista", onClick: tab === "proveedores" ? openCreate : () => {} }}
+        action={{ label: tab === "proveedores" ? "Nuevo proveedor" : "Cargar lista con IA", onClick: tab === "proveedores" ? openCreate : openAiUpload }}
       />
       <div className="p-4 sm:p-8 space-y-6">
         {/* Stats */}
@@ -672,6 +810,192 @@ export default function ProveedoresPage() {
           </div>
         </>
       )}
+
+      {/* AI Upload Modal */}
+      <Modal
+        open={aiModalOpen}
+        onClose={() => { if (!aiParsing) setAiModalOpen(false); }}
+        title="Cargar lista de precios con IA"
+        description="Subi un PDF o imagen de una lista de precios y la IA extrae los articulos automaticamente."
+        size="xl"
+        footer={
+          aiResult ? (
+            <>
+              <button
+                onClick={() => { setAiResult(null); setAiFile(null); }}
+                className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300"
+              >
+                Volver a subir
+              </button>
+              <button
+                onClick={handleAiSave}
+                disabled={aiSaving || !aiProveedorId || aiResult.items.length === 0}
+                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50"
+              >
+                {aiSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                Guardar lista ({aiResult.items.length} articulos)
+              </button>
+            </>
+          ) : undefined
+        }
+      >
+        {!aiResult ? (
+          <div className="space-y-6">
+            {/* File upload zone */}
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 p-10 cursor-pointer hover:border-orange-400 hover:bg-orange-50/30 transition-colors dark:border-zinc-600 dark:bg-zinc-800/50 dark:hover:border-orange-500"
+            >
+              <div className="rounded-full bg-orange-100 p-3 dark:bg-orange-900/30">
+                <FileUp className="h-6 w-6 text-orange-600 dark:text-orange-400" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                  {aiFile ? aiFile.name : "Click para seleccionar archivo"}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  PDF, PNG, JPG o WEBP — maximo 20MB
+                </p>
+              </div>
+              {aiFile && (
+                <div className="flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 shadow-sm dark:bg-zinc-700">
+                  <Check className="h-3.5 w-3.5 text-emerald-600" />
+                  <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">{(aiFile.size / 1024 / 1024).toFixed(1)} MB</span>
+                </div>
+              )}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.png,.jpg,.jpeg,.webp"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) setAiFile(file);
+              }}
+            />
+
+            {aiError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400">
+                {aiError}
+              </div>
+            )}
+
+            <button
+              onClick={handleAiParse}
+              disabled={!aiFile || aiParsing}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+            >
+              {aiParsing ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Analizando con IA... puede tardar unos segundos
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4" />
+                  Extraer articulos con IA
+                </>
+              )}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* AI Result summary */}
+            <div className="flex items-start gap-3 rounded-xl bg-emerald-50 border border-emerald-200 p-4 dark:bg-emerald-950/30 dark:border-emerald-800">
+              <Sparkles className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">
+                  {aiResult.items.length} articulos extraidos
+                </p>
+                <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-0.5">
+                  {aiResult.nombre_lista} — {aiResult.moneda}
+                  {aiResult.proveedor && ` — ${aiResult.proveedor}`}
+                </p>
+              </div>
+            </div>
+
+            {/* Proveedor selector */}
+            <div>
+              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">
+                Asignar a proveedor *
+              </label>
+              <select
+                value={aiProveedorId}
+                onChange={(e) => setAiProveedorId(e.target.value)}
+                className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+              >
+                <option value="">Seleccionar proveedor...</option>
+                {proveedores.map((p) => (
+                  <option key={p.id} value={p.id}>{p.razonSocial}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Metadata */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800">
+                <p className="text-xs text-zinc-500">Moneda</p>
+                <p className="text-sm font-semibold">{aiResult.moneda}</p>
+              </div>
+              <div className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800">
+                <p className="text-xs text-zinc-500">Desde</p>
+                <p className="text-sm font-semibold">{aiResult.vigencia_desde || "—"}</p>
+              </div>
+              <div className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800">
+                <p className="text-xs text-zinc-500">Hasta</p>
+                <p className="text-sm font-semibold">{aiResult.vigencia_hasta || "—"}</p>
+              </div>
+              <div className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800">
+                <p className="text-xs text-zinc-500">Articulos</p>
+                <p className="text-sm font-semibold">{aiResult.items.length}</p>
+              </div>
+            </div>
+
+            {aiResult.notas && (
+              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-700 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400">
+                <strong>Notas de la IA:</strong> {aiResult.notas}
+              </div>
+            )}
+
+            {/* Items table */}
+            <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-zinc-500">Codigo</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-zinc-500">Descripcion</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-zinc-500 hidden sm:table-cell">Categoria</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-zinc-500">Un.</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-zinc-500">Precio</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-zinc-500 hidden sm:table-cell">Desc.</th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-zinc-500">Neto</th>
+                    <th className="px-3 py-2 w-8"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                  {aiResult.items.map((item, i) => (
+                    <tr key={i} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                      <td className="px-3 py-2 font-mono text-xs font-bold">{item.codigo || "—"}</td>
+                      <td className="px-3 py-2 max-w-[200px] truncate">{item.descripcion}</td>
+                      <td className="px-3 py-2 text-zinc-500 hidden sm:table-cell">{item.categoria}</td>
+                      <td className="px-3 py-2 text-zinc-400">{item.unidad}</td>
+                      <td className="px-3 py-2 text-right font-mono">{item.precio.toFixed(2)}</td>
+                      <td className="px-3 py-2 text-right text-emerald-600 hidden sm:table-cell">{item.descuento ? `${item.descuento}%` : "—"}</td>
+                      <td className="px-3 py-2 text-right font-mono font-semibold">{item.precio_neto.toFixed(2)}</td>
+                      <td className="px-3 py-2">
+                        <button onClick={() => removeAiItem(i)} className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-500" title="Quitar">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </Modal>
     </>
   );
 }
