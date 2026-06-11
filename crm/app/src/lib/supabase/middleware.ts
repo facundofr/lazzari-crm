@@ -30,9 +30,10 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const isLoginPage = request.nextUrl.pathname === "/login";
+  const isApiRoute = request.nextUrl.pathname.startsWith("/api/");
 
-  // Not logged in and not on login page -> redirect to login
-  if (!user && !isLoginPage) {
+  // Not logged in and not on login page or API -> redirect to login
+  if (!user && !isLoginPage && !isApiRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
