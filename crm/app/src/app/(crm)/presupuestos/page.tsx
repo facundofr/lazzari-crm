@@ -14,7 +14,7 @@ import { supabase } from "@/lib/supabase/client";
 import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
-  Printer,
+  Printer, Sparkles,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -174,6 +174,12 @@ export default function PresupuestosPage() {
   // Nuevo PR modal
   const [showNewPR, setShowNewPR] = useState(false);
   const [newPRSaving, setNewPRSaving] = useState(false);
+
+  // AI presupuesto
+  const [showAIPanel, setShowAIPanel] = useState(false);
+  const [aiMessage, setAiMessage] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiNotes, setAiNotes] = useState("");
   const [clientes, setClientes] = useState<{id: string; razon_social: string}[]>([]);
   const [newPR, setNewPR] = useState({
     cliente_id: "",
@@ -184,26 +190,37 @@ export default function PresupuestosPage() {
     items: [{ ...emptyItem }] as NewPRItem[],
   });
 
-  // Product autocomplete
-  const [suggestions, setSuggestions] = useState<ProductSuggestion[]>([]);
-  const [activeAutocomplete, setActiveAutocomplete] = useState<{ idx: number; field: "codigo" | "descripcion" } | null>(null);
-  const autocompleteRef = useRef<HTMLDivElement>(null);
+  // Product search modal
+  const [productSearchOpen, setProductSearchOpen] = useState(false);
+  const [productSearchIdx, setProductSearchIdx] = useState(0);
+  const [productSearchQuery, setProductSearchQuery] = useState("");
+  const [productSearchResults, setProductSearchResults] = useState<ProductSuggestion[]>([]);
+  const [productSearchLoading, setProductSearchLoading] = useState(false);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const productSearchInputRef = useRef<HTMLInputElement>(null);
 
-  async function searchProducts(query: string, field: "codigo" | "descripcion") {
-    if (query.length < 2) { setSuggestions([]); return; }
+  function openProductSearch(idx: number) {
+    setProductSearchIdx(idx);
+    setProductSearchQuery("");
+    setProductSearchResults([]);
+    setProductSearchOpen(true);
+    setTimeout(() => productSearchInputRef.current?.focus(), 100);
+  }
+
+  async function doProductSearch(query: string) {
+    if (query.length < 2) { setProductSearchResults([]); return; }
+    setProductSearchLoading(true);
     try {
-      const col = field === "codigo" ? "codigo" : "descripcion";
       const { data, error } = await supabase
         .from("lista_precios_items")
         .select(`
           id, codigo, descripcion, categoria, unidad, precio, precio_neto,
           listas_precios:lista_id(nombre, moneda, proveedor_id, proveedores:proveedor_id(razon_social))
         `)
-        .ilike(col, `%${query}%`)
-        .limit(15);
+        .or(`codigo.ilike.%${query}%,descripcion.ilike.%${query}%`)
+        .limit(20);
 
-      if (error || !data) { setSuggestions([]); return; }
+      if (error || !data) { setProductSearchResults([]); return; }
 
       const mapped: ProductSuggestion[] = data
         .filter((d: any) => d.listas_precios)
@@ -219,15 +236,24 @@ export default function PresupuestosPage() {
           lista_nombre: d.listas_precios?.nombre ?? "",
           moneda: d.listas_precios?.moneda ?? "ARS",
         }));
-      setSuggestions(mapped);
+      setProductSearchResults(mapped);
     } catch {
-      setSuggestions([]);
+      setProductSearchResults([]);
+    } finally {
+      setProductSearchLoading(false);
     }
   }
 
-  function handleProductSelect(idx: number, suggestion: ProductSuggestion) {
+  function handleProductSearchInput(value: string) {
+    setProductSearchQuery(value);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(() => doProductSearch(value), 300);
+  }
+
+  function handleProductSelect(suggestion: ProductSuggestion) {
     setNewPR((prev) => {
       const items = [...prev.items];
+      const idx = productSearchIdx;
       const markup = items[idx].markup_porcentaje || prev.markup_general;
       const precioVenta = Number((suggestion.precio_neto * (1 + markup / 100)).toFixed(2));
       items[idx] = {
@@ -242,28 +268,58 @@ export default function PresupuestosPage() {
       };
       return { ...prev, items };
     });
-    setSuggestions([]);
-    setActiveAutocomplete(null);
+    setProductSearchOpen(false);
   }
 
-  function handleItemSearchInput(idx: number, field: "codigo" | "descripcion", value: string) {
-    updateNewPRItem(idx, field, value);
-    setActiveAutocomplete({ idx, field });
-    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
-    searchTimeoutRef.current = setTimeout(() => searchProducts(value, field), 300);
-  }
+  async function handleAIGenerate() {
+    if (!aiMessage.trim()) return;
+    setAiLoading(true);
+    setAiNotes("");
+    try {
+      const res = await fetch("/api/ai-presupuesto", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mensaje: aiMessage,
+          cliente_id: newPR.cliente_id || null,
+          moneda: newPR.moneda,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Error de la IA");
 
-  // Close autocomplete on outside click
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (autocompleteRef.current && !autocompleteRef.current.contains(e.target as Node)) {
-        setSuggestions([]);
-        setActiveAutocomplete(null);
+      if (data.items && Array.isArray(data.items) && data.items.length > 0) {
+        const newItems: NewPRItem[] = data.items.map((item: any) => {
+          const markup = newPR.markup_general;
+          const precioCosto = Number(item.precio_costo) || 0;
+          const precioVenta = Number((precioCosto * (1 + markup / 100)).toFixed(2));
+          return {
+            codigo: item.codigo || "",
+            descripcion: item.descripcion || "",
+            categoria: item.categoria || "",
+            cantidad: Number(item.cantidad) || 1,
+            unidad: item.unidad || "UN",
+            precio_costo: precioCosto,
+            markup_porcentaje: markup,
+            precio_venta: precioVenta,
+            iva_porcentaje: 21,
+          };
+        });
+        setNewPR((prev) => ({ ...prev, items: newItems }));
+        if (data.notas_generales) setAiNotes(data.notas_generales);
+        toast.success(`IA generó ${newItems.length} item(s)`);
+        setShowAIPanel(false);
+        setAiMessage("");
+      } else {
+        toast.warning("La IA no encontró productos para este pedido");
       }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Error inesperado";
+      toast.error(`Error IA: ${msg}`);
+    } finally {
+      setAiLoading(false);
     }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
+  }
 
   // Smart filters
   const filterConfigs: FilterConfig[] = [
@@ -1090,13 +1146,61 @@ export default function PresupuestosPage() {
         <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
             <label className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Items</label>
-            <button
-              onClick={() => setNewPR((p) => ({ ...p, items: [...p.items, { ...emptyItem, markup_porcentaje: p.markup_general }] }))}
-              className="flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
-            >
-              <Plus className="h-3 w-3" /> Agregar item
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowAIPanel(!showAIPanel)}
+                className="flex items-center gap-1 rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-400 dark:hover:bg-orange-950/50 transition-colors"
+              >
+                <Sparkles className="h-3 w-3" /> IA: armar desde mensaje
+              </button>
+              <button
+                onClick={() => setNewPR((p) => ({ ...p, items: [...p.items, { ...emptyItem, markup_porcentaje: p.markup_general }] }))}
+                className="flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+              >
+                <Plus className="h-3 w-3" /> Agregar item
+              </button>
+            </div>
           </div>
+
+          {/* AI Panel */}
+          {showAIPanel && (
+            <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50/50 p-4 dark:border-orange-800 dark:bg-orange-950/20">
+              <div className="flex items-center gap-2 mb-2">
+                <Sparkles className="h-4 w-4 text-orange-500" />
+                <span className="text-sm font-semibold text-orange-800 dark:text-orange-300">Pega el mensaje del cliente</span>
+              </div>
+              <p className="text-xs text-orange-600 dark:text-orange-400 mb-3">
+                La IA va a buscar los productos en las listas de precios y armar los items del presupuesto automaticamente.
+              </p>
+              <textarea
+                value={aiMessage}
+                onChange={(e) => setAiMessage(e.target.value)}
+                rows={4}
+                placeholder="Ej: Necesito 3 válvulas esféricas de 2 pulgadas, 10 metros de caño SCH40 de 4 y un manómetro de glicerina..."
+                className="w-full rounded-lg border border-orange-200 px-3 py-2 text-sm dark:border-orange-800 dark:bg-zinc-900 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-200 resize-none"
+              />
+              <div className="flex items-center justify-between mt-3">
+                <button onClick={() => { setShowAIPanel(false); setAiMessage(""); }} className="text-xs text-zinc-500 hover:text-zinc-700">
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleAIGenerate}
+                  disabled={aiLoading || !aiMessage.trim()}
+                  className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                >
+                  {aiLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {aiLoading ? "Buscando productos..." : "Generar items"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* AI Notes */}
+          {aiNotes && (
+            <div className="mb-3 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-700 dark:bg-blue-950/20 dark:border-blue-800 dark:text-blue-400">
+              <span className="font-semibold">Notas de la IA:</span> {aiNotes}
+            </div>
+          )}
           <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
             <table className="w-full text-sm">
               <thead>
@@ -1116,47 +1220,21 @@ export default function PresupuestosPage() {
                   const belowCost = item.precio_venta > 0 && item.precio_venta < item.precio_costo;
                   return (
                     <tr key={idx} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
-                      <td className="px-2 py-1.5 relative">
-                        <input value={item.codigo} onChange={(e) => handleItemSearchInput(idx, "codigo", e.target.value)}
-                          onFocus={() => { if (item.codigo.length >= 2) { setActiveAutocomplete({ idx, field: "codigo" }); searchProducts(item.codigo, "codigo"); } }}
-                          placeholder="Buscar..."
-                          autoComplete="off"
-                          className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
-                        {activeAutocomplete?.idx === idx && activeAutocomplete?.field === "codigo" && suggestions.length > 0 && (
-                          <div ref={autocompleteRef} className="absolute left-0 top-full z-50 mt-1 w-[420px] max-h-60 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
-                            {suggestions.map((s) => (
-                              <button key={s.id} type="button" onClick={() => handleProductSelect(idx, s)}
-                                className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs hover:bg-orange-50 dark:hover:bg-zinc-800 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
-                                <span className="shrink-0 font-mono font-semibold text-orange-600 dark:text-orange-400">{s.codigo}</span>
-                                <span className="flex-1 min-w-0">
-                                  <span className="block truncate text-zinc-800 dark:text-zinc-200">{s.descripcion}</span>
-                                  <span className="block text-[10px] text-zinc-500 mt-0.5">{s.proveedor_nombre} — {formatCurrency(s.precio_neto, s.moneda as "USD" | "ARS")}</span>
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
+                      <td className="px-2 py-1.5">
+                        <div className="flex items-center gap-1">
+                          <input value={item.codigo} onChange={(e) => updateNewPRItem(idx, "codigo", e.target.value)}
+                            placeholder="Codigo"
+                            className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                          <button type="button" onClick={() => openProductSearch(idx)} title="Buscar producto"
+                            className="shrink-0 rounded border border-zinc-200 p-1 text-zinc-400 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-300 dark:border-zinc-700 dark:hover:bg-orange-950/30 dark:hover:text-orange-400 transition-colors">
+                            <Search className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </td>
-                      <td className="px-2 py-1.5 relative">
-                        <input value={item.descripcion} onChange={(e) => handleItemSearchInput(idx, "descripcion", e.target.value)}
-                          onFocus={() => { if (item.descripcion.length >= 2) { setActiveAutocomplete({ idx, field: "descripcion" }); searchProducts(item.descripcion, "descripcion"); } }}
+                      <td className="px-2 py-1.5">
+                        <input value={item.descripcion} onChange={(e) => updateNewPRItem(idx, "descripcion", e.target.value)}
                           placeholder="Descripcion del item..."
-                          autoComplete="off"
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
-                        {activeAutocomplete?.idx === idx && activeAutocomplete?.field === "descripcion" && suggestions.length > 0 && (
-                          <div ref={autocompleteRef} className="absolute left-0 top-full z-50 mt-1 w-[420px] max-h-60 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
-                            {suggestions.map((s) => (
-                              <button key={s.id} type="button" onClick={() => handleProductSelect(idx, s)}
-                                className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs hover:bg-orange-50 dark:hover:bg-zinc-800 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
-                                <span className="shrink-0 font-mono font-semibold text-orange-600 dark:text-orange-400">{s.codigo}</span>
-                                <span className="flex-1 min-w-0">
-                                  <span className="block truncate text-zinc-800 dark:text-zinc-200">{s.descripcion}</span>
-                                  <span className="block text-[10px] text-zinc-500 mt-0.5">{s.proveedor_nombre} — {formatCurrency(s.precio_neto, s.moneda as "USD" | "ARS")}</span>
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
                       </td>
                       <td className="px-2 py-1.5">
                         <input type="number" value={item.cantidad} onChange={(e) => updateNewPRItem(idx, "cantidad", Number(e.target.value))}
@@ -1253,6 +1331,75 @@ export default function PresupuestosPage() {
           autoFocus
         />
       </Modal>
+
+      {/* ==================== PRODUCT SEARCH MODAL ==================== */}
+      {productSearchOpen && (
+        <>
+          <div className="fixed inset-0 z-[60] bg-black/40" onClick={() => setProductSearchOpen(false)} />
+          <div className="fixed inset-4 z-[60] m-auto h-fit max-h-[70vh] w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-zinc-900 flex flex-col">
+            {/* Header */}
+            <div className="flex items-center gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-700">
+              <Search className="h-5 w-5 text-zinc-400" />
+              <input
+                ref={productSearchInputRef}
+                value={productSearchQuery}
+                onChange={(e) => handleProductSearchInput(e.target.value)}
+                placeholder="Buscar por codigo o descripcion..."
+                autoFocus
+                className="flex-1 bg-transparent text-sm text-zinc-900 placeholder-zinc-400 focus:outline-none dark:text-white"
+              />
+              {productSearchLoading && <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />}
+              <button onClick={() => setProductSearchOpen(false)} className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Results */}
+            <div className="flex-1 overflow-y-auto max-h-[50vh]">
+              {productSearchResults.length > 0 ? (
+                <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                  {productSearchResults.map((s) => (
+                    <button key={s.id} type="button" onClick={() => handleProductSelect(s)}
+                      className="flex w-full items-start gap-3 px-5 py-3 text-left hover:bg-orange-50 dark:hover:bg-zinc-800/60 transition-colors">
+                      <div className="shrink-0 mt-0.5 rounded bg-zinc-100 px-2 py-1 dark:bg-zinc-800">
+                        <span className="font-mono text-xs font-bold text-orange-600 dark:text-orange-400">{s.codigo}</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200 truncate">{s.descripcion}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/30 dark:text-blue-400">
+                            {s.proveedor_nombre}
+                          </span>
+                          {s.categoria && (
+                            <span className="text-[10px] text-zinc-400">{s.categoria}</span>
+                          )}
+                          <span className="text-[10px] text-zinc-400">{s.unidad}</span>
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right">
+                        <p className="font-mono text-sm font-bold text-zinc-900 dark:text-white">{formatCurrency(s.precio_neto, s.moneda as "USD" | "ARS")}</p>
+                        <p className="text-[10px] text-zinc-400">{s.lista_nombre}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : productSearchQuery.length >= 2 && !productSearchLoading ? (
+                <div className="flex flex-col items-center justify-center py-12 text-zinc-400">
+                  <Search className="h-8 w-8 mb-2" />
+                  <p className="text-sm">No se encontraron productos</p>
+                  <p className="text-xs mt-1">Proba con otro codigo o descripcion</p>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12 text-zinc-400">
+                  <Search className="h-8 w-8 mb-2" />
+                  <p className="text-sm">Escribi al menos 2 caracteres para buscar</p>
+                  <p className="text-xs mt-1">Busca por codigo de proveedor o descripcion del producto</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }
