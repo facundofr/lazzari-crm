@@ -108,8 +108,10 @@ export type Database = {
       cliente_sucursales: {
         Row: {
           cliente_id: string
+          cp: string | null
           created_at: string
           direccion: string | null
+          email: string | null
           id: string
           localidad: string | null
           nombre: string
@@ -118,8 +120,10 @@ export type Database = {
         }
         Insert: {
           cliente_id: string
+          cp?: string | null
           created_at?: string
           direccion?: string | null
+          email?: string | null
           id?: string
           localidad?: string | null
           nombre: string
@@ -128,8 +132,10 @@ export type Database = {
         }
         Update: {
           cliente_id?: string
+          cp?: string | null
           created_at?: string
           direccion?: string | null
+          email?: string | null
           id?: string
           localidad?: string | null
           nombre?: string
@@ -161,7 +167,7 @@ export type Database = {
           cp: string | null
           created_at: string
           created_by: string | null
-          cuit: string
+          cuit: string | null
           dias_cuenta_corriente: number
           direccion: string | null
           email: string | null
@@ -185,7 +191,7 @@ export type Database = {
           cp?: string | null
           created_at?: string
           created_by?: string | null
-          cuit: string
+          cuit?: string | null
           dias_cuenta_corriente?: number
           direccion?: string | null
           email?: string | null
@@ -209,7 +215,7 @@ export type Database = {
           cp?: string | null
           created_at?: string
           created_by?: string | null
-          cuit?: string
+          cuit?: string | null
           dias_cuenta_corriente?: number
           direccion?: string | null
           email?: string | null
@@ -282,9 +288,12 @@ export type Database = {
           email: string | null
           entity_id: string
           entity_type: Database["public"]["Enums"]["contacto_entity_type"]
+          fecha_cumpleanos: string | null
           id: string
           nombre: string
+          notas: string | null
           principal: boolean
+          sucursal_id: string | null
           telefono: string | null
         }
         Insert: {
@@ -293,9 +302,12 @@ export type Database = {
           email?: string | null
           entity_id: string
           entity_type: Database["public"]["Enums"]["contacto_entity_type"]
+          fecha_cumpleanos?: string | null
           id?: string
           nombre: string
+          notas?: string | null
           principal?: boolean
+          sucursal_id?: string | null
           telefono?: string | null
         }
         Update: {
@@ -304,12 +316,23 @@ export type Database = {
           email?: string | null
           entity_id?: string
           entity_type?: Database["public"]["Enums"]["contacto_entity_type"]
+          fecha_cumpleanos?: string | null
           id?: string
           nombre?: string
+          notas?: string | null
           principal?: boolean
+          sucursal_id?: string | null
           telefono?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "contactos_sucursal_id_fkey"
+            columns: ["sucursal_id"]
+            isOneToOne: false
+            referencedRelation: "cliente_sucursales"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       extracto_movimientos: {
         Row: {
@@ -596,6 +619,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      gastos_fijos: {
+        Row: {
+          activo: boolean
+          categoria: string
+          created_at: string
+          created_by: string | null
+          descripcion: string
+          id: string
+          moneda: string
+          monto: number
+          notas: string | null
+          updated_at: string
+        }
+        Insert: {
+          activo?: boolean
+          categoria?: string
+          created_at?: string
+          created_by?: string | null
+          descripcion: string
+          id?: string
+          moneda?: string
+          monto: number
+          notas?: string | null
+          updated_at?: string
+        }
+        Update: {
+          activo?: boolean
+          categoria?: string
+          created_at?: string
+          created_by?: string | null
+          descripcion?: string
+          id?: string
+          moneda?: string
+          monto?: number
+          notas?: string | null
+          updated_at?: string
+        }
+        Relationships: []
       }
       lineas_credito: {
         Row: {
@@ -936,6 +998,54 @@ export type Database = {
         }
         Relationships: []
       }
+      objetivos: {
+        Row: {
+          activo: boolean
+          created_at: string
+          created_by: string | null
+          id: string
+          moneda: string
+          monto_target: number
+          nombre: string
+          notas: string | null
+          periodo_fin: string
+          periodo_inicio: string
+          tipo: string
+          updated_at: string
+          usuario_id: string | null
+        }
+        Insert: {
+          activo?: boolean
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          moneda?: string
+          monto_target: number
+          nombre: string
+          notas?: string | null
+          periodo_fin: string
+          periodo_inicio: string
+          tipo?: string
+          updated_at?: string
+          usuario_id?: string | null
+        }
+        Update: {
+          activo?: boolean
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          moneda?: string
+          monto_target?: number
+          nombre?: string
+          notas?: string | null
+          periodo_fin?: string
+          periodo_inicio?: string
+          tipo?: string
+          updated_at?: string
+          usuario_id?: string | null
+        }
+        Relationships: []
+      }
       orden_compra_items: {
         Row: {
           cantidad: number
@@ -1097,6 +1207,47 @@ export type Database = {
           },
         ]
       }
+      precio_historial: {
+        Row: {
+          campo: string
+          changed_by: string | null
+          created_at: string
+          entity_id: string
+          entity_type: string
+          id: string
+          valor_anterior: number | null
+          valor_nuevo: number | null
+        }
+        Insert: {
+          campo: string
+          changed_by?: string | null
+          created_at?: string
+          entity_id: string
+          entity_type: string
+          id?: string
+          valor_anterior?: number | null
+          valor_nuevo?: number | null
+        }
+        Update: {
+          campo?: string
+          changed_by?: string | null
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          id?: string
+          valor_anterior?: number | null
+          valor_nuevo?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "precio_historial_changed_by_fkey"
+            columns: ["changed_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       presupuesto_items: {
         Row: {
           cantidad: number
@@ -1206,6 +1357,7 @@ export type Database = {
           total: number
           updated_at: string
           vencimiento: string
+          vendedor_id: string | null
           version: number
         }
         Insert: {
@@ -1227,6 +1379,7 @@ export type Database = {
           total?: number
           updated_at?: string
           vencimiento: string
+          vendedor_id?: string | null
           version?: number
         }
         Update: {
@@ -1248,6 +1401,7 @@ export type Database = {
           total?: number
           updated_at?: string
           vencimiento?: string
+          vendedor_id?: string | null
           version?: number
         }
         Relationships: [
@@ -1268,6 +1422,13 @@ export type Database = {
           {
             foreignKeyName: "presupuestos_created_by_fkey"
             columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "presupuestos_vendedor_id_fkey"
+            columns: ["vendedor_id"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
@@ -1379,6 +1540,8 @@ export type Database = {
       proveedores: {
         Row: {
           activo: boolean
+          clasificacion_nota: string | null
+          clasificacion_tags: string[] | null
           condicion_iva: Database["public"]["Enums"]["condicion_iva_type"]
           created_at: string
           created_by: string | null
@@ -1390,6 +1553,7 @@ export type Database = {
           id: string
           limite_credito: number
           localidad: string | null
+          marcas: string | null
           notas: string | null
           provincia: string | null
           razon_social: string
@@ -1400,6 +1564,8 @@ export type Database = {
         }
         Insert: {
           activo?: boolean
+          clasificacion_nota?: string | null
+          clasificacion_tags?: string[] | null
           condicion_iva?: Database["public"]["Enums"]["condicion_iva_type"]
           created_at?: string
           created_by?: string | null
@@ -1411,6 +1577,7 @@ export type Database = {
           id?: string
           limite_credito?: number
           localidad?: string | null
+          marcas?: string | null
           notas?: string | null
           provincia?: string | null
           razon_social: string
@@ -1421,6 +1588,8 @@ export type Database = {
         }
         Update: {
           activo?: boolean
+          clasificacion_nota?: string | null
+          clasificacion_tags?: string[] | null
           condicion_iva?: Database["public"]["Enums"]["condicion_iva_type"]
           created_at?: string
           created_by?: string | null
@@ -1432,6 +1601,7 @@ export type Database = {
           id?: string
           limite_credito?: number
           localidad?: string | null
+          marcas?: string | null
           notas?: string | null
           provincia?: string | null
           razon_social?: string
@@ -2180,4 +2350,3 @@ export const Constants = {
     },
   },
 } as const
-

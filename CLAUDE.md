@@ -13,7 +13,7 @@ All commands run from `crm/app/`:
 ```bash
 cd crm/app
 npm run dev      # Dev server (Next.js on localhost:3000)
-npm run build    # Production build
+npm run build    # Production build (ESLint errors ignored via next.config.ts)
 npm run lint     # ESLint
 ```
 
@@ -34,8 +34,10 @@ No test framework is configured yet.
 ```
 crm/app/src/
   app/(crm)/              # Route group — 11 CRM modules behind auth
+  app/api/ai/             # AI agent API route (Claude + Supabase tool use)
+  app/api/parse-lista-precios/ # PDF price list parser
   components/layout/      # Sidebar, Header, AIWidget
-  components/ui/          # Reusable: Badge, Card, StatCard, DataTable, SmartFilters
+  components/ui/          # Badge, Card, StatCard, DataTable, SmartFilters, Modal, Toast, Input, EmptyState
   lib/supabase/queries/   # Data access layer — one file per module
   lib/auth-context.tsx    # UserProvider context (profile, role, sidebar state)
   lib/theme-context.tsx   # ThemeProvider for dark/light mode toggle
@@ -59,7 +61,18 @@ dashboard, clientes, proveedores, presupuestos, ordenes-compra, stock, facturaci
 
 ### Data Fetching Pattern
 
-All pages use a **hybrid fallback approach**: attempt Supabase query → fall back to mock data on error. Some pages (like presupuestos) have progressive degradation: try with joins → try without joins → try minimal select → mock. When adding new features, maintain this pattern. Each page maps Supabase snake_case rows to TypeScript camelCase interfaces via local `mapTo*()` functions defined in the page file itself.
+All pages use a **hybrid fallback approach**: attempt Supabase query → fall back to mock data on error. Some pages (like presupuestos) have progressive degradation: try with joins → try without joins → try minimal select → mock. When adding new features, maintain this pattern.
+
+Each page defines its own `*Row` interface for the raw Supabase response and a `mapTo*()` function to convert snake_case DB rows to camelCase TypeScript interfaces. Example from clientes:
+
+```
+interface ClienteRow { id: string; razon_social: string; ... }  // raw DB shape
+function mapToClient(row: ClienteRow): Client { ... }            // defined in the page file
+```
+
+### AI Agent (`api/ai/route.ts`)
+
+Server-side API route that uses Claude with Supabase tool use. The AI can run SELECT/INSERT/UPDATE queries against the database, with role-based write permissions enforced via `TABLE_ACCESS` and `ROLE_HIERARCHY` maps. The floating `AIWidget` component (`components/layout/ai-widget.tsx`) provides the chat UI.
 
 ### Role System
 
@@ -74,13 +87,14 @@ Supabase project ID: `ycuzszzskqatlegtbgbq`. Full schema plan in `SUPABASE_PLAN.
 - Auto-numbering via PG function `generate_document_number()` (e.g., `PR-2026-0049`)
 - RLS enabled on all tables; role-based access from `profiles`
 - Some FK joins (e.g., `created_by`) may be null — avoid inner joins on nullable FKs
-- Polimorphic contacts table: `contactos` with `entity_type` (cliente/proveedor) and `entity_id`
+- Polymorphic contacts table: `contactos` with `entity_type` (cliente/proveedor) and `entity_id`
 
 ### Environment Variables
 
 ```
-NEXT_PUBLIC_SUPABASE_URL
-NEXT_PUBLIC_SUPABASE_ANON_KEY
+NEXT_PUBLIC_SUPABASE_URL      # Supabase project URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY # Supabase anonymous key
+ANTHROPIC_API_KEY             # Server-side only, used by api/ai route
 ```
 
 ### Path Alias
@@ -108,4 +122,5 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY
 - `crm/app/src/lib/mock-data.ts` — Comprehensive mock dataset (5 clients, 8 products, 6 suppliers, etc.)
 - `crm/app/src/components/ui/data-table.tsx` — Generic sortable/paginated table used by all pages
 - `crm/app/src/components/ui/smart-filters.tsx` — Reusable filter bar (select, date-range, number-range)
+- `crm/app/src/app/api/ai/route.ts` — AI agent with Claude tool use + Supabase DB access
 - `crm/app/AGENTS.md` — Next.js 15 warning: read `node_modules/next/dist/docs/` before using new APIs

@@ -9,7 +9,7 @@ import { DataTable } from "@/components/ui/data-table";
 import {
   DollarSign, FileText, TrendingUp, Percent,
   ArrowRight, Clock, AlertTriangle, Package,
-  Loader2, Users,
+  Loader2, Users, Target,
 } from "lucide-react";
 import { formatCurrency, formatDateTime } from "@/lib/utils";
 import {
@@ -26,9 +26,11 @@ import {
   ventasPorMes as mockVentasPorMes,
   presupuestosPorEstado as mockPresupuestosPorEstado,
   topClientes as mockTopClientes,
+  mockGastosFijos,
+  mockObjetivos,
 } from "@/lib/mock-data";
 import { supabase } from "@/lib/supabase/client";
-import type { Presupuesto, ActivityLog, Alert } from "@/lib/types";
+import type { Presupuesto, ActivityLog, Alert, GastoFijo, Objetivo } from "@/lib/types";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info" }> = {
   borrador: { label: "Borrador", variant: "outline" },
@@ -87,6 +89,8 @@ export default function DashboardPage() {
   const [alerts, setAlerts] = useState(mockAlerts);
   const [topClientes, setTopClientes] = useState(mockTopClientes);
   const [activity, setActivity] = useState(mockActivity);
+  const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>(mockGastosFijos);
+  const [objetivos, setObjetivos] = useState<Objetivo[]>(mockObjetivos);
 
   useEffect(() => {
     async function fetchAll() {
@@ -99,6 +103,8 @@ export default function DashboardPage() {
           topClientesResult,
           activityResult,
           facturasResult,
+          gastosFijosResult,
+          objetivosResult,
         ] = await Promise.all([
           supabase.rpc("get_dashboard_kpis"),
           supabase.from("presupuestos").select("estado"),
@@ -126,6 +132,16 @@ export default function DashboardPage() {
             .from("facturas")
             .select("fecha, total")
             .neq("estado", "anulada"),
+          // Gastos fijos
+          supabase
+            .from("gastos_fijos")
+            .select("*")
+            .eq("activo", true),
+          // Objetivos activos
+          supabase
+            .from("objetivos")
+            .select("*, profiles:usuario_id(full_name)")
+            .eq("activo", true),
         ]);
 
         // --- KPIs ---
@@ -216,6 +232,26 @@ export default function DashboardPage() {
             details: a.details, createdAt: a.created_at,
           })));
         }
+
+        // --- Gastos fijos ---
+        if (!gastosFijosResult.error && gastosFijosResult.data?.length) {
+          setGastosFijos(gastosFijosResult.data.map((g: any) => ({
+            id: g.id, descripcion: g.descripcion, categoria: g.categoria,
+            monto: Number(g.monto), moneda: g.moneda, activo: g.activo,
+            notas: g.notas ?? "", createdAt: g.created_at,
+          })));
+        }
+
+        // --- Objetivos ---
+        if (!objetivosResult.error && objetivosResult.data?.length) {
+          setObjetivos(objetivosResult.data.map((o: any) => ({
+            id: o.id, nombre: o.nombre, tipo: o.tipo,
+            montoTarget: Number(o.monto_target), moneda: o.moneda,
+            periodoInicio: o.periodo_inicio, periodoFin: o.periodo_fin,
+            usuarioId: o.usuario_id, usuarioNombre: o.profiles?.full_name ?? null,
+            activo: o.activo, notas: o.notas ?? "", createdAt: o.created_at,
+          })));
+        }
       } catch (e) {
         console.error("Error fetching dashboard data:", e);
       } finally {
@@ -263,6 +299,21 @@ export default function DashboardPage() {
   const conversionChange = calcChange(kpi.tasaConversion, kpi.tasaConversionAnterior);
 
   const firstName = profile?.full_name?.split(" ")[0] || "Usuario";
+  const userRole = profile?.role ?? "viewer";
+  const isAdmin = userRole === "super_admin" || userRole === "admin";
+
+  // Gastos fijos calculation (solo ARS por simplicidad)
+  const totalGastosFijos = gastosFijos.filter((g) => g.activo && g.moneda === "ARS").reduce((s, g) => s + g.monto, 0);
+  const facturadoMes = kpi.facturadoMes;
+  const coberturaPct = totalGastosFijos > 0 ? Math.min(Math.round((facturadoMes / totalGastosFijos) * 100), 999) : 0;
+  const faltaCubrir = Math.max(totalGastosFijos - facturadoMes, 0);
+
+  // Objetivos relevantes: admin ve todos, vendedor ve los suyos o globales
+  const today = new Date().toISOString().split("T")[0];
+  const objetivosActivos = objetivos.filter((o) =>
+    o.activo && o.periodoInicio <= today && o.periodoFin >= today &&
+    (isAdmin || !o.usuarioId || o.usuarioId === profile?.id)
+  );
 
   return (
     <>
@@ -327,6 +378,106 @@ export default function DashboardPage() {
             iconColor="text-violet-600"
           />
         </div>
+
+        {/* Cobertura de gastos + Objetivos */}
+        {(totalGastosFijos > 0 || objetivosActivos.length > 0) && (
+          <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
+            {/* Cobertura de gastos - solo admin */}
+            {isAdmin && totalGastosFijos > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Cobertura de gastos fijos</CardTitle>
+                  <Link href="/finanzas" className="flex items-center gap-1 text-xs font-medium text-orange-500 hover:text-orange-600">
+                    Gestionar <ArrowRight className="h-3 w-3" />
+                  </Link>
+                </CardHeader>
+                <div className="px-6 pb-5 space-y-4">
+                  <div className="flex items-end justify-between">
+                    <div>
+                      <p className="text-2xl font-bold text-zinc-900 dark:text-white">{coberturaPct}%</p>
+                      <p className="text-xs text-zinc-500">
+                        {formatCurrency(facturadoMes)} de {formatCurrency(totalGastosFijos)}
+                      </p>
+                    </div>
+                    {faltaCubrir > 0 ? (
+                      <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
+                        Faltan {formatCurrency(faltaCubrir)}
+                      </p>
+                    ) : (
+                      <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                        Gastos cubiertos
+                      </p>
+                    )}
+                  </div>
+                  <div className="h-3 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                    <div
+                      className={`h-3 rounded-full transition-all duration-500 ${
+                        coberturaPct >= 100 ? "bg-emerald-500" : coberturaPct >= 60 ? "bg-amber-500" : "bg-red-500"
+                      }`}
+                      style={{ width: `${Math.min(coberturaPct, 100)}%` }}
+                    />
+                  </div>
+                  {isAdmin && (
+                    <div className="grid grid-cols-2 gap-2 pt-1">
+                      <div className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
+                        <p className="text-[10px] uppercase tracking-wider text-zinc-500">Ventas del mes</p>
+                        <p className="text-sm font-semibold font-mono">{formatCurrency(facturadoMes)}</p>
+                      </div>
+                      <div className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
+                        <p className="text-[10px] uppercase tracking-wider text-zinc-500">Gastos fijos</p>
+                        <p className="text-sm font-semibold font-mono">{formatCurrency(totalGastosFijos)}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            )}
+
+            {/* Objetivos */}
+            {objetivosActivos.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <Target className="h-4 w-4 text-orange-500" />
+                    <CardTitle>Objetivos</CardTitle>
+                  </div>
+                </CardHeader>
+                <div className="px-6 pb-5 space-y-4">
+                  {objetivosActivos.map((obj) => {
+                    // Para vendedores: calcular progreso como % del facturado vs target
+                    const progreso = obj.montoTarget > 0 ? Math.min(Math.round((facturadoMes / obj.montoTarget) * 100), 999) : 0;
+                    return (
+                      <div key={obj.id} className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">{obj.nombre}</span>
+                            {obj.usuarioNombre && (
+                              <span className="text-[10px] rounded-full bg-zinc-100 px-2 py-0.5 text-zinc-500 dark:bg-zinc-800">{obj.usuarioNombre}</span>
+                            )}
+                          </div>
+                          <span className="text-sm font-bold text-zinc-900 dark:text-white">{progreso}%</span>
+                        </div>
+                        <div className="h-2.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+                          <div
+                            className={`h-2.5 rounded-full transition-all duration-500 ${
+                              progreso >= 100 ? "bg-emerald-500" : progreso >= 60 ? "bg-orange-500" : "bg-amber-500"
+                            }`}
+                            style={{ width: `${Math.min(progreso, 100)}%` }}
+                          />
+                        </div>
+                        {isAdmin && (
+                          <p className="text-[10px] text-zinc-500">
+                            {formatCurrency(facturadoMes, obj.moneda)} / {formatCurrency(obj.montoTarget, obj.moneda)}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+          </div>
+        )}
 
         <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
           {/* Facturación mensual - Recharts BarChart */}

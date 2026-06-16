@@ -7,9 +7,9 @@ import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { formatCurrency } from "@/lib/utils";
-import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito } from "@/lib/mock-data";
-import type { Movimiento, ExtractoMovimiento, LineaCredito } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock } from "lucide-react";
+import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
+import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
@@ -23,7 +23,7 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   efectivo: { label: "Efectivo", variant: "outline", icon: Wallet },
 };
 
-type FinanzasTab = "movimientos" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito" | "vencimientos";
+type FinanzasTab = "movimientos" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito" | "vencimientos" | "gastos_fijos" | "objetivos";
 
 // ── Helper types for Supabase rows (snake_case) ──
 interface MovimientoRow {
@@ -120,6 +120,14 @@ export default function FinanzasPage() {
   const [ccProveedores, setCcProveedores] = useState<CCRow[]>([]);
   const [extractos, setExtractos] = useState<ExtractoRow[]>([]);
   const [lineasCredito, setLineasCredito] = useState<LineaCreditoRow[]>([]);
+  const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>(mockGastosFijos);
+  const [objetivos, setObjetivos] = useState<Objetivo[]>(mockObjetivos);
+
+  // Gastos fijos modal
+  const [gastoModalOpen, setGastoModalOpen] = useState(false);
+  const [editingGasto, setEditingGasto] = useState<GastoFijo | null>(null);
+  const [gastoForm, setGastoForm] = useState({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS" as "USD" | "ARS", notas: "" });
+  const [gastoSaving, setGastoSaving] = useState(false);
 
   // ── SmartFilters for Movimientos tab ──
   const movFilterConfigs: FilterConfig[] = [
@@ -158,7 +166,7 @@ export default function FinanzasPage() {
   const fetchData = useCallback(async () => {
       setLoading(true);
       try {
-        const [movRes, ccCliRes, ccProvRes, extRes, lcRes] = await Promise.all([
+        const [movRes, ccCliRes, ccProvRes, extRes, lcRes, gfRes, objRes] = await Promise.all([
           supabase
             .from("movimientos")
             .select(`*, clientes(razon_social), proveedores(razon_social)`)
@@ -177,6 +185,14 @@ export default function FinanzasPage() {
             .from("lineas_credito")
             .select(`*, proveedores(razon_social)`)
             .order("vencimiento"),
+          supabase
+            .from("gastos_fijos")
+            .select("*")
+            .order("categoria"),
+          supabase
+            .from("objetivos")
+            .select("*, profiles:usuario_id(full_name)")
+            .order("periodo_inicio", { ascending: false }),
         ]);
 
         // Use Supabase data if available, otherwise fall back to mock data mapped to snake_case
@@ -302,6 +318,24 @@ export default function FinanzasPage() {
             }))
           );
         }
+
+        if (gfRes.data && gfRes.data.length > 0) {
+          setGastosFijos(gfRes.data.map((g: any) => ({
+            id: g.id, descripcion: g.descripcion, categoria: g.categoria,
+            monto: Number(g.monto), moneda: g.moneda, activo: g.activo,
+            notas: g.notas ?? "", createdAt: g.created_at,
+          })));
+        }
+
+        if (objRes.data && objRes.data.length > 0) {
+          setObjetivos(objRes.data.map((o: any) => ({
+            id: o.id, nombre: o.nombre, tipo: o.tipo,
+            montoTarget: Number(o.monto_target), moneda: o.moneda,
+            periodoInicio: o.periodo_inicio, periodoFin: o.periodo_fin,
+            usuarioId: o.usuario_id, usuarioNombre: o.profiles?.full_name ?? null,
+            activo: o.activo, notas: o.notas ?? "", createdAt: o.created_at,
+          })));
+        }
       } catch (err) {
         console.error("Error fetching finanzas data:", err);
         // On error, mock data fallback is already set above (or stays empty).
@@ -350,6 +384,62 @@ export default function FinanzasPage() {
       await fetchData();
     } catch (err) {
       console.error("Error conciliando:", err);
+    }
+  }
+
+  function openGastoModal(gasto?: GastoFijo) {
+    if (gasto) {
+      setEditingGasto(gasto);
+      setGastoForm({ descripcion: gasto.descripcion, categoria: gasto.categoria, monto: gasto.monto, moneda: gasto.moneda, notas: gasto.notas });
+    } else {
+      setEditingGasto(null);
+      setGastoForm({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS", notas: "" });
+    }
+    setGastoModalOpen(true);
+  }
+
+  async function handleSaveGasto() {
+    if (!gastoForm.descripcion.trim() || gastoForm.monto <= 0) return;
+    setGastoSaving(true);
+    try {
+      if (editingGasto) {
+        const { error } = await supabase.from("gastos_fijos").update({
+          descripcion: gastoForm.descripcion, categoria: gastoForm.categoria,
+          monto: gastoForm.monto, moneda: gastoForm.moneda, notas: gastoForm.notas,
+        } as any).eq("id", editingGasto.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("gastos_fijos").insert({
+          descripcion: gastoForm.descripcion, categoria: gastoForm.categoria,
+          monto: gastoForm.monto, moneda: gastoForm.moneda, notas: gastoForm.notas,
+        } as any);
+        if (error) throw error;
+      }
+      setGastoModalOpen(false);
+      await fetchData();
+    } catch (err) {
+      console.error("Error saving gasto:", err);
+    } finally {
+      setGastoSaving(false);
+    }
+  }
+
+  async function handleToggleGasto(id: string, activo: boolean) {
+    try {
+      await supabase.from("gastos_fijos").update({ activo: !activo } as any).eq("id", id);
+      await fetchData();
+    } catch (err) {
+      console.error("Error toggling gasto:", err);
+    }
+  }
+
+  async function handleDeleteGasto(id: string) {
+    if (!confirm("Seguro que queres eliminar este gasto fijo?")) return;
+    try {
+      await supabase.from("gastos_fijos").delete().eq("id", id);
+      await fetchData();
+    } catch (err) {
+      console.error("Error deleting gasto:", err);
     }
   }
 
@@ -407,6 +497,8 @@ export default function FinanzasPage() {
     { id: "extractos", label: "Extractos" },
     { id: "lineas_credito", label: "Lineas credito" },
     { id: "vencimientos", label: "Vencimientos" },
+    { id: "gastos_fijos", label: "Gastos fijos" },
+    { id: "objetivos", label: "Objetivos" },
   ];
 
   if (loading) {
@@ -866,7 +958,147 @@ export default function FinanzasPage() {
             </>
           );
         })()}
+
+        {/* ── Gastos fijos ── */}
+        {tab === "gastos_fijos" && (
+          <>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-zinc-500">
+                  Total mensual: <span className="font-bold font-mono text-zinc-900 dark:text-white">
+                    {formatCurrency(gastosFijos.filter((g) => g.activo && g.moneda === "ARS").reduce((s, g) => s + g.monto, 0))}
+                  </span>
+                </p>
+              </div>
+              <button onClick={() => openGastoModal()} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
+                <Plus className="h-4 w-4" /> Nuevo gasto
+              </button>
+            </div>
+            <div className="space-y-2">
+              {gastosFijos.map((g) => (
+                <div key={g.id} className={`flex items-center gap-4 rounded-lg border p-4 ${g.activo ? "border-zinc-200 dark:border-zinc-700" : "border-zinc-100 dark:border-zinc-800 opacity-50"}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-zinc-900 dark:text-white">{g.descripcion}</span>
+                      <Badge variant="outline">{g.categoria}</Badge>
+                      {!g.activo && <Badge variant="danger">Inactivo</Badge>}
+                    </div>
+                    {g.notas && <p className="text-xs text-zinc-500 mt-0.5">{g.notas}</p>}
+                  </div>
+                  <span className="font-mono font-bold text-lg text-zinc-900 dark:text-white">
+                    {formatCurrency(g.monto, g.moneda)}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => openGastoModal(g)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Editar">
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => handleToggleGasto(g.id, g.activo)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={g.activo ? "Desactivar" : "Activar"}>
+                      {g.activo ? <X className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
+                    </button>
+                    <button onClick={() => handleDeleteGasto(g.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {gastosFijos.length === 0 && (
+                <Card className="text-center py-12">
+                  <Wallet className="mx-auto h-10 w-10 text-zinc-300 dark:text-zinc-600" />
+                  <p className="mt-3 text-sm text-zinc-500">No hay gastos fijos cargados</p>
+                  <button onClick={() => openGastoModal()} className="mt-3 text-sm text-orange-500 hover:text-orange-600 font-medium">Agregar el primero</button>
+                </Card>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ── Objetivos ── */}
+        {tab === "objetivos" && (
+          <>
+            <div className="space-y-4">
+              {objetivos.map((obj) => {
+                const isActive = obj.activo && obj.periodoInicio <= new Date().toISOString().split("T")[0] && obj.periodoFin >= new Date().toISOString().split("T")[0];
+                return (
+                  <Card key={obj.id} className={!isActive ? "opacity-50" : ""}>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Target className="h-4 w-4 text-orange-500" />
+                        <span className="text-sm font-semibold text-zinc-900 dark:text-white">{obj.nombre}</span>
+                        <Badge variant={isActive ? "success" : "outline"}>{isActive ? "Activo" : "Inactivo"}</Badge>
+                        <Badge variant="info">{obj.tipo}</Badge>
+                      </div>
+                      <span className="font-mono font-bold text-lg">{formatCurrency(obj.montoTarget, obj.moneda)}</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div><span className="text-zinc-500">Periodo:</span> <span className="font-medium">{formatDate(obj.periodoInicio)} — {formatDate(obj.periodoFin)}</span></div>
+                      <div><span className="text-zinc-500">Asignado a:</span> <span className="font-medium">{obj.usuarioNombre ?? "Global"}</span></div>
+                      <div><span className="text-zinc-500">Moneda:</span> <span className="font-medium">{obj.moneda}</span></div>
+                      {obj.notas && <div><span className="text-zinc-500">Notas:</span> <span className="font-medium">{obj.notas}</span></div>}
+                    </div>
+                  </Card>
+                );
+              })}
+              {objetivos.length === 0 && (
+                <Card className="text-center py-12">
+                  <Target className="mx-auto h-10 w-10 text-zinc-300 dark:text-zinc-600" />
+                  <p className="mt-3 text-sm text-zinc-500">No hay objetivos configurados</p>
+                </Card>
+              )}
+            </div>
+          </>
+        )}
       </div>
+
+      {/* Nuevo gasto fijo modal */}
+      {gastoModalOpen && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setGastoModalOpen(false)} />
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-bold dark:text-white">{editingGasto ? "Editar gasto fijo" : "Nuevo gasto fijo"}</h2>
+              <button onClick={() => setGastoModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Descripcion *</label>
+                <input value={gastoForm.descripcion} onChange={(e) => setGastoForm({ ...gastoForm, descripcion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Alquiler oficina" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Categoria</label>
+                <select value={gastoForm.categoria} onChange={(e) => setGastoForm({ ...gastoForm, categoria: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  {["Alquiler", "Sueldos", "Servicios", "Seguros", "Profesionales", "Logística", "Impuestos", "Marketing", "Otros"].map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Monto mensual *</label>
+                  <input type="number" value={gastoForm.monto || ""} onChange={(e) => setGastoForm({ ...gastoForm, monto: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Moneda</label>
+                  <select value={gastoForm.moneda} onChange={(e) => setGastoForm({ ...gastoForm, moneda: e.target.value as "ARS" | "USD" })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    <option value="ARS">ARS</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Notas</label>
+                <input value={gastoForm.notas} onChange={(e) => setGastoForm({ ...gastoForm, notas: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Notas opcionales..." />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+              <button onClick={() => setGastoModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
+              <button onClick={handleSaveGasto} disabled={gastoSaving || !gastoForm.descripcion.trim() || gastoForm.monto <= 0} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                {gastoSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                {editingGasto ? "Guardar cambios" : "Crear gasto"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Nuevo movimiento modal */}
       {modalOpen && (

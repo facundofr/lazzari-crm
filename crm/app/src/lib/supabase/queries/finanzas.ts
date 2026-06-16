@@ -69,3 +69,58 @@ export async function deleteMovimiento(id: string) {
   const { error } = await supabase.from("movimientos").delete().eq("id", id);
   if (error) throw error;
 }
+
+// ── Gastos fijos ──────────────────────────────────────────────
+
+export async function getGastosFijos() {
+  const { data, error } = await supabase
+    .from("gastos_fijos")
+    .select("*")
+    .order("categoria")
+    .order("descripcion");
+  if (error) throw error;
+  return data;
+}
+
+export async function createGastoFijo(gasto: Record<string, unknown>) {
+  const { data, error } = await supabase.from("gastos_fijos").insert(gasto as any).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateGastoFijo(id: string, gasto: Record<string, unknown>) {
+  const { error } = await supabase.from("gastos_fijos").update(gasto as any).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteGastoFijo(id: string) {
+  const { error } = await supabase.from("gastos_fijos").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// ── Objetivos ─────────────────────────────────────────────────
+
+export async function getObjetivos() {
+  const { data, error } = await supabase
+    .from("objetivos")
+    .select("*, profiles:usuario_id(full_name)")
+    .order("periodo_inicio", { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function createObjetivo(obj: Record<string, unknown>) {
+  const { data, error } = await supabase.from("objetivos").insert(obj as any).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateObjetivo(id: string, obj: Record<string, unknown>) {
+  const { error } = await supabase.from("objetivos").update(obj as any).eq("id", id);
+  if (error) throw error;
+}
+
+export async function deleteObjetivo(id: string) {
+  const { error } = await supabase.from("objetivos").delete().eq("id", id);
+  if (error) throw error;
+}

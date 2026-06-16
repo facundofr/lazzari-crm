@@ -16,7 +16,7 @@ import {
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
   Printer,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { useUser } from "@/lib/auth-context";
 
@@ -127,6 +127,20 @@ interface NewPRItem {
   iva_porcentaje: number;
 }
 
+// Autocomplete result from lista_precios_items
+interface ProductSuggestion {
+  id: string;
+  codigo: string;
+  descripcion: string;
+  categoria: string;
+  unidad: string;
+  precio_neto: number;
+  precio: number;
+  proveedor_nombre: string;
+  lista_nombre: string;
+  moneda: string;
+}
+
 function calcItemTotals(item: NewPRItem) {
   const subtotal = item.cantidad * item.precio_venta;
   const iva = subtotal * (item.iva_porcentaje / 100);
@@ -169,6 +183,87 @@ export default function PresupuestosPage() {
     observaciones: "",
     items: [{ ...emptyItem }] as NewPRItem[],
   });
+
+  // Product autocomplete
+  const [suggestions, setSuggestions] = useState<ProductSuggestion[]>([]);
+  const [activeAutocomplete, setActiveAutocomplete] = useState<{ idx: number; field: "codigo" | "descripcion" } | null>(null);
+  const autocompleteRef = useRef<HTMLDivElement>(null);
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  async function searchProducts(query: string, field: "codigo" | "descripcion") {
+    if (query.length < 2) { setSuggestions([]); return; }
+    try {
+      const col = field === "codigo" ? "codigo" : "descripcion";
+      const { data, error } = await supabase
+        .from("lista_precios_items")
+        .select(`
+          id, codigo, descripcion, categoria, unidad, precio, precio_neto,
+          listas_precios:lista_id(nombre, moneda, proveedor_id, proveedores:proveedor_id(razon_social))
+        `)
+        .ilike(col, `%${query}%`)
+        .limit(15);
+
+      if (error || !data) { setSuggestions([]); return; }
+
+      const mapped: ProductSuggestion[] = data
+        .filter((d: any) => d.listas_precios)
+        .map((d: any) => ({
+          id: d.id,
+          codigo: d.codigo ?? "",
+          descripcion: d.descripcion ?? "",
+          categoria: d.categoria ?? "",
+          unidad: d.unidad ?? "UN",
+          precio_neto: d.precio_neto ?? d.precio ?? 0,
+          precio: d.precio ?? 0,
+          proveedor_nombre: d.listas_precios?.proveedores?.razon_social ?? "—",
+          lista_nombre: d.listas_precios?.nombre ?? "",
+          moneda: d.listas_precios?.moneda ?? "ARS",
+        }));
+      setSuggestions(mapped);
+    } catch {
+      setSuggestions([]);
+    }
+  }
+
+  function handleProductSelect(idx: number, suggestion: ProductSuggestion) {
+    setNewPR((prev) => {
+      const items = [...prev.items];
+      const markup = items[idx].markup_porcentaje || prev.markup_general;
+      const precioVenta = Number((suggestion.precio_neto * (1 + markup / 100)).toFixed(2));
+      items[idx] = {
+        ...items[idx],
+        codigo: suggestion.codigo,
+        descripcion: suggestion.descripcion,
+        categoria: suggestion.categoria,
+        unidad: suggestion.unidad,
+        precio_costo: suggestion.precio_neto,
+        markup_porcentaje: markup,
+        precio_venta: precioVenta,
+      };
+      return { ...prev, items };
+    });
+    setSuggestions([]);
+    setActiveAutocomplete(null);
+  }
+
+  function handleItemSearchInput(idx: number, field: "codigo" | "descripcion", value: string) {
+    updateNewPRItem(idx, field, value);
+    setActiveAutocomplete({ idx, field });
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(() => searchProducts(value, field), 300);
+  }
+
+  // Close autocomplete on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (autocompleteRef.current && !autocompleteRef.current.contains(e.target as Node)) {
+        setSuggestions([]);
+        setActiveAutocomplete(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
 
   // Smart filters
   const filterConfigs: FilterConfig[] = [
@@ -1021,14 +1116,47 @@ export default function PresupuestosPage() {
                   const belowCost = item.precio_venta > 0 && item.precio_venta < item.precio_costo;
                   return (
                     <tr key={idx} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
-                      <td className="px-2 py-1.5">
-                        <input value={item.codigo} onChange={(e) => updateNewPRItem(idx, "codigo", e.target.value)}
+                      <td className="px-2 py-1.5 relative">
+                        <input value={item.codigo} onChange={(e) => handleItemSearchInput(idx, "codigo", e.target.value)}
+                          onFocus={() => { if (item.codigo.length >= 2) { setActiveAutocomplete({ idx, field: "codigo" }); searchProducts(item.codigo, "codigo"); } }}
+                          placeholder="Buscar..."
+                          autoComplete="off"
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                        {activeAutocomplete?.idx === idx && activeAutocomplete?.field === "codigo" && suggestions.length > 0 && (
+                          <div ref={autocompleteRef} className="absolute left-0 top-full z-50 mt-1 w-[420px] max-h-60 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+                            {suggestions.map((s) => (
+                              <button key={s.id} type="button" onClick={() => handleProductSelect(idx, s)}
+                                className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs hover:bg-orange-50 dark:hover:bg-zinc-800 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
+                                <span className="shrink-0 font-mono font-semibold text-orange-600 dark:text-orange-400">{s.codigo}</span>
+                                <span className="flex-1 min-w-0">
+                                  <span className="block truncate text-zinc-800 dark:text-zinc-200">{s.descripcion}</span>
+                                  <span className="block text-[10px] text-zinc-500 mt-0.5">{s.proveedor_nombre} — {formatCurrency(s.precio_neto, s.moneda as "USD" | "ARS")}</span>
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </td>
-                      <td className="px-2 py-1.5">
-                        <input value={item.descripcion} onChange={(e) => updateNewPRItem(idx, "descripcion", e.target.value)}
+                      <td className="px-2 py-1.5 relative">
+                        <input value={item.descripcion} onChange={(e) => handleItemSearchInput(idx, "descripcion", e.target.value)}
+                          onFocus={() => { if (item.descripcion.length >= 2) { setActiveAutocomplete({ idx, field: "descripcion" }); searchProducts(item.descripcion, "descripcion"); } }}
                           placeholder="Descripcion del item..."
+                          autoComplete="off"
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                        {activeAutocomplete?.idx === idx && activeAutocomplete?.field === "descripcion" && suggestions.length > 0 && (
+                          <div ref={autocompleteRef} className="absolute left-0 top-full z-50 mt-1 w-[420px] max-h-60 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+                            {suggestions.map((s) => (
+                              <button key={s.id} type="button" onClick={() => handleProductSelect(idx, s)}
+                                className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs hover:bg-orange-50 dark:hover:bg-zinc-800 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
+                                <span className="shrink-0 font-mono font-semibold text-orange-600 dark:text-orange-400">{s.codigo}</span>
+                                <span className="flex-1 min-w-0">
+                                  <span className="block truncate text-zinc-800 dark:text-zinc-200">{s.descripcion}</span>
+                                  <span className="block text-[10px] text-zinc-500 mt-0.5">{s.proveedor_nombre} — {formatCurrency(s.precio_neto, s.moneda as "USD" | "ARS")}</span>
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </td>
                       <td className="px-2 py-1.5">
                         <input type="number" value={item.cantidad} onChange={(e) => updateNewPRItem(idx, "cantidad", Number(e.target.value))}

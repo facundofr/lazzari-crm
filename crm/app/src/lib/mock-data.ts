@@ -429,3 +429,17 @@ export const topClientes = [
   { nombre: "Metalúrgica San Martín", facturado: 4800000 },
   { nombre: "Agro Insumos Litoral", facturado: 2100000 },
 ];
+
+export const mockGastosFijos: import("./types").GastoFijo[] = [
+  { id: "gf-1", descripcion: "Alquiler oficina/deposito", categoria: "Alquiler", monto: 1200000, moneda: "ARS", activo: true, notas: "", createdAt: "2026-01-01" },
+  { id: "gf-2", descripcion: "Sueldos y cargas sociales", categoria: "Sueldos", monto: 4500000, moneda: "ARS", activo: true, notas: "4 empleados", createdAt: "2026-01-01" },
+  { id: "gf-3", descripcion: "Servicios (luz, gas, internet)", categoria: "Servicios", monto: 280000, moneda: "ARS", activo: true, notas: "", createdAt: "2026-01-01" },
+  { id: "gf-4", descripcion: "Seguro local y mercadería", categoria: "Seguros", monto: 350000, moneda: "ARS", activo: true, notas: "", createdAt: "2026-01-01" },
+  { id: "gf-5", descripcion: "Contador / Estudio contable", categoria: "Profesionales", monto: 400000, moneda: "ARS", activo: true, notas: "", createdAt: "2026-01-01" },
+  { id: "gf-6", descripcion: "Combustible y logística", categoria: "Logística", monto: 600000, moneda: "ARS", activo: true, notas: "", createdAt: "2026-01-01" },
+];
+
+export const mockObjetivos: import("./types").Objetivo[] = [
+  { id: "obj-1", nombre: "Ventas Junio 2026", tipo: "ventas", montoTarget: 15000000, moneda: "ARS", periodoInicio: "2026-06-01", periodoFin: "2026-06-30", usuarioId: null, activo: true, notas: "Objetivo global", createdAt: "2026-06-01" },
+  { id: "obj-2", nombre: "Facturación Q2 2026", tipo: "facturacion", montoTarget: 40000000, moneda: "ARS", periodoInicio: "2026-04-01", periodoFin: "2026-06-30", usuarioId: null, activo: true, notas: "", createdAt: "2026-04-01" },
+];

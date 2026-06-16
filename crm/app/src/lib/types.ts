@@ -413,6 +413,36 @@ export interface LineaCredito {
   createdAt: string;
 }
 
+// ── Gastos fijos ────────────────────────────────────────────────
+export interface GastoFijo {
+  id: string;
+  descripcion: string;
+  categoria: string;
+  monto: number;
+  moneda: "USD" | "ARS";
+  activo: boolean;
+  notas: string;
+  createdAt: string;
+}
+
+// ── Objetivos ───────────────────────────────────────────────────
+export type ObjetivoTipo = "ventas" | "facturacion" | "cobranza" | "margen";
+
+export interface Objetivo {
+  id: string;
+  nombre: string;
+  tipo: ObjetivoTipo;
+  montoTarget: number;
+  moneda: "USD" | "ARS";
+  periodoInicio: string;
+  periodoFin: string;
+  usuarioId: string | null;
+  usuarioNombre?: string;
+  activo: boolean;
+  notas: string;
+  createdAt: string;
+}
+
 export type AlertType = "vencimiento_pr" | "stock_bajo" | "cc_vencida" | "cheque_proximo" | "seguimiento";
 
 export interface Alert {
