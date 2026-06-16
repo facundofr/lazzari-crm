@@ -99,12 +99,7 @@ export default function ReportesPage() {
             });
           setVentasMensuales(sorted);
         } else {
-          // Fallback
-          setVentasMensuales([
-            { mes: "Ene", total: 2500000 }, { mes: "Feb", total: 3100000 },
-            { mes: "Mar", total: 2800000 }, { mes: "Abr", total: 3500000 },
-            { mes: "May", total: 4200000 }, { mes: "Jun", total: 3800000 },
-          ]);
+          setVentasMensuales([]);
         }
 
         // PR por estado
@@ -142,13 +137,9 @@ export default function ReportesPage() {
           setTopClientesData(topClientes);
         }
       } catch {
-        // Fallback to mock data
-        setVentasMensuales([
-          { mes: "Ene", total: 2500000 }, { mes: "Feb", total: 3100000 },
-          { mes: "Mar", total: 2800000 }, { mes: "Abr", total: 3500000 },
-        ]);
-        setPrEstadoData(presupuestosPorEstado.map((p) => ({ name: p.estado, value: p.cantidad })));
-        setTopClientesData(topClientes);
+        setVentasMensuales([]);
+        setPrEstadoData([]);
+        setTopClientesData([]);
       } finally {
         setLoading(false);
       }
@@ -410,8 +401,8 @@ export default function ReportesPage() {
             <div className="space-y-4">
               {[
                 { label: "Tasa de conversion", value: `${dashboardKPIs.tasaConversion}%`, prev: `${dashboardKPIs.tasaConversionAnterior}%`, up: dashboardKPIs.tasaConversion > dashboardKPIs.tasaConversionAnterior },
-                { label: "Margen promedio", value: `${dashboardKPIs.margenPromedio}%`, prev: "34.2%", up: true },
-                { label: "Ticket promedio", value: formatCurrency(ticketPromedio), prev: formatCurrency(ticketPromedio * 0.88), up: true },
+                { label: "Margen promedio", value: `${dashboardKPIs.margenPromedio}%`, prev: "—", up: false },
+                { label: "Ticket promedio", value: formatCurrency(ticketPromedio), prev: "—", up: false },
                 { label: "Presupuestos emitidos", value: String(totalPR), prev: "—", up: false },
                 { label: "Facturado", value: formatCurrency(dashboardKPIs.facturadoMes), prev: formatCurrency(dashboardKPIs.ventasMesAnterior), up: dashboardKPIs.facturadoMes > dashboardKPIs.ventasMesAnterior },
               ].map((m) => (

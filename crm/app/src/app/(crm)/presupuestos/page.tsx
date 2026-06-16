@@ -126,6 +126,8 @@ interface NewPRItem {
   precio_venta: number;
   iva_porcentaje: number;
   proveedor_nombre: string;
+  proveedor_id: string;
+  lista_item_id: string;
 }
 
 // Autocomplete result from lista_precios_items
@@ -138,6 +140,7 @@ interface ProductSuggestion {
   precio_neto: number;
   precio: number;
   proveedor_nombre: string;
+  proveedor_id: string;
   lista_nombre: string;
   moneda: string;
 }
@@ -151,7 +154,7 @@ function calcItemTotals(item: NewPRItem) {
 const emptyItem: NewPRItem = {
   codigo: "", descripcion: "", categoria: "", cantidad: 1, unidad: "UN",
   precio_costo: 0, markup_porcentaje: 0, precio_venta: 0, iva_porcentaje: 21,
-  proveedor_nombre: "",
+  proveedor_nombre: "", proveedor_id: "", lista_item_id: "",
 };
 
 export default function PresupuestosPage() {
@@ -235,6 +238,7 @@ export default function PresupuestosPage() {
           precio_neto: d.precio_neto ?? d.precio ?? 0,
           precio: d.precio ?? 0,
           proveedor_nombre: d.listas_precios?.proveedores?.razon_social ?? "—",
+          proveedor_id: d.listas_precios?.proveedor_id ?? "",
           lista_nombre: d.listas_precios?.nombre ?? "",
           moneda: d.listas_precios?.moneda ?? "ARS",
         }));
@@ -268,6 +272,8 @@ export default function PresupuestosPage() {
         markup_porcentaje: markup,
         precio_venta: precioVenta,
         proveedor_nombre: suggestion.proveedor_nombre,
+        proveedor_id: suggestion.proveedor_id,
+        lista_item_id: suggestion.id,
       };
       return { ...prev, items };
     });
@@ -307,6 +313,8 @@ export default function PresupuestosPage() {
             precio_venta: precioVenta,
             iva_porcentaje: 21,
             proveedor_nombre: item.proveedor || "",
+            proveedor_id: "",
+            lista_item_id: item.lista_id || "",
           };
         });
         setNewPR((prev) => ({ ...prev, items: newItems }));
@@ -482,8 +490,11 @@ export default function PresupuestosPage() {
           iva: it.iva,
           total: it.total,
           orden: it.orden,
+          proveedor_id: it.proveedor_id || null,
+          lista_item_id: it.lista_item_id || null,
+          proveedor_nombre: it.proveedor_nombre || null,
         }));
-        await supabase.from("presupuesto_items").insert(items);
+        await supabase.from("presupuesto_items").insert(items as any);
       }
 
       setShowNewPR(false);
@@ -517,6 +528,94 @@ export default function PresupuestosPage() {
   const counts: Record<string, number> = { todos: presupuestos.length };
   presupuestos.forEach((pr) => { counts[pr.estado] = (counts[pr.estado] || 0) + 1; });
 
+  async function generateOCsFromPresupuesto(prId: string) {
+    try {
+      // Fetch presupuesto items with proveedor info
+      const { data: items, error: itemsErr } = await supabase
+        .from("presupuesto_items")
+        .select("*")
+        .eq("presupuesto_id", prId);
+      if (itemsErr || !items || items.length === 0) return;
+
+      // Get presupuesto header for moneda and numero
+      const { data: prHeader } = await supabase
+        .from("presupuestos")
+        .select("moneda, numero")
+        .eq("id", prId)
+        .single();
+      const moneda = prHeader?.moneda ?? "USD";
+      const prNumero = prHeader?.numero ?? "";
+
+      // Group items by proveedor_id (skip items without proveedor)
+      const byProveedor: Record<string, any[]> = {};
+      for (const item of items) {
+        const provId = (item as any).proveedor_id;
+        if (!provId) continue;
+        if (!byProveedor[provId]) byProveedor[provId] = [];
+        byProveedor[provId].push(item);
+      }
+
+      const proveedorIds = Object.keys(byProveedor);
+      if (proveedorIds.length === 0) {
+        toast.info("PR aprobado. No se generaron OC (items sin proveedor asignado).");
+        return;
+      }
+
+      let ocsCreated = 0;
+      const today = new Date().toISOString().split("T")[0];
+
+      for (const provId of proveedorIds) {
+        const provItems = byProveedor[provId];
+        const subtotal = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
+        const iva = subtotal * 0.21;
+
+        const { data: ocRow, error: ocErr } = await supabase
+          .from("ordenes_compra")
+          .insert({
+            proveedor_id: provId,
+            presupuesto_origen_id: prId,
+            fecha: today,
+            moneda,
+            estado: "borrador",
+            subtotal,
+            iva,
+            total: subtotal + iva,
+            observaciones: `Generada automáticamente desde ${prNumero}`,
+            created_by: profile?.id,
+          } as any)
+          .select()
+          .single();
+
+        if (ocErr || !ocRow) {
+          console.error("Error creating OC for proveedor:", provId, ocErr);
+          continue;
+        }
+
+        // Create OC items
+        const ocItems = provItems.map((it: any, idx: number) => ({
+          orden_id: ocRow.id,
+          codigo: it.codigo,
+          descripcion: it.descripcion,
+          cantidad: Number(it.cantidad),
+          unidad: it.unidad,
+          precio_unitario: Number(it.precio_costo),
+          subtotal: Number(it.precio_costo) * Number(it.cantidad),
+          orden: idx + 1,
+          cantidad_recibida: 0,
+        }));
+        await supabase.from("orden_compra_items").insert(ocItems);
+        ocsCreated++;
+      }
+
+      if (ocsCreated > 0) {
+        toast.success(`Se generaron ${ocsCreated} orden(es) de compra automáticamente`);
+      }
+    } catch (err) {
+      console.error("Error generating OCs:", err);
+      toast.warning("PR aprobado pero hubo un error al generar las OC");
+    }
+  }
+
   async function handleEstadoChange(id: string, estado: PRStatus, motivo?: string) {
     try {
       const update: { estado: string; motivo_rechazo?: string; enviado_at?: string; respondido_at?: string } = { estado };
@@ -529,6 +628,12 @@ export default function PresupuestosPage() {
         .update(update as any)
         .eq("id", id);
       if (error) throw new Error(`${error.message} (${error.code}) [${status} ${statusText}]`);
+
+      // When approved, auto-generate purchase orders grouped by supplier
+      if (estado === "aprobado") {
+        await generateOCsFromPresupuesto(id);
+      }
+
       await fetchPresupuestos();
       if (selected?.id === id) {
         setSelected((prev) => prev ? { ...prev, estado, motivoRechazo: motivo ?? prev.motivoRechazo } : null);
@@ -1076,7 +1181,7 @@ export default function PresupuestosPage() {
                     <CheckCircle2 className="h-4 w-4" />
                     <span>Aprobado{selected.respondidoAt ? ` el ${formatDate(selected.respondidoAt)}` : ""}</span>
                     <ArrowRight className="h-4 w-4 ml-2" />
-                    <span className="text-zinc-500">Listo para facturar</span>
+                    <span className="text-zinc-500">OC generadas — Listo para facturar</span>
                   </div>
                 )}
               </div>

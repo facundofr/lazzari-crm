@@ -11,7 +11,7 @@ import { supabase } from "@/lib/supabase/client";
 import { mockFacturas } from "@/lib/mock-data";
 import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
-  X, Eye, Download, Printer, CheckCircle2, Clock, Ban,
+  X, Eye, Printer, CheckCircle2, Clock, Ban,
   ExternalLink, ShieldCheck, KeyRound, Server,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
@@ -642,13 +642,9 @@ export default function FacturacionPage() {
                       </button>
                     </>
                   )}
-                  <button className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                  <button onClick={() => window.print()} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
                     <Printer className="h-4 w-4" />
                     Imprimir
-                  </button>
-                  <button className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
-                    <Download className="h-4 w-4" />
-                    Descargar PDF
                   </button>
                 </div>
               </div>

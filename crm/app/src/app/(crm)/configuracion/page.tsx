@@ -8,7 +8,8 @@ import { mockUsers } from "@/lib/mock-data";
 import { ROLE_LABELS, ROLE_PERMISSIONS } from "@/lib/types";
 import type { User, Role } from "@/lib/types";
 import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase/client";
 
 const roleBadgeVariant: Record<Role, "success" | "warning" | "danger" | "info" | "purple" | "outline"> = {
   super_admin: "danger",
@@ -22,16 +23,70 @@ export default function ConfiguracionPage() {
   const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones">("usuarios");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [dbUsers, setDbUsers] = useState<User[]>([]);
+  const [usersLoading, setUsersLoading] = useState(true);
 
   // Empresa form — controlled inputs
   const [empresa, setEmpresa] = useState({
-    razon_social: "Lazzari Soluciones Industriales",
-    cuit: "30-71XXXXXX-X",
-    condicion_iva: "Responsable Inscripto",
-    direccion: "Buenos Aires, Argentina",
-    punto_venta: "0001",
-    inicio_actividades: "01/01/2019",
+    razon_social: "",
+    cuit: "",
+    condicion_iva: "",
+    direccion: "",
+    punto_venta: "",
+    inicio_actividades: "",
   });
+
+  useEffect(() => {
+    async function fetchData() {
+      // Fetch real users from profiles
+      try {
+        const { data: profiles } = await supabase
+          .from("profiles")
+          .select("id, full_name, email, role, active, created_at")
+          .order("created_at", { ascending: false });
+        if (profiles && profiles.length > 0) {
+          setDbUsers(profiles.map((p: any) => ({
+            id: p.id,
+            name: p.full_name || p.email || "—",
+            email: p.email || "",
+            role: p.role || "viewer",
+            active: p.active ?? true,
+            createdAt: p.created_at ? new Date(p.created_at).toLocaleDateString("es-AR") : "—",
+          })));
+        } else {
+          setDbUsers(mockUsers);
+        }
+      } catch {
+        setDbUsers(mockUsers);
+      }
+      setUsersLoading(false);
+
+      // Fetch empresa config (key/value jsonb table)
+      try {
+        const { data: config } = await supabase
+          .from("configuracion")
+          .select("key, value")
+          .in("key", ["empresa"]);
+        if (config && config.length > 0) {
+          const empresaConfig = config.find((c: any) => c.key === "empresa");
+          if (empresaConfig) {
+            const val = (empresaConfig as any).value || {};
+            setEmpresa({
+              razon_social: val.razon_social || "",
+              cuit: val.cuit || "",
+              condicion_iva: val.condicion_iva || "",
+              direccion: val.direccion || "",
+              punto_venta: val.punto_venta || "",
+              inicio_actividades: val.inicio_actividades || "",
+            });
+          }
+        }
+      } catch {
+        // Config table may not exist yet — leave defaults
+      }
+    }
+    fetchData();
+  }, []);
 
   // Notification toggles
   const [notifs, setNotifs] = useState({
@@ -50,11 +105,18 @@ export default function ConfiguracionPage() {
 
   async function handleSaveEmpresa() {
     setSaving(true);
-    // In future, save to Supabase config table
-    await new Promise((r) => setTimeout(r, 500));
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    try {
+      await supabase.from("configuracion").upsert(
+        { key: "empresa", value: empresa } as any,
+        { onConflict: "key" }
+      );
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      console.error("Error saving empresa config:", err);
+    } finally {
+      setSaving(false);
+    }
   }
 
   function toggleNotif(key: keyof typeof notifs) {
@@ -90,9 +152,9 @@ export default function ConfiguracionPage() {
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-semibold text-zinc-900 dark:text-white">Usuarios del sistema</h3>
-                <p className="text-sm text-zinc-500">{mockUsers.length} usuarios registrados</p>
+                <p className="text-sm text-zinc-500">{dbUsers.length} usuarios registrados</p>
               </div>
-              <button onClick={() => alert("Próximamente: invitación de usuarios por email")} className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
+              <button disabled className="rounded-lg bg-zinc-300 px-4 py-2 text-sm font-medium text-zinc-500 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400" title="Próximamente">
                 Invitar usuario
               </button>
             </div>
@@ -117,7 +179,7 @@ export default function ConfiguracionPage() {
                   { key: "active", label: "Estado", sortable: true, render: (row) => <Badge variant={row.active ? "success" : "outline"}>{row.active ? "Activo" : "Inactivo"}</Badge> },
                   { key: "createdAt", label: "Registrado", sortable: true, render: (row) => <span className="text-zinc-400 text-xs">{row.createdAt}</span> },
                 ]}
-                data={mockUsers}
+                data={dbUsers}
               />
             </Card>
           </div>
@@ -137,7 +199,7 @@ export default function ConfiguracionPage() {
                       <div className="flex items-center justify-between mb-3">
                         <div className="flex items-center gap-3">
                           <Badge variant={roleBadgeVariant[role]}>{label}</Badge>
-                          <span className="text-xs text-zinc-400">{mockUsers.filter((u) => u.role === role).length} usuario(s)</span>
+                          <span className="text-xs text-zinc-400">{dbUsers.filter((u) => u.role === role).length} usuario(s)</span>
                         </div>
                       </div>
                       {isWildcard ? (
@@ -259,9 +321,11 @@ export default function ConfiguracionPage() {
                   </div>
                   <p className="mt-1 text-sm text-zinc-500">{integration.desc}</p>
                   {integration.note && <p className="mt-1 text-xs text-zinc-400">{integration.note}</p>}
-                  <button onClick={() => alert(`${integration.name}: próximamente`)} className="mt-3 text-xs font-medium text-orange-500 hover:text-orange-600">
-                    {integration.connected ? "Configurar" : "Conectar"}
-                  </button>
+                  {integration.connected ? (
+                    <span className="mt-3 inline-block text-xs font-medium text-emerald-500">Activo</span>
+                  ) : (
+                    <span className="mt-3 inline-block text-xs text-zinc-400">Próximamente</span>
+                  )}
                 </div>
               </Card>
             ))}
