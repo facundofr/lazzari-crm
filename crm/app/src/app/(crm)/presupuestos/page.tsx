@@ -475,6 +475,7 @@ export default function PresupuestosPage() {
       if (error) throw new Error(error.message);
 
       if (newRow && itemsWithTotals.length > 0) {
+        // precio_venta, subtotal, iva, total are GENERATED columns — don't insert them
         const items = itemsWithTotals.map((it) => ({
           presupuesto_id: newRow.id,
           codigo: it.codigo,
@@ -484,17 +485,14 @@ export default function PresupuestosPage() {
           unidad: it.unidad,
           precio_costo: it.precio_costo,
           markup_porcentaje: it.markup_porcentaje,
-          precio_venta: it.precio_venta,
-          subtotal: it.subtotal,
           iva_porcentaje: it.iva_porcentaje,
-          iva: it.iva,
-          total: it.total,
           orden: it.orden,
           proveedor_id: it.proveedor_id || null,
           lista_item_id: it.lista_item_id || null,
           proveedor_nombre: it.proveedor_nombre || null,
         }));
-        await supabase.from("presupuesto_items").insert(items as any);
+        const { error: itemsError } = await supabase.from("presupuesto_items").insert(items as any);
+        if (itemsError) console.error("Error inserting items:", itemsError);
       }
 
       setShowNewPR(false);

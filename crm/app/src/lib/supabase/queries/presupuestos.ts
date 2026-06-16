@@ -131,7 +131,8 @@ export async function duplicatePresupuesto(id: string) {
   if (error) throw error;
 
   if (presupuesto_items && presupuesto_items.length > 0) {
-    const items = presupuesto_items.map(({ id: _iid, presupuesto_id: _pid, ...itemRest }) => ({
+    // precio_venta, subtotal, iva, total are GENERATED columns — strip them
+    const items = presupuesto_items.map(({ id: _iid, presupuesto_id: _pid, created_at: _ica, precio_venta: _pv, subtotal: _st, iva: _iv, total: _t, ...itemRest }) => ({
       ...itemRest,
       presupuesto_id: newPR.id,
     }));
