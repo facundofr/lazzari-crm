@@ -346,14 +346,14 @@ export default function PresupuestosPage() {
       // First try with items + vendedor profile
       let res: { data: any; error: any } = await supabase
         .from("presupuestos")
-        .select(`*, clientes(razon_social, cuit), vendedor_profile:vendedor_id(full_name, avatar_url), presupuesto_items(*)`)
+        .select(`*, clientes(razon_social, cuit), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), presupuesto_items(*)`)
         .order("fecha", { ascending: false });
 
       // If that fails, try without items
       if (res.error) {
         res = await supabase
           .from("presupuestos")
-          .select(`*, clientes(razon_social, cuit), vendedor_id`)
+          .select(`*, clientes(razon_social, cuit), created_by_profile:created_by(full_name), vendedor_id`)
           .order("fecha", { ascending: false });
       }
 
