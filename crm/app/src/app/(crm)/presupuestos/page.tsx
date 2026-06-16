@@ -347,14 +347,14 @@ export default function PresupuestosPage() {
       let res: { data: any; error: any } = await supabase
         .from("presupuestos")
         .select(`*, clientes(razon_social, cuit), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), presupuesto_items(*)`)
-        .order("fecha", { ascending: false });
+        .order("created_at", { ascending: false });
 
       // If that fails, try without items
       if (res.error) {
         res = await supabase
           .from("presupuestos")
           .select(`*, clientes(razon_social, cuit), created_by_profile:created_by(full_name), vendedor_id`)
-          .order("fecha", { ascending: false });
+          .order("created_at", { ascending: false });
       }
 
       // If still fails, try minimal
@@ -362,7 +362,7 @@ export default function PresupuestosPage() {
         res = await supabase
           .from("presupuestos")
           .select(`*, vendedor_id`)
-          .order("fecha", { ascending: false });
+          .order("created_at", { ascending: false });
       }
 
       const { data, error } = res;

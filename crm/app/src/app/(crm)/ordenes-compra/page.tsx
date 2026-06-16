@@ -130,7 +130,7 @@ export default function OrdenesCompraPage() {
       const { data, error } = await supabase
         .from("ordenes_compra")
         .select(`*, proveedores(razon_social), orden_compra_items(cantidad, cantidad_recibida)`)
-        .order("fecha", { ascending: false });
+        .order("created_at", { ascending: false });
 
       if (!error && data && data.length > 0) {
         setOrdenes(data as unknown as OCRow[]);
