@@ -591,7 +591,7 @@ export default function PresupuestosPage() {
           continue;
         }
 
-        // Create OC items
+        // Create OC items (subtotal is GENERATED column — don't insert it)
         const ocItems = provItems.map((it: any, idx: number) => ({
           orden_id: ocRow.id,
           codigo: it.codigo,
@@ -599,7 +599,6 @@ export default function PresupuestosPage() {
           cantidad: Number(it.cantidad),
           unidad: it.unidad,
           precio_unitario: Number(it.precio_costo),
-          subtotal: Number(it.precio_costo) * Number(it.cantidad),
           orden: idx + 1,
           cantidad_recibida: 0,
         }));
