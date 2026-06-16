@@ -2,19 +2,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 
-interface MatchedItem {
-  codigo: string;
-  descripcion: string;
-  categoria: string;
-  cantidad: number;
-  unidad: string;
-  precio_costo: number;
-  proveedor: string;
-  lista_id: string;
-  confianza: "alta" | "media" | "baja";
-  nota?: string;
-}
-
 export async function POST(request: NextRequest) {
   try {
     const { mensaje, cliente_id, moneda } = await request.json();
@@ -51,13 +38,7 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "Error al buscar productos" }, { status: 500 });
     }
 
-    // 2. Also get internal products catalog
-    const { data: productos } = await supabase
-      .from("productos")
-      .select("id, codigo, nombre, categoria, unidad, precio_costo, moneda_costo, iva, stock, activo")
-      .eq("activo", true);
-
-    // 3. Get client info if provided
+    // 2. Get client info if provided
     let clienteInfo = "";
     if (cliente_id) {
       const { data: cliente } = await supabase
@@ -82,16 +63,6 @@ export async function POST(request: NextRequest) {
       lista_id: item.lista_id,
     }));
 
-    const productosContext = (productos || []).map((p: any) => ({
-      codigo: p.codigo,
-      nombre: p.nombre,
-      categoria: p.categoria,
-      unidad: p.unidad,
-      precio_costo: p.precio_costo,
-      moneda: p.moneda_costo,
-      stock: p.stock,
-    }));
-
     const client = new Anthropic({ apiKey });
 
     const response = await client.messages.create({
@@ -103,33 +74,30 @@ Tu tarea: dado un mensaje de un cliente pidiendo productos, buscá los items má
 ${clienteInfo}
 Moneda del presupuesto: ${moneda || "USD"}
 
-CATALOGO DE LISTAS DE PRECIOS (proveedores):
+CATALOGO DE LISTAS DE PRECIOS (proveedores) — UNICA fuente de datos válida:
 ${JSON.stringify(catalogItems, null, 0)}
 
-CATALOGO INTERNO (productos propios):
-${JSON.stringify(productosContext, null, 0)}
-
 REGLAS:
-1. Matcheá cada producto pedido con el item más cercano del catálogo.
-2. Si dos proveedores tienen un item similar, elegí el de mejor precio en la moneda del presupuesto.
-3. Si el cliente pide algo que NO existe en el catálogo, incluiló con confianza "baja" y precio_costo 0.
+1. SOLO devolvé items que existan en el CATALOGO DE LISTAS DE PRECIOS. NUNCA inventes productos ni códigos. Si un producto pedido no existe en el catálogo, NO lo incluyas en items — mencionalo en notas_generales.
+2. Matcheá cada producto pedido con el item más cercano del catálogo de listas de precios.
+3. Si dos proveedores tienen un item similar, elegí el de mejor precio en la moneda del presupuesto.
 4. Interpretá cantidades del mensaje. Si no se especifica, usá 1.
 5. Usá la unidad del catálogo (UN, MT, KG, etc).
-6. El campo "nota" es para aclaraciones (ej: "no encontrado exacto, alternativa sugerida").
+6. El campo "nota" es para aclaraciones (ej: "alternativa sugerida", "verificar medida con cliente").
+7. Usá el codigo, descripcion, precio y lista_id EXACTOS del catálogo. No modifiques estos valores.
 
 Respondé SOLO con un JSON válido, sin markdown ni explicaciones:
 {
   "items": [
     {
-      "codigo": "string",
-      "descripcion": "string",
+      "codigo": "string (exacto del catálogo)",
+      "descripcion": "string (exacta del catálogo)",
       "categoria": "string",
       "cantidad": number,
       "unidad": "string",
-      "precio_costo": number,
+      "precio_costo": number (exacto del catálogo),
       "proveedor": "string",
-      "lista_id": "string o vacío",
-      "confianza": "alta|media|baja",
+      "lista_id": "string (exacto del catálogo)",
       "nota": "string opcional"
     }
   ],
