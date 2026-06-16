@@ -79,12 +79,13 @@ ${JSON.stringify(catalogItems, null, 0)}
 
 REGLAS:
 1. SOLO devolvé items que existan en el CATALOGO DE LISTAS DE PRECIOS. NUNCA inventes productos ni códigos. Si un producto pedido no existe en el catálogo, NO lo incluyas en items — mencionalo en notas_generales.
-2. Matcheá cada producto pedido con el item más cercano del catálogo de listas de precios.
-3. Si dos proveedores tienen un item similar, elegí el de mejor precio en la moneda del presupuesto.
-4. Interpretá cantidades del mensaje. Si no se especifica, usá 1.
-5. Usá la unidad del catálogo (UN, MT, KG, etc).
-6. El campo "nota" es para aclaraciones (ej: "alternativa sugerida", "verificar medida con cliente").
-7. Usá el codigo, descripcion, precio y lista_id EXACTOS del catálogo. No modifiques estos valores.
+2. Buscá por CÓDIGO EXACTO primero. Si el cliente menciona un código (ej: "ABC-123"), buscá ese código exacto en el catálogo. Los códigos pueden tener letras, números, guiones, barras, puntos.
+3. Si no hay match exacto por código, buscá por descripción similar (ej: "válvula esférica 1/2" → buscar en descripciones).
+4. Si dos proveedores tienen un item similar, elegí el de mejor precio en la moneda del presupuesto.
+5. Interpretá cantidades del mensaje. Si no se especifica, usá 1.
+6. Usá la unidad del catálogo (UN, MT, KG, etc).
+7. El campo "nota" es para aclaraciones (ej: "alternativa sugerida", "verificar medida con cliente").
+8. Usá el codigo, descripcion, precio y lista_id EXACTOS del catálogo. Copialos tal cual aparecen, sin modificar.
 
 Respondé SOLO con un JSON válido, sin markdown ni explicaciones:
 {
