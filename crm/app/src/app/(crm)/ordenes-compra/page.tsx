@@ -11,7 +11,8 @@ import { mockOrdenesCompra } from "@/lib/mock-data";
 import type { OCStatus } from "@/lib/types";
 import {
   ShoppingCart, Clock, CheckCircle2, Truck, Loader2,
-  X, Send, XCircle,
+  X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
+  FileText, ClipboardCopy, Check,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
@@ -24,6 +25,18 @@ const statusConfig: Record<string, { label: string; variant: "success" | "warnin
   recibida: { label: "Recibida", variant: "success" },
   cancelada: { label: "Cancelada", variant: "danger" },
 };
+
+interface ProveedorInfo {
+  razon_social: string;
+  cuit: string | null;
+  email: string | null;
+  telefono: string | null;
+  direccion: string | null;
+  localidad: string | null;
+  provincia: string | null;
+  forma_pago: string | null;
+  condicion_iva: string | null;
+}
 
 interface OCRow {
   id: string;
@@ -38,7 +51,9 @@ interface OCRow {
   moneda: string;
   presupuesto_origen_id: string | null;
   observaciones: string;
-  proveedores: { razon_social: string } | null;
+  created_at: string;
+  proveedores: ProveedorInfo | null;
+  presupuesto_origen: { numero: string } | null;
   orden_compra_items: { cantidad: number; cantidad_recibida: number }[];
 }
 
@@ -48,6 +63,7 @@ interface DetailItem {
   descripcion: string;
   cantidad: number;
   cantidad_recibida: number;
+  unidad: string | null;
   precio_unitario: number;
   subtotal: number;
 }
@@ -71,7 +87,9 @@ function mapMockToOCRow(oc: (typeof mockOrdenesCompra)[number]): OCRow {
     moneda: oc.moneda,
     presupuesto_origen_id: oc.presupuestoOrigenId || null,
     observaciones: oc.observaciones,
-    proveedores: { razon_social: oc.proveedorNombre },
+    created_at: oc.fecha,
+    proveedores: { razon_social: oc.proveedorNombre, cuit: null, email: null, telefono: null, direccion: null, localidad: null, provincia: null, forma_pago: null, condicion_iva: null },
+    presupuesto_origen: null,
     orden_compra_items: oc.items.map((i) => ({
       cantidad: i.cantidad,
       cantidad_recibida: i.cantidadRecibida,
@@ -79,12 +97,31 @@ function mapMockToOCRow(oc: (typeof mockOrdenesCompra)[number]): OCRow {
   };
 }
 
+function CopyButton({ text, label }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <button
+      onClick={handleCopy}
+      className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-orange-500 transition-colors"
+      title={label || "Copiar"}
+    >
+      {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+      {label && <span>{copied ? "Copiado" : label}</span>}
+    </button>
+  );
+}
+
 export default function OrdenesCompraPage() {
   const [filter, setFilter] = useState<OCStatus | "todas">("todas");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // SmartFilters state
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
     fecha: { from: "", to: "" },
     moneda: "",
@@ -93,15 +130,7 @@ export default function OrdenesCompraPage() {
 
   const smartFilterConfigs: FilterConfig[] = [
     { key: "fecha", label: "Fecha", type: "date-range" },
-    {
-      key: "moneda",
-      label: "Moneda",
-      type: "select",
-      options: [
-        { value: "USD", label: "USD" },
-        { value: "ARS", label: "ARS" },
-      ],
-    },
+    { key: "moneda", label: "Moneda", type: "select", options: [{ value: "USD", label: "USD" }, { value: "ARS", label: "ARS" }] },
     { key: "monto", label: "Monto total", type: "number-range" },
   ];
 
@@ -122,6 +151,7 @@ export default function OrdenesCompraPage() {
   const [detailOC, setDetailOC] = useState<OCRow | null>(null);
   const [detailItems, setDetailItems] = useState<DetailItem[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [savingRecepcion, setSavingRecepcion] = useState<string | null>(null);
 
   // ── Fetch main data ──────────────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -129,7 +159,12 @@ export default function OrdenesCompraPage() {
     try {
       const { data, error } = await supabase
         .from("ordenes_compra")
-        .select(`*, proveedores(razon_social), orden_compra_items(cantidad, cantidad_recibida)`)
+        .select(`
+          *,
+          proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva),
+          presupuesto_origen:presupuesto_origen_id(numero),
+          orden_compra_items(cantidad, cantidad_recibida)
+        `)
         .order("created_at", { ascending: false });
 
       if (!error && data && data.length > 0) {
@@ -157,9 +192,7 @@ export default function OrdenesCompraPage() {
       if (data && data.length > 0) {
         setProveedores(data as unknown as ProveedorOption[]);
       }
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }, []);
 
   // ── Fetch detail items ───────────────────────────────────────────
@@ -168,8 +201,9 @@ export default function OrdenesCompraPage() {
     try {
       const { data, error } = await supabase
         .from("orden_compra_items")
-        .select("id, codigo, descripcion, cantidad, cantidad_recibida, precio_unitario, subtotal")
-        .eq("orden_id", ocId);
+        .select("id, codigo, descripcion, cantidad, cantidad_recibida, unidad, precio_unitario, subtotal")
+        .eq("orden_id", ocId)
+        .order("orden", { ascending: true });
       if (!error && data) {
         setDetailItems(data as unknown as DetailItem[]);
       } else {
@@ -184,23 +218,14 @@ export default function OrdenesCompraPage() {
 
   // ── Handlers ─────────────────────────────────────────────────────
   const openCreateModal = () => {
-    setFormData({
-      proveedor_id: "",
-      fecha: new Date().toISOString().slice(0, 10),
-      fecha_entrega_estimada: "",
-      moneda: "ARS",
-      observaciones: "",
-    });
+    setFormData({ proveedor_id: "", fecha: new Date().toISOString().slice(0, 10), fecha_entrega_estimada: "", moneda: "ARS", observaciones: "" });
     setFormError("");
     setCreateOpen(true);
     fetchProveedores();
   };
 
   const handleCreate = async () => {
-    if (!formData.proveedor_id) {
-      setFormError("Seleccioná un proveedor");
-      return;
-    }
+    if (!formData.proveedor_id) { setFormError("Selecciona un proveedor"); return; }
     setFormLoading(true);
     setFormError("");
     try {
@@ -211,9 +236,7 @@ export default function OrdenesCompraPage() {
         moneda: formData.moneda,
         observaciones: formData.observaciones,
         estado: "borrador",
-        subtotal: 0,
-        iva: 0,
-        total: 0,
+        subtotal: 0, iva: 0, total: 0,
       } as any);
       if (error) throw error;
       setCreateOpen(false);
@@ -233,10 +256,7 @@ export default function OrdenesCompraPage() {
   const handleCancel = async (oc: OCRow) => {
     if (!confirm(`¿Cancelar la OC ${oc.numero}?`)) return;
     try {
-      const { error } = await supabase
-        .from("ordenes_compra")
-        .update({ estado: "cancelada" } as any)
-        .eq("id", oc.id);
+      const { error } = await supabase.from("ordenes_compra").update({ estado: "cancelada" } as any).eq("id", oc.id);
       if (error) throw error;
       await fetchData();
       if (detailOC?.id === oc.id) setDetailOC(null);
@@ -247,10 +267,7 @@ export default function OrdenesCompraPage() {
 
   const handleAdvanceEstado = async (oc: OCRow, nuevoEstado: "enviada" | "confirmada") => {
     try {
-      const { error } = await supabase
-        .from("ordenes_compra")
-        .update({ estado: nuevoEstado } as any)
-        .eq("id", oc.id);
+      const { error } = await supabase.from("ordenes_compra").update({ estado: nuevoEstado } as any).eq("id", oc.id);
       if (error) throw error;
       await fetchData();
       if (detailOC?.id === oc.id) {
@@ -261,18 +278,100 @@ export default function OrdenesCompraPage() {
     }
   };
 
+  const handleUpdateRecepcion = async (itemId: string, cantidadRecibida: number) => {
+    setSavingRecepcion(itemId);
+    try {
+      const { error } = await supabase
+        .from("orden_compra_items")
+        .update({ cantidad_recibida: cantidadRecibida } as any)
+        .eq("id", itemId);
+      if (error) throw error;
+      // Update local state
+      setDetailItems((prev) => prev.map((it) => it.id === itemId ? { ...it, cantidad_recibida: cantidadRecibida } : it));
+      // Check if all items fully received → update OC estado
+      if (detailOC) {
+        const updatedItems = detailItems.map((it) => it.id === itemId ? { ...it, cantidad_recibida: cantidadRecibida } : it);
+        const allReceived = updatedItems.every((it) => Number(it.cantidad_recibida) >= Number(it.cantidad));
+        const someReceived = updatedItems.some((it) => Number(it.cantidad_recibida) > 0);
+        let newEstado = detailOC.estado;
+        if (allReceived && updatedItems.length > 0) newEstado = "recibida";
+        else if (someReceived) newEstado = "recibida_parcial";
+        if (newEstado !== detailOC.estado && ["confirmada", "recibida_parcial"].includes(detailOC.estado)) {
+          await supabase.from("ordenes_compra").update({ estado: newEstado } as any).eq("id", detailOC.id);
+          setDetailOC({ ...detailOC, estado: newEstado });
+          await fetchData();
+        }
+      }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Error al actualizar recepcion");
+    } finally {
+      setSavingRecepcion(null);
+    }
+  };
+
+  const handleMarcarTodoRecibido = async () => {
+    if (!detailOC || !confirm("¿Marcar todos los items como recibidos?")) return;
+    setSavingRecepcion("all");
+    try {
+      for (const item of detailItems) {
+        if (Number(item.cantidad_recibida) < Number(item.cantidad)) {
+          await supabase.from("orden_compra_items").update({ cantidad_recibida: item.cantidad } as any).eq("id", item.id);
+        }
+      }
+      await supabase.from("ordenes_compra").update({ estado: "recibida" } as any).eq("id", detailOC.id);
+      setDetailOC({ ...detailOC, estado: "recibida" });
+      setDetailItems((prev) => prev.map((it) => ({ ...it, cantidad_recibida: it.cantidad })));
+      await fetchData();
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Error");
+    } finally {
+      setSavingRecepcion(null);
+    }
+  };
+
+  const buildOCSummaryText = (oc: OCRow) => {
+    const prov = oc.proveedores;
+    const lines = [
+      `ORDEN DE COMPRA: ${oc.numero}`,
+      `Fecha: ${formatDate(oc.fecha)}`,
+      oc.fecha_entrega_estimada ? `Entrega estimada: ${formatDate(oc.fecha_entrega_estimada)}` : null,
+      `Estado: ${(statusConfig[oc.estado] || { label: oc.estado }).label}`,
+      `Moneda: ${oc.moneda}`,
+      "",
+      "PROVEEDOR:",
+      prov?.razon_social || "—",
+      prov?.cuit ? `CUIT: ${prov.cuit}` : null,
+      prov?.email ? `Email: ${prov.email}` : null,
+      prov?.telefono ? `Tel: ${prov.telefono}` : null,
+      prov?.direccion ? `Dir: ${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? `, ${prov.provincia}` : ""}` : null,
+      "",
+      "ITEMS:",
+      ...detailItems.map((it, i) =>
+        `${i + 1}. ${it.codigo} | ${it.descripcion} | Cant: ${it.cantidad}${it.unidad ? ` ${it.unidad}` : ""} | P.Unit: ${formatCurrency(Number(it.precio_unitario), oc.moneda as "ARS" | "USD")} | Subtotal: ${formatCurrency(Number(it.subtotal), oc.moneda as "ARS" | "USD")}`
+      ),
+      "",
+      `TOTAL: ${formatCurrency(Number(oc.total), oc.moneda as "ARS" | "USD")}`,
+      oc.observaciones ? `\nOBSERVACIONES: ${oc.observaciones}` : null,
+    ];
+    return lines.filter(Boolean).join("\n");
+  };
+
+  const [copiedSummary, setCopiedSummary] = useState(false);
+  const handleCopySummary = async () => {
+    if (!detailOC) return;
+    await navigator.clipboard.writeText(buildOCSummaryText(detailOC));
+    setCopiedSummary(true);
+    setTimeout(() => setCopiedSummary(false), 2000);
+  };
+
   // ── Computed ─────────────────────────────────────────────────────
   const filtered = ordenes.filter((oc) => {
-    // existing estado tab filter
     if (filter !== "todas" && oc.estado !== filter) return false;
-    // fecha filter
     const fechaFilter = smartFilterValues.fecha as { from?: string; to?: string } | undefined;
     if (fechaFilter?.from && oc.fecha < fechaFilter.from) return false;
     if (fechaFilter?.to && oc.fecha > fechaFilter.to) return false;
-    // moneda filter
     const monedaFilter = smartFilterValues.moneda as string;
     if (monedaFilter && oc.moneda !== monedaFilter) return false;
-    // monto filter
     const montoFilter = smartFilterValues.monto as { min?: number; max?: number } | undefined;
     if (montoFilter?.min !== undefined && Number(oc.total) < montoFilter.min) return false;
     if (montoFilter?.max !== undefined && Number(oc.total) > montoFilter.max) return false;
@@ -294,7 +393,6 @@ export default function OrdenesCompraPage() {
     ["enviada", "confirmada", "recibida_parcial"].includes(oc.estado)
   ).length;
 
-  // ── Loading state ────────────────────────────────────────────────
   if (loading) {
     return (
       <>
@@ -347,11 +445,7 @@ export default function OrdenesCompraPage() {
           })}
         </div>
 
-        <SmartFilters
-          filters={smartFilterConfigs}
-          values={smartFilterValues}
-          onChange={setSmartFilterValues}
-        />
+        <SmartFilters filters={smartFilterConfigs} values={smartFilterValues} onChange={setSmartFilterValues} />
 
         {/* Data table */}
         <Card className="p-0 overflow-hidden">
@@ -359,7 +453,7 @@ export default function OrdenesCompraPage() {
             columns={[
               {
                 key: "numero",
-                label: "N OC",
+                label: "N° OC",
                 sortable: true,
                 render: (row) => (
                   <div className="flex items-center gap-2">
@@ -372,28 +466,25 @@ export default function OrdenesCompraPage() {
                 key: "proveedores",
                 label: "Proveedor",
                 sortable: true,
-                render: (row) => <span className="font-medium">{row.proveedores?.razon_social}</span>,
+                render: (row) => (
+                  <div>
+                    <span className="font-medium">{row.proveedores?.razon_social || "—"}</span>
+                    {row.proveedores?.email && (
+                      <p className="text-xs text-zinc-400 truncate max-w-[200px]">{row.proveedores.email}</p>
+                    )}
+                  </div>
+                ),
               },
               {
                 key: "orden_compra_items",
                 label: "Items",
-                render: (row) => <span className="text-zinc-500">{row.orden_compra_items.length} lineas</span>,
+                render: (row) => <span className="text-zinc-500">{row.orden_compra_items.length} items</span>,
               },
               {
                 key: "fecha",
                 label: "Fecha",
                 sortable: true,
                 render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span>,
-              },
-              {
-                key: "fecha_entrega_estimada",
-                label: "Entrega est.",
-                sortable: true,
-                render: (row) => (
-                  <span className="text-zinc-500">
-                    {row.fecha_entrega_estimada ? formatDate(row.fecha_entrega_estimada) : "\u2014"}
-                  </span>
-                ),
               },
               {
                 key: "total",
@@ -441,7 +532,11 @@ export default function OrdenesCompraPage() {
                 key: "presupuesto_origen_id",
                 label: "PR origen",
                 render: (row) =>
-                  row.presupuesto_origen_id ? <Badge variant="info">Vinculado</Badge> : <span className="text-zinc-300">{"\u2014"}</span>,
+                  row.presupuesto_origen ? (
+                    <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{(row.presupuesto_origen as { numero: string }).numero}</span>
+                  ) : (
+                    <span className="text-zinc-300">{"\u2014"}</span>
+                  ),
               },
               {
                 key: "acciones",
@@ -449,30 +544,18 @@ export default function OrdenesCompraPage() {
                 render: (row) => (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     {row.estado === "borrador" && (
-                      <button
-                        onClick={() => handleAdvanceEstado(row, "enviada")}
-                        className="p-1 rounded hover:bg-blue-50 text-blue-500 transition-colors"
-                        title="Enviar"
-                      >
-                        <Send className="h-4 w-4" />
+                      <button onClick={() => handleAdvanceEstado(row, "enviada")} className="px-2 py-1 rounded text-xs font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 transition-colors" title="Enviar al proveedor">
+                        Enviar
                       </button>
                     )}
                     {row.estado === "enviada" && (
-                      <button
-                        onClick={() => handleAdvanceEstado(row, "confirmada")}
-                        className="p-1 rounded hover:bg-green-50 text-green-600 transition-colors"
-                        title="Confirmar"
-                      >
-                        <CheckCircle2 className="h-4 w-4" />
+                      <button onClick={() => handleAdvanceEstado(row, "confirmada")} className="px-2 py-1 rounded text-xs font-medium bg-green-50 text-green-600 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 transition-colors" title="Confirmar OC">
+                        Confirmar
                       </button>
                     )}
                     {["borrador", "enviada", "confirmada"].includes(row.estado) && (
-                      <button
-                        onClick={() => handleCancel(row)}
-                        className="p-1 rounded hover:bg-red-50 text-red-500 transition-colors"
-                        title="Cancelar"
-                      >
-                        <XCircle className="h-4 w-4" />
+                      <button onClick={() => handleCancel(row)} className="px-2 py-1 rounded text-xs font-medium bg-red-50 text-red-500 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 transition-colors" title="Cancelar OC">
+                        Cancelar
                       </button>
                     )}
                   </div>
@@ -496,79 +579,39 @@ export default function OrdenesCompraPage() {
               </button>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {formError && (
-                <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</div>
-              )}
-              {/* Proveedor */}
+              {formError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</div>}
               <div>
                 <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Proveedor *</label>
-                <select
-                  value={formData.proveedor_id}
-                  onChange={(e) => setFormData((p) => ({ ...p, proveedor_id: e.target.value }))}
-                  className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white"
-                >
+                <select value={formData.proveedor_id} onChange={(e) => setFormData((p) => ({ ...p, proveedor_id: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
                   <option value="">Seleccionar proveedor...</option>
-                  {proveedores.map((prov) => (
-                    <option key={prov.id} value={prov.id}>{prov.razon_social}</option>
-                  ))}
+                  {proveedores.map((prov) => <option key={prov.id} value={prov.id}>{prov.razon_social}</option>)}
                 </select>
               </div>
-              {/* Fecha */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha</label>
-                  <input
-                    type="date"
-                    value={formData.fecha}
-                    onChange={(e) => setFormData((p) => ({ ...p, fecha: e.target.value }))}
-                    className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white"
-                  />
+                  <input type="date" value={formData.fecha} onChange={(e) => setFormData((p) => ({ ...p, fecha: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Entrega estimada</label>
-                  <input
-                    type="date"
-                    value={formData.fecha_entrega_estimada}
-                    onChange={(e) => setFormData((p) => ({ ...p, fecha_entrega_estimada: e.target.value }))}
-                    className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white"
-                  />
+                  <input type="date" value={formData.fecha_entrega_estimada} onChange={(e) => setFormData((p) => ({ ...p, fecha_entrega_estimada: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
                 </div>
               </div>
-              {/* Moneda */}
               <div>
                 <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Moneda</label>
-                <select
-                  value={formData.moneda}
-                  onChange={(e) => setFormData((p) => ({ ...p, moneda: e.target.value as "ARS" | "USD" }))}
-                  className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white"
-                >
+                <select value={formData.moneda} onChange={(e) => setFormData((p) => ({ ...p, moneda: e.target.value as "ARS" | "USD" }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
                   <option value="ARS">ARS - Pesos</option>
                   <option value="USD">USD - Dolares</option>
                 </select>
               </div>
-              {/* Observaciones */}
               <div>
                 <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Observaciones</label>
-                <textarea
-                  value={formData.observaciones}
-                  onChange={(e) => setFormData((p) => ({ ...p, observaciones: e.target.value }))}
-                  rows={3}
-                  className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm resize-none"
-                />
+                <textarea value={formData.observaciones} onChange={(e) => setFormData((p) => ({ ...p, observaciones: e.target.value }))} rows={3} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm resize-none" />
               </div>
             </div>
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-zinc-200 dark:border-zinc-700">
-              <button
-                onClick={() => setCreateOpen(false)}
-                className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleCreate}
-                disabled={formLoading}
-                className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
-              >
+              <button onClick={() => setCreateOpen(false)} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cancelar</button>
+              <button onClick={handleCreate} disabled={formLoading} className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 transition-colors">
                 {formLoading && <Loader2 className="h-4 w-4 animate-spin" />}
                 Crear OC
               </button>
@@ -581,40 +624,156 @@ export default function OrdenesCompraPage() {
       {detailOC && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-black/30" onClick={() => setDetailOC(null)} />
-          <div className="relative w-full max-w-xl bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto">
+          <div className="relative w-full max-w-2xl bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
               <div>
-                <h2 className="text-lg font-semibold font-mono dark:text-white">{detailOC.numero}</h2>
-                <p className="text-sm text-zinc-500">{detailOC.proveedores?.razon_social}</p>
+                <div className="flex items-center gap-3">
+                  <h2 className="text-lg font-semibold font-mono dark:text-white">{detailOC.numero}</h2>
+                  <Badge variant={(statusConfig[detailOC.estado] || { variant: "outline" as const }).variant}>
+                    {(statusConfig[detailOC.estado] || { label: detailOC.estado }).label}
+                  </Badge>
+                </div>
+                {detailOC.presupuesto_origen && (
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Origen: <span className="font-mono text-blue-500">{(detailOC.presupuesto_origen as { numero: string }).numero}</span>
+                  </p>
+                )}
               </div>
-              <button onClick={() => setDetailOC(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                <X className="h-5 w-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCopySummary}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                  title="Copiar resumen al portapapeles"
+                >
+                  {copiedSummary ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
+                  {copiedSummary ? "Copiado" : "Copiar OC"}
+                </button>
+                <button onClick={() => setDetailOC(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
             </div>
 
             <div className="px-6 py-5 space-y-6">
-              {/* Info grid */}
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              {/* ── Action Buttons ─────────────────────────────────────── */}
+              {!["recibida", "cancelada"].includes(detailOC.estado) && (
+                <div className="flex flex-wrap gap-2">
+                  {detailOC.estado === "borrador" && (
+                    <button
+                      onClick={() => handleAdvanceEstado(detailOC, "enviada")}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                    >
+                      <Send className="h-4 w-4" /> Enviar al proveedor
+                    </button>
+                  )}
+                  {detailOC.estado === "enviada" && (
+                    <button
+                      onClick={() => handleAdvanceEstado(detailOC, "confirmada")}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition-colors"
+                    >
+                      <CheckCircle2 className="h-4 w-4" /> Confirmar OC
+                    </button>
+                  )}
+                  {["confirmada", "recibida_parcial"].includes(detailOC.estado) && detailItems.length > 0 && (
+                    <button
+                      onClick={handleMarcarTodoRecibido}
+                      disabled={savingRecepcion === "all"}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50 transition-colors"
+                    >
+                      {savingRecepcion === "all" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Package className="h-4 w-4" />}
+                      Marcar todo recibido
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleCancel(detailOC)}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors"
+                  >
+                    <XCircle className="h-4 w-4" /> Cancelar OC
+                  </button>
+                </div>
+              )}
+
+              {/* ── Proveedor Info ─────────────────────────────────────── */}
+              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold flex items-center gap-2">
+                    <Truck className="h-4 w-4 text-zinc-400" /> Proveedor
+                  </h3>
+                  {detailOC.proveedores?.razon_social && (
+                    <CopyButton text={`${detailOC.proveedores.razon_social}${detailOC.proveedores.cuit ? ` - CUIT: ${detailOC.proveedores.cuit}` : ""}`} label="Copiar" />
+                  )}
+                </div>
+                {detailOC.proveedores ? (
+                  <div className="space-y-2 text-sm">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="font-semibold text-base dark:text-white">{detailOC.proveedores.razon_social}</p>
+                        {detailOC.proveedores.cuit && <p className="text-zinc-500">CUIT: {detailOC.proveedores.cuit}</p>}
+                        {detailOC.proveedores.condicion_iva && <p className="text-zinc-400 text-xs">{detailOC.proveedores.condicion_iva}</p>}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                      {detailOC.proveedores.email && (
+                        <div className="flex items-center gap-2">
+                          <Mail className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                          <span className="truncate">{detailOC.proveedores.email}</span>
+                          <CopyButton text={detailOC.proveedores.email} />
+                        </div>
+                      )}
+                      {detailOC.proveedores.telefono && (
+                        <div className="flex items-center gap-2">
+                          <Phone className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                          <span>{detailOC.proveedores.telefono}</span>
+                          <CopyButton text={detailOC.proveedores.telefono} />
+                        </div>
+                      )}
+                      {detailOC.proveedores.direccion && (
+                        <div className="flex items-center gap-2 sm:col-span-2">
+                          <MapPin className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                          <span className="truncate">
+                            {detailOC.proveedores.direccion}
+                            {detailOC.proveedores.localidad ? `, ${detailOC.proveedores.localidad}` : ""}
+                            {detailOC.proveedores.provincia ? `, ${detailOC.proveedores.provincia}` : ""}
+                          </span>
+                          <CopyButton text={`${detailOC.proveedores.direccion}${detailOC.proveedores.localidad ? `, ${detailOC.proveedores.localidad}` : ""}${detailOC.proveedores.provincia ? `, ${detailOC.proveedores.provincia}` : ""}`} />
+                        </div>
+                      )}
+                      {detailOC.proveedores.forma_pago && (
+                        <div className="flex items-center gap-2">
+                          <FileText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                          <span>Pago: {detailOC.proveedores.forma_pago}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-zinc-400">Sin datos del proveedor</p>
+                )}
+              </div>
+
+              {/* ── Info grid ──────────────────────────────────────────── */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                 <div>
                   <span className="text-zinc-400">Fecha</span>
-                  <p className="font-medium">{formatDate(detailOC.fecha)}</p>
+                  <p className="font-medium dark:text-white">{formatDate(detailOC.fecha)}</p>
                 </div>
                 <div>
                   <span className="text-zinc-400">Entrega estimada</span>
-                  <p className="font-medium">{detailOC.fecha_entrega_estimada ? formatDate(detailOC.fecha_entrega_estimada) : "\u2014"}</p>
-                </div>
-                <div>
-                  <span className="text-zinc-400">Estado</span>
-                  <div className="mt-1">
-                    <Badge variant={(statusConfig[detailOC.estado] || { variant: "outline" as const }).variant}>
-                      {(statusConfig[detailOC.estado] || { label: detailOC.estado }).label}
-                    </Badge>
-                  </div>
+                  <p className="font-medium dark:text-white">{detailOC.fecha_entrega_estimada ? formatDate(detailOC.fecha_entrega_estimada) : "\u2014"}</p>
                 </div>
                 <div>
                   <span className="text-zinc-400">Moneda</span>
-                  <p className="font-medium">{detailOC.moneda}</p>
+                  <p className="font-medium dark:text-white">{detailOC.moneda}</p>
+                </div>
+                <div>
+                  <span className="text-zinc-400">PR origen</span>
+                  <p className="font-medium dark:text-white">
+                    {detailOC.presupuesto_origen ? (
+                      <span className="font-mono text-blue-500">{(detailOC.presupuesto_origen as { numero: string }).numero}</span>
+                    ) : "\u2014"}
+                  </p>
                 </div>
               </div>
 
@@ -626,7 +785,7 @@ export default function OrdenesCompraPage() {
                 </div>
               )}
 
-              {/* Totals */}
+              {/* ── Totals ─────────────────────────────────────────────── */}
               <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4 space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-zinc-500">Subtotal</span>
@@ -638,13 +797,24 @@ export default function OrdenesCompraPage() {
                 </div>
                 <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-700 pt-2 font-semibold">
                   <span>Total</span>
-                  <span className="font-mono">{formatCurrency(Number(detailOC.total), detailOC.moneda as "ARS" | "USD")}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono">{formatCurrency(Number(detailOC.total), detailOC.moneda as "ARS" | "USD")}</span>
+                    <CopyButton text={formatCurrency(Number(detailOC.total), detailOC.moneda as "ARS" | "USD")} />
+                  </div>
                 </div>
               </div>
 
-              {/* Items table */}
+              {/* ── Items table with reception ─────────────────────────── */}
               <div>
-                <h3 className="text-sm font-semibold mb-3">Items de la orden</h3>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold">Items ({detailItems.length})</h3>
+                  {detailItems.length > 0 && (
+                    <CopyButton
+                      text={detailItems.map((it, i) => `${i + 1}. ${it.codigo} - ${it.descripcion} x${it.cantidad}`).join("\n")}
+                      label="Copiar items"
+                    />
+                  )}
+                </div>
                 {detailLoading ? (
                   <div className="flex items-center justify-center py-8">
                     <Loader2 className="h-5 w-5 animate-spin text-orange-500" />
@@ -661,7 +831,7 @@ export default function OrdenesCompraPage() {
                           <th className="px-3 py-2 text-right">Cant.</th>
                           <th className="px-3 py-2 text-right">P. Unit.</th>
                           <th className="px-3 py-2 text-right">Subtotal</th>
-                          <th className="px-3 py-2">Recepcion</th>
+                          <th className="px-3 py-2 text-center">Recibido</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -669,11 +839,12 @@ export default function OrdenesCompraPage() {
                           const pct = Number(item.cantidad) > 0
                             ? Math.round((Number(item.cantidad_recibida) / Number(item.cantidad)) * 100)
                             : 0;
+                          const canEditRecepcion = ["confirmada", "recibida_parcial"].includes(detailOC.estado);
                           return (
                             <tr key={item.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                               <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
-                              <td className="px-3 py-2">{item.descripcion}</td>
-                              <td className="px-3 py-2 text-right">{item.cantidad}</td>
+                              <td className="px-3 py-2 max-w-[200px] truncate" title={item.descripcion}>{item.descripcion}</td>
+                              <td className="px-3 py-2 text-right">{item.cantidad}{item.unidad ? ` ${item.unidad}` : ""}</td>
                               <td className="px-3 py-2 text-right font-mono">
                                 {formatCurrency(Number(item.precio_unitario), detailOC.moneda as "ARS" | "USD")}
                               </td>
@@ -681,16 +852,43 @@ export default function OrdenesCompraPage() {
                                 {formatCurrency(Number(item.subtotal), detailOC.moneda as "ARS" | "USD")}
                               </td>
                               <td className="px-3 py-2">
-                                <div className="w-20">
-                                  <div className="flex justify-between text-xs mb-0.5">
-                                    <span>{item.cantidad_recibida}/{item.cantidad}</span>
-                                  </div>
-                                  <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800">
-                                    <div
-                                      className={`h-1.5 rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 0 ? "bg-amber-500" : "bg-zinc-300"}`}
-                                      style={{ width: `${pct}%` }}
-                                    />
-                                  </div>
+                                <div className="flex items-center gap-2 justify-center">
+                                  {canEditRecepcion ? (
+                                    <div className="flex items-center gap-1">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        max={Number(item.cantidad)}
+                                        value={item.cantidad_recibida}
+                                        onChange={(e) => {
+                                          const val = Math.min(Number(e.target.value), Number(item.cantidad));
+                                          setDetailItems((prev) => prev.map((it) => it.id === item.id ? { ...it, cantidad_recibida: val } : it));
+                                        }}
+                                        onBlur={(e) => {
+                                          const val = Math.min(Math.max(0, Number(e.target.value)), Number(item.cantidad));
+                                          if (val !== Number(item.cantidad_recibida)) {
+                                            handleUpdateRecepcion(item.id, val);
+                                          }
+                                        }}
+                                        className="w-14 text-center rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-1 py-0.5 text-xs"
+                                        disabled={savingRecepcion === item.id}
+                                      />
+                                      <span className="text-xs text-zinc-400">/ {item.cantidad}</span>
+                                      {savingRecepcion === item.id && <Loader2 className="h-3 w-3 animate-spin text-orange-500" />}
+                                    </div>
+                                  ) : (
+                                    <div className="w-20">
+                                      <div className="flex justify-between text-xs mb-0.5">
+                                        <span>{item.cantidad_recibida}/{item.cantidad}</span>
+                                      </div>
+                                      <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800">
+                                        <div
+                                          className={`h-1.5 rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 0 ? "bg-amber-500" : "bg-zinc-300"}`}
+                                          style={{ width: `${pct}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               </td>
                             </tr>
