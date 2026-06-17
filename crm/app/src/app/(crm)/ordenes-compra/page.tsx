@@ -332,45 +332,31 @@ export default function OrdenesCompraPage() {
   const buildOCSummaryText = (oc: OCRow) => {
     const prov = oc.proveedores;
     const estadoLabel = (statusConfig[oc.estado] || { label: oc.estado }).label;
-    const sep = "─".repeat(50);
+    const mon = oc.moneda as "ARS" | "USD";
     const lines = [
-      sep,
-      `ORDEN DE COMPRA: ${oc.numero}`,
-      sep,
+      `*ORDEN DE COMPRA ${oc.numero}*`,
       "",
-      `Fecha:             ${formatDate(oc.fecha)}`,
-      oc.fecha_entrega_estimada ? `Entrega estimada:  ${formatDate(oc.fecha_entrega_estimada)}` : null,
-      `Estado:            ${estadoLabel}`,
-      `Moneda:            ${oc.moneda}`,
+      `Fecha: ${formatDate(oc.fecha)}`,
+      oc.fecha_entrega_estimada ? `Entrega estimada: ${formatDate(oc.fecha_entrega_estimada)}` : null,
+      `Estado: ${estadoLabel}`,
+      `Moneda: ${oc.moneda}`,
       "",
-      sep,
-      "PROVEEDOR",
-      sep,
-      "",
-      `Razon Social:  ${prov?.razon_social || "—"}`,
-      prov?.cuit ? `CUIT:          ${prov.cuit}` : null,
-      prov?.condicion_iva ? `IVA:           ${prov.condicion_iva}` : null,
-      prov?.email ? `Email:         ${prov.email}` : null,
-      prov?.telefono ? `Telefono:      ${prov.telefono}` : null,
-      prov?.direccion ? `Direccion:     ${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? `, ${prov.provincia}` : ""}` : null,
+      `*Proveedor:* ${prov?.razon_social || "\u2014"}`,
+      prov?.cuit ? `CUIT: ${prov.cuit}` : null,
+      prov?.email ? `Email: ${prov.email}` : null,
+      prov?.telefono ? `Tel: ${prov.telefono}` : null,
+      prov?.direccion ? `Dir: ${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? `, ${prov.provincia}` : ""}` : null,
       prov?.forma_pago ? `Forma de pago: ${prov.forma_pago}` : null,
       "",
-      sep,
-      "DETALLE DE ITEMS",
-      sep,
+      "*Items:*",
+      ...detailItems.map((it, i) =>
+        `${i + 1}. ${it.codigo} - ${it.descripcion}\n   ${it.cantidad}${it.unidad ? ` ${it.unidad}` : ""} x ${formatCurrency(Number(it.precio_unitario), mon)} = ${formatCurrency(Number(it.subtotal), mon)}`
+      ),
       "",
-      ...detailItems.map((it, i) => [
-        `${String(i + 1).padStart(2, " ")}. ${it.codigo}`,
-        `    ${it.descripcion}`,
-        `    Cantidad: ${it.cantidad}${it.unidad ? ` ${it.unidad}` : ""}  |  P.Unitario: ${formatCurrency(Number(it.precio_unitario), oc.moneda as "ARS" | "USD")}  |  Subtotal: ${formatCurrency(Number(it.subtotal), oc.moneda as "ARS" | "USD")}`,
-        "",
-      ]).flat(),
-      sep,
-      `Subtotal:  ${formatCurrency(Number(oc.subtotal), oc.moneda as "ARS" | "USD")}`,
-      `IVA:       ${formatCurrency(Number(oc.iva), oc.moneda as "ARS" | "USD")}`,
-      `TOTAL:     ${formatCurrency(Number(oc.total), oc.moneda as "ARS" | "USD")}`,
-      sep,
-      oc.observaciones ? `\nOBSERVACIONES:\n${oc.observaciones}` : null,
+      `Subtotal: ${formatCurrency(Number(oc.subtotal), mon)}`,
+      `IVA: ${formatCurrency(Number(oc.iva), mon)}`,
+      `*Total: ${formatCurrency(Number(oc.total), mon)}*`,
+      oc.observaciones ? `\nObs: ${oc.observaciones}` : null,
     ];
     return lines.filter((l) => l !== null).join("\n");
   };
@@ -394,82 +380,103 @@ export default function OrdenesCompraPage() {
     `).join("");
 
     const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${oc.numero}</title>
+<html><head><meta charset="utf-8"><title>${oc.numero} - Lazzari</title>
 <style>
-  body { font-family: -apple-system, Arial, sans-serif; margin: 0; padding: 40px; color: #18181b; font-size: 13px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; border-bottom: 3px solid #FF4500; padding-bottom: 20px; }
-  .title { font-size: 22px; font-weight: 700; color: #FF4500; }
-  .numero { font-size: 16px; font-family: monospace; margin-top: 4px; }
-  .estado { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #f4f4f5; }
-  .section { margin-bottom: 24px; }
-  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #71717a; font-weight: 600; margin-bottom: 8px; border-bottom: 1px solid #e4e4e7; padding-bottom: 4px; }
-  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; }
-  .info-label { color: #71717a; font-size: 11px; }
-  .info-value { font-weight: 500; margin-bottom: 4px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { background: #f4f4f5; padding: 8px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #71717a; font-weight: 600; }
-  .totals { margin-top: 16px; display: flex; flex-direction: column; align-items: flex-end; }
-  .total-row { display: flex; justify-content: space-between; width: 250px; padding: 4px 0; font-size: 13px; }
-  .total-row.final { border-top: 2px solid #18181b; padding-top: 8px; margin-top: 4px; font-weight: 700; font-size: 15px; }
-  .obs { background: #fafafa; border: 1px solid #e4e4e7; border-radius: 6px; padding: 12px; margin-top: 16px; }
-  .footer { margin-top: 40px; text-align: center; color: #a1a1aa; font-size: 10px; border-top: 1px solid #e4e4e7; padding-top: 12px; }
-  @media print { body { padding: 20px; } }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; padding: 0; color: #1a1a1a; font-size: 13px; line-height: 1.5; }
+  .page { max-width: 800px; margin: 0 auto; padding: 40px 48px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 3px solid #FF4500; }
+  .brand { font-size: 20px; font-weight: 800; color: #FF4500; letter-spacing: -0.5px; }
+  .brand-sub { font-size: 10px; color: #999; font-weight: 400; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 2px; }
+  .doc-info { text-align: right; }
+  .doc-type { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: #888; font-weight: 600; }
+  .doc-num { font-size: 20px; font-weight: 700; font-family: 'SF Mono', 'Consolas', monospace; margin: 4px 0; }
+  .doc-estado { display: inline-block; padding: 2px 12px; border-radius: 12px; font-size: 10px; font-weight: 600; background: #f0f0f0; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
+  .doc-fecha { font-size: 11px; color: #888; margin-top: 6px; }
+  .two-col { display: flex; gap: 32px; margin-bottom: 28px; }
+  .col { flex: 1; }
+  .section-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px; color: #FF4500; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
+  .field { margin-bottom: 6px; }
+  .field-label { font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.3px; }
+  .field-value { font-size: 13px; font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
+  thead th { background: #f8f8f8; padding: 10px 12px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #888; font-weight: 600; border-bottom: 2px solid #eee; }
+  tbody td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; font-size: 12px; }
+  tbody tr:last-child td { border-bottom: 2px solid #eee; }
+  .mono { font-family: 'SF Mono', 'Consolas', monospace; font-size: 11px; }
+  .right { text-align: right; }
+  .center { text-align: center; }
+  .totals-box { display: flex; justify-content: flex-end; margin-top: 12px; }
+  .totals-inner { width: 280px; }
+  .total-line { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12px; color: #666; }
+  .total-line .mono { color: #1a1a1a; }
+  .total-final { display: flex; justify-content: space-between; padding: 10px 0; margin-top: 6px; border-top: 2px solid #1a1a1a; font-size: 16px; font-weight: 700; }
+  .obs-box { background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 14px 16px; margin-top: 20px; font-size: 12px; color: #555; }
+  .obs-title { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; margin-bottom: 6px; }
+  .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #eee; display: flex; justify-content: space-between; font-size: 9px; color: #bbb; }
+  @media print { .page { padding: 24px 32px; } }
 </style></head><body>
+<div class="page">
 
 <div class="header">
   <div>
-    <div class="title">ORDEN DE COMPRA</div>
-    <div class="numero">${oc.numero}</div>
+    <div class="brand">LAZZARI</div>
+    <div class="brand-sub">Soluciones Industriales</div>
   </div>
-  <div style="text-align:right">
-    <div class="estado">${estadoLabel}</div>
-    <div style="margin-top:8px;font-size:12px;color:#71717a">Fecha: ${formatDate(oc.fecha)}</div>
-    ${oc.fecha_entrega_estimada ? `<div style="font-size:12px;color:#71717a">Entrega est.: ${formatDate(oc.fecha_entrega_estimada)}</div>` : ""}
-  </div>
-</div>
-
-<div class="section">
-  <div class="section-title">Proveedor</div>
-  <div class="info-grid">
-    <div><div class="info-label">Razon Social</div><div class="info-value">${prov?.razon_social || "—"}</div></div>
-    <div><div class="info-label">CUIT</div><div class="info-value">${prov?.cuit || "—"}</div></div>
-    ${prov?.email ? `<div><div class="info-label">Email</div><div class="info-value">${prov.email}</div></div>` : ""}
-    ${prov?.telefono ? `<div><div class="info-label">Telefono</div><div class="info-value">${prov.telefono}</div></div>` : ""}
-    ${prov?.direccion ? `<div><div class="info-label">Direccion</div><div class="info-value">${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? `, ${prov.provincia}` : ""}</div></div>` : ""}
-    ${prov?.condicion_iva ? `<div><div class="info-label">Cond. IVA</div><div class="info-value">${prov.condicion_iva}</div></div>` : ""}
-    ${prov?.forma_pago ? `<div><div class="info-label">Forma de pago</div><div class="info-value">${prov.forma_pago}</div></div>` : ""}
+  <div class="doc-info">
+    <div class="doc-type">Orden de Compra</div>
+    <div class="doc-num">${oc.numero}</div>
+    <div class="doc-estado">${estadoLabel}</div>
+    <div class="doc-fecha">${formatDate(oc.fecha)}${oc.fecha_entrega_estimada ? ` &bull; Entrega: ${formatDate(oc.fecha_entrega_estimada)}` : ""}</div>
   </div>
 </div>
 
-<div class="section">
-  <div class="section-title">Detalle de items</div>
-  <table>
-    <thead><tr>
-      <th style="text-align:center;width:30px">#</th>
-      <th>Codigo</th>
-      <th>Descripcion</th>
-      <th style="text-align:right">Cantidad</th>
-      <th style="text-align:right">P. Unitario</th>
-      <th style="text-align:right">Subtotal</th>
-    </tr></thead>
-    <tbody>${itemRows}</tbody>
-  </table>
-  <div class="totals">
-    <div class="total-row"><span>Subtotal</span><span style="font-family:monospace">${formatCurrency(Number(oc.subtotal), mon)}</span></div>
-    <div class="total-row"><span>IVA</span><span style="font-family:monospace">${formatCurrency(Number(oc.iva), mon)}</span></div>
-    <div class="total-row final"><span>TOTAL</span><span style="font-family:monospace">${formatCurrency(Number(oc.total), mon)}</span></div>
+<div class="two-col">
+  <div class="col">
+    <div class="section-label">Proveedor</div>
+    <div class="field"><div class="field-value" style="font-size:15px;font-weight:700">${prov?.razon_social || "\u2014"}</div></div>
+    ${prov?.cuit ? `<div class="field"><div class="field-label">CUIT</div><div class="field-value">${prov.cuit}</div></div>` : ""}
+    ${prov?.condicion_iva ? `<div class="field"><div class="field-label">Cond. IVA</div><div class="field-value">${prov.condicion_iva}</div></div>` : ""}
+  </div>
+  <div class="col">
+    <div class="section-label">Contacto</div>
+    ${prov?.email ? `<div class="field"><div class="field-label">Email</div><div class="field-value">${prov.email}</div></div>` : ""}
+    ${prov?.telefono ? `<div class="field"><div class="field-label">Telefono</div><div class="field-value">${prov.telefono}</div></div>` : ""}
+    ${prov?.direccion ? `<div class="field"><div class="field-label">Direccion</div><div class="field-value">${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? `, ${prov.provincia}` : ""}</div></div>` : ""}
+    ${prov?.forma_pago ? `<div class="field"><div class="field-label">Forma de pago</div><div class="field-value">${prov.forma_pago}</div></div>` : ""}
   </div>
 </div>
 
-${oc.observaciones ? `<div class="section"><div class="section-title">Observaciones</div><div class="obs">${oc.observaciones}</div></div>` : ""}
+<div class="section-label" style="margin-bottom:12px">Detalle</div>
+<table>
+  <thead><tr>
+    <th class="center" style="width:36px">#</th>
+    <th style="width:100px">Codigo</th>
+    <th>Descripcion</th>
+    <th class="right" style="width:80px">Cant.</th>
+    <th class="right" style="width:110px">P. Unitario</th>
+    <th class="right" style="width:110px">Subtotal</th>
+  </tr></thead>
+  <tbody>${itemRows}</tbody>
+</table>
 
-${oc.presupuesto_origen ? `<div style="font-size:11px;color:#71717a;margin-top:12px">Presupuesto origen: ${(oc.presupuesto_origen as { numero: string }).numero}</div>` : ""}
+<div class="totals-box">
+  <div class="totals-inner">
+    <div class="total-line"><span>Subtotal</span><span class="mono">${formatCurrency(Number(oc.subtotal), mon)}</span></div>
+    <div class="total-line"><span>IVA</span><span class="mono">${formatCurrency(Number(oc.iva), mon)}</span></div>
+    <div class="total-final"><span>TOTAL (${mon})</span><span class="mono">${formatCurrency(Number(oc.total), mon)}</span></div>
+  </div>
+</div>
+
+${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones</div>${oc.observaciones}</div>` : ""}
 
 <div class="footer">
-  Lazzari Soluciones Industriales &mdash; ${oc.numero} &mdash; Generado el ${formatDate(new Date().toISOString())}
+  <span>Lazzari Soluciones Industriales</span>
+  <span>${oc.numero}${oc.presupuesto_origen ? ` | PR: ${(oc.presupuesto_origen as { numero: string }).numero}` : ""}</span>
+  <span>${formatDate(new Date().toISOString())}</span>
 </div>
 
-</body></html>`;
+</div></body></html>`;
 
     const win = window.open("", "_blank");
     if (win) {

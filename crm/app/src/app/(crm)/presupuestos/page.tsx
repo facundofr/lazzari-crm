@@ -729,47 +729,32 @@ export default function PresupuestosPage() {
 
   function buildPRSummaryText(pr: Presupuesto) {
     const p = pr as any;
-    const sep = "\u2500".repeat(50);
     const estadoLabel = (statusConfig[pr.estado] || { label: pr.estado }).label;
+    const mon = pr.moneda;
     const lines = [
-      sep,
-      `PRESUPUESTO: ${pr.numero}`,
-      sep,
+      `*PRESUPUESTO ${pr.numero}*`,
       "",
-      `Fecha:        ${formatDate(pr.fecha)}`,
-      `Vencimiento:  ${formatDate(pr.vencimiento)}`,
-      `Estado:       ${estadoLabel}`,
-      `Moneda:       ${pr.moneda}`,
-      pr.creadoPor ? `Creado por:   ${pr.creadoPor}` : null,
-      p.vendedorNombre ? `Vendedor:     ${p.vendedorNombre}` : null,
+      `Fecha: ${formatDate(pr.fecha)}`,
+      `Vencimiento: ${formatDate(pr.vencimiento)}`,
+      `Estado: ${estadoLabel}`,
+      `Moneda: ${mon}`,
+      p.vendedorNombre ? `Vendedor: ${p.vendedorNombre}` : null,
       "",
-      sep,
-      "CLIENTE",
-      sep,
+      `*Cliente:* ${pr.clienteNombre}`,
+      p.clienteCuit ? `CUIT: ${p.clienteCuit}` : null,
+      p.clienteEmail ? `Email: ${p.clienteEmail}` : null,
+      p.clienteTelefono ? `Tel: ${p.clienteTelefono}` : null,
+      p.clienteDireccion ? `Dir: ${p.clienteDireccion}${p.clienteLocalidad ? `, ${p.clienteLocalidad}` : ""}${p.clienteProvincia ? `, ${p.clienteProvincia}` : ""}` : null,
       "",
-      `Razon Social:  ${pr.clienteNombre}`,
-      p.clienteCuit ? `CUIT:          ${p.clienteCuit}` : null,
-      p.clienteCondicionIva ? `IVA:           ${p.clienteCondicionIva}` : null,
-      p.clienteEmail ? `Email:         ${p.clienteEmail}` : null,
-      p.clienteTelefono ? `Telefono:      ${p.clienteTelefono}` : null,
-      p.clienteDireccion ? `Direccion:     ${p.clienteDireccion}${p.clienteLocalidad ? `, ${p.clienteLocalidad}` : ""}${p.clienteProvincia ? `, ${p.clienteProvincia}` : ""}` : null,
+      "*Items:*",
+      ...pr.items.map((it, i) =>
+        `${i + 1}. ${it.codigo} - ${it.descripcion}\n   ${it.cantidad} ${it.unidad} x ${formatCurrency(it.precioVenta, mon)} = ${formatCurrency(it.total, mon)}`
+      ),
       "",
-      sep,
-      "DETALLE DE ITEMS",
-      sep,
-      "",
-      ...pr.items.map((it, i) => [
-        `${String(i + 1).padStart(2, " ")}. ${it.codigo}`,
-        `    ${it.descripcion}`,
-        `    Cantidad: ${it.cantidad} ${it.unidad}  |  P.Venta: ${formatCurrency(it.precioVenta, pr.moneda)}  |  Total: ${formatCurrency(it.total, pr.moneda)}`,
-        "",
-      ]).flat(),
-      sep,
-      `Subtotal:  ${formatCurrency(pr.subtotal, pr.moneda)}`,
-      `IVA:       ${formatCurrency(pr.iva, pr.moneda)}`,
-      `TOTAL:     ${formatCurrency(pr.total, pr.moneda)}`,
-      sep,
-      pr.observaciones ? `\nOBSERVACIONES:\n${pr.observaciones}` : null,
+      `Subtotal: ${formatCurrency(pr.subtotal, mon)}`,
+      `IVA: ${formatCurrency(pr.iva, mon)}`,
+      `*Total: ${formatCurrency(pr.total, mon)}*`,
+      pr.observaciones ? `\nObs: ${pr.observaciones}` : null,
     ];
     return lines.filter((l) => l !== null).join("\n");
   }
@@ -788,91 +773,110 @@ export default function PresupuestosPage() {
 
     const itemRows = pr.items.map((it, i) => `
       <tr>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:center">${i + 1}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-family:monospace;font-size:11px">${it.codigo}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7">${it.descripcion}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right">${it.cantidad} ${it.unidad}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace">${formatCurrency(it.precioVenta, mon)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace;font-weight:600">${formatCurrency(it.total, mon)}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;text-align:center;font-size:12px">${i + 1}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-family:'SF Mono','Consolas',monospace;font-size:11px">${it.codigo}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:12px">${it.descripcion}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;text-align:right;font-size:12px">${it.cantidad} ${it.unidad}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;text-align:right;font-family:'SF Mono','Consolas',monospace;font-size:11px">${formatCurrency(it.precioVenta, mon)}</td>
+        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;text-align:right;font-family:'SF Mono','Consolas',monospace;font-size:11px;font-weight:600">${formatCurrency(it.total, mon)}</td>
       </tr>
     `).join("");
 
     const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${pr.numero}</title>
+<html><head><meta charset="utf-8"><title>${pr.numero} - Lazzari</title>
 <style>
-  body { font-family: -apple-system, Arial, sans-serif; margin: 0; padding: 40px; color: #18181b; font-size: 13px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; border-bottom: 3px solid #FF4500; padding-bottom: 20px; }
-  .title { font-size: 22px; font-weight: 700; color: #FF4500; }
-  .numero { font-size: 16px; font-family: monospace; margin-top: 4px; }
-  .estado { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #f4f4f5; }
-  .section { margin-bottom: 24px; }
-  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #71717a; font-weight: 600; margin-bottom: 8px; border-bottom: 1px solid #e4e4e7; padding-bottom: 4px; }
-  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; }
-  .info-label { color: #71717a; font-size: 11px; }
-  .info-value { font-weight: 500; margin-bottom: 4px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { background: #f4f4f5; padding: 8px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #71717a; font-weight: 600; }
-  .totals { margin-top: 16px; display: flex; flex-direction: column; align-items: flex-end; }
-  .total-row { display: flex; justify-content: space-between; width: 250px; padding: 4px 0; font-size: 13px; }
-  .total-row.final { border-top: 2px solid #18181b; padding-top: 8px; margin-top: 4px; font-weight: 700; font-size: 15px; }
-  .obs { background: #fafafa; border: 1px solid #e4e4e7; border-radius: 6px; padding: 12px; margin-top: 16px; }
-  .footer { margin-top: 40px; text-align: center; color: #a1a1aa; font-size: 10px; border-top: 1px solid #e4e4e7; padding-top: 12px; }
-  @media print { body { padding: 20px; } }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; padding: 0; color: #1a1a1a; font-size: 13px; line-height: 1.5; }
+  .page { max-width: 800px; margin: 0 auto; padding: 40px 48px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 3px solid #FF4500; }
+  .brand { font-size: 20px; font-weight: 800; color: #FF4500; letter-spacing: -0.5px; }
+  .brand-sub { font-size: 10px; color: #999; font-weight: 400; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 2px; }
+  .doc-info { text-align: right; }
+  .doc-type { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: #888; font-weight: 600; }
+  .doc-num { font-size: 20px; font-weight: 700; font-family: 'SF Mono', 'Consolas', monospace; margin: 4px 0; }
+  .doc-estado { display: inline-block; padding: 2px 12px; border-radius: 12px; font-size: 10px; font-weight: 600; background: #f0f0f0; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
+  .doc-fecha { font-size: 11px; color: #888; margin-top: 6px; }
+  .two-col { display: flex; gap: 32px; margin-bottom: 28px; }
+  .col { flex: 1; }
+  .section-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px; color: #FF4500; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
+  .field { margin-bottom: 6px; }
+  .field-label { font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.3px; }
+  .field-value { font-size: 13px; font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
+  thead th { background: #f8f8f8; padding: 10px 12px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #888; font-weight: 600; border-bottom: 2px solid #eee; }
+  tbody tr:last-child td { border-bottom: 2px solid #eee !important; }
+  .totals-box { display: flex; justify-content: flex-end; margin-top: 12px; }
+  .totals-inner { width: 280px; }
+  .total-line { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12px; color: #666; }
+  .total-line span:last-child { font-family: 'SF Mono', 'Consolas', monospace; font-size: 11px; color: #1a1a1a; }
+  .total-final { display: flex; justify-content: space-between; padding: 10px 0; margin-top: 6px; border-top: 2px solid #1a1a1a; font-size: 16px; font-weight: 700; }
+  .total-final span:last-child { font-family: 'SF Mono', 'Consolas', monospace; }
+  .obs-box { background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 14px 16px; margin-top: 20px; font-size: 12px; color: #555; }
+  .obs-title { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; margin-bottom: 6px; }
+  .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #eee; display: flex; justify-content: space-between; font-size: 9px; color: #bbb; }
+  @media print { .page { padding: 24px 32px; } }
 </style></head><body>
+<div class="page">
 
 <div class="header">
   <div>
-    <div class="title">PRESUPUESTO</div>
-    <div class="numero">${pr.numero}</div>
+    <div class="brand">LAZZARI</div>
+    <div class="brand-sub">Soluciones Industriales</div>
   </div>
-  <div style="text-align:right">
-    <div class="estado">${estadoLabel}</div>
-    <div style="margin-top:8px;font-size:12px;color:#71717a">Fecha: ${formatDate(pr.fecha)}</div>
-    <div style="font-size:12px;color:#71717a">Vence: ${formatDate(pr.vencimiento)}</div>
-  </div>
-</div>
-
-<div class="section">
-  <div class="section-title">Cliente</div>
-  <div class="info-grid">
-    <div><div class="info-label">Razon Social</div><div class="info-value">${pr.clienteNombre}</div></div>
-    <div><div class="info-label">CUIT</div><div class="info-value">${p.clienteCuit || "\u2014"}</div></div>
-    ${p.clienteEmail ? `<div><div class="info-label">Email</div><div class="info-value">${p.clienteEmail}</div></div>` : ""}
-    ${p.clienteTelefono ? `<div><div class="info-label">Telefono</div><div class="info-value">${p.clienteTelefono}</div></div>` : ""}
-    ${p.clienteDireccion ? `<div><div class="info-label">Direccion</div><div class="info-value">${p.clienteDireccion}${p.clienteLocalidad ? `, ${p.clienteLocalidad}` : ""}${p.clienteProvincia ? `, ${p.clienteProvincia}` : ""}</div></div>` : ""}
-    ${p.clienteCondicionIva ? `<div><div class="info-label">Cond. IVA</div><div class="info-value">${p.clienteCondicionIva}</div></div>` : ""}
+  <div class="doc-info">
+    <div class="doc-type">Presupuesto</div>
+    <div class="doc-num">${pr.numero}</div>
+    <div class="doc-estado">${estadoLabel}</div>
+    <div class="doc-fecha">${formatDate(pr.fecha)} &bull; Vence: ${formatDate(pr.vencimiento)}</div>
   </div>
 </div>
 
-<div class="section">
-  <div class="section-title">Detalle de items</div>
-  <table>
-    <thead><tr>
-      <th style="text-align:center;width:30px">#</th>
-      <th>Codigo</th>
-      <th>Descripcion</th>
-      <th style="text-align:right">Cantidad</th>
-      <th style="text-align:right">P. Venta</th>
-      <th style="text-align:right">Total</th>
-    </tr></thead>
-    <tbody>${itemRows}</tbody>
-  </table>
-  <div class="totals">
-    <div class="total-row"><span>Subtotal</span><span style="font-family:monospace">${formatCurrency(pr.subtotal, mon)}</span></div>
-    <div class="total-row"><span>IVA</span><span style="font-family:monospace">${formatCurrency(pr.iva, mon)}</span></div>
-    <div class="total-row final"><span>TOTAL</span><span style="font-family:monospace">${formatCurrency(pr.total, mon)}</span></div>
+<div class="two-col">
+  <div class="col">
+    <div class="section-label">Cliente</div>
+    <div class="field"><div class="field-value" style="font-size:15px;font-weight:700">${pr.clienteNombre}</div></div>
+    ${p.clienteCuit ? `<div class="field"><div class="field-label">CUIT</div><div class="field-value">${p.clienteCuit}</div></div>` : ""}
+    ${p.clienteCondicionIva ? `<div class="field"><div class="field-label">Cond. IVA</div><div class="field-value">${p.clienteCondicionIva}</div></div>` : ""}
+  </div>
+  <div class="col">
+    <div class="section-label">Contacto</div>
+    ${p.clienteEmail ? `<div class="field"><div class="field-label">Email</div><div class="field-value">${p.clienteEmail}</div></div>` : ""}
+    ${p.clienteTelefono ? `<div class="field"><div class="field-label">Telefono</div><div class="field-value">${p.clienteTelefono}</div></div>` : ""}
+    ${p.clienteDireccion ? `<div class="field"><div class="field-label">Direccion</div><div class="field-value">${p.clienteDireccion}${p.clienteLocalidad ? `, ${p.clienteLocalidad}` : ""}${p.clienteProvincia ? `, ${p.clienteProvincia}` : ""}</div></div>` : ""}
+    ${p.vendedorNombre ? `<div class="field"><div class="field-label">Vendedor</div><div class="field-value">${p.vendedorNombre}</div></div>` : ""}
   </div>
 </div>
 
-${pr.observaciones ? `<div class="section"><div class="section-title">Observaciones</div><div class="obs">${pr.observaciones}</div></div>` : ""}
+<div class="section-label" style="margin-bottom:12px">Detalle</div>
+<table>
+  <thead><tr>
+    <th style="text-align:center;width:36px">#</th>
+    <th style="width:100px">Codigo</th>
+    <th>Descripcion</th>
+    <th style="text-align:right;width:80px">Cant.</th>
+    <th style="text-align:right;width:110px">P. Venta</th>
+    <th style="text-align:right;width:110px">Total</th>
+  </tr></thead>
+  <tbody>${itemRows}</tbody>
+</table>
 
-${pr.creadoPor ? `<div style="font-size:11px;color:#71717a;margin-top:12px">Creado por: ${pr.creadoPor}${p.vendedorNombre ? ` | Vendedor: ${p.vendedorNombre}` : ""}</div>` : ""}
+<div class="totals-box">
+  <div class="totals-inner">
+    <div class="total-line"><span>Subtotal</span><span>${formatCurrency(pr.subtotal, mon)}</span></div>
+    <div class="total-line"><span>IVA</span><span>${formatCurrency(pr.iva, mon)}</span></div>
+    <div class="total-final"><span>TOTAL (${mon})</span><span>${formatCurrency(pr.total, mon)}</span></div>
+  </div>
+</div>
+
+${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones</div>${pr.observaciones}</div>` : ""}
 
 <div class="footer">
-  Lazzari Soluciones Industriales &mdash; ${pr.numero} &mdash; Generado el ${formatDate(new Date().toISOString())}
+  <span>Lazzari Soluciones Industriales</span>
+  <span>${pr.numero}${pr.creadoPor ? ` | ${pr.creadoPor}` : ""}</span>
+  <span>${formatDate(new Date().toISOString())}</span>
 </div>
 
-</body></html>`;
+</div></body></html>`;
 
     const w = window.open("", "_blank");
     if (w) {
