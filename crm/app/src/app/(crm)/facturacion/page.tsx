@@ -226,18 +226,6 @@ export default function FacturacionPage() {
       if (data.success) {
         setEmitResult(data.factura);
         setEmitStep("success");
-        // Save items to factura_items
-        if (data.factura?.id) {
-          const itemsToInsert = emitData.items.map((it, idx) => ({
-            factura_id: data.factura.id,
-            descripcion: it.descripcion,
-            cantidad: it.cantidad,
-            precio_unitario: it.precio_unitario,
-            iva_porcentaje: it.iva_porcentaje,
-            orden: idx + 1,
-          }));
-          await supabase.from("factura_items").insert(itemsToInsert as any);
-        }
         await fetchData();
       } else {
         setEmitError(data.error || "Error al emitir factura");

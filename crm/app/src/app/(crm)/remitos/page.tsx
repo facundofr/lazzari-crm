@@ -35,7 +35,7 @@ interface PresupuestoIA {
   numero: string;
   cliente_id: string;
   clientes: { razon_social: string } | null;
-  presupuesto_items: { id: string; codigo: string; descripcion: string; cantidad: number; unidad: string }[];
+  presupuesto_items: { id: string; descripcion: string; cantidad: number; unidad: string }[];
 }
 
 export default function RemitosPage() {
@@ -179,7 +179,7 @@ export default function RemitosPage() {
     setIaSuccess("");
     const { data } = await supabase
       .from("presupuestos")
-      .select("id, numero, cliente_id, clientes(razon_social), presupuesto_items(id, codigo, descripcion, cantidad, unidad)")
+      .select("id, numero, cliente_id, clientes(razon_social), presupuesto_items(id, descripcion, cantidad, unidad)")
       .eq("estado", "aprobado");
     if (data) setPresupuestosIA(data as unknown as PresupuestoIA[]);
     setIaModalOpen(true);
@@ -213,12 +213,12 @@ export default function RemitosPage() {
         }).select("id").single();
 
         if (remitoData && p.presupuesto_items.length > 0) {
-          const items = p.presupuesto_items.map((item) => ({
+          const items = p.presupuesto_items.map((item, idx) => ({
             remito_id: remitoData.id,
-            codigo: item.codigo,
             descripcion: item.descripcion,
             cantidad: item.cantidad,
             unidad: item.unidad,
+            orden: idx,
           }));
           await (supabase.from("remito_items") as any).insert(items);
         }

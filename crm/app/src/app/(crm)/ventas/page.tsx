@@ -9,11 +9,11 @@ import { useUser } from "@/lib/auth-context";
 import Link from "next/link";
 import {
   FileText, Receipt, Truck, CheckCircle2,
-  Loader2, X, ChevronRight, ArrowRight, ShieldCheck, XCircle,
-  Plus, Minus, User, ExternalLink, ClipboardCopy, Download,
-  Eye, Check, DollarSign,
+  Loader2, X, ChevronRight, ChevronDown,
+  Plus, Minus, DollarSign, Eye, AlertCircle,
+  ArrowRight, Clock, Package,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -34,13 +34,13 @@ interface VentaPresupuesto {
   moneda: string;
   vendedor_id: string | null;
   vendedor_profile: { full_name: string; avatar_url: string | null } | null;
-  clientes: { razon_social: string; cuit: string; condicion_iva?: string } | null;
-  presupuesto_items?: {
+  clientes: { razon_social: string; cuit: string; condicion_iva: string } | null;
+  presupuesto_items: {
     descripcion: string;
     cantidad: number;
-    precio_venta: number;
-    iva_porcentaje?: number;
-    total: number;
+    precio_venta: number | null;
+    iva_porcentaje: number;
+    total: number | null;
   }[];
 }
 
@@ -72,114 +72,111 @@ interface Venta {
   remitos: VentaRemito[];
 }
 
-// ── Emit Modal Types ──────────────────────────────────────────────
+// ── Pipeline logic ───────────────────────────────────────────────
 
-interface EmitItem {
-  descripcion: string;
-  cantidad: number;
-  precio_unitario: number;
-  iva_porcentaje: number;
+type VentaStep = 0 | 1 | 2 | 3;
+
+function getVentaStep(v: Venta): VentaStep {
+  const facturaActiva = v.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
+  if (facturaActiva?.estado === "pagada") return 3; // Cobrada
+  if (facturaActiva) return 2; // Facturada
+  const remitoEntregado = v.remitos.some(r => r.estado === "entregado");
+  if (remitoEntregado) return 1; // Entregada
+  if (v.remitos.length > 0) return 1; // En proceso de entrega
+  return 0; // Pendiente
 }
+
+const STEP_LABELS = ["Presupuesto", "Entrega", "Factura", "Cobro"];
+const STEP_ICONS = [FileText, Truck, Receipt, DollarSign];
 
 const PV_CRM = 15;
 
-function formatComprobante(tipo: string, pv: number, num: number) {
-  return `${tipo} ${String(pv).padStart(4, "0")}-${String(num).padStart(8, "0")}`;
-}
-
-// ── Pipeline step config ──────────────────────────────────────────
-
-const STEPS = [
-  { key: "presupuesto", label: "Presupuesto", icon: FileText },
-  { key: "entrega", label: "Entrega", icon: Truck },
-  { key: "factura", label: "Factura", icon: Receipt },
-  { key: "cobro", label: "Cobro", icon: CheckCircle2 },
-] as const;
-
-function getVentaStep(v: Venta): number {
-  const hasFacturaPagada = v.facturas.some(f => f.estado === "pagada");
-  if (hasFacturaPagada) return 3; // cobro
-
-  const hasFactura = v.facturas.some(f => f.estado === "emitida");
-  if (hasFactura) return 2; // factura emitida
-
-  const hasRemito = v.remitos.length > 0;
-  if (hasRemito) return 1; // entregado
-
-  return 0; // presupuesto aprobado
-}
-
-// ── Page ──────────────────────────────────────────────────────────
+// ── Component ────────────────────────────────────────────────────
 
 export default function VentasPage() {
   const { profile, role } = useUser();
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedVenta, setSelectedVenta] = useState<Venta | null>(null);
-  const [filterStep, setFilterStep] = useState<string>("todos");
-  const [filterVendedor, setFilterVendedor] = useState<string>("todos");
   const [vendedores, setVendedores] = useState<VendedorOption[]>([]);
+  const [filterVendedor, setFilterVendedor] = useState<string>("todos");
+  const [filterStep, setFilterStep] = useState<number | null>(null);
+  const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
+  const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
-  // Emit modal
-  const [emitOpen, setEmitOpen] = useState(false);
-  const [emitStep, setEmitStep] = useState<"form" | "emitting" | "success" | "error">("form");
-  const [emitResult, setEmitResult] = useState<any>(null);
-  const [emitError, setEmitError] = useState("");
+  // Emit modal state
+  const [emitModalOpen, setEmitModalOpen] = useState(false);
   const [emitVenta, setEmitVenta] = useState<Venta | null>(null);
-  const [emitData, setEmitData] = useState({
-    tipo: "FB",
-    items: [] as EmitItem[],
-  });
+  const [emitTipo, setEmitTipo] = useState<"FA" | "FB">("FB");
+  const [emitItems, setEmitItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number }[]>([]);
+  const [emitting, setEmitting] = useState(false);
+  const [emitError, setEmitError] = useState("");
+  const [emitSuccess, setEmitSuccess] = useState("");
+
+  // Remito creation state
+  const [creatingRemito, setCreatingRemito] = useState(false);
 
   // Auto-filter vendedor for vendedor role
   useEffect(() => {
     if (role === "vendedor" && profile?.id) {
       setFilterVendedor(profile.id);
     }
-  }, [role, profile]);
-
-  // Fetch vendedores list
-  useEffect(() => {
-    supabase.from("profiles").select("id, full_name").in("role", ["vendedor", "admin", "super_admin"]).eq("active", true).order("full_name")
-      .then(({ data }) => { if (data) setVendedores(data as VendedorOption[]); });
-  }, []);
+  }, [role, profile?.id]);
 
   const fetchData = useCallback(async () => {
     try {
-      const { data: presupuestos } = await supabase
+      // Fetch presupuestos aprobados with items
+      const { data: presupuestos, error: pError } = await supabase
         .from("presupuestos")
-        .select(`*, clientes(razon_social, cuit, condicion_iva), vendedor_profile:vendedor_id(full_name, avatar_url), presupuesto_items(descripcion, cantidad, precio_venta, iva_porcentaje, total)`)
-        .in("estado", ["aprobado"])
+        .select(`
+          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, vendedor_id,
+          vendedor_profile:vendedor_id(full_name, avatar_url),
+          clientes(razon_social, cuit, condicion_iva),
+          presupuesto_items(descripcion, cantidad, precio_venta, iva_porcentaje, total)
+        `)
+        .eq("estado", "aprobado")
         .order("fecha", { ascending: false });
 
-      if (!presupuestos || presupuestos.length === 0) {
+      if (pError || !presupuestos) {
+        console.error("Error fetching presupuestos:", pError);
         setVentas([]);
         setLoading(false);
         return;
       }
 
-      const presupuestoIds = presupuestos.map(p => p.id);
+      // Get all presupuesto IDs
+      const pIds = presupuestos.map((p: any) => p.id);
 
-      // Fetch related facturas
-      const { data: facturas } = await supabase
-        .from("facturas")
-        .select("id, tipo, punto_venta, numero, fecha, cae, subtotal, iva, total, estado, presupuesto_id")
-        .in("presupuesto_id", presupuestoIds);
+      // Fetch related facturas and remitos in parallel
+      const [facturasRes, remitosRes] = await Promise.all([
+        pIds.length > 0
+          ? supabase.from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, subtotal, iva, total, estado, presupuesto_id").in("presupuesto_id", pIds)
+          : { data: [], error: null },
+        pIds.length > 0
+          ? supabase.from("remitos").select("id, numero, fecha, estado, presupuesto_id").in("presupuesto_id", pIds)
+          : { data: [], error: null },
+      ]);
 
-      // Fetch related remitos
-      const { data: remitos } = await supabase
-        .from("remitos")
-        .select("id, numero, fecha, estado, presupuesto_id")
-        .in("presupuesto_id", presupuestoIds);
+      const facturas = (facturasRes.data || []) as VentaFactura[];
+      const remitos = (remitosRes.data || []) as VentaRemito[];
 
-      const ventasList: Venta[] = presupuestos.map(p => ({
-        presupuesto: p as unknown as VentaPresupuesto,
-        facturas: (facturas || []).filter(f => f.presupuesto_id === p.id) as VentaFactura[],
-        remitos: (remitos || []).filter(r => r.presupuesto_id === p.id) as VentaRemito[],
+      // Build ventas array
+      const ventasArr: Venta[] = presupuestos.map((p: any) => ({
+        presupuesto: p as VentaPresupuesto,
+        facturas: facturas.filter(f => f.presupuesto_id === p.id),
+        remitos: remitos.filter(r => r.presupuesto_id === p.id),
       }));
 
-      setVentas(ventasList);
-    } catch {
+      setVentas(ventasArr);
+
+      // Fetch vendedores for filter
+      const { data: vendedorData } = await supabase
+        .from("profiles")
+        .select("id, full_name")
+        .in("role", ["vendedor", "admin", "super_admin"])
+        .eq("active", true);
+      if (vendedorData) setVendedores(vendedorData as VendedorOption[]);
+    } catch (err) {
+      console.error("Error fetching ventas:", err);
       setVentas([]);
     } finally {
       setLoading(false);
@@ -188,57 +185,66 @@ export default function VentasPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // ── Facturar from presupuesto ──────────────────────────────────
+  // ── Filtered data ──────────────────────────────────────────────
 
-  const openFacturar = (v: Venta) => {
-    const p = v.presupuesto;
-    const items: EmitItem[] = (p.presupuesto_items || []).map(it => ({
+  const filteredVentas = useMemo(() => {
+    return ventas.filter(v => {
+      if (filterVendedor !== "todos" && v.presupuesto.vendedor_id !== filterVendedor) return false;
+      if (filterStep !== null && getVentaStep(v) !== filterStep) return false;
+      return true;
+    });
+  }, [ventas, filterVendedor, filterStep]);
+
+  // KPIs from filtered ventas (respecting vendedor filter, ignoring step filter)
+  const kpis = useMemo(() => {
+    const base = ventas.filter(v =>
+      filterVendedor === "todos" || v.presupuesto.vendedor_id === filterVendedor
+    );
+    const total = base.length;
+    const pendientes = base.filter(v => getVentaStep(v) < 2).length;
+    const facturadas = base.filter(v => getVentaStep(v) === 2).length;
+    const cobradas = base.filter(v => getVentaStep(v) === 3).length;
+    const montoTotal = base.reduce((sum, v) => sum + (v.presupuesto.total || 0), 0);
+    return { total, pendientes, facturadas, cobradas, montoTotal };
+  }, [ventas, filterVendedor]);
+
+  const selectedVenta = useMemo(() => {
+    if (!selectedVentaId) return null;
+    return filteredVentas.find(v => v.presupuesto.id === selectedVentaId) || null;
+  }, [filteredVentas, selectedVentaId]);
+
+  // ── Actions ────────────────────────────────────────────────────
+
+  function openEmitModal(venta: Venta) {
+    const p = venta.presupuesto;
+    const condIva = p.clientes?.condicion_iva;
+    const defaultTipo = condIva === "RI" ? "FA" : "FB";
+
+    const items = (p.presupuesto_items || []).map(it => ({
       descripcion: it.descripcion,
       cantidad: it.cantidad,
-      precio_unitario: it.precio_venta || it.total / (it.cantidad || 1),
+      precio_unitario: it.precio_venta || (it.total ? it.total / (it.cantidad || 1) : 0),
       iva_porcentaje: it.iva_porcentaje || 21,
     }));
 
-    const clienteCuit = p.clientes?.cuit;
-    const defaultTipo = clienteCuit ? "FA" : "FB";
-
-    setEmitVenta(v);
-    setEmitData({ tipo: defaultTipo, items: items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] });
-    setEmitStep("form");
+    setEmitVenta(venta);
+    setEmitTipo(defaultTipo as "FA" | "FB");
+    setEmitItems(items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]);
     setEmitError("");
-    setEmitResult(null);
-    setEmitOpen(true);
-  };
+    setEmitSuccess("");
+    setEmitModalOpen(true);
+  }
 
-  const isFacturaA = emitData.tipo === "FA" || emitData.tipo === "NCA";
+  async function handleEmitFactura() {
+    if (!emitVenta || emitting) return;
+    const p = emitVenta.presupuesto;
 
-  const emitTotals = emitData.items.reduce((acc, it) => {
-    if (isFacturaA) {
-      const neto = it.cantidad * it.precio_unitario;
-      const iva = neto * (it.iva_porcentaje / 100);
-      return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + neto + iva };
-    } else {
-      const total = it.cantidad * it.precio_unitario;
-      const neto = Math.round(total / 1.21 * 100) / 100;
-      const iva = Math.round((total - neto) * 100) / 100;
-      return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + total };
-    }
-  }, { neto: 0, iva: 0, total: 0 });
-
-  const addItem = () => setEmitData(p => ({ ...p, items: [...p.items, { descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] }));
-  const removeItem = (idx: number) => setEmitData(p => ({ ...p, items: p.items.filter((_, i) => i !== idx) }));
-  const updateItem = (idx: number, field: keyof EmitItem, value: string | number) => {
-    setEmitData(p => ({ ...p, items: p.items.map((it, i) => i === idx ? { ...it, [field]: value } : it) }));
-  };
-
-  const handleEmit = async () => {
-    if (!emitVenta) return;
-    if (emitData.items.some(it => !it.descripcion || it.precio_unitario <= 0)) {
-      setEmitError("Completa todos los items con descripcion y precio");
+    if (emitItems.some(it => !it.descripcion || it.precio_unitario <= 0 || it.cantidad <= 0)) {
+      setEmitError("Completa todos los items con descripcion, cantidad > 0 y precio > 0.");
       return;
     }
 
-    setEmitStep("emitting");
+    setEmitting(true);
     setEmitError("");
 
     try {
@@ -246,75 +252,87 @@ export default function VentasPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          tipo: emitData.tipo,
-          cliente_id: emitVenta.presupuesto.cliente_id,
+          tipo: emitTipo,
+          cliente_id: p.cliente_id,
           punto_venta: PV_CRM,
-          items: emitData.items,
-          presupuesto_id: emitVenta.presupuesto.id,
+          items: emitItems,
+          presupuesto_id: p.id,
         }),
       });
 
       const data = await res.json();
 
       if (data.success) {
-        setEmitResult(data.factura);
-        setEmitStep("success");
-        if (data.factura?.id) {
-          const itemsToInsert = emitData.items.map((it, idx) => ({
-            factura_id: data.factura.id,
-            descripcion: it.descripcion,
-            cantidad: it.cantidad,
-            precio_unitario: it.precio_unitario,
-            iva_porcentaje: it.iva_porcentaje,
-            orden: idx + 1,
-          }));
-          await supabase.from("factura_items").insert(itemsToInsert as any);
-        }
+        setEmitSuccess(`${data.factura.comprobante} emitida - CAE: ${data.factura.cae}`);
         await fetchData();
       } else {
         setEmitError(data.error || "Error al emitir factura");
-        setEmitStep("error");
       }
-    } catch (err: unknown) {
-      setEmitError(err instanceof Error ? err.message : "Error de conexion");
-      setEmitStep("error");
+    } catch (err) {
+      setEmitError("Error de conexion al emitir factura");
+    } finally {
+      setEmitting(false);
     }
-  };
+  }
 
-  // ── Marcar pagada ──────────────────────────────────────────────
+  async function handleCrearRemito(venta: Venta) {
+    const p = venta.presupuesto;
+    setCreatingRemito(true);
+    try {
+      // Create remito
+      const { data: remitoData, error: rError } = await (supabase.from("remitos") as any)
+        .insert({
+          cliente_id: p.cliente_id,
+          presupuesto_id: p.id,
+          fecha: new Date().toISOString().split("T")[0],
+          observaciones: `Desde presupuesto ${p.numero}`,
+          estado: "pendiente",
+        })
+        .select("id")
+        .single();
 
-  const handleMarcarPagada = async (facturaId: string) => {
+      if (rError || !remitoData) {
+        console.error("Error creando remito:", rError);
+        return;
+      }
+
+      // Create remito items from presupuesto items
+      if (p.presupuesto_items?.length > 0) {
+        const items = p.presupuesto_items.map((item, idx) => ({
+          remito_id: remitoData.id,
+          descripcion: item.descripcion,
+          cantidad: item.cantidad,
+          unidad: "u",
+          orden: idx,
+        }));
+        await (supabase.from("remito_items") as any).insert(items);
+      }
+
+      await fetchData();
+    } catch (err) {
+      console.error("Error creando remito:", err);
+    } finally {
+      setCreatingRemito(false);
+    }
+  }
+
+  async function handleMarcarEntregado(remitoId: string) {
+    await supabase.from("remitos").update({ estado: "entregado" } as any).eq("id", remitoId);
+    await fetchData();
+  }
+
+  async function handleMarcarPagada(facturaId: string) {
+    if (!confirm("¿Marcar esta factura como pagada?")) return;
     await supabase.from("facturas").update({ estado: "pagada" } as any).eq("id", facturaId);
     await fetchData();
-  };
+  }
 
-  // ── Filter ──────────────────────────────────────────────────────
-
-  const filteredVentas = ventas.filter(v => {
-    // Filter by vendedor
-    if (filterVendedor !== "todos" && v.presupuesto.vendedor_id !== filterVendedor) return false;
-    // Filter by step
-    if (filterStep === "todos") return true;
-    const step = getVentaStep(v);
-    if (filterStep === "pendiente_factura") return step < 2;
-    if (filterStep === "facturado") return step === 2;
-    if (filterStep === "cobrado") return step === 3;
-    return true;
-  });
-
-  // ── KPIs ──────────────────────────────────────────────────────
-
-  const pendientesFactura = ventas.filter(v => getVentaStep(v) < 2).length;
-  const facturadas = ventas.filter(v => getVentaStep(v) === 2).length;
-  const cobradas = ventas.filter(v => getVentaStep(v) === 3).length;
-  const totalPendiente = ventas
-    .filter(v => getVentaStep(v) < 2)
-    .reduce((a, v) => a + Number(v.presupuesto.total), 0);
+  // ── Render ─────────────────────────────────────────────────────
 
   if (loading) {
     return (
       <>
-        <Header title="Ventas" subtitle="Seguimiento de ventas" />
+        <Header title="Ventas" subtitle="Cargando..." />
         <div className="flex items-center justify-center h-96">
           <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
         </div>
@@ -324,415 +342,521 @@ export default function VentasPage() {
 
   return (
     <>
-      <Header title="Ventas" subtitle="Seguimiento del proceso de venta" />
-      <div className="p-6 lg:p-8 space-y-6">
-        {/* Vendedor filter */}
-        {role !== "vendedor" && vendedores.length > 0 && (
-          <div className="flex items-center gap-3">
-            <User className="h-4 w-4 text-zinc-400" />
+      <Header title="Ventas" subtitle={`${ventas.length} ventas en proceso`} />
+      <div className="p-4 sm:p-8 space-y-6">
+
+        {/* KPI Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { label: "Total", value: kpis.total, color: "text-zinc-900 dark:text-white", step: null },
+            { label: "Pend. facturar", value: kpis.pendientes, color: "text-amber-600", step: 0 },
+            { label: "Facturadas", value: kpis.facturadas, color: "text-blue-600", step: 2 },
+            { label: "Cobradas", value: kpis.cobradas, color: "text-green-600", step: 3 },
+          ].map(kpi => (
+            <button
+              key={kpi.label}
+              onClick={() => setFilterStep(filterStep === kpi.step ? null : kpi.step)}
+              className={`rounded-xl border p-4 text-left transition-all ${
+                filterStep === kpi.step
+                  ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30"
+                  : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700"
+              }`}
+            >
+              <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">{kpi.label}</p>
+              <p className={`text-2xl font-bold mt-1 ${kpi.color}`}>{kpi.value}</p>
+            </button>
+          ))}
+        </div>
+
+        {/* Filters */}
+        <div className="flex items-center gap-3">
+          {role !== "vendedor" && (
             <select
               value={filterVendedor}
-              onChange={(e) => setFilterVendedor(e.target.value)}
-              className="rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white"
+              onChange={e => setFilterVendedor(e.target.value)}
+              className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             >
               <option value="todos">Todos los vendedores</option>
               {vendedores.map(v => (
                 <option key={v.id} value={v.id}>{v.full_name}</option>
               ))}
             </select>
-            {filterVendedor !== "todos" && (
-              <button onClick={() => setFilterVendedor("todos")} className="text-xs text-zinc-400 hover:text-zinc-600">Limpiar</button>
-            )}
-          </div>
-        )}
-
-        {/* KPIs */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
-          <button onClick={() => setFilterStep("todos")} className={`rounded-xl border p-4 text-left transition-colors ${filterStep === "todos" ? "border-orange-300 bg-orange-50 dark:border-orange-700 dark:bg-orange-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
-            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Total ventas activas</p>
-            <p className="text-2xl font-bold mt-1 dark:text-white">{ventas.length}</p>
-          </button>
-          <button onClick={() => setFilterStep("pendiente_factura")} className={`rounded-xl border p-4 text-left transition-colors ${filterStep === "pendiente_factura" ? "border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
-            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Pendientes de facturar</p>
-            <p className="text-2xl font-bold mt-1 text-amber-600">{pendientesFactura}</p>
-            <p className="text-xs text-zinc-400 mt-0.5">{formatCurrency(totalPendiente)}</p>
-          </button>
-          <button onClick={() => setFilterStep("facturado")} className={`rounded-xl border p-4 text-left transition-colors ${filterStep === "facturado" ? "border-blue-300 bg-blue-50 dark:border-blue-700 dark:bg-blue-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
-            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Facturadas (pendiente cobro)</p>
-            <p className="text-2xl font-bold mt-1 text-blue-600">{facturadas}</p>
-          </button>
-          <button onClick={() => setFilterStep("cobrado")} className={`rounded-xl border p-4 text-left transition-colors ${filterStep === "cobrado" ? "border-emerald-300 bg-emerald-50 dark:border-emerald-700 dark:bg-emerald-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
-            <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Cobradas</p>
-            <p className="text-2xl font-bold mt-1 text-emerald-600">{cobradas}</p>
-          </button>
+          )}
+          {filterStep !== null && (
+            <button
+              onClick={() => setFilterStep(null)}
+              className="flex items-center gap-1 rounded-lg bg-orange-100 px-3 py-2 text-sm font-medium text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
+            >
+              {STEP_LABELS[filterStep]}
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+          <span className="ml-auto text-sm text-zinc-400">
+            {filteredVentas.length} venta{filteredVentas.length !== 1 ? "s" : ""}
+          </span>
         </div>
 
-        {/* Ventas list */}
-        {filteredVentas.length === 0 ? (
-          <Card className="p-12 text-center">
-            <FileText className="h-10 w-10 text-zinc-300 mx-auto mb-3" />
-            <p className="text-zinc-500 dark:text-zinc-400">
-              {ventas.length === 0
-                ? "No hay presupuestos aprobados. Aprobá un presupuesto para iniciar el seguimiento de venta."
-                : "No hay ventas en este estado."}
-            </p>
-          </Card>
-        ) : (
-          <div className="space-y-3">
-            {filteredVentas.map(v => {
-              const p = v.presupuesto;
-              const step = getVentaStep(v);
-              const facturaEmitida = v.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
+        {/* Main content */}
+        <div className="flex gap-6">
+          {/* List */}
+          <div className={`space-y-3 ${selectedVenta ? "w-1/2 hidden lg:block" : "w-full"}`}>
+            {filteredVentas.length === 0 ? (
+              <Card className="p-12 text-center">
+                <Package className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
+                <p className="text-zinc-500">No hay ventas que coincidan con los filtros</p>
+              </Card>
+            ) : (
+              filteredVentas.map(v => {
+                const p = v.presupuesto;
+                const step = getVentaStep(v);
+                const vendedorName = (p.vendedor_profile as any)?.full_name;
+                const isSelected = selectedVentaId === p.id;
 
-              return (
-                <Card
-                  key={p.id}
-                  className="p-0 overflow-hidden cursor-pointer hover:border-zinc-300 dark:hover:border-zinc-600 transition-colors"
-                  onClick={() => setSelectedVenta(v)}
-                >
-                  <div className="p-5">
-                    {/* Header: number + client + total */}
-                    <div className="flex items-start justify-between mb-4">
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => {
+                      setSelectedVentaId(isSelected ? null : p.id);
+                      setExpandedSection(null);
+                    }}
+                    className={`w-full text-left rounded-xl border p-4 transition-all ${
+                      isSelected
+                        ? "border-orange-500 bg-orange-50/50 dark:bg-orange-950/20"
+                        : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between mb-3">
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-bold text-orange-600 dark:text-orange-400">{p.numero}</span>
-                          <ChevronRight className="h-3 w-3 text-zinc-300" />
-                          <span className="font-medium text-sm text-zinc-800 dark:text-zinc-200">{p.clientes?.razon_social || "—"}</span>
+                          <span className="font-mono text-xs font-bold text-zinc-900 dark:text-white">{p.numero}</span>
+                          <span className="text-sm text-zinc-500">{p.clientes?.razon_social}</span>
                         </div>
                         <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-zinc-400">{formatDate(p.fecha)}</span>
-                          {p.vendedor_profile?.full_name && (
-                            <span className="flex items-center gap-1 text-xs text-zinc-400">
-                              <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-orange-100 text-[8px] font-bold text-orange-600 dark:bg-orange-900/40 dark:text-orange-400">
-                                {getInitials(p.vendedor_profile.full_name)}
-                              </span>
-                              {p.vendedor_profile.full_name}
-                            </span>
+                          {vendedorName && (
+                            <span className="text-xs text-zinc-400">{vendedorName}</span>
                           )}
+                          <span className="text-xs text-zinc-400">{formatDate(p.fecha)}</span>
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="font-mono font-bold text-lg dark:text-white">{formatCurrency(Number(p.total))}</p>
-                        {p.moneda === "USD" && <p className="text-xs text-zinc-400">USD</p>}
+                        <p className="font-bold text-zinc-900 dark:text-white">
+                          {formatCurrency(p.total, p.moneda as "ARS" | "USD")}
+                        </p>
                       </div>
                     </div>
 
                     {/* Pipeline steps */}
                     <div className="flex items-center gap-1">
-                      {STEPS.map((s, idx) => {
-                        const isCompleted = idx <= step;
-                        const isCurrent = idx === step;
-                        const StepIcon = s.icon;
+                      {STEP_LABELS.map((label, i) => {
+                        const Icon = STEP_ICONS[i];
+                        const done = step > i;
+                        const current = step === i;
                         return (
-                          <div key={s.key} className="flex items-center gap-1 flex-1">
-                            <div className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium flex-1 justify-center transition-colors ${
-                              isCompleted
-                                ? isCurrent
-                                  ? "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400"
-                                  : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400"
-                                : "bg-zinc-50 text-zinc-400 dark:bg-zinc-800/50 dark:text-zinc-500"
+                          <div key={label} className="flex items-center gap-1 flex-1">
+                            <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
+                              done ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                                : current ? "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400"
+                                : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
                             }`}>
-                              <StepIcon className="h-3.5 w-3.5" />
-                              <span className="hidden sm:inline">{s.label}</span>
+                              <Icon className="h-3 w-3" />
+                              <span className="hidden sm:inline">{label}</span>
                             </div>
-                            {idx < STEPS.length - 1 && (
-                              <ArrowRight className={`h-3 w-3 flex-shrink-0 ${idx < step ? "text-emerald-400" : "text-zinc-200 dark:text-zinc-700"}`} />
-                            )}
+                            {i < 3 && <ChevronRight className="h-3 w-3 text-zinc-300 shrink-0" />}
                           </div>
                         );
                       })}
                     </div>
 
-                    {/* Actions row */}
-                    <div className="flex items-center justify-between mt-4 pt-3 border-t border-zinc-100 dark:border-zinc-800">
-                      <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                        <Link href={`/presupuestos?id=${p.id}`} className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
-                          <FileText className="h-3 w-3" /> Presupuesto
-                        </Link>
-                        <Link href={`/remitos?presupuesto_id=${p.id}`} className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
-                          <Truck className="h-3 w-3" /> Remitos{v.remitos.length > 0 ? ` (${v.remitos.length})` : ""}
-                        </Link>
-                        {facturaEmitida && (
-                          <Link href={`/facturacion?id=${facturaEmitida.id}`} className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors">
-                            <ShieldCheck className="h-3 w-3" /> {formatComprobante(facturaEmitida.tipo, facturaEmitida.punto_venta, facturaEmitida.numero)}
-                          </Link>
-                        )}
-                      </div>
-                      <div onClick={e => e.stopPropagation()}>
-                        {step < 2 && (
-                          <button onClick={() => openFacturar(v)} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600 transition-colors">
-                            <Receipt className="h-3.5 w-3.5" /> Facturar
-                          </button>
-                        )}
-                        {step === 2 && (
-                          <button onClick={() => { if (facturaEmitida) handleMarcarPagada(facturaEmitida.id); }} className="flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 transition-colors">
-                            <DollarSign className="h-3.5 w-3.5" /> Cobrar
-                          </button>
-                        )}
-                        {step === 3 && (
-                          <Badge variant="success">Completada</Badge>
-                        )}
-                      </div>
+                    {/* Quick action */}
+                    <div className="mt-3 flex items-center gap-2">
+                      {step === 0 && (
+                        <span className="text-xs text-amber-600 flex items-center gap-1">
+                          <Clock className="h-3 w-3" /> Pendiente de remito
+                        </span>
+                      )}
+                      {step === 1 && (
+                        <span className="text-xs text-blue-600 flex items-center gap-1">
+                          <Receipt className="h-3 w-3" /> Lista para facturar
+                        </span>
+                      )}
+                      {step === 2 && (
+                        <span className="text-xs text-green-600 flex items-center gap-1">
+                          <DollarSign className="h-3 w-3" /> Pendiente de cobro
+                        </span>
+                      )}
+                      {step === 3 && (
+                        <span className="text-xs text-green-600 flex items-center gap-1">
+                          <CheckCircle2 className="h-3 w-3" /> Completada
+                        </span>
+                      )}
                     </div>
-                  </div>
-                </Card>
-              );
-            })}
+                  </button>
+                );
+              })
+            )}
           </div>
-        )}
+
+          {/* Detail Panel */}
+          {selectedVenta && (
+            <div className="w-full lg:w-1/2">
+              <Card className="sticky top-4 p-0 overflow-hidden">
+                {/* Header */}
+                <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 p-4">
+                  <div>
+                    <h3 className="font-bold text-zinc-900 dark:text-white">{selectedVenta.presupuesto.numero}</h3>
+                    <p className="text-sm text-zinc-500">{selectedVenta.presupuesto.clientes?.razon_social}</p>
+                  </div>
+                  <button onClick={() => setSelectedVentaId(null)} className="text-zinc-400 hover:text-zinc-600 lg:hidden">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                  {/* Step 1: Presupuesto */}
+                  <DetailSection
+                    title="Presupuesto"
+                    icon={FileText}
+                    status="done"
+                    expanded={expandedSection === "presupuesto"}
+                    onToggle={() => setExpandedSection(expandedSection === "presupuesto" ? null : "presupuesto")}
+                  >
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Numero</span>
+                        <span className="font-mono font-bold">{selectedVenta.presupuesto.numero}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Fecha</span>
+                        <span>{formatDate(selectedVenta.presupuesto.fecha)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Total</span>
+                        <span className="font-bold">
+                          {formatCurrency(selectedVenta.presupuesto.total, selectedVenta.presupuesto.moneda as "ARS" | "USD")}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-zinc-500">Items</span>
+                        <span>{selectedVenta.presupuesto.presupuesto_items?.length || 0} productos</span>
+                      </div>
+                      <Link
+                        href={`/presupuestos`}
+                        className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 mt-1"
+                      >
+                        Ver presupuesto <ArrowRight className="h-3 w-3" />
+                      </Link>
+                    </div>
+                  </DetailSection>
+
+                  {/* Step 2: Entrega */}
+                  <DetailSection
+                    title="Entrega"
+                    icon={Truck}
+                    status={
+                      selectedVenta.remitos.some(r => r.estado === "entregado") ? "done"
+                        : selectedVenta.remitos.length > 0 ? "in-progress"
+                        : "pending"
+                    }
+                    expanded={expandedSection === "entrega"}
+                    onToggle={() => setExpandedSection(expandedSection === "entrega" ? null : "entrega")}
+                  >
+                    {selectedVenta.remitos.length > 0 ? (
+                      <div className="space-y-2">
+                        {selectedVenta.remitos.map(r => (
+                          <div key={r.id} className="flex items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
+                            <div>
+                              <span className="font-mono text-xs font-bold">{r.numero || "Sin numero"}</span>
+                              <span className="text-xs text-zinc-400 ml-2">{formatDate(r.fecha)}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Badge variant={r.estado === "entregado" ? "success" : r.estado === "parcial" ? "info" : "warning"}>
+                                {r.estado}
+                              </Badge>
+                              {r.estado === "pendiente" && (
+                                <button
+                                  onClick={() => handleMarcarEntregado(r.id)}
+                                  className="text-xs text-green-600 hover:text-green-700 font-medium"
+                                >
+                                  Marcar entregado
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        <Link
+                          href="/remitos"
+                          className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700"
+                        >
+                          Ver en remitos <ArrowRight className="h-3 w-3" />
+                        </Link>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <p className="text-sm text-zinc-500">Sin remitos generados</p>
+                        <button
+                          onClick={() => handleCrearRemito(selectedVenta)}
+                          disabled={creatingRemito}
+                          className="flex items-center gap-2 rounded-lg bg-orange-600 px-3 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+                        >
+                          {creatingRemito ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Truck className="h-4 w-4" />
+                          )}
+                          Generar remito desde presupuesto
+                        </button>
+                      </div>
+                    )}
+                  </DetailSection>
+
+                  {/* Step 3: Factura */}
+                  <DetailSection
+                    title="Factura"
+                    icon={Receipt}
+                    status={
+                      selectedVenta.facturas.some(f => f.estado === "emitida" || f.estado === "pagada") ? "done"
+                        : "pending"
+                    }
+                    expanded={expandedSection === "factura"}
+                    onToggle={() => setExpandedSection(expandedSection === "factura" ? null : "factura")}
+                  >
+                    {(() => {
+                      const facturaActiva = selectedVenta.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
+                      if (facturaActiva) {
+                        const comp = `${facturaActiva.tipo} ${String(facturaActiva.punto_venta).padStart(4, "0")}-${String(facturaActiva.numero).padStart(8, "0")}`;
+                        return (
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-zinc-500">Comprobante</span>
+                              <span className="font-mono font-bold">{comp}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-zinc-500">CAE</span>
+                              <span className="font-mono text-xs">{facturaActiva.cae || "—"}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-zinc-500">Total</span>
+                              <span className="font-bold">{formatCurrency(facturaActiva.total)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-zinc-500">Estado</span>
+                              <Badge variant={facturaActiva.estado === "pagada" ? "success" : "info"}>
+                                {facturaActiva.estado}
+                              </Badge>
+                            </div>
+                            <Link
+                              href="/facturacion"
+                              className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700"
+                            >
+                              Ver en facturacion <ArrowRight className="h-3 w-3" />
+                            </Link>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="space-y-3">
+                          <p className="text-sm text-zinc-500">Sin factura emitida</p>
+                          <button
+                            onClick={() => openEmitModal(selectedVenta)}
+                            className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                          >
+                            <Receipt className="h-4 w-4" />
+                            Facturar con ARCA
+                          </button>
+                        </div>
+                      );
+                    })()}
+                  </DetailSection>
+
+                  {/* Step 4: Cobro */}
+                  <DetailSection
+                    title="Cobro"
+                    icon={DollarSign}
+                    status={
+                      selectedVenta.facturas.some(f => f.estado === "pagada") ? "done" : "pending"
+                    }
+                    expanded={expandedSection === "cobro"}
+                    onToggle={() => setExpandedSection(expandedSection === "cobro" ? null : "cobro")}
+                  >
+                    {(() => {
+                      const facturaActiva = selectedVenta.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
+                      if (facturaActiva?.estado === "pagada") {
+                        return (
+                          <div className="flex items-center gap-2 text-sm text-green-600">
+                            <CheckCircle2 className="h-4 w-4" />
+                            <span className="font-medium">Cobro registrado</span>
+                          </div>
+                        );
+                      }
+                      if (facturaActiva?.estado === "emitida") {
+                        return (
+                          <div className="space-y-3">
+                            <p className="text-sm text-zinc-500">Factura emitida, pendiente de cobro</p>
+                            <button
+                              onClick={() => handleMarcarPagada(facturaActiva.id)}
+                              className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                            >
+                              <DollarSign className="h-4 w-4" />
+                              Registrar cobro
+                            </button>
+                          </div>
+                        );
+                      }
+                      return <p className="text-sm text-zinc-400">Primero emiti la factura</p>;
+                    })()}
+                  </DetailSection>
+                </div>
+
+                {/* Quick links */}
+                <div className="border-t border-zinc-200 dark:border-zinc-800 p-4">
+                  <p className="text-xs font-medium text-zinc-400 uppercase mb-2">Ir a</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Link href="/clientes" className="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                      Cliente
+                    </Link>
+                    <Link href="/presupuestos" className="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                      Presupuesto
+                    </Link>
+                    <Link href="/remitos" className="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                      Remitos
+                    </Link>
+                    <Link href="/facturacion" className="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                      Facturacion
+                    </Link>
+                  </div>
+                </div>
+              </Card>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* ── Detail Side Panel ──────────────────────────────────────── */}
-      {selectedVenta && (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setSelectedVenta(null)} />
-          <div className="relative w-full max-w-lg bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto">
-            <div className="sticky top-0 z-10 flex items-center justify-between bg-white px-6 py-4 border-b border-zinc-200 dark:bg-zinc-900 dark:border-zinc-700">
-              <div>
-                <h2 className="font-mono text-lg font-bold dark:text-white">{selectedVenta.presupuesto.numero}</h2>
-                <p className="text-sm text-zinc-500">{selectedVenta.presupuesto.clientes?.razon_social}</p>
-                {selectedVenta.presupuesto.vendedor_profile?.full_name && (
-                  <p className="text-xs text-zinc-400 mt-0.5">Vendedor: {selectedVenta.presupuesto.vendedor_profile.full_name}</p>
-                )}
-              </div>
-              <button onClick={() => setSelectedVenta(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+      {/* Emit Modal */}
+      {emitModalOpen && emitVenta && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => !emitting && setEmitModalOpen(false)}>
+          <Card className="w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold dark:text-white">
+                Emitir factura — {emitVenta.presupuesto.numero}
+              </h2>
+              <button onClick={() => !emitting && setEmitModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="px-6 py-5 space-y-5">
-              {(() => {
-                const sv = selectedVenta;
-                const step = getVentaStep(sv);
-                const facturaEmitida = sv.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
-
-                return (
-                  <>
-                    {/* ── 1. Presupuesto ──────────────────────── */}
-                    <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                      <div className="flex items-center justify-between px-4 py-3 bg-emerald-50 dark:bg-emerald-950/20">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 text-emerald-600" />
-                          <span className="text-sm font-semibold text-emerald-700 dark:text-emerald-400">1. Presupuesto</span>
-                          <Badge variant="success">Aprobado</Badge>
-                        </div>
-                        <Link href={`/presupuestos?id=${sv.presupuesto.id}`} className="flex items-center gap-1 text-xs text-zinc-500 hover:text-orange-500 transition-colors">
-                          <ExternalLink className="h-3 w-3" /> Abrir
-                        </Link>
-                      </div>
-                      <div className="px-4 py-3 space-y-2">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-zinc-500">Numero</span>
-                          <span className="font-mono font-medium dark:text-white">{sv.presupuesto.numero}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-zinc-500">Fecha</span>
-                          <span className="dark:text-zinc-300">{formatDate(sv.presupuesto.fecha)}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-zinc-500">Total</span>
-                          <span className="font-mono font-semibold dark:text-white">{formatCurrency(Number(sv.presupuesto.total))}{sv.presupuesto.moneda === "USD" ? " USD" : ""}</span>
-                        </div>
-                        {(sv.presupuesto.presupuesto_items || []).length > 0 && (
-                          <details className="mt-1">
-                            <summary className="text-xs text-zinc-400 cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300">
-                              Ver {sv.presupuesto.presupuesto_items!.length} items
-                            </summary>
-                            <div className="mt-2 space-y-1">
-                              {sv.presupuesto.presupuesto_items!.map((it, idx) => (
-                                <div key={idx} className="flex justify-between text-xs text-zinc-500 dark:text-zinc-400">
-                                  <span>{it.cantidad}x {it.descripcion}</span>
-                                  <span className="font-mono">{formatCurrency(it.total)}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </details>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* ── 2. Entrega / Remitos ────────────────── */}
-                    <div className={`rounded-lg border overflow-hidden ${step >= 1 ? "border-zinc-200 dark:border-zinc-700" : "border-dashed border-zinc-200 dark:border-zinc-700"}`}>
-                      <div className="flex items-center justify-between px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50">
-                        <div className="flex items-center gap-2">
-                          <Truck className={`h-4 w-4 ${step >= 1 ? "text-emerald-600" : "text-zinc-400"}`} />
-                          <span className={`text-sm font-semibold ${step >= 1 ? "text-zinc-800 dark:text-zinc-200" : "text-zinc-400 dark:text-zinc-500"}`}>2. Entrega</span>
-                          {sv.remitos.length > 0 && <Badge variant="success">{sv.remitos.length} remito{sv.remitos.length > 1 ? "s" : ""}</Badge>}
-                        </div>
-                        <Link href={`/remitos?presupuesto_id=${sv.presupuesto.id}`} className="flex items-center gap-1 text-xs text-zinc-500 hover:text-orange-500 transition-colors">
-                          <ExternalLink className="h-3 w-3" /> {sv.remitos.length > 0 ? "Ver" : "Crear"} remito
-                        </Link>
-                      </div>
-                      {sv.remitos.length > 0 ? (
-                        <div className="px-4 py-3 space-y-2">
-                          {sv.remitos.map(r => (
-                            <div key={r.id} className="flex justify-between text-sm">
-                              <span className="font-mono text-zinc-700 dark:text-zinc-300">{r.numero}</span>
-                              <span className="text-zinc-500">{formatDate(r.fecha)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="px-4 py-4 text-center">
-                          <p className="text-xs text-zinc-400">Sin remitos. Podes crear uno desde Remitos.</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* ── 3. Factura ───────────────────────────── */}
-                    <div className={`rounded-lg border overflow-hidden ${step >= 2 ? "border-zinc-200 dark:border-zinc-700" : "border-dashed border-zinc-200 dark:border-zinc-700"}`}>
-                      <div className="flex items-center justify-between px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50">
-                        <div className="flex items-center gap-2">
-                          <Receipt className={`h-4 w-4 ${step >= 2 ? "text-emerald-600" : "text-zinc-400"}`} />
-                          <span className={`text-sm font-semibold ${step >= 2 ? "text-zinc-800 dark:text-zinc-200" : "text-zinc-400 dark:text-zinc-500"}`}>3. Factura</span>
-                          {facturaEmitida && <Badge variant="success">Emitida</Badge>}
-                        </div>
-                        {facturaEmitida && (
-                          <Link href={`/facturacion?id=${facturaEmitida.id}`} className="flex items-center gap-1 text-xs text-zinc-500 hover:text-orange-500 transition-colors">
-                            <ExternalLink className="h-3 w-3" /> Ver factura
-                          </Link>
-                        )}
-                      </div>
-                      {facturaEmitida ? (
-                        <div className="px-4 py-3 space-y-2">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-zinc-500">Comprobante</span>
-                            <span className="font-mono font-medium dark:text-white">{formatComprobante(facturaEmitida.tipo, facturaEmitida.punto_venta, facturaEmitida.numero)}</span>
-                          </div>
-                          <div className="flex justify-between text-sm">
-                            <span className="text-zinc-500">Total</span>
-                            <span className="font-mono font-semibold dark:text-white">{formatCurrency(Number(facturaEmitida.total))}</span>
-                          </div>
-                          {facturaEmitida.cae && (
-                            <div className="flex justify-between text-sm">
-                              <span className="text-zinc-500">CAE</span>
-                              <span className="font-mono text-emerald-600 dark:text-emerald-400">{facturaEmitida.cae}</span>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="px-4 py-4">
-                          <button
-                            onClick={() => { setSelectedVenta(null); openFacturar(sv); }}
-                            className="flex w-full items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
-                          >
-                            <Receipt className="h-4 w-4" /> Facturar con ARCA
-                          </button>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* ── 4. Cobro ─────────────────────────────── */}
-                    <div className={`rounded-lg border overflow-hidden ${step >= 3 ? "border-emerald-200 dark:border-emerald-800" : "border-dashed border-zinc-200 dark:border-zinc-700"}`}>
-                      <div className="flex items-center justify-between px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50">
-                        <div className="flex items-center gap-2">
-                          <DollarSign className={`h-4 w-4 ${step >= 3 ? "text-emerald-600" : "text-zinc-400"}`} />
-                          <span className={`text-sm font-semibold ${step >= 3 ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-400 dark:text-zinc-500"}`}>4. Cobro</span>
-                          {step >= 3 && <Badge variant="success">Cobrada</Badge>}
-                        </div>
-                      </div>
-                      {step === 2 && facturaEmitida ? (
-                        <div className="px-4 py-4">
-                          <button
-                            onClick={() => handleMarcarPagada(facturaEmitida.id)}
-                            className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-600 transition-colors"
-                          >
-                            <DollarSign className="h-4 w-4" /> Registrar cobro
-                          </button>
-                        </div>
-                      ) : step >= 3 ? (
-                        <div className="px-4 py-3 flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400">
-                          <CheckCircle2 className="h-4 w-4" /> Venta completada
-                        </div>
-                      ) : (
-                        <div className="px-4 py-4 text-center">
-                          <p className="text-xs text-zinc-400">Pendiente — primero emiti la factura</p>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* ── Links rapidos ────────────────────────── */}
-                    <div>
-                      <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Ir a</h4>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Link href={`/clientes?id=${sv.presupuesto.cliente_id}`} className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
-                          <User className="h-3.5 w-3.5" /> Cliente
-                        </Link>
-                        <Link href={`/presupuestos?id=${sv.presupuesto.id}`} className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
-                          <FileText className="h-3.5 w-3.5" /> Presupuesto
-                        </Link>
-                        <Link href={`/remitos?presupuesto_id=${sv.presupuesto.id}`} className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
-                          <Truck className="h-3.5 w-3.5" /> Remitos
-                        </Link>
-                        <Link href="/facturacion" className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
-                          <Receipt className="h-3.5 w-3.5" /> Facturacion
-                        </Link>
-                      </div>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Emit Modal ────────────────────────────────────────────── */}
-      {emitOpen && emitVenta && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
-              <div>
-                <h2 className="text-lg font-bold dark:text-white">Facturar {emitVenta.presupuesto.numero}</h2>
-                <p className="text-sm text-zinc-400">{emitVenta.presupuesto.clientes?.razon_social} — PV {String(PV_CRM).padStart(4, "0")}</p>
+            {emitSuccess ? (
+              <div className="rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-800 dark:bg-green-950/30">
+                <div className="flex items-center gap-2 text-green-700 dark:text-green-400">
+                  <CheckCircle2 className="h-5 w-5" />
+                  <p className="font-medium">{emitSuccess}</p>
+                </div>
+                <button
+                  onClick={() => setEmitModalOpen(false)}
+                  className="mt-3 rounded-lg border border-green-300 px-4 py-2 text-sm font-medium text-green-700 hover:bg-green-100"
+                >
+                  Cerrar
+                </button>
               </div>
-              <button onClick={() => setEmitOpen(false)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
+            ) : (
+              <>
+                {/* Info */}
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-zinc-500">Cliente</span>
+                    <p className="font-medium dark:text-white">{emitVenta.presupuesto.clientes?.razon_social}</p>
+                    <p className="text-xs text-zinc-400">
+                      {emitVenta.presupuesto.clientes?.condicion_iva || "—"} · {emitVenta.presupuesto.clientes?.cuit || "Sin CUIT"}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-zinc-500">Punto de venta</span>
+                    <p className="font-mono font-bold dark:text-white">{String(PV_CRM).padStart(4, "0")}</p>
+                  </div>
+                </div>
 
-            {emitStep === "form" && (
-              <div className="p-6 space-y-5">
-                {emitError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{emitError}</div>}
-
+                {/* Tipo */}
                 <div>
-                  <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Tipo de comprobante</label>
-                  <select value={emitData.tipo} onChange={(e) => setEmitData(p => ({ ...p, tipo: e.target.value }))} className="rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
-                    <option value="FA">Factura A</option>
-                    <option value="FB">Factura B</option>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo de comprobante</label>
+                  <select
+                    value={emitTipo}
+                    onChange={e => setEmitTipo(e.target.value as "FA" | "FB")}
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                  >
+                    {emitVenta.presupuesto.clientes?.condicion_iva === "RI" && (
+                      <option value="FA">Factura A (discrimina IVA)</option>
+                    )}
+                    <option value="FB">Factura B (precio final)</option>
                   </select>
-                  {isFacturaA && !emitVenta.presupuesto.clientes?.cuit && (
-                    <p className="text-xs text-red-500 mt-1">El cliente no tiene CUIT. Factura A requiere CUIT.</p>
-                  )}
                 </div>
 
                 {/* Items */}
                 <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <label className="text-sm font-medium dark:text-zinc-300">Items</label>
-                    <button onClick={addItem} className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Items</label>
+                    <button
+                      onClick={() => setEmitItems([...emitItems, { descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }])}
+                      className="text-xs text-orange-600 hover:text-orange-700 flex items-center gap-1"
+                    >
                       <Plus className="h-3 w-3" /> Agregar
                     </button>
                   </div>
-                  <div className="space-y-3">
-                    {emitData.items.map((item, idx) => (
-                      <div key={idx} className="grid grid-cols-12 gap-2 items-start">
-                        <div className={isFacturaA ? "col-span-5" : "col-span-7"}>
-                          {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">Descripcion</label>}
-                          <input value={item.descripcion} onChange={e => updateItem(idx, "descripcion", e.target.value)} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {emitItems.map((item, idx) => (
+                      <div key={idx} className="grid grid-cols-12 gap-2 items-end">
+                        <div className="col-span-5">
+                          {idx === 0 && <span className="text-xs text-zinc-400">Descripcion</span>}
+                          <input
+                            type="text"
+                            value={item.descripcion}
+                            onChange={e => {
+                              const copy = [...emitItems];
+                              copy[idx] = { ...copy[idx], descripcion: e.target.value };
+                              setEmitItems(copy);
+                            }}
+                            className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                          />
                         </div>
                         <div className="col-span-2">
-                          {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">Cant.</label>}
-                          <input type="number" min={1} value={item.cantidad} onChange={e => updateItem(idx, "cantidad", Number(e.target.value))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                          {idx === 0 && <span className="text-xs text-zinc-400">Cant.</span>}
+                          <input
+                            type="number"
+                            min="1"
+                            value={item.cantidad}
+                            onChange={e => {
+                              const copy = [...emitItems];
+                              copy[idx] = { ...copy[idx], cantidad: Number(e.target.value) };
+                              setEmitItems(copy);
+                            }}
+                            className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                          />
                         </div>
                         <div className="col-span-2">
-                          {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">{isFacturaA ? "Neto" : "Precio"}</label>}
-                          <input type="number" step="0.01" min={0} value={item.precio_unitario || ""} onChange={e => updateItem(idx, "precio_unitario", Number(e.target.value))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                          {idx === 0 && <span className="text-xs text-zinc-400">{emitTipo === "FA" ? "Neto" : "Precio"}</span>}
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.precio_unitario}
+                            onChange={e => {
+                              const copy = [...emitItems];
+                              copy[idx] = { ...copy[idx], precio_unitario: Number(e.target.value) };
+                              setEmitItems(copy);
+                            }}
+                            className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                          />
                         </div>
-                        {isFacturaA && (
+                        {emitTipo === "FA" && (
                           <div className="col-span-2">
-                            {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">IVA</label>}
-                            <select value={item.iva_porcentaje} onChange={e => updateItem(idx, "iva_porcentaje", Number(e.target.value))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                            {idx === 0 && <span className="text-xs text-zinc-400">IVA %</span>}
+                            <select
+                              value={item.iva_porcentaje}
+                              onChange={e => {
+                                const copy = [...emitItems];
+                                copy[idx] = { ...copy[idx], iva_porcentaje: Number(e.target.value) };
+                                setEmitItems(copy);
+                              }}
+                              className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                            >
                               <option value={21}>21%</option>
                               <option value={10.5}>10.5%</option>
                               <option value={27}>27%</option>
@@ -740,9 +864,12 @@ export default function VentasPage() {
                             </select>
                           </div>
                         )}
-                        <div className="col-span-1 flex items-end">
-                          {emitData.items.length > 1 && (
-                            <button onClick={() => removeItem(idx)} className="p-2 rounded hover:bg-red-50 text-red-400 hover:text-red-500">
+                        <div className={emitTipo === "FA" ? "col-span-1" : "col-span-3 flex items-end justify-end"}>
+                          {emitItems.length > 1 && (
+                            <button
+                              onClick={() => setEmitItems(emitItems.filter((_, i) => i !== idx))}
+                              className="rounded p-1 text-zinc-400 hover:text-red-500"
+                            >
                               <Minus className="h-4 w-4" />
                             </button>
                           )}
@@ -753,76 +880,113 @@ export default function VentasPage() {
                 </div>
 
                 {/* Totals */}
-                <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4 space-y-2 text-sm">
-                  {isFacturaA ? (
-                    <>
-                      <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(emitTotals.neto)}</span></div>
-                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(emitTotals.iva)}</span></div>
-                      <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-700 pt-2 font-semibold text-base">
-                        <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total)}</span>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex justify-between font-semibold text-base">
-                      <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total)}</span>
-                    </div>
-                  )}
+                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-900 p-3 space-y-1">
+                  {(() => {
+                    if (emitTipo === "FA") {
+                      const neto = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
+                      const iva = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario * it.iva_porcentaje / 100, 0);
+                      return (
+                        <>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-zinc-500">Neto</span>
+                            <span>{formatCurrency(neto)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-zinc-500">IVA</span>
+                            <span>{formatCurrency(iva)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1">
+                            <span>Total</span>
+                            <span>{formatCurrency(neto + iva)}</span>
+                          </div>
+                        </>
+                      );
+                    } else {
+                      const total = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
+                      return (
+                        <div className="flex justify-between text-sm font-bold">
+                          <span>Total (IVA incluido)</span>
+                          <span>{formatCurrency(total)}</span>
+                        </div>
+                      );
+                    }
+                  })()}
                 </div>
 
-                <div className="flex justify-end gap-3 pt-2">
-                  <button onClick={() => setEmitOpen(false)} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cancelar</button>
-                  <button onClick={handleEmit} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors">
-                    <ShieldCheck className="h-4 w-4" /> Emitir con ARCA
+                {emitError && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400 flex items-start gap-2">
+                    <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                    {emitError}
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => setEmitModalOpen(false)}
+                    disabled={emitting}
+                    className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleEmitFactura}
+                    disabled={emitting}
+                    className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {emitting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Emitiendo...
+                      </>
+                    ) : (
+                      <>
+                        <Receipt className="h-4 w-4" />
+                        Emitir con ARCA
+                      </>
+                    )}
                   </button>
                 </div>
-              </div>
+              </>
             )}
-
-            {emitStep === "emitting" && (
-              <div className="p-12 flex flex-col items-center gap-4">
-                <Loader2 className="h-10 w-10 animate-spin text-orange-500" />
-                <p className="text-sm text-zinc-500">Autorizando con ARCA...</p>
-              </div>
-            )}
-
-            {emitStep === "success" && emitResult && (
-              <div className="p-8 space-y-6">
-                <div className="flex flex-col items-center gap-3">
-                  <div className="rounded-full bg-emerald-100 p-3 dark:bg-emerald-900/30">
-                    <CheckCircle2 className="h-8 w-8 text-emerald-600" />
-                  </div>
-                  <h3 className="text-lg font-bold dark:text-white">Factura emitida</h3>
-                </div>
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30 p-4 space-y-2 text-sm">
-                  <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">Comprobante</span><span className="font-mono font-bold">{emitResult.comprobante}</span></div>
-                  <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">CAE</span><span className="font-mono">{emitResult.cae}</span></div>
-                  <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">Vto CAE</span><span>{emitResult.cae_vencimiento ? formatDate(emitResult.cae_vencimiento) : "—"}</span></div>
-                  <div className="flex justify-between border-t border-emerald-200 dark:border-emerald-700 pt-2"><span className="text-emerald-700 dark:text-emerald-400 font-semibold">Total</span><span className="font-mono font-bold">{formatCurrency(emitResult.total)}</span></div>
-                </div>
-                <div className="flex justify-center">
-                  <button onClick={() => setEmitOpen(false)} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cerrar</button>
-                </div>
-              </div>
-            )}
-
-            {emitStep === "error" && (
-              <div className="p-8 space-y-6">
-                <div className="flex flex-col items-center gap-3">
-                  <div className="rounded-full bg-red-100 p-3 dark:bg-red-900/30">
-                    <XCircle className="h-8 w-8 text-red-600" />
-                  </div>
-                  <h3 className="text-lg font-bold dark:text-white">Error al emitir</h3>
-                  <p className="text-sm text-red-600 text-center max-w-md">{emitError}</p>
-                </div>
-                <div className="flex justify-center gap-3">
-                  <button onClick={() => setEmitStep("form")} className="px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors">Intentar de nuevo</button>
-                  <button onClick={() => setEmitOpen(false)} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cerrar</button>
-                </div>
-              </div>
-            )}
-          </div>
+          </Card>
         </div>
       )}
     </>
+  );
+}
+
+// ── Detail Section Component ─────────────────────────────────────
+
+function DetailSection({
+  title, icon: Icon, status, expanded, onToggle, children,
+}: {
+  title: string;
+  icon: React.ElementType;
+  status: "done" | "in-progress" | "pending";
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <button onClick={onToggle} className="flex items-center w-full p-4 hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors">
+        <div className={`rounded-lg p-1.5 mr-3 ${
+          status === "done" ? "bg-green-100 text-green-600 dark:bg-green-900/40 dark:text-green-400"
+            : status === "in-progress" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/40 dark:text-orange-400"
+            : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"
+        }`}>
+          <Icon className="h-4 w-4" />
+        </div>
+        <span className="flex-1 text-left text-sm font-medium dark:text-white">{title}</span>
+        {status === "done" && <CheckCircle2 className="h-4 w-4 text-green-500 mr-2" />}
+        {status === "in-progress" && <Clock className="h-4 w-4 text-orange-500 mr-2" />}
+        <ChevronDown className={`h-4 w-4 text-zinc-400 transition-transform ${expanded ? "rotate-180" : ""}`} />
+      </button>
+      {expanded && (
+        <div className="px-4 pb-4 pl-[52px]">
+          {children}
+        </div>
+      )}
+    </div>
   );
 }
