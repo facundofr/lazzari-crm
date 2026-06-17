@@ -12,7 +12,7 @@ import type { OCStatus } from "@/lib/types";
 import {
   ShoppingCart, Clock, CheckCircle2, Truck, Loader2,
   X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
-  FileText, ClipboardCopy, Check,
+  FileText, ClipboardCopy, Check, Download,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
@@ -331,29 +331,152 @@ export default function OrdenesCompraPage() {
 
   const buildOCSummaryText = (oc: OCRow) => {
     const prov = oc.proveedores;
+    const estadoLabel = (statusConfig[oc.estado] || { label: oc.estado }).label;
+    const sep = "─".repeat(50);
     const lines = [
+      sep,
       `ORDEN DE COMPRA: ${oc.numero}`,
-      `Fecha: ${formatDate(oc.fecha)}`,
-      oc.fecha_entrega_estimada ? `Entrega estimada: ${formatDate(oc.fecha_entrega_estimada)}` : null,
-      `Estado: ${(statusConfig[oc.estado] || { label: oc.estado }).label}`,
-      `Moneda: ${oc.moneda}`,
+      sep,
       "",
-      "PROVEEDOR:",
-      prov?.razon_social || "—",
-      prov?.cuit ? `CUIT: ${prov.cuit}` : null,
-      prov?.email ? `Email: ${prov.email}` : null,
-      prov?.telefono ? `Tel: ${prov.telefono}` : null,
-      prov?.direccion ? `Dir: ${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? `, ${prov.provincia}` : ""}` : null,
+      `Fecha:             ${formatDate(oc.fecha)}`,
+      oc.fecha_entrega_estimada ? `Entrega estimada:  ${formatDate(oc.fecha_entrega_estimada)}` : null,
+      `Estado:            ${estadoLabel}`,
+      `Moneda:            ${oc.moneda}`,
       "",
-      "ITEMS:",
-      ...detailItems.map((it, i) =>
-        `${i + 1}. ${it.codigo} | ${it.descripcion} | Cant: ${it.cantidad}${it.unidad ? ` ${it.unidad}` : ""} | P.Unit: ${formatCurrency(Number(it.precio_unitario), oc.moneda as "ARS" | "USD")} | Subtotal: ${formatCurrency(Number(it.subtotal), oc.moneda as "ARS" | "USD")}`
-      ),
+      sep,
+      "PROVEEDOR",
+      sep,
       "",
-      `TOTAL: ${formatCurrency(Number(oc.total), oc.moneda as "ARS" | "USD")}`,
-      oc.observaciones ? `\nOBSERVACIONES: ${oc.observaciones}` : null,
+      `Razon Social:  ${prov?.razon_social || "—"}`,
+      prov?.cuit ? `CUIT:          ${prov.cuit}` : null,
+      prov?.condicion_iva ? `IVA:           ${prov.condicion_iva}` : null,
+      prov?.email ? `Email:         ${prov.email}` : null,
+      prov?.telefono ? `Telefono:      ${prov.telefono}` : null,
+      prov?.direccion ? `Direccion:     ${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? `, ${prov.provincia}` : ""}` : null,
+      prov?.forma_pago ? `Forma de pago: ${prov.forma_pago}` : null,
+      "",
+      sep,
+      "DETALLE DE ITEMS",
+      sep,
+      "",
+      ...detailItems.map((it, i) => [
+        `${String(i + 1).padStart(2, " ")}. ${it.codigo}`,
+        `    ${it.descripcion}`,
+        `    Cantidad: ${it.cantidad}${it.unidad ? ` ${it.unidad}` : ""}  |  P.Unitario: ${formatCurrency(Number(it.precio_unitario), oc.moneda as "ARS" | "USD")}  |  Subtotal: ${formatCurrency(Number(it.subtotal), oc.moneda as "ARS" | "USD")}`,
+        "",
+      ]).flat(),
+      sep,
+      `Subtotal:  ${formatCurrency(Number(oc.subtotal), oc.moneda as "ARS" | "USD")}`,
+      `IVA:       ${formatCurrency(Number(oc.iva), oc.moneda as "ARS" | "USD")}`,
+      `TOTAL:     ${formatCurrency(Number(oc.total), oc.moneda as "ARS" | "USD")}`,
+      sep,
+      oc.observaciones ? `\nOBSERVACIONES:\n${oc.observaciones}` : null,
     ];
-    return lines.filter(Boolean).join("\n");
+    return lines.filter((l) => l !== null).join("\n");
+  };
+
+  const handleDownloadPDF = () => {
+    if (!detailOC) return;
+    const oc = detailOC;
+    const prov = oc.proveedores;
+    const estadoLabel = (statusConfig[oc.estado] || { label: oc.estado }).label;
+    const mon = oc.moneda as "ARS" | "USD";
+
+    const itemRows = detailItems.map((it, i) => `
+      <tr>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:center">${i + 1}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-family:monospace;font-size:11px">${it.codigo}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7">${it.descripcion}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right">${it.cantidad}${it.unidad ? ` ${it.unidad}` : ""}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace">${formatCurrency(Number(it.precio_unitario), mon)}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace;font-weight:600">${formatCurrency(Number(it.subtotal), mon)}</td>
+      </tr>
+    `).join("");
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${oc.numero}</title>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; margin: 0; padding: 40px; color: #18181b; font-size: 13px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; border-bottom: 3px solid #FF4500; padding-bottom: 20px; }
+  .title { font-size: 22px; font-weight: 700; color: #FF4500; }
+  .numero { font-size: 16px; font-family: monospace; margin-top: 4px; }
+  .estado { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #f4f4f5; }
+  .section { margin-bottom: 24px; }
+  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #71717a; font-weight: 600; margin-bottom: 8px; border-bottom: 1px solid #e4e4e7; padding-bottom: 4px; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; }
+  .info-label { color: #71717a; font-size: 11px; }
+  .info-value { font-weight: 500; margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #f4f4f5; padding: 8px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #71717a; font-weight: 600; }
+  .totals { margin-top: 16px; display: flex; flex-direction: column; align-items: flex-end; }
+  .total-row { display: flex; justify-content: space-between; width: 250px; padding: 4px 0; font-size: 13px; }
+  .total-row.final { border-top: 2px solid #18181b; padding-top: 8px; margin-top: 4px; font-weight: 700; font-size: 15px; }
+  .obs { background: #fafafa; border: 1px solid #e4e4e7; border-radius: 6px; padding: 12px; margin-top: 16px; }
+  .footer { margin-top: 40px; text-align: center; color: #a1a1aa; font-size: 10px; border-top: 1px solid #e4e4e7; padding-top: 12px; }
+  @media print { body { padding: 20px; } }
+</style></head><body>
+
+<div class="header">
+  <div>
+    <div class="title">ORDEN DE COMPRA</div>
+    <div class="numero">${oc.numero}</div>
+  </div>
+  <div style="text-align:right">
+    <div class="estado">${estadoLabel}</div>
+    <div style="margin-top:8px;font-size:12px;color:#71717a">Fecha: ${formatDate(oc.fecha)}</div>
+    ${oc.fecha_entrega_estimada ? `<div style="font-size:12px;color:#71717a">Entrega est.: ${formatDate(oc.fecha_entrega_estimada)}</div>` : ""}
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Proveedor</div>
+  <div class="info-grid">
+    <div><div class="info-label">Razon Social</div><div class="info-value">${prov?.razon_social || "—"}</div></div>
+    <div><div class="info-label">CUIT</div><div class="info-value">${prov?.cuit || "—"}</div></div>
+    ${prov?.email ? `<div><div class="info-label">Email</div><div class="info-value">${prov.email}</div></div>` : ""}
+    ${prov?.telefono ? `<div><div class="info-label">Telefono</div><div class="info-value">${prov.telefono}</div></div>` : ""}
+    ${prov?.direccion ? `<div><div class="info-label">Direccion</div><div class="info-value">${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? `, ${prov.provincia}` : ""}</div></div>` : ""}
+    ${prov?.condicion_iva ? `<div><div class="info-label">Cond. IVA</div><div class="info-value">${prov.condicion_iva}</div></div>` : ""}
+    ${prov?.forma_pago ? `<div><div class="info-label">Forma de pago</div><div class="info-value">${prov.forma_pago}</div></div>` : ""}
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Detalle de items</div>
+  <table>
+    <thead><tr>
+      <th style="text-align:center;width:30px">#</th>
+      <th>Codigo</th>
+      <th>Descripcion</th>
+      <th style="text-align:right">Cantidad</th>
+      <th style="text-align:right">P. Unitario</th>
+      <th style="text-align:right">Subtotal</th>
+    </tr></thead>
+    <tbody>${itemRows}</tbody>
+  </table>
+  <div class="totals">
+    <div class="total-row"><span>Subtotal</span><span style="font-family:monospace">${formatCurrency(Number(oc.subtotal), mon)}</span></div>
+    <div class="total-row"><span>IVA</span><span style="font-family:monospace">${formatCurrency(Number(oc.iva), mon)}</span></div>
+    <div class="total-row final"><span>TOTAL</span><span style="font-family:monospace">${formatCurrency(Number(oc.total), mon)}</span></div>
+  </div>
+</div>
+
+${oc.observaciones ? `<div class="section"><div class="section-title">Observaciones</div><div class="obs">${oc.observaciones}</div></div>` : ""}
+
+${oc.presupuesto_origen ? `<div style="font-size:11px;color:#71717a;margin-top:12px">Presupuesto origen: ${(oc.presupuesto_origen as { numero: string }).numero}</div>` : ""}
+
+<div class="footer">
+  Lazzari Soluciones Industriales &mdash; ${oc.numero} &mdash; Generado el ${formatDate(new Date().toISOString())}
+</div>
+
+</body></html>`;
+
+    const win = window.open("", "_blank");
+    if (win) {
+      win.document.write(html);
+      win.document.close();
+      setTimeout(() => win.print(), 500);
+    }
   };
 
   const [copiedSummary, setCopiedSummary] = useState(false);
@@ -647,7 +770,15 @@ export default function OrdenesCompraPage() {
                   title="Copiar resumen al portapapeles"
                 >
                   {copiedSummary ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
-                  {copiedSummary ? "Copiado" : "Copiar OC"}
+                  {copiedSummary ? "Copiado" : "Copiar"}
+                </button>
+                <button
+                  onClick={handleDownloadPDF}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                  title="Descargar PDF"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  PDF
                 </button>
                 <button onClick={() => setDetailOC(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
                   <X className="h-5 w-5" />

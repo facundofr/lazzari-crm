@@ -14,7 +14,7 @@ import { supabase } from "@/lib/supabase/client";
 import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
-  Printer, Sparkles,
+  Printer, Sparkles, Download, ClipboardCopy, Check,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -41,7 +41,7 @@ interface SupabasePresupuesto {
   created_at: string;
   updated_at: string;
   vendedor_id: string | null;
-  clientes?: { razon_social: string; cuit: string } | null;
+  clientes?: { razon_social: string; cuit: string; email?: string | null; telefono?: string | null; direccion?: string | null; localidad?: string | null; provincia?: string | null; condicion_iva?: string | null } | null;
   created_by_profile?: { full_name: string } | null;
   vendedor_profile?: { full_name: string; avatar_url: string | null } | null;
   presupuesto_items?: PresupuestoItem[];
@@ -103,6 +103,13 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     vendedorNombre: row.vendedor_profile?.full_name ?? "",
     vendedorAvatar: row.vendedor_profile?.avatar_url ?? null,
     vendedorId: row.vendedor_id ?? null,
+    clienteCuit: row.clientes?.cuit ?? "",
+    clienteEmail: row.clientes?.email ?? "",
+    clienteTelefono: row.clientes?.telefono ?? "",
+    clienteDireccion: row.clientes?.direccion ?? "",
+    clienteLocalidad: row.clientes?.localidad ?? "",
+    clienteProvincia: row.clientes?.provincia ?? "",
+    clienteCondicionIva: row.clientes?.condicion_iva ?? "",
   } as any;
 }
 
@@ -346,14 +353,14 @@ export default function PresupuestosPage() {
       // First try with items + vendedor profile
       let res: { data: any; error: any } = await supabase
         .from("presupuestos")
-        .select(`*, clientes(razon_social, cuit), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), presupuesto_items(*)`)
+        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), presupuesto_items(*)`)
         .order("created_at", { ascending: false });
 
       // If that fails, try without items
       if (res.error) {
         res = await supabase
           .from("presupuestos")
-          .select(`*, clientes(razon_social, cuit), created_by_profile:created_by(full_name), vendedor_id`)
+          .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_id`)
           .order("created_at", { ascending: false });
       }
 
@@ -720,39 +727,158 @@ export default function PresupuestosPage() {
     }
   }
 
-  function handlePrint(pr: Presupuesto) {
-    // Build a printable window
-    const items = pr.items
-      .map(
-        (it) =>
-          `<tr>
-            <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-family:monospace;font-size:12px">${it.codigo}</td>
-            <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-size:13px">${it.descripcion}</td>
-            <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-size:13px">${it.cantidad} ${it.unidad}</td>
-            <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace;font-size:13px">${formatCurrency(it.precioVenta, pr.moneda)}</td>
-            <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace;font-size:13px;font-weight:600">${formatCurrency(it.total, pr.moneda)}</td>
-          </tr>`
-      )
-      .join("");
+  function buildPRSummaryText(pr: Presupuesto) {
+    const p = pr as any;
+    const sep = "\u2500".repeat(50);
+    const estadoLabel = (statusConfig[pr.estado] || { label: pr.estado }).label;
+    const lines = [
+      sep,
+      `PRESUPUESTO: ${pr.numero}`,
+      sep,
+      "",
+      `Fecha:        ${formatDate(pr.fecha)}`,
+      `Vencimiento:  ${formatDate(pr.vencimiento)}`,
+      `Estado:       ${estadoLabel}`,
+      `Moneda:       ${pr.moneda}`,
+      pr.creadoPor ? `Creado por:   ${pr.creadoPor}` : null,
+      p.vendedorNombre ? `Vendedor:     ${p.vendedorNombre}` : null,
+      "",
+      sep,
+      "CLIENTE",
+      sep,
+      "",
+      `Razon Social:  ${pr.clienteNombre}`,
+      p.clienteCuit ? `CUIT:          ${p.clienteCuit}` : null,
+      p.clienteCondicionIva ? `IVA:           ${p.clienteCondicionIva}` : null,
+      p.clienteEmail ? `Email:         ${p.clienteEmail}` : null,
+      p.clienteTelefono ? `Telefono:      ${p.clienteTelefono}` : null,
+      p.clienteDireccion ? `Direccion:     ${p.clienteDireccion}${p.clienteLocalidad ? `, ${p.clienteLocalidad}` : ""}${p.clienteProvincia ? `, ${p.clienteProvincia}` : ""}` : null,
+      "",
+      sep,
+      "DETALLE DE ITEMS",
+      sep,
+      "",
+      ...pr.items.map((it, i) => [
+        `${String(i + 1).padStart(2, " ")}. ${it.codigo}`,
+        `    ${it.descripcion}`,
+        `    Cantidad: ${it.cantidad} ${it.unidad}  |  P.Venta: ${formatCurrency(it.precioVenta, pr.moneda)}  |  Total: ${formatCurrency(it.total, pr.moneda)}`,
+        "",
+      ]).flat(),
+      sep,
+      `Subtotal:  ${formatCurrency(pr.subtotal, pr.moneda)}`,
+      `IVA:       ${formatCurrency(pr.iva, pr.moneda)}`,
+      `TOTAL:     ${formatCurrency(pr.total, pr.moneda)}`,
+      sep,
+      pr.observaciones ? `\nOBSERVACIONES:\n${pr.observaciones}` : null,
+    ];
+    return lines.filter((l) => l !== null).join("\n");
+  }
 
-    const html = `<!DOCTYPE html><html><head><title>PR ${pr.numero}</title><style>body{font-family:system-ui,sans-serif;margin:40px;color:#18181b}table{width:100%;border-collapse:collapse}th{text-align:left;padding:8px;border-bottom:2px solid #18181b;font-size:12px;text-transform:uppercase;letter-spacing:0.05em;color:#71717a}@media print{body{margin:20px}}</style></head><body>
-      <h1 style="font-size:20px;margin-bottom:4px">Presupuesto ${pr.numero}</h1>
-      <p style="color:#71717a;font-size:14px;margin-top:0">${pr.clienteNombre} &mdash; ${formatDate(pr.fecha)}</p>
-      <hr style="border:none;border-top:1px solid #e4e4e7;margin:16px 0"/>
-      <table><thead><tr><th>Codigo</th><th>Descripcion</th><th style="text-align:right">Cant.</th><th style="text-align:right">P. Venta</th><th style="text-align:right">Total</th></tr></thead><tbody>${items}</tbody></table>
-      <div style="text-align:right;margin-top:16px;font-size:14px">
-        <p>Subtotal: <strong>${formatCurrency(pr.subtotal, pr.moneda)}</strong></p>
-        <p>IVA: <strong>${formatCurrency(pr.iva, pr.moneda)}</strong></p>
-        <p style="font-size:18px;font-weight:bold;margin-top:8px;border-top:2px solid #18181b;padding-top:8px">Total: ${formatCurrency(pr.total, pr.moneda)}</p>
-      </div>
-      ${pr.observaciones ? `<hr style="border:none;border-top:1px solid #e4e4e7;margin:16px 0"/><p style="font-size:13px;color:#52525b"><strong>Observaciones:</strong> ${pr.observaciones}</p>` : ""}
-      <script>window.print()</script>
-    </body></html>`;
+  const [copiedPR, setCopiedPR] = useState(false);
+  function handleCopyPR(pr: Presupuesto) {
+    navigator.clipboard.writeText(buildPRSummaryText(pr));
+    setCopiedPR(true);
+    setTimeout(() => setCopiedPR(false), 2000);
+  }
+
+  function handlePrint(pr: Presupuesto) {
+    const p = pr as any;
+    const mon = pr.moneda;
+    const estadoLabel = (statusConfig[pr.estado] || { label: pr.estado }).label;
+
+    const itemRows = pr.items.map((it, i) => `
+      <tr>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:center">${i + 1}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-family:monospace;font-size:11px">${it.codigo}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7">${it.descripcion}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right">${it.cantidad} ${it.unidad}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace">${formatCurrency(it.precioVenta, mon)}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace;font-weight:600">${formatCurrency(it.total, mon)}</td>
+      </tr>
+    `).join("");
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${pr.numero}</title>
+<style>
+  body { font-family: -apple-system, Arial, sans-serif; margin: 0; padding: 40px; color: #18181b; font-size: 13px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; border-bottom: 3px solid #FF4500; padding-bottom: 20px; }
+  .title { font-size: 22px; font-weight: 700; color: #FF4500; }
+  .numero { font-size: 16px; font-family: monospace; margin-top: 4px; }
+  .estado { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; background: #f4f4f5; }
+  .section { margin-bottom: 24px; }
+  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #71717a; font-weight: 600; margin-bottom: 8px; border-bottom: 1px solid #e4e4e7; padding-bottom: 4px; }
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; }
+  .info-label { color: #71717a; font-size: 11px; }
+  .info-value { font-weight: 500; margin-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #f4f4f5; padding: 8px; text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #71717a; font-weight: 600; }
+  .totals { margin-top: 16px; display: flex; flex-direction: column; align-items: flex-end; }
+  .total-row { display: flex; justify-content: space-between; width: 250px; padding: 4px 0; font-size: 13px; }
+  .total-row.final { border-top: 2px solid #18181b; padding-top: 8px; margin-top: 4px; font-weight: 700; font-size: 15px; }
+  .obs { background: #fafafa; border: 1px solid #e4e4e7; border-radius: 6px; padding: 12px; margin-top: 16px; }
+  .footer { margin-top: 40px; text-align: center; color: #a1a1aa; font-size: 10px; border-top: 1px solid #e4e4e7; padding-top: 12px; }
+  @media print { body { padding: 20px; } }
+</style></head><body>
+
+<div class="header">
+  <div>
+    <div class="title">PRESUPUESTO</div>
+    <div class="numero">${pr.numero}</div>
+  </div>
+  <div style="text-align:right">
+    <div class="estado">${estadoLabel}</div>
+    <div style="margin-top:8px;font-size:12px;color:#71717a">Fecha: ${formatDate(pr.fecha)}</div>
+    <div style="font-size:12px;color:#71717a">Vence: ${formatDate(pr.vencimiento)}</div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Cliente</div>
+  <div class="info-grid">
+    <div><div class="info-label">Razon Social</div><div class="info-value">${pr.clienteNombre}</div></div>
+    <div><div class="info-label">CUIT</div><div class="info-value">${p.clienteCuit || "\u2014"}</div></div>
+    ${p.clienteEmail ? `<div><div class="info-label">Email</div><div class="info-value">${p.clienteEmail}</div></div>` : ""}
+    ${p.clienteTelefono ? `<div><div class="info-label">Telefono</div><div class="info-value">${p.clienteTelefono}</div></div>` : ""}
+    ${p.clienteDireccion ? `<div><div class="info-label">Direccion</div><div class="info-value">${p.clienteDireccion}${p.clienteLocalidad ? `, ${p.clienteLocalidad}` : ""}${p.clienteProvincia ? `, ${p.clienteProvincia}` : ""}</div></div>` : ""}
+    ${p.clienteCondicionIva ? `<div><div class="info-label">Cond. IVA</div><div class="info-value">${p.clienteCondicionIva}</div></div>` : ""}
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Detalle de items</div>
+  <table>
+    <thead><tr>
+      <th style="text-align:center;width:30px">#</th>
+      <th>Codigo</th>
+      <th>Descripcion</th>
+      <th style="text-align:right">Cantidad</th>
+      <th style="text-align:right">P. Venta</th>
+      <th style="text-align:right">Total</th>
+    </tr></thead>
+    <tbody>${itemRows}</tbody>
+  </table>
+  <div class="totals">
+    <div class="total-row"><span>Subtotal</span><span style="font-family:monospace">${formatCurrency(pr.subtotal, mon)}</span></div>
+    <div class="total-row"><span>IVA</span><span style="font-family:monospace">${formatCurrency(pr.iva, mon)}</span></div>
+    <div class="total-row final"><span>TOTAL</span><span style="font-family:monospace">${formatCurrency(pr.total, mon)}</span></div>
+  </div>
+</div>
+
+${pr.observaciones ? `<div class="section"><div class="section-title">Observaciones</div><div class="obs">${pr.observaciones}</div></div>` : ""}
+
+${pr.creadoPor ? `<div style="font-size:11px;color:#71717a;margin-top:12px">Creado por: ${pr.creadoPor}${p.vendedorNombre ? ` | Vendedor: ${p.vendedorNombre}` : ""}</div>` : ""}
+
+<div class="footer">
+  Lazzari Soluciones Industriales &mdash; ${pr.numero} &mdash; Generado el ${formatDate(new Date().toISOString())}
+</div>
+
+</body></html>`;
 
     const w = window.open("", "_blank");
     if (w) {
       w.document.write(html);
       w.document.close();
+      setTimeout(() => w.print(), 500);
     }
   }
 
@@ -989,8 +1115,21 @@ export default function PresupuestosPage() {
                 <p className="text-sm text-zinc-500 mt-0.5">{selected.clienteNombre}</p>
               </div>
               <div className="flex items-center gap-1">
-                <button onClick={() => handlePrint(selected)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Imprimir">
-                  <Printer className="h-4 w-4" />
+                <button
+                  onClick={() => handleCopyPR(selected)}
+                  className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 transition-colors"
+                  title="Copiar resumen"
+                >
+                  {copiedPR ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
+                  {copiedPR ? "Copiado" : "Copiar"}
+                </button>
+                <button
+                  onClick={() => handlePrint(selected)}
+                  className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 transition-colors"
+                  title="Descargar PDF"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  PDF
                 </button>
                 <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                   <Copy className="h-4 w-4" />
