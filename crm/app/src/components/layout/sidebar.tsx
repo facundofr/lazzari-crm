@@ -21,6 +21,7 @@ import {
   Sun,
   Moon,
   X,
+  ArrowRightLeft,
 } from "lucide-react";
 import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -33,6 +34,7 @@ const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
   { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
   { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
+  { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
   { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
   { name: "Órdenes compra", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
   { name: "Facturación", href: "/facturacion", icon: Receipt, module: "facturacion" },

@@ -5,36 +5,23 @@ import * as path from "path";
 
 // Lazy-import arca-facturacion (ESM module)
 let Arca: any;
-let CbteTipo: any;
-let IvaTipo: any;
-let DocTipo: any;
 
 async function loadArca() {
   if (!Arca) {
     const mod = await import("@ramiidv/arca-facturacion");
     Arca = mod.Arca;
-    CbteTipo = mod.CbteTipo;
-    IvaTipo = mod.IvaTipo;
-    DocTipo = mod.DocTipo;
   }
 }
 
 // Map our DB tipo codes to ARCA CbteTipo enum values
-// ARCA codes: 1=FA, 6=FB, 11=FC, 3=NCA, 8=NCB, 13=NCC, 2=NDA, 7=NDB, 12=NDC
 const CBTE_TIPO_MAP: Record<string, number> = {
-  FA: 1, FB: 6, FC: 11,
-  NCA: 3, NCB: 8, NCC: 13,
-  NDA: 2, NDB: 7, NDC: 12,
+  FA: 1, FB: 6,
+  NCA: 3, NCB: 8,
+  NDA: 2, NDB: 7,
 };
 
-// Map condicion_iva to ARCA DocTipo
-// FA requires CUIT (80), FB accepts DNI (96) or consumidor final (99)
-const DOC_TIPO_MAP: Record<string, number> = {
-  CUIT: 80,
-  CUIL: 86,
-  DNI: 96,
-  "Consumidor Final": 99,
-};
+// Default punto de venta (active ones: 8, 9, 10, 12)
+const DEFAULT_PTO_VTA = 15;
 
 function getArcaInstance() {
   const certPath = process.env.ARCA_CERT_PATH || path.join(process.cwd(), "..", "certs", "lazzari.crt");
@@ -48,12 +35,12 @@ function getArcaInstance() {
   }
 
   const cuit = Number(process.env.ARCA_CUIT || "20379309128");
-  const production = process.env.ARCA_PRODUCTION === "true";
+  // Certificate is from production ARCA — always use production
+  const production = process.env.ARCA_PRODUCTION !== "false";
 
   return new Arca({ cuit, cert, key, production });
 }
 
-// Supabase admin client for server-side operations
 function getSupabase() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -70,12 +57,11 @@ export async function POST(req: NextRequest) {
     const {
       tipo,           // "FA" | "FB" | "FC" | "NCA" | "NCB" | "NCC"
       cliente_id,     // UUID
-      punto_venta,    // number (ej: 1)
+      punto_venta,    // number (ej: 10)
       items,          // [{ descripcion, cantidad, precio_unitario, iva_porcentaje }]
       presupuesto_id, // optional UUID
     } = body;
 
-    // Validate required fields
     if (!tipo || !cliente_id || !punto_venta || !items?.length) {
       return NextResponse.json(
         { error: "Faltan campos requeridos: tipo, cliente_id, punto_venta, items" },
@@ -88,105 +74,167 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Tipo de comprobante no valido: ${tipo}` }, { status: 400 });
     }
 
-    // Fetch client data from Supabase
     const supabase = getSupabase();
-    const { data: cliente, error: clienteError } = await supabase
-      .from("clientes")
-      .select("razon_social, cuit, condicion_iva")
-      .eq("id", cliente_id)
-      .single();
 
-    if (clienteError || !cliente) {
-      return NextResponse.json({ error: "Cliente no encontrado" }, { status: 404 });
-    }
-
-    // Determine document type based on comprobante type
+    // Determine document type and client data
     let docTipo: number;
     let docNro: string;
+    let cliente: { razon_social: string; cuit: string; condicion_iva?: string } | null = null;
 
-    if (tipo.endsWith("A")) {
-      // Factura A: requires CUIT
-      if (!cliente.cuit) {
-        return NextResponse.json({ error: "El cliente necesita CUIT para Factura A" }, { status: 400 });
+    if (cliente_id === "consumidor_final") {
+      // Consumidor Final — only for FB/NCB
+      if (tipo.endsWith("A")) {
+        return NextResponse.json({ error: "Factura A requiere un cliente con CUIT" }, { status: 400 });
       }
-      docTipo = 80; // CUIT
-      docNro = cliente.cuit.replace(/-/g, "");
-    } else if (tipo.endsWith("B")) {
-      // Factura B: CUIT, DNI, or Consumidor Final
-      if (cliente.cuit) {
-        docTipo = 80;
-        docNro = cliente.cuit.replace(/-/g, "");
-      } else {
-        docTipo = 99; // Consumidor Final
-        docNro = "0";
-      }
-    } else {
-      // Factura C
       docTipo = 99;
       docNro = "0";
+      cliente = { razon_social: "Consumidor Final", cuit: "" };
+    } else {
+      const { data, error: clienteError } = await supabase
+        .from("clientes")
+        .select("razon_social, cuit, condicion_iva")
+        .eq("id", cliente_id)
+        .single();
+
+      if (clienteError || !data) {
+        return NextResponse.json({ error: "Cliente no encontrado" }, { status: 404 });
+      }
+      cliente = data;
+
+      if (tipo.endsWith("A")) {
+        if (!cliente.cuit) {
+          return NextResponse.json({ error: "El cliente necesita CUIT para Factura A" }, { status: 400 });
+        }
+        docTipo = 80;
+        docNro = cliente.cuit.replace(/-/g, "");
+      } else if (tipo.endsWith("B")) {
+        if (cliente.cuit) {
+          docTipo = 80;
+          docNro = cliente.cuit.replace(/-/g, "");
+        } else {
+          docTipo = 99;
+          docNro = "0";
+        }
+      } else {
+        return NextResponse.json({ error: `Tipo de comprobante no soportado: ${tipo}` }, { status: 400 });
+      }
     }
 
-    // Build ARCA items — group by IVA rate
-    const arcaItems = items.map((item: any) => {
-      const neto = Number(item.cantidad) * Number(item.precio_unitario);
-      const ivaPct = Number(item.iva_porcentaje || 21);
-      // Map percentage to ARCA IvaTipo enum
+    // Calculate totals per IVA rate
+    const isFacturaA = tipo.endsWith("A");
+    const ivaGroups: Record<number, { baseImp: number; importe: number }> = {};
+    let totalNeto = 0;
+    let totalIva = 0;
+
+    for (const item of items) {
+      let neto: number;
+      let ivaPct: number;
+      let ivaImporte: number;
+
+      if (isFacturaA) {
+        // FA/NCA: precio es neto, IVA se calcula aparte
+        neto = Number(item.cantidad) * Number(item.precio_unitario);
+        ivaPct = Number(item.iva_porcentaje || 21);
+        ivaImporte = Math.round(neto * ivaPct / 100 * 100) / 100;
+      } else {
+        // FB/NCB: precio es final (IVA 21% incluido)
+        const totalItem = Number(item.cantidad) * Number(item.precio_unitario);
+        ivaPct = 21;
+        neto = Math.round(totalItem / 1.21 * 100) / 100;
+        ivaImporte = Math.round((totalItem - neto) * 100) / 100;
+      }
+
       let ivaId: number;
-      if (ivaPct === 0) ivaId = 3;       // 0%
-      else if (ivaPct === 10.5) ivaId = 4; // 10.5%
-      else if (ivaPct === 21) ivaId = 5;   // 21%
-      else if (ivaPct === 27) ivaId = 6;   // 27%
-      else ivaId = 5; // default 21%
+      if (ivaPct === 0) ivaId = 3;
+      else if (ivaPct === 10.5) ivaId = 4;
+      else if (ivaPct === 21) ivaId = 5;
+      else if (ivaPct === 27) ivaId = 6;
+      else ivaId = 5;
 
-      return { neto, iva: ivaId };
-    });
+      totalNeto += neto;
+      totalIva += ivaImporte;
 
-    // Call ARCA
+      if (!ivaGroups[ivaId]) {
+        ivaGroups[ivaId] = { baseImp: 0, importe: 0 };
+      }
+      ivaGroups[ivaId].baseImp += neto;
+      ivaGroups[ivaId].importe += ivaImporte;
+    }
+
+    totalNeto = Math.round(totalNeto * 100) / 100;
+    totalIva = Math.round(totalIva * 100) / 100;
+    const totalFinal = Math.round((totalNeto + totalIva) * 100) / 100;
+
+    // Build ARCA invoice using crearFacturaAuto (handles cbteNro automatically)
     const arca = getArcaInstance();
-    const result = await arca.facturar({
-      ptoVta: punto_venta,
-      cbteTipo,
-      docTipo,
-      docNro,
-      items: arcaItems,
+    const ptoVta = Number(punto_venta);
+
+    const ivaArray = Object.entries(ivaGroups).map(([id, vals]) => ({
+      Id: Number(id),
+      BaseImp: Math.round(vals.baseImp * 100) / 100,
+      Importe: Math.round(vals.importe * 100) / 100,
+    }));
+
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+
+    const result = await arca.crearFacturaAuto(ptoVta, cbteTipo, {
+      Concepto: 1, // Productos
+      DocTipo: docTipo,
+      DocNro: Number(docNro),
+      CbteFch: today,
+      ImpTotal: totalFinal,
+      ImpTotConc: 0,
+      ImpNeto: totalNeto,
+      ImpOpEx: 0,
+      ImpTrib: 0,
+      ImpIVA: totalIva,
+      MonId: "PES",
+      MonCotiz: 1,
+      Iva: ivaArray,
     });
 
-    // Calculate totals from result
-    const subtotal = result.importes?.neto ?? items.reduce((a: number, it: any) => a + Number(it.cantidad) * Number(it.precio_unitario), 0);
-    const iva = result.importes?.iva ?? Math.round(subtotal * 0.21 * 100) / 100;
-    const total = result.importes?.total ?? subtotal + iva;
+    // Extract CAE from response
+    const det = result?.FeDetResp?.FECAEDetResponse;
+    const detArray = Array.isArray(det) ? det : det ? [det] : [];
+    const firstDet = detArray[0];
+
+    if (!firstDet || firstDet.Resultado !== "A") {
+      const obs = firstDet?.Observaciones?.Obs;
+      const obsArray = Array.isArray(obs) ? obs : obs ? [obs] : [];
+      const obsMsg = obsArray.map((o: any) => `[${o.Code}] ${o.Msg}`).join(", ");
+      return NextResponse.json({
+        error: `ARCA rechazó el comprobante: ${obsMsg || "Error desconocido"}`,
+      }, { status: 422 });
+    }
+
+    const cae = String(firstDet.CAE);
+    const caeFchVto = String(firstDet.CAEFchVto);
+    const cbteNro = Number(firstDet.CbteDesde);
 
     // Save to database
     const { data: factura, error: insertError } = await supabase
       .from("facturas")
       .insert({
         tipo,
-        punto_venta,
-        numero: result.cbteNro,
-        cliente_id,
+        punto_venta: ptoVta,
+        numero: cbteNro,
+        cliente_id: cliente_id === "consumidor_final" ? null : cliente_id,
         presupuesto_id: presupuesto_id || null,
         fecha: new Date().toISOString().slice(0, 10),
-        cae: result.cae,
-        cae_vencimiento: result.caeFchVto,
-        subtotal,
-        iva,
-        total,
+        cae,
+        cae_vencimiento: caeFchVto,
+        subtotal: totalNeto,
+        iva: totalIva,
+        total: totalFinal,
         estado: "emitida",
       } as any)
       .select()
       .single();
 
     if (insertError) {
-      // The invoice was authorized by ARCA but we failed to save it locally
-      // Return the ARCA data so the user doesn't lose it
       return NextResponse.json({
-        warning: "Factura autorizada por ARCA pero hubo un error al guardar localmente. Guardar los datos manualmente.",
-        arca: {
-          cae: result.cae,
-          caeFchVto: result.caeFchVto,
-          cbteNro: result.cbteNro,
-          importes: result.importes,
-        },
+        warning: "Factura autorizada por ARCA pero hubo un error al guardar localmente.",
+        arca: { cae, caeFchVto, cbteNro, total: totalFinal },
         error: insertError.message,
       }, { status: 207 });
     }
@@ -195,11 +243,11 @@ export async function POST(req: NextRequest) {
       success: true,
       factura: {
         id: factura.id,
-        numero: result.cbteNro,
-        cae: result.cae,
-        cae_vencimiento: result.caeFchVto,
-        total,
-        comprobante: `${tipo} ${String(punto_venta).padStart(4, "0")}-${String(result.cbteNro).padStart(8, "0")}`,
+        numero: cbteNro,
+        cae,
+        cae_vencimiento: caeFchVto,
+        total: totalFinal,
+        comprobante: `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(cbteNro).padStart(8, "0")}`,
       },
     });
   } catch (err: unknown) {
@@ -209,7 +257,7 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// GET /api/facturacion?action=status — Check ARCA connection status
+// GET /api/facturacion — Check status or list puntos de venta
 export async function GET(req: NextRequest) {
   const action = req.nextUrl.searchParams.get("action");
 
@@ -217,25 +265,37 @@ export async function GET(req: NextRequest) {
     try {
       await loadArca();
       const arca = getArcaInstance();
-      // Try to get last authorized voucher number to verify connection
-      const lastVoucher = await arca.ultimoComprobante({
-        ptoVta: Number(process.env.ARCA_PTO_VTA || 1),
-        cbteTipo: 1, // Factura A
-      });
+      const ptoVta = Number(process.env.ARCA_PTO_VTA || DEFAULT_PTO_VTA);
+      const lastVoucher = await arca.ultimoComprobante(ptoVta, 1);
       return NextResponse.json({
         connected: true,
-        production: process.env.ARCA_PRODUCTION === "true",
-        lastVoucher: lastVoucher,
+        production: true,
+        lastVoucher,
+        ptoVta,
         cuit: process.env.ARCA_CUIT || "20379309128",
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Error de conexion";
-      return NextResponse.json({
-        connected: false,
-        error: message,
-      });
+      return NextResponse.json({ connected: false, error: message });
     }
   }
 
-  return NextResponse.json({ error: "Accion no valida" }, { status: 400 });
+  if (action === "puntos-venta") {
+    try {
+      await loadArca();
+      const arca = getArcaInstance();
+      const auth = await arca.getAuth();
+      const puntos = await arca.wsfe.getPuntosVenta(auth);
+      // Filter to only active ones (no FchBaja or FchBaja === "NULL")
+      const activos = (puntos || []).filter((p: any) =>
+        !p.FchBaja || p.FchBaja === "NULL"
+      );
+      return NextResponse.json({ puntosVenta: activos });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Error consultando puntos de venta";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+  }
+
+  return NextResponse.json({ error: "Accion no valida. Usar ?action=status o ?action=puntos-venta" }, { status: 400 });
 }

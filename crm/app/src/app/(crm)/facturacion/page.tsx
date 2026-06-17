@@ -72,7 +72,7 @@ export default function FacturacionPage() {
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
 
   // ARCA status
-  const [arcaStatus, setArcaStatus] = useState<{ connected: boolean; error?: string; production?: boolean } | null>(null);
+  const [arcaStatus, setArcaStatus] = useState<{ connected: boolean; error?: string; production?: boolean; ptoVta?: number } | null>(null);
 
   // Emit modal
   const [emitOpen, setEmitOpen] = useState(false);
@@ -80,10 +80,11 @@ export default function FacturacionPage() {
   const [emitResult, setEmitResult] = useState<any>(null);
   const [emitError, setEmitError] = useState("");
   const [clientes, setClientes] = useState<ClienteOption[]>([]);
+  const PV_CRM = 15; // Punto de venta exclusivo del CRM
   const [emitData, setEmitData] = useState({
     tipo: "FA",
     cliente_id: "",
-    punto_venta: 1,
+    punto_venta: PV_CRM,
     items: [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] as EmitItem[],
   });
 
@@ -91,8 +92,8 @@ export default function FacturacionPage() {
   const filterConfigs: FilterConfig[] = [
     { key: "fecha", label: "Fecha", type: "date-range" },
     { key: "tipo", label: "Tipo", type: "select", options: [
-      { value: "FA", label: "Factura A" }, { value: "FB", label: "Factura B" }, { value: "FC", label: "Factura C" },
-      { value: "NCA", label: "NC A" }, { value: "NCB", label: "NC B" }, { value: "NCC", label: "NC C" },
+      { value: "FA", label: "Factura A" }, { value: "FB", label: "Factura B" },
+      { value: "NCA", label: "NC A" }, { value: "NCB", label: "NC B" },
     ]},
     { key: "estado", label: "Estado", type: "select", options: [
       { value: "emitida", label: "Emitida" }, { value: "pagada", label: "Pagada" },
@@ -157,10 +158,12 @@ export default function FacturacionPage() {
   }, []);
 
   // ── Emit handlers ──────────────────────────────────────────────
-  const openEmitModal = () => {
+  const openEmitModal = (prefill?: { cliente_id: string; tipo?: string; items?: EmitItem[] }) => {
     setEmitData({
-      tipo: "FA", cliente_id: "", punto_venta: 1,
-      items: [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],
+      tipo: prefill?.tipo || "FB",
+      cliente_id: prefill?.cliente_id || "",
+      punto_venta: PV_CRM,
+      items: prefill?.items || [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],
     });
     setEmitStep("form");
     setEmitError("");
@@ -180,10 +183,21 @@ export default function FacturacionPage() {
     }));
   };
 
+  const isFacturaA = emitData.tipo === "FA" || emitData.tipo === "NCA";
+
   const emitTotals = emitData.items.reduce((acc, it) => {
-    const neto = it.cantidad * it.precio_unitario;
-    const iva = neto * (it.iva_porcentaje / 100);
-    return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + neto + iva };
+    if (isFacturaA) {
+      // FA/NCA: precio es neto, IVA se suma
+      const neto = it.cantidad * it.precio_unitario;
+      const iva = neto * (it.iva_porcentaje / 100);
+      return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + neto + iva };
+    } else {
+      // FB/NCB: precio es final (IVA incluido)
+      const total = it.cantidad * it.precio_unitario;
+      const neto = Math.round(total / 1.21 * 100) / 100;
+      const iva = Math.round((total - neto) * 100) / 100;
+      return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + total };
+    }
   }, { neto: 0, iva: 0, total: 0 });
 
   const handleEmit = async () => {
@@ -521,7 +535,7 @@ ${f.cae ? `
               <div className="flex items-center gap-2">
                 <div className={`h-2 w-2 rounded-full ${arcaStatus?.connected ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"}`} />
                 <span className="text-xs text-zinc-500">
-                  {arcaStatus?.connected ? (arcaStatus.production ? "Produccion" : "Homologacion") : "Pendiente de configuracion"}
+                  {arcaStatus?.connected ? `Produccion — PV ${arcaStatus.ptoVta}` : "Pendiente de configuracion"}
                 </span>
               </div>
             </div>
@@ -569,35 +583,35 @@ ${f.cae ? `
               <div className="p-6 space-y-5">
                 {emitError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{emitError}</div>}
 
-                {/* Tipo + Cliente */}
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
+                {/* Tipo + Cliente + PV */}
+                <div className="grid grid-cols-12 gap-4">
+                  <div className="col-span-3">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Tipo *</label>
                     <select value={emitData.tipo} onChange={(e) => setEmitData((p) => ({ ...p, tipo: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
                       <optgroup label="Facturas">
                         <option value="FA">Factura A</option>
                         <option value="FB">Factura B</option>
-                        <option value="FC">Factura C</option>
                       </optgroup>
                       <optgroup label="Notas de credito">
                         <option value="NCA">NC A</option>
                         <option value="NCB">NC B</option>
-                        <option value="NCC">NC C</option>
                       </optgroup>
                     </select>
                   </div>
-                  <div className="col-span-2">
+                  <div className="col-span-7">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cliente *</label>
                     <select value={emitData.cliente_id} onChange={(e) => setEmitData((p) => ({ ...p, cliente_id: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
                       <option value="">Seleccionar cliente...</option>
+                      {!isFacturaA && <option value="consumidor_final">Consumidor Final</option>}
                       {clientes.map((c) => <option key={c.id} value={c.id}>{c.razon_social} — {c.cuit || "Sin CUIT"}</option>)}
                     </select>
                   </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Punto de venta</label>
-                  <input type="number" min={1} value={emitData.punto_venta} onChange={(e) => setEmitData((p) => ({ ...p, punto_venta: Number(e.target.value) }))} className="w-20 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium mb-1 dark:text-zinc-300">PV</label>
+                    <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 text-sm font-mono text-zinc-500 dark:text-zinc-400">
+                      {String(emitData.punto_venta).padStart(4, "0")}
+                    </div>
+                  </div>
                 </div>
 
                 {/* Items */}
@@ -611,7 +625,7 @@ ${f.cae ? `
                   <div className="space-y-3">
                     {emitData.items.map((item, idx) => (
                       <div key={idx} className="grid grid-cols-12 gap-2 items-start">
-                        <div className="col-span-5">
+                        <div className={isFacturaA ? "col-span-5" : "col-span-7"}>
                           {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">Descripcion</label>}
                           <input
                             value={item.descripcion} onChange={(e) => updateItem(idx, "descripcion", e.target.value)}
@@ -624,18 +638,20 @@ ${f.cae ? `
                           <input type="number" min={1} value={item.cantidad} onChange={(e) => updateItem(idx, "cantidad", Number(e.target.value))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
                         </div>
                         <div className="col-span-2">
-                          {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">P. Unitario</label>}
+                          {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">{isFacturaA ? "Neto unit." : "Precio"}</label>}
                           <input type="number" step="0.01" min={0} value={item.precio_unitario || ""} onChange={(e) => updateItem(idx, "precio_unitario", Number(e.target.value))} placeholder="0.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
                         </div>
-                        <div className="col-span-2">
-                          {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">IVA %</label>}
-                          <select value={item.iva_porcentaje} onChange={(e) => updateItem(idx, "iva_porcentaje", Number(e.target.value))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
-                            <option value={21}>21%</option>
-                            <option value={10.5}>10.5%</option>
-                            <option value={27}>27%</option>
-                            <option value={0}>0%</option>
-                          </select>
-                        </div>
+                        {isFacturaA && (
+                          <div className="col-span-2">
+                            {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">IVA %</label>}
+                            <select value={item.iva_porcentaje} onChange={(e) => updateItem(idx, "iva_porcentaje", Number(e.target.value))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                              <option value={21}>21%</option>
+                              <option value={10.5}>10.5%</option>
+                              <option value={27}>27%</option>
+                              <option value={0}>0%</option>
+                            </select>
+                          </div>
+                        )}
                         <div className="col-span-1 flex items-end">
                           {emitData.items.length > 1 && (
                             <button onClick={() => removeItem(idx)} className="p-2 rounded hover:bg-red-50 text-red-400 hover:text-red-500">
@@ -650,11 +666,19 @@ ${f.cae ? `
 
                 {/* Totals preview */}
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4 space-y-2 text-sm">
-                  <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(emitTotals.neto)}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(emitTotals.iva)}</span></div>
-                  <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-700 pt-2 font-semibold text-base">
-                    <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total)}</span>
-                  </div>
+                  {isFacturaA ? (
+                    <>
+                      <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(emitTotals.neto)}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(emitTotals.iva)}</span></div>
+                      <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-700 pt-2 font-semibold text-base">
+                        <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex justify-between font-semibold text-base">
+                      <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total)}</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex justify-end gap-3 pt-2">
