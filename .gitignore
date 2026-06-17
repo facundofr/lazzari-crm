@@ -7,3 +7,9 @@ node_modules/
 .DS_Store
 .vercel
 out/
+
+# ARCA certificates (NEVER commit these)
+crm/certs/*.key
+crm/certs/*.crt
+crm/certs/*.pem
+crm/certs/*.p12
