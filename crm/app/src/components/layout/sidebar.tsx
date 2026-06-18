@@ -60,6 +60,7 @@ export function Sidebar() {
     profile, role,
     sidebarCollapsed: collapsed, setSidebarCollapsed: setCollapsed,
     mobileSidebarOpen, setMobileSidebarOpen,
+    sociedadActiva,
   } = useUser();
   const { theme, toggleTheme } = useTheme();
   const [loggingOut, setLoggingOut] = useState(false);
@@ -80,6 +81,10 @@ export function Sidebar() {
     // Close mobile sidebar on navigation
     setMobileSidebarOpen(false);
   }
+
+  const accentColor = sociedadActiva?.colorPrimario || "#FF4500";
+  const logoInitial = sociedadActiva?.nombre?.charAt(0) || "L";
+  const logoName = sociedadActiva?.nombre || "Lazzari";
 
   const displayName = profile?.full_name
     || profile?.email?.split("@")[0].replace(/[._-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
@@ -104,18 +109,21 @@ export function Sidebar() {
       <div className="flex h-16 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
         {(!collapsed || mobileSidebarOpen) && (
           <Link href="/dashboard" className="flex items-center gap-2" onClick={handleNavClick}>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-500 font-bold text-white text-sm">
-              L
+            <div
+              className="flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm"
+              style={{ backgroundColor: accentColor }}
+            >
+              {logoInitial}
             </div>
             <span className="text-base font-bold text-zinc-900 dark:text-white">
-              Lazzari
+              {logoName}
             </span>
             <span className="text-xs text-zinc-400 font-medium">CRM</span>
           </Link>
         )}
         {collapsed && !mobileSidebarOpen && (
-          <Link href="/dashboard" className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-orange-500 font-bold text-white text-sm">
-            L
+          <Link href="/dashboard" className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg font-bold text-white text-sm" style={{ backgroundColor: accentColor }}>
+            {logoInitial}
           </Link>
         )}
         {/* Close button on mobile */}
@@ -155,13 +163,12 @@ export function Sidebar() {
                     onClick={handleNavClick}
                     className={cn(
                       "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                      isActive
-                        ? "bg-orange-50 text-orange-600 dark:bg-orange-950/50 dark:text-orange-400"
-                        : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white"
+                      !isActive && "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white"
                     )}
+                    style={isActive ? { backgroundColor: accentColor + "15", color: accentColor } : undefined}
                     title={!showLabel ? item.name : undefined}
                   >
-                    <item.icon className={cn("h-5 w-5 shrink-0", isActive && "text-orange-500")} />
+                    <item.icon className="h-5 w-5 shrink-0" style={isActive ? { color: accentColor } : undefined} />
                     {showLabel && <span>{item.name}</span>}
                   </Link>
                 </li>
@@ -178,10 +185,9 @@ export function Sidebar() {
             onClick={handleNavClick}
             className={cn(
               "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-              pathname.startsWith("/configuracion")
-                ? "bg-orange-50 text-orange-600"
-                : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
+              !pathname.startsWith("/configuracion") && "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
             )}
+            style={pathname.startsWith("/configuracion") ? { backgroundColor: accentColor + "15", color: accentColor } : undefined}
             title={collapsed && !mobileSidebarOpen ? "Configuración" : undefined}
           >
             <Settings className="h-5 w-5" />

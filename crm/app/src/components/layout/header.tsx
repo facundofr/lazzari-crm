@@ -14,6 +14,8 @@ import {
   Receipt,
   Loader2,
   Menu,
+  Building2,
+  ChevronDown,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -93,7 +95,8 @@ const alertVariant: Record<string, "danger" | "warning" | "info" | "purple"> = {
 
 export function Header({ title, subtitle, action }: HeaderProps) {
   const router = useRouter();
-  const { setMobileSidebarOpen } = useUser();
+  const { setMobileSidebarOpen, sociedades, sociedadActiva, setSociedadActiva } = useUser();
+  const [sociedadOpen, setSociedadOpen] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [search, setSearch] = useState("");
@@ -297,6 +300,64 @@ export function Header({ title, subtitle, action }: HeaderProps) {
         </div>
       </div>
       <div className="flex items-center gap-2 sm:gap-3">
+        {/* Sociedad selector */}
+        {sociedades.length > 1 && sociedadActiva && (
+          <div className="relative">
+            <button
+              onClick={() => setSociedadOpen(!sociedadOpen)}
+              className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors"
+              style={{
+                borderColor: sociedadActiva.colorPrimario + "40",
+                backgroundColor: sociedadActiva.colorPrimario + "10",
+                color: sociedadActiva.colorPrimario,
+              }}
+            >
+              <Building2 className="h-4 w-4" />
+              <span className="hidden sm:inline">{sociedadActiva.nombre}</span>
+              <ChevronDown className="h-3 w-3" />
+            </button>
+            {sociedadOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setSociedadOpen(false)} />
+                <div className="absolute right-0 top-full z-50 mt-1 w-64 rounded-xl border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                  {sociedades.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => {
+                        setSociedadActiva(s);
+                        setSociedadOpen(false);
+                      }}
+                      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
+                        s.id === sociedadActiva.id
+                          ? "bg-zinc-100 dark:bg-zinc-800"
+                          : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+                      }`}
+                    >
+                      <div
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white text-xs font-bold"
+                        style={{ backgroundColor: s.colorPrimario }}
+                      >
+                        {s.nombre.charAt(0)}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                          {s.nombre}
+                        </p>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                          CUIT: {s.cuit}
+                        </p>
+                      </div>
+                      {s.id === sociedadActiva.id && (
+                        <div className="h-2 w-2 rounded-full" style={{ backgroundColor: s.colorPrimario }} />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Search */}
         <div className="relative hidden md:block" ref={searchContainerRef}>
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />

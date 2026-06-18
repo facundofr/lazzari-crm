@@ -218,6 +218,15 @@ export default function PresupuestosPage() {
     items: [{ ...emptyItem }] as NewPRItem[],
   });
 
+  // Client search
+  const [clientSearch, setClientSearch] = useState("");
+  const [clientDropdownOpen, setClientDropdownOpen] = useState(false);
+  const clientSearchRef = useRef<HTMLDivElement>(null);
+
+  const filteredClientes = clientes.filter((c) =>
+    c.razon_social.toLowerCase().includes(clientSearch.toLowerCase())
+  );
+
   // Product search modal
   const [productSearchOpen, setProductSearchOpen] = useState(false);
   const [productSearchIdx, setProductSearchIdx] = useState(0);
@@ -1072,6 +1081,11 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                         <Send className="h-4 w-4" />
                       </button>
                     )}
+                    {row.estado === "rechazado" && (
+                      <button onClick={() => handleEstadoChange(row.id, "borrador")} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Reabrir como borrador">
+                        <Edit3 className="h-4 w-4" />
+                      </button>
+                    )}
                     {row.estado === "pendiente" && (
                       <>
                         <button onClick={() => handleEstadoChange(row.id, "aprobado")} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600 dark:hover:bg-green-950/40" title="Aprobar">
@@ -1291,13 +1305,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 </div>
               </div>
 
-              {/* Observaciones */}
-              {selected.observaciones && (
-                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Observaciones (cliente)</h3>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{selected.observaciones}</p>
-                </div>
-              )}
+              {/* Notas internas (primero) */}
               {selected.notasInternas && (
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                   <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-400 mb-2 flex items-center gap-1.5">
@@ -1305,6 +1313,13 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     Notas internas
                   </h3>
                   <p className="text-sm text-amber-700/80 dark:text-amber-400/80 whitespace-pre-wrap bg-amber-50 dark:bg-amber-950/20 rounded-lg p-3">{selected.notasInternas}</p>
+                </div>
+              )}
+              {/* Observaciones (cliente) */}
+              {selected.observaciones && (
+                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Observaciones (cliente)</h3>
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{selected.observaciones}</p>
                 </div>
               )}
 
@@ -1350,6 +1365,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       <PauseCircle className="h-4 w-4" /> Postergar
                     </button>
                   </>
+                )}
+                {selected.estado === "rechazado" && (
+                  <button
+                    onClick={() => { handleEstadoChange(selected.id, "borrador"); }}
+                    className="flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition-colors dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    <Edit3 className="h-4 w-4" /> Reabrir como borrador
+                  </button>
                 )}
                 {selected.estado === "aprobado" && (
                   <div className="flex items-center gap-2 text-sm text-green-600">
@@ -1398,13 +1421,53 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-          <Select
-            label="Cliente *"
-            value={newPR.cliente_id}
-            onChange={(e) => setNewPR((p) => ({ ...p, cliente_id: e.target.value }))}
-            placeholder="Seleccionar cliente..."
-            options={clientes.map((c) => ({ value: c.id, label: c.razon_social }))}
-          />
+          <div className="relative" ref={clientSearchRef}>
+            <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Cliente *</label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+              <input
+                type="text"
+                value={clientSearch || (newPR.cliente_id ? clientes.find(c => c.id === newPR.cliente_id)?.razon_social || "" : "")}
+                onChange={(e) => {
+                  setClientSearch(e.target.value);
+                  setClientDropdownOpen(true);
+                  if (!e.target.value) setNewPR((p) => ({ ...p, cliente_id: "" }));
+                }}
+                onFocus={() => setClientDropdownOpen(true)}
+                placeholder="Buscar cliente..."
+                className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-3 text-sm text-zinc-800 placeholder:text-zinc-400 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white dark:focus:border-orange-600 dark:focus:ring-orange-900/30"
+              />
+              {newPR.cliente_id && (
+                <button
+                  onClick={() => { setNewPR((p) => ({ ...p, cliente_id: "" })); setClientSearch(""); }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 hover:text-zinc-600"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {clientDropdownOpen && clientSearch && (
+              <div className="absolute left-0 top-full z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                {filteredClientes.length === 0 ? (
+                  <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
+                ) : (
+                  filteredClientes.slice(0, 20).map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        setNewPR((p) => ({ ...p, cliente_id: c.id }));
+                        setClientSearch(c.razon_social);
+                        setClientDropdownOpen(false);
+                      }}
+                      className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${c.id === newPR.cliente_id ? "bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400" : "text-zinc-700 dark:text-zinc-300"}`}
+                    >
+                      {c.razon_social}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
           <Select
             label="Vendedor *"
             value={newPR.vendedor_id}
@@ -1444,7 +1507,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             label="Markup general %"
             type="number"
             value={newPR.markup_general}
-            onChange={(e) => setNewPR((p) => ({ ...p, markup_general: Number(e.target.value) }))}
+            onChange={(e) => setNewPR((p) => {
+              const mg = Number(e.target.value);
+              const items = p.items.map(it => {
+                const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio);
+                return { ...it, markup_porcentaje: mg, precio_venta: Number((costoConv * (1 + mg / 100)).toFixed(2)) };
+              });
+              return { ...p, markup_general: mg, items };
+            })}
           />
         </div>
 
@@ -1617,6 +1687,15 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           </div>
         </div>
 
+        {/* Notas internas (NO se envian al cliente) — van primero */}
+        <Textarea
+          label="Notas internas (solo uso interno)"
+          value={newPR.notas_internas}
+          onChange={(e) => setNewPR((p) => ({ ...p, notas_internas: e.target.value }))}
+          rows={2}
+          placeholder="Margen esperado, contexto de la negociacion, datos internos..."
+        />
+
         {/* Observaciones (van al cliente en PDF/WhatsApp) */}
         <Textarea
           label="Observaciones (visibles para el cliente)"
@@ -1624,15 +1703,6 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           onChange={(e) => setNewPR((p) => ({ ...p, observaciones: e.target.value }))}
           rows={2}
           placeholder="Condiciones de pago, plazo de entrega, aclaraciones..."
-        />
-
-        {/* Notas internas (NO se envian al cliente) */}
-        <Textarea
-          label="Notas internas (solo uso interno)"
-          value={newPR.notas_internas}
-          onChange={(e) => setNewPR((p) => ({ ...p, notas_internas: e.target.value }))}
-          rows={2}
-          placeholder="Margen esperado, contexto de la negociacion, datos internos..."
         />
       </Modal>
 

@@ -69,6 +69,17 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   ],
 };
 
+// ── Sociedades ──────────────────────────────────────────────────
+export interface Sociedad {
+  id: string;
+  nombre: string;
+  cuit: string;
+  razonSocial: string;
+  condicionIva: string;
+  colorPrimario: string;
+  activo: boolean;
+}
+
 // ── Usuarios ─────────────────────────────────────────────────────
 export interface User {
   id: string;
@@ -118,6 +129,9 @@ export interface Sucursal {
   telefono: string;
   email?: string;
   cp?: string;
+  principal?: boolean;
+  activo?: boolean;
+  notas?: string;
 }
 
 export interface Contacto {
@@ -126,6 +140,7 @@ export interface Contacto {
   cargo: string;
   email: string;
   telefono: string;
+  whatsapp?: string;
   principal: boolean;
   fechaCumpleanos?: string | null;
   notas?: string | null;
@@ -174,6 +189,9 @@ export interface Presupuesto {
   vendedorId?: string;
   vendedorNombre?: string;
   vendedorAvatar?: string | null;
+  sociedadId?: string;
+  sucursalId?: string;
+  contactoId?: string;
   enviadoAt?: string;
   respondidoAt?: string;
   createdAt: string;
@@ -241,6 +259,9 @@ export interface Remito {
   items: RemitoItem[];
   estado: "pendiente" | "entregado" | "parcial";
   observaciones: string;
+  sociedadId?: string;
+  sucursalId?: string;
+  valorDeclarado?: number | null;
   createdAt: string;
 }
 

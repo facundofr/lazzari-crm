@@ -42,6 +42,7 @@ interface RemitoRow {
   cae: string | null;
   estado: string;
   observaciones: string;
+  valor_declarado: number | null;
   clientes: { razon_social: string } | null;
   remito_items: { id: string }[];
 }
@@ -74,6 +75,7 @@ export default function RemitosPage() {
     fecha: new Date().toISOString().split("T")[0],
     observaciones: "",
     presupuesto_id: "",
+    valor_declarado: "",
   });
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
   const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string }[]>([]);
@@ -136,6 +138,7 @@ export default function RemitosPage() {
             id: r.id, numero: r.numero, cliente_id: r.clienteId,
             presupuesto_id: r.presupuestoId || null, fecha: r.fecha,
             cae: r.cae || null, estado: r.estado, observaciones: r.observaciones,
+            valor_declarado: null,
             clientes: { razon_social: r.clienteNombre },
             remito_items: r.items.map((i) => ({ id: i.id })),
           })));
@@ -145,6 +148,7 @@ export default function RemitosPage() {
           id: r.id, numero: r.numero, cliente_id: r.clienteId,
           presupuesto_id: r.presupuestoId || null, fecha: r.fecha,
           cae: r.cae || null, estado: r.estado, observaciones: r.observaciones,
+          valor_declarado: null,
           clientes: { razon_social: r.clienteNombre },
           remito_items: r.items.map((i) => ({ id: i.id })),
         })));
@@ -177,6 +181,7 @@ export default function RemitosPage() {
       fecha: new Date().toISOString().split("T")[0],
       observaciones: "",
       presupuesto_id: "",
+      valor_declarado: "",
     });
     // Fetch clientes and presupuestos in parallel
     const [clientesRes, presupuestosRes] = await Promise.all([
@@ -199,6 +204,7 @@ export default function RemitosPage() {
         observaciones: createForm.observaciones,
         presupuesto_id: createForm.presupuesto_id || null,
         estado: "pendiente",
+        valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : null,
       });
       setCreateModalOpen(false);
       await fetchData();
@@ -296,6 +302,7 @@ export default function RemitosPage() {
       `Cliente: ${detailRemito.clientes?.razon_social || "—"}`,
       `Fecha: ${formatDate(detailRemito.fecha)}`,
       `Estado: ${estadoConfig[detailRemito.estado]?.label || detailRemito.estado}`,
+      detailRemito.valor_declarado ? `VALOR DECLARADO: $ ${Number(detailRemito.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "",
       detailRemito.observaciones ? `Obs: ${detailRemito.observaciones}` : "",
       "",
       "ITEMS:",
@@ -352,6 +359,7 @@ export default function RemitosPage() {
         <tbody>${items.map((it, i) => `<tr><td>${i + 1}</td><td>${it.descripcion}</td><td>${it.cantidad}</td><td>${it.unidad || "u"}</td></tr>`).join("")}</tbody>
       </table>
     </div>
+    ${r.valor_declarado ? `<div class="obs" style="font-size:14px;font-weight:bold;margin-top:16px;background:#fff3e0;border:1px solid #ff9800;padding:12px;border-radius:4px"><strong>VALOR DECLARADO:</strong> $ ${Number(r.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>` : ""}
     ${r.observaciones ? `<div class="obs"><strong>Observaciones:</strong> ${r.observaciones}</div>` : ""}
     <div class="footer">
       <div class="signature">Firma Emisor</div>
@@ -540,6 +548,14 @@ export default function RemitosPage() {
                     </div>
                   </div>
                 )}
+                {detailRemito.valor_declarado != null && detailRemito.valor_declarado > 0 && (
+                  <div>
+                    <span className="text-zinc-400">Valor declarado</span>
+                    <p className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
+                      $ {Number(detailRemito.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}
+                    </p>
+                  </div>
+                )}
               </div>
 
               {detailRemito.observaciones && (
@@ -636,6 +652,17 @@ export default function RemitosPage() {
                   onChange={(e) => setCreateForm({ ...createForm, observaciones: e.target.value })}
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   rows={3}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Valor declarado ($)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={createForm.valor_declarado}
+                  onChange={(e) => setCreateForm({ ...createForm, valor_declarado: e.target.value })}
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                  placeholder="Ingrese el valor declarado..."
                 />
               </div>
               <div>
