@@ -495,7 +495,9 @@ ${f.cae ? `
               { key: "acciones", label: "", render: (r) => (
                 <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                   {r.estado === "emitida" && (
-                    <button onClick={() => handleMarcarPagada(r.id)} className="px-2 py-1 rounded text-xs font-medium bg-green-50 text-green-600 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 transition-colors">Pagada</button>
+                    <button onClick={() => handleMarcarPagada(r.id)} className="px-2 py-1 rounded text-xs font-medium border border-green-200 text-green-600 hover:bg-green-50 dark:border-green-800 dark:text-green-400 dark:hover:bg-green-950/30 transition-colors">
+                      Marcar pagada
+                    </button>
                   )}
                 </div>
               )},
