@@ -29,11 +29,27 @@ function getArcaInstance() {
   const certPath = process.env.ARCA_CERT_PATH || path.join(process.cwd(), "..", "certs", "lazzari.crt");
   const keyPath = process.env.ARCA_KEY_PATH || path.join(process.cwd(), "..", "certs", "lazzari.key");
 
-  const cert = process.env.ARCA_CERT || (fs.existsSync(certPath) ? fs.readFileSync(certPath, "utf-8") : "");
-  const key = process.env.ARCA_KEY || (fs.existsSync(keyPath) ? fs.readFileSync(keyPath, "utf-8") : "");
+  // Support base64-encoded certs (Vercel), plain text certs (env), or file-based certs (local)
+  let cert = "";
+  if (process.env.ARCA_CERT_B64) {
+    cert = Buffer.from(process.env.ARCA_CERT_B64, "base64").toString("utf-8");
+  } else if (process.env.ARCA_CERT) {
+    cert = process.env.ARCA_CERT;
+  } else if (fs.existsSync(certPath)) {
+    cert = fs.readFileSync(certPath, "utf-8");
+  }
+
+  let key = "";
+  if (process.env.ARCA_KEY_B64) {
+    key = Buffer.from(process.env.ARCA_KEY_B64, "base64").toString("utf-8");
+  } else if (process.env.ARCA_KEY) {
+    key = process.env.ARCA_KEY;
+  } else if (fs.existsSync(keyPath)) {
+    key = fs.readFileSync(keyPath, "utf-8");
+  }
 
   if (!cert || !key) {
-    throw new Error("Certificado ARCA no configurado. Configura ARCA_CERT y ARCA_KEY en variables de entorno.");
+    throw new Error("Certificado ARCA no configurado. Configura ARCA_CERT_B64/ARCA_KEY_B64 o ARCA_CERT/ARCA_KEY en variables de entorno.");
   }
 
   const cuit = Number(process.env.ARCA_CUIT || "20379309128");
