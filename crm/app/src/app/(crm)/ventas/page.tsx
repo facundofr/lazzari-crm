@@ -32,6 +32,7 @@ interface VentaPresupuesto {
   iva: number;
   total: number;
   moneda: string;
+  tipo_cambio: number | null;
   vendedor_id: string | null;
   vendedor_profile: { full_name: string; avatar_url: string | null } | null;
   clientes: { razon_social: string; cuit: string; condicion_iva: string } | null;
@@ -109,6 +110,7 @@ export default function VentasPage() {
   const [emitTipo, setEmitTipo] = useState<"FA" | "FB">("FB");
   const [emitItems, setEmitItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number }[]>([]);
   const [emitting, setEmitting] = useState(false);
+  const [emitTipoCambio, setEmitTipoCambio] = useState<number>(0);
   const [emitError, setEmitError] = useState("");
   const [emitSuccess, setEmitSuccess] = useState("");
 
@@ -128,7 +130,7 @@ export default function VentasPage() {
       const { data: presupuestos, error: pError } = await supabase
         .from("presupuestos")
         .select(`
-          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, vendedor_id,
+          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id,
           vendedor_profile:vendedor_id(full_name, avatar_url),
           clientes(razon_social, cuit, condicion_iva),
           presupuesto_items(descripcion, cantidad, precio_venta, iva_porcentaje, total)
@@ -230,6 +232,7 @@ export default function VentasPage() {
     setEmitVenta(venta);
     setEmitTipo(defaultTipo as "FA" | "FB");
     setEmitItems(items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]);
+    setEmitTipoCambio(p.tipo_cambio || 0);
     setEmitError("");
     setEmitSuccess("");
     setEmitModalOpen(true);
@@ -241,6 +244,10 @@ export default function VentasPage() {
 
     if (emitItems.some(it => !it.descripcion || it.precio_unitario <= 0 || it.cantidad <= 0)) {
       setEmitError("Completa todos los items con descripcion, cantidad > 0 y precio > 0.");
+      return;
+    }
+    if (p.moneda === "USD" && (!emitTipoCambio || emitTipoCambio <= 0)) {
+      setEmitError("Ingresa el tipo de cambio USD → ARS para facturar.");
       return;
     }
 
@@ -259,6 +266,8 @@ export default function VentasPage() {
           tipo: emitTipo,
           cliente_id: p.cliente_id,
           punto_venta: PV_CRM,
+          moneda: p.moneda || "ARS",
+          tipo_cambio: p.moneda === "USD" ? (emitTipoCambio || p.tipo_cambio || null) : null,
           items: emitItems,
           presupuesto_id: p.id,
         }),
@@ -793,6 +802,26 @@ export default function VentasPage() {
                   </select>
                 </div>
 
+                {/* Moneda / Tipo de cambio */}
+                {emitVenta.presupuesto.moneda === "USD" && (
+                  <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3">
+                    <div className="flex items-center gap-4">
+                      <div className="text-sm text-amber-700 dark:text-amber-400 font-medium">Operacion en USD</div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-amber-600 dark:text-amber-500">TC (USD→ARS) *</label>
+                        <input
+                          type="number" step="0.01" min={0}
+                          value={emitTipoCambio || ""}
+                          onChange={e => setEmitTipoCambio(Number(e.target.value))}
+                          placeholder="Ej: 1250.00"
+                          className="w-32 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-900 px-2 py-1 text-sm font-mono dark:text-white"
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs text-amber-500 mt-1">Los precios estan en USD. ARCA recibira el monto convertido a ARS.</p>
+                  </div>
+                )}
+
                 {/* Items */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
@@ -886,32 +915,51 @@ export default function VentasPage() {
                 {/* Totals */}
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-900 p-3 space-y-1">
                   {(() => {
+                    const isUSDEmit = emitVenta.presupuesto.moneda === "USD";
+                    const tcEmit = emitTipoCambio || 1;
                     if (emitTipo === "FA") {
                       const neto = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
                       const iva = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario * it.iva_porcentaje / 100, 0);
+                      const netoARS = isUSDEmit ? Math.round(neto * tcEmit * 100) / 100 : neto;
+                      const ivaARS = isUSDEmit ? Math.round(iva * tcEmit * 100) / 100 : iva;
                       return (
                         <>
+                          {isUSDEmit && tcEmit > 1 && (
+                            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+                              <span>Total USD</span>
+                              <span className="font-mono">USD {(neto + iva).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          )}
                           <div className="flex justify-between text-sm">
                             <span className="text-zinc-500">Neto</span>
-                            <span>{formatCurrency(neto)}</span>
+                            <span>{formatCurrency(netoARS)}</span>
                           </div>
                           <div className="flex justify-between text-sm">
                             <span className="text-zinc-500">IVA</span>
-                            <span>{formatCurrency(iva)}</span>
+                            <span>{formatCurrency(ivaARS)}</span>
                           </div>
                           <div className="flex justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1">
-                            <span>Total</span>
-                            <span>{formatCurrency(neto + iva)}</span>
+                            <span>Total{isUSDEmit ? " (ARS)" : ""}</span>
+                            <span>{formatCurrency(netoARS + ivaARS)}</span>
                           </div>
                         </>
                       );
                     } else {
                       const total = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
+                      const totalARS = isUSDEmit ? Math.round(total * tcEmit * 100) / 100 : total;
                       return (
-                        <div className="flex justify-between text-sm font-bold">
-                          <span>Total (IVA incluido)</span>
-                          <span>{formatCurrency(total)}</span>
-                        </div>
+                        <>
+                          {isUSDEmit && tcEmit > 1 && (
+                            <div className="flex justify-between text-xs text-zinc-400 mb-1">
+                              <span>Total USD</span>
+                              <span className="font-mono">USD {total.toLocaleString("es-AR", { minimumFractionDigits: 2 })}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between text-sm font-bold">
+                            <span>Total{isUSDEmit ? " (ARS)" : ""} (IVA incluido)</span>
+                            <span>{formatCurrency(totalARS)}</span>
+                          </div>
+                        </>
                       );
                     }
                   })()}

@@ -35,6 +35,8 @@ interface FacturaRow {
   subtotal: number;
   iva: number;
   total: number;
+  moneda: string;
+  tipo_cambio: number | null;
   estado: string;
   presupuesto_id: string | null;
   clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string } | null;
@@ -70,6 +72,7 @@ export default function FacturacionPage() {
   const [facturas, setFacturas] = useState<FacturaRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
+  const [detailItems, setDetailItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number; subtotal: number }[]>([]);
 
   // ARCA status
   const [arcaStatus, setArcaStatus] = useState<{ connected: boolean; error?: string; production?: boolean; ptoVta?: number } | null>(null);
@@ -85,6 +88,8 @@ export default function FacturacionPage() {
     tipo: "FA",
     cliente_id: "",
     punto_venta: PV_CRM,
+    moneda: "ARS" as "ARS" | "USD",
+    tipo_cambio: 0,
     items: [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] as EmitItem[],
   });
 
@@ -130,6 +135,7 @@ export default function FacturacionPage() {
           id: f.id, tipo: f.tipo, punto_venta: f.puntoVenta, numero: f.numero,
           cliente_id: f.clienteId, fecha: f.fecha, cae: f.cae, cae_vencimiento: f.caeVencimiento,
           subtotal: f.subtotal, iva: f.iva, total: f.total, estado: f.estado,
+          moneda: "ARS", tipo_cambio: null,
           presupuesto_id: null,
           clientes: { razon_social: f.clienteNombre, cuit: "" },
         })));
@@ -139,6 +145,7 @@ export default function FacturacionPage() {
         id: f.id, tipo: f.tipo, punto_venta: f.puntoVenta, numero: f.numero,
         cliente_id: f.clienteId, fecha: f.fecha, cae: f.cae, cae_vencimiento: f.caeVencimiento,
         subtotal: f.subtotal, iva: f.iva, total: f.total, estado: f.estado,
+        moneda: "ARS", tipo_cambio: null,
         presupuesto_id: null,
         clientes: { razon_social: f.clienteNombre, cuit: "" },
       })));
@@ -158,11 +165,13 @@ export default function FacturacionPage() {
   }, []);
 
   // ── Emit handlers ──────────────────────────────────────────────
-  const openEmitModal = (prefill?: { cliente_id: string; tipo?: string; items?: EmitItem[] }) => {
+  const openEmitModal = (prefill?: { cliente_id: string; tipo?: string; items?: EmitItem[]; moneda?: "ARS" | "USD"; tipo_cambio?: number }) => {
     setEmitData({
       tipo: prefill?.tipo || "FB",
       cliente_id: prefill?.cliente_id || "",
       punto_venta: PV_CRM,
+      moneda: prefill?.moneda || "ARS",
+      tipo_cambio: prefill?.tipo_cambio || 0,
       items: prefill?.items || [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],
     });
     setEmitStep("form");
@@ -185,14 +194,15 @@ export default function FacturacionPage() {
 
   const isFacturaA = emitData.tipo === "FA" || emitData.tipo === "NCA";
 
+  const isUSD = emitData.moneda === "USD";
+  const tc = emitData.tipo_cambio || 0;
+
   const emitTotals = emitData.items.reduce((acc, it) => {
     if (isFacturaA) {
-      // FA/NCA: precio es neto, IVA se suma
       const neto = it.cantidad * it.precio_unitario;
       const iva = neto * (it.iva_porcentaje / 100);
       return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + neto + iva };
     } else {
-      // FB/NCB: precio es final (IVA incluido)
       const total = it.cantidad * it.precio_unitario;
       const neto = Math.round(total / 1.21 * 100) / 100;
       const iva = Math.round((total - neto) * 100) / 100;
@@ -200,10 +210,20 @@ export default function FacturacionPage() {
     }
   }, { neto: 0, iva: 0, total: 0 });
 
+  // When USD: ARCA always gets ARS, so we convert
+  const emitTotalsARS = isUSD && tc > 0 ? {
+    neto: Math.round(emitTotals.neto * tc * 100) / 100,
+    iva: Math.round(emitTotals.iva * tc * 100) / 100,
+    total: Math.round(emitTotals.total * tc * 100) / 100,
+  } : emitTotals;
+
   const handleEmit = async () => {
     if (!emitData.cliente_id) { setEmitError("Selecciona un cliente"); return; }
     if (emitData.items.some((it) => !it.descripcion || it.precio_unitario <= 0)) {
       setEmitError("Completa todos los items con descripcion y precio"); return;
+    }
+    if (isUSD && (!tc || tc <= 0)) {
+      setEmitError("Ingresa el tipo de cambio USD → ARS"); return;
     }
 
     setEmitStep("emitting");
@@ -221,6 +241,8 @@ export default function FacturacionPage() {
           tipo: emitData.tipo,
           cliente_id: emitData.cliente_id,
           punto_venta: emitData.punto_venta,
+          moneda: emitData.moneda,
+          tipo_cambio: isUSD ? tc : null,
           items: emitData.items,
         }),
       });
@@ -291,6 +313,7 @@ export default function FacturacionPage() {
     const letraComprobante = f.tipo.replace("NC", "").replace("ND", "");
 
     // Build QR data URL for ARCA verification
+    const isUSDPdf = f.moneda === "USD" && f.tipo_cambio;
     const qrData = JSON.stringify({
       ver: 1, fecha: f.fecha, cuit: 20379309128, ptoVta: f.punto_venta,
       tipoCmp: { FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13 }[f.tipo] || 1,
@@ -386,16 +409,25 @@ export default function FacturacionPage() {
     <th class="right">Subtotal</th>
   </tr></thead>
   <tbody>
+    ${detailItems.length > 0 ? detailItems.map(it => `
+    <tr>
+      <td>${it.descripcion}</td>
+      <td class="right mono">${it.cantidad}</td>
+      <td class="right mono">${formatCurrency(Number(it.precio_unitario))}</td>
+      <td class="right">${it.iva_porcentaje}%</td>
+      <td class="right mono">${formatCurrency(Number(it.subtotal))}</td>
+    </tr>`).join("") : `
     <tr>
       <td colspan="5" style="text-align:center;color:#888;padding:16px">
-        Items detallados no disponibles en esta vista
+        Items detallados no disponibles
       </td>
-    </tr>
+    </tr>`}
   </tbody>
 </table>
 
 <div class="totals">
   <div class="totals-inner">
+    ${isUSDPdf ? `<div class="total-line" style="color:#888;font-size:10px"><span>Operacion en USD — TC: ${Number(f.tipo_cambio).toLocaleString("es-AR")}</span><span class="mono">USD ${(Number(f.total) / Number(f.tipo_cambio!)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
     <div class="total-line"><span>Neto gravado</span><span class="mono">${formatCurrency(Number(f.subtotal))}</span></div>
     <div class="total-line"><span>IVA 21%</span><span class="mono">${formatCurrency(Number(f.iva))}</span></div>
     <div class="total-line final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total))}</span></div>
@@ -503,7 +535,11 @@ ${f.cae ? `
               )},
             ]}
             data={filteredFacturas}
-            onRowClick={setDetailFactura}
+            onRowClick={(f) => {
+              setDetailFactura(f);
+              supabase.from("factura_items").select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal").eq("factura_id", f.id).order("orden")
+                .then(({ data }) => setDetailItems((data || []).map(d => ({ ...d, subtotal: d.subtotal ?? 0 }))));
+            }}
           />
         </Card>
 
@@ -608,6 +644,28 @@ ${f.cae ? `
                   </div>
                 </div>
 
+                {/* Moneda + Tipo de cambio */}
+                <div className="grid grid-cols-12 gap-4">
+                  <div className="col-span-3">
+                    <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Moneda</label>
+                    <select value={emitData.moneda} onChange={(e) => setEmitData((p) => ({ ...p, moneda: e.target.value as "ARS" | "USD" }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                      <option value="ARS">ARS — Peso argentino</option>
+                      <option value="USD">USD — Dolar</option>
+                    </select>
+                  </div>
+                  {isUSD && (
+                    <div className="col-span-4">
+                      <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Tipo de cambio (USD → ARS) *</label>
+                      <input type="number" step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) }))} placeholder="Ej: 1250.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                    </div>
+                  )}
+                  {isUSD && (
+                    <div className="col-span-5 flex items-end">
+                      <p className="text-xs text-zinc-400 pb-2">ARCA solo acepta ARS. Los precios se ingresan en USD y se convierten automaticamente.</p>
+                    </div>
+                  )}
+                </div>
+
                 {/* Items */}
                 <div>
                   <div className="flex items-center justify-between mb-3">
@@ -660,18 +718,27 @@ ${f.cae ? `
 
                 {/* Totals preview */}
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4 space-y-2 text-sm">
+                  {isUSD && tc > 0 && (
+                    <div className="flex justify-between text-zinc-400 text-xs mb-1">
+                      <span>Total en USD</span>
+                      <span className="font-mono">USD {emitTotals.total.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
                   {isFacturaA ? (
                     <>
-                      <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(emitTotals.neto)}</span></div>
-                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(emitTotals.iva)}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(emitTotalsARS.neto)}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(emitTotalsARS.iva)}</span></div>
                       <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-700 pt-2 font-semibold text-base">
-                        <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total)}</span>
+                        <span>Total{isUSD ? " (ARS)" : ""}</span><span className="font-mono">{formatCurrency(emitTotalsARS.total)}</span>
                       </div>
                     </>
                   ) : (
                     <div className="flex justify-between font-semibold text-base">
-                      <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total)}</span>
+                      <span>Total{isUSD ? " (ARS)" : ""}</span><span className="font-mono">{formatCurrency(emitTotalsARS.total)}</span>
                     </div>
+                  )}
+                  {isUSD && tc > 0 && (
+                    <div className="text-xs text-zinc-400 text-right">TC: 1 USD = {tc.toLocaleString("es-AR")} ARS</div>
                   )}
                 </div>
 
@@ -789,6 +856,35 @@ ${f.cae ? `
                 )}
               </div>
 
+              {/* Items */}
+              {detailItems.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Items</h4>
+                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-zinc-50 dark:bg-zinc-800/50">
+                          <th className="text-left px-3 py-2 font-medium text-zinc-500">Descripcion</th>
+                          <th className="text-right px-3 py-2 font-medium text-zinc-500">Cant.</th>
+                          <th className="text-right px-3 py-2 font-medium text-zinc-500">P.Unit.</th>
+                          <th className="text-right px-3 py-2 font-medium text-zinc-500">Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailItems.map((it, idx) => (
+                          <tr key={idx} className="border-t border-zinc-100 dark:border-zinc-800">
+                            <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300">{it.descripcion}</td>
+                            <td className="px-3 py-2 text-right font-mono text-zinc-600 dark:text-zinc-400">{it.cantidad}</td>
+                            <td className="px-3 py-2 text-right font-mono text-zinc-600 dark:text-zinc-400">{formatCurrency(Number(it.precio_unitario))}</td>
+                            <td className="px-3 py-2 text-right font-mono font-medium text-zinc-700 dark:text-zinc-300">{formatCurrency(Number(it.subtotal))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               {/* Importes */}
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Importes</h4>
@@ -805,6 +901,12 @@ ${f.cae ? `
                     <span className="text-zinc-700 dark:text-zinc-300">Total</span>
                     <span className="font-mono text-base">{formatCurrency(Number(detailFactura.total))}</span>
                   </div>
+                  {detailFactura.moneda === "USD" && detailFactura.tipo_cambio && (
+                    <div className="flex items-center justify-between px-4 py-2 text-xs border-t border-zinc-100 dark:border-zinc-800 text-zinc-400">
+                      <span>Operacion en USD — TC: {Number(detailFactura.tipo_cambio).toLocaleString("es-AR")}</span>
+                      <span className="font-mono">USD {(Number(detailFactura.total) / Number(detailFactura.tipo_cambio)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 

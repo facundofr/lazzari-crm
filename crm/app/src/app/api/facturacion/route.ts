@@ -89,7 +89,15 @@ export async function POST(req: NextRequest) {
       punto_venta,    // number (15)
       items,          // [{ descripcion, cantidad, precio_unitario, iva_porcentaje }]
       presupuesto_id, // optional UUID
+      moneda,         // "ARS" | "USD" (default ARS)
+      tipo_cambio,    // number — exchange rate USD→ARS (required when USD)
     } = body;
+
+    const isUSD = moneda === "USD";
+    const tc = isUSD ? Number(tipo_cambio) : 1;
+    if (isUSD && (!tc || tc <= 0)) {
+      return NextResponse.json({ error: "Tipo de cambio requerido para facturar en USD" }, { status: 400 });
+    }
 
     if (!tipo || !cliente_id || !punto_venta || !items?.length) {
       return NextResponse.json(
@@ -167,13 +175,16 @@ export async function POST(req: NextRequest) {
       let ivaPct: number;
       let ivaImporte: number;
 
+      // Items come in original currency; convert to ARS for ARCA
+      const precioARS = Number(item.precio_unitario) * tc;
+
       if (isFacturaA) {
-        neto = Number(item.cantidad) * Number(item.precio_unitario);
+        neto = Number(item.cantidad) * precioARS;
         ivaPct = Number(item.iva_porcentaje ?? 21);
         ivaImporte = Math.round(neto * ivaPct / 100 * 100) / 100;
       } else {
         // FB/NCB: precio es final (IVA incluido), siempre 21% para productos
-        const totalItem = Number(item.cantidad) * Number(item.precio_unitario);
+        const totalItem = Number(item.cantidad) * precioARS;
         ivaPct = 21;
         neto = Math.round(totalItem / 1.21 * 100) / 100;
         ivaImporte = Math.round((totalItem - neto) * 100) / 100;
@@ -264,6 +275,8 @@ export async function POST(req: NextRequest) {
         subtotal: totalNeto,
         iva: totalIva,
         total: totalFinal,
+        moneda: isUSD ? "USD" : "ARS",
+        tipo_cambio: isUSD ? tc : null,
         estado: "emitida",
       } as any)
       .select()

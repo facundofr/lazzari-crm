@@ -167,6 +167,7 @@ export interface Presupuesto {
   iva: number;
   total: number;
   moneda: "USD" | "ARS";
+  tipoCambio?: number | null;
   observaciones: string;
   notasInternas: string;
   creadoPor: string;
@@ -213,6 +214,8 @@ export interface Factura {
   subtotal: number;
   iva: number;
   total: number;
+  moneda?: "ARS" | "USD";
+  tipoCambio?: number | null;
   estado: "emitida" | "pagada" | "anulada" | "vencida";
   createdAt: string;
 }

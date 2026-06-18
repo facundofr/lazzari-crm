@@ -33,6 +33,7 @@ interface SupabasePresupuesto {
   iva: number;
   total: number;
   moneda: "USD" | "ARS";
+  tipo_cambio: number | null;
   observaciones: string;
   notas_internas: string;
   enviado_at?: string | null;
@@ -95,6 +96,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     iva: row.iva,
     total: row.total,
     moneda: row.moneda,
+    tipoCambio: row.tipo_cambio ?? null,
     observaciones: row.observaciones ?? "",
     notasInternas: row.notas_internas ?? "",
     creadoPor: (row as any).created_by_profile?.full_name ?? row.created_by ?? "",
@@ -199,6 +201,7 @@ export default function PresupuestosPage() {
     cliente_id: "",
     vendedor_id: "",
     moneda: "USD" as "USD" | "ARS",
+    tipo_cambio: 0,
     markup_general: 30,
     observaciones: "",
     notas_internas: "",
@@ -477,6 +480,7 @@ export default function PresupuestosPage() {
           iva: ivaTotal,
           total: subtotal + ivaTotal,
           moneda: newPR.moneda,
+          tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
           observaciones: newPR.observaciones,
           notas_internas: newPR.notas_internas,
         } as any)
@@ -507,7 +511,7 @@ export default function PresupuestosPage() {
       }
 
       setShowNewPR(false);
-      setNewPR({ cliente_id: "", vendedor_id: "", moneda: "USD", markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem }] });
+      setNewPR({ cliente_id: "", vendedor_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem }] });
       toast.success("Presupuesto creado correctamente");
       await fetchPresupuestos();
     } catch (err: unknown) {
@@ -1187,7 +1191,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 </div>
                 <div>
                   <p className="text-xs text-zinc-500">Moneda</p>
-                  <p className="text-sm font-medium">{selected.moneda}</p>
+                  <p className="text-sm font-medium">{selected.moneda}{(selected as any).tipoCambio ? ` (TC: ${Number((selected as any).tipoCambio).toLocaleString("es-AR")})` : ""}</p>
                 </div>
                 <div>
                   <p className="text-xs text-zinc-500">Markup general</p>
@@ -1396,6 +1400,16 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             onChange={(e) => setNewPR((p) => ({ ...p, moneda: e.target.value as "USD" | "ARS" }))}
             options={[{ value: "USD", label: "USD" }, { value: "ARS", label: "ARS" }]}
           />
+          {newPR.moneda === "USD" && (
+            <Input
+              label="Tipo de cambio (USD→ARS)"
+              type="number"
+              step="0.01"
+              value={newPR.tipo_cambio || ""}
+              onChange={(e) => setNewPR((p) => ({ ...p, tipo_cambio: Number(e.target.value) }))}
+              placeholder="Ej: 1250.00"
+            />
+          )}
           <Input
             label="Markup general %"
             type="number"
