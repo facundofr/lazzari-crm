@@ -139,6 +139,7 @@ interface NewPRItem {
   proveedor_nombre: string;
   proveedor_id: string;
   lista_item_id: string;
+  costo_moneda: "ARS" | "USD";
 }
 
 // Autocomplete result from lista_precios_items
@@ -165,8 +166,17 @@ function calcItemTotals(item: NewPRItem) {
 const emptyItem: NewPRItem = {
   codigo: "", descripcion: "", categoria: "", cantidad: 1, unidad: "UN",
   precio_costo: 0, markup_porcentaje: 0, precio_venta: 0, iva_porcentaje: 21,
-  proveedor_nombre: "", proveedor_id: "", lista_item_id: "",
+  proveedor_nombre: "", proveedor_id: "", lista_item_id: "", costo_moneda: "USD",
 };
+
+/** Convierte precio_costo a la moneda del presupuesto */
+function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, tc: number): number {
+  if (!tc || tc <= 0 || costoMoneda === prMoneda) return costoBase;
+  // USD→ARS: multiplicar, ARS→USD: dividir
+  if (costoMoneda === "USD" && prMoneda === "ARS") return costoBase * tc;
+  if (costoMoneda === "ARS" && prMoneda === "USD") return costoBase / tc;
+  return costoBase;
+}
 
 export default function PresupuestosPage() {
   const { profile } = useUser();
@@ -274,7 +284,9 @@ export default function PresupuestosPage() {
       const items = [...prev.items];
       const idx = productSearchIdx;
       const markup = items[idx].markup_porcentaje || prev.markup_general;
-      const precioVenta = Number((suggestion.precio_neto * (1 + markup / 100)).toFixed(2));
+      const costoMoneda = (suggestion.moneda || "USD") as "ARS" | "USD";
+      const costoConv = convertCosto(suggestion.precio_neto, costoMoneda, prev.moneda, prev.tipo_cambio);
+      const precioVenta = Number((costoConv * (1 + markup / 100)).toFixed(2));
       items[idx] = {
         ...items[idx],
         codigo: suggestion.codigo,
@@ -282,6 +294,7 @@ export default function PresupuestosPage() {
         categoria: suggestion.categoria,
         unidad: suggestion.unidad,
         precio_costo: suggestion.precio_neto,
+        costo_moneda: costoMoneda,
         markup_porcentaje: markup,
         precio_venta: precioVenta,
         proveedor_nombre: suggestion.proveedor_nombre,
@@ -322,6 +335,7 @@ export default function PresupuestosPage() {
             cantidad: Number(item.cantidad) || 1,
             unidad: item.unidad || "UN",
             precio_costo: precioCosto,
+            costo_moneda: (item.moneda || "USD") as "ARS" | "USD",
             markup_porcentaje: markup,
             precio_venta: precioVenta,
             iva_porcentaje: 21,
@@ -428,16 +442,14 @@ export default function PresupuestosPage() {
     fetchClientes();
   }, [showNewPR]);
 
-  function updateNewPRItem(index: number, field: keyof NewPRItem, value: string | number) {
+  function updateNewPRItem(index: number, field: keyof NewPRItem | "costo_moneda", value: string | number) {
     setNewPR((prev) => {
       const items = [...prev.items];
       const item = { ...items[index], [field]: value };
-      // Auto-calc precio_venta when costo or markup change
-      if (field === "precio_costo" || field === "markup_porcentaje") {
-        const costoBase = item.precio_costo;
-        // Apply TC only when costo is in different currency than presupuesto
-        const costoConvertido = prev.tipo_cambio > 0 ? costoBase * prev.tipo_cambio : costoBase;
-        item.precio_venta = Number((costoConvertido * (1 + item.markup_porcentaje / 100)).toFixed(2));
+      // Auto-calc precio_venta when costo, markup, or costo_moneda change
+      if (field === "precio_costo" || field === "markup_porcentaje" || field === "costo_moneda") {
+        const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio);
+        item.precio_venta = Number((costoConv * (1 + item.markup_porcentaje / 100)).toFixed(2));
       }
       items[index] = item;
       return { ...prev, items };
@@ -1405,10 +1417,8 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             value={newPR.moneda}
             onChange={(e) => setNewPR((p) => {
               const mon = e.target.value as "USD" | "ARS";
-              // Recalc precios de venta with current TC
-              const tc = p.tipo_cambio;
               const items = p.items.map(it => {
-                const costoConv = tc > 0 ? it.precio_costo * tc : it.precio_costo;
+                const costoConv = convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio);
                 return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
               });
               return { ...p, moneda: mon, items };
@@ -1423,7 +1433,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             onChange={(e) => setNewPR((p) => {
               const tc = Number(e.target.value);
               const items = p.items.map(it => {
-                const costoConv = tc > 0 ? it.precio_costo * tc : it.precio_costo;
+                const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc);
                 return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
               });
               return { ...p, tipo_cambio: tc, items };
@@ -1543,8 +1553,16 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                       </td>
                       <td className="px-2 py-1.5">
-                        <input type="number" value={item.precio_costo || ""} onChange={(e) => updateNewPRItem(idx, "precio_costo", Number(e.target.value))}
-                          className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                        <div className="flex items-center gap-1">
+                          <select value={item.costo_moneda} onChange={(e) => updateNewPRItem(idx, "costo_moneda" as any, e.target.value)}
+                            className="w-12 shrink-0 rounded border border-zinc-200 px-0.5 py-1 text-[10px] text-center dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 focus:outline-none"
+                            title="Moneda del costo">
+                            <option value="USD">US$</option>
+                            <option value="ARS">AR$</option>
+                          </select>
+                          <input type="number" value={item.precio_costo || ""} onChange={(e) => updateNewPRItem(idx, "precio_costo", Number(e.target.value))}
+                            className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                        </div>
                       </td>
                       <td className="px-2 py-1.5">
                         <input type="number" value={item.markup_porcentaje || ""} onChange={(e) => updateNewPRItem(idx, "markup_porcentaje", Number(e.target.value))}
