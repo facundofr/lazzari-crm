@@ -910,8 +910,8 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 render: (row) => (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     {row.estado === "borrador" && (
-                      <button onClick={() => handleAdvanceEstado(row, "enviada")} className="px-2 py-1 rounded text-xs font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 transition-colors" title="Enviar al proveedor">
-                        Enviar
+                      <button onClick={() => handleAdvanceEstado(row, "enviada")} className="px-2 py-1 rounded text-xs font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 transition-colors" title="Marcar como enviada">
+                        Enviada
                       </button>
                     )}
                     {row.estado === "enviada" && (
@@ -1157,7 +1157,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       onClick={() => handleAdvanceEstado(detailOC, "enviada")}
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
                     >
-                      <Send className="h-4 w-4" /> Enviar al proveedor
+                      <Send className="h-4 w-4" /> Marcar como enviada
                     </button>
                   )}
                   {detailOC.estado === "enviada" && (

@@ -8,7 +8,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { Modal } from "@/components/ui/modal";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import { mockClients, mockPresupuestos, mockFacturas } from "@/lib/mock-data";
 import type { Client } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
@@ -16,7 +16,7 @@ import {
   Search, Download, MapPin, Phone, Mail, Loader2, Building2,
   Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight,
   BarChart3, ShoppingBag, CalendarDays, TrendingUp, Cake,
-  User, FileText, CreditCard, StickyNote,
+  User, FileText, CreditCard, StickyNote, Clock, Receipt, Truck, Wallet,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 
@@ -144,7 +144,16 @@ const emptyForm = {
   notas: "",
 };
 
-type DetailTab = "datos" | "contactos" | "sucursales" | "historial";
+type DetailTab = "datos" | "contactos" | "sucursales" | "historial" | "actividad";
+
+interface TimelineEvent {
+  id: string;
+  tipo: "presupuesto" | "factura" | "remito" | "movimiento";
+  fecha: string;
+  titulo: string;
+  detalle: string;
+  estado?: string;
+}
 
 export default function ClientesPage() {
   const [view, setView] = useState<"table" | "cards">("table");
@@ -182,6 +191,10 @@ export default function ClientesPage() {
   // Detail
   const [selectedCliente, setSelectedCliente] = useState<ClienteExt | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("datos");
+
+  // Timeline / Activity
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
 
   // Consumo analysis
   const [consumoData, setConsumoData] = useState<ConsumoData>({
@@ -290,6 +303,109 @@ export default function ClientesPage() {
 
     fetchConsumo();
   }, [selectedCliente]);
+
+  // Fetch timeline when actividad tab is selected
+  useEffect(() => {
+    if (!selectedCliente || detailTab !== "actividad") return;
+    const clienteId = selectedCliente.id;
+    setTimelineLoading(true);
+
+    async function fetchTimeline() {
+      const events: TimelineEvent[] = [];
+      try {
+        // Presupuestos
+        const { data: prs } = await supabase
+          .from("presupuestos")
+          .select("id, numero, fecha, total, estado, moneda")
+          .eq("cliente_id", clienteId)
+          .order("fecha", { ascending: false })
+          .limit(20);
+        if (prs) {
+          for (const p of prs) {
+            events.push({
+              id: `pr-${p.id}`,
+              tipo: "presupuesto",
+              fecha: p.fecha,
+              titulo: `Presupuesto ${p.numero || ""}`,
+              detalle: `${formatCurrency(Number(p.total), (p.moneda as "ARS" | "USD") || "ARS")}`,
+              estado: p.estado,
+            });
+          }
+        }
+
+        // Facturas
+        const { data: facts } = await supabase
+          .from("facturas")
+          .select("id, tipo, numero, punto_venta, fecha, total, estado, moneda")
+          .eq("cliente_id", clienteId)
+          .order("fecha", { ascending: false })
+          .limit(20) as { data: any[] | null };
+        if (facts) {
+          for (const f of facts) {
+            const comprobante = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
+            events.push({
+              id: `fact-${f.id}`,
+              tipo: "factura",
+              fecha: f.fecha,
+              titulo: `Factura ${comprobante}`,
+              detalle: `${formatCurrency(Number(f.total), (f.moneda as "ARS" | "USD") || "ARS")}`,
+              estado: f.estado,
+            });
+          }
+        }
+
+        // Remitos
+        const { data: rems } = await supabase
+          .from("remitos")
+          .select("id, numero, fecha, estado")
+          .eq("cliente_id", clienteId)
+          .order("fecha", { ascending: false })
+          .limit(20);
+        if (rems) {
+          for (const r of rems) {
+            events.push({
+              id: `rem-${r.id}`,
+              tipo: "remito",
+              fecha: r.fecha,
+              titulo: `Remito ${r.numero || ""}`,
+              detalle: r.estado === "entregado" ? "Entregado" : r.estado === "parcial" ? "Entrega parcial" : "Pendiente",
+              estado: r.estado,
+            });
+          }
+        }
+
+        // Movimientos (cobros)
+        const { data: movs } = await supabase
+          .from("movimientos")
+          .select("id, tipo, fecha, monto, descripcion, moneda")
+          .eq("cliente_id", clienteId)
+          .order("fecha", { ascending: false })
+          .limit(20);
+        if (movs) {
+          for (const m of movs) {
+            events.push({
+              id: `mov-${m.id}`,
+              tipo: "movimiento",
+              fecha: m.fecha,
+              titulo: m.tipo === "cobro" ? "Cobro recibido" : m.tipo === "pago" ? "Pago" : (m.tipo || "Movimiento"),
+              detalle: `${formatCurrency(Number(m.monto), (m.moneda as "ARS" | "USD") || "ARS")}${m.descripcion ? ` — ${m.descripcion}` : ""}`,
+            });
+          }
+        }
+
+        // Sort all events by date descending
+        events.sort((a, b) => b.fecha.localeCompare(a.fecha));
+        setTimeline(events);
+      } catch (err) {
+        console.error("Error fetching timeline:", err);
+        setTimeline([]);
+      } finally {
+        setTimelineLoading(false);
+      }
+    }
+
+    fetchTimeline();
+  }, [selectedCliente, detailTab]);
 
   // Fetch contactos when a client is selected (polymorphic table, no FK join)
   useEffect(() => {
@@ -510,6 +626,7 @@ export default function ClientesPage() {
     { key: "contactos", label: "Contactos", icon: <User className="h-3.5 w-3.5" /> },
     { key: "sucursales", label: "Sucursales", icon: <Building2 className="h-3.5 w-3.5" /> },
     { key: "historial", label: "Historial", icon: <BarChart3 className="h-3.5 w-3.5" /> },
+    { key: "actividad", label: "Actividad", icon: <Clock className="h-3.5 w-3.5" /> },
   ];
 
   return (
@@ -982,6 +1099,74 @@ export default function ClientesPage() {
                           </div>
                         </div>
                       )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {detailTab === "actividad" && (
+                <>
+                  {timelineLoading ? (
+                    <div className="flex items-center gap-2 py-8 justify-center">
+                      <Loader2 className="h-4 w-4 animate-spin text-orange-500" />
+                      <span className="text-xs text-zinc-500">Cargando actividad...</span>
+                    </div>
+                  ) : timeline.length === 0 ? (
+                    <EmptyState icon={<Clock className="h-6 w-6" />} text="Sin actividad registrada para este cliente" />
+                  ) : (
+                    <div className="relative">
+                      {/* Vertical line */}
+                      <div className="absolute left-4 top-2 bottom-2 w-px bg-zinc-200 dark:bg-zinc-700" />
+                      <div className="space-y-0">
+                        {timeline.map((ev, idx) => {
+                          const iconMap: Record<string, { icon: React.ReactNode; color: string }> = {
+                            presupuesto: { icon: <FileText className="h-3.5 w-3.5" />, color: "bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-400" },
+                            factura: { icon: <Receipt className="h-3.5 w-3.5" />, color: "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400" },
+                            remito: { icon: <Truck className="h-3.5 w-3.5" />, color: "bg-violet-100 text-violet-600 dark:bg-violet-900/50 dark:text-violet-400" },
+                            movimiento: { icon: <Wallet className="h-3.5 w-3.5" />, color: "bg-amber-100 text-amber-600 dark:bg-amber-900/50 dark:text-amber-400" },
+                          };
+                          const cfg = iconMap[ev.tipo] || iconMap.presupuesto;
+                          // Group by month
+                          const evDate = new Date(ev.fecha + "T00:00:00");
+                          const monthLabel = evDate.toLocaleDateString("es-AR", { month: "long", year: "numeric" });
+                          const prevDate = idx > 0 ? new Date(timeline[idx - 1].fecha + "T00:00:00") : null;
+                          const prevMonth = prevDate ? prevDate.toLocaleDateString("es-AR", { month: "long", year: "numeric" }) : null;
+                          const showMonth = monthLabel !== prevMonth;
+
+                          return (
+                            <div key={ev.id}>
+                              {showMonth && (
+                                <p className="ml-10 text-xs font-semibold uppercase tracking-wider text-zinc-400 pt-4 pb-1 first:pt-0">
+                                  {monthLabel}
+                                </p>
+                              )}
+                              <div className="flex items-start gap-3 py-2 pl-1">
+                                <div className={`relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${cfg.color}`}>
+                                  {cfg.icon}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <p className="text-sm font-medium dark:text-white truncate">{ev.titulo}</p>
+                                    {ev.estado && (
+                                      <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                                        ev.estado === "aprobado" || ev.estado === "emitida" || ev.estado === "entregado" || ev.estado === "pagada"
+                                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                          : ev.estado === "rechazado" || ev.estado === "cancelada"
+                                            ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                                            : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
+                                      }`}>
+                                        {ev.estado}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-zinc-500 mt-0.5">{ev.detalle}</p>
+                                  <p className="text-[10px] text-zinc-400 mt-0.5">{formatDate(ev.fecha)}</p>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </>

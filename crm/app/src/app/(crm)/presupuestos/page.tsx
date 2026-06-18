@@ -1056,7 +1056,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       <Copy className="h-4 w-4" />
                     </button>
                     {(row.estado === "borrador" || row.estado === "postergado") && (
-                      <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-950/40" title="Enviar">
+                      <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-950/40" title="Marcar como enviado">
                         <Send className="h-4 w-4" />
                       </button>
                     )}
@@ -1314,7 +1314,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     onClick={() => { handleEstadoChange(selected.id, "pendiente"); }}
                     className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
                   >
-                    <Send className="h-4 w-4" /> Enviar al cliente
+                    <Send className="h-4 w-4" /> Marcar como enviado
                   </button>
                 )}
                 {selected.estado === "pendiente" && (
