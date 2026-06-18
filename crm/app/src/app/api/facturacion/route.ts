@@ -42,10 +42,22 @@ function getArcaInstance() {
   return new Arca({ cuit, cert, key, production });
 }
 
-function getSupabase() {
+function getSupabase(authHeader?: string | null) {
+  // If service role key is available, use it (bypasses RLS)
+  if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+  }
+  // Otherwise, use the user's JWT to respect RLS
+  const opts = authHeader
+    ? { global: { headers: { Authorization: authHeader } } }
+    : undefined;
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    opts
   );
 }
 
@@ -75,7 +87,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Tipo de comprobante no valido: ${tipo}` }, { status: 400 });
     }
 
-    const supabase = getSupabase();
+    const authHeader = req.headers.get("authorization");
+    const supabase = getSupabase(authHeader);
 
     // Determine document type and client data
     let docTipo: number;
