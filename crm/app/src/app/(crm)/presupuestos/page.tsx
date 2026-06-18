@@ -1270,6 +1270,12 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     <span>Total</span>
                     <span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(selected.total, selected.moneda)}</span>
                   </div>
+                  {selected.moneda === "USD" && (selected as any).tipoCambio > 0 && (
+                    <div className="flex justify-between text-xs text-zinc-400 mt-1">
+                      <span>Equiv. ARS (TC: {Number((selected as any).tipoCambio).toLocaleString("es-AR")})</span>
+                      <span className="font-mono">{formatCurrency(Math.round(selected.total * Number((selected as any).tipoCambio) * 100) / 100)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1566,6 +1572,12 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               <div className="flex justify-between"><span className="text-zinc-500">Subtotal</span><span className="font-mono">{formatCurrency(newPRSub, newPR.moneda)}</span></div>
               <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(newPRIva, newPR.moneda)}</span></div>
               <div className="flex justify-between font-bold border-t border-zinc-200 pt-1 dark:border-zinc-700"><span>Total</span><span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(newPRSub + newPRIva, newPR.moneda)}</span></div>
+              {newPR.moneda === "USD" && newPR.tipo_cambio > 0 && (
+                <div className="flex justify-between text-xs text-zinc-400 pt-1 border-t border-dashed border-zinc-200 dark:border-zinc-700">
+                  <span>Equiv. ARS (TC: {newPR.tipo_cambio.toLocaleString("es-AR")})</span>
+                  <span className="font-mono">{formatCurrency(Math.round((newPRSub + newPRIva) * newPR.tipo_cambio * 100) / 100)}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
