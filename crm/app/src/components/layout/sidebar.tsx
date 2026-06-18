@@ -32,14 +32,18 @@ import { useTheme } from "@/lib/theme-context";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
+  // ── Comercial ──
   { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
-  { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
-  { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
   { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
+  { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
+  // ── Compras & logistica ──
+  { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
   { name: "Órdenes compra", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
-  { name: "Facturación", href: "/facturacion", icon: Receipt, module: "facturacion" },
-  { name: "Remitos", href: "/remitos", icon: Truck, module: "remitos" },
   { name: "Stock", href: "/stock", icon: Package, module: "stock" },
+  // ── Entrega & facturacion ──
+  { name: "Remitos", href: "/remitos", icon: Truck, module: "remitos" },
+  { name: "Facturación", href: "/facturacion", icon: Receipt, module: "facturacion" },
+  // ── Admin ──
   { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },
   { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes" },
 ];

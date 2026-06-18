@@ -575,7 +575,7 @@ export default function ProveedoresPage() {
                       <div className="mt-4 space-y-2 text-sm text-zinc-500">
                         <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5" /> {prov.localidad}, {prov.provincia}</div>
                         <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5" /> {prov.telefono || "—"}</div>
-                        <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5" /> {prov.email || "—"}</div>
+                        <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5" /> {prov.email ? <a href={`mailto:${prov.email}`} className="hover:text-orange-500">{prov.email}</a> : "—"}</div>
                         <div className="flex items-center gap-2"><ListOrdered className="h-3.5 w-3.5" /> {provListas.length} lista(s) — {provListas.filter(l => l.estado === "vigente").length} vigente(s)</div>
                       </div>
                       {(prov.clasificacionTags?.length > 0 || prov.marcas) && (
@@ -694,8 +694,8 @@ export default function ProveedoresPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div><p className="text-xs text-zinc-500">Rubro</p><p className="text-sm font-medium">{selectedProv.rubro || "—"}</p></div>
                 <div><p className="text-xs text-zinc-500">Condicion IVA</p><p className="text-sm font-medium">{selectedProv.condicionIva}</p></div>
-                <div><p className="text-xs text-zinc-500">Email</p><p className="text-sm font-medium">{selectedProv.email || "—"}</p></div>
-                <div><p className="text-xs text-zinc-500">Telefono</p><p className="text-sm font-medium">{selectedProv.telefono || "—"}</p></div>
+                <div><p className="text-xs text-zinc-500">Email</p><p className="text-sm font-medium">{selectedProv.email ? <a href={`mailto:${selectedProv.email}`} className="hover:text-orange-500">{selectedProv.email}</a> : "—"}</p></div>
+                <div><p className="text-xs text-zinc-500">Telefono</p><p className="text-sm font-medium">{selectedProv.telefono ? <a href={`tel:${selectedProv.telefono}`} className="hover:text-orange-500">{selectedProv.telefono}</a> : "—"}</p></div>
                 <div className="col-span-2"><p className="text-xs text-zinc-500">Direccion</p><p className="text-sm font-medium">{selectedProv.direccion || "—"}, {selectedProv.localidad}, {selectedProv.provincia}</p></div>
               </div>
               <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">

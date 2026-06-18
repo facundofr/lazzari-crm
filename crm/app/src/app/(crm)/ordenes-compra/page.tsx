@@ -12,7 +12,7 @@ import type { OCStatus } from "@/lib/types";
 import {
   ShoppingCart, Clock, CheckCircle2, Truck, Loader2,
   X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
-  FileText, ClipboardCopy, Check, Download,
+  FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
@@ -146,6 +146,35 @@ export default function OrdenesCompraPage() {
   });
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState("");
+
+  // Consolidation modal
+  interface PendingItem {
+    pr_id: string;
+    pr_numero: string;
+    cliente_nombre: string;
+    item_id: string;
+    codigo: string;
+    descripcion: string;
+    cantidad: number;
+    precio_costo: number;
+    unidad: string;
+    proveedor_id: string;
+    proveedor_nombre: string;
+    moneda: string;
+    selected: boolean;
+  }
+  interface ProveedorGroup {
+    id: string;
+    nombre: string;
+    moneda: string;
+    items: PendingItem[];
+    expanded: boolean;
+  }
+  const [consolidateOpen, setConsolidateOpen] = useState(false);
+  const [consolidateGroups, setConsolidateGroups] = useState<ProveedorGroup[]>([]);
+  const [consolidateLoading, setConsolidateLoading] = useState(false);
+  const [consolidateCreating, setConsolidateCreating] = useState(false);
+  const [consolidateSuccessMsg, setConsolidateSuccessMsg] = useState("");
 
   // Detail panel
   const [detailOC, setDetailOC] = useState<OCRow | null>(null);
@@ -494,6 +523,174 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
     setTimeout(() => setCopiedSummary(false), 2000);
   };
 
+  // ── Consolidation logic ─────────────────────────────────────────
+  const openConsolidateModal = async () => {
+    setConsolidateOpen(true);
+    setConsolidateLoading(true);
+    try {
+      // Get approved presupuestos that have items with proveedor_id
+      const { data: prs } = await supabase
+        .from("presupuestos")
+        .select("id, numero, cliente_id, moneda, clientes(razon_social)")
+        .eq("estado", "aprobado");
+
+      if (!prs || prs.length === 0) {
+        setConsolidateGroups([]);
+        setConsolidateLoading(false);
+        return;
+      }
+
+      // Get existing OCs to know which PR items already have OC
+      const { data: existingOCs } = await supabase
+        .from("ordenes_compra")
+        .select("presupuesto_origen_id")
+        .not("presupuesto_origen_id", "is", null)
+        .not("estado", "eq", "cancelada");
+      const ocPRIds = new Set((existingOCs || []).map((oc: any) => oc.presupuesto_origen_id));
+
+      // Get items for PRs that don't have OC yet
+      const prIds = prs.filter(p => !ocPRIds.has(p.id)).map(p => p.id);
+      if (prIds.length === 0) {
+        setConsolidateGroups([]);
+        setConsolidateLoading(false);
+        return;
+      }
+
+      const { data: items } = await supabase
+        .from("presupuesto_items")
+        .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id, proveedor_nombre")
+        .in("presupuesto_id", prIds)
+        .not("proveedor_id", "is", null) as { data: any[] | null };
+
+      if (!items || items.length === 0) {
+        setConsolidateGroups([]);
+        setConsolidateLoading(false);
+        return;
+      }
+
+      // Build proveedor groups
+      const prMap = new Map(prs.map(p => [p.id, p]));
+      const groups: Record<string, ProveedorGroup> = {};
+
+      for (const item of items) {
+        const pr = prMap.get(item.presupuesto_id);
+        if (!pr || !item.proveedor_id) continue;
+        const provId = item.proveedor_id as string;
+        if (!groups[provId]) {
+          groups[provId] = {
+            id: provId,
+            nombre: (item.proveedor_nombre as string) || "Sin nombre",
+            moneda: pr.moneda || "ARS",
+            items: [],
+            expanded: true,
+          };
+        }
+        groups[provId].items.push({
+          pr_id: pr.id,
+          pr_numero: pr.numero || "",
+          cliente_nombre: (pr.clientes as any)?.razon_social || "",
+          item_id: item.id,
+          codigo: item.codigo || "",
+          descripcion: item.descripcion,
+          cantidad: item.cantidad,
+          precio_costo: item.precio_costo,
+          unidad: item.unidad || "UN",
+          proveedor_id: provId,
+          proveedor_nombre: (item.proveedor_nombre as string) || "",
+          moneda: pr.moneda || "ARS",
+          selected: true,
+        });
+      }
+
+      setConsolidateGroups(Object.values(groups));
+    } catch (err) {
+      console.error("Error loading consolidation data:", err);
+      setConsolidateGroups([]);
+    } finally {
+      setConsolidateLoading(false);
+    }
+  };
+
+  const toggleConsolidateItem = (provId: string, itemId: string) => {
+    setConsolidateGroups(prev => prev.map(g =>
+      g.id === provId ? { ...g, items: g.items.map(it => it.item_id === itemId ? { ...it, selected: !it.selected } : it) } : g
+    ));
+  };
+
+  const toggleProveedorExpand = (provId: string) => {
+    setConsolidateGroups(prev => prev.map(g =>
+      g.id === provId ? { ...g, expanded: !g.expanded } : g
+    ));
+  };
+
+  const toggleAllInGroup = (provId: string, selected: boolean) => {
+    setConsolidateGroups(prev => prev.map(g =>
+      g.id === provId ? { ...g, items: g.items.map(it => ({ ...it, selected })) } : g
+    ));
+  };
+
+  const handleCreateConsolidatedOCs = async () => {
+    setConsolidateCreating(true);
+    try {
+      const today = new Date().toISOString().split("T")[0];
+      let created = 0;
+
+      for (const group of consolidateGroups) {
+        const selectedItems = group.items.filter(it => it.selected);
+        if (selectedItems.length === 0) continue;
+
+        const subtotal = selectedItems.reduce((sum, it) => sum + it.precio_costo * it.cantidad, 0);
+        const iva = Math.round(subtotal * 0.21 * 100) / 100;
+
+        // Get unique PR IDs for observaciones
+        const prNums = [...new Set(selectedItems.map(it => it.pr_numero))];
+        const obs = `Consolidado de ${prNums.length} presupuesto(s): ${prNums.join(", ")}`;
+
+        const { data: ocRow, error: ocErr } = await supabase
+          .from("ordenes_compra")
+          .insert({
+            proveedor_id: group.id,
+            fecha: today,
+            moneda: group.moneda,
+            estado: "borrador",
+            subtotal: Math.round(subtotal * 100) / 100,
+            iva,
+            total: Math.round((subtotal + iva) * 100) / 100,
+            observaciones: obs,
+          } as any)
+          .select("id")
+          .single();
+
+        if (ocErr || !ocRow) continue;
+
+        // Insert items
+        const ocItems = selectedItems.map((it, idx) => ({
+          orden_id: ocRow.id,
+          codigo: it.codigo,
+          descripcion: `${it.descripcion} [${it.pr_numero} - ${it.cliente_nombre}]`,
+          cantidad: it.cantidad,
+          cantidad_recibida: 0,
+          unidad: it.unidad,
+          precio_unitario: it.precio_costo,
+          subtotal: Math.round(it.precio_costo * it.cantidad * 100) / 100,
+          orden: idx,
+        }));
+
+        await supabase.from("orden_compra_items").insert(ocItems as any);
+        created++;
+      }
+
+      setConsolidateOpen(false);
+      await fetchData();
+      if (created > 0) setConsolidateSuccessMsg(`Se crearon ${created} OC(s) consolidada(s)`);
+    } catch (err) {
+      alert("Error al crear OCs consolidadas");
+      console.error(err);
+    } finally {
+      setConsolidateCreating(false);
+    }
+  };
+
   // ── Computed ─────────────────────────────────────────────────────
   const filtered = ordenes.filter((oc) => {
     if (filter !== "todas" && oc.estado !== filter) return false;
@@ -542,7 +739,46 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         action={{ label: "Nueva OC", onClick: openCreateModal }}
       />
 
+      {/* Secondary action bar */}
+      <div className="px-4 sm:px-8 pt-2 flex justify-end">
+        <button
+          onClick={openConsolidateModal}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
+        >
+          <Merge className="h-4 w-4" />
+          Consolidar pedidos
+        </button>
+      </div>
+
       <div className="p-4 sm:p-8 space-y-6">
+        {/* Success message */}
+        {consolidateSuccessMsg && (
+          <div className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4" />
+              {consolidateSuccessMsg}
+            </div>
+            <button onClick={() => setConsolidateSuccessMsg("")} className="text-emerald-500 hover:text-emerald-700"><X className="h-4 w-4" /></button>
+          </div>
+        )}
+
+        {/* Late delivery warning */}
+        {(() => {
+          const today = new Date().toISOString().split("T")[0];
+          const late = ordenes.filter(oc =>
+            oc.fecha_entrega_estimada &&
+            oc.fecha_entrega_estimada < today &&
+            ["enviada", "confirmada", "recibida_parcial"].includes(oc.estado)
+          );
+          if (late.length === 0) return null;
+          return (
+            <div className="flex items-center gap-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span><strong>{late.length}</strong> OC con fecha de entrega vencida: {late.slice(0, 3).map(oc => oc.numero).join(", ")}{late.length > 3 ? ` y ${late.length - 3} más` : ""}</span>
+            </div>
+          );
+        })()}
+
         {/* Stats */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard title="Total OC este mes" value={String(ocEsteMes.length)} icon={ShoppingCart} iconColor="text-blue-600" />
@@ -600,7 +836,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <div>
                     <span className="font-medium">{row.proveedores?.razon_social || "—"}</span>
                     {row.proveedores?.email && (
-                      <p className="text-xs text-zinc-400 truncate max-w-[200px]">{row.proveedores.email}</p>
+                      <a href={`mailto:${row.proveedores.email}`} className="text-xs text-zinc-400 hover:text-orange-500 truncate max-w-[200px] block" onClick={(e) => e.stopPropagation()}>{row.proveedores.email}</a>
                     )}
                   </div>
                 ),
@@ -750,6 +986,125 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         </div>
       )}
 
+      {/* ── Consolidation Modal ──────────────────────────────────────── */}
+      {consolidateOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
+              <div>
+                <h2 className="text-lg font-semibold dark:text-white">Consolidar pedidos por proveedor</h2>
+                <p className="text-xs text-zinc-400 mt-0.5">Agrupa items de presupuestos aprobados en una OC por proveedor</p>
+              </div>
+              <button onClick={() => setConsolidateOpen(false)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {consolidateLoading ? (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-orange-500 mb-3" />
+                  <p className="text-sm text-zinc-400">Buscando presupuestos aprobados...</p>
+                </div>
+              ) : consolidateGroups.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <Package className="h-10 w-10 text-zinc-300 mb-3" />
+                  <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">No hay items pendientes</p>
+                  <p className="text-xs text-zinc-400 mt-1">Todos los presupuestos aprobados ya tienen OC generada, o no tienen proveedor asignado en sus items.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {consolidateGroups.map((group) => {
+                    const selectedCount = group.items.filter(it => it.selected).length;
+                    const totalGroup = group.items.filter(it => it.selected).reduce((s, it) => s + it.precio_costo * it.cantidad, 0);
+                    return (
+                      <div key={group.id} className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
+                        {/* Provider header */}
+                        <div
+                          className="flex items-center justify-between px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 cursor-pointer"
+                          onClick={() => toggleProveedorExpand(group.id)}
+                        >
+                          <div className="flex items-center gap-3">
+                            {group.expanded ? <ChevronDown className="h-4 w-4 text-zinc-400" /> : <ChevronRight className="h-4 w-4 text-zinc-400" />}
+                            <div>
+                              <p className="font-semibold text-sm dark:text-white">{group.nombre}</p>
+                              <p className="text-xs text-zinc-400">{selectedCount}/{group.items.length} items · {formatCurrency(totalGroup, group.moneda as "ARS" | "USD")}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); toggleAllInGroup(group.id, selectedCount < group.items.length); }}
+                              className="text-xs text-orange-500 hover:text-orange-600 font-medium"
+                            >
+                              {selectedCount === group.items.length ? "Deseleccionar" : "Seleccionar todos"}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Items */}
+                        {group.expanded && (
+                          <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                            {group.items.map((item) => (
+                              <label
+                                key={item.item_id}
+                                className="flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 cursor-pointer"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={item.selected}
+                                  onChange={() => toggleConsolidateItem(group.id, item.item_id)}
+                                  className="rounded border-zinc-300 text-orange-500 focus:ring-orange-500"
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    {item.codigo && <span className="font-mono text-xs text-zinc-400">{item.codigo}</span>}
+                                    <span className="text-sm font-medium truncate dark:text-white">{item.descripcion}</span>
+                                  </div>
+                                  <div className="flex items-center gap-3 mt-0.5">
+                                    <span className="text-xs text-blue-500 font-mono">{item.pr_numero}</span>
+                                    <span className="text-xs text-zinc-400">{item.cliente_nombre}</span>
+                                  </div>
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <p className="text-sm font-medium dark:text-white">{item.cantidad} {item.unidad}</p>
+                                  <p className="text-xs text-zinc-400">{formatCurrency(item.precio_costo, item.moneda as "ARS" | "USD")} c/u</p>
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {consolidateGroups.length > 0 && !consolidateLoading && (
+              <div className="flex items-center justify-between px-6 py-4 border-t border-zinc-200 dark:border-zinc-700">
+                <p className="text-sm text-zinc-500">
+                  {consolidateGroups.reduce((s, g) => s + g.items.filter(it => it.selected).length, 0)} items en{" "}
+                  {consolidateGroups.filter(g => g.items.some(it => it.selected)).length} proveedor(es)
+                </p>
+                <div className="flex gap-3">
+                  <button onClick={() => setConsolidateOpen(false)} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleCreateConsolidatedOCs}
+                    disabled={consolidateCreating || consolidateGroups.every(g => g.items.every(it => !it.selected))}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                  >
+                    {consolidateCreating && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Crear OC consolidadas
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ── Detail Side Panel ───────────────────────────────────────── */}
       {detailOC && (
         <div className="fixed inset-0 z-50 flex justify-end">
@@ -856,7 +1211,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       {detailOC.proveedores.email && (
                         <div className="flex items-center gap-2">
                           <Mail className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
-                          <span className="truncate">{detailOC.proveedores.email}</span>
+                          <a href={`mailto:${detailOC.proveedores.email}`} className="truncate hover:text-orange-500">{detailOC.proveedores.email}</a>
                           <CopyButton text={detailOC.proveedores.email} />
                         </div>
                       )}

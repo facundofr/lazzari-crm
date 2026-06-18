@@ -632,8 +632,8 @@ export default function ClientesPage() {
                 </div>
                 <div className="mt-4 space-y-2 text-sm text-zinc-500">
                   <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{client.localidad}, {client.provincia}</span></div>
-                  <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 shrink-0" /> {client.telefono || "—"}</div>
-                  <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{client.email || "—"}</span></div>
+                  <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 shrink-0" /> {client.telefono ? <a href={`tel:${client.telefono}`} className="hover:text-orange-500">{client.telefono}</a> : "—"}</div>
+                  <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 shrink-0" /> {client.email ? <a href={`mailto:${client.email}`} className="hover:text-orange-500 truncate">{client.email}</a> : <span className="truncate">—</span>}</div>
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4 dark:border-zinc-800">
                   <div>
@@ -717,8 +717,14 @@ export default function ClientesPage() {
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Informacion general</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <InfoField label="Condicion IVA" value={condicionLabels[selectedCliente.condicionIva]} />
-                      <InfoField label="Email" value={selectedCliente.email || "—"} />
-                      <InfoField label="Telefono" value={selectedCliente.telefono || "—"} />
+                      <div>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">Email</p>
+                        <p className="text-sm font-medium mt-0.5">{selectedCliente.email ? <a href={`mailto:${selectedCliente.email}`} className="text-orange-600 hover:underline">{selectedCliente.email}</a> : "—"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">Telefono</p>
+                        <p className="text-sm font-medium mt-0.5">{selectedCliente.telefono ? <a href={`tel:${selectedCliente.telefono}`} className="text-orange-600 hover:underline">{selectedCliente.telefono}</a> : "—"}</p>
+                      </div>
                       <InfoField label="Vendedor" value={selectedCliente.vendedorNombre} />
                       <div className="sm:col-span-2">
                         <InfoField

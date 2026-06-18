@@ -306,6 +306,7 @@ export default function VentasPage() {
 
       if (rError || !remitoData) {
         console.error("Error creando remito:", rError);
+        alert("Error al crear remito: " + (rError?.message || "Error desconocido"));
         return;
       }
 
@@ -324,6 +325,7 @@ export default function VentasPage() {
       await fetchData();
     } catch (err) {
       console.error("Error creando remito:", err);
+      alert("Error al crear remito");
     } finally {
       setCreatingRemito(false);
     }

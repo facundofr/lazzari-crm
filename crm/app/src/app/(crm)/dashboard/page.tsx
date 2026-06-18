@@ -183,14 +183,14 @@ export default function DashboardPage() {
           const byMonth: Record<string, number> = {};
           facturasResult.data.forEach((f: { fecha: string; total: number }) => {
             const d = new Date(f.fecha);
-            const key = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, "0")}`;
+            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
             byMonth[key] = (byMonth[key] || 0) + Number(f.total);
           });
           const sorted = Object.entries(byMonth)
             .sort(([a], [b]) => a.localeCompare(b))
             .slice(-6)
             .map(([key, monto]) => ({
-              mes: monthNames[parseInt(key.split("-")[1])],
+              mes: monthNames[parseInt(key.split("-")[1]) - 1],
               monto,
             }));
           if (sorted.length > 0) setVentasPorMes(sorted);

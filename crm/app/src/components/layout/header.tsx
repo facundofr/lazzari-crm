@@ -16,6 +16,7 @@ import {
   Menu,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 import { formatDateTime } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -91,6 +92,7 @@ const alertVariant: Record<string, "danger" | "warning" | "info" | "purple"> = {
 };
 
 export function Header({ title, subtitle, action }: HeaderProps) {
+  const router = useRouter();
   const { setMobileSidebarOpen } = useUser();
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
@@ -212,7 +214,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   function navigateTo(path: string) {
     setSearchOpen(false);
     setSearch("");
-    window.location.href = path;
+    router.push(path);
   }
 
   const hasResults =

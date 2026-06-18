@@ -6,9 +6,25 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X } from "lucide-react";
+import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { formatDate } from "@/lib/utils";
+
+function CopyButton({ text, label }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  return (
+    <button onClick={handleCopy} className="inline-flex items-center gap-1 text-xs text-zinc-400 hover:text-orange-500 transition-colors" title={label || "Copiar"}>
+      {copied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+      {label && <span>{copied ? "Copiado" : label}</span>}
+    </button>
+  );
+}
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 
 const estadoConfig: Record<string, { label: string; variant: "success" | "warning" | "info" }> = {
@@ -28,6 +44,14 @@ interface RemitoRow {
   observaciones: string;
   clientes: { razon_social: string } | null;
   remito_items: { id: string }[];
+}
+
+interface RemitoDetailItem {
+  id: string;
+  descripcion: string;
+  cantidad: number;
+  unidad: string | null;
+  orden: number;
 }
 
 interface PresupuestoIA {
@@ -54,6 +78,12 @@ export default function RemitosPage() {
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
   const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string }[]>([]);
   const [creating, setCreating] = useState(false);
+
+  // Detail panel
+  const [detailRemito, setDetailRemito] = useState<RemitoRow | null>(null);
+  const [detailItems, setDetailItems] = useState<RemitoDetailItem[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [copiedSummary, setCopiedSummary] = useState(false);
 
   // IA generation modal state
   const [iaModalOpen, setIaModalOpen] = useState(false);
@@ -135,7 +165,12 @@ export default function RemitosPage() {
   }
 
   async function openCreateModal() {
-    const autoNumero = `R-0001-${String(remitos.length + 1).padStart(8, "0")}`;
+    const maxNum = remitos.reduce((max, r) => {
+      const parts = r.numero?.split("-");
+      const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
+      return n > max ? n : max;
+    }, 0);
+    const autoNumero = `R-0001-${String(maxNum + 1).padStart(8, "0")}`;
     setCreateForm({
       numero: autoNumero,
       cliente_id: "",
@@ -198,7 +233,11 @@ export default function RemitosPage() {
     if (selectedPresupuestos.size === 0) return;
     setGeneratingIA(true);
     try {
-      let idx = remitos.length + 1;
+      let idx = remitos.reduce((max, r) => {
+        const parts = r.numero?.split("-");
+        const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
+        return n > max ? n : max;
+      }, 0) + 1;
       for (const pId of selectedPresupuestos) {
         const p = presupuestosIA.find((x) => x.id === pId);
         if (!p) continue;
@@ -231,6 +270,99 @@ export default function RemitosPage() {
     } finally {
       setGeneratingIA(false);
     }
+  }
+
+  async function handleRowClick(row: RemitoRow) {
+    setDetailRemito(row);
+    setDetailLoading(true);
+    try {
+      const { data } = await supabase
+        .from("remito_items")
+        .select("id, descripcion, cantidad, unidad, orden")
+        .eq("remito_id", row.id)
+        .order("orden", { ascending: true });
+      setDetailItems((data as unknown as RemitoDetailItem[]) || []);
+    } catch {
+      setDetailItems([]);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function handleCopySummary() {
+    if (!detailRemito) return;
+    const lines = [
+      `REMITO ${detailRemito.numero}`,
+      `Cliente: ${detailRemito.clientes?.razon_social || "—"}`,
+      `Fecha: ${formatDate(detailRemito.fecha)}`,
+      `Estado: ${estadoConfig[detailRemito.estado]?.label || detailRemito.estado}`,
+      detailRemito.observaciones ? `Obs: ${detailRemito.observaciones}` : "",
+      "",
+      "ITEMS:",
+      ...detailItems.map((it, i) => `${i + 1}. ${it.descripcion} — ${it.cantidad} ${it.unidad || "u"}`),
+    ].filter(Boolean).join("\n");
+    navigator.clipboard.writeText(lines);
+    setCopiedSummary(true);
+    setTimeout(() => setCopiedSummary(false), 2000);
+  }
+
+  function handleDownloadPDF() {
+    if (!detailRemito) return;
+    const r = detailRemito;
+    const items = detailItems;
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Remito ${r.numero}</title>
+    <style>
+      body{font-family:Arial,sans-serif;margin:40px;color:#333}
+      .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #FF4500;padding-bottom:16px;margin-bottom:24px}
+      .logo{font-size:24px;font-weight:bold;color:#FF4500}
+      .logo span{font-size:12px;color:#666;font-weight:normal;display:block}
+      .doc-info{text-align:right}
+      .doc-info h2{margin:0;font-size:18px}
+      .doc-info p{margin:2px 0;font-size:12px;color:#666}
+      .section{margin-bottom:20px}
+      .section h3{font-size:13px;text-transform:uppercase;color:#999;border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:8px}
+      .field{display:inline-block;margin-right:24px;margin-bottom:6px}
+      .field label{font-size:11px;color:#999;display:block}
+      .field span{font-size:13px}
+      table{width:100%;border-collapse:collapse;margin-top:8px}
+      th{background:#f5f5f5;text-align:left;padding:8px;font-size:12px;border-bottom:2px solid #ddd}
+      td{padding:8px;font-size:12px;border-bottom:1px solid #eee}
+      .footer{margin-top:40px;display:flex;justify-content:space-between}
+      .signature{border-top:1px solid #333;width:200px;text-align:center;padding-top:4px;font-size:11px;color:#666}
+      .obs{background:#f9f9f9;padding:12px;border-radius:4px;font-size:12px;color:#555;margin-top:16px}
+    </style></head><body>
+    <div class="header">
+      <div class="logo">Lazzari<span>Soluciones Industriales</span></div>
+      <div class="doc-info">
+        <h2>REMITO</h2>
+        <p><strong>${r.numero}</strong></p>
+        <p>Fecha: ${formatDate(r.fecha)}</p>
+        <p>Estado: ${estadoConfig[r.estado]?.label || r.estado}</p>
+        ${r.cae ? `<p>CAE: ${r.cae}</p>` : ""}
+      </div>
+    </div>
+    <div class="section">
+      <h3>Cliente</h3>
+      <div class="field"><label>Razon Social</label><span>${r.clientes?.razon_social || "—"}</span></div>
+    </div>
+    <div class="section">
+      <h3>Items</h3>
+      <table>
+        <thead><tr><th>#</th><th>Descripcion</th><th>Cantidad</th><th>Unidad</th></tr></thead>
+        <tbody>${items.map((it, i) => `<tr><td>${i + 1}</td><td>${it.descripcion}</td><td>${it.cantidad}</td><td>${it.unidad || "u"}</td></tr>`).join("")}</tbody>
+      </table>
+    </div>
+    ${r.observaciones ? `<div class="obs"><strong>Observaciones:</strong> ${r.observaciones}</div>` : ""}
+    <div class="footer">
+      <div class="signature">Firma Emisor</div>
+      <div class="signature">Firma Receptor</div>
+    </div>
+    </body></html>`;
+    const blob = new Blob([html], { type: "text/html" });
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, "_blank");
+    if (w) { setTimeout(() => { w.print(); }, 500); }
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
   if (loading) {
@@ -333,9 +465,126 @@ export default function RemitosPage() {
               if (vinculadoFilter === "no" && r.presupuesto_id) return false;
               return true;
             })}
+            onRowClick={handleRowClick}
           />
         </Card>
       </div>
+
+      {/* ── Detail Side Panel ───────────────────────────────────────── */}
+      {detailRemito && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setDetailRemito(null)} />
+          <div className="relative w-full max-w-xl bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
+              <div>
+                <div className="flex items-center gap-3">
+                  <h2 className="text-lg font-semibold font-mono dark:text-white">{detailRemito.numero}</h2>
+                  <Badge variant={(estadoConfig[detailRemito.estado] || { variant: "info" as const }).variant}>
+                    {(estadoConfig[detailRemito.estado] || { label: detailRemito.estado }).label}
+                  </Badge>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={handleCopySummary} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Copiar resumen">
+                  {copiedSummary ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
+                  {copiedSummary ? "Copiado" : "Copiar"}
+                </button>
+                <button onClick={handleDownloadPDF} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Descargar PDF">
+                  <Download className="h-3.5 w-3.5" /> PDF
+                </button>
+                <button onClick={() => setDetailRemito(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="px-6 py-5 space-y-5">
+              {/* Action buttons */}
+              {detailRemito.estado !== "entregado" && (
+                <div className="flex flex-wrap gap-2">
+                  {detailRemito.estado === "pendiente" && (
+                    <button onClick={() => { handleEstadoChange(detailRemito.id, "parcial"); setDetailRemito({ ...detailRemito, estado: "parcial" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors">
+                      <Package className="h-4 w-4" /> Entrega parcial
+                    </button>
+                  )}
+                  {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
+                    <button onClick={() => { handleEstadoChange(detailRemito.id, "entregado"); setDetailRemito({ ...detailRemito, estado: "entregado" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition-colors">
+                      <CheckCircle2 className="h-4 w-4" /> Marcar entregado
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Info */}
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-zinc-400">Cliente</span>
+                  <p className="font-medium dark:text-white">{detailRemito.clientes?.razon_social || "—"}</p>
+                </div>
+                <div>
+                  <span className="text-zinc-400">Fecha</span>
+                  <p className="font-medium dark:text-white">{formatDate(detailRemito.fecha)}</p>
+                </div>
+                {detailRemito.presupuesto_id && (
+                  <div>
+                    <span className="text-zinc-400">Presupuesto origen</span>
+                    <p className="font-mono text-blue-500 text-xs">{detailRemito.presupuesto_id.slice(0, 8)}...</p>
+                  </div>
+                )}
+                {detailRemito.cae && (
+                  <div>
+                    <span className="text-zinc-400">CAE</span>
+                    <div className="flex items-center gap-2">
+                      <p className="font-mono text-xs dark:text-white">{detailRemito.cae}</p>
+                      <CopyButton text={detailRemito.cae} />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {detailRemito.observaciones && (
+                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
+                  <span className="text-xs text-zinc-400 block mb-1">Observaciones</span>
+                  <p className="text-sm dark:text-zinc-300">{detailRemito.observaciones}</p>
+                </div>
+              )}
+
+              {/* Items */}
+              <div>
+                <h3 className="text-sm font-semibold mb-3 dark:text-white">Items ({detailItems.length})</h3>
+                {detailLoading ? (
+                  <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-orange-500" /></div>
+                ) : detailItems.length === 0 ? (
+                  <p className="text-sm text-zinc-400 text-center py-4">Sin items</p>
+                ) : (
+                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
+                          <th className="text-left px-3 py-2">#</th>
+                          <th className="text-left px-3 py-2">Descripcion</th>
+                          <th className="text-right px-3 py-2">Cantidad</th>
+                          <th className="text-left px-3 py-2">Unidad</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailItems.map((item, i) => (
+                          <tr key={item.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                            <td className="px-3 py-2 text-zinc-400">{i + 1}</td>
+                            <td className="px-3 py-2 dark:text-white">{item.descripcion}</td>
+                            <td className="px-3 py-2 text-right font-medium dark:text-white">{item.cantidad}</td>
+                            <td className="px-3 py-2 text-zinc-500">{item.unidad || "u"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Remito Modal */}
       {createModalOpen && (
