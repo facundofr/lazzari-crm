@@ -7,6 +7,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { mockFacturas } from "@/lib/mock-data";
 import {
@@ -39,6 +40,7 @@ interface FacturaRow {
   tipo_cambio: number | null;
   estado: string;
   presupuesto_id: string | null;
+  oc_cliente?: string | null;
   clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string } | null;
 }
 
@@ -69,6 +71,7 @@ const EMISOR = {
 };
 
 export default function FacturacionPage() {
+  const { sociedadActiva } = useUser();
   const [facturas, setFacturas] = useState<FacturaRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
@@ -123,10 +126,16 @@ export default function FacturacionPage() {
   // ── Fetch data ─────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("facturas")
         .select(`*, clientes(razon_social, cuit, condicion_iva, email, telefono, direccion, localidad, provincia)`)
         .order("created_at", { ascending: false });
+
+      if (sociedadActiva?.id) {
+        query = query.eq("sociedad_id" as any, sociedadActiva.id);
+      }
+
+      const { data, error } = await query;
 
       if (!error && data && data.length > 0) {
         setFacturas(data as unknown as FacturaRow[]);
@@ -152,7 +161,7 @@ export default function FacturacionPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sociedadActiva]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -504,6 +513,10 @@ ${f.cae ? `
                 </div>
               )},
               { key: "clientes", label: "Cliente", sortable: true, render: (r) => <span className="font-medium">{r.clientes?.razon_social || "\u2014"}</span> },
+              { key: "oc_cliente", label: "OC Cliente", render: (r) => r.oc_cliente
+                ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{r.oc_cliente}</span>
+                : <span className="text-zinc-300">{"\u2014"}</span>
+              },
               { key: "fecha", label: "Fecha", sortable: true, render: (r) => <span className="text-zinc-500">{formatDate(r.fecha)}</span> },
               { key: "total", label: "Total", sortable: true, className: "text-right", render: (r) => (
                 <span className="font-mono font-semibold block text-right">{formatCurrency(Number(r.total))}</span>
@@ -824,6 +837,14 @@ ${f.cae ? `
                 {detailFactura.clientes?.cuit && <p className="text-xs text-zinc-500 mt-0.5">CUIT: {detailFactura.clientes.cuit}</p>}
                 {detailFactura.clientes?.condicion_iva && <p className="text-xs text-zinc-400">{detailFactura.clientes.condicion_iva}</p>}
               </div>
+
+              {/* OC Cliente */}
+              {detailFactura.oc_cliente && (
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">OC Cliente</h4>
+                  <p className="font-mono text-sm font-medium text-blue-600 dark:text-blue-400">{detailFactura.oc_cliente}</p>
+                </div>
+              )}
 
               {/* CAE */}
               <div>

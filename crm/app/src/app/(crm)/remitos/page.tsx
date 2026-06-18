@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
 import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { useUser } from "@/lib/auth-context";
 import { formatDate } from "@/lib/utils";
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -64,6 +65,7 @@ interface PresupuestoIA {
 }
 
 export default function RemitosPage() {
+  const { sociedadActiva } = useUser();
   const [remitos, setRemitos] = useState<RemitoRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -126,10 +128,14 @@ export default function RemitosPage() {
 
   const fetchData = useCallback(async () => {
       try {
-        const { data, error } = await supabase
+        let q = supabase
           .from("remitos")
           .select(`*, clientes(razon_social), remito_items(id)`)
           .order("fecha", { ascending: false });
+
+        if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+
+        const { data, error } = await q;
 
         if (!error && data && data.length > 0) {
           setRemitos(data as unknown as RemitoRow[]);
@@ -155,7 +161,7 @@ export default function RemitosPage() {
       } finally {
         setLoading(false);
       }
-  }, []);
+  }, [sociedadActiva]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

@@ -80,7 +80,7 @@ function getGreeting(): string {
 }
 
 export default function DashboardPage() {
-  const { profile } = useUser();
+  const { profile, sociedadActiva } = useUser();
   const [loading, setLoading] = useState(true);
   const [kpi, setKpi] = useState(mockKPIs);
   const [presupuestosPorEstado, setPresupuestosPorEstado] = useState(mockPresupuestosPorEstado);
@@ -95,6 +95,29 @@ export default function DashboardPage() {
   useEffect(() => {
     async function fetchAll() {
       try {
+        // Build queries with optional sociedad filter
+        let qPresupuestosEstado = supabase.from("presupuestos").select("estado");
+        let qPresupuestosRecent = supabase
+          .from("presupuestos")
+          .select("id, numero, cliente_id, total, estado, fecha, clientes(razon_social)")
+          .order("created_at", { ascending: false })
+          .limit(5);
+        let qTopClientes = supabase
+          .from("facturas")
+          .select("cliente_id, clientes(razon_social), total")
+          .neq("estado", "anulada");
+        let qFacturasMensuales = supabase
+          .from("facturas")
+          .select("fecha, total")
+          .neq("estado", "anulada");
+
+        if (sociedadActiva?.id) {
+          qPresupuestosEstado = qPresupuestosEstado.eq("sociedad_id" as any, sociedadActiva.id);
+          qPresupuestosRecent = qPresupuestosRecent.eq("sociedad_id" as any, sociedadActiva.id);
+          qTopClientes = qTopClientes.eq("sociedad_id" as any, sociedadActiva.id);
+          qFacturasMensuales = qFacturasMensuales.eq("sociedad_id" as any, sociedadActiva.id);
+        }
+
         const [
           kpiResult,
           presupuestosEstadoResult,
@@ -107,31 +130,21 @@ export default function DashboardPage() {
           objetivosResult,
         ] = await Promise.all([
           supabase.rpc("get_dashboard_kpis"),
-          supabase.from("presupuestos").select("estado"),
-          supabase
-            .from("presupuestos")
-            .select("id, numero, cliente_id, total, estado, fecha, clientes(razon_social)")
-            .order("created_at", { ascending: false })
-            .limit(5),
+          qPresupuestosEstado,
+          qPresupuestosRecent,
           supabase
             .from("alertas")
             .select("*")
             .eq("read", false)
             .order("created_at", { ascending: false }),
-          supabase
-            .from("facturas")
-            .select("cliente_id, clientes(razon_social), total")
-            .neq("estado", "anulada"),
+          qTopClientes,
           supabase
             .from("activity_log")
             .select("*, profiles:user_id(full_name)")
             .order("created_at", { ascending: false })
             .limit(10),
           // Facturación mensual
-          supabase
-            .from("facturas")
-            .select("fecha, total")
-            .neq("estado", "anulada"),
+          qFacturasMensuales,
           // Gastos fijos
           supabase
             .from("gastos_fijos")
@@ -259,7 +272,7 @@ export default function DashboardPage() {
       }
     }
     fetchAll();
-  }, []);
+  }, [sociedadActiva]);
 
   if (loading) {
     return (

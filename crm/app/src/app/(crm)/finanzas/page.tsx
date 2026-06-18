@@ -11,6 +11,7 @@ import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLinea
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
 import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 
@@ -104,6 +105,7 @@ const emptyMovForm = {
 };
 
 export default function FinanzasPage() {
+  const { sociedadActiva } = useUser();
   const [tab, setTab] = useState<FinanzasTab>("movimientos");
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
   const [loading, setLoading] = useState(true);
@@ -166,11 +168,14 @@ export default function FinanzasPage() {
   const fetchData = useCallback(async () => {
       setLoading(true);
       try {
+        let qMov = supabase
+          .from("movimientos")
+          .select(`*, clientes(razon_social), proveedores(razon_social)`)
+          .order("fecha", { ascending: false });
+        if (sociedadActiva?.id) qMov = qMov.eq("sociedad_id" as any, sociedadActiva.id);
+
         const [movRes, ccCliRes, ccProvRes, extRes, lcRes, gfRes, objRes] = await Promise.all([
-          supabase
-            .from("movimientos")
-            .select(`*, clientes(razon_social), proveedores(razon_social)`)
-            .order("fecha", { ascending: false }),
+          qMov,
           supabase
             .from("v_cuenta_corriente_clientes")
             .select("*"),
@@ -354,7 +359,7 @@ export default function FinanzasPage() {
       } finally {
         setLoading(false);
       }
-  }, []);
+  }, [sociedadActiva]);
 
   useEffect(() => {
     fetchData();

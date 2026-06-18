@@ -19,6 +19,7 @@ import {
   User, FileText, CreditCard, StickyNote, Clock, Receipt, Truck, Wallet,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { useUser } from "@/lib/auth-context";
 
 const condicionLabels: Record<string, string> = {
   RI: "Resp. Inscripto",
@@ -156,6 +157,7 @@ interface TimelineEvent {
 }
 
 export default function ClientesPage() {
+  const { sociedadActiva } = useUser();
   const [view, setView] = useState<"table" | "cards">("table");
   const [search, setSearch] = useState("");
   const [clientes, setClientes] = useState<ClienteExt[]>([]);
@@ -441,10 +443,15 @@ export default function ClientesPage() {
   const fetchClientes = useCallback(async () => {
     try {
       // contactos is polymorphic (no FK to clientes), so we fetch it separately
-      const { data, error } = await supabase
+      let query = supabase
         .from("clientes")
-        .select(`*, assigned_profile:assigned_to(full_name), cliente_sucursales(*)`)
-        .order("razon_social");
+        .select(`*, assigned_profile:assigned_to(full_name), cliente_sucursales(*)`);
+
+      if (sociedadActiva?.id) {
+        query = query.eq("sociedad_id" as any, sociedadActiva.id);
+      }
+
+      const { data, error } = await query.order("razon_social");
 
       if (error) {
         console.error("Error fetching clientes:", error);
@@ -460,7 +467,7 @@ export default function ClientesPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sociedadActiva]);
 
   useEffect(() => {
     fetchClientes();

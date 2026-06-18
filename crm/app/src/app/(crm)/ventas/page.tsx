@@ -95,7 +95,7 @@ const PV_CRM = 15;
 // ── Component ────────────────────────────────────────────────────
 
 export default function VentasPage() {
-  const { profile, role } = useUser();
+  const { profile, role, sociedadActiva } = useUser();
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [loading, setLoading] = useState(true);
   const [vendedores, setVendedores] = useState<VendedorOption[]>([]);
@@ -127,7 +127,7 @@ export default function VentasPage() {
   const fetchData = useCallback(async () => {
     try {
       // Fetch presupuestos aprobados with items
-      const { data: presupuestos, error: pError } = await supabase
+      let presupuestosQuery = supabase
         .from("presupuestos")
         .select(`
           id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id,
@@ -137,6 +137,8 @@ export default function VentasPage() {
         `)
         .eq("estado", "aprobado")
         .order("fecha", { ascending: false });
+      if (sociedadActiva?.id) presupuestosQuery = presupuestosQuery.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: presupuestos, error: pError } = await presupuestosQuery;
 
       if (pError || !presupuestos) {
         console.error("Error fetching presupuestos:", pError);
@@ -151,10 +153,18 @@ export default function VentasPage() {
       // Fetch related facturas and remitos in parallel
       const [facturasRes, remitosRes] = await Promise.all([
         pIds.length > 0
-          ? supabase.from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, subtotal, iva, total, estado, presupuesto_id").in("presupuesto_id", pIds)
+          ? (() => {
+              let q = supabase.from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, subtotal, iva, total, estado, presupuesto_id").in("presupuesto_id", pIds);
+              if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+              return q;
+            })()
           : { data: [], error: null },
         pIds.length > 0
-          ? supabase.from("remitos").select("id, numero, fecha, estado, presupuesto_id").in("presupuesto_id", pIds)
+          ? (() => {
+              let q = supabase.from("remitos").select("id, numero, fecha, estado, presupuesto_id").in("presupuesto_id", pIds);
+              if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+              return q;
+            })()
           : { data: [], error: null },
       ]);
 
@@ -183,7 +193,7 @@ export default function VentasPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sociedadActiva]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -300,6 +310,8 @@ export default function VentasPage() {
           fecha: new Date().toISOString().split("T")[0],
           observaciones: `Desde presupuesto ${p.numero}`,
           estado: "pendiente",
+          oc_cliente: (p as any).oc_cliente || null,
+          sociedad_id: (p as any).sociedad_id || null,
         })
         .select("id")
         .single();

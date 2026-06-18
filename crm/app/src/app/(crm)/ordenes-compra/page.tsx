@@ -15,6 +15,7 @@ import {
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { useUser } from "@/lib/auth-context";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" | "outline" | "purple" }> = {
@@ -118,6 +119,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 }
 
 export default function OrdenesCompraPage() {
+  const { sociedadActiva } = useUser();
   const [filter, setFilter] = useState<OCStatus | "todas">("todas");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -186,7 +188,7 @@ export default function OrdenesCompraPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      let q = supabase
         .from("ordenes_compra")
         .select(`
           *,
@@ -195,6 +197,10 @@ export default function OrdenesCompraPage() {
           orden_compra_items(cantidad, cantidad_recibida)
         `)
         .order("created_at", { ascending: false });
+
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+
+      const { data, error } = await q;
 
       if (!error && data && data.length > 0) {
         setOrdenes(data as unknown as OCRow[]);
@@ -206,7 +212,7 @@ export default function OrdenesCompraPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sociedadActiva]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

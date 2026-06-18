@@ -192,6 +192,7 @@ export interface Presupuesto {
   sociedadId?: string;
   sucursalId?: string;
   contactoId?: string;
+  ocCliente?: string;
   enviadoAt?: string;
   respondidoAt?: string;
   createdAt: string;

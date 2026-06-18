@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
+import { useUser } from "@/lib/auth-context";
 import {
   dashboardKPIs, presupuestosPorEstado, topClientes, mockPresupuestos, mockUsers,
 } from "@/lib/mock-data";
@@ -61,6 +62,7 @@ function buildMockComisiones(): VendedorComision[] {
 const COLORS = ["#f97316", "#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#eab308"];
 
 export default function ReportesPage() {
+  const { sociedadActiva } = useUser();
   const [activeTab, setActiveTab] = useState<"comercial" | "comisiones">("comercial");
   const [loading, setLoading] = useState(true);
   const [ventasMensuales, setVentasMensuales] = useState<{ mes: string; total: number }[]>([]);
@@ -77,10 +79,12 @@ export default function ReportesPage() {
     async function fetchData() {
       try {
         // Ventas por mes from facturas
-        const { data: facturas } = await supabase
+        let facturasQuery = supabase
           .from("facturas")
           .select("fecha, total, estado")
           .neq("estado", "anulada");
+        if (sociedadActiva?.id) facturasQuery = facturasQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: facturas } = await facturasQuery;
 
         if (facturas && facturas.length > 0) {
           const byMonth: Record<string, number> = {};
@@ -103,9 +107,11 @@ export default function ReportesPage() {
         }
 
         // PR por estado
-        const { data: prs } = await supabase
+        let prsQuery = supabase
           .from("presupuestos")
           .select("estado, total");
+        if (sociedadActiva?.id) prsQuery = prsQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: prs } = await prsQuery;
 
         if (prs && prs.length > 0) {
           const byEstado: Record<string, number> = {};
@@ -116,10 +122,12 @@ export default function ReportesPage() {
         }
 
         // Top clientes
-        const { data: topCli } = await supabase
+        let topCliQuery = supabase
           .from("facturas")
           .select("clientes(razon_social), total")
           .neq("estado", "anulada");
+        if (sociedadActiva?.id) topCliQuery = topCliQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: topCli } = await topCliQuery;
 
         if (topCli && topCli.length > 0) {
           const byCli: Record<string, number> = {};
@@ -145,17 +153,19 @@ export default function ReportesPage() {
       }
     }
     fetchData();
-  }, []);
+  }, [sociedadActiva]);
 
   // ── Fetch comisiones data ──────────────────────────────────────
   useEffect(() => {
     async function fetchComisiones() {
       try {
         // Try fetching approved presupuestos with their items and vendedor profiles
-        const { data: prs, error } = await supabase
+        let comPrsQuery = supabase
           .from("presupuestos")
           .select("id, subtotal, created_by, presupuesto_items(cantidad, precio_costo)")
           .eq("estado", "aprobado");
+        if (sociedadActiva?.id) comPrsQuery = comPrsQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: prs, error } = await comPrsQuery;
 
         if (error || !prs || prs.length === 0) {
           setComisionesData(buildMockComisiones());
@@ -215,7 +225,7 @@ export default function ReportesPage() {
       }
     }
     fetchComisiones();
-  }, []);
+  }, [sociedadActiva]);
 
   const rechazados = mockPresupuestos.filter((pr) => pr.motivoRechazo);
   const totalPR = mockPresupuestos.length;

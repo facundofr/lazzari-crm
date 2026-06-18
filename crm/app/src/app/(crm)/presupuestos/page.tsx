@@ -43,6 +43,7 @@ interface SupabasePresupuesto {
   created_at: string;
   updated_at: string;
   vendedor_id: string | null;
+  oc_cliente?: string | null;
   clientes?: { razon_social: string; cuit: string; email?: string | null; telefono?: string | null; direccion?: string | null; localidad?: string | null; provincia?: string | null; condicion_iva?: string | null } | null;
   created_by_profile?: { full_name: string } | null;
   vendedor_profile?: { full_name: string; avatar_url: string | null } | null;
@@ -107,6 +108,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     vendedorNombre: row.vendedor_profile?.full_name ?? "",
     vendedorAvatar: row.vendedor_profile?.avatar_url ?? null,
     vendedorId: row.vendedor_id ?? null,
+    ocCliente: row.oc_cliente ?? "",
     clienteCuit: row.clientes?.cuit ?? "",
     clienteEmail: row.clientes?.email ?? "",
     clienteTelefono: row.clientes?.telefono ?? "",
@@ -179,7 +181,7 @@ function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, 
 }
 
 export default function PresupuestosPage() {
-  const { profile } = useUser();
+  const { profile, sociedadActiva } = useUser();
   const { toast } = useToast();
   const [filter, setFilter] = useState<PRStatus | "todos">("todos");
   const [search, setSearch] = useState("");
@@ -380,25 +382,31 @@ export default function PresupuestosPage() {
   const fetchPresupuestos = useCallback(async () => {
     try {
       // First try with items + vendedor profile
-      let res: { data: any; error: any } = await supabase
+      let q = supabase
         .from("presupuestos")
         .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), presupuesto_items(*)`)
         .order("created_at", { ascending: false });
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      let res: { data: any; error: any } = await q;
 
       // If that fails, try without items
       if (res.error) {
-        res = await supabase
+        let q2 = supabase
           .from("presupuestos")
           .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_id`)
           .order("created_at", { ascending: false });
+        if (sociedadActiva?.id) q2 = q2.eq("sociedad_id" as any, sociedadActiva.id);
+        res = await q2;
       }
 
       // If still fails, try minimal
       if (res.error) {
-        res = await supabase
+        let q3 = supabase
           .from("presupuestos")
           .select(`*, vendedor_id`)
           .order("created_at", { ascending: false });
+        if (sociedadActiva?.id) q3 = q3.eq("sociedad_id" as any, sociedadActiva.id);
+        res = await q3;
       }
 
       const { data, error } = res;
@@ -412,7 +420,7 @@ export default function PresupuestosPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sociedadActiva]);
 
   useEffect(() => {
     fetchPresupuestos();
@@ -496,9 +504,11 @@ export default function PresupuestosPage() {
           cliente_id: newPR.cliente_id,
           vendedor_id: newPR.vendedor_id,
           created_by: profile?.id,
+          sociedad_id: sociedadActiva?.id || null,
           fecha: today,
           vencimiento,
-          estado: "borrador",
+          estado: "pendiente",
+          enviado_at: new Date().toISOString(),
           markup_general: newPR.markup_general,
           subtotal,
           iva: ivaTotal,
@@ -1225,6 +1235,27 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 <div>
                   <p className="text-xs text-zinc-500">Markup general</p>
                   <p className="text-sm font-medium">{selected.markupGeneral}%</p>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500">OC del cliente</p>
+                  {(selected as any).ocCliente ? (
+                    <p className="text-sm font-medium font-mono text-blue-600 dark:text-blue-400">{(selected as any).ocCliente}</p>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        const oc = prompt("Número de OC del cliente:");
+                        if (oc && oc.trim()) {
+                          await supabase.from("presupuestos").update({ oc_cliente: oc.trim() } as any).eq("id", selected.id);
+                          setSelected({ ...selected, ocCliente: oc.trim() } as any);
+                          await fetchPresupuestos();
+                          toast.success("OC del cliente guardada");
+                        }
+                      }}
+                      className="text-sm text-orange-500 hover:text-orange-600 underline underline-offset-2"
+                    >
+                      + Adjuntar OC
+                    </button>
+                  )}
                 </div>
                 {selected.enviadoAt && (
                   <div>
