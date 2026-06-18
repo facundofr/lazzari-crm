@@ -434,7 +434,12 @@ export default function PresupuestosPage() {
       const item = { ...items[index], [field]: value };
       // Auto-calc precio_venta when costo or markup change
       if (field === "precio_costo" || field === "markup_porcentaje") {
-        item.precio_venta = Number((item.precio_costo * (1 + item.markup_porcentaje / 100)).toFixed(2));
+        const costoBase = item.precio_costo;
+        // If provider prices are in USD, convert to ARS first
+        const costoARS = prev.moneda === "USD" && prev.tipo_cambio > 0
+          ? costoBase * prev.tipo_cambio
+          : costoBase;
+        item.precio_venta = Number((costoARS * (1 + item.markup_porcentaje / 100)).toFixed(2));
       }
       items[index] = item;
       return { ...prev, items };
@@ -1190,8 +1195,8 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   )}
                 </div>
                 <div>
-                  <p className="text-xs text-zinc-500">Moneda</p>
-                  <p className="text-sm font-medium">{selected.moneda}{(selected as any).tipoCambio ? ` (TC: ${Number((selected as any).tipoCambio).toLocaleString("es-AR")})` : ""}</p>
+                  <p className="text-xs text-zinc-500">Costo proveedor</p>
+                  <p className="text-sm font-medium">{selected.moneda === "USD" ? `USD (TC: ${(selected as any).tipoCambio ? Number((selected as any).tipoCambio).toLocaleString("es-AR") : "—"})` : "ARS"}</p>
                 </div>
                 <div>
                   <p className="text-xs text-zinc-500">Markup general</p>
@@ -1271,10 +1276,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     <span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(selected.total, selected.moneda)}</span>
                   </div>
                   {selected.moneda === "USD" && (selected as any).tipoCambio > 0 && (
-                    <div className="flex justify-between text-xs text-zinc-400 mt-1">
-                      <span>Equiv. ARS (TC: {Number((selected as any).tipoCambio).toLocaleString("es-AR")})</span>
-                      <span className="font-mono">{formatCurrency(Math.round(selected.total * Number((selected as any).tipoCambio) * 100) / 100)}</span>
-                    </div>
+                    <div className="text-xs text-zinc-400 text-right mt-1">Costo proveedor en USD — TC: {Number((selected as any).tipoCambio).toLocaleString("es-AR")}</div>
                   )}
                 </div>
               </div>
@@ -1401,19 +1403,34 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             options={vendedores.map((v) => ({ value: v.id, label: v.full_name }))}
           />
           <Select
-            label="Moneda"
+            label="Moneda costo proveedor"
             value={newPR.moneda}
-            onChange={(e) => setNewPR((p) => ({ ...p, moneda: e.target.value as "USD" | "ARS" }))}
-            options={[{ value: "USD", label: "USD" }, { value: "ARS", label: "ARS" }]}
+            onChange={(e) => setNewPR((p) => {
+              const mon = e.target.value as "USD" | "ARS";
+              const tc = mon === "USD" ? p.tipo_cambio : 0;
+              const items = p.items.map(it => {
+                const costoARS = mon === "USD" && tc > 0 ? it.precio_costo * tc : it.precio_costo;
+                return { ...it, precio_venta: Number((costoARS * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+              });
+              return { ...p, moneda: mon, tipo_cambio: tc, items };
+            })}
+            options={[{ value: "USD", label: "USD (requiere TC)" }, { value: "ARS", label: "ARS" }]}
           />
           {newPR.moneda === "USD" && (
             <Input
-              label="Tipo de cambio (USD→ARS)"
+              label="Tipo de cambio (USD→ARS) *"
               type="number"
               step="0.01"
               value={newPR.tipo_cambio || ""}
-              onChange={(e) => setNewPR((p) => ({ ...p, tipo_cambio: Number(e.target.value) }))}
-              placeholder="Ej: 1250.00"
+              onChange={(e) => setNewPR((p) => {
+                const tc = Number(e.target.value);
+                const items = p.items.map(it => {
+                  const costoARS = tc > 0 ? it.precio_costo * tc : it.precio_costo;
+                  return { ...it, precio_venta: Number((costoARS * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+                });
+                return { ...p, tipo_cambio: tc, items };
+              })}
+              placeholder="Ej: 1450.00"
             />
           )}
           <Input
@@ -1569,14 +1586,11 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           {/* Items totals preview */}
           <div className="flex justify-end mt-3">
             <div className="w-56 space-y-1 text-sm rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800/50">
-              <div className="flex justify-between"><span className="text-zinc-500">Subtotal</span><span className="font-mono">{formatCurrency(newPRSub, newPR.moneda)}</span></div>
-              <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(newPRIva, newPR.moneda)}</span></div>
-              <div className="flex justify-between font-bold border-t border-zinc-200 pt-1 dark:border-zinc-700"><span>Total</span><span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(newPRSub + newPRIva, newPR.moneda)}</span></div>
+              <div className="flex justify-between"><span className="text-zinc-500">Subtotal</span><span className="font-mono">{formatCurrency(newPRSub)}</span></div>
+              <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(newPRIva)}</span></div>
+              <div className="flex justify-between font-bold border-t border-zinc-200 pt-1 dark:border-zinc-700"><span>Total</span><span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(newPRSub + newPRIva)}</span></div>
               {newPR.moneda === "USD" && newPR.tipo_cambio > 0 && (
-                <div className="flex justify-between text-xs text-zinc-400 pt-1 border-t border-dashed border-zinc-200 dark:border-zinc-700">
-                  <span>Equiv. ARS (TC: {newPR.tipo_cambio.toLocaleString("es-AR")})</span>
-                  <span className="font-mono">{formatCurrency(Math.round((newPRSub + newPRIva) * newPR.tipo_cambio * 100) / 100)}</span>
-                </div>
+                <div className="text-xs text-zinc-400 text-right pt-1">TC: 1 USD = {newPR.tipo_cambio.toLocaleString("es-AR")} ARS</div>
               )}
             </div>
           </div>
