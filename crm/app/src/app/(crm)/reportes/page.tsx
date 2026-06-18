@@ -331,24 +331,6 @@ export default function ReportesPage() {
       {/* Tab: Analisis comercial */}
       {activeTab === "comercial" && (
       <div className="p-4 sm:p-8 space-y-6">
-        {/* Report categories */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            { title: "Rendimiento comercial", desc: "Conversion, facturacion, margen", icon: TrendingUp, color: "text-emerald-600 bg-emerald-50" },
-            { title: "Analisis de clientes", desc: "Top clientes, frecuencia, ticket", icon: Users, color: "text-blue-600 bg-blue-50" },
-            { title: "Presupuestos", desc: "Estados, rechazos, tendencias", icon: FileText, color: "text-orange-600 bg-orange-50" },
-            { title: "Financiero", desc: "Cobranzas, CC, flujo de caja", icon: DollarSign, color: "text-violet-600 bg-violet-50" },
-          ].map((report) => (
-            <Card key={report.title} className="cursor-pointer hover:shadow-md transition-shadow">
-              <div className={`rounded-lg p-2.5 w-fit ${report.color}`}>
-                <report.icon className="h-5 w-5" />
-              </div>
-              <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{report.title}</h3>
-              <p className="mt-1 text-sm text-zinc-500">{report.desc}</p>
-            </Card>
-          ))}
-        </div>
-
         {/* Charts row */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Ventas mensuales */}
