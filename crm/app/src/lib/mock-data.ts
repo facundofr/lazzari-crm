@@ -85,7 +85,7 @@ export const mockPresupuestos: Presupuesto[] = [
       { id: "i2", productoId: "p4", codigo: "FIT-022", descripcion: "Codo 90° 2\" SCH40 SW", categoria: "Fittings", cantidad: 20, unidad: "u", precioCosto: 18900, markupPorcentaje: 35, precioVenta: 25515, subtotal: 510300, iva: 107163, total: 617463 },
     ],
     subtotal: 1120500, iva: 235305, total: 1355805, moneda: "ARS",
-    observaciones: "Entrega en planta San Martín", creadoPor: "u2", enviadoAt: "2026-05-15",
+    observaciones: "Entrega en planta San Martín", notasInternas: "", creadoPor: "u2", enviadoAt: "2026-05-15",
     createdAt: "2026-05-15", updatedAt: "2026-05-15",
   },
   {
@@ -97,7 +97,7 @@ export const mockPresupuestos: Presupuesto[] = [
       { id: "i5", productoId: "p5", codigo: "JUN-003", descripcion: "Junta espirometálica 4\" 150#", categoria: "Juntas", cantidad: 60, unidad: "u", precioCosto: 12400, markupPorcentaje: 45, precioVenta: 17980, subtotal: 1078800, iva: 226548, total: 1305348 },
     ],
     subtotal: 12171000, iva: 2555910, total: 14726910, moneda: "ARS",
-    observaciones: "Entrega en Mina Veladero. Requiere remito con CAE.", creadoPor: "u4", enviadoAt: "2026-05-16", respondidoAt: "2026-05-18",
+    observaciones: "Entrega en Mina Veladero. Requiere remito con CAE.", notasInternas: "", creadoPor: "u4", enviadoAt: "2026-05-16", respondidoAt: "2026-05-18",
     createdAt: "2026-05-16", updatedAt: "2026-05-18",
   },
   {
@@ -108,7 +108,7 @@ export const mockPresupuestos: Presupuesto[] = [
       { id: "i6", productoId: "p8", codigo: "BOM-002", descripcion: "Bomba centrífuga 5HP trifásica", categoria: "Bombas", cantidad: 3, unidad: "u", precioCosto: 890000, markupPorcentaje: 38, precioVenta: 1228200, subtotal: 3684600, iva: 773766, total: 4458366 },
     ],
     subtotal: 3684600, iva: 773766, total: 4458366, moneda: "ARS",
-    observaciones: "", creadoPor: "u2", enviadoAt: "2026-05-10", respondidoAt: "2026-05-14",
+    observaciones: "", notasInternas: "", creadoPor: "u2", enviadoAt: "2026-05-10", respondidoAt: "2026-05-14",
     createdAt: "2026-05-10", updatedAt: "2026-05-14",
   },
   {
@@ -120,7 +120,7 @@ export const mockPresupuestos: Presupuesto[] = [
       { id: "i8", productoId: "p6", codigo: "BUL-010", descripcion: "Bulón hexagonal M16x80 8.8 ZN", categoria: "Bulonería", cantidad: 200, unidad: "u", precioCosto: 1250, markupPorcentaje: 30, precioVenta: 1625, subtotal: 325000, iva: 68250, total: 393250 },
     ],
     subtotal: 1019200, iva: 214032, total: 1233232, moneda: "ARS",
-    observaciones: "Cliente postergó para junio", creadoPor: "u2",
+    observaciones: "Cliente postergó para junio", notasInternas: "", creadoPor: "u2",
     createdAt: "2026-05-12", updatedAt: "2026-05-19",
   },
   {
@@ -130,7 +130,7 @@ export const mockPresupuestos: Presupuesto[] = [
       { id: "i9", productoId: "p1", codigo: "VAL-001", descripcion: "Válvula esférica 2\" AISI 316", categoria: "Válvulas", cantidad: 25, unidad: "u", precioCosto: 45200, markupPorcentaje: 35, precioVenta: 61020, subtotal: 1525500, iva: 320355, total: 1845855 },
     ],
     subtotal: 1525500, iva: 320355, total: 1845855, moneda: "ARS",
-    observaciones: "Borrador - pendiente agregar más items", creadoPor: "u4",
+    observaciones: "Borrador - pendiente agregar más items", notasInternas: "", creadoPor: "u4",
     createdAt: "2026-05-19", updatedAt: "2026-05-19",
   },
 ];

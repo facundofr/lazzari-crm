@@ -34,6 +34,7 @@ interface SupabasePresupuesto {
   total: number;
   moneda: "USD" | "ARS";
   observaciones: string;
+  notas_internas: string;
   enviado_at?: string | null;
   respondido_at?: string | null;
   version?: number;
@@ -95,6 +96,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     total: row.total,
     moneda: row.moneda,
     observaciones: row.observaciones ?? "",
+    notasInternas: row.notas_internas ?? "",
     creadoPor: (row as any).created_by_profile?.full_name ?? row.created_by ?? "",
     enviadoAt: row.enviado_at ?? undefined,
     respondidoAt: row.respondido_at ?? undefined,
@@ -199,6 +201,7 @@ export default function PresupuestosPage() {
     moneda: "USD" as "USD" | "ARS",
     markup_general: 30,
     observaciones: "",
+    notas_internas: "",
     items: [{ ...emptyItem }] as NewPRItem[],
   });
 
@@ -475,6 +478,7 @@ export default function PresupuestosPage() {
           total: subtotal + ivaTotal,
           moneda: newPR.moneda,
           observaciones: newPR.observaciones,
+          notas_internas: newPR.notas_internas,
         } as any)
         .select()
         .single();
@@ -503,7 +507,7 @@ export default function PresupuestosPage() {
       }
 
       setShowNewPR(false);
-      setNewPR({ cliente_id: "", vendedor_id: "", moneda: "USD", markup_general: 30, observaciones: "", items: [{ ...emptyItem }] });
+      setNewPR({ cliente_id: "", vendedor_id: "", moneda: "USD", markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem }] });
       toast.success("Presupuesto creado correctamente");
       await fetchPresupuestos();
     } catch (err: unknown) {
@@ -1268,8 +1272,17 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               {/* Observaciones */}
               {selected.observaciones && (
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Observaciones</h3>
+                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Observaciones (cliente)</h3>
                   <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{selected.observaciones}</p>
+                </div>
+              )}
+              {selected.notasInternas && (
+                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                  <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-400 mb-2 flex items-center gap-1.5">
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                    Notas internas
+                  </h3>
+                  <p className="text-sm text-amber-700/80 dark:text-amber-400/80 whitespace-pre-wrap bg-amber-50 dark:bg-amber-950/20 rounded-lg p-3">{selected.notasInternas}</p>
                 </div>
               )}
 
@@ -1543,13 +1556,22 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           </div>
         </div>
 
-        {/* Observaciones */}
+        {/* Observaciones (van al cliente en PDF/WhatsApp) */}
         <Textarea
-          label="Observaciones"
+          label="Observaciones (visibles para el cliente)"
           value={newPR.observaciones}
           onChange={(e) => setNewPR((p) => ({ ...p, observaciones: e.target.value }))}
           rows={2}
-          placeholder="Notas internas o para el cliente..."
+          placeholder="Condiciones de pago, plazo de entrega, aclaraciones..."
+        />
+
+        {/* Notas internas (NO se envian al cliente) */}
+        <Textarea
+          label="Notas internas (solo uso interno)"
+          value={newPR.notas_internas}
+          onChange={(e) => setNewPR((p) => ({ ...p, notas_internas: e.target.value }))}
+          rows={2}
+          placeholder="Margen esperado, contexto de la negociacion, datos internos..."
         />
       </Modal>
 

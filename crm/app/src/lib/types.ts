@@ -168,6 +168,7 @@ export interface Presupuesto {
   total: number;
   moneda: "USD" | "ARS";
   observaciones: string;
+  notasInternas: string;
   creadoPor: string;
   vendedorId?: string;
   vendedorNombre?: string;
