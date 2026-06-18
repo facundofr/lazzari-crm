@@ -14,7 +14,7 @@ import { supabase } from "@/lib/supabase/client";
 import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
-  Printer, Sparkles, Download, ClipboardCopy, Check,
+  Printer, Sparkles, Download, ClipboardCopy, Check, Mail,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -194,6 +194,47 @@ export default function PresupuestosPage() {
   // Vendedor filter
   const [vendedorFilter, setVendedorFilter] = useState<string>("");
   const [vendedores, setVendedores] = useState<{id: string; full_name: string}[]>([]);
+
+  // Email modal
+  const [emailModal, setEmailModal] = useState(false);
+  const [emailTo, setEmailTo] = useState("");
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailBody, setEmailBody] = useState("");
+  const [emailSending, setEmailSending] = useState(false);
+
+  async function openEmailModal(pr: Presupuesto) {
+    const clientEmail = (pr as any).clienteEmail || "";
+    // Try to get email template
+    let subject = `Presupuesto N° ${pr.numero} - ${sociedadActiva?.razonSocial || "Lazzari"}`;
+    let body = `Estimado/a,\n\nAdjuntamos el presupuesto N° ${pr.numero} para su consideración.\n\nQuedamos a disposición ante cualquier consulta.\nSaludos,\n${sociedadActiva?.razonSocial || "Lazzari"}`;
+    try {
+      const { data } = await (supabase as any).from("email_templates").select("asunto, cuerpo").eq("tipo", "presupuesto").eq("sociedad_id", sociedadActiva?.id).single();
+      if (data) {
+        subject = data.asunto.replace(/\{\{numero\}\}/g, pr.numero).replace(/\{\{sociedad\}\}/g, sociedadActiva?.razonSocial || "").replace(/\{\{cliente\}\}/g, pr.clienteNombre);
+        body = data.cuerpo.replace(/\{\{numero\}\}/g, pr.numero).replace(/\{\{sociedad\}\}/g, sociedadActiva?.razonSocial || "").replace(/\{\{cliente\}\}/g, pr.clienteNombre);
+      }
+    } catch {}
+    setEmailTo(clientEmail);
+    setEmailSubject(subject);
+    setEmailBody(body);
+    setEmailModal(true);
+  }
+
+  async function handleSendEmail() {
+    if (!emailTo || !selected) return;
+    setEmailSending(true);
+    try {
+      // Use mailto as fallback (real sending requires backend integration)
+      const mailtoUrl = `mailto:${encodeURIComponent(emailTo)}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+      window.open(mailtoUrl, "_blank");
+      toast.success("Se abrió el cliente de email");
+      setEmailModal(false);
+    } catch {
+      toast.error("Error al preparar el email");
+    } finally {
+      setEmailSending(false);
+    }
+  }
 
   // Rechazo modal
   const [rechazoModal, setRechazoModal] = useState<string | null>(null);
@@ -1182,6 +1223,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <Download className="h-3.5 w-3.5" />
                   PDF
                 </button>
+                <button
+                  onClick={() => openEmailModal(selected)}
+                  className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-950/30 transition-colors"
+                  title="Enviar por email"
+                >
+                  <Mail className="h-3.5 w-3.5" />
+                  Email
+                </button>
                 <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                   <Copy className="h-4 w-4" />
                 </button>
@@ -1835,6 +1884,44 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <p className="text-xs mt-1">Busca por codigo de proveedor o descripcion del producto</p>
                 </div>
               )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ==================== EMAIL MODAL ==================== */}
+      {emailModal && (
+        <>
+          <div className="fixed inset-0 z-[70] bg-black/40" onClick={() => setEmailModal(false)} />
+          <div className="fixed inset-4 z-[70] m-auto h-fit max-h-[80vh] w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-zinc-900 flex flex-col">
+            <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-4 dark:border-zinc-700">
+              <div className="flex items-center gap-2">
+                <Mail className="h-5 w-5 text-blue-500" />
+                <h3 className="font-semibold text-zinc-900 dark:text-white">Enviar por email</h3>
+              </div>
+              <button onClick={() => setEmailModal(false)} className="rounded p-1 text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="p-5 space-y-4 overflow-y-auto">
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Para</label>
+                <input type="email" value={emailTo} onChange={(e) => setEmailTo(e.target.value)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="email@cliente.com" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Asunto</label>
+                <input type="text" value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Mensaje</label>
+                <textarea value={emailBody} onChange={(e) => setEmailBody(e.target.value)} rows={8} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-none" />
+              </div>
+              <p className="text-xs text-zinc-400">El PDF se adjuntará desde tu cliente de email. Podés editar el template en Configuración.</p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
+              <button onClick={() => setEmailModal(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
+              <button onClick={handleSendEmail} disabled={emailSending || !emailTo} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                {emailSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                Enviar
+              </button>
             </div>
           </div>
         </>

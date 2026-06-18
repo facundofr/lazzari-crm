@@ -64,6 +64,8 @@ const COLORS = ["#f97316", "#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#eab308"
 export default function ReportesPage() {
   const { sociedadActiva } = useUser();
   const [activeTab, setActiveTab] = useState<"comercial" | "comisiones">("comercial");
+  const [monedaReporte, setMonedaReporte] = useState<"original" | "ARS" | "USD">("original");
+  const [tipoCambioReporte, setTipoCambioReporte] = useState<number>(1200);
   const [loading, setLoading] = useState(true);
   const [ventasMensuales, setVentasMensuales] = useState<{ mes: string; total: number }[]>([]);
   const [prEstadoData, setPrEstadoData] = useState<{ name: string; value: number }[]>([]);
@@ -291,6 +293,35 @@ export default function ReportesPage() {
     [comisionesData]
   );
 
+  // ── Multi-currency conversion ──────────────────────────────────
+  const convertMonto = useCallback(
+    (monto: number, monedaOriginal: string): number => {
+      if (monedaReporte === "original") return monto;
+      const orig = (monedaOriginal || "ARS").toUpperCase();
+      const target = monedaReporte;
+      if (orig === target) return monto;
+      // orig=ARS, target=USD → divide by TC
+      if (orig === "ARS" && target === "USD") return monto / tipoCambioReporte;
+      // orig=USD, target=ARS → multiply by TC
+      if (orig === "USD" && target === "ARS") return monto * tipoCambioReporte;
+      return monto;
+    },
+    [monedaReporte, tipoCambioReporte]
+  );
+
+  /** Format currency with conversion applied. monedaOriginal defaults to ARS. */
+  const fc = useCallback(
+    (monto: number, monedaOriginal: string = "ARS"): string => {
+      const converted = convertMonto(monto, monedaOriginal);
+      const displayCurrency: "USD" | "ARS" =
+        monedaReporte === "original"
+          ? (monedaOriginal.toUpperCase() as "USD" | "ARS") || "ARS"
+          : monedaReporte;
+      return formatCurrency(converted, displayCurrency);
+    },
+    [convertMonto, monedaReporte]
+  );
+
   if (loading) {
     return (
       <>
@@ -338,6 +369,44 @@ export default function ReportesPage() {
         </div>
       </div>
 
+      {/* Currency selector */}
+      <div className="px-8 pt-4 flex flex-wrap items-center gap-3">
+        <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Moneda:</span>
+        <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-600 overflow-hidden">
+          {([
+            { key: "original" as const, label: "Original" },
+            { key: "ARS" as const, label: "Todo en ARS" },
+            { key: "USD" as const, label: "Todo en USD" },
+          ]).map((opt) => (
+            <button
+              key={opt.key}
+              onClick={() => setMonedaReporte(opt.key)}
+              className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                monedaReporte === opt.key
+                  ? "bg-orange-500 text-white"
+                  : "bg-white text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        {monedaReporte !== "original" && (
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-zinc-500">TC (1 USD =</label>
+            <input
+              type="number"
+              min={1}
+              step={10}
+              value={tipoCambioReporte}
+              onChange={(e) => setTipoCambioReporte(Number(e.target.value) || 1)}
+              className="w-24 rounded-md border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-2 py-1 text-sm font-mono text-right focus:outline-none focus:ring-1 focus:ring-orange-500"
+            />
+            <span className="text-sm text-zinc-500">ARS)</span>
+          </div>
+        )}
+      </div>
+
       {/* Tab: Analisis comercial */}
       {activeTab === "comercial" && (
       <div className="p-4 sm:p-8 space-y-6">
@@ -350,10 +419,10 @@ export default function ReportesPage() {
             </CardHeader>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={ventasMensuales}>
+                <BarChart data={ventasMensuales.map((d) => ({ ...d, total: convertMonto(d.total, "ARS") }))}>
                   <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
                   <YAxis tickFormatter={(v) => `${(v / 1000000).toFixed(1)}M`} tick={{ fontSize: 12 }} />
-                  <Tooltip formatter={(v) => formatCurrency(Number(v))} />
+                  <Tooltip formatter={(v) => fc(Number(v))} />
                   <Bar dataKey="total" fill="#f97316" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -394,9 +463,9 @@ export default function ReportesPage() {
               {[
                 { label: "Tasa de conversion", value: `${dashboardKPIs.tasaConversion}%`, prev: `${dashboardKPIs.tasaConversionAnterior}%`, up: dashboardKPIs.tasaConversion > dashboardKPIs.tasaConversionAnterior },
                 { label: "Margen promedio", value: `${dashboardKPIs.margenPromedio}%`, prev: "—", up: false },
-                { label: "Ticket promedio", value: formatCurrency(ticketPromedio), prev: "—", up: false },
+                { label: "Ticket promedio", value: fc(ticketPromedio), prev: "—", up: false },
                 { label: "Presupuestos emitidos", value: String(totalPR), prev: "—", up: false },
-                { label: "Facturado", value: formatCurrency(dashboardKPIs.facturadoMes), prev: formatCurrency(dashboardKPIs.ventasMesAnterior), up: dashboardKPIs.facturadoMes > dashboardKPIs.ventasMesAnterior },
+                { label: "Facturado", value: fc(dashboardKPIs.facturadoMes), prev: fc(dashboardKPIs.ventasMesAnterior), up: dashboardKPIs.facturadoMes > dashboardKPIs.ventasMesAnterior },
               ].map((m) => (
                 <div key={m.label} className="flex items-center justify-between py-2 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
                   <span className="text-sm text-zinc-600 dark:text-zinc-400">{m.label}</span>
@@ -470,7 +539,7 @@ export default function ReportesPage() {
                     <tr key={c.nombre} className="border-b border-zinc-100 dark:border-zinc-800">
                       <td className="px-4 py-3 text-sm font-bold text-zinc-400">{i + 1}</td>
                       <td className="px-4 py-3 text-sm font-medium text-zinc-800 dark:text-zinc-200">{c.nombre}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right">{formatCurrency(c.facturado)}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-right">{fc(c.facturado)}</td>
                       <td className="px-4 py-3 text-sm text-right text-zinc-500">{pct}%</td>
                       <td className="px-4 py-3 w-40">
                         <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800">
@@ -516,14 +585,14 @@ export default function ReportesPage() {
                 <div className="rounded-lg p-2.5 w-fit text-blue-600 bg-blue-50">
                   <DollarSign className="h-5 w-5" />
                 </div>
-                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{formatCurrency(comisionesData.reduce((s, v) => s + v.ventaNeta, 0))}</h3>
+                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{fc(comisionesData.reduce((s, v) => s + v.ventaNeta, 0))}</h3>
                 <p className="mt-1 text-sm text-zinc-500">Total venta neta</p>
               </Card>
               <Card>
                 <div className="rounded-lg p-2.5 w-fit text-violet-600 bg-violet-50">
                   <Percent className="h-5 w-5" />
                 </div>
-                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{formatCurrency(totalComisionesGeneral)}</h3>
+                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{fc(totalComisionesGeneral)}</h3>
                 <p className="mt-1 text-sm text-zinc-500">Total comisiones</p>
               </Card>
             </div>
@@ -563,14 +632,14 @@ export default function ReportesPage() {
                         <td className="px-4 py-3 text-sm text-center">
                           <Badge variant={v.presupuestosAprobados > 0 ? "success" : "outline"}>{v.presupuestosAprobados}</Badge>
                         </td>
-                        <td className="px-4 py-3 text-sm font-mono text-right">{formatCurrency(v.ventaNeta)}</td>
-                        <td className="px-4 py-3 text-sm font-mono text-right text-zinc-500">{formatCurrency(v.costoTotal)}</td>
+                        <td className="px-4 py-3 text-sm font-mono text-right">{fc(v.ventaNeta)}</td>
+                        <td className="px-4 py-3 text-sm font-mono text-right text-zinc-500">{fc(v.costoTotal)}</td>
                         <td className="px-4 py-3 text-sm font-mono text-right">
-                          <span className={v.margen > 0 ? "text-emerald-600" : "text-red-500"}>{formatCurrency(v.margen)}</span>
+                          <span className={v.margen > 0 ? "text-emerald-600" : "text-red-500"}>{fc(v.margen)}</span>
                         </td>
-                        <td className="px-4 py-3 text-sm font-mono text-right text-blue-600 dark:text-blue-400">{formatCurrency(v.comisionVenta)}</td>
-                        <td className="px-4 py-3 text-sm font-mono text-right text-emerald-600 dark:text-emerald-400">{formatCurrency(v.comisionMargen)}</td>
-                        <td className="px-4 py-3 text-sm font-mono text-right font-bold text-orange-600 dark:text-orange-400">{formatCurrency(v.totalComision)}</td>
+                        <td className="px-4 py-3 text-sm font-mono text-right text-blue-600 dark:text-blue-400">{fc(v.comisionVenta)}</td>
+                        <td className="px-4 py-3 text-sm font-mono text-right text-emerald-600 dark:text-emerald-400">{fc(v.comisionMargen)}</td>
+                        <td className="px-4 py-3 text-sm font-mono text-right font-bold text-orange-600 dark:text-orange-400">{fc(v.totalComision)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -578,12 +647,12 @@ export default function ReportesPage() {
                     <tr className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50">
                       <td className="px-4 py-3 text-sm font-bold text-zinc-900 dark:text-white">Total</td>
                       <td className="px-4 py-3 text-sm text-center font-bold">{comisionesData.reduce((s, v) => s + v.presupuestosAprobados, 0)}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold">{formatCurrency(comisionesData.reduce((s, v) => s + v.ventaNeta, 0))}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-zinc-500">{formatCurrency(comisionesData.reduce((s, v) => s + v.costoTotal, 0))}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-emerald-600">{formatCurrency(comisionesData.reduce((s, v) => s + v.margen, 0))}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-blue-600">{formatCurrency(comisionesData.reduce((s, v) => s + v.comisionVenta, 0))}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-emerald-600">{formatCurrency(comisionesData.reduce((s, v) => s + v.comisionMargen, 0))}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-orange-600 dark:text-orange-400">{formatCurrency(totalComisionesGeneral)}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-right font-bold">{fc(comisionesData.reduce((s, v) => s + v.ventaNeta, 0))}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-zinc-500">{fc(comisionesData.reduce((s, v) => s + v.costoTotal, 0))}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-emerald-600">{fc(comisionesData.reduce((s, v) => s + v.margen, 0))}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-blue-600">{fc(comisionesData.reduce((s, v) => s + v.comisionVenta, 0))}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-emerald-600">{fc(comisionesData.reduce((s, v) => s + v.comisionMargen, 0))}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-orange-600 dark:text-orange-400">{fc(totalComisionesGeneral)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -598,10 +667,10 @@ export default function ReportesPage() {
                 </CardHeader>
                 <div className="h-72">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={comisionesChartData} barGap={4}>
+                    <BarChart data={comisionesChartData.map((d) => ({ ...d, "Comision por venta": convertMonto(d["Comision por venta"], "ARS"), "Comision por margen": convertMonto(d["Comision por margen"], "ARS") }))} barGap={4}>
                       <XAxis dataKey="nombre" tick={{ fontSize: 12 }} />
                       <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 12 }} />
-                      <Tooltip formatter={(v) => formatCurrency(Number(v))} />
+                      <Tooltip formatter={(v) => fc(Number(v))} />
                       <Legend />
                       <Bar dataKey="Comision por venta" fill="#3b82f6" radius={[4, 4, 0, 0]} />
                       <Bar dataKey="Comision por margen" fill="#22c55e" radius={[4, 4, 0, 0]} />
@@ -621,25 +690,25 @@ export default function ReportesPage() {
                           <h4 className="text-sm font-semibold text-zinc-900 dark:text-white">{v.nombre}</h4>
                           <p className="text-xs text-zinc-500">{v.presupuestosAprobados} presupuesto{v.presupuestosAprobados !== 1 ? "s" : ""} aprobado{v.presupuestosAprobados !== 1 ? "s" : ""}</p>
                         </div>
-                        <span className="text-lg font-bold text-orange-600 dark:text-orange-400">{formatCurrency(v.totalComision)}</span>
+                        <span className="text-lg font-bold text-orange-600 dark:text-orange-400">{fc(v.totalComision)}</span>
                       </div>
                       <div className="space-y-2">
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-zinc-500">Venta neta</span>
-                          <span className="font-mono font-medium">{formatCurrency(v.ventaNeta)}</span>
+                          <span className="font-mono font-medium">{fc(v.ventaNeta)}</span>
                         </div>
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-zinc-500">Margen ({margenPct}%)</span>
-                          <span className="font-mono font-medium text-emerald-600">{formatCurrency(v.margen)}</span>
+                          <span className="font-mono font-medium text-emerald-600">{fc(v.margen)}</span>
                         </div>
                         <div className="h-px bg-zinc-100 dark:bg-zinc-800 my-1" />
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-blue-600 dark:text-blue-400">Com. {COMISION_VENTA_PCT}% s/ venta</span>
-                          <span className="font-mono font-medium text-blue-600 dark:text-blue-400">{formatCurrency(v.comisionVenta)}</span>
+                          <span className="font-mono font-medium text-blue-600 dark:text-blue-400">{fc(v.comisionVenta)}</span>
                         </div>
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-emerald-600 dark:text-emerald-400">Com. {COMISION_MARGEN_PCT}% s/ margen</span>
-                          <span className="font-mono font-medium text-emerald-600 dark:text-emerald-400">{formatCurrency(v.comisionMargen)}</span>
+                          <span className="font-mono font-medium text-emerald-600 dark:text-emerald-400">{fc(v.comisionMargen)}</span>
                         </div>
                       </div>
                     </Card>

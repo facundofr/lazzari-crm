@@ -729,7 +729,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
   if (loading) {
     return (
       <>
-        <Header title="Ordenes de compra" subtitle="Cargando..." />
+        <Header title="Compras" subtitle="Cargando..." />
         <div className="flex items-center justify-center h-96">
           <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
         </div>
@@ -740,8 +740,8 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
   return (
     <>
       <Header
-        title="Ordenes de compra"
-        subtitle={`${ordenes.length} ordenes de compra`}
+        title="Compras"
+        subtitle={`${ordenes.length} compras`}
         action={{ label: "Nueva OC", onClick: openCreateModal }}
       />
 

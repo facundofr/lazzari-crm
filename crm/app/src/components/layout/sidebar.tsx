@@ -38,10 +38,11 @@ const navigation = [
   { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
   // ── Compras & logistica ──
   { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
-  { name: "Órdenes compra", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
+  { name: "Compras", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
   { name: "Stock", href: "/stock", icon: Package, module: "stock" },
   // ── Entrega & facturacion ──
   { name: "Remitos", href: "/remitos", icon: Truck, module: "remitos" },
+  { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
   { name: "Facturación", href: "/facturacion", icon: Receipt, module: "facturacion" },
   // ── Admin ──
   { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },

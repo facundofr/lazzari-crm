@@ -14,7 +14,7 @@ import type { Client } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
 import {
   Search, Download, MapPin, Phone, Mail, Loader2, Building2,
-  Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight,
+  Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight, Send, Check,
   BarChart3, ShoppingBag, CalendarDays, TrendingUp, Cake,
   User, FileText, CreditCard, StickyNote, Clock, Receipt, Truck, Wallet,
 } from "lucide-react";
@@ -56,6 +56,8 @@ interface ClienteRow {
   notas: string;
   activo: boolean;
   assigned_to: string | null;
+  email_facturacion?: string | null;
+  envio_automatico?: boolean;
   created_at: string;
   updated_at: string;
   assigned_profile: { full_name: string } | null;
@@ -84,6 +86,8 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
     notas: row.notas ?? "",
     activo: row.activo ?? true,
     assignedTo: row.assigned_to ?? undefined,
+    emailFacturacion: row.email_facturacion ?? null,
+    envioAutomatico: row.envio_automatico ?? true,
     createdAt: row.created_at ?? "",
     updatedAt: row.updated_at ?? "",
     contactos: Array.isArray(row.contactos) ? (row.contactos as Array<Record<string, unknown>>).map((c) => ({
@@ -143,6 +147,8 @@ const emptyForm = {
   forma_pago: "Transferencia",
   limite_credito: 0,
   notas: "",
+  email_facturacion: "",
+  envio_automatico: true,
 };
 
 type DetailTab = "datos" | "contactos" | "sucursales" | "historial" | "actividad";
@@ -544,6 +550,8 @@ export default function ClientesPage() {
       forma_pago: c.formaPago,
       limite_credito: c.limiteCredito,
       notas: c.notas,
+      email_facturacion: c.emailFacturacion ?? "",
+      envio_automatico: c.envioAutomatico ?? true,
     });
     setFormError("");
     setModalOpen(true);
@@ -561,17 +569,21 @@ export default function ClientesPage() {
     setSaving(true);
     setFormError("");
     try {
+      const payload = {
+        ...form,
+        email_facturacion: form.email_facturacion?.trim() || null,
+      };
       if (editingId) {
         const { error } = await supabase
           .from("clientes")
-          .update(form as any)
+          .update(payload as any)
           .eq("id", editingId);
         if (error) throw error;
         toast.success("Cliente actualizado correctamente");
       } else {
         const { error } = await supabase
           .from("clientes")
-          .insert(form as any);
+          .insert(payload as any);
         if (error) throw error;
         toast.success("Cliente creado correctamente");
       }
@@ -855,6 +867,45 @@ export default function ClientesPage() {
                           label="Direccion"
                           value={[selectedCliente.direccion, selectedCliente.localidad, selectedCliente.provincia, selectedCliente.cp].filter(Boolean).join(", ") || "—"}
                         />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Email facturacion & envio automatico */}
+                  <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3 flex items-center gap-1.5">
+                      <Send className="h-3.5 w-3.5" /> Facturacion electronica
+                    </h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">Email facturacion</p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <p className="text-sm font-medium">
+                            {selectedCliente.emailFacturacion ? (
+                              <a href={`mailto:${selectedCliente.emailFacturacion}`} className="text-orange-600 hover:underline">{selectedCliente.emailFacturacion}</a>
+                            ) : (
+                              <span className="text-zinc-400 italic">Mismo email principal</span>
+                            )}
+                          </p>
+                          <button
+                            onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); }}
+                            className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors"
+                            title="Editar email facturacion"
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-xs text-zinc-500 dark:text-zinc-400">Envio automatico</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <div className={`flex h-5 w-5 items-center justify-center rounded ${selectedCliente.envioAutomatico !== false ? "bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"}`}>
+                            {selectedCliente.envioAutomatico !== false && <Check className="h-3 w-3" />}
+                          </div>
+                          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                            {selectedCliente.envioAutomatico !== false ? "Enviar documentos automaticamente" : "Envio manual"}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1267,6 +1318,24 @@ export default function ClientesPage() {
                 value={form.telefono}
                 onChange={(e) => setForm({ ...form, telefono: e.target.value })}
               />
+              <Input
+                label="Email facturacion"
+                type="email"
+                value={form.email_facturacion}
+                onChange={(e) => setForm({ ...form, email_facturacion: e.target.value })}
+                placeholder="Dejar vacio para usar el email principal"
+              />
+              <div className="flex items-end pb-1">
+                <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={form.envio_automatico}
+                    onChange={(e) => setForm({ ...form, envio_automatico: e.target.checked })}
+                    className="h-4 w-4 rounded border-zinc-300 text-orange-500 focus:ring-orange-500 dark:border-zinc-600 dark:bg-zinc-800"
+                  />
+                  <span className="text-sm text-zinc-700 dark:text-zinc-300">Enviar documentos automaticamente</span>
+                </label>
+              </div>
             </div>
           </div>
 

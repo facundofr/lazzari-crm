@@ -74,16 +74,32 @@ interface Venta {
 }
 
 // ── Pipeline logic ───────────────────────────────────────────────
+// Entrega y Factura son independientes: se puede facturar sin entregar y viceversa
 
 type VentaStep = 0 | 1 | 2 | 3;
 
-function getVentaStep(v: Venta): VentaStep {
+interface VentaStatus {
+  entregado: boolean;
+  facturado: boolean;
+  cobrado: boolean;
+}
+
+function getVentaStatus(v: Venta): VentaStatus {
   const facturaActiva = v.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
-  if (facturaActiva?.estado === "pagada") return 3; // Cobrada
-  if (facturaActiva) return 2; // Facturada
-  const remitoEntregado = v.remitos.some(r => r.estado === "entregado");
-  if (remitoEntregado) return 1; // Entregada
-  if (v.remitos.length > 0) return 1; // En proceso de entrega
+  return {
+    entregado: v.remitos.some(r => r.estado === "entregado"),
+    facturado: !!facturaActiva,
+    cobrado: facturaActiva?.estado === "pagada" || false,
+  };
+}
+
+// Keep getVentaStep for KPI filtering compatibility
+function getVentaStep(v: Venta): VentaStep {
+  const s = getVentaStatus(v);
+  if (s.cobrado) return 3;
+  if (s.facturado && s.entregado) return 3; // Completada (falta cobro)
+  if (s.facturado || s.entregado) return 2; // En progreso
+  if (v.remitos.length > 0) return 1; // Algo iniciado
   return 0; // Pendiente
 }
 
@@ -472,51 +488,73 @@ export default function VentasPage() {
                       </div>
                     </div>
 
-                    {/* Pipeline steps */}
-                    <div className="flex items-center gap-1">
-                      {STEP_LABELS.map((label, i) => {
-                        const Icon = STEP_ICONS[i];
-                        const done = step > i;
-                        const current = step === i;
-                        return (
-                          <div key={label} className="flex items-center gap-1 flex-1">
-                            <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
-                              done ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
-                                : current ? "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400"
-                                : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
-                            }`}>
-                              <Icon className="h-3 w-3" />
-                              <span className="hidden sm:inline">{label}</span>
-                            </div>
-                            {i < 3 && <ChevronRight className="h-3 w-3 text-zinc-300 shrink-0" />}
+                    {/* Status badges — entrega y factura independientes */}
+                    {(() => {
+                      const st = getVentaStatus(v);
+                      return (
+                        <div className="flex flex-wrap items-center gap-2">
+                          {/* Presupuesto siempre done */}
+                          <div className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">
+                            <FileText className="h-3 w-3" />
+                            <span className="hidden sm:inline">Aprobado</span>
                           </div>
-                        );
-                      })}
-                    </div>
+                          {/* Entrega */}
+                          <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
+                            st.entregado
+                              ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                              : v.remitos.length > 0
+                                ? "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400"
+                                : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
+                          }`}>
+                            <Truck className="h-3 w-3" />
+                            <span className="hidden sm:inline">{st.entregado ? "Entregado" : v.remitos.length > 0 ? "En entrega" : "Sin entregar"}</span>
+                          </div>
+                          {/* Factura */}
+                          <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
+                            st.facturado
+                              ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                              : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
+                          }`}>
+                            <Receipt className="h-3 w-3" />
+                            <span className="hidden sm:inline">{st.facturado ? "Facturado" : "Sin facturar"}</span>
+                          </div>
+                          {/* Cobro */}
+                          {st.facturado && (
+                            <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
+                              st.cobrado
+                                ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                                : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
+                            }`}>
+                              <DollarSign className="h-3 w-3" />
+                              <span className="hidden sm:inline">{st.cobrado ? "Cobrado" : "Pend. cobro"}</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Quick action */}
-                    <div className="mt-3 flex items-center gap-2">
-                      {step === 0 && (
-                        <span className="text-xs text-amber-600 flex items-center gap-1">
-                          <Clock className="h-3 w-3" /> Pendiente de remito
-                        </span>
-                      )}
-                      {step === 1 && (
-                        <span className="text-xs text-blue-600 flex items-center gap-1">
-                          <Receipt className="h-3 w-3" /> Lista para facturar
-                        </span>
-                      )}
-                      {step === 2 && (
-                        <span className="text-xs text-green-600 flex items-center gap-1">
-                          <DollarSign className="h-3 w-3" /> Pendiente de cobro
-                        </span>
-                      )}
-                      {step === 3 && (
-                        <span className="text-xs text-green-600 flex items-center gap-1">
-                          <CheckCircle2 className="h-3 w-3" /> Completada
-                        </span>
-                      )}
-                    </div>
+                    {(() => {
+                      const st = getVentaStatus(v);
+                      if (st.cobrado) return (
+                        <div className="mt-3 flex items-center gap-2">
+                          <span className="text-xs text-green-600 flex items-center gap-1">
+                            <CheckCircle2 className="h-3 w-3" /> Completada
+                          </span>
+                        </div>
+                      );
+                      const pending: string[] = [];
+                      if (!st.entregado) pending.push("entregar");
+                      if (!st.facturado) pending.push("facturar");
+                      else pending.push("cobrar");
+                      return (
+                        <div className="mt-3 flex items-center gap-2">
+                          <span className="text-xs text-amber-600 flex items-center gap-1">
+                            <Clock className="h-3 w-3" /> Falta: {pending.join(", ")}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </button>
                 );
               })

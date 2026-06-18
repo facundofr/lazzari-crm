@@ -118,6 +118,8 @@ export interface Client {
   createdAt: string;
   updatedAt: string;
   assignedTo?: string; // vendedor asignado
+  emailFacturacion?: string | null;
+  envioAutomatico?: boolean;
 }
 
 export interface Sucursal {
