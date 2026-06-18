@@ -1515,7 +1515,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500">Descripcion</th>
                   <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-28">Proveedor</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-16">Cant.</th>
-                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Costo</th>
+                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-36">P. Costo</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">Markup%</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Venta</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">IVA%</th>
@@ -1554,14 +1554,20 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1">
-                          <select value={item.costo_moneda} onChange={(e) => updateNewPRItem(idx, "costo_moneda" as any, e.target.value)}
-                            className="w-12 shrink-0 rounded border border-zinc-200 px-0.5 py-1 text-[10px] text-center dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400 focus:outline-none"
-                            title="Moneda del costo">
-                            <option value="USD">US$</option>
-                            <option value="ARS">AR$</option>
-                          </select>
+                          <button
+                            type="button"
+                            onClick={() => updateNewPRItem(idx, "costo_moneda" as any, item.costo_moneda === "USD" ? "ARS" : "USD")}
+                            className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border transition-colors ${
+                              item.costo_moneda === "USD"
+                                ? "border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                            }`}
+                            title="Click para cambiar moneda del costo"
+                          >
+                            {item.costo_moneda === "USD" ? "US$" : "AR$"}
+                          </button>
                           <input type="number" value={item.precio_costo || ""} onChange={(e) => updateNewPRItem(idx, "precio_costo", Number(e.target.value))}
-                            className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                            className="w-full min-w-0 rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                         </div>
                       </td>
                       <td className="px-2 py-1.5">
