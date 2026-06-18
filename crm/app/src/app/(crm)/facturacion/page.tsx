@@ -210,20 +210,13 @@ export default function FacturacionPage() {
     }
   }, { neto: 0, iva: 0, total: 0 });
 
-  // When USD: ARCA always gets ARS, so we convert
-  const emitTotalsARS = isUSD && tc > 0 ? {
-    neto: Math.round(emitTotals.neto * tc * 100) / 100,
-    iva: Math.round(emitTotals.iva * tc * 100) / 100,
-    total: Math.round(emitTotals.total * tc * 100) / 100,
-  } : emitTotals;
-
   const handleEmit = async () => {
     if (!emitData.cliente_id) { setEmitError("Selecciona un cliente"); return; }
     if (emitData.items.some((it) => !it.descripcion || it.precio_unitario <= 0)) {
       setEmitError("Completa todos los items con descripcion y precio"); return;
     }
     if (isUSD && (!tc || tc <= 0)) {
-      setEmitError("Ingresa el tipo de cambio USD → ARS"); return;
+      setEmitError("Factura en USD requiere tipo de cambio (cotizacion ARCA)"); return;
     }
 
     setEmitStep("emitting");
@@ -646,22 +639,22 @@ ${f.cae ? `
 
                 {/* Moneda + Tipo de cambio */}
                 <div className="grid grid-cols-12 gap-4">
-                  <div className="col-span-3">
-                    <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Moneda</label>
+                  <div className="col-span-4">
+                    <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Moneda factura</label>
                     <select value={emitData.moneda} onChange={(e) => setEmitData((p) => ({ ...p, moneda: e.target.value as "ARS" | "USD" }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
-                      <option value="ARS">ARS — Peso argentino</option>
-                      <option value="USD">USD — Dolar</option>
+                      <option value="ARS">ARS — Pesos</option>
+                      <option value="USD">USD — Dolares</option>
                     </select>
                   </div>
                   {isUSD && (
                     <div className="col-span-4">
-                      <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Tipo de cambio (USD → ARS) *</label>
-                      <input type="number" step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) }))} placeholder="Ej: 1250.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                      <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cotizacion USD/ARS *</label>
+                      <input type="number" step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) }))} placeholder="Ej: 1450.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
                     </div>
                   )}
                   {isUSD && (
-                    <div className="col-span-5 flex items-end">
-                      <p className="text-xs text-zinc-400 pb-2">ARCA solo acepta ARS. Los precios se ingresan en USD y se convierten automaticamente.</p>
+                    <div className="col-span-4 flex items-end">
+                      <p className="text-xs text-zinc-400 pb-2">ARCA requiere la cotizacion oficial para facturas en USD.</p>
                     </div>
                   )}
                 </div>
@@ -718,27 +711,21 @@ ${f.cae ? `
 
                 {/* Totals preview */}
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4 space-y-2 text-sm">
-                  {isUSD && tc > 0 && (
-                    <div className="flex justify-between text-zinc-400 text-xs mb-1">
-                      <span>Total en USD</span>
-                      <span className="font-mono">USD {emitTotals.total.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    </div>
-                  )}
                   {isFacturaA ? (
                     <>
-                      <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(emitTotalsARS.neto)}</span></div>
-                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(emitTotalsARS.iva)}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(emitTotals.neto, isUSD ? "USD" : "ARS")}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(emitTotals.iva, isUSD ? "USD" : "ARS")}</span></div>
                       <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-700 pt-2 font-semibold text-base">
-                        <span>Total{isUSD ? " (ARS)" : ""}</span><span className="font-mono">{formatCurrency(emitTotalsARS.total)}</span>
+                        <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total, isUSD ? "USD" : "ARS")}</span>
                       </div>
                     </>
                   ) : (
                     <div className="flex justify-between font-semibold text-base">
-                      <span>Total{isUSD ? " (ARS)" : ""}</span><span className="font-mono">{formatCurrency(emitTotalsARS.total)}</span>
+                      <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total, isUSD ? "USD" : "ARS")}</span>
                     </div>
                   )}
                   {isUSD && tc > 0 && (
-                    <div className="text-xs text-zinc-400 text-right">TC: 1 USD = {tc.toLocaleString("es-AR")} ARS</div>
+                    <div className="text-xs text-zinc-400 text-right">Cotizacion ARCA: 1 USD = {tc.toLocaleString("es-AR")} ARS</div>
                   )}
                 </div>
 
