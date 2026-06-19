@@ -15,6 +15,7 @@ import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
   Printer, Sparkles, Download, ClipboardCopy, Check, Mail, GripVertical,
+  Phone, CalendarClock,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -184,6 +185,7 @@ export default function PresupuestosPage() {
   const { profile, sociedadActiva } = useUser();
   const { toast } = useToast();
   const [filter, setFilter] = useState<PRStatus | "todos">("todos");
+  const [vistaSeguimiento, setVistaSeguimiento] = useState(false);
   const [search, setSearch] = useState("");
   const [presupuestos, setPresupuestos] = useState<Presupuesto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1051,26 +1053,40 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         action={{ label: "Nuevo PR", onClick: () => setShowNewPR(true) }}
       />
       <div className="p-4 sm:p-8 space-y-6">
-        {/* Status tabs */}
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {(["todos", "borrador", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as const).map((status) => (
-            <button
-              key={status}
-              onClick={() => setFilter(status)}
-              className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                filter === status
-                  ? "bg-orange-500 text-white shadow-sm"
-                  : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
-              }`}
-            >
-              {status === "todos" ? "Todos" : statusConfig[status].label}
-              <span className={`rounded-full px-1.5 py-0.5 text-xs ${
-                filter === status ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
-              }`}>
-                {counts[status] || 0}
-              </span>
-            </button>
-          ))}
+        {/* Status tabs + toggle seguimiento */}
+        <div className="flex items-center gap-3 overflow-x-auto pb-1">
+          <div className="flex gap-2">
+            {(["todos", "borrador", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as const).map((status) => (
+              <button
+                key={status}
+                onClick={() => { setFilter(status); if (vistaSeguimiento) setVistaSeguimiento(false); }}
+                className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                  filter === status && !vistaSeguimiento
+                    ? "bg-orange-500 text-white shadow-sm"
+                    : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
+                }`}
+              >
+                {status === "todos" ? "Todos" : statusConfig[status].label}
+                <span className={`rounded-full px-1.5 py-0.5 text-xs ${
+                  filter === status && !vistaSeguimiento ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
+                }`}>
+                  {counts[status] || 0}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="h-6 w-px bg-zinc-200 dark:bg-zinc-700 shrink-0" />
+          <button
+            onClick={() => setVistaSeguimiento(!vistaSeguimiento)}
+            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+              vistaSeguimiento
+                ? "bg-orange-500 text-white shadow-sm"
+                : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
+            }`}
+          >
+            <CalendarClock className="h-4 w-4" />
+            Seguimiento
+          </button>
         </div>
 
         {/* Search + Vendedor filter */}
@@ -1100,6 +1116,169 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         {/* Smart filters */}
         <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
 
+        {/* ==================== VISTA SEGUIMIENTO ==================== */}
+        {vistaSeguimiento ? (() => {
+          const today = new Date();
+          const trackingPRs = presupuestos
+            .filter((pr) => pr.estado === "pendiente" || pr.estado === "postergado" || pr.estado === "vencido")
+            .map((pr) => {
+              const fechaRef = pr.enviadoAt || pr.fecha;
+              const refDate = new Date(fechaRef);
+              const diffMs = today.getTime() - refDate.getTime();
+              const diasSinRespuesta = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+              const vencDate = new Date(pr.vencimiento);
+              const vencido = vencDate < today;
+              let urgencia: "verde" | "amarillo" | "naranja" | "rojo";
+              if (vencido || diasSinRespuesta > 21) urgencia = "rojo";
+              else if (diasSinRespuesta > 14) urgencia = "naranja";
+              else if (diasSinRespuesta > 7) urgencia = "amarillo";
+              else urgencia = "verde";
+              return { ...pr, diasSinRespuesta, vencido, urgencia, fechaRef };
+            })
+            .sort((a, b) => {
+              const urgOrder = { rojo: 0, naranja: 1, amarillo: 2, verde: 3 };
+              if (urgOrder[a.urgencia] !== urgOrder[b.urgencia]) return urgOrder[a.urgencia] - urgOrder[b.urgencia];
+              return b.diasSinRespuesta - a.diasSinRespuesta;
+            });
+
+          const urgenciaColors = {
+            verde: { border: "border-emerald-400", bg: "bg-emerald-50 dark:bg-emerald-950/20", badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300", dot: "bg-emerald-500" },
+            amarillo: { border: "border-yellow-400", bg: "bg-yellow-50 dark:bg-yellow-950/20", badge: "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300", dot: "bg-yellow-500" },
+            naranja: { border: "border-orange-400", bg: "bg-orange-50 dark:bg-orange-950/20", badge: "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300", dot: "bg-orange-500" },
+            rojo: { border: "border-red-400", bg: "bg-red-50 dark:bg-red-950/20", badge: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300", dot: "bg-red-500" },
+          };
+
+          const urgenciaLabels = { verde: "< 7 dias", amarillo: "7-14 dias", naranja: "14-21 dias", rojo: "> 21 dias / vencido" };
+
+          const countByUrgencia = { verde: 0, amarillo: 0, naranja: 0, rojo: 0 };
+          trackingPRs.forEach((pr) => { countByUrgencia[pr.urgencia]++; });
+
+          return (
+            <div className="space-y-4">
+              {/* Resumen de urgencia */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {(["rojo", "naranja", "amarillo", "verde"] as const).map((urg) => (
+                  <div key={urg} className={`rounded-lg border-l-4 ${urgenciaColors[urg].border} ${urgenciaColors[urg].bg} p-3`}>
+                    <div className="flex items-center gap-2">
+                      <div className={`h-2.5 w-2.5 rounded-full ${urgenciaColors[urg].dot}`} />
+                      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase">{urgenciaLabels[urg]}</span>
+                    </div>
+                    <p className="text-2xl font-bold mt-1 text-zinc-800 dark:text-zinc-100">{countByUrgencia[urg]}</p>
+                  </div>
+                ))}
+              </div>
+
+              {trackingPRs.length === 0 ? (
+                <Card className="p-8 text-center">
+                  <CheckCircle2 className="h-12 w-12 text-emerald-400 mx-auto mb-3" />
+                  <p className="text-lg font-semibold text-zinc-700 dark:text-zinc-200">Sin presupuestos pendientes de seguimiento</p>
+                  <p className="text-sm text-zinc-500 mt-1">Todos los presupuestos han sido respondidos</p>
+                </Card>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {trackingPRs.map((pr) => {
+                    const colors = urgenciaColors[pr.urgencia];
+                    const telefono = (pr as any).clienteTelefono;
+                    return (
+                      <Card
+                        key={pr.id}
+                        className={`border-l-4 ${colors.border} hover:shadow-md transition-shadow cursor-pointer`}
+                        onClick={() => setSelected(pr)}
+                      >
+                        <div className="p-4 space-y-3">
+                          {/* Header: numero + dias */}
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono text-sm font-bold text-zinc-800 dark:text-zinc-100">{pr.numero}</span>
+                                {(() => {
+                                  const cfg = statusConfig[pr.estado];
+                                  return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+                                })()}
+                              </div>
+                              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mt-1">{pr.clienteNombre}</p>
+                            </div>
+                            <div className={`flex flex-col items-center rounded-lg px-3 py-1.5 ${colors.badge}`}>
+                              <span className="text-xl font-bold leading-none">{pr.diasSinRespuesta}</span>
+                              <span className="text-[10px] font-medium uppercase mt-0.5">dias</span>
+                            </div>
+                          </div>
+
+                          {/* Info */}
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div>
+                              <span className="text-zinc-400">Enviado</span>
+                              <p className="font-medium text-zinc-600 dark:text-zinc-300">{formatDate(pr.fechaRef)}</p>
+                            </div>
+                            <div>
+                              <span className="text-zinc-400">Vence</span>
+                              <p className={`font-medium ${pr.vencido ? "text-red-600 dark:text-red-400" : "text-zinc-600 dark:text-zinc-300"}`}>
+                                {formatDate(pr.vencimiento)}
+                                {pr.vencido && <span className="ml-1 text-[10px] font-bold uppercase">Vencido</span>}
+                              </p>
+                            </div>
+                            <div>
+                              <span className="text-zinc-400">Monto</span>
+                              <p className="font-mono font-semibold text-zinc-700 dark:text-zinc-200">{formatCurrency(pr.total, pr.moneda)}</p>
+                            </div>
+                            <div>
+                              <span className="text-zinc-400">Vendedor</span>
+                              <p className="font-medium text-zinc-600 dark:text-zinc-300">{(pr as any).vendedorNombre || "—"}</p>
+                            </div>
+                          </div>
+
+                          {/* Motivo postergacion */}
+                          {pr.estado === "postergado" && pr.motivoRechazo && (
+                            <div className="rounded-md bg-purple-50 dark:bg-purple-950/30 p-2 text-xs text-purple-700 dark:text-purple-300">
+                              <span className="font-semibold">Motivo:</span> {pr.motivoRechazo}
+                            </div>
+                          )}
+
+                          {/* Acciones rapidas */}
+                          <div className="flex items-center gap-1 pt-1 border-t border-zinc-100 dark:border-zinc-800" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => handleEstadoChange(pr.id, "aprobado")}
+                              className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300 dark:hover:bg-emerald-900/40 transition-colors"
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              Aprobar
+                            </button>
+                            <button
+                              onClick={() => { setRechazoModal(pr.id); setMotivoRechazo(""); }}
+                              className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-900/40 transition-colors"
+                            >
+                              <XCircle className="h-3.5 w-3.5" />
+                              Rechazar
+                            </button>
+                            {pr.estado === "pendiente" && (
+                              <button
+                                onClick={() => handleEstadoChange(pr.id, "postergado")}
+                                className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/30 dark:text-purple-300 dark:hover:bg-purple-900/40 transition-colors"
+                              >
+                                <PauseCircle className="h-3.5 w-3.5" />
+                                Postergar
+                              </button>
+                            )}
+                            {telefono && (
+                              <a
+                                href={`tel:${telefono}`}
+                                className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:text-blue-300 dark:hover:bg-blue-900/40 transition-colors ml-auto"
+                              >
+                                <Phone className="h-3.5 w-3.5" />
+                                Llamar
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })() : (
+          <>
         {/* Table */}
         <Card className="p-0 overflow-hidden">
           <DataTable<Presupuesto>
@@ -1237,6 +1416,8 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 ))}
             </div>
           </Card>
+        )}
+          </>
         )}
       </div>
 

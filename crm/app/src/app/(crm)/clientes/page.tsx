@@ -17,6 +17,7 @@ import {
   Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight, Send, Check,
   BarChart3, ShoppingBag, CalendarDays, TrendingUp, Cake,
   User, FileText, CreditCard, StickyNote, Clock, Receipt, Truck, Wallet,
+  ChevronDown, ChevronRight, Package, ExternalLink,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
@@ -131,6 +132,43 @@ interface ConsumoData {
   loading: boolean;
 }
 
+interface FichaPresupuesto {
+  id: string;
+  numero: string;
+  fecha: string;
+  estado: string;
+  total: number;
+  moneda: string;
+}
+
+interface FichaFactura {
+  id: string;
+  tipo: string;
+  numero: string;
+  punto_venta: string;
+  fecha: string;
+  estado: string;
+  total: number;
+  moneda: string;
+}
+
+interface FichaItemCotizado {
+  descripcion: string;
+  cantidadTotal: number;
+  vecesAparece: number;
+}
+
+interface FichaData {
+  presupuestos: FichaPresupuesto[];
+  facturas: FichaFactura[];
+  itemsCotizados: FichaItemCotizado[];
+  totalPresupuestos: number;
+  totalFacturado: number;
+  ultimoPresupuestoFecha: string | null;
+  saldoCC: number;
+  loading: boolean;
+}
+
 const emptyForm = {
   razon_social: "",
   cuit: "",
@@ -211,6 +249,23 @@ export default function ClientesPage() {
     cantidadPresupuestos: 0,
     ultimaCompra: null,
     loading: false,
+  });
+
+  // Ficha completa
+  const [fichaData, setFichaData] = useState<FichaData>({
+    presupuestos: [],
+    facturas: [],
+    itemsCotizados: [],
+    totalPresupuestos: 0,
+    totalFacturado: 0,
+    ultimoPresupuestoFecha: null,
+    saldoCC: 0,
+    loading: false,
+  });
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    presupuestos: true,
+    facturas: false,
+    items: false,
   });
 
   useEffect(() => {
@@ -311,6 +366,137 @@ export default function ClientesPage() {
 
     fetchConsumo();
   }, [selectedCliente]);
+
+  // Fetch ficha data when historial tab is selected
+  useEffect(() => {
+    if (!selectedCliente || detailTab !== "historial") return;
+    const clienteId = selectedCliente.id;
+    const clienteSaldoCC = selectedCliente.saldoCuentaCorriente;
+
+    async function fetchFicha() {
+      setFichaData((prev) => ({ ...prev, loading: true }));
+
+      try {
+        // Fetch in parallel: presupuestos, facturas, items
+        const [presRes, factRes, itemsRes, allPresCountRes, allFactSumRes] = await Promise.all([
+          // Last 5 presupuestos
+          supabase
+            .from("presupuestos")
+            .select("id, numero, fecha, estado, total, moneda")
+            .eq("cliente_id", clienteId)
+            .order("fecha", { ascending: false })
+            .limit(5),
+          // Last 5 facturas
+          supabase
+            .from("facturas")
+            .select("id, tipo, numero, punto_venta, fecha, estado, total, moneda")
+            .eq("cliente_id", clienteId)
+            .order("fecha", { ascending: false })
+            .limit(5),
+          // All presupuesto items for this client (for top items analysis)
+          supabase
+            .from("presupuesto_items")
+            .select("descripcion, cantidad, presupuesto_id, presupuestos!inner(cliente_id)")
+            .eq("presupuestos.cliente_id", clienteId),
+          // Total presupuestos count
+          supabase
+            .from("presupuestos")
+            .select("id", { count: "exact", head: true })
+            .eq("cliente_id", clienteId),
+          // Total facturado sum
+          supabase
+            .from("facturas")
+            .select("total")
+            .eq("cliente_id", clienteId),
+        ]);
+
+        const presupuestos: FichaPresupuesto[] = (presRes.data || []).map((p: any) => ({
+          id: p.id,
+          numero: p.numero || "",
+          fecha: p.fecha || "",
+          estado: p.estado || "",
+          total: Number(p.total) || 0,
+          moneda: p.moneda || "ARS",
+        }));
+
+        const facturas: FichaFactura[] = (factRes.data || []).map((f: any) => ({
+          id: f.id,
+          tipo: f.tipo || "",
+          numero: f.numero || "",
+          punto_venta: f.punto_venta || "",
+          fecha: f.fecha || "",
+          estado: f.estado || "",
+          total: Number(f.total) || 0,
+          moneda: f.moneda || "ARS",
+        }));
+
+        // Process items: group by descripcion, sum cantidades
+        const itemMap = new Map<string, { cantidadTotal: number; vecesAparece: number }>();
+        if (itemsRes.data) {
+          for (const item of itemsRes.data as any[]) {
+            const desc = item.descripcion || "Sin descripcion";
+            const existing = itemMap.get(desc) || { cantidadTotal: 0, vecesAparece: 0 };
+            itemMap.set(desc, {
+              cantidadTotal: existing.cantidadTotal + (Number(item.cantidad) || 0),
+              vecesAparece: existing.vecesAparece + 1,
+            });
+          }
+        }
+        const itemsCotizados = Array.from(itemMap.entries())
+          .map(([descripcion, data]) => ({ descripcion, ...data }))
+          .sort((a, b) => b.vecesAparece - a.vecesAparece)
+          .slice(0, 5);
+
+        const totalPresupuestos = allPresCountRes.count || presupuestos.length;
+        const totalFacturado = (allFactSumRes.data || []).reduce((sum: number, f: any) => sum + (Number(f.total) || 0), 0);
+        const ultimoPresupuestoFecha = presupuestos.length > 0 ? presupuestos[0].fecha : null;
+
+        setFichaData({
+          presupuestos,
+          facturas,
+          itemsCotizados,
+          totalPresupuestos,
+          totalFacturado,
+          ultimoPresupuestoFecha,
+          saldoCC: clienteSaldoCC,
+          loading: false,
+        });
+      } catch (err) {
+        console.error("Error fetching ficha:", err);
+        // Fallback to mock data
+        const mockPres = mockPresupuestos.filter((p) => p.clienteId === clienteId);
+        const mockFact = mockFacturas.filter((f) => f.clienteId === clienteId);
+        setFichaData({
+          presupuestos: mockPres.slice(0, 5).map((p) => ({
+            id: p.id,
+            numero: p.numero || "",
+            fecha: p.fecha || "",
+            estado: p.estado || "",
+            total: p.total || 0,
+            moneda: p.moneda || "ARS",
+          })),
+          facturas: mockFact.slice(0, 5).map((f: any) => ({
+            id: f.id,
+            tipo: f.tipo || "",
+            numero: f.numero || "",
+            punto_venta: f.puntoVenta || "",
+            fecha: f.fecha || "",
+            estado: f.estado || "",
+            total: f.total || 0,
+            moneda: f.moneda || "ARS",
+          })),
+          itemsCotizados: [],
+          totalPresupuestos: mockPres.length,
+          totalFacturado: mockFact.reduce((sum, f) => sum + f.total, 0),
+          ultimoPresupuestoFecha: mockPres.length > 0 ? mockPres[0].fecha : null,
+          saldoCC: clienteSaldoCC,
+          loading: false,
+        });
+      }
+    }
+
+    fetchFicha();
+  }, [selectedCliente?.id, detailTab]);
 
   // Fetch timeline when actividad tab is selected
   useEffect(() => {
@@ -625,6 +811,10 @@ export default function ClientesPage() {
   // Helpers
   function getInitials(name: string) {
     return name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  }
+
+  function toggleSection(key: string) {
+    setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
   if (loading) {
@@ -1084,53 +1274,229 @@ export default function ClientesPage() {
                 </>
               )}
 
-              {/* ---- TAB: HISTORIAL (Consumo) ---- */}
+              {/* ---- TAB: HISTORIAL (Ficha completa) ---- */}
               {detailTab === "historial" && (
                 <>
-                  {consumoData.loading ? (
+                  {fichaData.loading ? (
                     <div className="flex items-center gap-2 py-8 justify-center">
                       <Loader2 className="h-4 w-4 animate-spin text-orange-500" />
-                      <span className="text-xs text-zinc-500">Analizando consumo...</span>
+                      <span className="text-xs text-zinc-500">Cargando ficha del cliente...</span>
                     </div>
-                  ) : consumoData.categorias.length === 0 && consumoData.cantidadPresupuestos === 0 ? (
-                    <EmptyState icon={<ShoppingBag className="h-6 w-6" />} text="Sin presupuestos aprobados para este cliente" />
                   ) : (
-                    <div className="space-y-4">
-                      {/* Summary stats */}
+                    <div className="space-y-5">
+                      {/* ---- Resumen rapido (stats cards) ---- */}
                       <div className="grid grid-cols-2 gap-3">
-                        <div className="rounded-lg bg-orange-50 p-3 dark:bg-orange-900/20">
+                        <div className="rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
                           <div className="flex items-center gap-1.5">
-                            <TrendingUp className="h-3.5 w-3.5 text-orange-500" />
-                            <p className="text-xs text-orange-600 dark:text-orange-400">Total facturado</p>
+                            <FileText className="h-3.5 w-3.5 text-blue-500" />
+                            <p className="text-xs text-blue-600 dark:text-blue-400">Presupuestos</p>
                           </div>
-                          <p className="mt-1 text-sm font-bold text-orange-700 dark:text-orange-300">
-                            {formatCurrency(consumoData.totalFacturado)}
+                          <p className="mt-1 text-lg font-bold text-blue-700 dark:text-blue-300">
+                            {fichaData.totalPresupuestos}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-emerald-50 p-3 dark:bg-emerald-900/20">
+                          <div className="flex items-center gap-1.5">
+                            <TrendingUp className="h-3.5 w-3.5 text-emerald-500" />
+                            <p className="text-xs text-emerald-600 dark:text-emerald-400">Total facturado</p>
+                          </div>
+                          <p className="mt-1 text-lg font-bold text-emerald-700 dark:text-emerald-300">
+                            {formatCurrency(fichaData.totalFacturado)}
                           </p>
                         </div>
                         <div className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800">
                           <div className="flex items-center gap-1.5">
                             <CalendarDays className="h-3.5 w-3.5 text-zinc-400" />
-                            <p className="text-xs text-zinc-500">Frecuencia</p>
+                            <p className="text-xs text-zinc-500">Ultimo presupuesto</p>
                           </div>
                           <p className="mt-1 text-sm font-bold text-zinc-700 dark:text-zinc-200">
-                            {consumoData.cantidadPresupuestos} presupuesto{consumoData.cantidadPresupuestos !== 1 ? "s" : ""} aprobado{consumoData.cantidadPresupuestos !== 1 ? "s" : ""}
+                            {fichaData.ultimoPresupuestoFecha
+                              ? formatDate(fichaData.ultimoPresupuestoFecha)
+                              : "—"}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-orange-50 p-3 dark:bg-orange-900/20">
+                          <div className="flex items-center gap-1.5">
+                            <Wallet className="h-3.5 w-3.5 text-orange-500" />
+                            <p className="text-xs text-orange-600 dark:text-orange-400">Saldo CC</p>
+                          </div>
+                          <p className="mt-1 text-lg font-bold text-orange-700 dark:text-orange-300">
+                            {formatCurrency(fichaData.saldoCC)}
                           </p>
                         </div>
                       </div>
 
-                      {consumoData.ultimaCompra && (
-                        <div>
-                          <p className="text-xs text-zinc-500">Ultima compra aprobada</p>
-                          <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                            {new Date(consumoData.ultimaCompra + "T00:00:00").toLocaleDateString("es-AR", { day: "numeric", month: "long", year: "numeric" })}
-                          </p>
-                        </div>
-                      )}
+                      {/* ---- Ultimos presupuestos (colapsable) ---- */}
+                      <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                        <button
+                          onClick={() => toggleSection("presupuestos")}
+                          className="flex items-center justify-between w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-left"
+                        >
+                          <div className="flex items-center gap-2">
+                            <FileText className="h-4 w-4 text-blue-500" />
+                            <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">Ultimos presupuestos</span>
+                            {fichaData.presupuestos.length > 0 && (
+                              <span className="text-[10px] bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400 px-1.5 py-0.5 rounded-full font-medium">
+                                {fichaData.totalPresupuestos}
+                              </span>
+                            )}
+                          </div>
+                          {expandedSections.presupuestos ? (
+                            <ChevronDown className="h-4 w-4 text-zinc-400" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 text-zinc-400" />
+                          )}
+                        </button>
+                        {expandedSections.presupuestos && (
+                          <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                            {fichaData.presupuestos.length === 0 ? (
+                              <div className="px-4 py-6 text-center text-xs text-zinc-400">Sin presupuestos</div>
+                            ) : (
+                              <>
+                                {fichaData.presupuestos.map((pr) => (
+                                  <div key={pr.id} className="flex items-center justify-between px-4 py-2.5 bg-white dark:bg-zinc-900">
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200 truncate">
+                                        {pr.numero || "Sin numero"}
+                                      </p>
+                                      <p className="text-[11px] text-zinc-400 mt-0.5">{formatDate(pr.fecha)}</p>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <Badge
+                                        variant={
+                                          pr.estado === "aprobado" ? "success" :
+                                          pr.estado === "rechazado" ? "danger" :
+                                          pr.estado === "enviado" ? "info" :
+                                          "default"
+                                        }
+                                      >
+                                        {pr.estado}
+                                      </Badge>
+                                      <span className="text-xs font-mono font-medium text-zinc-600 dark:text-zinc-300">
+                                        {formatCurrency(pr.total, pr.moneda as "ARS" | "USD")}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
+                                <a
+                                  href={`/presupuestos?cliente=${selectedCliente.id}`}
+                                  className="flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-medium text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/10 transition-colors"
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                  Ver todos los presupuestos
+                                </a>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
 
-                      {/* Category breakdown with bars */}
-                      {consumoData.categorias.length > 0 && (
+                      {/* ---- Ultimas facturas (colapsable) ---- */}
+                      <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                        <button
+                          onClick={() => toggleSection("facturas")}
+                          className="flex items-center justify-between w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-left"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Receipt className="h-4 w-4 text-emerald-500" />
+                            <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">Ultimas facturas</span>
+                            {fichaData.facturas.length > 0 && (
+                              <span className="text-[10px] bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400 px-1.5 py-0.5 rounded-full font-medium">
+                                {fichaData.facturas.length}
+                              </span>
+                            )}
+                          </div>
+                          {expandedSections.facturas ? (
+                            <ChevronDown className="h-4 w-4 text-zinc-400" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 text-zinc-400" />
+                          )}
+                        </button>
+                        {expandedSections.facturas && (
+                          <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                            {fichaData.facturas.length === 0 ? (
+                              <div className="px-4 py-6 text-center text-xs text-zinc-400">Sin facturas</div>
+                            ) : (
+                              fichaData.facturas.map((f) => {
+                                const comprobante = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
+                                return (
+                                  <div key={f.id} className="flex items-center justify-between px-4 py-2.5 bg-white dark:bg-zinc-900">
+                                    <div className="min-w-0">
+                                      <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200 truncate">
+                                        {comprobante}
+                                      </p>
+                                      <p className="text-[11px] text-zinc-400 mt-0.5">{formatDate(f.fecha)}</p>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <Badge
+                                        variant={
+                                          f.estado === "pagada" || f.estado === "emitida" ? "success" :
+                                          f.estado === "cancelada" || f.estado === "anulada" ? "danger" :
+                                          f.estado === "vencida" ? "warning" :
+                                          "default"
+                                        }
+                                      >
+                                        {f.estado}
+                                      </Badge>
+                                      <span className="text-xs font-mono font-medium text-zinc-600 dark:text-zinc-300">
+                                        {formatCurrency(f.total, f.moneda as "ARS" | "USD")}
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ---- Items mas cotizados (colapsable) ---- */}
+                      <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                        <button
+                          onClick={() => toggleSection("items")}
+                          className="flex items-center justify-between w-full px-4 py-3 bg-zinc-50 dark:bg-zinc-800/50 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-left"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Package className="h-4 w-4 text-violet-500" />
+                            <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">Items mas cotizados</span>
+                          </div>
+                          {expandedSections.items ? (
+                            <ChevronDown className="h-4 w-4 text-zinc-400" />
+                          ) : (
+                            <ChevronRight className="h-4 w-4 text-zinc-400" />
+                          )}
+                        </button>
+                        {expandedSections.items && (
+                          <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                            {fichaData.itemsCotizados.length === 0 ? (
+                              <div className="px-4 py-6 text-center text-xs text-zinc-400">Sin datos de items cotizados</div>
+                            ) : (
+                              fichaData.itemsCotizados.map((item, idx) => (
+                                <div key={idx} className="flex items-center justify-between px-4 py-2.5 bg-white dark:bg-zinc-900">
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200 truncate">
+                                      {item.descripcion}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-3 shrink-0 ml-3">
+                                    <span className="text-[11px] text-zinc-400">
+                                      {item.vecesAparece} vez{item.vecesAparece !== 1 ? "es" : ""}
+                                    </span>
+                                    <span className="text-xs font-mono font-medium text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-900/20 px-2 py-0.5 rounded">
+                                      {item.cantidadTotal} u.
+                                    </span>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* ---- Categorias compradas (from consumo data) ---- */}
+                      {consumoData.categorias.length > 0 && !consumoData.loading && (
                         <div>
-                          <p className="text-xs font-medium text-zinc-500 mb-2">Categorias compradas</p>
+                          <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Categorias compradas (aprobados)</p>
                           <div className="space-y-2.5">
                             {consumoData.categorias.map((cat) => {
                               const maxTotal = consumoData.categorias[0].total;

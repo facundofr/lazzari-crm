@@ -7,10 +7,42 @@ import { DataTable } from "@/components/ui/data-table";
 import { mockUsers } from "@/lib/mock-data";
 import { ROLE_LABELS, ROLE_PERMISSIONS } from "@/lib/types";
 import type { User, Role } from "@/lib/types";
-import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2, Mail, Save, RotateCcw } from "lucide-react";
+import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2, Mail, Save, RotateCcw, Percent, Plus, Trash2, X } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
+
+type ComisionTipo = "porcentaje_venta" | "porcentaje_margen" | "monto_fijo";
+type ComisionAplicaA = "todos" | "vendedor_especifico";
+
+interface ComisionRegla {
+  id: string;
+  sociedad_id: string;
+  nombre: string;
+  tipo: ComisionTipo;
+  valor: number;
+  aplica_a: ComisionAplicaA;
+  vendedor_id: string | null;
+  activo: boolean;
+  created_at: string;
+}
+
+interface VendedorOption {
+  id: string;
+  full_name: string;
+}
+
+const COMISION_TIPO_LABELS: Record<ComisionTipo, string> = {
+  porcentaje_venta: "% sobre venta",
+  porcentaje_margen: "% sobre margen",
+  monto_fijo: "Monto fijo",
+};
+
+const COMISION_TIPO_BADGE: Record<ComisionTipo, "info" | "purple" | "warning"> = {
+  porcentaje_venta: "info",
+  porcentaje_margen: "purple",
+  monto_fijo: "warning",
+};
 
 type TemplateTipo = "presupuesto" | "factura" | "remito";
 
@@ -48,7 +80,7 @@ const roleBadgeVariant: Record<Role, "success" | "warning" | "danger" | "info" |
 
 export default function ConfiguracionPage() {
   const { sociedadActiva } = useUser();
-  const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas">("usuarios");
+  const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas" | "comisiones">("usuarios");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dbUsers, setDbUsers] = useState<User[]>([]);
@@ -58,6 +90,22 @@ export default function ConfiguracionPage() {
   const [templates, setTemplates] = useState<Record<TemplateTipo, EmailTemplate>>({ ...DEFAULT_TEMPLATES });
   const [templateSaving, setTemplateSaving] = useState<TemplateTipo | null>(null);
   const [templateSaved, setTemplateSaved] = useState<TemplateTipo | null>(null);
+
+  // Comisiones state
+  const [comisionReglas, setComisionReglas] = useState<ComisionRegla[]>([]);
+  const [comisionesLoading, setComisionesLoading] = useState(false);
+  const [vendedores, setVendedores] = useState<VendedorOption[]>([]);
+  const [showComisionForm, setShowComisionForm] = useState(false);
+  const [editingComision, setEditingComision] = useState<ComisionRegla | null>(null);
+  const [comisionForm, setComisionForm] = useState({
+    nombre: "",
+    tipo: "porcentaje_venta" as ComisionTipo,
+    valor: "",
+    aplica_a: "todos" as ComisionAplicaA,
+    vendedor_id: "",
+    activo: true,
+  });
+  const [comisionSaving, setComisionSaving] = useState(false);
 
   // Empresa form — controlled inputs
   const [empresa, setEmpresa] = useState({
@@ -190,6 +238,107 @@ export default function ConfiguracionPage() {
     setTemplateSaved(null);
   }
 
+  // Fetch comisiones + vendedores when sociedadActiva changes or tab switches
+  useEffect(() => {
+    async function fetchComisiones() {
+      if (!sociedadActiva) return;
+      setComisionesLoading(true);
+      try {
+        const { data } = await (supabase as any)
+          .from("comision_reglas")
+          .select("*")
+          .eq("sociedad_id", sociedadActiva.id)
+          .order("created_at", { ascending: false });
+        if (data) setComisionReglas(data);
+      } catch {
+        setComisionReglas([]);
+      }
+      // Fetch vendedores for selector
+      try {
+        const { data: vData } = await supabase
+          .from("profiles")
+          .select("id, full_name")
+          .eq("role", "vendedor");
+        if (vData) setVendedores(vData.map((v: any) => ({ id: v.id, full_name: v.full_name || "Sin nombre" })));
+      } catch {
+        setVendedores([]);
+      }
+      setComisionesLoading(false);
+    }
+    if (tab === "comisiones") fetchComisiones();
+  }, [sociedadActiva, tab]);
+
+  function resetComisionForm() {
+    setComisionForm({ nombre: "", tipo: "porcentaje_venta", valor: "", aplica_a: "todos", vendedor_id: "", activo: true });
+    setEditingComision(null);
+    setShowComisionForm(false);
+  }
+
+  function handleEditComision(regla: ComisionRegla) {
+    setComisionForm({
+      nombre: regla.nombre,
+      tipo: regla.tipo,
+      valor: String(regla.valor),
+      aplica_a: regla.aplica_a as ComisionAplicaA,
+      vendedor_id: regla.vendedor_id || "",
+      activo: regla.activo,
+    });
+    setEditingComision(regla);
+    setShowComisionForm(true);
+  }
+
+  async function handleSaveComision() {
+    if (!sociedadActiva || !comisionForm.nombre || !comisionForm.valor) return;
+    setComisionSaving(true);
+    try {
+      const payload = {
+        sociedad_id: sociedadActiva.id,
+        nombre: comisionForm.nombre,
+        tipo: comisionForm.tipo,
+        valor: parseFloat(comisionForm.valor),
+        aplica_a: comisionForm.aplica_a,
+        vendedor_id: comisionForm.aplica_a === "vendedor_especifico" ? comisionForm.vendedor_id || null : null,
+        activo: comisionForm.activo,
+      };
+      if (editingComision) {
+        await (supabase as any).from("comision_reglas").update(payload).eq("id", editingComision.id);
+      } else {
+        await (supabase as any).from("comision_reglas").insert(payload);
+      }
+      // Re-fetch
+      const { data } = await (supabase as any)
+        .from("comision_reglas")
+        .select("*")
+        .eq("sociedad_id", sociedadActiva.id)
+        .order("created_at", { ascending: false });
+      if (data) setComisionReglas(data);
+      resetComisionForm();
+    } catch (err) {
+      console.error("Error saving comision regla:", err);
+    } finally {
+      setComisionSaving(false);
+    }
+  }
+
+  async function handleDeleteComision(id: string) {
+    if (!sociedadActiva) return;
+    try {
+      await (supabase as any).from("comision_reglas").delete().eq("id", id);
+      setComisionReglas((prev) => prev.filter((r) => r.id !== id));
+    } catch (err) {
+      console.error("Error deleting comision regla:", err);
+    }
+  }
+
+  async function handleToggleComisionActivo(regla: ComisionRegla) {
+    try {
+      await (supabase as any).from("comision_reglas").update({ activo: !regla.activo }).eq("id", regla.id);
+      setComisionReglas((prev) => prev.map((r) => r.id === regla.id ? { ...r, activo: !r.activo } : r));
+    } catch (err) {
+      console.error("Error toggling comision:", err);
+    }
+  }
+
   // Notification toggles
   const [notifs, setNotifs] = useState({
     pr_vencer: true,
@@ -232,6 +381,7 @@ export default function ConfiguracionPage() {
     { id: "integraciones" as const, label: "Integraciones", icon: Plug },
     { id: "notificaciones" as const, label: "Notificaciones", icon: Bell },
     { id: "plantillas" as const, label: "Plantillas de Email", icon: Mail },
+    { id: "comisiones" as const, label: "Comisiones", icon: Percent },
   ];
 
   return (
@@ -462,6 +612,210 @@ export default function ConfiguracionPage() {
               ))}
             </div>
           </Card>
+        )}
+
+        {tab === "comisiones" && (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-zinc-900 dark:text-white">Reglas de Comisiones</h3>
+                <p className="text-sm text-zinc-500">
+                  Configurá las reglas de comisión para los vendedores.
+                  {sociedadActiva && <span className="ml-1 font-medium text-zinc-700 dark:text-zinc-300">Sociedad: {sociedadActiva.nombre}</span>}
+                </p>
+              </div>
+              <button
+                onClick={() => { resetComisionForm(); setShowComisionForm(true); }}
+                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
+              >
+                <Plus className="h-4 w-4" />
+                Nueva regla
+              </button>
+            </div>
+
+            {/* Form inline */}
+            {showComisionForm && (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>{editingComision ? "Editar regla" : "Nueva regla de comisión"}</CardTitle>
+                    <button onClick={resetComisionForm} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300">
+                      <X className="h-5 w-5" />
+                    </button>
+                  </div>
+                </CardHeader>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="sm:col-span-2">
+                    <label className="text-xs font-medium text-zinc-500">Nombre de la regla</label>
+                    <input
+                      type="text"
+                      value={comisionForm.nombre}
+                      onChange={(e) => setComisionForm((f) => ({ ...f, nombre: e.target.value }))}
+                      placeholder="Ej: Comisión venta 3%"
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Tipo</label>
+                    <select
+                      value={comisionForm.tipo}
+                      onChange={(e) => setComisionForm((f) => ({ ...f, tipo: e.target.value as ComisionTipo }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    >
+                      {(Object.entries(COMISION_TIPO_LABELS) as [ComisionTipo, string][]).map(([val, label]) => (
+                        <option key={val} value={val}>{label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">
+                      Valor {comisionForm.tipo === "monto_fijo" ? "($)" : "(%)"}
+                    </label>
+                    <div className="relative mt-1">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={comisionForm.valor}
+                        onChange={(e) => setComisionForm((f) => ({ ...f, valor: e.target.value }))}
+                        placeholder={comisionForm.tipo === "monto_fijo" ? "1500.00" : "3"}
+                        className="w-full rounded-lg border border-zinc-200 px-3 py-2.5 pr-8 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      />
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-zinc-400">
+                        {comisionForm.tipo === "monto_fijo" ? "$" : "%"}
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Aplica a</label>
+                    <select
+                      value={comisionForm.aplica_a}
+                      onChange={(e) => setComisionForm((f) => ({ ...f, aplica_a: e.target.value as ComisionAplicaA }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    >
+                      <option value="todos">Todos los vendedores</option>
+                      <option value="vendedor_especifico">Vendedor específico</option>
+                    </select>
+                  </div>
+                  {comisionForm.aplica_a === "vendedor_especifico" && (
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Vendedor</label>
+                      <select
+                        value={comisionForm.vendedor_id}
+                        onChange={(e) => setComisionForm((f) => ({ ...f, vendedor_id: e.target.value }))}
+                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      >
+                        <option value="">Seleccionar vendedor...</option>
+                        {vendedores.map((v) => (
+                          <option key={v.id} value={v.id}>{v.full_name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3 sm:col-span-2">
+                    <button
+                      onClick={() => setComisionForm((f) => ({ ...f, activo: !f.activo }))}
+                      className={`relative h-6 w-11 rounded-full transition-colors ${comisionForm.activo ? "bg-orange-500" : "bg-zinc-300 dark:bg-zinc-600"}`}
+                    >
+                      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${comisionForm.activo ? "left-[22px]" : "left-0.5"}`} />
+                    </button>
+                    <span className="text-sm text-zinc-700 dark:text-zinc-300">{comisionForm.activo ? "Activa" : "Inactiva"}</span>
+                  </div>
+                </div>
+                <div className="mt-6 flex items-center justify-end gap-3">
+                  <button
+                    onClick={resetComisionForm}
+                    className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleSaveComision}
+                    disabled={comisionSaving || !comisionForm.nombre || !comisionForm.valor}
+                    className="flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                  >
+                    {comisionSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {editingComision ? "Actualizar" : "Guardar"}
+                  </button>
+                </div>
+              </Card>
+            )}
+
+            {/* List */}
+            {comisionesLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
+              </div>
+            ) : comisionReglas.length === 0 ? (
+              <Card className="flex flex-col items-center justify-center py-12 text-center">
+                <div className="rounded-full bg-zinc-100 p-3 dark:bg-zinc-800">
+                  <Percent className="h-6 w-6 text-zinc-400" />
+                </div>
+                <p className="mt-3 font-medium text-zinc-700 dark:text-zinc-300">No hay reglas de comisión</p>
+                <p className="text-sm text-zinc-500">Creá una regla para empezar a calcular comisiones.</p>
+              </Card>
+            ) : (
+              <div className="space-y-3">
+                {comisionReglas.map((regla) => {
+                  const vendedorName = regla.vendedor_id
+                    ? vendedores.find((v) => v.id === regla.vendedor_id)?.full_name || "Vendedor"
+                    : null;
+                  return (
+                    <Card key={regla.id} className={`transition-opacity ${!regla.activo ? "opacity-60" : ""}`}>
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div className="rounded-lg bg-orange-50 p-2.5 text-orange-600 dark:bg-orange-900/30">
+                            <Percent className="h-5 w-5" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-medium text-zinc-900 dark:text-white">{regla.nombre}</p>
+                              <Badge variant={COMISION_TIPO_BADGE[regla.tipo]}>{COMISION_TIPO_LABELS[regla.tipo]}</Badge>
+                              {!regla.activo && <Badge variant="outline">Inactiva</Badge>}
+                            </div>
+                            <div className="mt-1 flex items-center gap-3 text-sm text-zinc-500">
+                              <span className="font-semibold text-zinc-700 dark:text-zinc-300">
+                                {regla.tipo === "monto_fijo" ? `$ ${regla.valor}` : `${regla.valor}%`}
+                              </span>
+                              <span>·</span>
+                              <span>
+                                {regla.aplica_a === "todos"
+                                  ? "Todos los vendedores"
+                                  : vendedorName || "Vendedor específico"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleToggleComisionActivo(regla)}
+                            className={`relative h-6 w-11 rounded-full transition-colors ${regla.activo ? "bg-orange-500" : "bg-zinc-300 dark:bg-zinc-600"}`}
+                            title={regla.activo ? "Desactivar" : "Activar"}
+                          >
+                            <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${regla.activo ? "left-[22px]" : "left-0.5"}`} />
+                          </button>
+                          <button
+                            onClick={() => handleEditComision(regla)}
+                            className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors"
+                            title="Editar"
+                          >
+                            <Save className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteComision(regla.id)}
+                            className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 transition-colors"
+                            title="Eliminar"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         )}
 
         {tab === "plantillas" && (
