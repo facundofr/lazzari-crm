@@ -125,7 +125,7 @@ export async function duplicatePresupuesto(id: string) {
 
   const { data: newPR, error } = await supabase
     .from("presupuestos")
-    .insert({ ...rest, estado: "borrador", version: 1 } as any)
+    .insert({ ...rest, estado: "pendiente", version: 1 } as any)
     .select()
     .single();
   if (error) throw error;

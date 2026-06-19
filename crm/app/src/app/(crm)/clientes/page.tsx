@@ -59,6 +59,7 @@ interface ClienteRow {
   assigned_to: string | null;
   email_facturacion?: string | null;
   envio_automatico?: boolean;
+  transporte_definido?: string | null;
   created_at: string;
   updated_at: string;
   assigned_profile: { full_name: string } | null;
@@ -89,6 +90,7 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
     assignedTo: row.assigned_to ?? undefined,
     emailFacturacion: row.email_facturacion ?? null,
     envioAutomatico: row.envio_automatico ?? true,
+    transporteDefinido: row.transporte_definido ?? "",
     createdAt: row.created_at ?? "",
     updatedAt: row.updated_at ?? "",
     contactos: Array.isArray(row.contactos) ? (row.contactos as Array<Record<string, unknown>>).map((c) => ({
@@ -101,6 +103,8 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
       fechaCumpleanos: (c.fecha_cumpleanos as string) ?? null,
       notas: (c.notas as string) ?? null,
       sucursalId: (c.sucursal_id as string) ?? null,
+      vendedorId: (c.vendedor_id as string) ?? null,
+      vendedorNombre: null,
     })) : [],
     sucursales: Array.isArray(row.cliente_sucursales) ? (row.cliente_sucursales as Array<Record<string, unknown>>).map((s) => ({
       id: s.id as string,
@@ -187,6 +191,7 @@ const emptyForm = {
   notas: "",
   email_facturacion: "",
   envio_automatico: true,
+  transporte_definido: "",
 };
 
 type DetailTab = "datos" | "contactos" | "sucursales" | "historial" | "actividad";
@@ -234,6 +239,12 @@ export default function ClientesPage() {
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState("");
 
+  // Sucursales in modal (edit mode only)
+  const [formSucursales, setFormSucursales] = useState<{ id: string; nombre: string; isNew?: boolean }[]>([]);
+  const [newSucursalNombre, setNewSucursalNombre] = useState("");
+  const [sucursalesLoading, setSucursalesLoading] = useState(false);
+  const [removedSucursalIds, setRemovedSucursalIds] = useState<string[]>([]);
+
   // Detail
   const [selectedCliente, setSelectedCliente] = useState<ClienteExt | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("datos");
@@ -251,6 +262,9 @@ export default function ClientesPage() {
     loading: false,
   });
 
+  // Vendedores list (for assigning to contactos)
+  const [vendedores, setVendedores] = useState<{id: string; full_name: string}[]>([]);
+
   // Ficha completa
   const [fichaData, setFichaData] = useState<FichaData>({
     presupuestos: [],
@@ -267,6 +281,25 @@ export default function ClientesPage() {
     facturas: false,
     items: false,
   });
+
+  // Fetch vendedores on mount
+  useEffect(() => {
+    async function fetchVendedores() {
+      try {
+        const { data, error } = await supabase
+          .from("profiles")
+          .select("id, full_name")
+          .in("role", ["vendedor", "admin", "super_admin"])
+          .order("full_name");
+        if (!error && data) {
+          setVendedores(data as { id: string; full_name: string }[]);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    fetchVendedores();
+  }, []);
 
   useEffect(() => {
     if (!selectedCliente) return;
@@ -606,23 +639,28 @@ export default function ClientesPage() {
     if (!selectedCliente) return;
     async function fetchContactos() {
       try {
-        const { data } = await supabase
+        const { data } = await (supabase as any)
           .from("contactos")
-          .select("*")
+          .select("*, vendedor:vendedor_id(id, full_name)")
           .eq("entity_type", "cliente")
           .eq("entity_id", selectedCliente!.id);
         if (data && data.length > 0) {
-          const mapped = data.map((c: Record<string, unknown>) => ({
-            id: c.id as string,
-            nombre: (c.nombre as string) ?? "",
-            cargo: (c.cargo as string) ?? "",
-            email: (c.email as string) ?? "",
-            telefono: (c.telefono as string) ?? "",
-            principal: (c.principal as boolean) ?? false,
-            fechaCumpleanos: (c.fecha_cumpleanos as string) ?? null,
-            notas: (c.notas as string) ?? null,
-            sucursalId: (c.sucursal_id as string) ?? null,
-          }));
+          const mapped = data.map((c: Record<string, unknown>) => {
+            const vendedor = c.vendedor as Record<string, unknown> | null;
+            return {
+              id: c.id as string,
+              nombre: (c.nombre as string) ?? "",
+              cargo: (c.cargo as string) ?? "",
+              email: (c.email as string) ?? "",
+              telefono: (c.telefono as string) ?? "",
+              principal: (c.principal as boolean) ?? false,
+              fechaCumpleanos: (c.fecha_cumpleanos as string) ?? null,
+              notas: (c.notas as string) ?? null,
+              sucursalId: (c.sucursal_id as string) ?? null,
+              vendedorId: (c.vendedor_id as string) ?? null,
+              vendedorNombre: vendedor ? (vendedor.full_name as string) : null,
+            };
+          });
           setSelectedCliente((prev) => prev ? { ...prev, contactos: mapped } : prev);
         }
       } catch (err) {
@@ -715,6 +753,9 @@ export default function ClientesPage() {
     setEditingId(null);
     setForm(emptyForm);
     setFormError("");
+    setFormSucursales([]);
+    setNewSucursalNombre("");
+    setRemovedSucursalIds([]);
     setModalOpen(true);
   }
 
@@ -738,8 +779,31 @@ export default function ClientesPage() {
       notas: c.notas,
       email_facturacion: c.emailFacturacion ?? "",
       envio_automatico: c.envioAutomatico ?? true,
+      transporte_definido: c.transporteDefinido ?? "",
     });
     setFormError("");
+    setRemovedSucursalIds([]);
+    setNewSucursalNombre("");
+    // Fetch sucursales for this client
+    setSucursalesLoading(true);
+    (supabase as any)
+      .from("cliente_sucursales")
+      .select("id, nombre")
+      .eq("cliente_id", c.id)
+      .eq("activo", true)
+      .order("nombre")
+      .then(({ data }: { data: any[] | null }) => {
+        setFormSucursales(
+          (data || []).map((s: any) => ({ id: s.id, nombre: s.nombre || "" }))
+        );
+        setSucursalesLoading(false);
+      })
+      .catch(() => {
+        setFormSucursales(
+          (c.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }))
+        );
+        setSucursalesLoading(false);
+      });
     setModalOpen(true);
   }
 
@@ -755,16 +819,37 @@ export default function ClientesPage() {
     setSaving(true);
     setFormError("");
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         ...form,
         email_facturacion: form.email_facturacion?.trim() || null,
+        transporte_definido: form.transporte_definido?.trim() || null,
       };
+      if (!editingId && sociedadActiva?.id) {
+        payload.sociedad_id = sociedadActiva.id;
+      }
       if (editingId) {
         const { error } = await supabase
           .from("clientes")
           .update(payload as any)
           .eq("id", editingId);
         if (error) throw error;
+
+        // Save sucursales changes
+        // Delete removed sucursales
+        for (const id of removedSucursalIds) {
+          await (supabase as any)
+            .from("cliente_sucursales")
+            .update({ activo: false })
+            .eq("id", id);
+        }
+        // Insert new sucursales
+        const newSucs = formSucursales.filter((s) => s.isNew);
+        for (const s of newSucs) {
+          await (supabase as any)
+            .from("cliente_sucursales")
+            .insert({ cliente_id: editingId, nombre: s.nombre, activo: true });
+        }
+
         toast.success("Cliente actualizado correctamente");
       } else {
         const { error } = await supabase
@@ -837,6 +922,34 @@ export default function ClientesPage() {
     { key: "historial", label: "Historial", icon: <BarChart3 className="h-3.5 w-3.5" /> },
     { key: "actividad", label: "Actividad", icon: <Clock className="h-3.5 w-3.5" /> },
   ];
+
+  // Handler: assign vendedor to a contacto
+  async function handleAssignVendedor(contactoId: string, vendedorId: string | null) {
+    try {
+      const { error } = await (supabase as any)
+        .from("contactos")
+        .update({ vendedor_id: vendedorId })
+        .eq("id", contactoId);
+      if (error) {
+        toast.error("Error al asignar vendedor");
+        return;
+      }
+      // Update local state
+      const vendedorName = vendedorId ? vendedores.find((v) => v.id === vendedorId)?.full_name ?? null : null;
+      setSelectedCliente((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          contactos: prev.contactos.map((c) =>
+            c.id === contactoId ? { ...c, vendedorId, vendedorNombre: vendedorName } : c
+          ),
+        };
+      });
+      toast.success("Vendedor asignado correctamente");
+    } catch {
+      toast.error("Error al asignar vendedor");
+    }
+  }
 
   return (
     <>
@@ -1109,6 +1222,7 @@ export default function ClientesPage() {
                       <InfoField label="Dias CC" value={String(selectedCliente.diasCuentaCorriente)} />
                       <InfoField label="Limite credito" value={formatCurrency(selectedCliente.limiteCredito)} />
                       <InfoField label="Saldo CC" value={formatCurrency(selectedCliente.saldoCuentaCorriente)} highlight />
+                      <InfoField label="Transporte definido" value={selectedCliente.transporteDefinido || "—"} />
                     </div>
                   </div>
 
@@ -1192,6 +1306,19 @@ export default function ClientesPage() {
                                     )}
                                   </div>
                                   {c.notas && <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500 pl-10">{c.notas}</p>}
+                                  <div className="mt-2 pl-10 flex items-center gap-2">
+                                    <label className="text-xs text-zinc-500 whitespace-nowrap">Vendedor:</label>
+                                    <select
+                                      className="text-xs border border-zinc-200 dark:border-zinc-600 rounded-md px-2 py-1 bg-white dark:bg-zinc-800 text-zinc-900 dark:text-white flex-1 max-w-[200px]"
+                                      value={c.vendedorId ?? ""}
+                                      onChange={(e) => handleAssignVendedor(c.id, e.target.value || null)}
+                                    >
+                                      <option value="">Sin asignar</option>
+                                      {vendedores.map((v) => (
+                                        <option key={v.id} value={v.id}>{v.full_name}</option>
+                                      ))}
+                                    </select>
+                                  </div>
                                 </div>
                               ))}
                             </div>
@@ -1669,6 +1796,93 @@ export default function ClientesPage() {
             </div>
           </div>
 
+          {/* Section: Sucursales (edit mode only) */}
+          {editingId && (
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Sucursales</p>
+              {sucursalesLoading ? (
+                <div className="flex items-center gap-2 text-sm text-zinc-400 py-2">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Cargando sucursales...
+                </div>
+              ) : (
+                <>
+                  {formSucursales.length > 0 ? (
+                    <div className="space-y-2 mb-3">
+                      {formSucursales.map((s) => (
+                        <div
+                          key={s.id}
+                          className="flex items-center justify-between rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-800"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Building2 className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                            <span className="text-sm text-zinc-700 dark:text-zinc-300 truncate">{s.nombre}</span>
+                            {s.isNew && (
+                              <span className="text-[10px] font-medium text-green-600 bg-green-50 px-1.5 py-0.5 rounded dark:bg-green-900/30 dark:text-green-400">Nueva</span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (s.isNew) {
+                                setFormSucursales((prev) => prev.filter((x) => x.id !== s.id));
+                              } else {
+                                setRemovedSucursalIds((prev) => [...prev, s.id]);
+                                setFormSucursales((prev) => prev.filter((x) => x.id !== s.id));
+                              }
+                            }}
+                            className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 transition-colors"
+                            title="Eliminar sucursal"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-zinc-400 italic mb-3">Sin sucursales registradas</p>
+                  )}
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <Input
+                        label=""
+                        value={newSucursalNombre}
+                        onChange={(e) => setNewSucursalNombre(e.target.value)}
+                        placeholder="Nombre de la sucursal"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            if (newSucursalNombre.trim()) {
+                              setFormSucursales((prev) => [
+                                ...prev,
+                                { id: `new-${Date.now()}`, nombre: newSucursalNombre.trim(), isNew: true },
+                              ]);
+                              setNewSucursalNombre("");
+                            }
+                          }
+                        }}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (newSucursalNombre.trim()) {
+                          setFormSucursales((prev) => [
+                            ...prev,
+                            { id: `new-${Date.now()}`, nombre: newSucursalNombre.trim(), isNew: true },
+                          ]);
+                          setNewSucursalNombre("");
+                        }
+                      }}
+                      className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5" /> Agregar
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Section: Contacto */}
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Contacto</p>
@@ -1731,6 +1945,14 @@ export default function ClientesPage() {
                 value={form.cp}
                 onChange={(e) => setForm({ ...form, cp: e.target.value })}
               />
+              <div className="sm:col-span-2">
+                <Input
+                  label="Transporte definido"
+                  value={form.transporte_definido}
+                  onChange={(e) => setForm({ ...form, transporte_definido: e.target.value })}
+                  placeholder="Ej: Andreani, OCA, Via Cargo..."
+                />
+              </div>
             </div>
           </div>
 

@@ -236,31 +236,13 @@ export function Header({ title, subtitle, action }: HeaderProps) {
         .order("created_at", { ascending: false })
         .limit(20);
 
-      if (!error && data && data.length > 0) {
+      if (!error && data) {
         setAlerts(data as AlertRow[]);
       } else {
-        setAlerts(mockAlerts.map((a) => ({
-          id: a.id,
-          tipo: a.type,
-          title: a.title,
-          description: a.description,
-          module: a.module,
-          read: a.read,
-          created_at: a.createdAt,
-          entity_id: a.entityId ?? null,
-        })));
+        setAlerts([]);
       }
     } catch {
-      setAlerts(mockAlerts.map((a) => ({
-        id: a.id,
-        tipo: a.type,
-        title: a.title,
-        description: a.description,
-        module: a.module,
-        read: a.read,
-        created_at: a.createdAt,
-        entity_id: a.entityId ?? null,
-      })));
+      setAlerts([]);
     }
   }, [supabase]);
 

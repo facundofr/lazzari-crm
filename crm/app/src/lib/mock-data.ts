@@ -125,7 +125,7 @@ export const mockPresupuestos: Presupuesto[] = [
   },
   {
     id: "pr5", numero: "PR-2026-0049", clienteId: "c5", clienteNombre: "Petroquímica del Sur S.A.",
-    fecha: "2026-05-19", vencimiento: "2026-06-03", estado: "borrador", markupGeneral: 35,
+    fecha: "2026-05-19", vencimiento: "2026-06-03", estado: "pendiente", markupGeneral: 35,
     items: [
       { id: "i9", productoId: "p1", codigo: "VAL-001", descripcion: "Válvula esférica 2\" AISI 316", categoria: "Válvulas", cantidad: 25, unidad: "u", precioCosto: 45200, markupPorcentaje: 35, precioVenta: 61020, subtotal: 1525500, iva: 320355, total: 1845855 },
     ],
@@ -173,7 +173,7 @@ export const mockMovimientos: Movimiento[] = [
 
 // ── Actividad reciente ───────────────────────────────────────────
 export const mockActivity: ActivityLog[] = [
-  { id: "a1", userId: "u4", userName: "Lucía Gómez", action: "create", module: "presupuestos", entityId: "pr5", details: "Creó borrador PR-2026-0049 para Petroquímica del Sur", createdAt: "2026-05-19T10:30:00" },
+  { id: "a1", userId: "u4", userName: "Lucía Gómez", action: "create", module: "presupuestos", entityId: "pr5", details: "Creó PR-2026-0049 para Petroquímica del Sur", createdAt: "2026-05-19T10:30:00" },
   { id: "a2", userId: "u2", userName: "Carolina Ruiz", action: "update", module: "presupuestos", entityId: "pr2", details: "Marcó PR-2026-0048 como aprobado", createdAt: "2026-05-18T16:45:00" },
   { id: "a3", userId: "u3", userName: "Pablo Fernández", action: "create", module: "facturacion", entityId: "f1", details: "Emitió FA A-0001-00234 para Minera Andina por $14.726.910", createdAt: "2026-05-18T17:00:00" },
   { id: "a4", userId: "u2", userName: "Carolina Ruiz", action: "update", module: "presupuestos", entityId: "pr3", details: "PR-2026-0045 rechazado: precio fuera de presupuesto", createdAt: "2026-05-14T11:20:00" },

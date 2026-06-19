@@ -120,6 +120,7 @@ export interface Client {
   assignedTo?: string; // vendedor asignado
   emailFacturacion?: string | null;
   envioAutomatico?: boolean;
+  transporteDefinido?: string;
 }
 
 export interface Sucursal {
@@ -147,6 +148,8 @@ export interface Contacto {
   fechaCumpleanos?: string | null;
   notas?: string | null;
   sucursalId?: string | null;
+  vendedorId?: string | null;
+  vendedorNombre?: string | null;
 }
 
 // ── Productos / Articulos ────────────────────────────────────────
@@ -167,7 +170,7 @@ export interface Product {
 }
 
 // ── Presupuestos ─────────────────────────────────────────────────
-export type PRStatus = "borrador" | "pendiente" | "aprobado" | "rechazado" | "postergado" | "vencido";
+export type PRStatus = "pendiente" | "aprobado" | "rechazado" | "postergado" | "vencido";
 
 export interface Presupuesto {
   id: string;

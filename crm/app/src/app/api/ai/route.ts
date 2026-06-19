@@ -58,7 +58,7 @@ Productos: codigo (UNICO global), nombre, categoria, precio_costo, moneda_costo,
 Listas_precios: nombre, proveedor_id, moneda, vigencia_desde, vigencia_hasta, estado (vigente/vencida/borrador).
 Lista_precios_items: lista_id, codigo (del proveedor, NO unico — puede repetirse entre proveedores), descripcion, categoria, unidad, precio, descuento, precio_neto, producto_id (opcional link a productos).
 IMPORTANTE: Dos proveedores pueden tener el mismo codigo de articulo. Siempre mostra el nombre del proveedor junto al codigo cuando busques productos o items de lista. Para buscar un articulo por codigo, uni lista_precios_items con listas_precios y proveedores para mostrar contexto completo.
-Presupuestos: numero, cliente_id, vendedor_id, estado (borrador/pendiente/aprobado/rechazado/postergado/vencido), total, moneda, fecha, validez_dias, observaciones.
+Presupuestos: numero, cliente_id, vendedor_id, estado (pendiente/aprobado/rechazado/postergado/vencido), total, moneda, fecha, validez_dias, observaciones.
 Facturas: numero, tipo, punto_venta, cliente_id, total, estado (pendiente/pagada/anulada), cae, cae_vencimiento.
 Movimientos: tipo (cobro/pago/cheque_emitido/cheque_recibido/transferencia/efectivo), monto, moneda, fecha, descripcion, conciliado.
 Profiles: full_name, email, role, active.

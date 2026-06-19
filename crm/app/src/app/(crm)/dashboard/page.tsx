@@ -33,7 +33,6 @@ import { supabase } from "@/lib/supabase/client";
 import type { Presupuesto, ActivityLog, Alert, GastoFijo, Objetivo } from "@/lib/types";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info" }> = {
-  borrador: { label: "Borrador", variant: "outline" },
   pendiente: { label: "Pendiente", variant: "warning" },
   aprobado: { label: "Aprobado", variant: "success" },
   rechazado: { label: "Rechazado", variant: "danger" },
@@ -54,7 +53,6 @@ const estadoColorMap: Record<string, string> = {
   pendiente: "#f59e0b",
   rechazado: "#ef4444",
   postergado: "#8b5cf6",
-  borrador: "#a1a1aa",
   vencido: "#dc2626",
 };
 
@@ -63,7 +61,6 @@ const estadoLabelMap: Record<string, string> = {
   pendiente: "Pendientes",
   rechazado: "Rechazados",
   postergado: "Postergados",
-  borrador: "Borradores",
   vencido: "Vencidos",
 };
 

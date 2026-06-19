@@ -20,6 +20,7 @@ import {
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { useUser } from "@/lib/auth-context";
+import { PendientesWidget } from "@/components/presupuestos/pendientes-widget";
 
 interface SupabasePresupuesto {
   id: string;
@@ -121,7 +122,6 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
 }
 
 const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info"; icon: typeof Clock }> = {
-  borrador: { label: "Borrador", variant: "outline", icon: Edit3 },
   pendiente: { label: "Pendiente", variant: "warning", icon: Clock },
   aprobado: { label: "Aprobado", variant: "success", icon: CheckCircle2 },
   rechazado: { label: "Rechazado", variant: "danger", icon: XCircle },
@@ -184,11 +184,14 @@ function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, 
 export default function PresupuestosPage() {
   const { profile, sociedadActiva } = useUser();
   const { toast } = useToast();
-  const [filter, setFilter] = useState<PRStatus | "todos">("todos");
+  const allEstados: (PRStatus | "facturado")[] = ["pendiente", "aprobado", "rechazado", "postergado", "vencido", "facturado"];
+  const [selectedEstados, setSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [vistaSeguimiento, setVistaSeguimiento] = useState(false);
   const [search, setSearch] = useState("");
   const [presupuestos, setPresupuestos] = useState<Presupuesto[]>([]);
   const [loading, setLoading] = useState(true);
+  // IDs de presupuestos que tienen factura asociada
+  const [facturadoIds, setFacturadoIds] = useState<Set<string>>(new Set());
 
   // Detail panel
   const [selected, setSelected] = useState<Presupuesto | null>(null);
@@ -506,6 +509,24 @@ export default function PresupuestosPage() {
     fetchPresupuestos();
   }, [fetchPresupuestos]);
 
+  // Fetch IDs de presupuestos facturados
+  useEffect(() => {
+    async function fetchFacturadoIds() {
+      try {
+        const { data } = await supabase
+          .from("facturas")
+          .select("presupuesto_id")
+          .not("presupuesto_id", "is", null);
+        if (data) {
+          setFacturadoIds(new Set(data.map((f: any) => f.presupuesto_id).filter(Boolean)));
+        }
+      } catch {
+        // ignore
+      }
+    }
+    fetchFacturadoIds();
+  }, [presupuestos]);
+
   useEffect(() => {
     async function fetchVendedores() {
       try {
@@ -640,8 +661,44 @@ export default function PresupuestosPage() {
     }
   }
 
+  // Helper: toggle estado in multi-select
+  function toggleEstado(estado: string) {
+    setSelectedEstados(prev => {
+      const next = new Set(prev);
+      if (estado === "todos") {
+        // Si se clickea "Todos", seleccionar/deseleccionar todo
+        if (next.has("todos")) {
+          // Ya está "todos" activo — deseleccionar todo (dejar vacío = mostrar nada, mejor no permitir)
+          return new Set(["todos"]);
+        }
+        return new Set(["todos"]);
+      }
+      // Quitar "todos" si estaba
+      next.delete("todos");
+      if (next.has(estado)) {
+        next.delete(estado);
+      } else {
+        next.add(estado);
+      }
+      // Si no queda nada seleccionado, volver a "todos"
+      if (next.size === 0) return new Set(["todos"]);
+      // Si se seleccionaron todos los estados individuales, equivale a "todos"
+      if (next.size === allEstados.length) return new Set(["todos"]);
+      return next;
+    });
+    if (vistaSeguimiento) setVistaSeguimiento(false);
+  }
+
+  const isAllSelected = selectedEstados.has("todos");
+
   const filtered = presupuestos.filter((pr) => {
-    if (filter !== "todos" && pr.estado !== filter) return false;
+    // Estado filter (multi-select)
+    if (!isAllSelected) {
+      const prEsFacturado = facturadoIds.has(pr.id);
+      const matchesEstado = selectedEstados.has(pr.estado);
+      const matchesFacturado = selectedEstados.has("facturado") && prEsFacturado;
+      if (!matchesEstado && !matchesFacturado) return false;
+    }
     if (search && !pr.numero.toLowerCase().includes(search.toLowerCase()) && !pr.clienteNombre.toLowerCase().includes(search.toLowerCase())) return false;
     if (vendedorFilter && (pr as any).vendedorId !== vendedorFilter) return false;
     // Smart filters
@@ -656,8 +713,11 @@ export default function PresupuestosPage() {
     return true;
   });
 
-  const counts: Record<string, number> = { todos: presupuestos.length };
-  presupuestos.forEach((pr) => { counts[pr.estado] = (counts[pr.estado] || 0) + 1; });
+  const counts: Record<string, number> = { todos: presupuestos.length, facturado: 0 };
+  presupuestos.forEach((pr) => {
+    counts[pr.estado] = (counts[pr.estado] || 0) + 1;
+    if (facturadoIds.has(pr.id)) counts.facturado = (counts.facturado || 0) + 1;
+  });
 
   async function generateOCsFromPresupuesto(prId: string) {
     try {
@@ -818,7 +878,7 @@ export default function PresupuestosPage() {
 
       const { data: newPRRow, error: insertError } = await supabase
         .from("presupuestos")
-        .insert({ ...rest, estado: "borrador", version: 1 } as any)
+        .insert({ ...rest, estado: "pendiente", version: 1 } as any)
         .select()
         .single();
 
@@ -1053,27 +1113,72 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         action={{ label: "Nuevo PR", onClick: () => setShowNewPR(true) }}
       />
       <div className="p-4 sm:p-8 space-y-6">
-        {/* Status tabs + toggle seguimiento */}
+        {/* Status multi-select toggles + seguimiento */}
         <div className="flex items-center gap-3 overflow-x-auto pb-1">
-          <div className="flex gap-2">
-            {(["todos", "borrador", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as const).map((status) => (
-              <button
-                key={status}
-                onClick={() => { setFilter(status); if (vistaSeguimiento) setVistaSeguimiento(false); }}
-                className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                  filter === status && !vistaSeguimiento
-                    ? "bg-orange-500 text-white shadow-sm"
-                    : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
-                }`}
-              >
-                {status === "todos" ? "Todos" : statusConfig[status].label}
-                <span className={`rounded-full px-1.5 py-0.5 text-xs ${
-                  filter === status && !vistaSeguimiento ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
-                }`}>
-                  {counts[status] || 0}
-                </span>
-              </button>
-            ))}
+          <div className="flex gap-2 flex-wrap">
+            {/* Botón "Todos" */}
+            <button
+              onClick={() => toggleEstado("todos")}
+              className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                isAllSelected && !vistaSeguimiento
+                  ? "bg-orange-500 text-white shadow-sm"
+                  : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
+              }`}
+            >
+              {isAllSelected && <Check className="h-3.5 w-3.5" />}
+              Todos
+              <span className={`rounded-full px-1.5 py-0.5 text-xs ${
+                isAllSelected && !vistaSeguimiento ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
+              }`}>
+                {counts.todos || 0}
+              </span>
+            </button>
+            {/* Botones por estado */}
+            {(["pendiente", "aprobado", "rechazado", "postergado", "vencido"] as PRStatus[]).map((status) => {
+              const active = !isAllSelected && selectedEstados.has(status);
+              return (
+                <button
+                  key={status}
+                  onClick={() => toggleEstado(status)}
+                  className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                    active && !vistaSeguimiento
+                      ? "bg-orange-500 text-white shadow-sm"
+                      : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
+                  }`}
+                >
+                  {active && <Check className="h-3.5 w-3.5" />}
+                  {statusConfig[status].label}
+                  <span className={`rounded-full px-1.5 py-0.5 text-xs ${
+                    active && !vistaSeguimiento ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
+                  }`}>
+                    {counts[status] || 0}
+                  </span>
+                </button>
+              );
+            })}
+            {/* Botón Facturados */}
+            {(() => {
+              const active = !isAllSelected && selectedEstados.has("facturado");
+              return (
+                <button
+                  onClick={() => toggleEstado("facturado")}
+                  className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                    active && !vistaSeguimiento
+                      ? "bg-blue-600 text-white shadow-sm"
+                      : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
+                  }`}
+                >
+                  {active && <Check className="h-3.5 w-3.5" />}
+                  <FileText className="h-3.5 w-3.5" />
+                  Facturados
+                  <span className={`rounded-full px-1.5 py-0.5 text-xs ${
+                    active && !vistaSeguimiento ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
+                  }`}>
+                    {counts.facturado || 0}
+                  </span>
+                </button>
+              );
+            })()}
           </div>
           <div className="h-6 w-px bg-zinc-200 dark:bg-zinc-700 shrink-0" />
           <button
@@ -1087,6 +1192,10 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             <CalendarClock className="h-4 w-4" />
             Seguimiento
           </button>
+          <div className="h-6 w-px bg-zinc-200 dark:bg-zinc-700 shrink-0" />
+          <PendientesWidget
+            presupuestoOptions={presupuestos.map((p) => ({ id: p.id, numero: p.numero }))}
+          />
         </div>
 
         {/* Search + Vendedor filter */}
@@ -1360,7 +1469,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     <button onClick={() => handleDuplicate(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                       <Copy className="h-4 w-4" />
                     </button>
-                    {(row.estado === "borrador" || row.estado === "postergado") && (
+                    {row.estado === "postergado" && (
                       <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-950/40" title="Marcar como enviado">
                         <Send className="h-4 w-4" />
                       </button>
@@ -1469,7 +1578,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                   <Copy className="h-4 w-4" />
                 </button>
-                {selected.estado === "borrador" && (
+                {selected.estado === "pendiente" && (
                   <button onClick={() => handleDelete(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -1651,7 +1760,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
 
               {/* Action buttons */}
               <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700 flex flex-wrap gap-2">
-                {(selected.estado === "borrador" || selected.estado === "postergado") && (
+                {selected.estado === "postergado" && (
                   <button
                     onClick={() => { handleEstadoChange(selected.id, "pendiente"); }}
                     className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
