@@ -243,6 +243,7 @@ export default function PresupuestosPage() {
   // Nuevo PR modal
   const [showNewPR, setShowNewPR] = useState(false);
   const [newPRSaving, setNewPRSaving] = useState(false);
+  const [postCreatePR, setPostCreatePR] = useState<Presupuesto | null>(null); // PR recién creado
 
   // AI presupuesto
   const [showAIPanel, setShowAIPanel] = useState(false);
@@ -253,13 +254,36 @@ export default function PresupuestosPage() {
   const [newPR, setNewPR] = useState({
     cliente_id: "",
     vendedor_id: "",
+    sucursal_id: "",
+    contacto_id: "",
     moneda: "USD" as "USD" | "ARS",
     tipo_cambio: 0,
     markup_general: 30,
     observaciones: "",
     notas_internas: "",
-    items: [{ ...emptyItem }] as NewPRItem[],
+    items: [{ ...emptyItem, markup_porcentaje: 30 }] as NewPRItem[],
   });
+
+  // Sucursales y contactos del cliente seleccionado
+  const [clienteSucursales, setClienteSucursales] = useState<{ id: string; nombre: string }[]>([]);
+  const [clienteContactos, setClienteContactos] = useState<{ id: string; nombre: string; cargo: string; sucursal_id: string | null }[]>([]);
+
+  // Fetch sucursales + contactos cuando cambia el cliente
+  useEffect(() => {
+    if (!newPR.cliente_id) {
+      setClienteSucursales([]);
+      setClienteContactos([]);
+      return;
+    }
+    (async () => {
+      const [sucRes, conRes] = await Promise.all([
+        (supabase as any).from("cliente_sucursales").select("id, nombre").eq("cliente_id", newPR.cliente_id).eq("activo", true).order("principal", { ascending: false }),
+        (supabase as any).from("contactos").select("id, nombre, cargo, sucursal_id").eq("entity_type", "cliente").eq("entity_id", newPR.cliente_id).order("principal", { ascending: false }),
+      ]);
+      setClienteSucursales((sucRes.data || []) as { id: string; nombre: string }[]);
+      setClienteContactos((conRes.data || []) as { id: string; nombre: string; cargo: string; sucursal_id: string | null }[]);
+    })();
+  }, [newPR.cliente_id]);
 
   // Client search
   const [clientSearch, setClientSearch] = useState("");
@@ -544,6 +568,8 @@ export default function PresupuestosPage() {
         .insert({
           cliente_id: newPR.cliente_id,
           vendedor_id: newPR.vendedor_id,
+          sucursal_id: newPR.sucursal_id || null,
+          contacto_id: newPR.contacto_id || null,
           created_by: profile?.id,
           sociedad_id: sociedadActiva?.id || null,
           fecha: today,
@@ -586,9 +612,11 @@ export default function PresupuestosPage() {
       }
 
       setShowNewPR(false);
-      setNewPR({ cliente_id: "", vendedor_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem }] });
-      toast.success("Presupuesto creado correctamente");
+      setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
       await fetchPresupuestos();
+      // Mostrar diálogo post-creación con opciones correo/PDF
+      const createdPR = presupuestos.find((p) => p.id === newRow.id) || mapToPresupuesto(newRow as any);
+      setPostCreatePR(createdPR);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : JSON.stringify(err);
       toast.error(`Error al crear presupuesto: ${msg}`);
@@ -1133,7 +1161,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       </button>
                     )}
                     {row.estado === "rechazado" && (
-                      <button onClick={() => handleEstadoChange(row.id, "borrador")} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Reabrir como borrador">
+                      <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-950/40" title="Reabrir como pendiente">
                         <Edit3 className="h-4 w-4" />
                       </button>
                     )}
@@ -1448,10 +1476,10 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 )}
                 {selected.estado === "rechazado" && (
                   <button
-                    onClick={() => { handleEstadoChange(selected.id, "borrador"); }}
-                    className="flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition-colors dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    onClick={() => { handleEstadoChange(selected.id, "pendiente"); }}
+                    className="flex items-center gap-2 rounded-lg border border-orange-300 px-4 py-2 text-sm font-medium text-orange-700 hover:bg-orange-50 transition-colors dark:border-orange-600 dark:text-orange-300 dark:hover:bg-orange-900/20"
                   >
-                    <Edit3 className="h-4 w-4" /> Reabrir como borrador
+                    <Edit3 className="h-4 w-4" /> Reabrir como pendiente
                   </button>
                 )}
                 {selected.estado === "aprobado" && (
@@ -1555,6 +1583,29 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             placeholder="Seleccionar vendedor..."
             options={vendedores.map((v) => ({ value: v.id, label: v.full_name }))}
           />
+          {clienteSucursales.length > 0 && (
+            <Select
+              label="Sucursal"
+              value={newPR.sucursal_id}
+              onChange={(e) => setNewPR((p) => ({ ...p, sucursal_id: e.target.value, contacto_id: "" }))}
+              placeholder="Seleccionar sucursal..."
+              options={clienteSucursales.map((s) => ({ value: s.id, label: s.nombre }))}
+            />
+          )}
+          {clienteContactos.length > 0 && (
+            <Select
+              label="Solicitante"
+              value={newPR.contacto_id}
+              onChange={(e) => setNewPR((p) => ({ ...p, contacto_id: e.target.value }))}
+              placeholder="Seleccionar contacto..."
+              options={
+                (newPR.sucursal_id
+                  ? clienteContactos.filter((c) => !c.sucursal_id || c.sucursal_id === newPR.sucursal_id)
+                  : clienteContactos
+                ).map((c) => ({ value: c.id, label: c.cargo ? `${c.nombre} (${c.cargo})` : c.nombre }))
+              }
+            />
+          )}
           <Select
             label="Moneda presupuesto"
             value={newPR.moneda}
@@ -1819,6 +1870,62 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           autoFocus
         />
       </Modal>
+
+      {/* ==================== POST-CREATE MODAL ==================== */}
+      {postCreatePR && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <Card className="w-full max-w-sm p-6 space-y-4">
+            <div className="text-center">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
+                <CheckCircle2 className="h-6 w-6 text-green-600" />
+              </div>
+              <h3 className="text-lg font-semibold dark:text-white">Presupuesto creado</h3>
+              <p className="text-sm text-zinc-500 mt-1">{postCreatePR.numero}</p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  const pr = postCreatePR;
+                  const text = buildPRSummaryText(pr);
+                  const email = pr.clienteNombre ? "" : "";
+                  const subject = encodeURIComponent(`Presupuesto ${pr.numero}`);
+                  const body = encodeURIComponent(text);
+                  window.open(`mailto:?subject=${subject}&body=${body}`, "_blank");
+                  setPostCreatePR(null);
+                }}
+                className="flex items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-700 transition-colors"
+              >
+                <Mail className="h-4 w-4" /> Enviar por correo
+              </button>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(buildPRSummaryText(postCreatePR));
+                  toast.success("Presupuesto copiado al portapapeles");
+                  setPostCreatePR(null);
+                }}
+                className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+              >
+                <ClipboardCopy className="h-4 w-4" /> Copiar resumen
+              </button>
+              <button
+                onClick={() => {
+                  setPostCreatePR(null);
+                  setSelected(postCreatePR);
+                }}
+                className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+              >
+                <Eye className="h-4 w-4" /> Ver presupuesto
+              </button>
+              <button
+                onClick={() => setPostCreatePR(null)}
+                className="text-sm text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 mt-1"
+              >
+                Cerrar
+              </button>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {/* ==================== PRODUCT SEARCH MODAL ==================== */}
       {productSearchOpen && (
