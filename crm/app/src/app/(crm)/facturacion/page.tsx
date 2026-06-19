@@ -13,7 +13,7 @@ import { mockFacturas } from "@/lib/mock-data";
 import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
-  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus,
+  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 
@@ -307,6 +307,43 @@ export default function FacturacionPage() {
     navigator.clipboard.writeText(lines.filter(Boolean).join("\n"));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  function buildFacturaSummaryText(f: FacturaRow) {
+    const comp = formatComprobante(f.tipo, f.punto_venta, f.numero);
+    const lines = [
+      `${comp}`,
+      "",
+      `Fecha: ${formatDate(f.fecha)}`,
+      `Estado: ${estadoConfig[f.estado]?.label || f.estado}`,
+      "",
+      `Emisor: ${EMISOR.razonSocial}`,
+      `CUIT: ${EMISOR.cuit}`,
+      "",
+      `Cliente: ${f.clientes?.razon_social || "\u2014"}`,
+      f.clientes?.cuit ? `CUIT: ${f.clientes.cuit}` : null,
+      f.oc_cliente ? `OC Cliente: ${f.oc_cliente}` : null,
+      "",
+      "DETALLE:",
+      ...detailItems.map((it, i) => `${i + 1}. ${it.descripcion} — ${it.cantidad} x ${formatCurrency(it.precio_unitario)} = ${formatCurrency(it.subtotal)}`),
+      "",
+      `Subtotal: ${formatCurrency(Number(f.subtotal))}`,
+      `IVA: ${formatCurrency(Number(f.iva))}`,
+      `TOTAL: ${formatCurrency(Number(f.total))}`,
+      f.moneda === "USD" && f.tipo_cambio ? `Moneda: USD — TC: ${Number(f.tipo_cambio).toLocaleString("es-AR")}` : null,
+      f.cae ? `\nCAE: ${f.cae}` : null,
+      f.cae_vencimiento ? `Vto CAE: ${formatDate(f.cae_vencimiento)}` : null,
+    ];
+    return lines.filter(Boolean).join("\n");
+  }
+
+  function handleEmailFactura(f: FacturaRow) {
+    const text = buildFacturaSummaryText(f);
+    const comp = formatComprobante(f.tipo, f.punto_venta, f.numero);
+    const emailTo = f.clientes?.email || "";
+    const subject = encodeURIComponent(comp);
+    const body = encodeURIComponent(text);
+    window.open(`mailto:${encodeURIComponent(emailTo)}?subject=${subject}&body=${body}`, "_blank");
   }
 
   function handlePrintFactura(f: FacturaRow) {
@@ -816,7 +853,10 @@ ${f.cae ? `
                 </div>
               </div>
               <div className="flex items-center gap-1">
-                <button onClick={() => handleCopy(detailFactura)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
+                <button onClick={() => handleEmailFactura(detailFactura)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" title="Enviar por correo">
+                  <Mail className="h-3.5 w-3.5" /> Email
+                </button>
+                <button onClick={() => handleCopy(detailFactura)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" title="Copiar resumen">
                   {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
                   {copied ? "Copiado" : "Copiar"}
                 </button>

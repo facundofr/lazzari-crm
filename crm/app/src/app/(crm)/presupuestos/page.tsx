@@ -14,7 +14,7 @@ import { supabase } from "@/lib/supabase/client";
 import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
-  Printer, Sparkles, Download, ClipboardCopy, Check, Mail,
+  Printer, Sparkles, Download, ClipboardCopy, Check, Mail, GripVertical,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -250,6 +250,19 @@ export default function PresupuestosPage() {
   const [aiMessage, setAiMessage] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiNotes, setAiNotes] = useState("");
+  // Drag-to-reorder items
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+  function reorderItems(fromIdx: number, toIdx: number) {
+    setNewPR(prev => {
+      const items = [...prev.items];
+      const [moved] = items.splice(fromIdx, 1);
+      items.splice(toIdx, 0, moved);
+      return { ...prev, items };
+    });
+  }
+
   const [clientes, setClientes] = useState<{id: string; razon_social: string}[]>([]);
   const [newPR, setNewPR] = useState({
     cliente_id: "",
@@ -1725,6 +1738,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
+                  <th className="w-7"></th>
                   <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-20">Codigo</th>
                   <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500">Descripcion</th>
                   <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-28">Proveedor</th>
@@ -1740,7 +1754,35 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 {newPR.items.map((item, idx) => {
                   const belowCost = item.precio_venta > 0 && item.precio_venta < item.precio_costo;
                   return (
-                    <tr key={idx} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
+                    <tr
+                      key={idx}
+                      draggable
+                      onDragStart={(e) => {
+                        setDragIdx(idx);
+                        e.dataTransfer.effectAllowed = "move";
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        setDragOverIdx(idx);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (dragIdx !== null && dragIdx !== idx) {
+                          reorderItems(dragIdx, idx);
+                        }
+                        setDragIdx(null);
+                        setDragOverIdx(null);
+                      }}
+                      onDragEnd={() => {
+                        setDragIdx(null);
+                        setDragOverIdx(null);
+                      }}
+                      className={`${belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""} ${dragIdx === idx ? "opacity-40" : ""} ${dragOverIdx === idx && dragIdx !== idx ? "border-t-2 border-blue-500" : ""}`}
+                    >
+                      <td className="px-1 py-1.5 cursor-grab active:cursor-grabbing">
+                        <GripVertical className="h-4 w-4 text-zinc-300 dark:text-zinc-600" />
+                      </td>
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1">
                           <input value={item.codigo} onChange={(e) => updateNewPRItem(idx, "codigo", e.target.value)}

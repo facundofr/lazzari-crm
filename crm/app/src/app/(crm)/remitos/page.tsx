@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy } from "lucide-react";
+import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate } from "@/lib/utils";
@@ -44,7 +44,7 @@ interface RemitoRow {
   estado: string;
   observaciones: string;
   valor_declarado: number | null;
-  clientes: { razon_social: string } | null;
+  clientes: { razon_social: string; email?: string } | null;
   remito_items: { id: string }[];
 }
 
@@ -130,7 +130,7 @@ export default function RemitosPage() {
       try {
         let q = supabase
           .from("remitos")
-          .select(`*, clientes(razon_social), remito_items(id)`)
+          .select(`*, clientes(razon_social, email), remito_items(id)`)
           .order("fecha", { ascending: false });
 
         if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
@@ -303,9 +303,16 @@ export default function RemitosPage() {
 
   function handleCopySummary() {
     if (!detailRemito) return;
+    navigator.clipboard.writeText(buildRemitoSummaryText());
+    setCopiedSummary(true);
+    setTimeout(() => setCopiedSummary(false), 2000);
+  }
+
+  function buildRemitoSummaryText() {
+    if (!detailRemito) return "";
     const lines = [
       `REMITO ${detailRemito.numero}`,
-      `Cliente: ${detailRemito.clientes?.razon_social || "—"}`,
+      `Cliente: ${detailRemito.clientes?.razon_social || "\u2014"}`,
       `Fecha: ${formatDate(detailRemito.fecha)}`,
       `Estado: ${estadoConfig[detailRemito.estado]?.label || detailRemito.estado}`,
       detailRemito.valor_declarado ? `VALOR DECLARADO: $ ${Number(detailRemito.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "",
@@ -314,9 +321,16 @@ export default function RemitosPage() {
       "ITEMS:",
       ...detailItems.map((it, i) => `${i + 1}. ${it.descripcion} — ${it.cantidad} ${it.unidad || "u"}`),
     ].filter(Boolean).join("\n");
-    navigator.clipboard.writeText(lines);
-    setCopiedSummary(true);
-    setTimeout(() => setCopiedSummary(false), 2000);
+    return lines;
+  }
+
+  function handleEmailRemito() {
+    if (!detailRemito) return;
+    const text = buildRemitoSummaryText();
+    const emailTo = detailRemito.clientes?.email || "";
+    const subject = encodeURIComponent(`Remito ${detailRemito.numero}`);
+    const body = encodeURIComponent(text);
+    window.open(`mailto:${encodeURIComponent(emailTo)}?subject=${subject}&body=${body}`, "_blank");
   }
 
   function handleDownloadPDF() {
@@ -499,6 +513,9 @@ export default function RemitosPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                <button onClick={handleEmailRemito} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Enviar por correo">
+                  <Mail className="h-3.5 w-3.5" /> Email
+                </button>
                 <button onClick={handleCopySummary} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Copiar resumen">
                   {copiedSummary ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
                   {copiedSummary ? "Copiado" : "Copiar"}

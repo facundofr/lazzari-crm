@@ -7,9 +7,36 @@ import { DataTable } from "@/components/ui/data-table";
 import { mockUsers } from "@/lib/mock-data";
 import { ROLE_LABELS, ROLE_PERMISSIONS } from "@/lib/types";
 import type { User, Role } from "@/lib/types";
-import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2 } from "lucide-react";
+import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2, Mail, Save, RotateCcw } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { useUser } from "@/lib/auth-context";
+
+type TemplateTipo = "presupuesto" | "factura" | "remito";
+
+interface EmailTemplate {
+  tipo: TemplateTipo;
+  asunto: string;
+  cuerpo: string;
+}
+
+const DEFAULT_TEMPLATES: Record<TemplateTipo, EmailTemplate> = {
+  presupuesto: {
+    tipo: "presupuesto",
+    asunto: "Presupuesto {{numero}} — {{sociedad}}",
+    cuerpo: "Estimado/a,\n\nAdjuntamos el presupuesto {{numero}} por un total de {{total}}.\n\nQuedamos a disposición para cualquier consulta.\n\nSaludos,\n{{sociedad}}",
+  },
+  factura: {
+    tipo: "factura",
+    asunto: "Factura {{numero}} — {{sociedad}}",
+    cuerpo: "Estimado/a,\n\nAdjuntamos la factura {{numero}} por un total de {{total}}.\n\nDatos bancarios:\nBanco: [completar]\nCBU: [completar]\nAlias: [completar]\n\nSaludos,\n{{sociedad}}",
+  },
+  remito: {
+    tipo: "remito",
+    asunto: "Remito {{numero}} — {{sociedad}}",
+    cuerpo: "Estimado/a,\n\nAdjuntamos el remito {{numero}}.\n\nSaludos,\n{{sociedad}}",
+  },
+};
 
 const roleBadgeVariant: Record<Role, "success" | "warning" | "danger" | "info" | "purple" | "outline"> = {
   super_admin: "danger",
@@ -20,11 +47,17 @@ const roleBadgeVariant: Record<Role, "success" | "warning" | "danger" | "info" |
 };
 
 export default function ConfiguracionPage() {
-  const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones">("usuarios");
+  const { sociedadActiva } = useUser();
+  const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas">("usuarios");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dbUsers, setDbUsers] = useState<User[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
+
+  // Email templates state
+  const [templates, setTemplates] = useState<Record<TemplateTipo, EmailTemplate>>({ ...DEFAULT_TEMPLATES });
+  const [templateSaving, setTemplateSaving] = useState<TemplateTipo | null>(null);
+  const [templateSaved, setTemplateSaved] = useState<TemplateTipo | null>(null);
 
   // Empresa form — controlled inputs
   const [empresa, setEmpresa] = useState({
@@ -88,6 +121,75 @@ export default function ConfiguracionPage() {
     fetchData();
   }, []);
 
+  // Fetch email templates when sociedadActiva changes
+  useEffect(() => {
+    async function fetchTemplates() {
+      if (!sociedadActiva) return;
+      try {
+        const { data } = await (supabase as any)
+          .from("email_templates")
+          .select("tipo, asunto, cuerpo")
+          .eq("sociedad_id", sociedadActiva.id);
+        if (data && data.length > 0) {
+          const loaded = { ...DEFAULT_TEMPLATES };
+          for (const row of data) {
+            if (row.tipo in loaded) {
+              loaded[row.tipo as TemplateTipo] = {
+                tipo: row.tipo,
+                asunto: row.asunto || DEFAULT_TEMPLATES[row.tipo as TemplateTipo].asunto,
+                cuerpo: row.cuerpo || DEFAULT_TEMPLATES[row.tipo as TemplateTipo].cuerpo,
+              };
+            }
+          }
+          setTemplates(loaded);
+        } else {
+          setTemplates({ ...DEFAULT_TEMPLATES });
+        }
+      } catch {
+        setTemplates({ ...DEFAULT_TEMPLATES });
+      }
+    }
+    fetchTemplates();
+  }, [sociedadActiva]);
+
+  function handleTemplateChange(tipo: TemplateTipo, field: "asunto" | "cuerpo", value: string) {
+    setTemplates((prev) => ({
+      ...prev,
+      [tipo]: { ...prev[tipo], [field]: value },
+    }));
+    setTemplateSaved(null);
+  }
+
+  async function handleSaveTemplate(tipo: TemplateTipo) {
+    if (!sociedadActiva) return;
+    setTemplateSaving(tipo);
+    try {
+      await (supabase as any).from("email_templates").upsert(
+        {
+          sociedad_id: sociedadActiva.id,
+          tipo,
+          asunto: templates[tipo].asunto,
+          cuerpo: templates[tipo].cuerpo,
+        },
+        { onConflict: "sociedad_id,tipo" }
+      );
+      setTemplateSaved(tipo);
+      setTimeout(() => setTemplateSaved(null), 3000);
+    } catch (err) {
+      console.error("Error saving email template:", err);
+    } finally {
+      setTemplateSaving(null);
+    }
+  }
+
+  function handleRestoreTemplate(tipo: TemplateTipo) {
+    setTemplates((prev) => ({
+      ...prev,
+      [tipo]: { ...DEFAULT_TEMPLATES[tipo] },
+    }));
+    setTemplateSaved(null);
+  }
+
   // Notification toggles
   const [notifs, setNotifs] = useState({
     pr_vencer: true,
@@ -129,6 +231,7 @@ export default function ConfiguracionPage() {
     { id: "empresa" as const, label: "Empresa", icon: Building2 },
     { id: "integraciones" as const, label: "Integraciones", icon: Plug },
     { id: "notificaciones" as const, label: "Notificaciones", icon: Bell },
+    { id: "plantillas" as const, label: "Plantillas de Email", icon: Mail },
   ];
 
   return (
@@ -359,6 +462,88 @@ export default function ConfiguracionPage() {
               ))}
             </div>
           </Card>
+        )}
+
+        {tab === "plantillas" && (
+          <div className="space-y-6">
+            <div>
+              <h3 className="font-semibold text-zinc-900 dark:text-white">Plantillas de Email</h3>
+              <p className="text-sm text-zinc-500">
+                Editá las leyendas que se usan al enviar documentos por email.
+                {sociedadActiva && <span className="ml-1 font-medium text-zinc-700 dark:text-zinc-300">Sociedad: {sociedadActiva.nombre}</span>}
+              </p>
+            </div>
+
+            {(["presupuesto", "factura", "remito"] as TemplateTipo[]).map((tipo) => {
+              const template = templates[tipo];
+              const label = tipo === "presupuesto" ? "Presupuesto" : tipo === "factura" ? "Factura" : "Remito";
+              const isSaving = templateSaving === tipo;
+              const isSaved = templateSaved === tipo;
+
+              return (
+                <Card key={tipo}>
+                  <CardHeader>
+                    <div className="flex items-center gap-3">
+                      <div className="rounded-lg bg-orange-50 p-2 text-orange-600 dark:bg-orange-900/30">
+                        <Mail className="h-5 w-5" />
+                      </div>
+                      <CardTitle>{label}</CardTitle>
+                    </div>
+                  </CardHeader>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Asunto</label>
+                      <input
+                        type="text"
+                        value={template.asunto}
+                        onChange={(e) => handleTemplateChange(tipo, "asunto", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Cuerpo</label>
+                      <textarea
+                        rows={6}
+                        value={template.cuerpo}
+                        onChange={(e) => handleTemplateChange(tipo, "cuerpo", e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-y"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className="text-xs text-zinc-400">Variables disponibles:</span>
+                      {["{{numero}}", "{{cliente}}", "{{sociedad}}", "{{total}}", "{{fecha}}"].map((v) => (
+                        <Badge key={v} variant="outline">{v}</Badge>
+                      ))}
+                    </div>
+                    <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                      <button
+                        onClick={() => handleRestoreTemplate(tipo)}
+                        className="flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        Restaurar predeterminado
+                      </button>
+                      <div className="flex items-center gap-3">
+                        {isSaved && (
+                          <span className="flex items-center gap-1 text-sm text-emerald-600">
+                            <CheckCircle2 className="h-4 w-4" /> Guardado
+                          </span>
+                        )}
+                        <button
+                          onClick={() => handleSaveTemplate(tipo)}
+                          disabled={isSaving}
+                          className="flex items-center gap-2 rounded-lg bg-orange-500 px-5 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                        >
+                          {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                          Guardar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
         )}
       </div>
     </>
