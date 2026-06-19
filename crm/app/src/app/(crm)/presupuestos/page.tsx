@@ -653,14 +653,26 @@ export default function PresupuestosPage() {
         .eq("presupuesto_id", prId);
       if (itemsErr || !items || items.length === 0) return;
 
-      // Get presupuesto header for moneda and numero
-      const { data: prHeader } = await supabase
+      // Get presupuesto header for moneda, numero, and sociedad_id
+      const { data: prHeader } = await (supabase as any)
         .from("presupuestos")
-        .select("moneda, numero")
+        .select("moneda, numero, sociedad_id")
         .eq("id", prId)
         .single();
       const moneda = prHeader?.moneda ?? "USD";
       const prNumero = prHeader?.numero ?? "";
+      const sociedadId = prHeader?.sociedad_id ?? null;
+
+      // Check if OCs already exist for this PR (avoid duplicates on re-approval)
+      const { data: existingOCs } = await supabase
+        .from("ordenes_compra")
+        .select("id")
+        .eq("presupuesto_origen_id", prId)
+        .not("estado", "eq", "cancelada");
+      if (existingOCs && existingOCs.length > 0) {
+        toast.info("Este PR ya tiene OC generadas. No se crearon duplicados.");
+        return;
+      }
 
       // Group items by proveedor_id (skip items without proveedor)
       const byProveedor: Record<string, any[]> = {};
@@ -690,6 +702,7 @@ export default function PresupuestosPage() {
           .insert({
             proveedor_id: provId,
             presupuesto_origen_id: prId,
+            sociedad_id: sociedadId,
             fecha: today,
             moneda,
             estado: "borrador",

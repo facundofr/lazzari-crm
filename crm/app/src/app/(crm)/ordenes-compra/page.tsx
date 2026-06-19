@@ -13,6 +13,7 @@ import {
   ShoppingCart, Clock, CheckCircle2, Truck, Loader2,
   X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
+  PackageCheck,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
@@ -67,6 +68,7 @@ interface DetailItem {
   unidad: string | null;
   precio_unitario: number;
   subtotal: number;
+  producto_id: string | null;
 }
 
 interface ProveedorOption {
@@ -183,6 +185,8 @@ export default function OrdenesCompraPage() {
   const [detailItems, setDetailItems] = useState<DetailItem[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [savingRecepcion, setSavingRecepcion] = useState<string | null>(null);
+  // Reception form: quantities being received in this batch (keyed by item id)
+  const [recepcionQtys, setRecepcionQtys] = useState<Record<string, number>>({});
 
   // ── Fetch main data ──────────────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -236,7 +240,7 @@ export default function OrdenesCompraPage() {
     try {
       const { data, error } = await supabase
         .from("orden_compra_items")
-        .select("id, codigo, descripcion, cantidad, cantidad_recibida, unidad, precio_unitario, subtotal")
+        .select("id, codigo, descripcion, cantidad, cantidad_recibida, unidad, precio_unitario, subtotal, producto_id" as any)
         .eq("orden_id", ocId)
         .order("orden", { ascending: true });
       if (!error && data) {
@@ -313,32 +317,71 @@ export default function OrdenesCompraPage() {
     }
   };
 
-  const handleUpdateRecepcion = async (itemId: string, cantidadRecibida: number) => {
-    setSavingRecepcion(itemId);
+  const handleRegistrarRecepcion = async () => {
+    if (!detailOC) return;
+    // Check there's at least one item with qty > 0
+    const hasQty = Object.values(recepcionQtys).some((v) => v > 0);
+    if (!hasQty) { alert("Ingresa al menos una cantidad recibida"); return; }
+    setSavingRecepcion("all");
     try {
-      const { error } = await supabase
-        .from("orden_compra_items")
-        .update({ cantidad_recibida: cantidadRecibida } as any)
-        .eq("id", itemId);
-      if (error) throw error;
-      // Update local state
-      setDetailItems((prev) => prev.map((it) => it.id === itemId ? { ...it, cantidad_recibida: cantidadRecibida } : it));
-      // Check if all items fully received → update OC estado
-      if (detailOC) {
-        const updatedItems = detailItems.map((it) => it.id === itemId ? { ...it, cantidad_recibida: cantidadRecibida } : it);
-        const allReceived = updatedItems.every((it) => Number(it.cantidad_recibida) >= Number(it.cantidad));
-        const someReceived = updatedItems.some((it) => Number(it.cantidad_recibida) > 0);
-        let newEstado = detailOC.estado;
-        if (allReceived && updatedItems.length > 0) newEstado = "recibida";
-        else if (someReceived) newEstado = "recibida_parcial";
-        if (newEstado !== detailOC.estado && ["confirmada", "recibida_parcial"].includes(detailOC.estado)) {
-          await supabase.from("ordenes_compra").update({ estado: newEstado } as any).eq("id", detailOC.id);
-          setDetailOC({ ...detailOC, estado: newEstado });
-          await fetchData();
+      // For each item with qty > 0, update cantidad_recibida and stock
+      for (const item of detailItems) {
+        const qtyRecibida = recepcionQtys[item.id] || 0;
+        if (qtyRecibida <= 0) continue;
+        const newCantidadRecibida = Math.min(
+          Number(item.cantidad_recibida) + qtyRecibida,
+          Number(item.cantidad)
+        );
+        // Update orden_compra_items
+        const { error: itemErr } = await supabase
+          .from("orden_compra_items")
+          .update({ cantidad_recibida: newCantidadRecibida } as any)
+          .eq("id", item.id);
+        if (itemErr) throw itemErr;
+
+        // Update stock in productos if producto_id exists
+        if (item.producto_id) {
+          // Fetch current stock
+          const { data: prod } = await (supabase as any)
+            .from("productos")
+            .select("stock")
+            .eq("id", item.producto_id)
+            .single();
+          if (prod) {
+            const currentStock = Number(prod.stock) || 0;
+            await (supabase as any)
+              .from("productos")
+              .update({ stock: currentStock + qtyRecibida })
+              .eq("id", item.producto_id);
+          }
         }
       }
+
+      // Compute new estado based on updated quantities
+      const updatedItems = detailItems.map((it) => ({
+        ...it,
+        cantidad_recibida: Math.min(
+          Number(it.cantidad_recibida) + (recepcionQtys[it.id] || 0),
+          Number(it.cantidad)
+        ),
+      }));
+      const allReceived = updatedItems.every((it) => Number(it.cantidad_recibida) >= Number(it.cantidad));
+      const someReceived = updatedItems.some((it) => Number(it.cantidad_recibida) > 0);
+      let newEstado = detailOC.estado;
+      if (allReceived && updatedItems.length > 0) newEstado = "recibida";
+      else if (someReceived) newEstado = "recibida_parcial";
+
+      if (newEstado !== detailOC.estado) {
+        await supabase.from("ordenes_compra").update({ estado: newEstado } as any).eq("id", detailOC.id);
+      }
+
+      // Update local state
+      setDetailItems(updatedItems);
+      setDetailOC({ ...detailOC, estado: newEstado });
+      setRecepcionQtys({});
+      await fetchData();
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Error al actualizar recepcion");
+      alert(err instanceof Error ? err.message : "Error al registrar recepcion");
     } finally {
       setSavingRecepcion(null);
     }
@@ -346,16 +389,43 @@ export default function OrdenesCompraPage() {
 
   const handleMarcarTodoRecibido = async () => {
     if (!detailOC || !confirm("¿Marcar todos los items como recibidos?")) return;
+    // Fill recepcionQtys with pending amounts and call handleRegistrarRecepcion
+    const qtys: Record<string, number> = {};
+    for (const item of detailItems) {
+      const pending = Number(item.cantidad) - Number(item.cantidad_recibida);
+      if (pending > 0) qtys[item.id] = pending;
+    }
+    setRecepcionQtys(qtys);
+    // We need to trigger the registration with these qtys directly
     setSavingRecepcion("all");
     try {
       for (const item of detailItems) {
-        if (Number(item.cantidad_recibida) < Number(item.cantidad)) {
-          await supabase.from("orden_compra_items").update({ cantidad_recibida: item.cantidad } as any).eq("id", item.id);
+        const qtyRecibida = qtys[item.id] || 0;
+        if (qtyRecibida <= 0) continue;
+        await supabase
+          .from("orden_compra_items")
+          .update({ cantidad_recibida: item.cantidad } as any)
+          .eq("id", item.id);
+        // Update stock
+        if (item.producto_id) {
+          const { data: prod } = await (supabase as any)
+            .from("productos")
+            .select("stock")
+            .eq("id", item.producto_id)
+            .single();
+          if (prod) {
+            const currentStock = Number(prod.stock) || 0;
+            await (supabase as any)
+              .from("productos")
+              .update({ stock: currentStock + qtyRecibida })
+              .eq("id", item.producto_id);
+          }
         }
       }
       await supabase.from("ordenes_compra").update({ estado: "recibida" } as any).eq("id", detailOC.id);
       setDetailOC({ ...detailOC, estado: "recibida" });
       setDetailItems((prev) => prev.map((it) => ({ ...it, cantidad_recibida: it.cantidad })));
+      setRecepcionQtys({});
       await fetchData();
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Error");
@@ -648,8 +718,9 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         const subtotal = selectedItems.reduce((sum, it) => sum + it.precio_costo * it.cantidad, 0);
         const iva = Math.round(subtotal * 0.21 * 100) / 100;
 
-        // Get unique PR IDs for observaciones
+        // Get unique PR IDs for observaciones and origin linking
         const prNums = [...new Set(selectedItems.map(it => it.pr_numero))];
+        const prIds = [...new Set(selectedItems.map(it => it.pr_id))];
         const obs = `Consolidado de ${prNums.length} presupuesto(s): ${prNums.join(", ")}`;
 
         const { data: ocRow, error: ocErr } = await supabase
@@ -663,6 +734,8 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             iva,
             total: Math.round((subtotal + iva) * 100) / 100,
             observaciones: obs,
+            sociedad_id: sociedadActiva?.id || null,
+            presupuesto_origen_id: prIds.length === 1 ? prIds[0] : null,
           } as any)
           .select("id")
           .single();
@@ -884,20 +957,17 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 render: (row) => {
                   const totalQty = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
                   const recibido = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad_recibida), 0);
-                  const pct = totalQty > 0 ? Math.round((recibido / totalQty) * 100) : 0;
-                  return (
-                    <div className="w-20">
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="text-zinc-500">{pct}%</span>
-                      </div>
-                      <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800">
-                        <div
-                          className={`h-1.5 rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 0 ? "bg-amber-500" : "bg-zinc-300"}`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
+                  if (row.estado === "recibida") {
+                    return <Badge variant="success">Completa</Badge>;
+                  }
+                  if (row.estado === "recibida_parcial") {
+                    return <Badge variant="purple">Parcial ({recibido}/{totalQty})</Badge>;
+                  }
+                  if (row.estado === "confirmada") {
+                    return <Badge variant="warning">Pend. recepcion</Badge>;
+                  }
+                  // For other states (borrador, enviada, cancelada) show a dash
+                  return <span className="text-zinc-300">{"\u2014"}</span>;
                 },
               },
               {
@@ -1303,7 +1373,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 </div>
               </div>
 
-              {/* ── Items table with reception ─────────────────────────── */}
+              {/* ── Items table ─────────────────────────────────────── */}
               <div>
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold">Items ({detailItems.length})</h3>
@@ -1338,7 +1408,6 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                           const pct = Number(item.cantidad) > 0
                             ? Math.round((Number(item.cantidad_recibida) / Number(item.cantidad)) * 100)
                             : 0;
-                          const canEditRecepcion = ["confirmada", "recibida_parcial"].includes(detailOC.estado);
                           return (
                             <tr key={item.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                               <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
@@ -1352,42 +1421,17 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                               </td>
                               <td className="px-3 py-2">
                                 <div className="flex items-center gap-2 justify-center">
-                                  {canEditRecepcion ? (
-                                    <div className="flex items-center gap-1">
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        max={Number(item.cantidad)}
-                                        value={item.cantidad_recibida}
-                                        onChange={(e) => {
-                                          const val = Math.min(Number(e.target.value), Number(item.cantidad));
-                                          setDetailItems((prev) => prev.map((it) => it.id === item.id ? { ...it, cantidad_recibida: val } : it));
-                                        }}
-                                        onBlur={(e) => {
-                                          const val = Math.min(Math.max(0, Number(e.target.value)), Number(item.cantidad));
-                                          if (val !== Number(item.cantidad_recibida)) {
-                                            handleUpdateRecepcion(item.id, val);
-                                          }
-                                        }}
-                                        className="w-14 text-center rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-1 py-0.5 text-xs"
-                                        disabled={savingRecepcion === item.id}
+                                  <div className="w-20">
+                                    <div className="flex justify-between text-xs mb-0.5">
+                                      <span>{item.cantidad_recibida}/{item.cantidad}</span>
+                                    </div>
+                                    <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800">
+                                      <div
+                                        className={`h-1.5 rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 0 ? "bg-amber-500" : "bg-zinc-300"}`}
+                                        style={{ width: `${pct}%` }}
                                       />
-                                      <span className="text-xs text-zinc-400">/ {item.cantidad}</span>
-                                      {savingRecepcion === item.id && <Loader2 className="h-3 w-3 animate-spin text-orange-500" />}
                                     </div>
-                                  ) : (
-                                    <div className="w-20">
-                                      <div className="flex justify-between text-xs mb-0.5">
-                                        <span>{item.cantidad_recibida}/{item.cantidad}</span>
-                                      </div>
-                                      <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800">
-                                        <div
-                                          className={`h-1.5 rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 0 ? "bg-amber-500" : "bg-zinc-300"}`}
-                                          style={{ width: `${pct}%` }}
-                                        />
-                                      </div>
-                                    </div>
-                                  )}
+                                  </div>
                                 </div>
                               </td>
                             </tr>
@@ -1398,6 +1442,115 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   </div>
                 )}
               </div>
+
+              {/* ── Recepcion de mercaderia ─────────────────────────── */}
+              {["confirmada", "recibida_parcial"].includes(detailOC.estado) && detailItems.length > 0 && !detailLoading && (
+                <div className="rounded-lg border-2 border-violet-200 dark:border-violet-800 bg-violet-50/50 dark:bg-violet-900/10 p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold flex items-center gap-2 text-violet-700 dark:text-violet-300">
+                      <PackageCheck className="h-4 w-4" />
+                      Recepcion de mercaderia
+                    </h3>
+                    <button
+                      onClick={handleMarcarTodoRecibido}
+                      disabled={savingRecepcion === "all"}
+                      className="text-xs font-medium text-violet-600 hover:text-violet-800 dark:text-violet-400 dark:hover:text-violet-200 transition-colors"
+                    >
+                      Marcar todo recibido
+                    </button>
+                  </div>
+
+                  <div className="border border-violet-200 dark:border-violet-700 rounded-lg overflow-hidden bg-white dark:bg-zinc-900">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-violet-50 dark:bg-violet-900/30 text-left text-xs text-violet-600 dark:text-violet-300 uppercase">
+                          <th className="px-3 py-2">Descripcion</th>
+                          <th className="px-3 py-2 text-center">Pedido</th>
+                          <th className="px-3 py-2 text-center">Ya recibido</th>
+                          <th className="px-3 py-2 text-center">Pendiente</th>
+                          <th className="px-3 py-2 text-center">Recibir ahora</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                        {detailItems.map((item) => {
+                          const pendiente = Math.max(0, Number(item.cantidad) - Number(item.cantidad_recibida));
+                          const fullyReceived = pendiente === 0;
+                          return (
+                            <tr
+                              key={item.id}
+                              className={fullyReceived ? "opacity-50 bg-emerald-50/50 dark:bg-emerald-900/10" : ""}
+                            >
+                              <td className="px-3 py-2">
+                                <div className="max-w-[220px] truncate" title={item.descripcion}>
+                                  {item.codigo && <span className="font-mono text-xs text-zinc-400 mr-1">{item.codigo}</span>}
+                                  {item.descripcion}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 text-center font-medium">{item.cantidad}</td>
+                              <td className="px-3 py-2 text-center">
+                                <span className={Number(item.cantidad_recibida) > 0 ? "text-emerald-600 font-medium" : "text-zinc-400"}>
+                                  {item.cantidad_recibida}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <span className={pendiente > 0 ? "text-amber-600 font-medium" : "text-emerald-600"}>
+                                  {pendiente}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2">
+                                <div className="flex items-center justify-center">
+                                  {fullyReceived ? (
+                                    <Check className="h-4 w-4 text-emerald-500" />
+                                  ) : (
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      max={pendiente}
+                                      value={recepcionQtys[item.id] || 0}
+                                      onChange={(e) => {
+                                        const val = Math.min(Math.max(0, Number(e.target.value)), pendiente);
+                                        setRecepcionQtys((prev) => ({ ...prev, [item.id]: val }));
+                                      }}
+                                      className="w-16 text-center rounded border border-violet-300 dark:border-violet-600 bg-white dark:bg-zinc-800 px-1 py-1 text-sm focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+                                      disabled={savingRecepcion !== null}
+                                    />
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Summary + submit */}
+                  {(() => {
+                    const totalRecibiendo = Object.values(recepcionQtys).reduce((a, b) => a + b, 0);
+                    return (
+                      <div className="flex items-center justify-between pt-2">
+                        <p className="text-sm text-violet-600 dark:text-violet-300">
+                          {totalRecibiendo > 0
+                            ? `Registrando ${totalRecibiendo} unidad(es) en esta recepcion`
+                            : "Ingresa las cantidades recibidas"}
+                        </p>
+                        <button
+                          onClick={handleRegistrarRecepcion}
+                          disabled={savingRecepcion !== null || totalRecibiendo === 0}
+                          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 transition-colors"
+                        >
+                          {savingRecepcion === "all" ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <PackageCheck className="h-4 w-4" />
+                          )}
+                          Registrar recepcion
+                        </button>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           </div>
         </div>

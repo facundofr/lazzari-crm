@@ -9,7 +9,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { formatCurrency } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -24,7 +24,66 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   efectivo: { label: "Efectivo", variant: "outline", icon: Wallet },
 };
 
-type FinanzasTab = "movimientos" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito" | "vencimientos" | "gastos_fijos" | "objetivos";
+type FinanzasTab = "movimientos" | "ordenes_pago" | "gastos_manuales" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito" | "vencimientos" | "gastos_fijos" | "objetivos";
+
+// ── OP & Gastos types ──
+interface ProveedorOption {
+  id: string;
+  razon_social: string;
+}
+
+interface OrdenPagoRow {
+  id: string;
+  fecha: string;
+  proveedor_id: string;
+  proveedor_nombre: string;
+  monto_bruto: number;
+  retencion_pct: number;
+  monto_retencion: number;
+  neto: number;
+  moneda: "ARS" | "USD";
+  medio_pago: string;
+  cheque_cruce_id?: string;
+  notas: string;
+  estado: "pendiente" | "pagada" | "anulada";
+  created_at: string;
+}
+
+interface GastoManualRow {
+  id: string;
+  fecha: string;
+  descripcion: string;
+  proveedor_id?: string;
+  proveedor_nombre?: string;
+  categoria: string;
+  monto: number;
+  moneda: "ARS" | "USD";
+  notas: string;
+  created_at: string;
+}
+
+const GASTO_CATEGORIAS = ["Transporte", "Servicios", "Materiales", "Varios", "Comisiones", "Impuestos"] as const;
+
+const emptyOPForm = {
+  proveedor_id: "",
+  monto_bruto: 0,
+  moneda: "ARS" as "ARS" | "USD",
+  retencion_pct: 0,
+  medio_pago: "transferencia" as string,
+  cheque_cruce_id: "",
+  notas: "",
+  fecha: new Date().toISOString().slice(0, 10),
+};
+
+const emptyGastoManualForm = {
+  descripcion: "",
+  proveedor_id: "",
+  categoria: "Varios" as string,
+  monto: 0,
+  moneda: "ARS" as "ARS" | "USD",
+  notas: "",
+  fecha: new Date().toISOString().slice(0, 10),
+};
 
 // ── Helper types for Supabase rows (snake_case) ──
 interface MovimientoRow {
@@ -130,6 +189,24 @@ export default function FinanzasPage() {
   const [editingGasto, setEditingGasto] = useState<GastoFijo | null>(null);
   const [gastoForm, setGastoForm] = useState({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS" as "USD" | "ARS", notas: "" });
   const [gastoSaving, setGastoSaving] = useState(false);
+
+  // OP state
+  const [ordenesPago, setOrdenesPago] = useState<OrdenPagoRow[]>([]);
+  const [opModalOpen, setOpModalOpen] = useState(false);
+  const [opForm, setOpForm] = useState(emptyOPForm);
+  const [opSaving, setOpSaving] = useState(false);
+  const [opError, setOpError] = useState("");
+  const [proveedoresOptions, setProveedoresOptions] = useState<ProveedorOption[]>([]);
+  const [chequesRecibidos, setChequesRecibidos] = useState<MovimientoRow[]>([]);
+  const [proveedorSearch, setProveedorSearch] = useState("");
+
+  // Gastos manuales state
+  const [gastosManuales, setGastosManuales] = useState<GastoManualRow[]>([]);
+  const [gmModalOpen, setGmModalOpen] = useState(false);
+  const [gmForm, setGmForm] = useState(emptyGastoManualForm);
+  const [gmSaving, setGmSaving] = useState(false);
+  const [gmError, setGmError] = useState("");
+  const [gmProvSearch, setGmProvSearch] = useState("");
 
   // ── SmartFilters for Movimientos tab ──
   const movFilterConfigs: FilterConfig[] = [
@@ -341,6 +418,57 @@ export default function FinanzasPage() {
             activo: o.activo, notas: o.notas ?? "", createdAt: o.created_at,
           })));
         }
+
+        // Fetch proveedores list for OP/gastos selectors
+        try {
+          let qProv = supabase.from("proveedores").select("id, razon_social").order("razon_social");
+          if (sociedadActiva?.id) qProv = qProv.eq("sociedad_id" as any, sociedadActiva.id);
+          const { data: provData } = await qProv;
+          if (provData) setProveedoresOptions(provData as ProveedorOption[]);
+        } catch { /* ignore */ }
+
+        // Fetch cheques recibidos no conciliados (for cruce)
+        try {
+          let qCheq = supabase.from("movimientos").select("*").eq("tipo", "cheque_recibido").eq("conciliado", false).order("fecha", { ascending: false });
+          if (sociedadActiva?.id) qCheq = qCheq.eq("sociedad_id" as any, sociedadActiva.id);
+          const { data: cheqData } = await qCheq;
+          if (cheqData) setChequesRecibidos(cheqData as MovimientoRow[]);
+        } catch { /* ignore */ }
+
+        // Fetch ordenes de pago (movimientos with tipo=pago that have op_ prefix in descripcion)
+        try {
+          let qOp = (supabase as any).from("ordenes_pago").select("*, proveedores(razon_social)").order("fecha", { ascending: false });
+          if (sociedadActiva?.id) qOp = qOp.eq("sociedad_id", sociedadActiva.id);
+          const { data: opData } = await qOp;
+          if (opData && opData.length > 0) {
+            setOrdenesPago(opData.map((r: any) => ({
+              id: r.id, fecha: r.fecha, proveedor_id: r.proveedor_id,
+              proveedor_nombre: r.proveedores?.razon_social ?? "—",
+              monto_bruto: Number(r.monto_bruto), retencion_pct: Number(r.retencion_pct ?? 0),
+              monto_retencion: Number(r.monto_retencion ?? 0), neto: Number(r.neto),
+              moneda: (r.moneda as "ARS" | "USD") ?? "ARS", medio_pago: r.medio_pago ?? "transferencia",
+              cheque_cruce_id: r.cheque_cruce_id, notas: r.notas ?? "",
+              estado: r.estado ?? "pendiente", created_at: r.created_at,
+            })));
+          }
+        } catch { /* table may not exist yet, ignore */ }
+
+        // Fetch gastos manuales
+        try {
+          let qGm = (supabase as any).from("gastos_manuales").select("*, proveedores(razon_social)").order("fecha", { ascending: false });
+          if (sociedadActiva?.id) qGm = qGm.eq("sociedad_id", sociedadActiva.id);
+          const { data: gmData } = await qGm;
+          if (gmData && gmData.length > 0) {
+            setGastosManuales(gmData.map((r: any) => ({
+              id: r.id, fecha: r.fecha, descripcion: r.descripcion,
+              proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? undefined,
+              categoria: r.categoria ?? "Varios", monto: Number(r.monto),
+              moneda: (r.moneda as "ARS" | "USD") ?? "ARS", notas: r.notas ?? "",
+              created_at: r.created_at,
+            })));
+          }
+        } catch { /* table may not exist yet, ignore */ }
+
       } catch (err) {
         console.error("Error fetching finanzas data:", err);
         // On error, mock data fallback is already set above (or stays empty).
@@ -458,6 +586,153 @@ export default function FinanzasPage() {
     }
   }
 
+  // ── OP handlers ──
+  function openOPModal() {
+    setOpForm(emptyOPForm);
+    setOpError("");
+    setProveedorSearch("");
+    setOpModalOpen(true);
+  }
+
+  const opRetencion = opForm.monto_bruto * (opForm.retencion_pct / 100);
+  const opNeto = opForm.monto_bruto - opRetencion;
+
+  async function handleCreateOP() {
+    if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
+    if (opForm.monto_bruto <= 0) { setOpError("El monto debe ser mayor a 0"); return; }
+    setOpSaving(true);
+    setOpError("");
+    try {
+      // Insert into ordenes_pago table
+      const insertData: Record<string, unknown> = {
+        fecha: opForm.fecha,
+        proveedor_id: opForm.proveedor_id,
+        monto_bruto: opForm.monto_bruto,
+        retencion_pct: opForm.retencion_pct,
+        monto_retencion: opRetencion,
+        neto: opNeto,
+        moneda: opForm.moneda,
+        medio_pago: opForm.medio_pago,
+        notas: opForm.notas,
+        estado: "pendiente",
+      };
+      if (opForm.cheque_cruce_id) insertData.cheque_cruce_id = opForm.cheque_cruce_id;
+      if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
+
+      const { error } = await (supabase as any).from("ordenes_pago").insert(insertData);
+      if (error) throw error;
+
+      // Also create a movimiento for the payment
+      const provNombre = proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social ?? "";
+      const movData: Record<string, unknown> = {
+        tipo: "pago",
+        descripcion: `OP — ${provNombre} — Neto ${opForm.moneda} ${opNeto.toLocaleString()}`,
+        monto: opNeto,
+        moneda: opForm.moneda,
+        fecha: opForm.fecha,
+        proveedor_id: opForm.proveedor_id,
+        conciliado: false,
+      };
+      if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
+      await supabase.from("movimientos").insert(movData as any);
+
+      // If cruce with cheque, mark cheque as conciliado
+      if (opForm.cheque_cruce_id) {
+        await supabase.from("movimientos").update({ conciliado: true } as any).eq("id", opForm.cheque_cruce_id);
+      }
+
+      setOpModalOpen(false);
+      await fetchData();
+    } catch (err: unknown) {
+      setOpError(err instanceof Error ? err.message : "Error al crear la OP");
+    } finally {
+      setOpSaving(false);
+    }
+  }
+
+  async function handleAnularOP(id: string) {
+    if (!confirm("¿Seguro que queres anular esta orden de pago?")) return;
+    try {
+      await (supabase as any).from("ordenes_pago").update({ estado: "anulada" }).eq("id", id);
+      await fetchData();
+    } catch (err) { console.error("Error anulando OP:", err); }
+  }
+
+  async function handlePagarOP(id: string) {
+    try {
+      await (supabase as any).from("ordenes_pago").update({ estado: "pagada" }).eq("id", id);
+      await fetchData();
+    } catch (err) { console.error("Error marcando OP como pagada:", err); }
+  }
+
+  // ── Gastos manuales handlers ──
+  function openGMModal() {
+    setGmForm(emptyGastoManualForm);
+    setGmError("");
+    setGmProvSearch("");
+    setGmModalOpen(true);
+  }
+
+  async function handleCreateGM() {
+    if (!gmForm.descripcion.trim()) { setGmError("La descripcion es obligatoria"); return; }
+    if (gmForm.monto <= 0) { setGmError("El monto debe ser mayor a 0"); return; }
+    setGmSaving(true);
+    setGmError("");
+    try {
+      const insertData: Record<string, unknown> = {
+        fecha: gmForm.fecha,
+        descripcion: gmForm.descripcion,
+        categoria: gmForm.categoria,
+        monto: gmForm.monto,
+        moneda: gmForm.moneda,
+        notas: gmForm.notas,
+      };
+      if (gmForm.proveedor_id) insertData.proveedor_id = gmForm.proveedor_id;
+      if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
+
+      const { error } = await (supabase as any).from("gastos_manuales").insert(insertData);
+      if (error) throw error;
+
+      // Also create a movimiento
+      const provNombre = gmForm.proveedor_id ? proveedoresOptions.find(p => p.id === gmForm.proveedor_id)?.razon_social : null;
+      const movData: Record<string, unknown> = {
+        tipo: "pago",
+        descripcion: `Gasto — ${gmForm.categoria} — ${gmForm.descripcion}${provNombre ? ` (${provNombre})` : ""}`,
+        monto: gmForm.monto,
+        moneda: gmForm.moneda,
+        fecha: gmForm.fecha,
+        conciliado: false,
+      };
+      if (gmForm.proveedor_id) (movData as any).proveedor_id = gmForm.proveedor_id;
+      if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
+      await supabase.from("movimientos").insert(movData as any);
+
+      setGmModalOpen(false);
+      await fetchData();
+    } catch (err: unknown) {
+      setGmError(err instanceof Error ? err.message : "Error al crear el gasto");
+    } finally {
+      setGmSaving(false);
+    }
+  }
+
+  async function handleDeleteGM(id: string) {
+    if (!confirm("¿Seguro que queres eliminar este gasto?")) return;
+    try {
+      await (supabase as any).from("gastos_manuales").delete().eq("id", id);
+      await fetchData();
+    } catch (err) { console.error("Error eliminando gasto:", err); }
+  }
+
+  // Filtered proveedores for search
+  const filteredProveedoresOP = proveedorSearch.trim()
+    ? proveedoresOptions.filter(p => p.razon_social.toLowerCase().includes(proveedorSearch.toLowerCase()))
+    : proveedoresOptions;
+
+  const filteredProveedoresGM = gmProvSearch.trim()
+    ? proveedoresOptions.filter(p => p.razon_social.toLowerCase().includes(gmProvSearch.toLowerCase()))
+    : proveedoresOptions;
+
   // ── Derived calculations ──
   const totalCobros = movimientos.filter((m) => ["cobro", "cheque_recibido", "transferencia"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
   const totalPagos = movimientos.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
@@ -496,6 +771,8 @@ export default function FinanzasPage() {
 
   const tabs: { id: FinanzasTab; label: string }[] = [
     { id: "movimientos", label: "Movimientos" },
+    { id: "ordenes_pago", label: "Ordenes de Pago" },
+    { id: "gastos_manuales", label: "Gastos" },
     { id: "cc_clientes", label: "CC Clientes" },
     { id: "cc_proveedores", label: "CC Proveedores" },
     { id: "cheques", label: "E-Cheques" },
@@ -582,6 +859,101 @@ export default function FinanzasPage() {
               data={filteredMovimientos}
             />
           </Card>
+          </>
+        )}
+
+        {/* ── Ordenes de Pago ── */}
+        {tab === "ordenes_pago" && (
+          <>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-zinc-500">
+                Total pendiente: <span className="font-bold font-mono text-zinc-900 dark:text-white">
+                  {formatCurrency(ordenesPago.filter(o => o.estado === "pendiente").reduce((s, o) => s + o.neto, 0))}
+                </span>
+              </p>
+              <button onClick={openOPModal} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
+                <Plus className="h-4 w-4" /> Nueva OP
+              </button>
+            </div>
+            <Card className="p-0 overflow-hidden">
+              <DataTable<OrdenPagoRow>
+                columns={[
+                  { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
+                  { key: "proveedor_nombre", label: "Proveedor", sortable: true, render: (row) => <span className="font-medium">{row.proveedor_nombre}</span> },
+                  { key: "monto_bruto", label: "Monto bruto", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.monto_bruto, row.moneda)}</span> },
+                  { key: "monto_retencion", label: "Retención", className: "text-right", sortable: true, render: (row) => (
+                    <div className="text-right">
+                      <span className="font-mono text-amber-600">{formatCurrency(row.monto_retencion, row.moneda)}</span>
+                      {row.retencion_pct > 0 && <span className="text-xs text-zinc-400 ml-1">({row.retencion_pct}%)</span>}
+                    </div>
+                  )},
+                  { key: "neto", label: "Neto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.neto, row.moneda)}</span> },
+                  { key: "medio_pago", label: "Medio", render: (row) => <Badge variant="outline">{row.medio_pago === "transferencia" ? "Transferencia" : row.medio_pago === "cheque" ? "Cheque" : row.medio_pago === "echeq" ? "E-Cheq" : "Efectivo"}</Badge> },
+                  { key: "estado", label: "Estado", sortable: true, render: (row) => (
+                    <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : "warning"}>
+                      {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : "Pendiente"}
+                    </Badge>
+                  )},
+                  { key: "actions", label: "", sortable: false, render: (row) => (
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {row.estado === "pendiente" && (
+                        <>
+                          <button onClick={() => handlePagarOP(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar como pagada">
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          </button>
+                          <button onClick={() => handleAnularOP(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Anular">
+                            <Ban className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )},
+                ]}
+                data={ordenesPago}
+                emptyMessage="No hay ordenes de pago cargadas"
+              />
+            </Card>
+          </>
+        )}
+
+        {/* ── Gastos Manuales ── */}
+        {tab === "gastos_manuales" && (
+          <>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-zinc-500">
+                Total gastos: <span className="font-bold font-mono text-zinc-900 dark:text-white">
+                  {formatCurrency(gastosManuales.reduce((s, g) => s + g.monto, 0))}
+                </span>
+              </p>
+              <button onClick={openGMModal} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
+                <Plus className="h-4 w-4" /> Nuevo gasto
+              </button>
+            </div>
+            <Card className="p-0 overflow-hidden">
+              <DataTable<GastoManualRow>
+                columns={[
+                  { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
+                  { key: "descripcion", label: "Descripción", sortable: true, render: (row) => (
+                    <div>
+                      <span className="font-medium">{row.descripcion}</span>
+                      {row.proveedor_nombre && <p className="text-xs text-zinc-400">{row.proveedor_nombre}</p>}
+                    </div>
+                  )},
+                  { key: "categoria", label: "Categoría", render: (row) => <Badge variant="info">{row.categoria}</Badge> },
+                  { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.monto, row.moneda)}</span> },
+                  { key: "moneda", label: "Moneda", render: (row) => <Badge variant="outline">{row.moneda}</Badge> },
+                  { key: "actions", label: "", sortable: false, render: (row) => (
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <button onClick={() => handleDeleteGM(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )},
+                ]}
+                data={gastosManuales}
+                emptyMessage="No hay gastos manuales cargados"
+              />
+            </Card>
           </>
         )}
 
@@ -1151,6 +1523,257 @@ export default function FinanzasPage() {
               <button onClick={handleCreateMov} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />}
                 Crear movimiento
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Nueva Orden de Pago modal */}
+      {opModalOpen && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setOpModalOpen(false)} />
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <FileText className="h-5 w-5 text-orange-500" />
+                <h2 className="text-lg font-bold dark:text-white">Nueva Orden de Pago</h2>
+              </div>
+              <button onClick={() => setOpModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </div>
+            {opError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}
+            <div className="space-y-4">
+              {/* Proveedor selector with search */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Proveedor *</label>
+                <div className="relative mt-1">
+                  <div className="flex items-center border border-zinc-200 rounded-lg dark:border-zinc-700 overflow-hidden">
+                    <Search className="h-4 w-4 text-zinc-400 ml-3 flex-shrink-0" />
+                    <input
+                      value={proveedorSearch}
+                      onChange={(e) => { setProveedorSearch(e.target.value); if (opForm.proveedor_id) setOpForm({ ...opForm, proveedor_id: "" }); }}
+                      placeholder="Buscar proveedor..."
+                      className="w-full px-2 py-2 text-sm bg-transparent dark:text-white outline-none"
+                    />
+                  </div>
+                  {opForm.proveedor_id && (
+                    <div className="mt-1 flex items-center gap-1">
+                      <Badge variant="success">{proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social}</Badge>
+                      <button onClick={() => { setOpForm({ ...opForm, proveedor_id: "" }); setProveedorSearch(""); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
+                    </div>
+                  )}
+                  {!opForm.proveedor_id && proveedorSearch.trim() && filteredProveedoresOP.length > 0 && (
+                    <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                      {filteredProveedoresOP.slice(0, 8).map(p => (
+                        <button key={p.id} onClick={() => { setOpForm({ ...opForm, proveedor_id: p.id }); setProveedorSearch(p.razon_social); }}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white">
+                          {p.razon_social}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Fecha</label>
+                <input type="date" value={opForm.fecha} onChange={(e) => setOpForm({ ...opForm, fecha: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Monto bruto *</label>
+                  <input type="number" value={opForm.monto_bruto || ""} onChange={(e) => setOpForm({ ...opForm, monto_bruto: Number(e.target.value) })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Moneda</label>
+                  <select value={opForm.moneda} onChange={(e) => setOpForm({ ...opForm, moneda: e.target.value as "ARS" | "USD" })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    <option value="ARS">ARS</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Retención */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">% Retención ganancias</label>
+                <div className="flex items-center gap-2 mt-1">
+                  <input type="number" step="0.5" value={opForm.retencion_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_pct: Number(e.target.value) })}
+                    className="w-24 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0" />
+                  <span className="text-sm text-zinc-400">%</span>
+                  <div className="flex gap-1 ml-2">
+                    {[2, 3, 6].map(pct => (
+                      <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, retencion_pct: pct })}
+                        className={`rounded px-2 py-1 text-xs font-medium transition-colors ${opForm.retencion_pct === pct ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                        {pct}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Calculated fields */}
+              {opForm.monto_bruto > 0 && (
+                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1.5">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-zinc-500">Monto bruto</span>
+                    <span className="font-mono">{formatCurrency(opForm.monto_bruto, opForm.moneda)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-zinc-500">Retención ({opForm.retencion_pct}%)</span>
+                    <span className="font-mono text-amber-600">- {formatCurrency(opRetencion, opForm.moneda)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1.5">
+                    <span className="text-zinc-700 dark:text-white">Neto a pagar</span>
+                    <span className="font-mono text-emerald-600">{formatCurrency(opNeto, opForm.moneda)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Medio de pago */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Medio de pago</label>
+                <select value={opForm.medio_pago} onChange={(e) => setOpForm({ ...opForm, medio_pago: e.target.value, cheque_cruce_id: "" })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="transferencia">Transferencia</option>
+                  <option value="cheque">Cheque</option>
+                  <option value="echeq">E-Cheq</option>
+                  <option value="efectivo">Efectivo</option>
+                </select>
+              </div>
+
+              {/* Cruce de cheque */}
+              {(opForm.medio_pago === "cheque" || opForm.medio_pago === "echeq") && (
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Cruzar con cheque recibido (opcional)</label>
+                  <select value={opForm.cheque_cruce_id} onChange={(e) => setOpForm({ ...opForm, cheque_cruce_id: e.target.value })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    <option value="">— Sin cruce —</option>
+                    {chequesRecibidos.map(ch => (
+                      <option key={ch.id} value={ch.id}>
+                        {ch.descripcion} — {formatCurrency(ch.monto)} — {formatDate(ch.fecha)}
+                      </option>
+                    ))}
+                  </select>
+                  {chequesRecibidos.length === 0 && (
+                    <p className="text-xs text-zinc-400 mt-1">No hay cheques recibidos disponibles para cruzar</p>
+                  )}
+                </div>
+              )}
+
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Notas</label>
+                <textarea value={opForm.notas} onChange={(e) => setOpForm({ ...opForm, notas: e.target.value })}
+                  rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Notas, nro de comprobante, certificado de retención..." />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+              <button onClick={() => setOpModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
+              <button onClick={handleCreateOP} disabled={opSaving || !opForm.proveedor_id || opForm.monto_bruto <= 0}
+                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                {opSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                Crear OP
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Nuevo gasto manual modal */}
+      {gmModalOpen && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setGmModalOpen(false)} />
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <Receipt className="h-5 w-5 text-orange-500" />
+                <h2 className="text-lg font-bold dark:text-white">Nuevo gasto manual</h2>
+              </div>
+              <button onClick={() => setGmModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </div>
+            {gmError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{gmError}</div>}
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Descripción *</label>
+                <input value={gmForm.descripcion} onChange={(e) => setGmForm({ ...gmForm, descripcion: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Flete a Campana" />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Fecha</label>
+                <input type="date" value={gmForm.fecha} onChange={(e) => setGmForm({ ...gmForm, fecha: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+
+              {/* Proveedor opcional con search */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Proveedor (opcional)</label>
+                <div className="relative mt-1">
+                  <div className="flex items-center border border-zinc-200 rounded-lg dark:border-zinc-700 overflow-hidden">
+                    <Search className="h-4 w-4 text-zinc-400 ml-3 flex-shrink-0" />
+                    <input
+                      value={gmProvSearch}
+                      onChange={(e) => { setGmProvSearch(e.target.value); if (gmForm.proveedor_id) setGmForm({ ...gmForm, proveedor_id: "" }); }}
+                      placeholder="Buscar proveedor..."
+                      className="w-full px-2 py-2 text-sm bg-transparent dark:text-white outline-none"
+                    />
+                  </div>
+                  {gmForm.proveedor_id && (
+                    <div className="mt-1 flex items-center gap-1">
+                      <Badge variant="success">{proveedoresOptions.find(p => p.id === gmForm.proveedor_id)?.razon_social}</Badge>
+                      <button onClick={() => { setGmForm({ ...gmForm, proveedor_id: "" }); setGmProvSearch(""); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
+                    </div>
+                  )}
+                  {!gmForm.proveedor_id && gmProvSearch.trim() && filteredProveedoresGM.length > 0 && (
+                    <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                      {filteredProveedoresGM.slice(0, 8).map(p => (
+                        <button key={p.id} onClick={() => { setGmForm({ ...gmForm, proveedor_id: p.id }); setGmProvSearch(p.razon_social); }}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white">
+                          {p.razon_social}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Categoría</label>
+                <select value={gmForm.categoria} onChange={(e) => setGmForm({ ...gmForm, categoria: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  {GASTO_CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Monto *</label>
+                  <input type="number" value={gmForm.monto || ""} onChange={(e) => setGmForm({ ...gmForm, monto: Number(e.target.value) })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Moneda</label>
+                  <select value={gmForm.moneda} onChange={(e) => setGmForm({ ...gmForm, moneda: e.target.value as "ARS" | "USD" })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    <option value="ARS">ARS</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Notas</label>
+                <input value={gmForm.notas} onChange={(e) => setGmForm({ ...gmForm, notas: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Notas opcionales..." />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+              <button onClick={() => setGmModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
+              <button onClick={handleCreateGM} disabled={gmSaving || !gmForm.descripcion.trim() || gmForm.monto <= 0}
+                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                {gmSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                Crear gasto
               </button>
             </div>
           </div>
