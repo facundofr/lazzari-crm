@@ -1307,7 +1307,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                               <div className="flex items-center gap-2">
                                 <span className="font-mono text-sm font-bold text-zinc-800 dark:text-zinc-100">{pr.numero}</span>
                                 {(() => {
-                                  const cfg = statusConfig[pr.estado];
+                                  const cfg = statusConfig[pr.estado] || { label: pr.estado, variant: "outline" as const };
                                   return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
                                 })()}
                               </div>
@@ -1458,7 +1458,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               {
                 key: "estado", label: "Estado", sortable: true,
                 render: (row) => {
-                  const cfg = statusConfig[row.estado];
+                  const cfg = statusConfig[row.estado] || { label: row.estado, variant: "outline" as const, icon: Clock };
                   const Icon = cfg.icon;
                   return (
                     <div className="flex items-center gap-1.5">
@@ -1567,7 +1567,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 <div className="flex items-center gap-3">
                   <h2 className="text-lg font-bold text-zinc-900 dark:text-white">PR {selected.numero}</h2>
                   {(() => {
-                    const cfg = statusConfig[selected.estado];
+                    const cfg = statusConfig[selected.estado] || { label: selected.estado, variant: "outline" as const };
                     return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
                   })()}
                 </div>
