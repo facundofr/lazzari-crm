@@ -79,7 +79,7 @@ const roleBadgeVariant: Record<Role, "success" | "warning" | "danger" | "info" |
 };
 
 export default function ConfiguracionPage() {
-  const { sociedadActiva } = useUser();
+  const { sociedadActiva, profile } = useUser();
   const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas" | "comisiones">("usuarios");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -348,6 +348,35 @@ export default function ConfiguracionPage() {
     seguimiento: false,
     resumen_diario: false,
   });
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [notifSaved, setNotifSaved] = useState<string | null>(null);
+
+  // Fetch notification preferences on mount
+  useEffect(() => {
+    async function fetchNotifPrefs() {
+      if (!profile?.id) return;
+      try {
+        const { data } = await (supabase as any)
+          .from("notification_preferences")
+          .select("pr_vencer, stock_bajo, cc_vencida, cheque_vencer, seguimiento, resumen_diario")
+          .eq("user_id", profile.id)
+          .single();
+        if (data) {
+          setNotifs({
+            pr_vencer: data.pr_vencer ?? true,
+            stock_bajo: data.stock_bajo ?? true,
+            cc_vencida: data.cc_vencida ?? true,
+            cheque_vencer: data.cheque_vencer ?? true,
+            seguimiento: data.seguimiento ?? false,
+            resumen_diario: data.resumen_diario ?? false,
+          });
+        }
+      } catch {
+        // No row yet — use defaults
+      }
+    }
+    fetchNotifPrefs();
+  }, [profile?.id]);
 
   function handleEmpresaChange(key: string, value: string) {
     setEmpresa((prev) => ({ ...prev, [key]: value }));
@@ -370,8 +399,27 @@ export default function ConfiguracionPage() {
     }
   }
 
-  function toggleNotif(key: keyof typeof notifs) {
-    setNotifs((prev) => ({ ...prev, [key]: !prev[key] }));
+  async function toggleNotif(key: keyof typeof notifs) {
+    if (!profile?.id) return;
+    const newValue = !notifs[key];
+    setNotifs((prev) => ({ ...prev, [key]: newValue }));
+    setNotifSaved(null);
+    try {
+      await (supabase as any).from("notification_preferences").upsert(
+        {
+          user_id: profile.id,
+          [key]: newValue,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id" }
+      );
+      setNotifSaved(key);
+      setTimeout(() => setNotifSaved(null), 2000);
+    } catch (err) {
+      // Revert on error
+      setNotifs((prev) => ({ ...prev, [key]: !newValue }));
+      console.error("Error saving notification preference:", err);
+    }
   }
 
   const tabs = [
@@ -588,26 +636,34 @@ export default function ConfiguracionPage() {
         {tab === "notificaciones" && (
           <Card>
             <CardHeader><CardTitle>Preferencias de notificaciones</CardTitle></CardHeader>
+            <p className="text-sm text-zinc-500 mb-4">Elegí qué alertas querés recibir. Los cambios se guardan automáticamente.</p>
             <div className="space-y-4">
               {([
-                { key: "pr_vencer" as const, label: "PR proximo a vencer", desc: "Alerta cuando un presupuesto esta cerca de su fecha de vencimiento" },
-                { key: "stock_bajo" as const, label: "Stock bajo", desc: "Alerta cuando un articulo baja del stock minimo" },
-                { key: "cc_vencida" as const, label: "Cuenta corriente vencida", desc: "Alerta cuando un cliente supera los dias de CC" },
-                { key: "cheque_vencer" as const, label: "E-cheque proximo a vencer", desc: "Recordatorio de cheques por depositar o con vencimiento cercano" },
-                { key: "seguimiento" as const, label: "Seguimiento comercial", desc: "Sugerencias de re-cotizacion tras rechazos" },
-                { key: "resumen_diario" as const, label: "Resumen diario por email", desc: "Resumen de actividad del dia enviado por email" },
+                { key: "pr_vencer" as const, label: "PR próximo a vencer", desc: "Alerta cuando un presupuesto está cerca de su fecha de vencimiento" },
+                { key: "stock_bajo" as const, label: "Stock bajo", desc: "Alerta cuando un artículo baja del stock mínimo" },
+                { key: "cc_vencida" as const, label: "Cuenta corriente vencida", desc: "Alerta cuando un cliente supera los días de CC" },
+                { key: "cheque_vencer" as const, label: "E-cheque próximo a vencer", desc: "Recordatorio de cheques por depositar o con vencimiento cercano" },
+                { key: "seguimiento" as const, label: "Seguimiento comercial", desc: "Sugerencias de re-cotización tras rechazos" },
+                { key: "resumen_diario" as const, label: "Resumen diario por email", desc: "Resumen de actividad del día enviado por email" },
               ]).map((pref) => (
                 <div key={pref.key} className="flex items-center justify-between rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
                   <div>
                     <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">{pref.label}</p>
                     <p className="text-xs text-zinc-500">{pref.desc}</p>
                   </div>
-                  <button
-                    onClick={() => toggleNotif(pref.key)}
-                    className={`relative h-6 w-11 rounded-full transition-colors ${notifs[pref.key] ? "bg-orange-500" : "bg-zinc-300 dark:bg-zinc-600"}`}
-                  >
-                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${notifs[pref.key] ? "left-[22px]" : "left-0.5"}`} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {notifSaved === pref.key && (
+                      <span className="flex items-center gap-1 text-xs text-emerald-600">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Guardado
+                      </span>
+                    )}
+                    <button
+                      onClick={() => toggleNotif(pref.key)}
+                      className={`relative h-6 w-11 rounded-full transition-colors ${notifs[pref.key] ? "bg-orange-500" : "bg-zinc-300 dark:bg-zinc-600"}`}
+                    >
+                      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${notifs[pref.key] ? "left-[22px]" : "left-0.5"}`} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

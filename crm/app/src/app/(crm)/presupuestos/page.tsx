@@ -15,7 +15,7 @@ import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
   Printer, Sparkles, Download, ClipboardCopy, Check, Mail, GripVertical,
-  Phone, CalendarClock,
+  Phone, CalendarClock, Inbox,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -122,6 +122,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
 }
 
 const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info"; icon: typeof Clock }> = {
+  solicitud: { label: "Solicitud", variant: "info", icon: Inbox },
   pendiente: { label: "Pendiente", variant: "warning", icon: Clock },
   aprobado: { label: "Aprobado", variant: "success", icon: CheckCircle2 },
   rechazado: { label: "Rechazado", variant: "danger", icon: XCircle },
@@ -184,7 +185,7 @@ function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, 
 export default function PresupuestosPage() {
   const { profile, sociedadActiva } = useUser();
   const { toast } = useToast();
-  const allEstados: (PRStatus | "facturado")[] = ["pendiente", "aprobado", "rechazado", "postergado", "vencido", "facturado"];
+  const allEstados: (PRStatus | "facturado")[] = ["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido", "facturado"];
   const [selectedEstados, setSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [vistaSeguimiento, setVistaSeguimiento] = useState(false);
   const [search, setSearch] = useState("");
@@ -249,6 +250,7 @@ export default function PresupuestosPage() {
   const [showNewPR, setShowNewPR] = useState(false);
   const [newPRSaving, setNewPRSaving] = useState(false);
   const [postCreatePR, setPostCreatePR] = useState<Presupuesto | null>(null); // PR recién creado
+  const [esSolicitud, setEsSolicitud] = useState(false); // Crear como solicitud
 
   // AI presupuesto
   const [showAIPanel, setShowAIPanel] = useState(false);
@@ -580,7 +582,7 @@ export default function PresupuestosPage() {
       return;
     }
     const validItems = newPR.items.filter((it) => it.descripcion.trim() && it.cantidad > 0);
-    if (validItems.length === 0) {
+    if (!esSolicitud && validItems.length === 0) {
       toast.warning("Agrega al menos un item");
       return;
     }
@@ -610,8 +612,8 @@ export default function PresupuestosPage() {
           sociedad_id: sociedadActiva?.id || null,
           fecha: today,
           vencimiento,
-          estado: "pendiente",
-          enviado_at: new Date().toISOString(),
+          estado: esSolicitud ? "solicitud" : "pendiente",
+          enviado_at: esSolicitud ? null : new Date().toISOString(),
           markup_general: newPR.markup_general,
           subtotal,
           iva: ivaTotal,
@@ -648,6 +650,7 @@ export default function PresupuestosPage() {
       }
 
       setShowNewPR(false);
+      setEsSolicitud(false);
       setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
       await fetchPresupuestos();
       // Mostrar diálogo post-creación con opciones correo/PDF
@@ -843,6 +846,7 @@ export default function PresupuestosPage() {
       }
 
       const statusLabels: Record<string, string> = {
+        solicitud: "marcado como solicitud",
         pendiente: "enviado al cliente",
         aprobado: "aprobado",
         rechazado: "rechazado",
@@ -1134,19 +1138,21 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               </span>
             </button>
             {/* Botones por estado */}
-            {(["pendiente", "aprobado", "rechazado", "postergado", "vencido"] as PRStatus[]).map((status) => {
+            {(["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as PRStatus[]).map((status) => {
               const active = !isAllSelected && selectedEstados.has(status);
+              const activeColor = status === "solicitud" ? "bg-blue-600 text-white shadow-sm" : "bg-orange-500 text-white shadow-sm";
               return (
                 <button
                   key={status}
                   onClick={() => toggleEstado(status)}
                   className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
                     active && !vistaSeguimiento
-                      ? "bg-orange-500 text-white shadow-sm"
+                      ? activeColor
                       : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
                   }`}
                 >
                   {active && <Check className="h-3.5 w-3.5" />}
+                  {status === "solicitud" && <Inbox className="h-3.5 w-3.5" />}
                   {statusConfig[status].label}
                   <span className={`rounded-full px-1.5 py-0.5 text-xs ${
                     active && !vistaSeguimiento ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
@@ -1229,7 +1235,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         {vistaSeguimiento ? (() => {
           const today = new Date();
           const trackingPRs = presupuestos
-            .filter((pr) => pr.estado === "pendiente" || pr.estado === "postergado" || pr.estado === "vencido")
+            .filter((pr) => pr.estado === "solicitud" || pr.estado === "pendiente" || pr.estado === "postergado" || pr.estado === "vencido")
             .map((pr) => {
               const fechaRef = pr.enviadoAt || pr.fecha;
               const refDate = new Date(fechaRef);
@@ -1345,6 +1351,16 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
 
                           {/* Acciones rapidas */}
                           <div className="flex items-center gap-1 pt-1 border-t border-zinc-100 dark:border-zinc-800" onClick={(e) => e.stopPropagation()}>
+                            {pr.estado === "solicitud" ? (
+                              <button
+                                onClick={() => handleEstadoChange(pr.id, "pendiente")}
+                                className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:text-blue-300 dark:hover:bg-blue-900/40 transition-colors"
+                              >
+                                <ArrowRight className="h-3.5 w-3.5" />
+                                Convertir a PR
+                              </button>
+                            ) : (
+                              <>
                             <button
                               onClick={() => handleEstadoChange(pr.id, "aprobado")}
                               className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300 dark:hover:bg-emerald-900/40 transition-colors"
@@ -1367,6 +1383,8 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                                 <PauseCircle className="h-3.5 w-3.5" />
                                 Postergar
                               </button>
+                            )}
+                              </>
                             )}
                             {telefono && (
                               <a
@@ -1469,6 +1487,11 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     <button onClick={() => handleDuplicate(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                       <Copy className="h-4 w-4" />
                     </button>
+                    {row.estado === "solicitud" && (
+                      <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600 dark:hover:bg-blue-950/40" title="Convertir a presupuesto">
+                        <ArrowRight className="h-4 w-4" />
+                      </button>
+                    )}
                     {row.estado === "postergado" && (
                       <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-950/40" title="Marcar como enviado">
                         <Send className="h-4 w-4" />
@@ -1760,6 +1783,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
 
               {/* Action buttons */}
               <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700 flex flex-wrap gap-2">
+                {selected.estado === "solicitud" && (
+                  <button
+                    onClick={() => { handleEstadoChange(selected.id, "pendiente"); }}
+                    className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+                  >
+                    <ArrowRight className="h-4 w-4" /> Convertir a Presupuesto
+                  </button>
+                )}
                 {selected.estado === "postergado" && (
                   <button
                     onClick={() => { handleEstadoChange(selected.id, "pendiente"); }}
@@ -1815,14 +1846,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       {/* ==================== NUEVO PR MODAL ==================== */}
       <Modal
         open={showNewPR}
-        onClose={() => setShowNewPR(false)}
-        title="Nuevo Presupuesto"
-        description="Completa los datos para crear un nuevo presupuesto"
+        onClose={() => { setShowNewPR(false); setEsSolicitud(false); }}
+        title={esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
+        description={esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="xl"
         footer={
           <>
             <button
-              onClick={() => setShowNewPR(false)}
+              onClick={() => { setShowNewPR(false); setEsSolicitud(false); }}
               className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
             >
               Cancelar
@@ -1830,19 +1861,50 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             <button
               onClick={handleCreatePR}
               disabled={newPRSaving}
-              className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+              className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50 transition-colors ${
+                esSolicitud ? "bg-blue-600 hover:bg-blue-700" : "bg-orange-500 hover:bg-orange-600"
+              }`}
             >
-              {newPRSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
-              Crear Presupuesto
+              {newPRSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : esSolicitud ? <Inbox className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+              {esSolicitud ? "Crear Solicitud" : "Crear Presupuesto"}
             </button>
           </>
         }
       >
         {/* Creado por (auto) */}
-        <div className="mb-5 rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800">
-          <span className="text-zinc-500">Creado por:</span>{" "}
-          <span className="font-medium text-zinc-900 dark:text-white">{profile?.full_name ?? profile?.email ?? "---"}</span>
+        <div className="mb-5 flex items-center justify-between gap-4">
+          <div className="rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800">
+            <span className="text-zinc-500">Creado por:</span>{" "}
+            <span className="font-medium text-zinc-900 dark:text-white">{profile?.full_name ?? profile?.email ?? "---"}</span>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <div
+              onClick={() => setEsSolicitud(!esSolicitud)}
+              className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer ${
+                esSolicitud ? "bg-blue-600" : "bg-zinc-300 dark:bg-zinc-600"
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition-transform ${
+                  esSolicitud ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Inbox className={`h-4 w-4 ${esSolicitud ? "text-blue-600" : "text-zinc-400"}`} />
+              <span className={`text-sm font-medium ${esSolicitud ? "text-blue-700 dark:text-blue-400" : "text-zinc-600 dark:text-zinc-400"}`}>
+                Crear como Solicitud
+              </span>
+            </div>
+          </label>
         </div>
+
+        {esSolicitud && (
+          <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
+            <Inbox className="inline h-4 w-4 mr-1.5 -mt-0.5" />
+            <strong>Modo solicitud:</strong> Se registra el pedido del cliente sin formalizar un presupuesto. Los items son opcionales. Luego podras convertirlo a presupuesto.
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
           <div className="relative" ref={clientSearchRef}>

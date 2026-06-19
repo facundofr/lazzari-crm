@@ -33,6 +33,7 @@ import { supabase } from "@/lib/supabase/client";
 import type { Presupuesto, ActivityLog, Alert, GastoFijo, Objetivo } from "@/lib/types";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info" }> = {
+  solicitud: { label: "Solicitud", variant: "info" },
   pendiente: { label: "Pendiente", variant: "warning" },
   aprobado: { label: "Aprobado", variant: "success" },
   rechazado: { label: "Rechazado", variant: "danger" },
@@ -49,6 +50,7 @@ const alertIcons: Record<string, typeof AlertTriangle> = {
 };
 
 const estadoColorMap: Record<string, string> = {
+  solicitud: "#3b82f6",
   aprobado: "#22c55e",
   pendiente: "#f59e0b",
   rechazado: "#ef4444",
@@ -57,6 +59,7 @@ const estadoColorMap: Record<string, string> = {
 };
 
 const estadoLabelMap: Record<string, string> = {
+  solicitud: "Solicitudes",
   aprobado: "Aprobados",
   pendiente: "Pendientes",
   rechazado: "Rechazados",

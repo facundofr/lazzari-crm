@@ -24,7 +24,7 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   efectivo: { label: "Efectivo", variant: "outline", icon: Wallet },
 };
 
-type FinanzasTab = "movimientos" | "ordenes_pago" | "gastos_manuales" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito" | "vencimientos" | "gastos_fijos" | "objetivos";
+type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito" | "vencimientos" | "gastos_fijos" | "objetivos";
 
 // ── OP & Gastos types ──
 interface ProveedorOption {
@@ -61,6 +61,45 @@ interface GastoManualRow {
   notas: string;
   created_at: string;
 }
+
+interface FacturaCompraRow {
+  id: string;
+  numero_factura: string;
+  proveedor_id: string;
+  proveedor_nombre: string;
+  orden_compra_id?: string;
+  oc_numero?: string;
+  fecha: string;
+  fecha_vencimiento?: string;
+  subtotal: number;
+  iva_porcentaje: number;
+  iva: number;
+  percepciones: number;
+  total: number;
+  moneda: "ARS" | "USD";
+  estado: "pendiente" | "pagada" | "anulada";
+  notas: string;
+  created_at: string;
+}
+
+interface OCOption {
+  id: string;
+  numero: string;
+  proveedor_id: string;
+}
+
+const emptyFCForm = {
+  numero_factura: "",
+  proveedor_id: "",
+  orden_compra_id: "",
+  fecha: new Date().toISOString().slice(0, 10),
+  fecha_vencimiento: "",
+  subtotal: 0,
+  iva_porcentaje: 21,
+  percepciones: 0,
+  moneda: "ARS" as "ARS" | "USD",
+  notas: "",
+};
 
 const GASTO_CATEGORIAS = ["Transporte", "Servicios", "Materiales", "Varios", "Comisiones", "Impuestos"] as const;
 
@@ -207,6 +246,15 @@ export default function FinanzasPage() {
   const [gmSaving, setGmSaving] = useState(false);
   const [gmError, setGmError] = useState("");
   const [gmProvSearch, setGmProvSearch] = useState("");
+
+  // Facturas compra state
+  const [facturasCompra, setFacturasCompra] = useState<FacturaCompraRow[]>([]);
+  const [fcModalOpen, setFcModalOpen] = useState(false);
+  const [fcForm, setFcForm] = useState(emptyFCForm);
+  const [fcSaving, setFcSaving] = useState(false);
+  const [fcError, setFcError] = useState("");
+  const [fcProvSearch, setFcProvSearch] = useState("");
+  const [ocOptions, setOcOptions] = useState<OCOption[]>([]);
 
   // ── SmartFilters for Movimientos tab ──
   const movFilterConfigs: FilterConfig[] = [
@@ -469,6 +517,36 @@ export default function FinanzasPage() {
           }
         } catch { /* table may not exist yet, ignore */ }
 
+        // Fetch facturas de compra
+        try {
+          let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero)").order("fecha", { ascending: false });
+          if (sociedadActiva?.id) qFc = qFc.eq("sociedad_id", sociedadActiva.id);
+          const { data: fcData } = await qFc;
+          if (fcData && fcData.length > 0) {
+            setFacturasCompra(fcData.map((r: any) => ({
+              id: r.id, numero_factura: r.numero_factura,
+              proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? "—",
+              orden_compra_id: r.orden_compra_id, oc_numero: r.ordenes_compra?.numero ?? undefined,
+              fecha: r.fecha, fecha_vencimiento: r.fecha_vencimiento,
+              subtotal: Number(r.subtotal), iva_porcentaje: Number(r.iva_porcentaje),
+              iva: Number(r.iva), percepciones: Number(r.percepciones ?? 0),
+              total: Number(r.total), moneda: (r.moneda as "ARS" | "USD") ?? "ARS",
+              estado: r.estado ?? "pendiente", notas: r.notas ?? "",
+              created_at: r.created_at,
+            })));
+          } else {
+            setFacturasCompra([]);
+          }
+        } catch { /* table may not exist yet, ignore */ }
+
+        // Fetch ordenes de compra for optional linking
+        try {
+          let qOc = supabase.from("ordenes_compra").select("id, numero, proveedor_id").order("numero", { ascending: false });
+          if (sociedadActiva?.id) qOc = qOc.eq("sociedad_id" as any, sociedadActiva.id);
+          const { data: ocData } = await qOc;
+          if (ocData) setOcOptions(ocData as OCOption[]);
+        } catch { /* ignore */ }
+
       } catch (err) {
         console.error("Error fetching finanzas data:", err);
         // On error, mock data fallback is already set above (or stays empty).
@@ -724,6 +802,85 @@ export default function FinanzasPage() {
     } catch (err) { console.error("Error eliminando gasto:", err); }
   }
 
+  // ── Facturas compra handlers ──
+  function openFCModal() {
+    setFcForm(emptyFCForm);
+    setFcError("");
+    setFcProvSearch("");
+    setFcModalOpen(true);
+  }
+
+  const fcIva = fcForm.subtotal * (fcForm.iva_porcentaje / 100);
+  const fcTotal = fcForm.subtotal + fcIva + fcForm.percepciones;
+
+  async function handleCreateFC() {
+    if (!fcForm.proveedor_id) { setFcError("Seleccioná un proveedor"); return; }
+    if (!fcForm.numero_factura.trim()) { setFcError("El número de factura es obligatorio"); return; }
+    if (fcForm.subtotal <= 0) { setFcError("El subtotal debe ser mayor a 0"); return; }
+    setFcSaving(true);
+    setFcError("");
+    try {
+      const insertData: Record<string, unknown> = {
+        numero_factura: fcForm.numero_factura.trim(),
+        proveedor_id: fcForm.proveedor_id,
+        fecha: fcForm.fecha,
+        subtotal: fcForm.subtotal,
+        iva_porcentaje: fcForm.iva_porcentaje,
+        iva: fcIva,
+        percepciones: fcForm.percepciones,
+        total: fcTotal,
+        moneda: fcForm.moneda,
+        notas: fcForm.notas,
+        estado: "pendiente",
+      };
+      if (fcForm.orden_compra_id) insertData.orden_compra_id = fcForm.orden_compra_id;
+      if (fcForm.fecha_vencimiento) insertData.fecha_vencimiento = fcForm.fecha_vencimiento;
+      if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
+
+      const { error } = await (supabase as any).from("facturas_compra").insert(insertData);
+      if (error) throw error;
+
+      setFcModalOpen(false);
+      await fetchData();
+    } catch (err: unknown) {
+      setFcError(err instanceof Error ? err.message : "Error al crear la factura");
+    } finally {
+      setFcSaving(false);
+    }
+  }
+
+  async function handleDeleteFC(id: string) {
+    if (!confirm("¿Seguro que querés eliminar esta factura de compra?")) return;
+    try {
+      await (supabase as any).from("facturas_compra").delete().eq("id", id);
+      await fetchData();
+    } catch (err) { console.error("Error eliminando FC:", err); }
+  }
+
+  async function handlePagarFC(id: string) {
+    try {
+      await (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", id);
+      await fetchData();
+    } catch (err) { console.error("Error marcando FC como pagada:", err); }
+  }
+
+  async function handleAnularFC(id: string) {
+    if (!confirm("¿Seguro que querés anular esta factura?")) return;
+    try {
+      await (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id);
+      await fetchData();
+    } catch (err) { console.error("Error anulando FC:", err); }
+  }
+
+  const filteredProveedoresFC = fcProvSearch.trim()
+    ? proveedoresOptions.filter(p => p.razon_social.toLowerCase().includes(fcProvSearch.toLowerCase()))
+    : proveedoresOptions;
+
+  // OCs filtered by selected proveedor (for optional linking)
+  const filteredOCsForFC = fcForm.proveedor_id
+    ? ocOptions.filter(oc => oc.proveedor_id === fcForm.proveedor_id)
+    : ocOptions;
+
   // Filtered proveedores for search
   const filteredProveedoresOP = proveedorSearch.trim()
     ? proveedoresOptions.filter(p => p.razon_social.toLowerCase().includes(proveedorSearch.toLowerCase()))
@@ -771,6 +928,7 @@ export default function FinanzasPage() {
 
   const tabs: { id: FinanzasTab; label: string }[] = [
     { id: "movimientos", label: "Movimientos" },
+    { id: "facturas_compra", label: "Facturas Compra" },
     { id: "ordenes_pago", label: "Ordenes de Pago" },
     { id: "gastos_manuales", label: "Gastos" },
     { id: "cc_clientes", label: "CC Clientes" },
@@ -859,6 +1017,70 @@ export default function FinanzasPage() {
               data={filteredMovimientos}
             />
           </Card>
+          </>
+        )}
+
+        {/* ── Facturas de Compra ── */}
+        {tab === "facturas_compra" && (
+          <>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-zinc-500">
+                Total pendiente: <span className="font-bold font-mono text-zinc-900 dark:text-white">
+                  {formatCurrency(facturasCompra.filter(f => f.estado === "pendiente").reduce((s, f) => s + f.total, 0))}
+                </span>
+              </p>
+              <button onClick={openFCModal} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
+                <Plus className="h-4 w-4" /> Nueva factura de compra
+              </button>
+            </div>
+            <Card className="p-0 overflow-hidden">
+              <DataTable<FacturaCompraRow>
+                columns={[
+                  { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
+                  { key: "numero_factura", label: "Nro. Factura", sortable: true, render: (row) => <span className="font-mono font-medium">{row.numero_factura}</span> },
+                  { key: "proveedor_nombre", label: "Proveedor", sortable: true, render: (row) => (
+                    <div>
+                      <span className="font-medium">{row.proveedor_nombre}</span>
+                      {row.oc_numero && <p className="text-xs text-zinc-400">OC: {row.oc_numero}</p>}
+                    </div>
+                  )},
+                  { key: "subtotal", label: "Subtotal", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.subtotal, row.moneda)}</span> },
+                  { key: "iva", label: "IVA", className: "text-right", render: (row) => (
+                    <div className="text-right">
+                      <span className="font-mono text-zinc-500">{formatCurrency(row.iva, row.moneda)}</span>
+                      <span className="text-xs text-zinc-400 ml-1">({row.iva_porcentaje}%)</span>
+                    </div>
+                  )},
+                  { key: "percepciones", label: "Perc.", className: "text-right", render: (row) => row.percepciones > 0 ? <span className="font-mono text-zinc-500 block text-right">{formatCurrency(row.percepciones, row.moneda)}</span> : <span className="text-zinc-300 block text-right">—</span> },
+                  { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.total, row.moneda)}</span> },
+                  { key: "fecha_vencimiento", label: "Vto.", sortable: true, render: (row) => row.fecha_vencimiento ? <span className="text-zinc-500 text-xs">{formatDate(row.fecha_vencimiento)}</span> : <span className="text-zinc-300">—</span> },
+                  { key: "estado", label: "Estado", sortable: true, render: (row) => (
+                    <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : "warning"}>
+                      {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : "Pendiente"}
+                    </Badge>
+                  )},
+                  { key: "actions", label: "", sortable: false, render: (row) => (
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {row.estado === "pendiente" && (
+                        <>
+                          <button onClick={() => handlePagarFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar como pagada">
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          </button>
+                          <button onClick={() => handleAnularFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Anular">
+                            <Ban className="h-3.5 w-3.5" />
+                          </button>
+                        </>
+                      )}
+                      <button onClick={() => handleDeleteFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )},
+                ]}
+                data={facturasCompra}
+                emptyMessage="No hay facturas de compra cargadas"
+              />
+            </Card>
           </>
         )}
 
@@ -1674,6 +1896,173 @@ export default function FinanzasPage() {
                 className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {opSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                 Crear OP
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Nueva factura de compra modal */}
+      {fcModalOpen && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setFcModalOpen(false)} />
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-2">
+                <Receipt className="h-5 w-5 text-orange-500" />
+                <h2 className="text-lg font-bold dark:text-white">Nueva Factura de Compra</h2>
+              </div>
+              <button onClick={() => setFcModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </div>
+            {fcError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{fcError}</div>}
+            <div className="space-y-4">
+              {/* Proveedor selector with search */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Proveedor *</label>
+                <div className="relative mt-1">
+                  <div className="flex items-center border border-zinc-200 rounded-lg dark:border-zinc-700 overflow-hidden">
+                    <Search className="h-4 w-4 text-zinc-400 ml-3 flex-shrink-0" />
+                    <input
+                      value={fcProvSearch}
+                      onChange={(e) => { setFcProvSearch(e.target.value); if (fcForm.proveedor_id) setFcForm({ ...fcForm, proveedor_id: "", orden_compra_id: "" }); }}
+                      placeholder="Buscar proveedor..."
+                      className="w-full px-2 py-2 text-sm bg-transparent dark:text-white outline-none"
+                    />
+                  </div>
+                  {fcForm.proveedor_id && (
+                    <div className="mt-1 flex items-center gap-1">
+                      <Badge variant="success">{proveedoresOptions.find(p => p.id === fcForm.proveedor_id)?.razon_social}</Badge>
+                      <button onClick={() => { setFcForm({ ...fcForm, proveedor_id: "", orden_compra_id: "" }); setFcProvSearch(""); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
+                    </div>
+                  )}
+                  {!fcForm.proveedor_id && fcProvSearch.trim() && filteredProveedoresFC.length > 0 && (
+                    <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                      {filteredProveedoresFC.slice(0, 8).map(p => (
+                        <button key={p.id} onClick={() => { setFcForm({ ...fcForm, proveedor_id: p.id, orden_compra_id: "" }); setFcProvSearch(p.razon_social); }}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white">
+                          {p.razon_social}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Numero de factura */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Número de factura *</label>
+                <input value={fcForm.numero_factura} onChange={(e) => setFcForm({ ...fcForm, numero_factura: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: 0001-00012345" />
+              </div>
+
+              {/* Fecha y fecha vencimiento */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Fecha</label>
+                  <input type="date" value={fcForm.fecha} onChange={(e) => setFcForm({ ...fcForm, fecha: e.target.value })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Fecha vencimiento</label>
+                  <input type="date" value={fcForm.fecha_vencimiento} onChange={(e) => setFcForm({ ...fcForm, fecha_vencimiento: e.target.value })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+              </div>
+
+              {/* Subtotal + Moneda */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Subtotal (neto gravado) *</label>
+                  <input type="number" value={fcForm.subtotal || ""} onChange={(e) => setFcForm({ ...fcForm, subtotal: Number(e.target.value) })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Moneda</label>
+                  <select value={fcForm.moneda} onChange={(e) => setFcForm({ ...fcForm, moneda: e.target.value as "ARS" | "USD" })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    <option value="ARS">ARS</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* IVA % + Percepciones */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">% IVA</label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input type="number" step="0.5" value={fcForm.iva_porcentaje || ""} onChange={(e) => setFcForm({ ...fcForm, iva_porcentaje: Number(e.target.value) })}
+                      className="w-20 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    <span className="text-sm text-zinc-400">%</span>
+                    <div className="flex gap-1 ml-1">
+                      {[10.5, 21, 27].map(pct => (
+                        <button key={pct} type="button" onClick={() => setFcForm({ ...fcForm, iva_porcentaje: pct })}
+                          className={`rounded px-2 py-1 text-xs font-medium transition-colors ${fcForm.iva_porcentaje === pct ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                          {pct}%
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Percepciones</label>
+                  <input type="number" value={fcForm.percepciones || ""} onChange={(e) => setFcForm({ ...fcForm, percepciones: Number(e.target.value) })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0" />
+                </div>
+              </div>
+
+              {/* Calculated totals */}
+              {fcForm.subtotal > 0 && (
+                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1.5">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-zinc-500">Subtotal</span>
+                    <span className="font-mono">{formatCurrency(fcForm.subtotal, fcForm.moneda)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-zinc-500">IVA ({fcForm.iva_porcentaje}%)</span>
+                    <span className="font-mono text-zinc-600">{formatCurrency(fcIva, fcForm.moneda)}</span>
+                  </div>
+                  {fcForm.percepciones > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-zinc-500">Percepciones</span>
+                      <span className="font-mono text-zinc-600">{formatCurrency(fcForm.percepciones, fcForm.moneda)}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1.5">
+                    <span className="text-zinc-700 dark:text-white">Total</span>
+                    <span className="font-mono text-red-600">{formatCurrency(fcTotal, fcForm.moneda)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* OC opcional */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Orden de compra (opcional)</label>
+                <select value={fcForm.orden_compra_id} onChange={(e) => setFcForm({ ...fcForm, orden_compra_id: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="">— Sin OC vinculada —</option>
+                  {filteredOCsForFC.map(oc => (
+                    <option key={oc.id} value={oc.id}>{oc.numero}</option>
+                  ))}
+                </select>
+                {fcForm.proveedor_id && filteredOCsForFC.length === 0 && (
+                  <p className="text-xs text-zinc-400 mt-1">No hay OCs para este proveedor</p>
+                )}
+              </div>
+
+              {/* Notas */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Notas</label>
+                <textarea value={fcForm.notas} onChange={(e) => setFcForm({ ...fcForm, notas: e.target.value })}
+                  rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Observaciones, condiciones de pago..." />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+              <button onClick={() => setFcModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
+              <button onClick={handleCreateFC} disabled={fcSaving || !fcForm.proveedor_id || !fcForm.numero_factura.trim() || fcForm.subtotal <= 0}
+                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                {fcSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                Crear factura
               </button>
             </div>
           </div>

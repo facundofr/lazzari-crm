@@ -9,7 +9,7 @@ import { useUser } from "@/lib/auth-context";
 import {
   dashboardKPIs, presupuestosPorEstado, topClientes, mockPresupuestos, mockUsers,
 } from "@/lib/mock-data";
-import { TrendingUp, Users, FileText, Download, DollarSign, XCircle, Loader2, Percent } from "lucide-react";
+import { TrendingUp, Users, FileText, Download, DollarSign, XCircle, Loader2, Percent, Package } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
@@ -59,11 +59,19 @@ function buildMockComisiones(): VendedorComision[] {
   });
 }
 
+// ── Ranking por Articulo types ──────────────────────────────────
+interface ArticuloRanking {
+  descripcion: string;
+  cantidadTotal: number;
+  montoTotal: number;
+  apariciones: number; // number of facturas/presupuestos where it appears
+}
+
 const COLORS = ["#f97316", "#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#eab308"];
 
 export default function ReportesPage() {
   const { sociedadActiva } = useUser();
-  const [activeTab, setActiveTab] = useState<"comercial" | "comisiones">("comercial");
+  const [activeTab, setActiveTab] = useState<"comercial" | "comisiones" | "articulos">("comercial");
   const [monedaReporte, setMonedaReporte] = useState<"original" | "ARS" | "USD">("original");
   const [tipoCambioReporte, setTipoCambioReporte] = useState<number>(1200);
   const [loading, setLoading] = useState(true);
@@ -72,6 +80,10 @@ export default function ReportesPage() {
   const [topClientesData, setTopClientesData] = useState<{ nombre: string; facturado: number }[]>([]);
   const [comisionesData, setComisionesData] = useState<VendedorComision[]>([]);
   const [comisionesLoading, setComisionesLoading] = useState(true);
+  const [articulosData, setArticulosData] = useState<ArticuloRanking[]>([]);
+  const [articulosLoading, setArticulosLoading] = useState(true);
+  const [articulosSortBy, setArticulosSortBy] = useState<"cantidad" | "monto">("cantidad");
+  const [articulosFuente, setArticulosFuente] = useState<"facturas" | "presupuestos" | "ambos">("facturas");
 
   const now = new Date();
   const mesActual = now.toLocaleString("es-AR", { month: "long", year: "numeric" });
@@ -229,6 +241,89 @@ export default function ReportesPage() {
     fetchComisiones();
   }, [sociedadActiva]);
 
+  // ── Fetch ranking por articulo ──────────────────────────────────
+  useEffect(() => {
+    async function fetchArticulos() {
+      setArticulosLoading(true);
+      try {
+        const byDesc: Record<string, { cantidad: number; monto: number; docs: Set<string> }> = {};
+
+        if (articulosFuente === "facturas" || articulosFuente === "ambos") {
+          // Get factura_items joined with facturas to filter by sociedad and exclude anuladas
+          let facItemsQuery = supabase
+            .from("factura_items")
+            .select("descripcion, cantidad, subtotal, factura_id, facturas!inner(estado, sociedad_id)");
+          if (sociedadActiva?.id) facItemsQuery = facItemsQuery.eq("facturas.sociedad_id" as any, sociedadActiva.id);
+          facItemsQuery = facItemsQuery.neq("facturas.estado" as any, "anulada");
+          const { data: facItems } = await facItemsQuery;
+
+          if (facItems) {
+            facItems.forEach((item: Record<string, unknown>) => {
+              const desc = ((item.descripcion as string) || "Sin descripcion").trim();
+              if (!byDesc[desc]) byDesc[desc] = { cantidad: 0, monto: 0, docs: new Set() };
+              byDesc[desc].cantidad += Number(item.cantidad) || 0;
+              byDesc[desc].monto += Number(item.subtotal) || 0;
+              byDesc[desc].docs.add(`F-${item.factura_id}`);
+            });
+          }
+        }
+
+        if (articulosFuente === "presupuestos" || articulosFuente === "ambos") {
+          // Get presupuesto_items joined with presupuestos (only aprobados)
+          let prItemsQuery = supabase
+            .from("presupuesto_items")
+            .select("descripcion, cantidad, subtotal, presupuesto_id, presupuestos!inner(estado, sociedad_id)")
+            .eq("presupuestos.estado" as any, "aprobado");
+          if (sociedadActiva?.id) prItemsQuery = prItemsQuery.eq("presupuestos.sociedad_id" as any, sociedadActiva.id);
+          const { data: prItems } = await prItemsQuery;
+
+          if (prItems) {
+            prItems.forEach((item: Record<string, unknown>) => {
+              const desc = ((item.descripcion as string) || "Sin descripcion").trim();
+              if (!byDesc[desc]) byDesc[desc] = { cantidad: 0, monto: 0, docs: new Set() };
+              byDesc[desc].cantidad += Number(item.cantidad) || 0;
+              byDesc[desc].monto += Number(item.subtotal) || 0;
+              byDesc[desc].docs.add(`P-${item.presupuesto_id}`);
+            });
+          }
+        }
+
+        const result: ArticuloRanking[] = Object.entries(byDesc).map(([descripcion, data]) => ({
+          descripcion,
+          cantidadTotal: data.cantidad,
+          montoTotal: data.monto,
+          apariciones: data.docs.size,
+        }));
+
+        setArticulosData(result);
+      } catch {
+        setArticulosData([]);
+      } finally {
+        setArticulosLoading(false);
+      }
+    }
+    fetchArticulos();
+  }, [sociedadActiva, articulosFuente]);
+
+  const articulosSorted = useMemo(() => {
+    const sorted = [...articulosData];
+    if (articulosSortBy === "cantidad") {
+      sorted.sort((a, b) => b.cantidadTotal - a.cantidadTotal);
+    } else {
+      sorted.sort((a, b) => b.montoTotal - a.montoTotal);
+    }
+    return sorted;
+  }, [articulosData, articulosSortBy]);
+
+  const articulosChartData = useMemo(
+    () =>
+      articulosSorted.slice(0, 10).map((a) => ({
+        nombre: a.descripcion.length > 25 ? a.descripcion.substring(0, 25) + "..." : a.descripcion,
+        value: articulosSortBy === "cantidad" ? a.cantidadTotal : a.montoTotal,
+      })),
+    [articulosSorted, articulosSortBy]
+  );
+
   const rechazados = mockPresupuestos.filter((pr) => pr.motivoRechazo);
   const totalPR = mockPresupuestos.length;
   const ticketPromedio = totalPR > 0 ? mockPresupuestos.reduce((a, pr) => a + pr.total, 0) / totalPR : 0;
@@ -263,6 +358,14 @@ export default function ReportesPage() {
     ]);
     downloadCSV("comisiones_vendedores", headers, rows);
   }, [downloadCSV, comisionesData]);
+
+  const exportArticulos = useCallback(() => {
+    const headers = ["Articulo", "Cantidad total", "Monto total", "Apariciones"];
+    const rows = articulosSorted.map((a) => [
+      a.descripcion, String(a.cantidadTotal), String(a.montoTotal), String(a.apariciones),
+    ]);
+    downloadCSV("ranking_articulos", headers, rows);
+  }, [downloadCSV, articulosSorted]);
 
   // Calc rejection percentages dynamically
   const motivoCounts: Record<string, number> = {};
@@ -364,6 +467,19 @@ export default function ReportesPage() {
             <span className="flex items-center gap-2">
               <Percent className="h-4 w-4" />
               Comisiones
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab("articulos")}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === "articulos"
+                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
+                : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <Package className="h-4 w-4" />
+              Ranking por Articulo
             </span>
           </button>
         </div>
@@ -553,6 +669,212 @@ export default function ReportesPage() {
             </table>
           </div>
         </Card>
+      </div>
+      )}
+
+      {/* Tab: Ranking por Articulo */}
+      {activeTab === "articulos" && (
+      <div className="p-4 sm:p-8 space-y-6">
+        {articulosLoading ? (
+          <div className="flex items-center justify-center p-16">
+            <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
+          </div>
+        ) : (
+          <>
+            {/* Controls row */}
+            <div className="flex flex-wrap items-center gap-4">
+              {/* Source selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Fuente:</span>
+                <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-600 overflow-hidden">
+                  {([
+                    { key: "facturas" as const, label: "Facturas" },
+                    { key: "presupuestos" as const, label: "PR aprobados" },
+                    { key: "ambos" as const, label: "Ambos" },
+                  ]).map((opt) => (
+                    <button
+                      key={opt.key}
+                      onClick={() => setArticulosFuente(opt.key)}
+                      className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                        articulosFuente === opt.key
+                          ? "bg-orange-500 text-white"
+                          : "bg-white text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {/* Sort toggle */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Ordenar por:</span>
+                <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-600 overflow-hidden">
+                  {([
+                    { key: "cantidad" as const, label: "Cantidad" },
+                    { key: "monto" as const, label: "Monto" },
+                  ]).map((opt) => (
+                    <button
+                      key={opt.key}
+                      onClick={() => setArticulosSortBy(opt.key)}
+                      className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                        articulosSortBy === opt.key
+                          ? "bg-orange-500 text-white"
+                          : "bg-white text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* KPI cards */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <Card>
+                <div className="rounded-lg p-2.5 w-fit text-orange-600 bg-orange-50">
+                  <Package className="h-5 w-5" />
+                </div>
+                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{articulosData.length}</h3>
+                <p className="mt-1 text-sm text-zinc-500">Articulos distintos</p>
+              </Card>
+              <Card>
+                <div className="rounded-lg p-2.5 w-fit text-blue-600 bg-blue-50">
+                  <FileText className="h-5 w-5" />
+                </div>
+                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">
+                  {articulosData.reduce((s, a) => s + a.apariciones, 0)}
+                </h3>
+                <p className="mt-1 text-sm text-zinc-500">Total documentos</p>
+              </Card>
+              <Card>
+                <div className="rounded-lg p-2.5 w-fit text-emerald-600 bg-emerald-50">
+                  <TrendingUp className="h-5 w-5" />
+                </div>
+                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">
+                  {articulosData.reduce((s, a) => s + a.cantidadTotal, 0).toLocaleString("es-AR")}
+                </h3>
+                <p className="mt-1 text-sm text-zinc-500">Unidades vendidas</p>
+              </Card>
+              <Card>
+                <div className="rounded-lg p-2.5 w-fit text-violet-600 bg-violet-50">
+                  <DollarSign className="h-5 w-5" />
+                </div>
+                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">
+                  {fc(articulosData.reduce((s, a) => s + a.montoTotal, 0))}
+                </h3>
+                <p className="mt-1 text-sm text-zinc-500">Monto total</p>
+              </Card>
+            </div>
+
+            {/* Top 10 chart */}
+            {articulosChartData.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Top 10 articulos por {articulosSortBy === "cantidad" ? "cantidad" : "monto"}</CardTitle>
+                </CardHeader>
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={articulosChartData} layout="vertical" margin={{ left: 10, right: 30 }}>
+                      <XAxis
+                        type="number"
+                        tickFormatter={(v) =>
+                          articulosSortBy === "monto"
+                            ? `${(v / 1000).toFixed(0)}K`
+                            : String(v)
+                        }
+                        tick={{ fontSize: 12 }}
+                      />
+                      <YAxis type="category" dataKey="nombre" width={180} tick={{ fontSize: 11 }} />
+                      <Tooltip
+                        formatter={(v) =>
+                          articulosSortBy === "monto"
+                            ? fc(Number(v))
+                            : Number(v).toLocaleString("es-AR")
+                        }
+                      />
+                      <Bar dataKey="value" fill="#f97316" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </Card>
+            )}
+
+            {/* Full table */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Ranking completo de articulos</CardTitle>
+                <button onClick={exportArticulos} className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
+                  <Download className="h-3.5 w-3.5" /> Exportar
+                </button>
+              </CardHeader>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-zinc-200 dark:border-zinc-700">
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-500">#</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-500">Articulo</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">
+                        <button
+                          onClick={() => setArticulosSortBy("cantidad")}
+                          className={`inline-flex items-center gap-1 ${articulosSortBy === "cantidad" ? "text-orange-600 dark:text-orange-400" : ""}`}
+                        >
+                          Cantidad {articulosSortBy === "cantidad" && <TrendingUp className="h-3 w-3 rotate-180" />}
+                        </button>
+                      </th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">
+                        <button
+                          onClick={() => setArticulosSortBy("monto")}
+                          className={`inline-flex items-center gap-1 ${articulosSortBy === "monto" ? "text-orange-600 dark:text-orange-400" : ""}`}
+                        >
+                          Monto total {articulosSortBy === "monto" && <TrendingUp className="h-3 w-3 rotate-180" />}
+                        </button>
+                      </th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold uppercase text-zinc-500">Apariciones</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-500">Barra</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {articulosSorted.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-8 text-center text-sm text-zinc-500">
+                          No se encontraron articulos para la fuente seleccionada
+                        </td>
+                      </tr>
+                    ) : (
+                      articulosSorted.map((a, i) => {
+                        const maxVal = articulosSortBy === "cantidad"
+                          ? articulosSorted[0]?.cantidadTotal || 1
+                          : articulosSorted[0]?.montoTotal || 1;
+                        const currentVal = articulosSortBy === "cantidad" ? a.cantidadTotal : a.montoTotal;
+                        const barPct = (currentVal / maxVal) * 100;
+                        return (
+                          <tr key={a.descripcion} className="border-b border-zinc-100 dark:border-zinc-800">
+                            <td className="px-4 py-3 text-sm font-bold text-zinc-400">{i + 1}</td>
+                            <td className="px-4 py-3 text-sm font-medium text-zinc-800 dark:text-zinc-200 max-w-xs truncate" title={a.descripcion}>
+                              {a.descripcion}
+                            </td>
+                            <td className="px-4 py-3 text-sm font-mono text-right">{a.cantidadTotal.toLocaleString("es-AR")}</td>
+                            <td className="px-4 py-3 text-sm font-mono text-right">{fc(a.montoTotal)}</td>
+                            <td className="px-4 py-3 text-sm text-center">
+                              <Badge variant="outline">{a.apariciones}</Badge>
+                            </td>
+                            <td className="px-4 py-3 w-40">
+                              <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800">
+                                <div className="h-2 rounded-full bg-orange-500" style={{ width: `${barPct}%` }} />
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </>
+        )}
       </div>
       )}
 

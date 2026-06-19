@@ -346,10 +346,20 @@ export default function FacturacionPage() {
     window.open(`mailto:${encodeURIComponent(emailTo)}?subject=${subject}&body=${body}`, "_blank");
   }
 
-  function handlePrintFactura(f: FacturaRow) {
+  async function handlePrintFactura(f: FacturaRow) {
+    // Ensure items are loaded before generating PDF
+    let pdfItems = detailItems;
+    if (pdfItems.length === 0) {
+      const { data } = await supabase.from("factura_items")
+        .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal")
+        .eq("factura_id", f.id).order("orden");
+      pdfItems = (data || []).map(d => ({ ...d, subtotal: d.subtotal ?? 0 }));
+    }
+
     const cli = f.clientes;
     const comp = formatComprobante(f.tipo, f.punto_venta, f.numero);
     const letraComprobante = f.tipo.replace("NC", "").replace("ND", "");
+    const isFacturaBPdf = f.tipo === "FB" || f.tipo === "NCB";
 
     // Build QR data URL for ARCA verification
     const isUSDPdf = f.moneda === "USD" && f.tipo_cambio;
@@ -444,20 +454,20 @@ export default function FacturacionPage() {
     <th style="width:50%">Descripcion</th>
     <th class="right">Cantidad</th>
     <th class="right">P. Unitario</th>
-    <th class="right">IVA %</th>
+    ${isFacturaBPdf ? "" : `<th class="right">IVA %</th>`}
     <th class="right">Subtotal</th>
   </tr></thead>
   <tbody>
-    ${detailItems.length > 0 ? detailItems.map(it => `
+    ${pdfItems.length > 0 ? pdfItems.map(it => `
     <tr>
       <td>${it.descripcion}</td>
       <td class="right mono">${it.cantidad}</td>
       <td class="right mono">${formatCurrency(Number(it.precio_unitario))}</td>
-      <td class="right">${it.iva_porcentaje}%</td>
+      ${isFacturaBPdf ? "" : `<td class="right">${it.iva_porcentaje}%</td>`}
       <td class="right mono">${formatCurrency(Number(it.subtotal))}</td>
     </tr>`).join("") : `
     <tr>
-      <td colspan="5" style="text-align:center;color:#888;padding:16px">
+      <td colspan="${isFacturaBPdf ? 4 : 5}" style="text-align:center;color:#888;padding:16px">
         Items detallados no disponibles
       </td>
     </tr>`}
@@ -467,9 +477,13 @@ export default function FacturacionPage() {
 <div class="totals">
   <div class="totals-inner">
     ${isUSDPdf ? `<div class="total-line" style="color:#888;font-size:10px"><span>Operacion en USD — TC: ${Number(f.tipo_cambio).toLocaleString("es-AR")}</span><span class="mono">USD ${(Number(f.total) / Number(f.tipo_cambio!)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
-    <div class="total-line"><span>Neto gravado</span><span class="mono">${formatCurrency(Number(f.subtotal))}</span></div>
-    <div class="total-line"><span>IVA 21%</span><span class="mono">${formatCurrency(Number(f.iva))}</span></div>
-    <div class="total-line final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total))}</span></div>
+    ${isFacturaBPdf
+      ? `<div class="total-line"><span>Subtotal</span><span class="mono">${formatCurrency(Number(f.total))}</span></div>
+         <div class="total-line" style="color:#888;font-size:10px"><span>IVA incluido en precio</span><span class="mono">${formatCurrency(Number(f.iva))}</span></div>
+         <div class="total-line final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total))}</span></div>`
+      : `<div class="total-line"><span>Neto gravado</span><span class="mono">${formatCurrency(Number(f.subtotal))}</span></div>
+         <div class="total-line"><span>IVA 21%</span><span class="mono">${formatCurrency(Number(f.iva))}</span></div>
+         <div class="total-line final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total))}</span></div>`}
   </div>
 </div>
 

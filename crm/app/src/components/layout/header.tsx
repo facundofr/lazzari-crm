@@ -93,9 +93,18 @@ const alertVariant: Record<string, "danger" | "warning" | "info" | "purple"> = {
   cc_vencida: "danger",
 };
 
+// Map alert tipo values to notification_preferences column names
+const ALERT_TIPO_TO_PREF: Record<string, string> = {
+  stock_bajo: "stock_bajo",
+  vencimiento_pr: "pr_vencer",
+  cheque_proximo: "cheque_vencer",
+  seguimiento: "seguimiento",
+  cc_vencida: "cc_vencida",
+};
+
 export function Header({ title, subtitle, action }: HeaderProps) {
   const router = useRouter();
-  const { setMobileSidebarOpen, sociedades, sociedadActiva, setSociedadActiva } = useUser();
+  const { setMobileSidebarOpen, sociedades, sociedadActiva, setSociedadActiva, profile } = useUser();
   const [sociedadOpen, setSociedadOpen] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
@@ -230,21 +239,44 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   // ── Alerts ──────────────────────────────────────────────────────
   const fetchAlerts = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("alertas")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(20);
+      // Fetch alerts and user notification preferences in parallel
+      const [alertsRes, prefsRes] = await Promise.all([
+        supabase
+          .from("alertas")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(20),
+        profile?.id
+          ? (supabase as any)
+              .from("notification_preferences")
+              .select("pr_vencer, stock_bajo, cc_vencida, cheque_vencer, seguimiento, resumen_diario")
+              .eq("user_id", profile.id)
+              .single()
+          : Promise.resolve({ data: null }),
+      ]);
 
-      if (!error && data) {
-        setAlerts(data as AlertRow[]);
+      if (!alertsRes.error && alertsRes.data) {
+        let filtered = alertsRes.data as AlertRow[];
+
+        // If user has notification preferences, filter out disabled alert types
+        if (prefsRes.data) {
+          const prefs = prefsRes.data as Record<string, boolean>;
+          filtered = filtered.filter((alert) => {
+            const prefKey = ALERT_TIPO_TO_PREF[alert.tipo];
+            // If we have a mapping and the pref is explicitly false, filter it out
+            if (prefKey && prefs[prefKey] === false) return false;
+            return true;
+          });
+        }
+
+        setAlerts(filtered);
       } else {
         setAlerts([]);
       }
     } catch {
       setAlerts([]);
     }
-  }, [supabase]);
+  }, [supabase, profile?.id]);
 
   useEffect(() => {
     fetchAlerts();
