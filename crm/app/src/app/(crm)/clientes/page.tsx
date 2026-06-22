@@ -17,7 +17,7 @@ import {
   Plus, X, Pencil, Trash2, ToggleLeft, ToggleRight, Send, Check,
   BarChart3, ShoppingBag, CalendarDays, TrendingUp, Cake,
   User, FileText, CreditCard, StickyNote, Clock, Receipt, Truck, Wallet,
-  ChevronDown, ChevronRight, Package, ExternalLink,
+  ChevronDown, ChevronRight, Package, ExternalLink, Copy, AlertCircle,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
@@ -194,7 +194,18 @@ const emptyForm = {
   transporte_definido: "",
 };
 
-type DetailTab = "datos" | "contactos" | "sucursales" | "historial" | "actividad";
+type DetailTab = "datos" | "contactos" | "sucursales" | "historial" | "actividad" | "cc";
+
+interface CCFactura {
+  id: string;
+  tipo: string;
+  punto_venta: string;
+  numero: string;
+  fecha: string;
+  fecha_vencimiento: string | null;
+  total: number;
+  moneda: string;
+}
 
 interface TimelineEvent {
   id: string;
@@ -238,6 +249,8 @@ export default function ClientesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState("");
+  const [cuitLookupLoading, setCuitLookupLoading] = useState(false);
+  const [cuitLookupMsg, setCuitLookupMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // Sucursales in modal (edit mode only)
   const [formSucursales, setFormSucursales] = useState<{ id: string; nombre: string; isNew?: boolean }[]>([]);
@@ -281,6 +294,45 @@ export default function ClientesPage() {
     facturas: false,
     items: false,
   });
+
+  // Cuenta Corriente
+  const [ccFacturas, setCcFacturas] = useState<CCFactura[]>([]);
+  const [ccLoading, setCcLoading] = useState(false);
+  const [pendingCountMap, setPendingCountMap] = useState<Record<string, number>>({});
+
+  // CUIT lookup from AFIP padron
+  const handleCuitLookup = useCallback(async () => {
+    const cleanCuit = form.cuit.replace(/\D/g, "");
+    if (cleanCuit.length !== 11) {
+      setCuitLookupMsg({ type: "error", text: "El CUIT debe tener 11 digitos" });
+      return;
+    }
+    setCuitLookupLoading(true);
+    setCuitLookupMsg(null);
+    try {
+      const res = await fetch(`/api/cuit-lookup?cuit=${cleanCuit}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setCuitLookupMsg({ type: "error", text: data.error || "Error consultando AFIP" });
+        return;
+      }
+      setForm((prev) => ({
+        ...prev,
+        razon_social: prev.razon_social || data.razon_social || prev.razon_social,
+        condicion_iva: data.condicion_iva || prev.condicion_iva,
+        direccion: prev.direccion || data.direccion || prev.direccion,
+        localidad: prev.localidad || data.localidad || prev.localidad,
+        provincia: prev.provincia || data.provincia || prev.provincia,
+        cp: prev.cp || data.cp || prev.cp,
+        type: data.tipo_persona === "JURIDICA" ? "empresa" : data.tipo_persona === "FISICA" ? "persona" : prev.type,
+      }));
+      setCuitLookupMsg({ type: "success", text: `${data.razon_social} - ${data.condicion_iva === "RI" ? "Resp. Inscripto" : data.condicion_iva === "Monotributo" ? "Monotributo" : data.condicion_iva === "Exento" ? "Exento" : "Cons. Final"}` });
+    } catch {
+      setCuitLookupMsg({ type: "error", text: "Error de conexion al consultar AFIP" });
+    } finally {
+      setCuitLookupLoading(false);
+    }
+  }, [form.cuit]);
 
   // Fetch vendedores on mount
   useEffect(() => {
@@ -670,6 +722,85 @@ export default function ClientesPage() {
     fetchContactos();
   }, [selectedCliente?.id]);
 
+  // Fetch CC (pending facturas) when CC tab is selected
+  useEffect(() => {
+    if (!selectedCliente || detailTab !== "cc") return;
+    const clienteId = selectedCliente.id;
+    setCcLoading(true);
+
+    async function fetchCC() {
+      try {
+        let query = (supabase as any)
+          .from("facturas")
+          .select("id, tipo, punto_venta, numero, fecha, fecha_vencimiento, total, moneda")
+          .eq("cliente_id", clienteId)
+          .eq("estado", "emitida")
+          .order("fecha");
+
+        if (sociedadActiva?.id) {
+          query = query.eq("sociedad_id", sociedadActiva.id);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+          console.error("Error fetching CC facturas:", error);
+          setCcFacturas([]);
+        } else {
+          setCcFacturas(
+            (data || []).map((f: any) => ({
+              id: f.id,
+              tipo: f.tipo || "FC A",
+              punto_venta: f.punto_venta || "0001",
+              numero: f.numero || "",
+              fecha: f.fecha || "",
+              fecha_vencimiento: f.fecha_vencimiento || null,
+              total: Number(f.total) || 0,
+              moneda: f.moneda || "ARS",
+            }))
+          );
+        }
+      } catch (err) {
+        console.error("Error fetching CC:", err);
+        setCcFacturas([]);
+      } finally {
+        setCcLoading(false);
+      }
+    }
+
+    fetchCC();
+  }, [selectedCliente?.id, detailTab, sociedadActiva?.id]);
+
+  // Fetch pending invoice counts for all clients (for badge in DataTable)
+  useEffect(() => {
+    if (clientes.length === 0) return;
+
+    async function fetchPendingCounts() {
+      try {
+        let query = (supabase as any)
+          .from("facturas")
+          .select("cliente_id")
+          .eq("estado", "emitida");
+
+        if (sociedadActiva?.id) {
+          query = query.eq("sociedad_id", sociedadActiva.id);
+        }
+
+        const { data, error } = await query;
+        if (error || !data) return;
+
+        const counts: Record<string, number> = {};
+        for (const row of data as { cliente_id: string }[]) {
+          counts[row.cliente_id] = (counts[row.cliente_id] || 0) + 1;
+        }
+        setPendingCountMap(counts);
+      } catch {
+        // ignore
+      }
+    }
+
+    fetchPendingCounts();
+  }, [clientes, sociedadActiva?.id]);
+
   const fetchClientes = useCallback(async () => {
     try {
       // contactos is polymorphic (no FK to clientes), so we fetch it separately
@@ -753,6 +884,7 @@ export default function ClientesPage() {
     setEditingId(null);
     setForm(emptyForm);
     setFormError("");
+    setCuitLookupMsg(null);
     setFormSucursales([]);
     setNewSucursalNombre("");
     setRemovedSucursalIds([]);
@@ -782,6 +914,7 @@ export default function ClientesPage() {
       transporte_definido: c.transporteDefinido ?? "",
     });
     setFormError("");
+    setCuitLookupMsg(null);
     setRemovedSucursalIds([]);
     setNewSucursalNombre("");
     // Fetch sucursales for this client
@@ -902,6 +1035,61 @@ export default function ClientesPage() {
     setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
+  function calcDiasMora(fecha: string): number {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    const f = new Date(fecha + "T00:00:00");
+    const diff = Math.floor((hoy.getTime() - f.getTime()) / (1000 * 60 * 60 * 24));
+    return diff > 0 ? diff : 0;
+  }
+
+  function generateCCText(cliente: ClienteExt, facturas: CCFactura[]): string {
+    const today = new Date().toLocaleDateString("es-AR");
+    const lines: string[] = [];
+    lines.push(`Estimado/a ${cliente.razonSocial},`);
+    lines.push("");
+    lines.push(`Le enviamos el detalle de su cuenta corriente al dia ${today}:`);
+    lines.push("");
+    lines.push("Comprobante | Fecha | Vencimiento | Monto | Dias de mora");
+    lines.push("-----------------------------------------------------------");
+    for (const f of facturas) {
+      const comprobante = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
+      const venc = f.fecha_vencimiento ? formatDate(f.fecha_vencimiento) : "—";
+      const mora = calcDiasMora(f.fecha);
+      lines.push(`${comprobante} | ${formatDate(f.fecha)} | ${venc} | ${formatCurrency(f.total, f.moneda as "ARS" | "USD")} | ${mora > 0 ? mora + " dias" : "Al dia"}`);
+    }
+    lines.push("");
+    const totalAdeudado = facturas.reduce((sum, f) => sum + f.total, 0);
+    lines.push(`Total pendiente: ${formatCurrency(totalAdeudado)}`);
+    lines.push("");
+    lines.push("Quedamos a disposicion para cualquier consulta.");
+    lines.push("Saludos cordiales,");
+    lines.push(sociedadActiva?.nombre || "Lazzari Soluciones Industriales");
+    return lines.join("\n");
+  }
+
+  function handleCopiarCC() {
+    if (!selectedCliente) return;
+    const text = generateCCText(selectedCliente, ccFacturas);
+    navigator.clipboard.writeText(text).then(() => {
+      toast.success("Cuenta corriente copiada al portapapeles");
+    }).catch(() => {
+      toast.error("No se pudo copiar al portapapeles");
+    });
+  }
+
+  function handleEnviarCC() {
+    if (!selectedCliente) return;
+    const email = selectedCliente.emailFacturacion || selectedCliente.email;
+    if (!email) {
+      toast.error("El cliente no tiene email configurado");
+      return;
+    }
+    const subject = encodeURIComponent(`Cuenta Corriente - ${selectedCliente.razonSocial}`);
+    const body = encodeURIComponent(generateCCText(selectedCliente, ccFacturas));
+    window.open(`mailto:${email}?subject=${subject}&body=${body}`, "_self");
+  }
+
   if (loading) {
     return (
       <>
@@ -921,6 +1109,7 @@ export default function ClientesPage() {
     { key: "sucursales", label: "Sucursales", icon: <Building2 className="h-3.5 w-3.5" /> },
     { key: "historial", label: "Historial", icon: <BarChart3 className="h-3.5 w-3.5" /> },
     { key: "actividad", label: "Actividad", icon: <Clock className="h-3.5 w-3.5" /> },
+    { key: "cc", label: "Cta. Cte.", icon: <CreditCard className="h-3.5 w-3.5" /> },
   ];
 
   // Handler: assign vendedor to a contacto
@@ -1008,17 +1197,28 @@ export default function ClientesPage() {
               columns={[
                 {
                   key: "razonSocial", label: "Razon social", sortable: true,
-                  render: (row) => (
+                  render: (row) => {
+                    const pendCount = pendingCountMap[row.id] || 0;
+                    return (
                     <div className="flex items-center gap-3">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-xs dark:bg-orange-900/30 dark:text-orange-400">
                         {getInitials(row.razonSocial)}
                       </div>
                       <div className="min-w-0">
-                        <p className="font-medium text-zinc-900 dark:text-white truncate">{row.razonSocial}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium text-zinc-900 dark:text-white truncate">{row.razonSocial}</p>
+                          {pendCount > 0 && (
+                            <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400 px-1.5 py-0.5 rounded-full whitespace-nowrap">
+                              <AlertCircle className="h-2.5 w-2.5" />
+                              {pendCount} pend.
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-zinc-400">{row.cuit}</p>
                       </div>
                     </div>
-                  ),
+                    );
+                  },
                 },
                 { key: "localidad", label: "Ubicación", sortable: true, render: (row) => (
                   <span className="text-xs text-zinc-500">{row.localidad}{row.provincia ? `, ${row.provincia}` : ""}</span>
@@ -1722,6 +1922,95 @@ export default function ClientesPage() {
                   )}
                 </>
               )}
+
+              {/* ---- TAB: CUENTA CORRIENTE ---- */}
+              {detailTab === "cc" && (
+                <>
+                  {ccLoading ? (
+                    <div className="flex items-center gap-2 py-8 justify-center">
+                      <Loader2 className="h-4 w-4 animate-spin text-orange-500" />
+                      <span className="text-xs text-zinc-500">Cargando cuenta corriente...</span>
+                    </div>
+                  ) : ccFacturas.length === 0 ? (
+                    <EmptyState icon={<CreditCard className="h-6 w-6" />} text="Sin facturas pendientes de cobro" />
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Action buttons */}
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleCopiarCC}
+                          className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 transition-colors"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                          Copiar CC
+                        </button>
+                        <button
+                          onClick={handleEnviarCC}
+                          className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-xs font-medium text-white hover:bg-orange-600 transition-colors"
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                          Enviar CC
+                        </button>
+                      </div>
+
+                      {/* Facturas pendientes table */}
+                      <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                        <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700">
+                          <p className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">
+                            Facturas pendientes de cobro ({ccFacturas.length})
+                          </p>
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="border-b border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+                                <th className="text-left px-3 py-2 font-medium text-zinc-500">Comprobante</th>
+                                <th className="text-left px-3 py-2 font-medium text-zinc-500">Fecha</th>
+                                <th className="text-left px-3 py-2 font-medium text-zinc-500">Vencimiento</th>
+                                <th className="text-right px-3 py-2 font-medium text-zinc-500">Monto</th>
+                                <th className="text-right px-3 py-2 font-medium text-zinc-500">Dias mora</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                              {ccFacturas.map((f) => {
+                                const comprobante = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
+                                const mora = calcDiasMora(f.fecha);
+                                return (
+                                  <tr key={f.id} className="bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                                    <td className="px-3 py-2.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap">{comprobante}</td>
+                                    <td className="px-3 py-2.5 text-zinc-500 whitespace-nowrap">{formatDate(f.fecha)}</td>
+                                    <td className="px-3 py-2.5 text-zinc-500 whitespace-nowrap">{f.fecha_vencimiento ? formatDate(f.fecha_vencimiento) : "—"}</td>
+                                    <td className="px-3 py-2.5 text-right font-mono font-medium text-zinc-700 dark:text-zinc-300 whitespace-nowrap">
+                                      {formatCurrency(f.total, f.moneda as "ARS" | "USD")}
+                                    </td>
+                                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                                      {mora > 0 ? (
+                                        <span className={`inline-flex items-center gap-0.5 font-medium ${mora > 30 ? "text-red-600 dark:text-red-400" : mora > 15 ? "text-orange-600 dark:text-orange-400" : "text-amber-600 dark:text-amber-400"}`}>
+                                          {mora} d
+                                        </span>
+                                      ) : (
+                                        <span className="text-green-600 dark:text-green-400 font-medium">Al dia</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Total row */}
+                        <div className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-3 flex items-center justify-between">
+                          <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">Total adeudado</span>
+                          <span className="text-sm font-bold font-mono text-red-600 dark:text-red-400">
+                            {formatCurrency(ccFacturas.reduce((sum, f) => sum + f.total, 0))}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </>
@@ -1772,12 +2061,41 @@ export default function ClientesPage() {
                   placeholder="Nombre o razon social"
                 />
               </div>
-              <Input
-                label="CUIT *"
-                value={form.cuit}
-                onChange={(e) => setForm({ ...form, cuit: e.target.value })}
-                placeholder="XX-XXXXXXXX-X"
-              />
+              <div>
+                <div className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <Input
+                      label="CUIT *"
+                      value={form.cuit}
+                      onChange={(e) => { setForm({ ...form, cuit: e.target.value }); setCuitLookupMsg(null); }}
+                      placeholder="XX-XXXXXXXX-X"
+                      onBlur={() => {
+                        const clean = form.cuit.replace(/\D/g, "");
+                        if (clean.length === 11 && !form.razon_social) handleCuitLookup();
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleCuitLookup}
+                    disabled={cuitLookupLoading}
+                    className="mb-[1px] flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 transition-colors"
+                    title="Consultar AFIP"
+                  >
+                    {cuitLookupLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Search className="h-4 w-4" />
+                    )}
+                    AFIP
+                  </button>
+                </div>
+                {cuitLookupMsg && (
+                  <p className={`mt-1 text-xs ${cuitLookupMsg.type === "error" ? "text-red-500 dark:text-red-400" : "text-green-600 dark:text-green-400"}`}>
+                    {cuitLookupMsg.text}
+                  </p>
+                )}
+              </div>
               <Select
                 label="Tipo"
                 value={form.type}

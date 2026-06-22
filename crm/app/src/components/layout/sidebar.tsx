@@ -22,6 +22,7 @@ import {
   Moon,
   X,
   ArrowRightLeft,
+  Calendar,
 } from "lucide-react";
 import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -47,6 +48,7 @@ const navigation = [
   // ── Admin ──
   { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },
   { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes" },
+  { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
 ];
 
 function hasModuleAccess(role: Role, module: string): boolean {

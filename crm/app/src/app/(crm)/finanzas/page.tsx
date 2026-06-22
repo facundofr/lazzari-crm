@@ -9,7 +9,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { formatCurrency } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -40,12 +40,16 @@ interface OrdenPagoRow {
   monto_bruto: number;
   retencion_pct: number;
   monto_retencion: number;
+  retencion_ganancias_pct: number;
+  retencion_ganancias_monto: number;
   neto: number;
   moneda: "ARS" | "USD";
   medio_pago: string;
   cheque_cruce_id?: string;
   notas: string;
   estado: "pendiente" | "pagada" | "anulada";
+  comprobante_url?: string;
+  certificado_retencion_url?: string;
   created_at: string;
 }
 
@@ -108,6 +112,8 @@ const emptyOPForm = {
   monto_bruto: 0,
   moneda: "ARS" as "ARS" | "USD",
   retencion_pct: 0,
+  aplica_ganancias: false,
+  retencion_ganancias_pct: 0,
   medio_pago: "transferencia" as string,
   cheque_cruce_id: "",
   notas: "",
@@ -238,6 +244,8 @@ export default function FinanzasPage() {
   const [proveedoresOptions, setProveedoresOptions] = useState<ProveedorOption[]>([]);
   const [chequesRecibidos, setChequesRecibidos] = useState<MovimientoRow[]>([]);
   const [proveedorSearch, setProveedorSearch] = useState("");
+  const [selectedOP, setSelectedOP] = useState<OrdenPagoRow | null>(null);
+  const [uploadingCert, setUploadingCert] = useState(false);
 
   // Gastos manuales state
   const [gastosManuales, setGastosManuales] = useState<GastoManualRow[]>([]);
@@ -492,11 +500,17 @@ export default function FinanzasPage() {
             setOrdenesPago(opData.map((r: any) => ({
               id: r.id, fecha: r.fecha, proveedor_id: r.proveedor_id,
               proveedor_nombre: r.proveedores?.razon_social ?? "—",
-              monto_bruto: Number(r.monto_bruto), retencion_pct: Number(r.retencion_pct ?? 0),
-              monto_retencion: Number(r.monto_retencion ?? 0), neto: Number(r.neto),
+              monto_bruto: Number(r.monto_bruto), retencion_pct: Number(r.retencion_porcentaje ?? r.retencion_pct ?? 0),
+              monto_retencion: Number(r.retencion_monto ?? r.monto_retencion ?? 0),
+              retencion_ganancias_pct: Number(r.retencion_ganancias_pct ?? 0),
+              retencion_ganancias_monto: Number(r.retencion_ganancias_monto ?? 0),
+              neto: Number(r.neto_a_pagar ?? r.neto ?? 0),
               moneda: (r.moneda as "ARS" | "USD") ?? "ARS", medio_pago: r.medio_pago ?? "transferencia",
               cheque_cruce_id: r.cheque_cruce_id, notas: r.notas ?? "",
-              estado: r.estado ?? "pendiente", created_at: r.created_at,
+              estado: r.estado ?? "pendiente",
+              comprobante_url: r.comprobante_url ?? undefined,
+              certificado_retencion_url: r.certificado_retencion_url ?? undefined,
+              created_at: r.created_at,
             })));
           }
         } catch { /* table may not exist yet, ignore */ }
@@ -673,7 +687,8 @@ export default function FinanzasPage() {
   }
 
   const opRetencion = opForm.monto_bruto * (opForm.retencion_pct / 100);
-  const opNeto = opForm.monto_bruto - opRetencion;
+  const opRetencionGanancias = opForm.aplica_ganancias ? opForm.monto_bruto * (opForm.retencion_ganancias_pct / 100) : 0;
+  const opNeto = opForm.monto_bruto - opRetencion - opRetencionGanancias;
 
   async function handleCreateOP() {
     if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
@@ -686,9 +701,11 @@ export default function FinanzasPage() {
         fecha: opForm.fecha,
         proveedor_id: opForm.proveedor_id,
         monto_bruto: opForm.monto_bruto,
-        retencion_pct: opForm.retencion_pct,
-        monto_retencion: opRetencion,
-        neto: opNeto,
+        retencion_porcentaje: opForm.retencion_pct,
+        retencion_monto: opRetencion,
+        retencion_ganancias_pct: opForm.aplica_ganancias ? opForm.retencion_ganancias_pct : 0,
+        retencion_ganancias_monto: opRetencionGanancias,
+        neto_a_pagar: opNeto,
         moneda: opForm.moneda,
         medio_pago: opForm.medio_pago,
         notas: opForm.notas,
@@ -741,6 +758,85 @@ export default function FinanzasPage() {
       await (supabase as any).from("ordenes_pago").update({ estado: "pagada" }).eq("id", id);
       await fetchData();
     } catch (err) { console.error("Error marcando OP como pagada:", err); }
+  }
+
+  function handleGenerarComprobante(op: OrdenPagoRow) {
+    const provNombre = op.proveedor_nombre;
+    const totalRetenciones = op.monto_retencion + op.retencion_ganancias_monto;
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Comprobante OP</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; color: #333; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #FF4500; padding-bottom: 16px; margin-bottom: 24px; }
+  .title { font-size: 22px; font-weight: bold; color: #FF4500; }
+  .subtitle { font-size: 12px; color: #888; margin-top: 4px; }
+  .section { margin-bottom: 20px; }
+  .section-title { font-size: 13px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 4px; }
+  .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+  .row .label { color: #666; }
+  .row .value { font-weight: 600; }
+  .totals { background: #f9f9f9; border-radius: 8px; padding: 16px; margin-top: 16px; }
+  .totals .row { border-bottom: 1px solid #eee; }
+  .totals .row:last-child { border-bottom: none; font-size: 16px; padding-top: 10px; }
+  .retencion { color: #d97706; }
+  .neto { color: #059669; font-size: 18px; }
+  .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #aaa; border-top: 1px solid #eee; padding-top: 16px; }
+  @media print { body { margin: 0; } .no-print { display: none; } }
+</style>
+</head><body>
+<div class="header">
+  <div><div class="title">Comprobante de Pago</div><div class="subtitle">Orden de Pago</div></div>
+  <div style="text-align:right"><div style="font-size:12px;color:#888">Fecha</div><div style="font-weight:600">${formatDate(op.fecha)}</div></div>
+</div>
+<div class="section">
+  <div class="section-title">Proveedor</div>
+  <div class="row"><span class="label">Razon social</span><span class="value">${provNombre}</span></div>
+</div>
+<div class="section">
+  <div class="section-title">Detalle del pago</div>
+  <div class="row"><span class="label">Medio de pago</span><span class="value">${op.medio_pago === "transferencia" ? "Transferencia bancaria" : op.medio_pago === "cheque" ? "Cheque" : op.medio_pago === "echeq" ? "E-Cheq" : "Efectivo"}</span></div>
+  <div class="row"><span class="label">Moneda</span><span class="value">${op.moneda}</span></div>
+  <div class="row"><span class="label">Estado</span><span class="value">${op.estado === "pagada" ? "Pagada" : op.estado === "anulada" ? "Anulada" : "Pendiente"}</span></div>
+  ${op.notas ? `<div class="row"><span class="label">Observaciones</span><span class="value">${op.notas}</span></div>` : ""}
+</div>
+<div class="totals">
+  <div class="section-title">Importes</div>
+  <div class="row"><span class="label">Monto bruto</span><span class="value">${formatCurrency(op.monto_bruto, op.moneda)}</span></div>
+  ${op.monto_retencion > 0 ? `<div class="row"><span class="label">Retención (${op.retencion_pct}%)</span><span class="value retencion">- ${formatCurrency(op.monto_retencion, op.moneda)}</span></div>` : ""}
+  ${op.retencion_ganancias_monto > 0 ? `<div class="row"><span class="label">Ret. Ganancias (${op.retencion_ganancias_pct}%)</span><span class="value retencion">- ${formatCurrency(op.retencion_ganancias_monto, op.moneda)}</span></div>` : ""}
+  ${totalRetenciones > 0 ? `<div class="row"><span class="label">Total retenciones</span><span class="value retencion">- ${formatCurrency(totalRetenciones, op.moneda)}</span></div>` : ""}
+  <div class="row"><span class="label">Neto a pagar</span><span class="value neto">${formatCurrency(op.neto, op.moneda)}</span></div>
+</div>
+<div class="footer">
+  Lazzari Soluciones Industriales — Comprobante generado el ${new Date().toLocaleDateString("es-AR")}
+  <br/><button class="no-print" onclick="window.print()" style="margin-top:12px;padding:8px 24px;background:#FF4500;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600">Imprimir</button>
+</div>
+</body></html>`;
+    const w = window.open("", "_blank", "width=800,height=700");
+    if (w) { w.document.write(html); w.document.close(); }
+  }
+
+  async function handleUploadCertificado(opId: string, file: File) {
+    setUploadingCert(true);
+    try {
+      const ext = file.name.split(".").pop();
+      const path = `op/${opId}/certificado_retencion.${ext}`;
+      const { error: uploadError } = await supabase.storage.from("certificados").upload(path, file, { upsert: true });
+      if (uploadError) throw uploadError;
+      const { data: urlData } = supabase.storage.from("certificados").getPublicUrl(path);
+      const publicUrl = urlData?.publicUrl;
+      if (publicUrl) {
+        await (supabase as any).from("ordenes_pago").update({ certificado_retencion_url: publicUrl }).eq("id", opId);
+        // Update local state
+        setOrdenesPago(prev => prev.map(o => o.id === opId ? { ...o, certificado_retencion_url: publicUrl } : o));
+        if (selectedOP?.id === opId) setSelectedOP(prev => prev ? { ...prev, certificado_retencion_url: publicUrl } : null);
+      }
+    } catch (err) {
+      console.error("Error subiendo certificado:", err);
+      alert("Error al subir el certificado de retención");
+    } finally {
+      setUploadingCert(false);
+    }
   }
 
   // ── Gastos manuales handlers ──
@@ -1103,21 +1199,48 @@ export default function FinanzasPage() {
                   { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
                   { key: "proveedor_nombre", label: "Proveedor", sortable: true, render: (row) => <span className="font-medium">{row.proveedor_nombre}</span> },
                   { key: "monto_bruto", label: "Monto bruto", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.monto_bruto, row.moneda)}</span> },
-                  { key: "monto_retencion", label: "Retención", className: "text-right", sortable: true, render: (row) => (
-                    <div className="text-right">
-                      <span className="font-mono text-amber-600">{formatCurrency(row.monto_retencion, row.moneda)}</span>
-                      {row.retencion_pct > 0 && <span className="text-xs text-zinc-400 ml-1">({row.retencion_pct}%)</span>}
-                    </div>
-                  )},
+                  { key: "monto_retencion", label: "Retenciones", className: "text-right", sortable: true, render: (row) => {
+                    const totalRet = row.monto_retencion + row.retencion_ganancias_monto;
+                    return (
+                      <div className="text-right">
+                        {totalRet > 0 ? (
+                          <>
+                            <span className="font-mono text-amber-600">{formatCurrency(totalRet, row.moneda)}</span>
+                            <div className="flex items-center justify-end gap-1 mt-0.5">
+                              {row.retencion_pct > 0 && <span className="text-[10px] text-zinc-400">Ret {row.retencion_pct}%</span>}
+                              {row.retencion_ganancias_monto > 0 && (
+                                <span className="inline-flex items-center gap-0.5 text-[10px] text-violet-500 font-medium">
+                                  <ShieldCheck className="h-2.5 w-2.5" />Gan {row.retencion_ganancias_pct}%
+                                </span>
+                              )}
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-zinc-300">—</span>
+                        )}
+                      </div>
+                    );
+                  }},
                   { key: "neto", label: "Neto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.neto, row.moneda)}</span> },
                   { key: "medio_pago", label: "Medio", render: (row) => <Badge variant="outline">{row.medio_pago === "transferencia" ? "Transferencia" : row.medio_pago === "cheque" ? "Cheque" : row.medio_pago === "echeq" ? "E-Cheq" : "Efectivo"}</Badge> },
                   { key: "estado", label: "Estado", sortable: true, render: (row) => (
-                    <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : "warning"}>
-                      {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : "Pendiente"}
-                    </Badge>
+                    <div className="flex items-center gap-1">
+                      <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : "warning"}>
+                        {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : "Pendiente"}
+                      </Badge>
+                      {row.certificado_retencion_url && (
+                        <span title="Certificado de retención adjunto" className="text-violet-500"><Paperclip className="h-3.5 w-3.5" /></span>
+                      )}
+                    </div>
                   )},
                   { key: "actions", label: "", sortable: false, render: (row) => (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <button onClick={() => setSelectedOP(row)} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Ver detalle">
+                        <Eye className="h-3.5 w-3.5" />
+                      </button>
+                      <button onClick={() => handleGenerarComprobante(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Generar comprobante">
+                        <Printer className="h-3.5 w-3.5" />
+                      </button>
                       {row.estado === "pendiente" && (
                         <>
                           <button onClick={() => handlePagarOP(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar como pagada">
@@ -1132,6 +1255,7 @@ export default function FinanzasPage() {
                   )},
                 ]}
                 data={ordenesPago}
+                onRowClick={(row) => setSelectedOP(row)}
                 emptyMessage="No hay ordenes de pago cargadas"
               />
             </Card>
@@ -1817,9 +1941,9 @@ export default function FinanzasPage() {
                 </div>
               </div>
 
-              {/* Retención */}
+              {/* Retención general */}
               <div>
-                <label className="text-xs font-medium text-zinc-500">% Retención ganancias</label>
+                <label className="text-xs font-medium text-zinc-500">% Retención</label>
                 <div className="flex items-center gap-2 mt-1">
                   <input type="number" step="0.5" value={opForm.retencion_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_pct: Number(e.target.value) })}
                     className="w-24 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0" />
@@ -1835,6 +1959,46 @@ export default function FinanzasPage() {
                 </div>
               </div>
 
+              {/* Retención Ganancias */}
+              <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4 text-violet-500" />
+                    <label className="text-xs font-semibold text-violet-700 dark:text-violet-300">Retención de Ganancias</label>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? 6 : 0 })}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${opForm.aplica_ganancias ? "bg-violet-500" : "bg-zinc-300 dark:bg-zinc-600"}`}
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${opForm.aplica_ganancias ? "translate-x-4.5" : "translate-x-0.5"}`} />
+                  </button>
+                </div>
+                {opForm.aplica_ganancias && (
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Porcentaje</label>
+                    <div className="flex items-center gap-2 mt-1">
+                      <input type="number" step="0.5" value={opForm.retencion_ganancias_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_ganancias_pct: Number(e.target.value) })}
+                        className="w-24 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0" />
+                      <span className="text-sm text-zinc-400">%</span>
+                      <div className="flex gap-1 ml-2">
+                        {[2, 3, 6, 28].map(pct => (
+                          <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, retencion_ganancias_pct: pct })}
+                            className={`rounded px-2 py-1 text-xs font-medium transition-colors ${opForm.retencion_ganancias_pct === pct ? "bg-violet-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                            {pct}%
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {opForm.monto_bruto > 0 && (
+                      <p className="text-xs text-violet-600 dark:text-violet-400 mt-1.5">
+                        Base imponible: {formatCurrency(opForm.monto_bruto, opForm.moneda)} → Retención: {formatCurrency(opRetencionGanancias, opForm.moneda)}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Calculated fields */}
               {opForm.monto_bruto > 0 && (
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1.5">
@@ -1842,10 +2006,18 @@ export default function FinanzasPage() {
                     <span className="text-zinc-500">Monto bruto</span>
                     <span className="font-mono">{formatCurrency(opForm.monto_bruto, opForm.moneda)}</span>
                   </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-500">Retención ({opForm.retencion_pct}%)</span>
-                    <span className="font-mono text-amber-600">- {formatCurrency(opRetencion, opForm.moneda)}</span>
-                  </div>
+                  {opRetencion > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-zinc-500">Retención ({opForm.retencion_pct}%)</span>
+                      <span className="font-mono text-amber-600">- {formatCurrency(opRetencion, opForm.moneda)}</span>
+                    </div>
+                  )}
+                  {opRetencionGanancias > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-zinc-500 flex items-center gap-1"><ShieldCheck className="h-3 w-3 text-violet-500" />Ret. Ganancias ({opForm.retencion_ganancias_pct}%)</span>
+                      <span className="font-mono text-violet-600">- {formatCurrency(opRetencionGanancias, opForm.moneda)}</span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1.5">
                     <span className="text-zinc-700 dark:text-white">Neto a pagar</span>
                     <span className="font-mono text-emerald-600">{formatCurrency(opNeto, opForm.moneda)}</span>
@@ -2064,6 +2236,181 @@ export default function FinanzasPage() {
                 {fcSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                 Crear factura
               </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── OP Detail Panel ── */}
+      {selectedOP && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setSelectedOP(null)} />
+          <div className="fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700">
+            <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
+              <div className="flex items-center gap-2">
+                <FileText className="h-5 w-5 text-orange-500" />
+                <h2 className="text-lg font-bold dark:text-white">Orden de Pago</h2>
+                <Badge variant={selectedOP.estado === "pagada" ? "success" : selectedOP.estado === "anulada" ? "danger" : "warning"}>
+                  {selectedOP.estado === "pagada" ? "Pagada" : selectedOP.estado === "anulada" ? "Anulada" : "Pendiente"}
+                </Badge>
+              </div>
+              <button onClick={() => setSelectedOP(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Info general */}
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-xs font-medium text-zinc-500">Proveedor</p>
+                    <p className="font-semibold dark:text-white">{selectedOP.proveedor_nombre}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-zinc-500">Fecha</p>
+                    <p className="font-medium dark:text-white">{formatDate(selectedOP.fecha)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-zinc-500">Medio de pago</p>
+                    <p className="font-medium dark:text-white">{selectedOP.medio_pago === "transferencia" ? "Transferencia" : selectedOP.medio_pago === "cheque" ? "Cheque" : selectedOP.medio_pago === "echeq" ? "E-Cheq" : "Efectivo"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium text-zinc-500">Moneda</p>
+                    <p className="font-medium dark:text-white">{selectedOP.moneda}</p>
+                  </div>
+                </div>
+                {selectedOP.notas && (
+                  <div>
+                    <p className="text-xs font-medium text-zinc-500">Notas</p>
+                    <p className="text-sm text-zinc-600 dark:text-zinc-400">{selectedOP.notas}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Desglose de importes */}
+              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Desglose de importes</p>
+                </div>
+                <div className="p-4 space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-zinc-500">Monto bruto</span>
+                    <span className="font-mono font-semibold dark:text-white">{formatCurrency(selectedOP.monto_bruto, selectedOP.moneda)}</span>
+                  </div>
+                  {selectedOP.monto_retencion > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-zinc-500">Retención ({selectedOP.retencion_pct}%)</span>
+                      <span className="font-mono text-amber-600">- {formatCurrency(selectedOP.monto_retencion, selectedOP.moneda)}</span>
+                    </div>
+                  )}
+                  {selectedOP.retencion_ganancias_monto > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-zinc-500 flex items-center gap-1">
+                        <ShieldCheck className="h-3 w-3 text-violet-500" />
+                        Ret. Ganancias ({selectedOP.retencion_ganancias_pct}%)
+                      </span>
+                      <span className="font-mono text-violet-600">- {formatCurrency(selectedOP.retencion_ganancias_monto, selectedOP.moneda)}</span>
+                    </div>
+                  )}
+                  {(selectedOP.monto_retencion > 0 || selectedOP.retencion_ganancias_monto > 0) && (
+                    <div className="flex items-center justify-between text-sm border-t border-zinc-100 dark:border-zinc-700 pt-2">
+                      <span className="text-zinc-500">Total retenciones</span>
+                      <span className="font-mono text-amber-600 font-medium">- {formatCurrency(selectedOP.monto_retencion + selectedOP.retencion_ganancias_monto, selectedOP.moneda)}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between text-base font-bold border-t border-zinc-200 dark:border-zinc-700 pt-2">
+                    <span className="text-zinc-700 dark:text-white">Neto a pagar</span>
+                    <span className="font-mono text-emerald-600">{formatCurrency(selectedOP.neto, selectedOP.moneda)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Comprobante de pago */}
+              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Comprobante de pago</p>
+                </div>
+                <div className="p-4">
+                  <button
+                    onClick={() => handleGenerarComprobante(selectedOP)}
+                    className="w-full flex items-center justify-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-4 py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                  >
+                    <Printer className="h-4 w-4" />
+                    Generar comprobante
+                  </button>
+                </div>
+              </div>
+
+              {/* Certificado de retención */}
+              {(selectedOP.retencion_ganancias_monto > 0 || selectedOP.monto_retencion > 0) && (
+                <div className="rounded-lg border border-violet-200 dark:border-violet-800 overflow-hidden">
+                  <div className="bg-violet-50 dark:bg-violet-950/30 px-4 py-2">
+                    <p className="text-xs font-semibold text-violet-600 dark:text-violet-400 uppercase tracking-wide flex items-center gap-1.5">
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      Certificado de retención
+                    </p>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    {selectedOP.certificado_retencion_url ? (
+                      <div className="flex items-center gap-3 rounded-lg bg-violet-50 dark:bg-violet-950/20 p-3 border border-violet-100 dark:border-violet-800">
+                        <Paperclip className="h-4 w-4 text-violet-500 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-violet-700 dark:text-violet-300 truncate">Certificado adjunto</p>
+                          <p className="text-xs text-violet-500 truncate">{selectedOP.certificado_retencion_url.split("/").pop()}</p>
+                        </div>
+                        <a
+                          href={selectedOP.certificado_retencion_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-600 transition-colors flex-shrink-0"
+                        >
+                          <Download className="h-3 w-3" />
+                          Descargar
+                        </a>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-zinc-400">No se adjuntó certificado de retención</p>
+                    )}
+                    <label className="block">
+                      <input
+                        type="file"
+                        accept=".pdf,.png,.jpg,.jpeg"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleUploadCertificado(selectedOP.id, file);
+                        }}
+                      />
+                      <span className={`w-full flex items-center justify-center gap-2 rounded-lg border border-dashed border-violet-300 dark:border-violet-700 px-4 py-2.5 text-sm font-medium cursor-pointer transition-colors ${uploadingCert ? "text-zinc-400" : "text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-950/20"}`}>
+                        {uploadingCert ? (
+                          <><Loader2 className="h-4 w-4 animate-spin" /> Subiendo...</>
+                        ) : (
+                          <><Upload className="h-4 w-4" /> {selectedOP.certificado_retencion_url ? "Reemplazar certificado" : "Adjuntar certificado"}</>
+                        )}
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {/* Acciones */}
+              <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
+                {selectedOP.estado === "pendiente" && (
+                  <>
+                    <button
+                      onClick={() => { handlePagarOP(selectedOP.id); setSelectedOP(null); }}
+                      className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-600 transition-colors"
+                    >
+                      <CheckCircle2 className="h-4 w-4" /> Marcar pagada
+                    </button>
+                    <button
+                      onClick={() => { handleAnularOP(selectedOP.id); setSelectedOP(null); }}
+                      className="flex items-center justify-center gap-2 rounded-lg border border-red-200 dark:border-red-800 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                    >
+                      <Ban className="h-4 w-4" /> Anular
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </>

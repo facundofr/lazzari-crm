@@ -33,6 +33,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     { module: "extractos", actions: ["read", "create", "update", "export"] },
     { module: "lineas_credito", actions: ["read", "create", "update", "export"] },
     { module: "configuracion", actions: ["read", "update"] },
+    { module: "calendario", actions: ["read", "create", "update", "delete"] },
   ],
   vendedor: [
     { module: "dashboard", actions: ["read"] },
@@ -43,6 +44,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     { module: "listas_precios", actions: ["read"] },
     { module: "stock", actions: ["read"] },
     { module: "reportes", actions: ["read"] },
+    { module: "calendario", actions: ["read", "create", "update"] },
   ],
   administrativo: [
     { module: "dashboard", actions: ["read"] },
@@ -58,6 +60,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     { module: "extractos", actions: ["read", "create", "update", "export"] },
     { module: "lineas_credito", actions: ["read", "create", "update", "export"] },
     { module: "reportes", actions: ["read", "export"] },
+    { module: "calendario", actions: ["read", "create", "update"] },
   ],
   viewer: [
     { module: "dashboard", actions: ["read"] },
@@ -66,6 +69,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     { module: "facturacion", actions: ["read"] },
     { module: "stock", actions: ["read"] },
     { module: "reportes", actions: ["read"] },
+    { module: "calendario", actions: ["read"] },
   ],
 };
 
