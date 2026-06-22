@@ -15,7 +15,7 @@ import {
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
   ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 
 const estadoConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" }> = {
   emitida: { label: "Emitida", variant: "info" },
@@ -62,16 +62,29 @@ function formatComprobante(tipo: string, pv: number, num: number) {
   return `${tipo} ${String(pv).padStart(4, "0")}-${String(num).padStart(8, "0")}`;
 }
 
-const EMISOR = {
-  razonSocial: "Augusto Lazzari",
-  cuit: "20-37930912-8",
-  domicilio: "", // completar desde configuracion
-  condicionIva: "Responsable Inscripto",
-  inicioActividades: "",
-};
-
 export default function FacturacionPage() {
   const { sociedadActiva } = useUser();
+
+  const emisorData = useMemo(() => {
+    if (sociedadActiva?.nombre === "Grupo LA") {
+      return {
+        razonSocial: "Grupo LA Servicios Integrales SAS",
+        cuit: "30-71939604-2",
+        cuitNumero: 30719396042,
+        condicionIva: "Responsable Inscripto",
+        domicilio: "",
+        ptoVta: 10,
+      };
+    }
+    return {
+      razonSocial: "Lazzari Soluciones Industriales",
+      cuit: "20-37930912-8",
+      cuitNumero: 20379309128,
+      condicionIva: "Responsable Inscripto",
+      domicilio: "",
+      ptoVta: 15,
+    };
+  }, [sociedadActiva]);
   const [facturas, setFacturas] = useState<FacturaRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
@@ -86,11 +99,10 @@ export default function FacturacionPage() {
   const [emitResult, setEmitResult] = useState<any>(null);
   const [emitError, setEmitError] = useState("");
   const [clientes, setClientes] = useState<ClienteOption[]>([]);
-  const PV_CRM = 15; // Punto de venta exclusivo del CRM
   const [emitData, setEmitData] = useState({
     tipo: "FA",
     cliente_id: "",
-    punto_venta: PV_CRM,
+    punto_venta: 15,
     moneda: "ARS" as "ARS" | "USD",
     tipo_cambio: 0,
     items: [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] as EmitItem[],
@@ -167,18 +179,18 @@ export default function FacturacionPage() {
 
   // Check ARCA status on mount
   useEffect(() => {
-    fetch("/api/facturacion?action=status")
+    fetch(`/api/facturacion?action=status&sociedad_id=${sociedadActiva?.id || ""}`)
       .then((r) => r.json())
       .then(setArcaStatus)
       .catch(() => setArcaStatus({ connected: false, error: "No se pudo verificar" }));
-  }, []);
+  }, [sociedadActiva]);
 
   // ── Emit handlers ──────────────────────────────────────────────
   const openEmitModal = (prefill?: { cliente_id: string; tipo?: string; items?: EmitItem[]; moneda?: "ARS" | "USD"; tipo_cambio?: number }) => {
     setEmitData({
       tipo: prefill?.tipo || "FB",
       cliente_id: prefill?.cliente_id || "",
-      punto_venta: PV_CRM,
+      punto_venta: emisorData.ptoVta,
       moneda: prefill?.moneda || "ARS",
       tipo_cambio: prefill?.tipo_cambio || 0,
       items: prefill?.items || [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],
@@ -246,6 +258,7 @@ export default function FacturacionPage() {
           moneda: emitData.moneda,
           tipo_cambio: isUSD ? tc : null,
           items: emitData.items,
+          sociedad_id: sociedadActiva?.id,
         }),
       });
 
@@ -292,8 +305,8 @@ export default function FacturacionPage() {
       `Fecha: ${formatDate(f.fecha)}`,
       `Estado: ${estadoConfig[f.estado]?.label || f.estado}`,
       "",
-      `*Emisor:* ${EMISOR.razonSocial}`,
-      `CUIT: ${EMISOR.cuit}`,
+      `*Emisor:* ${emisorData.razonSocial}`,
+      `CUIT: ${emisorData.cuit}`,
       "",
       `*Cliente:* ${f.clientes?.razon_social || "\u2014"}`,
       f.clientes?.cuit ? `CUIT: ${f.clientes.cuit}` : null,
@@ -317,8 +330,8 @@ export default function FacturacionPage() {
       `Fecha: ${formatDate(f.fecha)}`,
       `Estado: ${estadoConfig[f.estado]?.label || f.estado}`,
       "",
-      `Emisor: ${EMISOR.razonSocial}`,
-      `CUIT: ${EMISOR.cuit}`,
+      `Emisor: ${emisorData.razonSocial}`,
+      `CUIT: ${emisorData.cuit}`,
       "",
       `Cliente: ${f.clientes?.razon_social || "\u2014"}`,
       f.clientes?.cuit ? `CUIT: ${f.clientes.cuit}` : null,
@@ -364,7 +377,7 @@ export default function FacturacionPage() {
     // Build QR data URL for ARCA verification
     const isUSDPdf = f.moneda === "USD" && f.tipo_cambio;
     const qrData = JSON.stringify({
-      ver: 1, fecha: f.fecha, cuit: 20379309128, ptoVta: f.punto_venta,
+      ver: 1, fecha: f.fecha, cuit: emisorData.cuitNumero, ptoVta: f.punto_venta,
       tipoCmp: { FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13 }[f.tipo] || 1,
       nroCmp: f.numero, importe: Number(f.total), moneda: "PES", ctz: 1,
       tipoDocRec: cli?.cuit ? 80 : 99, nroDocRec: cli?.cuit ? Number(cli.cuit.replace(/-/g, "")) : 0,
@@ -417,10 +430,10 @@ export default function FacturacionPage() {
 
 <div class="fc-header">
   <div class="fc-left">
-    <div class="emisor-name">${EMISOR.razonSocial}</div>
-    <div class="emisor-detail">CUIT: ${EMISOR.cuit}</div>
-    <div class="emisor-detail">${EMISOR.condicionIva}</div>
-    ${EMISOR.domicilio ? `<div class="emisor-detail">${EMISOR.domicilio}</div>` : ""}
+    <div class="emisor-name">${emisorData.razonSocial}</div>
+    <div class="emisor-detail">CUIT: ${emisorData.cuit}</div>
+    <div class="emisor-detail">${emisorData.condicionIva}</div>
+    ${emisorData.domicilio ? `<div class="emisor-detail">${emisorData.domicilio}</div>` : ""}
   </div>
   <div class="fc-center">
     <div>
@@ -502,7 +515,7 @@ ${f.cae ? `
 ` : ""}
 
 <div class="footer">
-  ${comp} &mdash; ${EMISOR.razonSocial} &mdash; CUIT ${EMISOR.cuit}
+  ${comp} &mdash; ${emisorData.razonSocial} &mdash; CUIT ${emisorData.cuit}
 </div>
 
 </div></body></html>`;

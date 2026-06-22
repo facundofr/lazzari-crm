@@ -23,39 +23,59 @@ const CBTE_TIPO_MAP: Record<string, number> = {
   NDA: 2, NDB: 7,
 };
 
-const DEFAULT_PTO_VTA = 15;
+// Multi-sociedad ARCA configuration
+interface ArcaConfig {
+  id: string;
+  cuit: number;
+  ptoVta: number;
+  certFile: string;
+  keyFile: string;
+  certB64Env: string;
+  keyB64Env: string;
+}
 
-function getArcaInstance() {
-  const certPath = process.env.ARCA_CERT_PATH || path.join(process.cwd(), "..", "certs", "lazzari.crt");
-  const keyPath = process.env.ARCA_KEY_PATH || path.join(process.cwd(), "..", "certs", "lazzari.key");
+const ARCA_CONFIGS: ArcaConfig[] = [
+  { id: "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021", cuit: 20379309128, ptoVta: 15, certFile: "lazzari.crt", keyFile: "lazzari.key", certB64Env: "ARCA_CERT_B64", keyB64Env: "ARCA_KEY_B64" },
+  { id: "fee94607-747a-4e87-ba24-aff9032f7a56", cuit: 30719396042, ptoVta: 10, certFile: "GrupoLa-crm.crt", keyFile: "grupoLA.key", certB64Env: "ARCA_GRUPOLA_CERT_B64", keyB64Env: "ARCA_GRUPOLA_KEY_B64" },
+];
+
+const DEFAULT_ARCA_CONFIG = ARCA_CONFIGS[0]; // Lazzari
+
+function getArcaConfigBySociedad(sociedadId?: string): ArcaConfig {
+  if (!sociedadId) return DEFAULT_ARCA_CONFIG;
+  const config = ARCA_CONFIGS.find((c) => c.id === sociedadId);
+  if (!config) {
+    throw new Error(`Sociedad no configurada para ARCA: ${sociedadId}`);
+  }
+  return config;
+}
+
+function getArcaInstance(config: ArcaConfig = DEFAULT_ARCA_CONFIG) {
+  const certPath = path.join(process.cwd(), "..", "certs", config.certFile);
+  const keyPath = path.join(process.cwd(), "..", "certs", config.keyFile);
 
   // Support base64-encoded certs (Vercel), plain text certs (env), or file-based certs (local)
   let cert = "";
-  if (process.env.ARCA_CERT_B64) {
-    cert = Buffer.from(process.env.ARCA_CERT_B64, "base64").toString("utf-8");
-  } else if (process.env.ARCA_CERT) {
-    cert = process.env.ARCA_CERT;
+  if (process.env[config.certB64Env]) {
+    cert = Buffer.from(process.env[config.certB64Env]!, "base64").toString("utf-8");
   } else if (fs.existsSync(certPath)) {
     cert = fs.readFileSync(certPath, "utf-8");
   }
 
   let key = "";
-  if (process.env.ARCA_KEY_B64) {
-    key = Buffer.from(process.env.ARCA_KEY_B64, "base64").toString("utf-8");
-  } else if (process.env.ARCA_KEY) {
-    key = process.env.ARCA_KEY;
+  if (process.env[config.keyB64Env]) {
+    key = Buffer.from(process.env[config.keyB64Env]!, "base64").toString("utf-8");
   } else if (fs.existsSync(keyPath)) {
     key = fs.readFileSync(keyPath, "utf-8");
   }
 
   if (!cert || !key) {
-    throw new Error("Certificado ARCA no configurado. Configura ARCA_CERT_B64/ARCA_KEY_B64 o ARCA_CERT/ARCA_KEY en variables de entorno.");
+    throw new Error(`Certificado ARCA no configurado para sociedad (CUIT ${config.cuit}). Configura ${config.certB64Env}/${config.keyB64Env} o coloca ${config.certFile}/${config.keyFile} en /certs.`);
   }
 
-  const cuit = Number(process.env.ARCA_CUIT || "20379309128");
   const production = process.env.ARCA_PRODUCTION !== "false";
 
-  return new Arca({ cuit, cert, key, production });
+  return new Arca({ cuit: config.cuit, cert, key, production });
 }
 
 function getSupabase(authHeader?: string | null) {
@@ -86,12 +106,22 @@ export async function POST(req: NextRequest) {
     const {
       tipo,           // "FA" | "FB" | "NCA" | "NCB"
       cliente_id,     // UUID or "consumidor_final"
-      punto_venta,    // number (15)
+      punto_venta,    // number (15 for Lazzari, 10 for Grupo LA)
       items,          // [{ descripcion, cantidad, precio_unitario, iva_porcentaje }]
       presupuesto_id, // optional UUID
       moneda,         // "ARS" | "USD" (default ARS)
       tipo_cambio,    // number — exchange rate USD→ARS (required when USD)
+      sociedad_id,    // optional UUID — defaults to Lazzari
     } = body;
+
+    // Resolve ARCA config for the sociedad
+    let arcaConfig: ArcaConfig;
+    try {
+      arcaConfig = getArcaConfigBySociedad(sociedad_id);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Sociedad no valida";
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
 
     const isUSD = moneda === "USD";
     const tc = Number(tipo_cambio) || 0;
@@ -104,6 +134,13 @@ export async function POST(req: NextRequest) {
         { error: "Faltan campos requeridos: tipo, cliente_id, punto_venta, items" },
         { status: 400 }
       );
+    }
+
+    // Validate punto_venta matches the sociedad's configured PV
+    if (Number(punto_venta) !== arcaConfig.ptoVta) {
+      return NextResponse.json({
+        error: `Punto de venta ${punto_venta} no coincide con el configurado para esta sociedad (${arcaConfig.ptoVta})`,
+      }, { status: 400 });
     }
 
     const cbteTipo = CBTE_TIPO_MAP[tipo];
@@ -212,7 +249,7 @@ export async function POST(req: NextRequest) {
     const totalFinal = Math.round((totalNeto + totalIva) * 100) / 100;
 
     // Build ARCA invoice
-    const arca = getArcaInstance();
+    const arca = getArcaInstance(arcaConfig);
     const ptoVta = Number(punto_venta);
 
     const ivaArray = Object.entries(ivaGroups).map(([id, vals]) => ({
@@ -278,6 +315,7 @@ export async function POST(req: NextRequest) {
         moneda: isUSD ? "USD" : "ARS",
         tipo_cambio: isUSD ? tc : null,
         estado: "emitida",
+        sociedad_id: arcaConfig.id,
       } as any)
       .select()
       .single();
@@ -339,15 +377,23 @@ export async function GET(req: NextRequest) {
   if (action === "status") {
     try {
       await loadArca();
-      const arca = getArcaInstance();
-      const ptoVta = Number(process.env.ARCA_PTO_VTA || DEFAULT_PTO_VTA);
-      const lastVoucher = await arca.ultimoComprobante(ptoVta, 1);
+      const sociedadId = req.nextUrl.searchParams.get("sociedad_id") || undefined;
+      let arcaConfig: ArcaConfig;
+      try {
+        arcaConfig = getArcaConfigBySociedad(sociedadId);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Sociedad no valida";
+        return NextResponse.json({ connected: false, error: message });
+      }
+      const arca = getArcaInstance(arcaConfig);
+      const lastVoucher = await arca.ultimoComprobante(arcaConfig.ptoVta, 1);
       return NextResponse.json({
         connected: true,
         production: true,
         lastVoucher,
-        ptoVta,
-        cuit: process.env.ARCA_CUIT || "20379309128",
+        ptoVta: arcaConfig.ptoVta,
+        cuit: String(arcaConfig.cuit),
+        sociedad_id: arcaConfig.id,
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Error de conexion";

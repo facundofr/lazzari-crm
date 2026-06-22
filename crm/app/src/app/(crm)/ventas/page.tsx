@@ -106,12 +106,16 @@ function getVentaStep(v: Venta): VentaStep {
 const STEP_LABELS = ["Presupuesto", "Entrega", "Factura", "Cobro"];
 const STEP_ICONS = [FileText, Truck, Receipt, DollarSign];
 
-const PV_CRM = 15;
-
 // ── Component ────────────────────────────────────────────────────
 
 export default function VentasPage() {
   const { profile, role, sociedadActiva } = useUser();
+
+  const pvCrm = useMemo(() => {
+    if (sociedadActiva?.nombre === "Grupo LA") return 10;
+    return 15;
+  }, [sociedadActiva]);
+
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [loading, setLoading] = useState(true);
   const [vendedores, setVendedores] = useState<VendedorOption[]>([]);
@@ -300,11 +304,12 @@ export default function VentasPage() {
         body: JSON.stringify({
           tipo: emitTipo,
           cliente_id: p.cliente_id,
-          punto_venta: PV_CRM,
+          punto_venta: pvCrm,
           moneda: p.moneda || "ARS",
           tipo_cambio: p.moneda === "USD" ? (emitTipoCambio || p.tipo_cambio || null) : null,
           items: emitItems,
           presupuesto_id: p.id,
+          sociedad_id: sociedadActiva?.id || null,
         }),
       });
 
@@ -336,12 +341,16 @@ export default function VentasPage() {
     setEmitError("");
 
     try {
-      // Get next numero for this tipo+punto_venta
-      const { data: maxRow } = await supabase
+      // Get next numero for this tipo+punto_venta+sociedad
+      let maxQuery = supabase
         .from("facturas")
         .select("numero")
         .eq("tipo" as any, emitTipo)
-        .eq("punto_venta" as any, PV_CRM)
+        .eq("punto_venta" as any, pvCrm);
+      if (sociedadActiva?.id) {
+        maxQuery = maxQuery.eq("sociedad_id" as any, sociedadActiva.id);
+      }
+      const { data: maxRow } = await maxQuery
         .order("numero", { ascending: false })
         .limit(1)
         .single();
@@ -368,7 +377,7 @@ export default function VentasPage() {
       const { data: facturaData, error: fError } = await (supabase.from("facturas") as any)
         .insert({
           tipo: emitTipo,
-          punto_venta: PV_CRM,
+          punto_venta: pvCrm,
           numero: nextNumero,
           cliente_id: p.cliente_id,
           presupuesto_id: p.id,
@@ -406,7 +415,7 @@ export default function VentasPage() {
       }));
       await (supabase.from("factura_items") as any).insert(facturaItems);
 
-      const comp = `${emitTipo} ${String(PV_CRM).padStart(4, "0")}-${String(nextNumero).padStart(8, "0")}`;
+      const comp = `${emitTipo} ${String(pvCrm).padStart(4, "0")}-${String(nextNumero).padStart(8, "0")}`;
       setEmitSuccess(`${comp} emitida (manual, sin CAE)`);
       await fetchData();
     } catch (err) {
@@ -957,7 +966,7 @@ export default function VentasPage() {
                   </div>
                   <div>
                     <span className="text-zinc-500">Punto de venta</span>
-                    <p className="font-mono font-bold dark:text-white">{String(PV_CRM).padStart(4, "0")}</p>
+                    <p className="font-mono font-bold dark:text-white">{String(pvCrm).padStart(4, "0")}</p>
                   </div>
                 </div>
 
