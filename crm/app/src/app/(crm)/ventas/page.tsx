@@ -129,6 +129,7 @@ export default function VentasPage() {
   const [emitTipoCambio, setEmitTipoCambio] = useState<number>(0);
   const [emitError, setEmitError] = useState("");
   const [emitSuccess, setEmitSuccess] = useState("");
+  const [emitManual, setEmitManual] = useState(false);
 
   // Remito creation state
   const [creatingRemito, setCreatingRemito] = useState(false);
@@ -268,6 +269,7 @@ export default function VentasPage() {
     setEmitTipoCambio(p.tipo_cambio || 0);
     setEmitError("");
     setEmitSuccess("");
+    setEmitManual(false);
     setEmitModalOpen(true);
   }
 
@@ -316,6 +318,99 @@ export default function VentasPage() {
       }
     } catch (err) {
       setEmitError("Error de conexion al emitir factura");
+    } finally {
+      setEmitting(false);
+    }
+  }
+
+  async function handleEmitFacturaManual() {
+    if (!emitVenta || emitting) return;
+    const p = emitVenta.presupuesto;
+
+    if (emitItems.some(it => !it.descripcion || it.precio_unitario <= 0 || it.cantidad <= 0)) {
+      setEmitError("Completa todos los items con descripcion, cantidad > 0 y precio > 0.");
+      return;
+    }
+
+    setEmitting(true);
+    setEmitError("");
+
+    try {
+      // Get next numero for this tipo+punto_venta
+      const { data: maxRow } = await supabase
+        .from("facturas")
+        .select("numero")
+        .eq("tipo" as any, emitTipo)
+        .eq("punto_venta" as any, PV_CRM)
+        .order("numero", { ascending: false })
+        .limit(1)
+        .single();
+
+      const nextNumero = (maxRow?.numero || 0) + 1;
+
+      // Calculate totals
+      let subtotal: number;
+      let iva: number;
+      let total: number;
+      const mon = p.moneda || "ARS";
+
+      if (emitTipo === "FA") {
+        subtotal = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
+        iva = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario * it.iva_porcentaje / 100, 0);
+        total = subtotal + iva;
+      } else {
+        total = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
+        subtotal = total / 1.21;
+        iva = total - subtotal;
+      }
+
+      // Insert factura
+      const { data: facturaData, error: fError } = await (supabase.from("facturas") as any)
+        .insert({
+          tipo: emitTipo,
+          punto_venta: PV_CRM,
+          numero: nextNumero,
+          cliente_id: p.cliente_id,
+          presupuesto_id: p.id,
+          fecha: new Date().toISOString().split("T")[0],
+          cae: null,
+          cae_vencimiento: null,
+          subtotal,
+          iva,
+          total,
+          moneda: mon,
+          tipo_cambio: mon === "USD" ? (emitTipoCambio || p.tipo_cambio || null) : null,
+          estado: "emitida",
+          sociedad_id: (p as any).sociedad_id || null,
+        })
+        .select("id")
+        .single();
+
+      if (fError || !facturaData) {
+        setEmitError("Error al crear factura manual: " + (fError?.message || "Error desconocido"));
+        return;
+      }
+
+      // Insert factura items
+      const facturaItems = emitItems.map((it, idx) => ({
+        factura_id: facturaData.id,
+        descripcion: it.descripcion,
+        cantidad: it.cantidad,
+        precio_unitario: it.precio_unitario,
+        iva_porcentaje: emitTipo === "FA" ? it.iva_porcentaje : 21,
+        subtotal: it.cantidad * it.precio_unitario,
+        total: emitTipo === "FA"
+          ? it.cantidad * it.precio_unitario * (1 + it.iva_porcentaje / 100)
+          : it.cantidad * it.precio_unitario,
+        orden: idx,
+      }));
+      await (supabase.from("factura_items") as any).insert(facturaItems);
+
+      const comp = `${emitTipo} ${String(PV_CRM).padStart(4, "0")}-${String(nextNumero).padStart(8, "0")}`;
+      setEmitSuccess(`${comp} emitida (manual, sin CAE)`);
+      await fetchData();
+    } catch (err) {
+      setEmitError("Error al crear factura manual");
     } finally {
       setEmitting(false);
     }
@@ -518,14 +613,24 @@ export default function VentasPage() {
                             <span className="hidden sm:inline">{st.entregado ? "Entregado" : v.remitos.length > 0 ? "En entrega" : "Sin entregar"}</span>
                           </div>
                           {/* Factura */}
-                          <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
-                            st.facturado
-                              ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
-                              : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
-                          }`}>
-                            <Receipt className="h-3 w-3" />
-                            <span className="hidden sm:inline">{st.facturado ? "Facturado" : "Sin facturar"}</span>
-                          </div>
+                          {(() => {
+                            const factActiva = v.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
+                            const esManual = factActiva && !factActiva.cae;
+                            return (
+                              <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
+                                st.facturado
+                                  ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                                  : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
+                              }`}>
+                                <Receipt className="h-3 w-3" />
+                                <span className="hidden sm:inline">
+                                  {st.facturado
+                                    ? esManual ? "Manual" : "ARCA"
+                                    : "Sin facturar"}
+                                </span>
+                              </div>
+                            );
+                          })()}
                           {/* Cobro */}
                           {st.facturado && (
                             <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
@@ -701,12 +806,21 @@ export default function VentasPage() {
                           <div className="space-y-2 text-sm">
                             <div className="flex justify-between">
                               <span className="text-zinc-500">Comprobante</span>
-                              <span className="font-mono font-bold">{comp}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-bold">{comp}</span>
+                                {facturaActiva.cae ? (
+                                  <span className="inline-flex items-center rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-semibold text-green-700 dark:bg-green-900/40 dark:text-green-400">ARCA</span>
+                                ) : (
+                                  <span className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">Manual</span>
+                                )}
+                              </div>
                             </div>
+                            {facturaActiva.cae && (
                             <div className="flex justify-between">
                               <span className="text-zinc-500">CAE</span>
-                              <span className="font-mono text-xs">{facturaActiva.cae || "—"}</span>
+                              <span className="font-mono text-xs">{facturaActiva.cae}</span>
                             </div>
+                            )}
                             <div className="flex justify-between">
                               <span className="text-zinc-500">Total</span>
                               <span className="font-bold">{formatCurrency(facturaActiva.total)}</span>
@@ -860,6 +974,27 @@ export default function VentasPage() {
                     )}
                     <option value="FB">Factura B (precio final)</option>
                   </select>
+                </div>
+
+                {/* Manual toggle */}
+                <div className="flex items-center gap-3 rounded-lg border border-zinc-200 dark:border-zinc-700 p-3">
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={emitManual}
+                      onChange={e => setEmitManual(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-zinc-300 peer-focus:outline-none rounded-full peer dark:bg-zinc-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:after:border-zinc-500 peer-checked:bg-orange-500" />
+                  </label>
+                  <div>
+                    <span className="text-sm font-medium dark:text-white">Factura manual (sin ARCA)</span>
+                    <p className="text-xs text-zinc-400">
+                      {emitManual
+                        ? "Se creara un registro interno sin autorizacion electronica (sin CAE)"
+                        : "Se emitira electronicamente via ARCA con CAE"}
+                    </p>
+                  </div>
                 </div>
 
                 {/* Moneda / Tipo de cambio */}
@@ -1023,14 +1158,21 @@ export default function VentasPage() {
                     Cancelar
                   </button>
                   <button
-                    onClick={handleEmitFactura}
+                    onClick={emitManual ? handleEmitFacturaManual : handleEmitFactura}
                     disabled={emitting}
-                    className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 flex items-center gap-2"
+                    className={`rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50 flex items-center gap-2 ${
+                      emitManual ? "bg-orange-600 hover:bg-orange-700" : "bg-green-600 hover:bg-green-700"
+                    }`}
                   >
                     {emitting ? (
                       <>
                         <Loader2 className="h-4 w-4 animate-spin" />
                         Emitiendo...
+                      </>
+                    ) : emitManual ? (
+                      <>
+                        <Receipt className="h-4 w-4" />
+                        Crear factura manual
                       </>
                     ) : (
                       <>

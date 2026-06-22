@@ -252,6 +252,11 @@ export default function PresupuestosPage() {
   const [rechazoModal, setRechazoModal] = useState<string | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState("");
 
+  // Costos faltantes modal (al aprobar)
+  const [costosFaltantesModal, setCostosFaltantesModal] = useState<{ id: string; count: number; motivo?: string } | null>(null);
+  // Track PRs aprobados con costos faltantes (set of PR ids)
+  const [prsSinCostos, setPrsSinCostos] = useState<Set<string>>(new Set());
+
   // Nuevo PR modal
   const [showNewPR, setShowNewPR] = useState(false);
   const [newPRSaving, setNewPRSaving] = useState(false);
@@ -516,6 +521,30 @@ export default function PresupuestosPage() {
   useEffect(() => {
     fetchPresupuestos();
   }, [fetchPresupuestos]);
+
+  // Check approved PRs for missing costs
+  useEffect(() => {
+    async function checkAprobadosSinCostos() {
+      const aprobados = presupuestos.filter(p => p.estado === "aprobado");
+      if (aprobados.length === 0) return;
+      try {
+        const ids = aprobados.map(p => p.id);
+        const { data: items } = await supabase
+          .from("presupuesto_items")
+          .select("presupuesto_id, precio_costo")
+          .in("presupuesto_id", ids);
+        if (!items) return;
+        const sinCostoSet = new Set<string>();
+        for (const it of items as any[]) {
+          if (!it.precio_costo || Number(it.precio_costo) === 0) {
+            sinCostoSet.add(it.presupuesto_id);
+          }
+        }
+        setPrsSinCostos(sinCostoSet);
+      } catch { /* ignore */ }
+    }
+    checkAprobadosSinCostos();
+  }, [presupuestos]);
 
   // Fetch IDs de presupuestos facturados
   useEffect(() => {
@@ -829,6 +858,28 @@ export default function PresupuestosPage() {
   }
 
   async function handleEstadoChange(id: string, estado: PRStatus, motivo?: string) {
+    // If approving, check for items with precio_costo === 0
+    if (estado === "aprobado") {
+      try {
+        const { data: items } = await supabase
+          .from("presupuesto_items")
+          .select("id, precio_costo")
+          .eq("presupuesto_id", id);
+        const sinCosto = (items || []).filter((it: any) => !it.precio_costo || Number(it.precio_costo) === 0);
+        if (sinCosto.length > 0) {
+          // Show confirmation dialog instead of proceeding directly
+          setCostosFaltantesModal({ id, count: sinCosto.length, motivo });
+          return;
+        }
+      } catch {
+        // If we can't check items, proceed anyway
+      }
+    }
+
+    await doEstadoChange(id, estado, motivo);
+  }
+
+  async function doEstadoChange(id: string, estado: PRStatus, motivo?: string) {
     try {
       const update: { estado: string; motivo_rechazo?: string; enviado_at?: string; respondido_at?: string } = { estado };
       if (motivo) update.motivo_rechazo = motivo;
@@ -843,6 +894,18 @@ export default function PresupuestosPage() {
 
       // When approved, auto-generate purchase orders grouped by supplier
       if (estado === "aprobado") {
+        // Track if this PR has items without costs
+        try {
+          const { data: items } = await supabase
+            .from("presupuesto_items")
+            .select("id, precio_costo")
+            .eq("presupuesto_id", id);
+          const sinCosto = (items || []).filter((it: any) => !it.precio_costo || Number(it.precio_costo) === 0);
+          if (sinCosto.length > 0) {
+            setPrsSinCostos(prev => new Set(prev).add(id));
+          }
+        } catch { /* ignore */ }
+
         await generateOCsFromPresupuesto(id);
       }
 
@@ -1497,10 +1560,16 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 render: (row) => {
                   const cfg = statusConfig[row.estado] || { label: row.estado, variant: "outline" as const, icon: Clock };
                   const Icon = cfg.icon;
+                  const sinCostos = row.estado === "aprobado" && prsSinCostos.has(row.id);
                   return (
                     <div className="flex items-center gap-1.5">
                       <Icon className="h-3.5 w-3.5" />
                       <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                      {sinCostos && (
+                        <span title="Items sin costos cargados">
+                          <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                        </span>
+                      )}
                     </div>
                   );
                 },
@@ -1591,7 +1660,18 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <h2 className="text-lg font-bold text-zinc-900 dark:text-white">PR {selected.numero}</h2>
                   {(() => {
                     const cfg = statusConfig[selected.estado] || { label: selected.estado, variant: "outline" as const };
-                    return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+                    const sinCostos = selected.estado === "aprobado" && prsSinCostos.has(selected.id);
+                    return (
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                        {sinCostos && (
+                          <span title="Items sin costos cargados" className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                            <AlertTriangle className="h-3.5 w-3.5" />
+                            <span className="text-[10px] font-semibold">Sin costos</span>
+                          </span>
+                        )}
+                      </div>
+                    );
                   })()}
                 </div>
                 <p className="text-sm text-zinc-500 mt-0.5">{selected.clienteNombre}</p>
@@ -2022,21 +2102,21 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         {/* Items */}
         <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Items</label>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowAIPanel(!showAIPanel)}
-                className="flex items-center gap-1 rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-400 dark:hover:bg-orange-950/50 transition-colors"
-              >
-                <Sparkles className="h-3 w-3" /> IA: armar desde mensaje
-              </button>
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Items</label>
               <button
                 onClick={() => setNewPR((p) => ({ ...p, items: [...p.items, { ...emptyItem, markup_porcentaje: p.markup_general }] }))}
-                className="flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+                className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-600 shadow-sm transition-colors"
               >
-                <Plus className="h-3 w-3" /> Agregar item
+                <Plus className="h-3.5 w-3.5" /> Agregar item
               </button>
             </div>
+            <button
+              onClick={() => setShowAIPanel(!showAIPanel)}
+              className="flex items-center gap-1 rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-400 dark:hover:bg-orange-950/50 transition-colors"
+            >
+              <Sparkles className="h-3 w-3" /> IA: armar desde mensaje
+            </button>
           </div>
 
           {/* AI Panel */}
@@ -2140,6 +2220,17 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       </td>
                       <td className="px-2 py-1.5">
                         <input value={item.descripcion} onChange={(e) => updateNewPRItem(idx, "descripcion", e.target.value)}
+                          onKeyDown={(e) => {
+                            // Prevent Enter on empty description of last item from triggering form actions
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              // Only move to next field if description is not empty
+                              if (item.descripcion.trim()) {
+                                const nextInput = (e.target as HTMLElement).closest("td")?.nextElementSibling?.querySelector("input, select") as HTMLElement;
+                                nextInput?.focus();
+                              }
+                            }
+                          }}
                           placeholder="Descripcion del item..."
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                       </td>
@@ -2183,6 +2274,26 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       </td>
                       <td className="px-2 py-1.5">
                         <select value={item.iva_porcentaje} onChange={(e) => updateNewPRItem(idx, "iva_porcentaje", Number(e.target.value))}
+                          onKeyDown={(e) => {
+                            // Auto-add new item when Tab on last field of last item
+                            if (e.key === "Tab" && !e.shiftKey && idx === newPR.items.length - 1) {
+                              e.preventDefault();
+                              setNewPR((p) => {
+                                const updated = { ...p, items: [...p.items, { ...emptyItem, markup_porcentaje: p.markup_general }] };
+                                // Focus the codigo input of the new row after render
+                                setTimeout(() => {
+                                  const table = (e.target as HTMLElement).closest("table");
+                                  if (table) {
+                                    const rows = table.querySelectorAll("tbody tr");
+                                    const lastRow = rows[rows.length - 1];
+                                    const firstInput = lastRow?.querySelector("input");
+                                    firstInput?.focus();
+                                  }
+                                }, 50);
+                                return updated;
+                              });
+                            }
+                          }}
                           className="w-full rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100">
                           <option value={21}>21</option>
                           <option value={10.5}>10.5</option>
@@ -2204,6 +2315,13 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               </tbody>
             </table>
           </div>
+          {/* Bottom add item button */}
+          <button
+            onClick={() => setNewPR((p) => ({ ...p, items: [...p.items, { ...emptyItem, markup_porcentaje: p.markup_general }] }))}
+            className="mt-2 flex items-center gap-1.5 rounded-md border border-dashed border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-500 hover:border-orange-400 hover:text-orange-600 hover:bg-orange-50/50 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-orange-600 dark:hover:text-orange-400 dark:hover:bg-orange-950/20 transition-colors"
+          >
+            <Plus className="h-3 w-3" /> Agregar item
+          </button>
           {/* Items totals preview */}
           <div className="flex justify-end mt-3">
             <div className="w-56 space-y-1 text-sm rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800/50">
@@ -2234,6 +2352,48 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           rows={2}
           placeholder="Condiciones de pago, plazo de entrega, aclaraciones..."
         />
+      </Modal>
+
+      {/* ==================== COSTOS FALTANTES MODAL ==================== */}
+      <Modal
+        open={!!costosFaltantesModal}
+        onClose={() => setCostosFaltantesModal(null)}
+        title="Items sin costos"
+        description="Atención: hay items sin precio de costo cargado"
+        size="sm"
+        footer={
+          <>
+            <button
+              onClick={() => setCostosFaltantesModal(null)}
+              className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={() => {
+                if (costosFaltantesModal) {
+                  doEstadoChange(costosFaltantesModal.id, "aprobado", costosFaltantesModal.motivo);
+                  setCostosFaltantesModal(null);
+                }
+              }}
+              className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
+            >
+              Aprobar de todos modos
+            </button>
+          </>
+        }
+      >
+        <div className="flex items-start gap-3 rounded-lg bg-amber-50 border border-amber-200 p-4 dark:bg-amber-950/20 dark:border-amber-800">
+          <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm text-amber-800 dark:text-amber-300">
+              Este presupuesto tiene <span className="font-bold">{costosFaltantesModal?.count} item(s)</span> sin costos cargados.
+            </p>
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+              Puede continuar, pero deberá completar los costos luego.
+            </p>
+          </div>
+        </div>
       </Modal>
 
       {/* ==================== RECHAZO MODAL ==================== */}

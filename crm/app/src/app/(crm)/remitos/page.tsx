@@ -81,7 +81,7 @@ export default function RemitosPage() {
     valor_declarado: "",
   });
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
-  const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string }[]>([]);
+  const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; subtotal: number | null }[]>([]);
   const [creating, setCreating] = useState(false);
 
   // Detail panel
@@ -89,6 +89,8 @@ export default function RemitosPage() {
   const [detailItems, setDetailItems] = useState<RemitoDetailItem[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [copiedSummary, setCopiedSummary] = useState(false);
+  const [detailPRNumero, setDetailPRNumero] = useState<string | null>(null);
+  const [detailFacturas, setDetailFacturas] = useState<{ id: string; numero: string; tipo: string; total: number; estado: string }[]>([]);
 
   // IA generation modal state
   const [iaModalOpen, setIaModalOpen] = useState(false);
@@ -207,10 +209,10 @@ export default function RemitosPage() {
     // Fetch clientes and presupuestos in parallel
     const [clientesRes, presupuestosRes] = await Promise.all([
       supabase.from("clientes").select("id, razon_social").eq("activo", true).order("razon_social"),
-      supabase.from("presupuestos").select("id, numero").eq("estado", "aprobado"),
+      supabase.from("presupuestos").select("id, numero, subtotal").eq("estado", "aprobado"),
     ]);
     if (clientesRes.data) setClientes(clientesRes.data as { id: string; razon_social: string }[]);
-    if (presupuestosRes.data) setPresupuestosAprobados(presupuestosRes.data as { id: string; numero: string }[]);
+    if (presupuestosRes.data) setPresupuestosAprobados(presupuestosRes.data as { id: string; numero: string; subtotal: number | null }[]);
     setCreateModalOpen(true);
   }
 
@@ -302,13 +304,33 @@ export default function RemitosPage() {
   async function handleRowClick(row: RemitoRow) {
     setDetailRemito(row);
     setDetailLoading(true);
+    setDetailPRNumero(null);
+    setDetailFacturas([]);
     try {
-      const { data } = await supabase
+      // Fetch items
+      const itemsPromise = supabase
         .from("remito_items")
         .select("id, descripcion, cantidad, unidad, orden")
         .eq("remito_id", row.id)
         .order("orden", { ascending: true });
-      setDetailItems((data as unknown as RemitoDetailItem[]) || []);
+
+      // If linked to a PR, fetch PR number and linked facturas
+      const prPromise = row.presupuesto_id
+        ? supabase.from("presupuestos").select("numero").eq("id", row.presupuesto_id).single()
+        : null;
+      const facturasPromise = row.presupuesto_id
+        ? supabase.from("facturas").select("id, numero, tipo, total, estado").eq("presupuesto_id" as any, row.presupuesto_id)
+        : null;
+
+      const [itemsRes, prRes, facturasRes] = await Promise.all([
+        itemsPromise,
+        prPromise,
+        facturasPromise,
+      ]);
+
+      setDetailItems((itemsRes.data as unknown as RemitoDetailItem[]) || []);
+      if (prRes?.data) setDetailPRNumero((prRes.data as any).numero || null);
+      if (facturasRes?.data) setDetailFacturas((facturasRes.data as any[]) || []);
     } catch {
       setDetailItems([]);
     } finally {
@@ -574,10 +596,16 @@ export default function RemitosPage() {
                   <span className="text-zinc-400">Fecha</span>
                   <p className="font-medium dark:text-white">{formatDate(detailRemito.fecha)}</p>
                 </div>
-                {detailRemito.presupuesto_id && (
+                {detailRemito.presupuesto_id && detailPRNumero && (
                   <div>
                     <span className="text-zinc-400">Presupuesto origen</span>
-                    <p className="font-mono text-blue-500 text-xs">{detailRemito.presupuesto_id.slice(0, 8)}...</p>
+                    <button
+                      onClick={() => window.open(`/presupuestos`, "_self")}
+                      className="flex items-center gap-1 mt-0.5"
+                      title="Ir a presupuestos"
+                    >
+                      <Badge variant="info">{detailPRNumero}</Badge>
+                    </button>
                   </div>
                 )}
                 {detailRemito.cae && (
@@ -598,6 +626,30 @@ export default function RemitosPage() {
                   </div>
                 )}
               </div>
+
+              {/* Linked facturas */}
+              {detailFacturas.length > 0 && (
+                <div>
+                  <span className="text-xs text-zinc-400 block mb-2">Facturas vinculadas</span>
+                  <div className="flex flex-wrap gap-2">
+                    {detailFacturas.map((f) => (
+                      <button
+                        key={f.id}
+                        onClick={() => window.open(`/facturacion`, "_self")}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 px-2.5 py-1.5 text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                        title="Ir a facturacion"
+                      >
+                        <Badge variant={f.estado === "pagada" ? "success" : f.estado === "anulada" ? "warning" : "info"}>
+                          {f.tipo} {f.numero}
+                        </Badge>
+                        <span className="text-zinc-500 font-mono">
+                          ${Number(f.total).toLocaleString("es-AR", { minimumFractionDigits: 2 })}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {detailRemito.observaciones && (
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
@@ -696,6 +748,30 @@ export default function RemitosPage() {
                 />
               </div>
               <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Presupuesto (opcional)</label>
+                <select
+                  value={createForm.presupuesto_id}
+                  onChange={(e) => {
+                    const prId = e.target.value;
+                    const pr = presupuestosAprobados.find((p) => p.id === prId);
+                    const autoValor = pr?.subtotal ? String(pr.subtotal) : "";
+                    setCreateForm((prev) => ({
+                      ...prev,
+                      presupuesto_id: prId,
+                      valor_declarado: prev.valor_declarado === "" || presupuestosAprobados.some((p) => p.subtotal && String(p.subtotal) === prev.valor_declarado)
+                        ? autoValor
+                        : prev.valor_declarado,
+                    }));
+                  }}
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                >
+                  <option value="">Sin presupuesto</option>
+                  {presupuestosAprobados.map((p) => (
+                    <option key={p.id} value={p.id}>{p.numero}{p.subtotal ? ` — Neto: $${Number(p.subtotal).toLocaleString("es-AR")}` : ""}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Valor declarado ($)</label>
                 <input
                   type="number"
@@ -705,19 +781,9 @@ export default function RemitosPage() {
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   placeholder="Ingrese el valor declarado..."
                 />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Presupuesto (opcional)</label>
-                <select
-                  value={createForm.presupuesto_id}
-                  onChange={(e) => setCreateForm({ ...createForm, presupuesto_id: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                >
-                  <option value="">Sin presupuesto</option>
-                  {presupuestosAprobados.map((p) => (
-                    <option key={p.id} value={p.id}>{p.numero}</option>
-                  ))}
-                </select>
+                {createForm.presupuesto_id && createForm.valor_declarado && (
+                  <p className="text-xs text-zinc-400 mt-1">Sugerido desde el neto del presupuesto. Podés modificarlo.</p>
+                )}
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">

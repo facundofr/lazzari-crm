@@ -66,6 +66,63 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     } catch {}
   }, []);
 
+  const fetchSociedades = useCallback(async (userId?: string) => {
+    try {
+      const { data, error } = await supabase
+        .from("sociedades")
+        .select("id, nombre, cuit, razon_social, condicion_iva, color_primario, activo")
+        .eq("activo", true)
+        .order("nombre");
+
+      if (!error && data && data.length > 0) {
+        const allMapped: Sociedad[] = data.map((s: Record<string, unknown>) => ({
+          id: s.id as string,
+          nombre: s.nombre as string,
+          cuit: s.cuit as string,
+          razonSocial: s.razon_social as string,
+          condicionIva: s.condicion_iva as string,
+          colorPrimario: (s.color_primario as string) || "#FF4500",
+          activo: s.activo as boolean,
+        }));
+
+        // Fetch per-user sociedad restrictions from user_sociedades
+        let mapped = allMapped;
+        if (userId) {
+          try {
+            const { data: userSocs, error: usError } = await (supabase as any)
+              .from("user_sociedades")
+              .select("sociedad_id")
+              .eq("user_id", userId);
+
+            if (!usError && userSocs && userSocs.length > 0) {
+              // Usuario tiene restricciones — solo mostrar sociedades permitidas
+              const allowedIds = new Set(userSocs.map((us: any) => us.sociedad_id));
+              const filtered = allMapped.filter((s) => allowedIds.has(s.id));
+              if (filtered.length > 0) {
+                mapped = filtered;
+              }
+            }
+            // Sin registros en user_sociedades → acceso a todas (retrocompatible)
+          } catch {
+            // En caso de error, mostrar todas las sociedades
+          }
+        }
+
+        setSociedades(mapped);
+
+        // Restore from localStorage or default to first
+        let savedId: string | null = null;
+        try {
+          savedId = localStorage.getItem(SOCIEDAD_STORAGE_KEY);
+        } catch {}
+        const saved = savedId ? mapped.find((s) => s.id === savedId) : null;
+        setSociedadActivaState(saved || mapped[0]);
+      }
+    } catch {
+      // Will work without sociedades
+    }
+  }, [supabase]);
+
   const fetchProfile = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -92,50 +149,19 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
           active: true,
         });
       }
+
+      // Fetch sociedades with user-specific restrictions
+      await fetchSociedades(user.id);
     } catch {
       // Keep profile null on error
     } finally {
       setLoading(false);
     }
-  }, [supabase]);
-
-  const fetchSociedades = useCallback(async () => {
-    try {
-      const { data, error } = await supabase
-        .from("sociedades")
-        .select("id, nombre, cuit, razon_social, condicion_iva, color_primario, activo")
-        .eq("activo", true)
-        .order("nombre");
-
-      if (!error && data && data.length > 0) {
-        const mapped: Sociedad[] = data.map((s: Record<string, unknown>) => ({
-          id: s.id as string,
-          nombre: s.nombre as string,
-          cuit: s.cuit as string,
-          razonSocial: s.razon_social as string,
-          condicionIva: s.condicion_iva as string,
-          colorPrimario: (s.color_primario as string) || "#FF4500",
-          activo: s.activo as boolean,
-        }));
-        setSociedades(mapped);
-
-        // Restore from localStorage or default to first
-        let savedId: string | null = null;
-        try {
-          savedId = localStorage.getItem(SOCIEDAD_STORAGE_KEY);
-        } catch {}
-        const saved = savedId ? mapped.find((s) => s.id === savedId) : null;
-        setSociedadActivaState(saved || mapped[0]);
-      }
-    } catch {
-      // Will work without sociedades
-    }
-  }, [supabase]);
+  }, [supabase, fetchSociedades]);
 
   useEffect(() => {
     fetchProfile();
-    fetchSociedades();
-  }, [fetchProfile, fetchSociedades]);
+  }, [fetchProfile]);
 
   const role = profile?.role ?? "viewer";
 
