@@ -46,9 +46,13 @@ interface SupabasePresupuesto {
   updated_at: string;
   vendedor_id: string | null;
   oc_cliente?: string | null;
+  sucursal_id?: string | null;
+  contacto_id?: string | null;
   clientes?: { razon_social: string; cuit: string; email?: string | null; telefono?: string | null; direccion?: string | null; localidad?: string | null; provincia?: string | null; condicion_iva?: string | null } | null;
   created_by_profile?: { full_name: string } | null;
   vendedor_profile?: { full_name: string; avatar_url: string | null } | null;
+  sucursal?: { nombre: string } | null;
+  contacto?: { nombre: string } | null;
   presupuesto_items?: PresupuestoItem[];
 }
 
@@ -110,6 +114,8 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     vendedorNombre: row.vendedor_profile?.full_name ?? "",
     vendedorAvatar: row.vendedor_profile?.avatar_url ?? null,
     vendedorId: row.vendedor_id ?? null,
+    sucursalNombre: row.sucursal?.nombre ?? "",
+    contactoNombre: row.contacto?.nombre ?? "",
     ocCliente: row.oc_cliente ?? "",
     clienteCuit: row.clientes?.cuit ?? "",
     clienteEmail: row.clientes?.email ?? "",
@@ -467,9 +473,9 @@ export default function PresupuestosPage() {
   const fetchPresupuestos = useCallback(async () => {
     try {
       // First try with items + vendedor profile
-      let q = supabase
+      let q = (supabase as any)
         .from("presupuestos")
-        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), presupuesto_items(*)`)
+        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre), contacto:contacto_id(nombre), presupuesto_items(*)`)
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       let res: { data: any; error: any } = await q;
@@ -1350,42 +1356,29 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                           )}
 
                           {/* Acciones rapidas */}
-                          <div className="flex items-center gap-1 pt-1 border-t border-zinc-100 dark:border-zinc-800" onClick={(e) => e.stopPropagation()}>
-                            {pr.estado === "solicitud" ? (
-                              <button
-                                onClick={() => handleEstadoChange(pr.id, "pendiente")}
-                                className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:text-blue-300 dark:hover:bg-blue-900/40 transition-colors"
-                              >
-                                <ArrowRight className="h-3.5 w-3.5" />
-                                Convertir a PR
-                              </button>
-                            ) : (
-                              <>
-                            <button
-                              onClick={() => handleEstadoChange(pr.id, "aprobado")}
-                              className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300 dark:hover:bg-emerald-900/40 transition-colors"
+                          <div className="flex items-center gap-2 pt-1 border-t border-zinc-100 dark:border-zinc-800" onClick={(e) => e.stopPropagation()}>
+                            <select
+                              value=""
+                              onChange={(e) => {
+                                const newEstado = e.target.value as PRStatus;
+                                if (!newEstado) return;
+                                if (newEstado === "rechazado") {
+                                  setRechazoModal(pr.id);
+                                  setMotivoRechazo("");
+                                } else {
+                                  handleEstadoChange(pr.id, newEstado);
+                                }
+                              }}
+                              className="h-7 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-600 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                             >
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              Aprobar
-                            </button>
-                            <button
-                              onClick={() => { setRechazoModal(pr.id); setMotivoRechazo(""); }}
-                              className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-900/40 transition-colors"
-                            >
-                              <XCircle className="h-3.5 w-3.5" />
-                              Rechazar
-                            </button>
-                            {pr.estado === "pendiente" && (
-                              <button
-                                onClick={() => handleEstadoChange(pr.id, "postergado")}
-                                className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-purple-700 bg-purple-50 hover:bg-purple-100 dark:bg-purple-950/30 dark:text-purple-300 dark:hover:bg-purple-900/40 transition-colors"
-                              >
-                                <PauseCircle className="h-3.5 w-3.5" />
-                                Postergar
-                              </button>
-                            )}
-                              </>
-                            )}
+                              <option value="">Cambiar estado...</option>
+                              {(["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as PRStatus[])
+                                .filter((s) => s !== pr.estado)
+                                .map((s) => {
+                                  const cfg = statusConfig[s] || { label: s };
+                                  return <option key={s} value={s}>{cfg.label}</option>;
+                                })}
+                            </select>
                             {telefono && (
                               <a
                                 href={`tel:${telefono}`}
@@ -1411,48 +1404,92 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           <DataTable<Presupuesto>
             columns={[
               {
-                key: "numero", label: "N PR", sortable: true,
+                key: "fecha", label: "Fecha", sortable: true,
+                render: (row) => {
+                  const enviadoAt = row.enviadoAt;
+                  const createdAt = row.createdAt;
+                  const earliest = enviadoAt && createdAt
+                    ? (new Date(enviadoAt) < new Date(createdAt) ? enviadoAt : createdAt)
+                    : enviadoAt || createdAt;
+                  return <span className="text-zinc-600 dark:text-zinc-300 text-xs whitespace-nowrap">{earliest ? formatDate(earliest) : "—"}</span>;
+                },
+              },
+              {
+                key: "numero", label: "N° PR", sortable: true,
                 render: (row) => (
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-zinc-400" />
+                  <div className="flex items-center gap-1.5">
+                    <FileText className="h-3.5 w-3.5 text-zinc-400" />
                     <span className="font-mono text-xs font-bold">{row.numero}</span>
                   </div>
                 ),
               },
               {
-                key: "clienteNombre", label: "Cliente", sortable: true,
-                render: (row) => <span className="font-medium">{row.clienteNombre}</span>,
+                key: "items", label: "Resumen items", sortable: false,
+                render: (row) => {
+                  if (!row.items || row.items.length === 0) return <span className="text-zinc-400 text-xs">—</span>;
+                  const descs = row.items.slice(0, 2).map(it => it.descripcion || it.codigo || "").filter(Boolean);
+                  let text = descs.join(", ");
+                  if (text.length > 50) text = text.slice(0, 47) + "...";
+                  else if (row.items.length > 2) text += "...";
+                  return <span className="text-xs text-zinc-600 dark:text-zinc-400" title={row.items.map(it => it.descripcion).join(", ")}>{text}</span>;
+                },
               },
               {
-                key: "items", label: "Items", sortable: false,
-                render: (row) => <span className="text-zinc-500">{row.items.length} lineas</span>,
-              },
-              {
-                key: "total", label: "Total", className: "text-right", sortable: true,
+                key: "total", label: "Monto", className: "text-right", sortable: true,
                 render: (row) => (
-                  <span className="font-mono font-semibold block text-right">
+                  <span className="font-mono text-xs font-semibold block text-right whitespace-nowrap">
                     {formatCurrency(row.total, row.moneda)}
                   </span>
                 ),
               },
               {
+                key: "clienteNombre", label: "Cliente", sortable: true,
+                render: (row) => <span className="font-medium text-xs">{row.clienteNombre}</span>,
+              },
+              {
+                key: "sucursalNombre" as any, label: "Sucursal", sortable: true,
+                render: (row) => {
+                  const nombre = (row as any).sucursalNombre;
+                  return nombre ? <span className="text-xs text-zinc-600 dark:text-zinc-400">{nombre}</span> : <span className="text-zinc-400 text-xs">—</span>;
+                },
+              },
+              {
+                key: "contactoNombre" as any, label: "Solicitante", sortable: true,
+                render: (row) => {
+                  const nombre = (row as any).contactoNombre;
+                  return nombre ? <span className="text-xs text-zinc-600 dark:text-zinc-400">{nombre}</span> : <span className="text-zinc-400 text-xs">—</span>;
+                },
+              },
+              {
                 key: "vendedorNombre" as any, label: "Vendedor", sortable: true,
                 render: (row) => {
                   const nombre = (row as any).vendedorNombre;
-                  const avatar = (row as any).vendedorAvatar;
-                  if (!nombre) return <span className="text-zinc-400">&mdash;</span>;
+                  if (!nombre) return <span className="text-zinc-400 text-xs">—</span>;
+                  const initials = nombre.split(/\s+/).map((w: string) => w.charAt(0).toUpperCase()).join("");
                   return (
-                    <div className="flex items-center gap-2">
-                      {avatar ? (
-                        <img src={avatar} alt="" className="h-6 w-6 rounded-full object-cover" />
-                      ) : (
-                        <div className="h-6 w-6 rounded-full bg-orange-100 flex items-center justify-center text-xs font-bold text-orange-600">
-                          {nombre.charAt(0).toUpperCase()}
-                        </div>
-                      )}
-                      <span className="text-sm">{nombre}</span>
-                    </div>
+                    <span className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-orange-100 text-[10px] font-bold text-orange-600 dark:bg-orange-900/40 dark:text-orange-300" title={nombre}>
+                      {initials}
+                    </span>
                   );
+                },
+              },
+              {
+                key: "creadoPor" as any, label: "Operador", sortable: true,
+                render: (row) => {
+                  const nombre = row.creadoPor;
+                  if (!nombre) return <span className="text-zinc-400 text-xs">—</span>;
+                  const initials = nombre.split(/\s+/).map((w: string) => w.charAt(0).toUpperCase()).join("");
+                  return (
+                    <span className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300" title={nombre}>
+                      {initials}
+                    </span>
+                  );
+                },
+              },
+              {
+                key: "enviadoAt" as any, label: "Fecha envio", sortable: true,
+                render: (row) => {
+                  return row.enviadoAt ? <span className="text-xs text-zinc-600 dark:text-zinc-300 whitespace-nowrap">{formatDate(row.enviadoAt)}</span> : <span className="text-zinc-400 text-xs">—</span>;
                 },
               },
               {
@@ -1469,15 +1506,6 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 },
               },
               {
-                key: "fecha", label: "Fecha", sortable: true,
-                render: (row) => (
-                  <div>
-                    <p className="text-zinc-600 dark:text-zinc-300">{formatDate(row.fecha)}</p>
-                    <p className="text-xs text-zinc-400">Vence: {formatDate(row.vencimiento)}</p>
-                  </div>
-                ),
-              },
-              {
                 key: "actions", label: "", sortable: false,
                 render: (row) => (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -1487,34 +1515,29 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     <button onClick={() => handleDuplicate(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                       <Copy className="h-4 w-4" />
                     </button>
-                    {row.estado === "solicitud" && (
-                      <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600 dark:hover:bg-blue-950/40" title="Convertir a presupuesto">
-                        <ArrowRight className="h-4 w-4" />
-                      </button>
-                    )}
-                    {row.estado === "postergado" && (
-                      <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-950/40" title="Marcar como enviado">
-                        <Send className="h-4 w-4" />
-                      </button>
-                    )}
-                    {row.estado === "rechazado" && (
-                      <button onClick={() => handleEstadoChange(row.id, "pendiente")} className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-950/40" title="Reabrir como pendiente">
-                        <Edit3 className="h-4 w-4" />
-                      </button>
-                    )}
-                    {row.estado === "pendiente" && (
-                      <>
-                        <button onClick={() => handleEstadoChange(row.id, "aprobado")} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600 dark:hover:bg-green-950/40" title="Aprobar">
-                          <CheckCircle2 className="h-4 w-4" />
-                        </button>
-                        <button onClick={() => { setRechazoModal(row.id); setMotivoRechazo(""); }} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-950/40" title="Rechazar">
-                          <XCircle className="h-4 w-4" />
-                        </button>
-                        <button onClick={() => handleEstadoChange(row.id, "postergado")} className="rounded p-1.5 text-zinc-400 hover:bg-purple-100 hover:text-purple-600 dark:hover:bg-purple-950/40" title="Postergar">
-                          <PauseCircle className="h-4 w-4" />
-                        </button>
-                      </>
-                    )}
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const newEstado = e.target.value as PRStatus;
+                        if (!newEstado) return;
+                        if (newEstado === "rechazado") {
+                          setRechazoModal(row.id);
+                          setMotivoRechazo("");
+                        } else {
+                          handleEstadoChange(row.id, newEstado);
+                        }
+                      }}
+                      className="h-7 rounded border border-zinc-200 bg-white px-1 text-xs text-zinc-600 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                      title="Cambiar estado"
+                    >
+                      <option value="">Cambiar...</option>
+                      {(["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as PRStatus[])
+                        .filter((s) => s !== row.estado)
+                        .map((s) => {
+                          const cfg = statusConfig[s] || { label: s };
+                          return <option key={s} value={s}>{cfg.label}</option>;
+                        })}
+                    </select>
                   </div>
                 ),
               },
@@ -1782,61 +1805,30 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               )}
 
               {/* Action buttons */}
-              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700 flex flex-wrap gap-2">
-                {selected.estado === "solicitud" && (
-                  <button
-                    onClick={() => { handleEstadoChange(selected.id, "pendiente"); }}
-                    className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-                  >
-                    <ArrowRight className="h-4 w-4" /> Convertir a Presupuesto
-                  </button>
-                )}
-                {selected.estado === "postergado" && (
-                  <button
-                    onClick={() => { handleEstadoChange(selected.id, "pendiente"); }}
-                    className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
-                  >
-                    <Send className="h-4 w-4" /> Marcar como enviado
-                  </button>
-                )}
-                {selected.estado === "pendiente" && (
-                  <>
-                    <button
-                      onClick={() => handleEstadoChange(selected.id, "aprobado")}
-                      className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 transition-colors"
-                    >
-                      <CheckCircle2 className="h-4 w-4" /> Aprobar
-                    </button>
-                    <button
-                      onClick={() => { setRechazoModal(selected.id); setMotivoRechazo(""); }}
-                      className="flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 transition-colors"
-                    >
-                      <XCircle className="h-4 w-4" /> Rechazar
-                    </button>
-                    <button
-                      onClick={() => handleEstadoChange(selected.id, "postergado")}
-                      className="flex items-center gap-2 rounded-lg border border-purple-300 px-4 py-2 text-sm font-medium text-purple-700 hover:bg-purple-50 transition-colors dark:border-purple-700 dark:text-purple-400 dark:hover:bg-purple-950/30"
-                    >
-                      <PauseCircle className="h-4 w-4" /> Postergar
-                    </button>
-                  </>
-                )}
-                {selected.estado === "rechazado" && (
-                  <button
-                    onClick={() => { handleEstadoChange(selected.id, "pendiente"); }}
-                    className="flex items-center gap-2 rounded-lg border border-orange-300 px-4 py-2 text-sm font-medium text-orange-700 hover:bg-orange-50 transition-colors dark:border-orange-600 dark:text-orange-300 dark:hover:bg-orange-900/20"
-                  >
-                    <Edit3 className="h-4 w-4" /> Reabrir como pendiente
-                  </button>
-                )}
-                {selected.estado === "aprobado" && (
-                  <div className="flex items-center gap-2 text-sm text-green-600">
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>Aprobado{selected.respondidoAt ? ` el ${formatDate(selected.respondidoAt)}` : ""}</span>
-                    <ArrowRight className="h-4 w-4 ml-2" />
-                    <span className="text-zinc-500">OC generadas — Listo para facturar</span>
-                  </div>
-                )}
+              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700 flex flex-wrap items-center gap-3">
+                <label className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Cambiar estado:</label>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const newEstado = e.target.value as PRStatus;
+                    if (!newEstado) return;
+                    if (newEstado === "rechazado") {
+                      setRechazoModal(selected.id);
+                      setMotivoRechazo("");
+                    } else {
+                      handleEstadoChange(selected.id, newEstado);
+                    }
+                  }}
+                  className="h-9 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                >
+                  <option value="">Seleccionar...</option>
+                  {(["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as PRStatus[])
+                    .filter((s) => s !== selected.estado)
+                    .map((s) => {
+                      const cfg = statusConfig[s] || { label: s };
+                      return <option key={s} value={s}>{cfg.label}</option>;
+                    })}
+                </select>
               </div>
             </div>
           </div>

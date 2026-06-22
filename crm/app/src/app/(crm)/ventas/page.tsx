@@ -116,7 +116,7 @@ export default function VentasPage() {
   const [loading, setLoading] = useState(true);
   const [vendedores, setVendedores] = useState<VendedorOption[]>([]);
   const [filterVendedor, setFilterVendedor] = useState<string>("todos");
-  const [filterStep, setFilterStep] = useState<number | null>(null);
+  const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
@@ -218,10 +218,16 @@ export default function VentasPage() {
   const filteredVentas = useMemo(() => {
     return ventas.filter(v => {
       if (filterVendedor !== "todos" && v.presupuesto.vendedor_id !== filterVendedor) return false;
-      if (filterStep !== null && getVentaStep(v) !== filterStep) return false;
+      if (filterStatus) {
+        const st = getVentaStatus(v);
+        if (filterStatus === "pend_entrega" && st.entregado) return false;
+        if (filterStatus === "pend_factura" && st.facturado) return false;
+        if (filterStatus === "facturadas" && (!st.facturado || st.cobrado)) return false;
+        if (filterStatus === "cobradas" && !st.cobrado) return false;
+      }
       return true;
     });
-  }, [ventas, filterVendedor, filterStep]);
+  }, [ventas, filterVendedor, filterStatus]);
 
   // KPIs from filtered ventas (respecting vendedor filter, ignoring step filter)
   const kpis = useMemo(() => {
@@ -229,11 +235,12 @@ export default function VentasPage() {
       filterVendedor === "todos" || v.presupuesto.vendedor_id === filterVendedor
     );
     const total = base.length;
-    const pendientes = base.filter(v => getVentaStep(v) < 2).length;
-    const facturadas = base.filter(v => getVentaStep(v) === 2).length;
-    const cobradas = base.filter(v => getVentaStep(v) === 3).length;
+    const pendEntrega = base.filter(v => !getVentaStatus(v).entregado).length;
+    const pendFactura = base.filter(v => !getVentaStatus(v).facturado).length;
+    const facturadas = base.filter(v => { const s = getVentaStatus(v); return s.facturado && !s.cobrado; }).length;
+    const cobradas = base.filter(v => getVentaStatus(v).cobrado).length;
     const montoTotal = base.reduce((sum, v) => sum + (v.presupuesto.total || 0), 0);
-    return { total, pendientes, facturadas, cobradas, montoTotal };
+    return { total, pendEntrega, pendFactura, facturadas, cobradas, montoTotal };
   }, [ventas, filterVendedor]);
 
   const selectedVenta = useMemo(() => {
@@ -389,18 +396,19 @@ export default function VentasPage() {
       <div className="p-4 sm:p-8 space-y-6">
 
         {/* KPI Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           {[
-            { label: "Total", value: kpis.total, color: "text-zinc-900 dark:text-white", step: null },
-            { label: "Pend. facturar", value: kpis.pendientes, color: "text-amber-600", step: 0 },
-            { label: "Facturadas", value: kpis.facturadas, color: "text-blue-600", step: 2 },
-            { label: "Cobradas", value: kpis.cobradas, color: "text-green-600", step: 3 },
+            { label: "Total", value: kpis.total, color: "text-zinc-900 dark:text-white", key: null },
+            { label: "Pend. entrega", value: kpis.pendEntrega, color: "text-amber-600", key: "pend_entrega" },
+            { label: "Pend. factura", value: kpis.pendFactura, color: "text-red-600", key: "pend_factura" },
+            { label: "Facturadas", value: kpis.facturadas, color: "text-blue-600", key: "facturadas" },
+            { label: "Cobradas", value: kpis.cobradas, color: "text-green-600", key: "cobradas" },
           ].map(kpi => (
             <button
               key={kpi.label}
-              onClick={() => setFilterStep(filterStep === kpi.step ? null : kpi.step)}
+              onClick={() => setFilterStatus(filterStatus === kpi.key ? null : kpi.key)}
               className={`rounded-xl border p-4 text-left transition-all ${
-                filterStep === kpi.step
+                filterStatus === kpi.key
                   ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30"
                   : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700"
               }`}
@@ -425,12 +433,12 @@ export default function VentasPage() {
               ))}
             </select>
           )}
-          {filterStep !== null && (
+          {filterStatus !== null && (
             <button
-              onClick={() => setFilterStep(null)}
+              onClick={() => setFilterStatus(null)}
               className="flex items-center gap-1 rounded-lg bg-orange-100 px-3 py-2 text-sm font-medium text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
             >
-              {STEP_LABELS[filterStep]}
+              {{ pend_entrega: "Pend. entrega", pend_factura: "Pend. factura", facturadas: "Facturadas", cobradas: "Cobradas" }[filterStatus]}
               <X className="h-3.5 w-3.5" />
             </button>
           )}

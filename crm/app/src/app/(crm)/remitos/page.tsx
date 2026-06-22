@@ -45,6 +45,7 @@ interface RemitoRow {
   observaciones: string;
   valor_declarado: number | null;
   clientes: { razon_social: string; email?: string } | null;
+  clienteNombre: string;
   remito_items: { id: string }[];
 }
 
@@ -100,8 +101,14 @@ export default function RemitosPage() {
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
     fecha: { from: "", to: "" },
     estado: "",
+    cliente: "",
     vinculado: "",
   });
+
+  // Build unique client options from loaded remitos
+  const clienteOptions = Array.from(new Set(remitos.map(r => r.clientes?.razon_social).filter(Boolean)))
+    .sort()
+    .map(name => ({ value: name!, label: name! }));
 
   const smartFilterConfigs: FilterConfig[] = [
     { key: "fecha", label: "Fecha", type: "date-range" },
@@ -114,6 +121,12 @@ export default function RemitosPage() {
         { value: "entregado", label: "Entregado" },
         { value: "parcial", label: "Parcial" },
       ],
+    },
+    {
+      key: "cliente",
+      label: "Cliente",
+      type: "select",
+      options: clienteOptions,
     },
     {
       key: "vinculado",
@@ -138,7 +151,7 @@ export default function RemitosPage() {
         const { data, error } = await q;
 
         if (!error && data && data.length > 0) {
-          setRemitos(data as unknown as RemitoRow[]);
+          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "" })) as RemitoRow[]);
         } else {
           setRemitos(mockRemitos.map((r) => ({
             id: r.id, numero: r.numero, cliente_id: r.clienteId,
@@ -146,6 +159,7 @@ export default function RemitosPage() {
             cae: r.cae || null, estado: r.estado, observaciones: r.observaciones,
             valor_declarado: null,
             clientes: { razon_social: r.clienteNombre },
+            clienteNombre: r.clienteNombre,
             remito_items: r.items.map((i) => ({ id: i.id })),
           })));
         }
@@ -156,6 +170,7 @@ export default function RemitosPage() {
           cae: r.cae || null, estado: r.estado, observaciones: r.observaciones,
           valor_declarado: null,
           clientes: { razon_social: r.clienteNombre },
+          clienteNombre: r.clienteNombre,
           remito_items: r.items.map((i) => ({ id: i.id })),
         })));
       } finally {
@@ -445,7 +460,7 @@ export default function RemitosPage() {
                   </div>
                 ),
               },
-              { key: "clientes", label: "Cliente", sortable: false, render: (row) => <span className="font-medium">{row.clientes?.razon_social}</span> },
+              { key: "clientes", label: "Cliente", sortable: true, sortKey: "clienteNombre", render: (row) => <span className="font-medium">{row.clientes?.razon_social}</span> },
               { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
               { key: "remito_items", label: "Items", sortable: false, render: (row) => <span className="text-zinc-500">{row.remito_items.length} productos</span> },
               { key: "presupuesto_id", label: "PR Origen", sortable: false, render: (row) => row.presupuesto_id ? <Badge variant="info">Vinculado</Badge> : <span className="text-zinc-400">—</span> },
@@ -487,6 +502,9 @@ export default function RemitosPage() {
               // estado filter
               const estadoFilter = smartFilterValues.estado as string;
               if (estadoFilter && r.estado !== estadoFilter) return false;
+              // cliente filter
+              const clienteFilter = smartFilterValues.cliente as string;
+              if (clienteFilter && r.clientes?.razon_social !== clienteFilter) return false;
               // vinculado filter
               const vinculadoFilter = smartFilterValues.vinculado as string;
               if (vinculadoFilter === "si" && !r.presupuesto_id) return false;

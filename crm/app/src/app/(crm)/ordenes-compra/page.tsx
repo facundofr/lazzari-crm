@@ -13,7 +13,7 @@ import {
   ShoppingCart, Clock, CheckCircle2, Truck, Loader2,
   X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
-  PackageCheck,
+  PackageCheck, MessageSquare,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
@@ -52,6 +52,8 @@ interface OCRow {
   total: number;
   moneda: string;
   presupuesto_origen_id: string | null;
+  pedido: boolean;
+  notas_recepcion: string | null;
   observaciones: string;
   created_at: string;
   proveedores: ProveedorInfo | null;
@@ -89,6 +91,8 @@ function mapMockToOCRow(oc: (typeof mockOrdenesCompra)[number]): OCRow {
     total: oc.total,
     moneda: oc.moneda,
     presupuesto_origen_id: oc.presupuestoOrigenId || null,
+    pedido: oc.estado !== "borrador",
+    notas_recepcion: null,
     observaciones: oc.observaciones,
     created_at: oc.fecha,
     proveedores: { razon_social: oc.proveedorNombre, cuit: null, email: null, telefono: null, direccion: null, localidad: null, provincia: null, forma_pago: null, condicion_iva: null },
@@ -599,6 +603,111 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
     setTimeout(() => setCopiedSummary(false), 2000);
   };
 
+  // ── Toggle pedido Si/No ───────────────────────────────────────────
+  const handleTogglePedido = async (oc: OCRow, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newVal = !oc.pedido;
+    try {
+      const { error } = await supabase
+        .from("ordenes_compra")
+        .update({ pedido: newVal } as any)
+        .eq("id", oc.id);
+      if (error) throw error;
+      setOrdenes((prev) =>
+        prev.map((o) => (o.id === oc.id ? { ...o, pedido: newVal } : o))
+      );
+      if (detailOC?.id === oc.id) setDetailOC({ ...oc, pedido: newVal });
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Error al actualizar pedido");
+    }
+  };
+
+  // ── Notas de recepcion ────────────────────────────────────────────
+  const [notaPopoverId, setNotaPopoverId] = useState<string | null>(null);
+  const [notaPopoverText, setNotaPopoverText] = useState("");
+  const [savingNota, setSavingNota] = useState(false);
+
+  const openNotaPopover = (oc: OCRow, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setNotaPopoverId(oc.id);
+    setNotaPopoverText(oc.notas_recepcion || "");
+  };
+
+  const handleSaveNotaRecepcion = async () => {
+    if (!notaPopoverId) return;
+    setSavingNota(true);
+    try {
+      const { error } = await supabase
+        .from("ordenes_compra")
+        .update({ notas_recepcion: notaPopoverText || null } as any)
+        .eq("id", notaPopoverId);
+      if (error) throw error;
+      setOrdenes((prev) =>
+        prev.map((o) =>
+          o.id === notaPopoverId
+            ? { ...o, notas_recepcion: notaPopoverText || null }
+            : o
+        )
+      );
+      if (detailOC?.id === notaPopoverId) {
+        setDetailOC((prev) =>
+          prev ? { ...prev, notas_recepcion: notaPopoverText || null } : prev
+        );
+      }
+      setNotaPopoverId(null);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Error al guardar nota");
+    } finally {
+      setSavingNota(false);
+    }
+  };
+
+  // ── Copy OC summary for proveedor (from table, without detail items) ──
+  const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
+  const handleCopyForProveedor = async (oc: OCRow, e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Fetch items for this OC
+    let itemLines = "";
+    try {
+      const { data } = await supabase
+        .from("orden_compra_items")
+        .select("codigo, descripcion, cantidad, unidad, precio_unitario" as any)
+        .eq("orden_id", oc.id)
+        .order("orden", { ascending: true });
+      if (data && data.length > 0) {
+        itemLines = (data as any[])
+          .map(
+            (it: any, i: number) =>
+              `${i + 1}. ${it.codigo || ""} ${it.descripcion} — ${it.cantidad}${it.unidad ? ` ${it.unidad}` : ""}`
+          )
+          .join("\n");
+      }
+    } catch { /* ignore */ }
+
+    const mon = oc.moneda as "ARS" | "USD";
+    const lines = [
+      `*ORDEN DE COMPRA ${oc.numero}*`,
+      "",
+      `Fecha: ${formatDate(oc.fecha)}`,
+      oc.fecha_entrega_estimada
+        ? `Entrega estimada: ${formatDate(oc.fecha_entrega_estimada)}`
+        : null,
+      `Moneda: ${oc.moneda}`,
+      "",
+      `*Proveedor:* ${oc.proveedores?.razon_social || "\u2014"}`,
+      "",
+      "*Items:*",
+      itemLines || "(sin items)",
+      "",
+      `*Total: ${formatCurrency(Number(oc.total), mon)}*`,
+      oc.observaciones ? `\nObs: ${oc.observaciones}` : null,
+    ];
+    const text = lines.filter((l) => l !== null).join("\n");
+    await navigator.clipboard.writeText(text);
+    setCopiedRowId(oc.id);
+    setTimeout(() => setCopiedRowId(null), 2000);
+  };
+
   // ── Consolidation logic ─────────────────────────────────────────
   const openConsolidateModal = async () => {
     setConsolidateOpen(true);
@@ -944,11 +1053,27 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               },
               {
                 key: "estado",
-                label: "Estado",
+                label: "Pedido",
                 sortable: true,
                 render: (row) => {
-                  const cfg = statusConfig[row.estado] || { label: row.estado, variant: "outline" as const };
-                  return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+                  const isPedido = row.pedido ?? false;
+                  return (
+                    <button
+                      onClick={(e) => handleTogglePedido(row, e)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-colors ${
+                        isPedido
+                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                          : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+                      }`}
+                      title={isPedido ? "Pedido realizado" : "Marcar como pedido"}
+                    >
+                      {isPedido ? (
+                        <><Check className="h-3 w-3" /> Si</>
+                      ) : (
+                        <><X className="h-3 w-3" /> No</>
+                      )}
+                    </button>
+                  );
                 },
               },
               {
@@ -957,17 +1082,47 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 render: (row) => {
                   const totalQty = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
                   const recibido = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad_recibida), 0);
-                  if (row.estado === "recibida") {
-                    return <Badge variant="success">Completa</Badge>;
+                  const today = new Date().toISOString().split("T")[0];
+                  const isLate = row.fecha_entrega_estimada && row.fecha_entrega_estimada < today && row.estado !== "recibida" && row.estado !== "cancelada";
+
+                  // Determine traffic-light color
+                  let dotColor = "bg-red-500"; // Sin recepcion
+                  let label = "Sin recepcion";
+                  if (row.estado === "recibida" || (totalQty > 0 && recibido >= totalQty)) {
+                    dotColor = "bg-emerald-500";
+                    label = "Completo";
+                  } else if (recibido > 0 || row.estado === "recibida_parcial") {
+                    dotColor = "bg-amber-500";
+                    label = `Parcial (${recibido}/${totalQty})`;
+                  } else if (isLate) {
+                    dotColor = "bg-amber-500";
+                    label = "Demorado";
                   }
-                  if (row.estado === "recibida_parcial") {
-                    return <Badge variant="purple">Parcial ({recibido}/{totalQty})</Badge>;
+
+                  // Don't show for cancelled
+                  if (row.estado === "cancelada") {
+                    return <span className="text-zinc-300">{"\u2014"}</span>;
                   }
-                  if (row.estado === "confirmada") {
-                    return <Badge variant="warning">Pend. recepcion</Badge>;
-                  }
-                  // For other states (borrador, enviada, cancelada) show a dash
-                  return <span className="text-zinc-300">{"\u2014"}</span>;
+
+                  return (
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`inline-block h-3 w-3 rounded-full ${dotColor} shrink-0`}
+                        title={label}
+                      />
+                      <span className="text-xs text-zinc-500 hidden sm:inline">{label}</span>
+                      {/* Note icon for parcial/demorado */}
+                      {(recibido > 0 || isLate) && row.estado !== "recibida" && (
+                        <button
+                          onClick={(e) => openNotaPopover(row, e)}
+                          className={`p-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors ${row.notas_recepcion ? "text-orange-500" : "text-zinc-300 hover:text-zinc-500"}`}
+                          title={row.notas_recepcion || "Agregar nota de recepcion"}
+                        >
+                          <MessageSquare className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  );
                 },
               },
               {
@@ -981,21 +1136,34 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   ),
               },
               {
+                key: "observaciones",
+                label: "Enviar",
+                render: (row) => (
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={(e) => handleCopyForProveedor(row, e)}
+                      className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+                        copiedRowId === row.id
+                          ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400"
+                          : "bg-orange-50 text-orange-600 hover:bg-orange-100 dark:bg-orange-900/20 dark:text-orange-400 dark:hover:bg-orange-900/40"
+                      }`}
+                      title="Copiar resumen para enviar al proveedor"
+                    >
+                      {copiedRowId === row.id ? (
+                        <><Check className="h-3 w-3" /> Copiado</>
+                      ) : (
+                        <><ClipboardCopy className="h-3 w-3" /> Copiar</>
+                      )}
+                    </button>
+                  </div>
+                ),
+              },
+              {
                 key: "acciones",
                 label: "Acciones",
                 render: (row) => (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    {row.estado === "borrador" && (
-                      <button onClick={() => handleAdvanceEstado(row, "enviada")} className="px-2 py-1 rounded text-xs font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 transition-colors" title="Marcar como enviada">
-                        Enviada
-                      </button>
-                    )}
-                    {row.estado === "enviada" && (
-                      <button onClick={() => handleAdvanceEstado(row, "confirmada")} className="px-2 py-1 rounded text-xs font-medium bg-green-50 text-green-600 hover:bg-green-100 dark:bg-green-900/30 dark:text-green-400 transition-colors" title="Confirmar OC">
-                        Confirmar
-                      </button>
-                    )}
-                    {["borrador", "enviada", "confirmada"].includes(row.estado) && (
+                    {row.estado !== "recibida" && row.estado !== "cancelada" && (
                       <button onClick={() => handleCancel(row)} className="px-2 py-1 rounded text-xs font-medium bg-red-50 text-red-500 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 transition-colors" title="Cancelar OC">
                         Cancelar
                       </button>
@@ -1181,6 +1349,49 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         </div>
       )}
 
+      {/* ── Nota recepcion popover ──────────────────────────────────── */}
+      {notaPopoverId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setNotaPopoverId(null)}>
+          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-200 dark:border-zinc-700">
+              <h3 className="text-sm font-semibold dark:text-white flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-orange-500" />
+                Nota de recepcion
+              </h3>
+              <button onClick={() => setNotaPopoverId(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <p className="text-xs text-zinc-400">Indica fecha de llegada estimada, motivo de demora, o cualquier detalle relevante.</p>
+              <textarea
+                value={notaPopoverText}
+                onChange={(e) => setNotaPopoverText(e.target.value)}
+                rows={3}
+                placeholder="Ej: Fecha de llegada estimada 25/06. Proveedor confirmo demora por falta de stock."
+                className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm resize-none dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500"
+              />
+            </div>
+            <div className="flex justify-end gap-3 px-5 py-3 border-t border-zinc-200 dark:border-zinc-700">
+              <button
+                onClick={() => setNotaPopoverId(null)}
+                className="px-3 py-1.5 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveNotaRecepcion}
+                disabled={savingNota}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+              >
+                {savingNota && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                Guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Detail Side Panel ───────────────────────────────────────── */}
       {detailOC && (
         <div className="fixed inset-0 z-50 flex justify-end">
@@ -1191,9 +1402,23 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               <div>
                 <div className="flex items-center gap-3">
                   <h2 className="text-lg font-semibold font-mono dark:text-white">{detailOC.numero}</h2>
-                  <Badge variant={(statusConfig[detailOC.estado] || { variant: "outline" as const }).variant}>
-                    {(statusConfig[detailOC.estado] || { label: detailOC.estado }).label}
+                  <Badge variant={detailOC.pedido ? "success" : "outline"}>
+                    {detailOC.pedido ? "Pedido" : "No pedido"}
                   </Badge>
+                  {(() => {
+                    const totalQty = detailOC.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
+                    const recibido = detailOC.orden_compra_items.reduce((a, i) => a + Number(i.cantidad_recibida), 0);
+                    const today = new Date().toISOString().split("T")[0];
+                    const isLate = detailOC.fecha_entrega_estimada && detailOC.fecha_entrega_estimada < today && detailOC.estado !== "recibida" && detailOC.estado !== "cancelada";
+                    let dotColor = "bg-red-500";
+                    if (detailOC.estado === "recibida" || (totalQty > 0 && recibido >= totalQty)) dotColor = "bg-emerald-500";
+                    else if (recibido > 0 || detailOC.estado === "recibida_parcial") dotColor = "bg-amber-500";
+                    else if (isLate) dotColor = "bg-amber-500";
+                    if (detailOC.estado !== "cancelada") {
+                      return <span className={`inline-block h-3 w-3 rounded-full ${dotColor}`} title="Recepcion" />;
+                    }
+                    return null;
+                  })()}
                 </div>
                 {detailOC.presupuesto_origen && (
                   <p className="text-xs text-zinc-400 mt-0.5">
@@ -1351,6 +1576,31 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 <div className="text-sm">
                   <span className="text-zinc-400">Observaciones</span>
                   <p className="mt-1 text-zinc-700 dark:text-zinc-300">{detailOC.observaciones}</p>
+                </div>
+              )}
+
+              {/* Notas de recepcion */}
+              {(detailOC.notas_recepcion || ["recibida_parcial", "confirmada", "enviada"].includes(detailOC.estado)) && (
+                <div className="text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-400 flex items-center gap-1.5">
+                      <MessageSquare className="h-3.5 w-3.5" />
+                      Nota de recepcion
+                    </span>
+                    <button
+                      onClick={(e) => openNotaPopover(detailOC, e)}
+                      className="text-xs text-orange-500 hover:text-orange-600 font-medium"
+                    >
+                      {detailOC.notas_recepcion ? "Editar" : "Agregar nota"}
+                    </button>
+                  </div>
+                  {detailOC.notas_recepcion ? (
+                    <p className="mt-1 text-zinc-700 dark:text-zinc-300 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+                      {detailOC.notas_recepcion}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-zinc-300 dark:text-zinc-600 italic">Sin notas</p>
+                  )}
                 </div>
               )}
 
