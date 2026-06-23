@@ -9,7 +9,7 @@ import { useUser } from "@/lib/auth-context";
 import {
   dashboardKPIs, presupuestosPorEstado, topClientes, mockPresupuestos, mockUsers,
 } from "@/lib/mock-data";
-import { TrendingUp, Users, FileText, Download, DollarSign, XCircle, Loader2, Percent, Package } from "lucide-react";
+import { TrendingUp, Users, FileText, Download, DollarSign, XCircle, Loader2, Percent, Package, BookOpen } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
@@ -67,11 +67,37 @@ interface ArticuloRanking {
   apariciones: number; // number of facturas/presupuestos where it appears
 }
 
+// ── Libro IVA types ──────────────────────────────────────────────
+interface LibroIVAVentaRow {
+  fecha: string;
+  tipo: string;
+  punto_venta: number;
+  numero: number;
+  cuit: string;
+  razon_social: string;
+  neto_gravado: number;
+  iva: number;
+  total: number;
+  moneda: string;
+}
+
+interface LibroIVACompraRow {
+  fecha: string;
+  numero_factura: string;
+  cuit: string;
+  razon_social: string;
+  neto_gravado: number;
+  iva: number;
+  percepciones: number;
+  total: number;
+  moneda: string;
+}
+
 const COLORS = ["#f97316", "#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#eab308"];
 
 export default function ReportesPage() {
   const { sociedadActiva } = useUser();
-  const [activeTab, setActiveTab] = useState<"comercial" | "comisiones" | "articulos">("comercial");
+  const [activeTab, setActiveTab] = useState<"comercial" | "comisiones" | "articulos" | "libro_iva">("comercial");
   const [monedaReporte, setMonedaReporte] = useState<"original" | "ARS" | "USD">("original");
   const [tipoCambioReporte, setTipoCambioReporte] = useState<number>(1200);
   const [loading, setLoading] = useState(true);
@@ -84,6 +110,16 @@ export default function ReportesPage() {
   const [articulosLoading, setArticulosLoading] = useState(true);
   const [articulosSortBy, setArticulosSortBy] = useState<"cantidad" | "monto">("cantidad");
   const [articulosFuente, setArticulosFuente] = useState<"facturas" | "presupuestos" | "ambos">("facturas");
+
+  // Libro IVA
+  const [libroIVALoading, setLibroIVALoading] = useState(false);
+  const [libroIVAVentas, setLibroIVAVentas] = useState<LibroIVAVentaRow[]>([]);
+  const [libroIVACompras, setLibroIVACompras] = useState<LibroIVACompraRow[]>([]);
+  const [libroIVASubtab, setLibroIVASubtab] = useState<"ventas" | "compras">("ventas");
+  const [libroIVAMes, setLibroIVAMes] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  });
 
   const now = new Date();
   const mesActual = now.toLocaleString("es-AR", { month: "long", year: "numeric" });
@@ -305,6 +341,80 @@ export default function ReportesPage() {
     fetchArticulos();
   }, [sociedadActiva, articulosFuente]);
 
+  // ── Libro IVA fetch ──
+  useEffect(() => {
+    if (activeTab !== "libro_iva") return;
+    async function fetchLibroIVA() {
+      setLibroIVALoading(true);
+      try {
+        const [year, month] = libroIVAMes.split("-").map(Number);
+        const desde = `${year}-${String(month).padStart(2, "0")}-01`;
+        const hasta = `${year}-${String(month + 1 > 12 ? 1 : month + 1).padStart(2, "0")}-01`;
+
+        // Libro IVA Ventas
+        let qVentas = supabase
+          .from("facturas")
+          .select("fecha, tipo, punto_venta, numero, subtotal, iva, total, moneda, clientes(razon_social, cuit)")
+          .gte("fecha", desde)
+          .lt("fecha", hasta)
+          .neq("estado", "anulada")
+          .order("fecha", { ascending: true });
+        if (sociedadActiva?.id) qVentas = qVentas.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: ventas } = await qVentas;
+
+        if (ventas) {
+          setLibroIVAVentas(ventas.map((f: any) => ({
+            fecha: f.fecha,
+            tipo: f.tipo,
+            punto_venta: f.punto_venta,
+            numero: f.numero,
+            cuit: f.clientes?.cuit || "",
+            razon_social: f.clientes?.razon_social || "",
+            neto_gravado: Number(f.subtotal),
+            iva: Number(f.iva),
+            total: Number(f.total),
+            moneda: f.moneda || "ARS",
+          })));
+        } else {
+          setLibroIVAVentas([]);
+        }
+
+        // Libro IVA Compras
+        let qCompras = (supabase as any)
+          .from("facturas_compra")
+          .select("fecha, numero_factura, subtotal, iva, percepciones, total, moneda, proveedores:proveedor_id(razon_social, cuit)")
+          .gte("fecha", desde)
+          .lt("fecha", hasta)
+          .order("fecha", { ascending: true });
+        if (sociedadActiva?.id) qCompras = qCompras.eq("sociedad_id", sociedadActiva.id);
+        const { data: compras } = await qCompras;
+
+        if (compras) {
+          setLibroIVACompras(compras.map((f: any) => ({
+            fecha: f.fecha,
+            numero_factura: f.numero_factura || "",
+            cuit: f.proveedores?.cuit || "",
+            razon_social: f.proveedores?.razon_social || "",
+            neto_gravado: Number(f.subtotal),
+            iva: Number(f.iva),
+            percepciones: Number(f.percepciones || 0),
+            total: Number(f.total),
+            moneda: f.moneda || "ARS",
+          })));
+        } else {
+          setLibroIVACompras([]);
+        }
+      } catch (err) {
+        console.error("Error fetching Libro IVA:", err);
+        setLibroIVAVentas([]);
+        setLibroIVACompras([]);
+      } finally {
+        setLibroIVALoading(false);
+      }
+    }
+    fetchLibroIVA();
+  }, [activeTab, libroIVAMes, sociedadActiva]);
+
   const articulosSorted = useMemo(() => {
     const sorted = [...articulosData];
     if (articulosSortBy === "cantidad") {
@@ -480,6 +590,19 @@ export default function ReportesPage() {
             <span className="flex items-center gap-2">
               <Package className="h-4 w-4" />
               Ranking por Articulo
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab("libro_iva")}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === "libro_iva"
+                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
+                : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <BookOpen className="h-4 w-4" />
+              Libro IVA
             </span>
           </button>
         </div>
@@ -1038,6 +1161,187 @@ export default function ReportesPage() {
                 })}
               </div>
             </div>
+          </>
+        )}
+      </div>
+      )}
+
+      {/* Tab: Libro IVA */}
+      {activeTab === "libro_iva" && (
+      <div className="p-4 sm:p-8 space-y-6">
+        {/* Controls */}
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-600 overflow-hidden">
+            <button
+              onClick={() => setLibroIVASubtab("ventas")}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${libroIVASubtab === "ventas" ? "bg-orange-500 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-300"}`}
+            >
+              IVA Ventas
+            </button>
+            <button
+              onClick={() => setLibroIVASubtab("compras")}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${libroIVASubtab === "compras" ? "bg-orange-500 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-300"}`}
+            >
+              IVA Compras
+            </button>
+          </div>
+          <input
+            type="month"
+            value={libroIVAMes}
+            onChange={(e) => setLibroIVAMes(e.target.value)}
+            className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+          />
+          <button
+            onClick={() => {
+              const isVentas = libroIVASubtab === "ventas";
+              const headers = isVentas
+                ? ["Fecha", "Tipo", "PV", "Numero", "CUIT", "Razon Social", "Neto Gravado", "IVA", "Total", "Moneda"]
+                : ["Fecha", "N Factura", "CUIT", "Razon Social", "Neto Gravado", "IVA", "Percepciones", "Total", "Moneda"];
+              const rows = isVentas
+                ? libroIVAVentas.map((r) => [r.fecha, r.tipo, String(r.punto_venta), String(r.numero), r.cuit, r.razon_social, r.neto_gravado.toFixed(2), r.iva.toFixed(2), r.total.toFixed(2), r.moneda])
+                : libroIVACompras.map((r) => [r.fecha, r.numero_factura, r.cuit, r.razon_social, r.neto_gravado.toFixed(2), r.iva.toFixed(2), r.percepciones.toFixed(2), r.total.toFixed(2), r.moneda]);
+              downloadCSV(`libro_iva_${libroIVASubtab}_${libroIVAMes}.csv`, headers, rows);
+            }}
+            className="flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+          >
+            <Download className="h-4 w-4" /> Exportar CSV
+          </button>
+        </div>
+
+        {libroIVALoading ? (
+          <div className="flex items-center justify-center p-16">
+            <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
+          </div>
+        ) : libroIVASubtab === "ventas" ? (
+          <>
+            {/* Totals */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <Card>
+                <h3 className="text-sm text-zinc-500">Neto gravado</h3>
+                <p className="mt-1 text-lg font-bold font-mono text-zinc-900 dark:text-white">{fc(libroIVAVentas.reduce((s, r) => s + r.neto_gravado, 0))}</p>
+              </Card>
+              <Card>
+                <h3 className="text-sm text-zinc-500">IVA débito fiscal</h3>
+                <p className="mt-1 text-lg font-bold font-mono text-blue-600">{fc(libroIVAVentas.reduce((s, r) => s + r.iva, 0))}</p>
+              </Card>
+              <Card>
+                <h3 className="text-sm text-zinc-500">Total facturado</h3>
+                <p className="mt-1 text-lg font-bold font-mono text-orange-600">{fc(libroIVAVentas.reduce((s, r) => s + r.total, 0))}</p>
+              </Card>
+            </div>
+
+            {libroIVAVentas.length === 0 ? (
+              <Card><p className="text-center text-sm text-zinc-400 py-8">No hay facturas de venta en el período seleccionado</p></Card>
+            ) : (
+              <Card>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-zinc-200 dark:border-zinc-700">
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Fecha</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Tipo</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Comprobante</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">CUIT</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón Social</th>
+                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">Neto</th>
+                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">IVA</th>
+                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {libroIVAVentas.map((r, i) => (
+                        <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
+                          <td className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400">{new Date(r.fecha + "T00:00:00").toLocaleDateString("es-AR")}</td>
+                          <td className="px-3 py-2"><Badge variant="outline">{r.tipo}</Badge></td>
+                          <td className="px-3 py-2 text-sm font-mono">{String(r.punto_venta).padStart(5, "0")}-{String(r.numero).padStart(8, "0")}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-zinc-500">{r.cuit}</td>
+                          <td className="px-3 py-2 text-sm text-zinc-700 dark:text-zinc-300 max-w-[200px] truncate">{r.razon_social}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right">{fc(r.neto_gravado)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right text-blue-600">{fc(r.iva)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right font-semibold">{fc(r.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50">
+                        <td colSpan={5} className="px-3 py-2.5 text-sm font-bold">Totales ({libroIVAVentas.length} comprobantes)</td>
+                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold">{fc(libroIVAVentas.reduce((s, r) => s + r.neto_gravado, 0))}</td>
+                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-blue-600">{fc(libroIVAVentas.reduce((s, r) => s + r.iva, 0))}</td>
+                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-orange-600">{fc(libroIVAVentas.reduce((s, r) => s + r.total, 0))}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </Card>
+            )}
+          </>
+        ) : (
+          <>
+            {/* Compras totals */}
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
+              <Card>
+                <h3 className="text-sm text-zinc-500">Neto gravado</h3>
+                <p className="mt-1 text-lg font-bold font-mono text-zinc-900 dark:text-white">{fc(libroIVACompras.reduce((s, r) => s + r.neto_gravado, 0))}</p>
+              </Card>
+              <Card>
+                <h3 className="text-sm text-zinc-500">IVA crédito fiscal</h3>
+                <p className="mt-1 text-lg font-bold font-mono text-emerald-600">{fc(libroIVACompras.reduce((s, r) => s + r.iva, 0))}</p>
+              </Card>
+              <Card>
+                <h3 className="text-sm text-zinc-500">Percepciones</h3>
+                <p className="mt-1 text-lg font-bold font-mono text-violet-600">{fc(libroIVACompras.reduce((s, r) => s + r.percepciones, 0))}</p>
+              </Card>
+              <Card>
+                <h3 className="text-sm text-zinc-500">Total</h3>
+                <p className="mt-1 text-lg font-bold font-mono text-orange-600">{fc(libroIVACompras.reduce((s, r) => s + r.total, 0))}</p>
+              </Card>
+            </div>
+
+            {libroIVACompras.length === 0 ? (
+              <Card><p className="text-center text-sm text-zinc-400 py-8">No hay facturas de compra en el período seleccionado</p></Card>
+            ) : (
+              <Card>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-zinc-200 dark:border-zinc-700">
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Fecha</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">N° Factura</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">CUIT</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón Social</th>
+                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">Neto</th>
+                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">IVA</th>
+                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">Percep.</th>
+                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {libroIVACompras.map((r, i) => (
+                        <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
+                          <td className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400">{new Date(r.fecha + "T00:00:00").toLocaleDateString("es-AR")}</td>
+                          <td className="px-3 py-2 text-sm font-mono">{r.numero_factura}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-zinc-500">{r.cuit}</td>
+                          <td className="px-3 py-2 text-sm text-zinc-700 dark:text-zinc-300 max-w-[200px] truncate">{r.razon_social}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right">{fc(r.neto_gravado)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right text-emerald-600">{fc(r.iva)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right text-violet-600">{fc(r.percepciones)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right font-semibold">{fc(r.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50">
+                        <td colSpan={4} className="px-3 py-2.5 text-sm font-bold">Totales ({libroIVACompras.length} comprobantes)</td>
+                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold">{fc(libroIVACompras.reduce((s, r) => s + r.neto_gravado, 0))}</td>
+                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-emerald-600">{fc(libroIVACompras.reduce((s, r) => s + r.iva, 0))}</td>
+                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-violet-600">{fc(libroIVACompras.reduce((s, r) => s + r.percepciones, 0))}</td>
+                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-orange-600">{fc(libroIVACompras.reduce((s, r) => s + r.total, 0))}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </Card>
+            )}
           </>
         )}
       </div>

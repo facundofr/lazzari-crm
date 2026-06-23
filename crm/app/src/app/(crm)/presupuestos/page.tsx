@@ -267,6 +267,10 @@ export default function PresupuestosPage() {
   const [postCreatePR, setPostCreatePR] = useState<Presupuesto | null>(null); // PR recién creado
   const [esSolicitud, setEsSolicitud] = useState(false); // Crear como solicitud
 
+  // Warning PRs previos
+  const [prWarningModal, setPrWarningModal] = useState<{ matches: { numero: string; estado: string; fecha: string; codigos: string[] }[] } | null>(null);
+  const [prWarningBypass, setPrWarningBypass] = useState(false);
+
   // AI presupuesto
   const [showAIPanel, setShowAIPanel] = useState(false);
   const [aiMessage, setAiMessage] = useState("");
@@ -625,6 +629,41 @@ export default function PresupuestosPage() {
       toast.warning("Agrega al menos un item");
       return;
     }
+
+    // Check for previous PRs with same client + articles (skip if already bypassed)
+    if (!prWarningBypass && validItems.length > 0) {
+      try {
+        const codigos = validItems.map((it) => it.codigo).filter(Boolean);
+        if (codigos.length > 0) {
+          // Find PRs for same client in last 12 months
+          const twelveMonthsAgo = new Date(Date.now() - 365 * 86400000).toISOString().split("T")[0];
+          const { data: prevPRs } = await supabase
+            .from("presupuestos")
+            .select("id, numero, estado, fecha, presupuesto_items(codigo)")
+            .eq("cliente_id", newPR.cliente_id)
+            .gte("fecha", twelveMonthsAgo)
+            .order("fecha", { ascending: false })
+            .limit(50) as any;
+
+          if (prevPRs && prevPRs.length > 0) {
+            const matches: { numero: string; estado: string; fecha: string; codigos: string[] }[] = [];
+            for (const pr of prevPRs) {
+              const prCodigos = (pr.presupuesto_items || []).map((i: any) => i.codigo).filter(Boolean);
+              const overlap = codigos.filter((c: string) => prCodigos.includes(c));
+              if (overlap.length > 0) {
+                matches.push({ numero: pr.numero, estado: pr.estado, fecha: pr.fecha, codigos: overlap });
+              }
+            }
+            if (matches.length > 0) {
+              setPrWarningModal({ matches });
+              return; // Don't proceed — user must confirm
+            }
+          }
+        }
+      } catch { /* ignore check errors, proceed normally */ }
+    }
+    setPrWarningBypass(false); // Reset for next time
+
     setNewPRSaving(true);
     try {
       // Calculate totals
@@ -2453,6 +2492,65 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
               Puede continuar, pero deberá completar los costos luego.
             </p>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ==================== PR PREVIOS WARNING MODAL ==================== */}
+      <Modal
+        open={!!prWarningModal}
+        onClose={() => setPrWarningModal(null)}
+        title="Artículos cotizados previamente"
+        description="Se encontraron presupuestos anteriores para este cliente con artículos coincidentes"
+        size="md"
+        footer={
+          <>
+            <button
+              onClick={() => setPrWarningModal(null)}
+              className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={() => {
+                setPrWarningModal(null);
+                setPrWarningBypass(true);
+                setTimeout(() => handleCreatePR(), 50);
+              }}
+              className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
+            >
+              Crear de todos modos
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3">
+          <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 dark:bg-amber-950/20 dark:border-amber-800">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+              <p className="text-sm text-amber-800 dark:text-amber-300">
+                Estos artículos ya fueron cotizados para este cliente. Revisá el estado de los presupuestos anteriores antes de crear uno nuevo.
+              </p>
+            </div>
+          </div>
+          <div className="max-h-60 overflow-y-auto space-y-2">
+            {prWarningModal?.matches.map((m, i) => {
+              const cfg = statusConfig[m.estado as PRStatus] || { label: m.estado, variant: "outline" as const };
+              return (
+                <div key={i} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono text-sm font-medium dark:text-white">{m.numero}</span>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                      <span className="text-xs text-zinc-400">{formatDate(m.fecha)}</span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-zinc-500">
+                    Artículos: <span className="font-medium text-zinc-700 dark:text-zinc-300">{m.codigos.join(", ")}</span>
+                  </p>
+                </div>
+              );
+            })}
           </div>
         </div>
       </Modal>
