@@ -11,8 +11,9 @@ import {
   FileText, Receipt, Truck, CheckCircle2,
   Loader2, X, ChevronRight, ChevronDown,
   Plus, Minus, DollarSign, Eye, AlertCircle,
-  ArrowRight, Clock, Package,
+  ArrowRight, Clock, Package, ClipboardList,
 } from "lucide-react";
+import { FichasRelevamiento } from "@/components/ventas/fichas-relevamiento";
 import { useState, useEffect, useCallback, useMemo } from "react";
 
 // ── Types ────────────────────────────────────────────────────────
@@ -134,6 +135,9 @@ export default function VentasPage() {
   const [emitError, setEmitError] = useState("");
   const [emitSuccess, setEmitSuccess] = useState("");
   const [emitManual, setEmitManual] = useState(false);
+
+  // Tab: pipeline vs fichas
+  const [ventasTab, setVentasTab] = useState<"pipeline" | "fichas">("pipeline");
 
   // Remito creation state
   const [creatingRemito, setCreatingRemito] = useState(false);
@@ -499,6 +503,34 @@ export default function VentasPage() {
       <Header title="Ventas" subtitle={`${ventas.length} ventas en proceso`} />
       <div className="p-4 sm:p-8 space-y-6">
 
+        {/* Tab toggle */}
+        <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-fit">
+          <button
+            onClick={() => setVentasTab("pipeline")}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              ventasTab === "pipeline"
+                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
+                : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400"
+            }`}
+          >
+            <span className="flex items-center gap-2"><Package className="h-4 w-4" /> Pipeline</span>
+          </button>
+          <button
+            onClick={() => setVentasTab("fichas")}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              ventasTab === "fichas"
+                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
+                : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400"
+            }`}
+          >
+            <span className="flex items-center gap-2"><ClipboardList className="h-4 w-4" /> Fichas de relevamiento</span>
+          </button>
+        </div>
+
+        {ventasTab === "fichas" ? (
+          <FichasRelevamiento />
+        ) : (
+        <>
         {/* KPI Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           {[
@@ -925,7 +957,6 @@ export default function VentasPage() {
             </div>
           )}
         </div>
-      </div>
 
       {/* Emit Modal */}
       {emitModalOpen && emitVenta && (
@@ -1196,6 +1227,9 @@ export default function VentasPage() {
           </Card>
         </div>
       )}
+        </>
+        )}
+      </div>
     </>
   );
 }
