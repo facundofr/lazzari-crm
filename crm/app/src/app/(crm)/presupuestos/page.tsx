@@ -15,7 +15,7 @@ import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
   Printer, Sparkles, Download, ClipboardCopy, Check, Mail, GripVertical,
-  Phone, CalendarClock, Inbox, Paperclip, Upload,
+  Phone, CalendarClock, Inbox, Paperclip, Upload, Truck,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -266,6 +266,7 @@ export default function PresupuestosPage() {
   const [newPRSaving, setNewPRSaving] = useState(false);
   const [postCreatePR, setPostCreatePR] = useState<Presupuesto | null>(null); // PR recién creado
   const [esSolicitud, setEsSolicitud] = useState(false); // Crear como solicitud
+  const [editingPRId, setEditingPRId] = useState<string | null>(null); // null = crear, string = editar
 
   // Warning PRs previos
   const [prWarningModal, setPrWarningModal] = useState<{ matches: { numero: string; estado: string; fecha: string; codigos: string[] }[] } | null>(null);
@@ -676,67 +677,104 @@ export default function PresupuestosPage() {
         return { ...it, subtotal: t.subtotal, iva: t.iva, total: t.total, orden: idx + 1 };
       });
 
-      const today = new Date().toISOString().split("T")[0];
-      const vencimiento = new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0];
+      const buildItemRows = (prId: string) => itemsWithTotals.map((it) => ({
+        presupuesto_id: prId,
+        codigo: it.codigo,
+        descripcion: it.descripcion,
+        categoria: it.categoria,
+        cantidad: it.cantidad,
+        unidad: it.unidad,
+        precio_costo: it.precio_costo,
+        markup_porcentaje: it.markup_porcentaje,
+        iva_porcentaje: it.iva_porcentaje,
+        orden: it.orden,
+        proveedor_id: it.proveedor_id || null,
+        lista_item_id: it.lista_item_id || null,
+        proveedor_nombre: it.proveedor_nombre || null,
+      }));
 
-      const { data: newRow, error } = await supabase
-        .from("presupuestos")
-        .insert({
-          cliente_id: newPR.cliente_id,
-          vendedor_id: newPR.vendedor_id,
-          sucursal_id: newPR.sucursal_id || null,
-          contacto_id: newPR.contacto_id || null,
-          created_by: profile?.id,
-          sociedad_id: sociedadActiva?.id || null,
-          fecha: today,
-          vencimiento,
-          estado: esSolicitud ? "solicitud" : "pendiente",
-          enviado_at: esSolicitud ? null : new Date().toISOString(),
-          markup_general: newPR.markup_general,
-          subtotal,
-          iva: ivaTotal,
-          total: subtotal + ivaTotal,
-          moneda: newPR.moneda,
-          tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
-          observaciones: newPR.observaciones,
-          notas_internas: newPR.notas_internas,
-        } as any)
-        .select()
-        .single();
+      if (editingPRId) {
+        // ── UPDATE existing PR ──
+        const { error } = await supabase
+          .from("presupuestos")
+          .update({
+            cliente_id: newPR.cliente_id,
+            vendedor_id: newPR.vendedor_id,
+            sucursal_id: newPR.sucursal_id || null,
+            contacto_id: newPR.contacto_id || null,
+            markup_general: newPR.markup_general,
+            subtotal,
+            iva: ivaTotal,
+            total: subtotal + ivaTotal,
+            moneda: newPR.moneda,
+            tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
+            observaciones: newPR.observaciones,
+            notas_internas: newPR.notas_internas,
+          } as any)
+          .eq("id", editingPRId);
+        if (error) throw new Error(error.message);
 
-      if (error) throw new Error(error.message);
+        // Replace items: delete old, insert new
+        await supabase.from("presupuesto_items").delete().eq("presupuesto_id", editingPRId);
+        if (itemsWithTotals.length > 0) {
+          const { error: itemsError } = await supabase.from("presupuesto_items").insert(buildItemRows(editingPRId) as any);
+          if (itemsError) console.error("Error inserting items:", itemsError);
+        }
 
-      if (newRow && itemsWithTotals.length > 0) {
-        // precio_venta, subtotal, iva, total are GENERATED columns — don't insert them
-        const items = itemsWithTotals.map((it) => ({
-          presupuesto_id: newRow.id,
-          codigo: it.codigo,
-          descripcion: it.descripcion,
-          categoria: it.categoria,
-          cantidad: it.cantidad,
-          unidad: it.unidad,
-          precio_costo: it.precio_costo,
-          markup_porcentaje: it.markup_porcentaje,
-          iva_porcentaje: it.iva_porcentaje,
-          orden: it.orden,
-          proveedor_id: it.proveedor_id || null,
-          lista_item_id: it.lista_item_id || null,
-          proveedor_nombre: it.proveedor_nombre || null,
-        }));
-        const { error: itemsError } = await supabase.from("presupuesto_items").insert(items as any);
-        if (itemsError) console.error("Error inserting items:", itemsError);
+        setShowNewPR(false);
+        setEsSolicitud(false);
+        setEditingPRId(null);
+        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
+        await fetchPresupuestos();
+        toast.success("Presupuesto actualizado");
+      } else {
+        // ── CREATE new PR ──
+        const today = new Date().toISOString().split("T")[0];
+        const vencimiento = new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0];
+
+        const { data: newRow, error } = await supabase
+          .from("presupuestos")
+          .insert({
+            cliente_id: newPR.cliente_id,
+            vendedor_id: newPR.vendedor_id,
+            sucursal_id: newPR.sucursal_id || null,
+            contacto_id: newPR.contacto_id || null,
+            created_by: profile?.id,
+            sociedad_id: sociedadActiva?.id || null,
+            fecha: today,
+            vencimiento,
+            estado: esSolicitud ? "solicitud" : "pendiente",
+            enviado_at: esSolicitud ? null : new Date().toISOString(),
+            markup_general: newPR.markup_general,
+            subtotal,
+            iva: ivaTotal,
+            total: subtotal + ivaTotal,
+            moneda: newPR.moneda,
+            tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
+            observaciones: newPR.observaciones,
+            notas_internas: newPR.notas_internas,
+          } as any)
+          .select()
+          .single();
+
+        if (error) throw new Error(error.message);
+
+        if (newRow && itemsWithTotals.length > 0) {
+          const { error: itemsError } = await supabase.from("presupuesto_items").insert(buildItemRows(newRow.id) as any);
+          if (itemsError) console.error("Error inserting items:", itemsError);
+        }
+
+        setShowNewPR(false);
+        setEsSolicitud(false);
+        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
+        await fetchPresupuestos();
+        // Mostrar diálogo post-creación con opciones correo/PDF
+        const createdPR = presupuestos.find((p) => p.id === newRow.id) || mapToPresupuesto(newRow as any);
+        setPostCreatePR(createdPR);
       }
-
-      setShowNewPR(false);
-      setEsSolicitud(false);
-      setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
-      await fetchPresupuestos();
-      // Mostrar diálogo post-creación con opciones correo/PDF
-      const createdPR = presupuestos.find((p) => p.id === newRow.id) || mapToPresupuesto(newRow as any);
-      setPostCreatePR(createdPR);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : JSON.stringify(err);
-      toast.error(`Error al crear presupuesto: ${msg}`);
+      toast.error(`Error al ${editingPRId ? "actualizar" : "crear"} presupuesto: ${msg}`);
     } finally {
       setNewPRSaving(false);
     }
@@ -1031,6 +1069,121 @@ export default function PresupuestosPage() {
     } catch (err) {
       console.error("Error deleting:", err);
       toast.error("Error al eliminar presupuesto");
+    }
+  }
+
+  async function handleEditPR(pr: Presupuesto) {
+    try {
+      // Fetch full PR with items
+      const { data: fullPR, error } = await (supabase as any)
+        .from("presupuestos")
+        .select(`*, presupuesto_items(*)`)
+        .eq("id", pr.id)
+        .single();
+      if (error || !fullPR) { toast.error("Error al cargar presupuesto"); return; }
+
+      const items: NewPRItem[] = (fullPR.presupuesto_items || [])
+        .sort((a: any, b: any) => (a.orden || 0) - (b.orden || 0))
+        .map((it: any) => ({
+          codigo: it.codigo || "",
+          descripcion: it.descripcion || "",
+          categoria: it.categoria || "",
+          cantidad: Number(it.cantidad) || 1,
+          unidad: it.unidad || "UN",
+          precio_costo: Number(it.precio_costo) || 0,
+          markup_porcentaje: Number(it.markup_porcentaje) || 0,
+          precio_venta: Number(it.precio_venta) || 0,
+          iva_porcentaje: Number(it.iva_porcentaje) || 21,
+          proveedor_nombre: it.proveedor_nombre || "",
+          proveedor_id: it.proveedor_id || "",
+          lista_item_id: it.lista_item_id || "",
+          costo_moneda: (it.costo_moneda || "USD") as "ARS" | "USD",
+        }));
+
+      setNewPR({
+        cliente_id: fullPR.cliente_id || "",
+        vendedor_id: fullPR.vendedor_id || "",
+        sucursal_id: fullPR.sucursal_id || "",
+        contacto_id: fullPR.contacto_id || "",
+        moneda: fullPR.moneda || "USD",
+        tipo_cambio: Number(fullPR.tipo_cambio) || 0,
+        markup_general: Number(fullPR.markup_general) || 30,
+        observaciones: fullPR.observaciones || "",
+        notas_internas: fullPR.notas_internas || "",
+        items: items.length > 0 ? items : [{ ...emptyItem, markup_porcentaje: Number(fullPR.markup_general) || 30 }],
+      });
+
+      setEsSolicitud(fullPR.estado === "solicitud");
+      setEditingPRId(pr.id);
+      setSelected(null);
+      setShowNewPR(true);
+    } catch (err) {
+      console.error("Error loading PR for edit:", err);
+      toast.error("Error al cargar presupuesto para editar");
+    }
+  }
+
+  async function handleRemitar(pr: Presupuesto) {
+    if (!confirm(`¿Generar remito desde ${pr.numero}?`)) return;
+    try {
+      // Fetch items
+      const { data: items } = await supabase
+        .from("presupuesto_items")
+        .select("descripcion, cantidad, unidad")
+        .eq("presupuesto_id", pr.id)
+        .order("orden");
+
+      if (!items || items.length === 0) {
+        toast.warning("El presupuesto no tiene items para remitar");
+        return;
+      }
+
+      // Get next remito number
+      const { data: lastRemito } = await supabase
+        .from("remitos")
+        .select("numero")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      let nextNum = 1;
+      if (lastRemito && lastRemito.length > 0) {
+        const parts = lastRemito[0].numero?.split("-");
+        const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
+        if (n > 0) nextNum = n + 1;
+      }
+      const numero = `R-0001-${String(nextNum).padStart(8, "0")}`;
+
+      const { data: remitoData, error: remitoErr } = await (supabase as any)
+        .from("remitos")
+        .insert({
+          numero,
+          cliente_id: pr.clienteId,
+          fecha: new Date().toISOString().split("T")[0],
+          observaciones: `Generado desde presupuesto ${pr.numero}`,
+          presupuesto_id: pr.id,
+          estado: "pendiente",
+          sociedad_id: sociedadActiva?.id || null,
+        })
+        .select("id")
+        .single();
+
+      if (remitoErr || !remitoData) {
+        toast.error("Error al crear remito");
+        return;
+      }
+
+      const remitoItems = items.map((it: any, idx: number) => ({
+        remito_id: remitoData.id,
+        descripcion: it.descripcion,
+        cantidad: it.cantidad,
+        unidad: it.unidad || "UN",
+        orden: idx,
+      }));
+      await (supabase as any).from("remito_items").insert(remitoItems);
+
+      toast.success(`Remito ${numero} creado exitosamente`);
+    } catch (err) {
+      console.error("Error creating remito:", err);
+      toast.error("Error al crear remito");
     }
   }
 
@@ -1744,10 +1897,30 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <Mail className="h-3.5 w-3.5" />
                   Email
                 </button>
+                {["solicitud", "pendiente", "rechazado", "postergado"].includes(selected.estado) && (
+                  <button
+                    onClick={() => handleEditPR(selected)}
+                    className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 transition-colors"
+                    title="Editar presupuesto"
+                  >
+                    <Edit3 className="h-3.5 w-3.5" />
+                    Editar
+                  </button>
+                )}
+                {selected.estado === "aprobado" && (
+                  <button
+                    onClick={() => handleRemitar(selected)}
+                    className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950/30 transition-colors"
+                    title="Generar remito"
+                  >
+                    <Truck className="h-3.5 w-3.5" />
+                    Remitar
+                  </button>
+                )}
                 <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                   <Copy className="h-4 w-4" />
                 </button>
-                {selected.estado === "pendiente" && (
+                {["solicitud", "pendiente"].includes(selected.estado) && (
                   <button onClick={() => handleDelete(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
                     <Trash2 className="h-4 w-4" />
                   </button>
@@ -2018,14 +2191,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       {/* ==================== NUEVO PR MODAL ==================== */}
       <Modal
         open={showNewPR}
-        onClose={() => { setShowNewPR(false); setEsSolicitud(false); }}
-        title={esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
-        description={esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
+        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); }}
+        title={editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
+        description={editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="xl"
         footer={
           <>
             <button
-              onClick={() => { setShowNewPR(false); setEsSolicitud(false); }}
+              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); }}
               className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
             >
               Cancelar
@@ -2034,11 +2207,11 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               onClick={handleCreatePR}
               disabled={newPRSaving}
               className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50 transition-colors ${
-                esSolicitud ? "bg-blue-600 hover:bg-blue-700" : "bg-orange-500 hover:bg-orange-600"
+                esSolicitud && !editingPRId ? "bg-blue-600 hover:bg-blue-700" : "bg-orange-500 hover:bg-orange-600"
               }`}
             >
-              {newPRSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : esSolicitud ? <Inbox className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
-              {esSolicitud ? "Crear Solicitud" : "Crear Presupuesto"}
+              {newPRSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : editingPRId ? <Check className="h-4 w-4" /> : esSolicitud ? <Inbox className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+              {editingPRId ? "Guardar cambios" : esSolicitud ? "Crear Solicitud" : "Crear Presupuesto"}
             </button>
           </>
         }
@@ -2046,10 +2219,10 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         {/* Creado por (auto) */}
         <div className="mb-5 flex items-center justify-between gap-4">
           <div className="rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800">
-            <span className="text-zinc-500">Creado por:</span>{" "}
-            <span className="font-medium text-zinc-900 dark:text-white">{profile?.full_name ?? profile?.email ?? "---"}</span>
+            <span className="text-zinc-500">{editingPRId ? "Editando:" : "Creado por:"}</span>{" "}
+            <span className="font-medium text-zinc-900 dark:text-white">{editingPRId ? presupuestos.find(p => p.id === editingPRId)?.numero || "" : (profile?.full_name ?? profile?.email ?? "---")}</span>
           </div>
-          <label className="flex items-center gap-2 cursor-pointer select-none">
+          {!editingPRId && <label className="flex items-center gap-2 cursor-pointer select-none">
             <div
               onClick={() => setEsSolicitud(!esSolicitud)}
               className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors cursor-pointer ${
@@ -2068,10 +2241,10 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 Crear como Solicitud
               </span>
             </div>
-          </label>
+          </label>}
         </div>
 
-        {esSolicitud && (
+        {esSolicitud && !editingPRId && (
           <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
             <Inbox className="inline h-4 w-4 mr-1.5 -mt-0.5" />
             <strong>Modo solicitud:</strong> Se registra el pedido del cliente sin formalizar un presupuesto. Los items son opcionales. Luego podras convertirlo a presupuesto.
