@@ -1054,8 +1054,21 @@ export default function FinanzasPage() {
       if (fcForm.fecha_vencimiento) insertData.fecha_vencimiento = fcForm.fecha_vencimiento;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
 
-      const { error } = await (supabase as any).from("facturas_compra").insert(insertData);
+      const { data: fcData, error } = await (supabase as any).from("facturas_compra").insert(insertData).select("id").single();
       if (error) throw error;
+
+      // Upload PDF if provided
+      if (fcFile && fcData?.id) {
+        setFcUploading(true);
+        const ext = fcFile.name.split(".").pop() || "pdf";
+        const filePath = `${sociedadActiva?.id || "default"}/${fcData.id}/factura.${ext}`;
+        const { error: upErr } = await supabase.storage.from("facturas-compra").upload(filePath, fcFile, { upsert: true });
+        if (!upErr) {
+          const { data: urlData } = supabase.storage.from("facturas-compra").getPublicUrl(filePath);
+          await (supabase as any).from("facturas_compra").update({ archivo_url: urlData.publicUrl, archivo_nombre: fcFile.name }).eq("id", fcData.id);
+        }
+        setFcUploading(false);
+      }
 
       setFcModalOpen(false);
       await fetchData();
@@ -1278,6 +1291,11 @@ export default function FinanzasPage() {
                   )},
                   { key: "actions", label: "", sortable: false, render: (row) => (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {row.archivo_url && (
+                        <a href={row.archivo_url} target="_blank" rel="noopener noreferrer" className="rounded p-1.5 text-orange-500 hover:bg-orange-100" title="Ver PDF adjunto">
+                          <Paperclip className="h-3.5 w-3.5" />
+                        </a>
+                      )}
                       {row.estado === "pendiente" && (
                         <>
                           <button onClick={() => handlePagarFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar como pagada">
@@ -2348,6 +2366,21 @@ export default function FinanzasPage() {
                 {fcForm.proveedor_id && filteredOCsForFC.length === 0 && (
                   <p className="text-xs text-zinc-400 mt-1">No hay OCs para este proveedor</p>
                 )}
+              </div>
+
+              {/* Adjuntar PDF */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Adjuntar factura (PDF)</label>
+                <div className="mt-1 flex items-center gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-sm text-zinc-500 hover:border-orange-400 hover:text-orange-500 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-orange-500">
+                    <Upload className="h-4 w-4" />
+                    {fcFile ? fcFile.name : "Seleccionar PDF"}
+                    <input type="file" accept=".pdf" className="hidden" onChange={(e) => setFcFile(e.target.files?.[0] || null)} />
+                  </label>
+                  {fcFile && (
+                    <button onClick={() => setFcFile(null)} className="text-zinc-400 hover:text-red-500"><X className="h-4 w-4" /></button>
+                  )}
+                </div>
               </div>
 
               {/* Notas */}
