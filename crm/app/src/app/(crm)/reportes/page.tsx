@@ -104,6 +104,7 @@ export default function ReportesPage() {
   const [ventasMensuales, setVentasMensuales] = useState<{ mes: string; total: number }[]>([]);
   const [prEstadoData, setPrEstadoData] = useState<{ name: string; value: number }[]>([]);
   const [topClientesData, setTopClientesData] = useState<{ nombre: string; facturado: number }[]>([]);
+  const [rechazados, setRechazados] = useState<{ id: string; numero: string; motivoRechazo: string | null; clienteNombre: string; fecha: string; total: number }[]>([]);
   const [comisionesData, setComisionesData] = useState<VendedorComision[]>([]);
   const [comisionesLoading, setComisionesLoading] = useState(true);
   const [articulosData, setArticulosData] = useState<ArticuloRanking[]>([]);
@@ -169,6 +170,22 @@ export default function ReportesPage() {
           setPrEstadoData(Object.entries(byEstado).map(([name, value]) => ({ name, value })));
         } else {
           setPrEstadoData(presupuestosPorEstado.map((p) => ({ name: p.estado, value: p.cantidad })));
+        }
+
+        // Rechazados
+        let rechQuery = supabase
+          .from("presupuestos")
+          .select("id, numero, motivo_rechazo, total, fecha, clientes(razon_social)")
+          .eq("estado", "rechazado")
+          .order("fecha", { ascending: false })
+          .limit(20);
+        if (sociedadActiva?.id) rechQuery = rechQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: rechData } = await rechQuery;
+        if (rechData) {
+          setRechazados(rechData.map((r: any) => ({
+            id: r.id, numero: r.numero || "", motivoRechazo: r.motivo_rechazo, clienteNombre: r.clientes?.razon_social ?? "—",
+            fecha: r.fecha, total: Number(r.total),
+          })));
         }
 
         // Top clientes
@@ -246,7 +263,7 @@ export default function ReportesPage() {
           byVendedor[vid].count += 1;
           const items = (pr as Record<string, unknown>).presupuesto_items as { cantidad: number; precio_costo: number }[] | null;
           if (items) {
-            byVendedor[vid].costoTotal += items.reduce((s, it) => s + (it.cantidad * it.precio_costo), 0);
+            byVendedor[vid].costoTotal += items.reduce((s, it) => s + ((it.cantidad || 0) * (Number(it.precio_costo) || 0)), 0);
           }
         }
 
@@ -349,7 +366,9 @@ export default function ReportesPage() {
       try {
         const [year, month] = libroIVAMes.split("-").map(Number);
         const desde = `${year}-${String(month).padStart(2, "0")}-01`;
-        const hasta = `${year}-${String(month + 1 > 12 ? 1 : month + 1).padStart(2, "0")}-01`;
+        const hastaYear = month === 12 ? year + 1 : year;
+        const hastaMonth = month === 12 ? 1 : month + 1;
+        const hasta = `${hastaYear}-${String(hastaMonth).padStart(2, "0")}-01`;
 
         // Libro IVA Ventas
         let qVentas = supabase
@@ -434,9 +453,13 @@ export default function ReportesPage() {
     [articulosSorted, articulosSortBy]
   );
 
-  const rechazados = mockPresupuestos.filter((pr) => pr.motivoRechazo);
-  const totalPR = mockPresupuestos.length;
-  const ticketPromedio = totalPR > 0 ? mockPresupuestos.reduce((a, pr) => a + pr.total, 0) / totalPR : 0;
+  // Compute real metrics from fetched Supabase data
+  const totalPR = prEstadoData.reduce((sum, e) => sum + e.value, 0);
+  const aprobadosPR = prEstadoData.find((e) => e.name === "aprobado")?.value ?? 0;
+  const tasaConversion = totalPR > 0 ? Math.round((aprobadosPR / totalPR) * 100) : 0;
+  const facturadoMes = ventasMensuales.length > 0 ? ventasMensuales[ventasMensuales.length - 1].total : 0;
+  const facturadoMesAnterior = ventasMensuales.length > 1 ? ventasMensuales[ventasMensuales.length - 2].total : 0;
+  const ticketPromedio = totalPR > 0 ? topClientesData.reduce((a, c) => a + c.facturado, 0) / totalPR : 0;
 
   const downloadCSV = useCallback((filename: string, headers: string[], rows: string[][]) => {
     const csv = [headers.join(","), ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
@@ -451,14 +474,13 @@ export default function ReportesPage() {
 
   const exportMetricas = useCallback(() => {
     const rows = [
-      ["Tasa de conversion", `${dashboardKPIs.tasaConversion}%`],
-      ["Margen promedio", `${dashboardKPIs.margenPromedio}%`],
+      ["Tasa de conversion", `${tasaConversion}%`],
       ["Ticket promedio", String(ticketPromedio)],
       ["Presupuestos emitidos", String(totalPR)],
-      ["Facturado", String(dashboardKPIs.facturadoMes)],
+      ["Facturado", String(facturadoMes)],
     ];
     downloadCSV(`metricas_${mesActual.replace(/ /g, "_")}`, ["Metrica", "Valor"], rows);
-  }, [downloadCSV, mesActual, ticketPromedio, totalPR]);
+  }, [downloadCSV, mesActual, ticketPromedio, totalPR, tasaConversion, facturadoMes]);
 
   const exportComisiones = useCallback(() => {
     const headers = ["Vendedor", "PR Aprobados", "Venta neta", "Costo", "Margen", "Com. venta", "Com. margen", "Total comision"];
@@ -700,11 +722,10 @@ export default function ReportesPage() {
             </CardHeader>
             <div className="space-y-4">
               {[
-                { label: "Tasa de conversion", value: `${dashboardKPIs.tasaConversion}%`, prev: `${dashboardKPIs.tasaConversionAnterior}%`, up: dashboardKPIs.tasaConversion > dashboardKPIs.tasaConversionAnterior },
-                { label: "Margen promedio", value: `${dashboardKPIs.margenPromedio}%`, prev: "—", up: false },
+                { label: "Tasa de conversion", value: `${tasaConversion}%`, prev: "—", up: tasaConversion > 0 },
                 { label: "Ticket promedio", value: fc(ticketPromedio), prev: "—", up: false },
                 { label: "Presupuestos emitidos", value: String(totalPR), prev: "—", up: false },
-                { label: "Facturado", value: fc(dashboardKPIs.facturadoMes), prev: fc(dashboardKPIs.ventasMesAnterior), up: dashboardKPIs.facturadoMes > dashboardKPIs.ventasMesAnterior },
+                { label: "Facturado", value: fc(facturadoMes), prev: fc(facturadoMesAnterior), up: facturadoMes > facturadoMesAnterior },
               ].map((m) => (
                 <div key={m.label} className="flex items-center justify-between py-2 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
                   <span className="text-sm text-zinc-600 dark:text-zinc-400">{m.label}</span>
@@ -1200,7 +1221,7 @@ export default function ReportesPage() {
               const rows = isVentas
                 ? libroIVAVentas.map((r) => [r.fecha, r.tipo, String(r.punto_venta), String(r.numero), r.cuit, r.razon_social, r.neto_gravado.toFixed(2), r.iva.toFixed(2), r.total.toFixed(2), r.moneda])
                 : libroIVACompras.map((r) => [r.fecha, r.numero_factura, r.cuit, r.razon_social, r.neto_gravado.toFixed(2), r.iva.toFixed(2), r.percepciones.toFixed(2), r.total.toFixed(2), r.moneda]);
-              downloadCSV(`libro_iva_${libroIVASubtab}_${libroIVAMes}.csv`, headers, rows);
+              downloadCSV(`libro_iva_${libroIVASubtab}_${libroIVAMes}`, headers, rows);
             }}
             className="flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
           >

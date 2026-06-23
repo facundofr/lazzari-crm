@@ -484,7 +484,7 @@ export default function ProveedoresPage() {
     const rows = filteredProveedores.map((p) => [
       p.razonSocial, p.cuit, p.rubro, p.email, p.telefono, p.localidad, p.provincia, p.formaPago, p.saldoCuentaCorriente, p.limiteCredito,
     ]);
-    const csv = [headers, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
+    const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -658,7 +658,7 @@ export default function ProveedoresPage() {
             <div className="space-y-4">
               {filteredListas.map((lista) => {
                 const isExpanded = expandedId === lista.id;
-                const cfg = estadoListaConfig[lista.estado];
+                const cfg = estadoListaConfig[lista.estado] || { label: lista.estado, variant: "outline" as const };
                 return (
                   <Card key={lista.id} className="p-0 overflow-hidden">
                     <button onClick={() => setExpandedId(isExpanded ? null : lista.id)}

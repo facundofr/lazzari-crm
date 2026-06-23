@@ -283,7 +283,8 @@ export default function FacturacionPage() {
   async function handleAnular(id: string) {
     if (!confirm("¿Seguro que queres anular esta factura?")) return;
     try {
-      await supabase.from("facturas").update({ estado: "anulada" } as any).eq("id", id);
+      const { error } = await supabase.from("facturas").update({ estado: "anulada" } as any).eq("id", id);
+      if (error) { alert(error.message); return; }
       await fetchData();
       if (detailFactura?.id === id) setDetailFactura(null);
     } catch (err) { console.error("Error anulando:", err); }
@@ -291,7 +292,8 @@ export default function FacturacionPage() {
 
   async function handleMarcarPagada(id: string) {
     try {
-      await supabase.from("facturas").update({ estado: "pagada" } as any).eq("id", id);
+      const { error } = await supabase.from("facturas").update({ estado: "pagada" } as any).eq("id", id);
+      if (error) { alert(error.message); return; }
       await fetchData();
       if (detailFactura?.id === id) setDetailFactura((p) => p ? { ...p, estado: "pagada" } : null);
     } catch (err) { console.error("Error:", err); }
@@ -312,9 +314,9 @@ export default function FacturacionPage() {
       `*Cliente:* ${f.clientes?.razon_social || "\u2014"}`,
       f.clientes?.cuit ? `CUIT: ${f.clientes.cuit}` : null,
       "",
-      `Neto: ${formatCurrency(Number(f.subtotal))}`,
-      `IVA: ${formatCurrency(Number(f.iva))}`,
-      `*Total: ${formatCurrency(Number(f.total))}*`,
+      `Neto: ${formatCurrency(Number(f.subtotal), f.moneda as "USD" | "ARS")}`,
+      `IVA: ${formatCurrency(Number(f.iva), f.moneda as "USD" | "ARS")}`,
+      `*Total: ${formatCurrency(Number(f.total), f.moneda as "USD" | "ARS")}*`,
       f.cae ? `\nCAE: ${f.cae}` : null,
       f.cae_vencimiento ? `Vto CAE: ${formatDate(f.cae_vencimiento)}` : null,
     ];

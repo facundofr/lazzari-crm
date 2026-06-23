@@ -129,32 +129,49 @@ export default function DashboardPage() {
           gastosFijosResult,
           objetivosResult,
         ] = await Promise.all([
+          // RPC get_dashboard_kpis accepts no parameters (Args: never) — sociedad filter not supported yet
           supabase.rpc("get_dashboard_kpis"),
           qPresupuestosEstado,
           qPresupuestosRecent,
-          supabase
-            .from("alertas")
-            .select("*")
-            .eq("read", false)
-            .order("created_at", { ascending: false }),
+          (() => {
+            let qAlertas = (supabase as any)
+              .from("alertas")
+              .select("*")
+              .eq("read", false)
+              .order("created_at", { ascending: false });
+            if (sociedadActiva?.id) qAlertas = qAlertas.eq("sociedad_id", sociedadActiva.id);
+            return qAlertas;
+          })(),
           qTopClientes,
-          supabase
-            .from("activity_log")
-            .select("*, profiles:user_id(full_name)")
-            .order("created_at", { ascending: false })
-            .limit(10),
+          (() => {
+            let qActivity = (supabase as any)
+              .from("activity_log")
+              .select("*, profiles:user_id(full_name)")
+              .order("created_at", { ascending: false })
+              .limit(10);
+            if (sociedadActiva?.id) qActivity = qActivity.eq("sociedad_id", sociedadActiva.id);
+            return qActivity;
+          })(),
           // Facturación mensual
           qFacturasMensuales,
           // Gastos fijos
-          supabase
-            .from("gastos_fijos")
-            .select("*")
-            .eq("activo", true),
+          (() => {
+            let qGastos = (supabase as any)
+              .from("gastos_fijos")
+              .select("*")
+              .eq("activo", true);
+            if (sociedadActiva?.id) qGastos = qGastos.eq("sociedad_id", sociedadActiva.id);
+            return qGastos;
+          })(),
           // Objetivos activos
-          supabase
-            .from("objetivos")
-            .select("*, profiles:usuario_id(full_name)")
-            .eq("activo", true),
+          (() => {
+            let qObjetivos = (supabase as any)
+              .from("objetivos")
+              .select("*, profiles:usuario_id(full_name)")
+              .eq("activo", true);
+            if (sociedadActiva?.id) qObjetivos = qObjetivos.eq("sociedad_id", sociedadActiva.id);
+            return qObjetivos;
+          })(),
         ]);
 
         // --- KPIs ---

@@ -716,10 +716,11 @@ export default function FinanzasPage() {
 
   async function handleConciliar(id: string) {
     try {
-      await supabase.from("movimientos").update({ conciliado: true }).eq("id", id);
+      const { error } = await supabase.from("movimientos").update({ conciliado: true }).eq("id", id);
+      if (error) throw error;
       await fetchData();
     } catch (err) {
-      console.error("Error conciliando:", err);
+      alert("Error conciliando: " + (err instanceof Error ? err.message : String(err)));
     }
   }
 
@@ -748,6 +749,7 @@ export default function FinanzasPage() {
         const { error } = await supabase.from("gastos_fijos").insert({
           descripcion: gastoForm.descripcion, categoria: gastoForm.categoria,
           monto: gastoForm.monto, moneda: gastoForm.moneda, notas: gastoForm.notas,
+          ...(sociedadActiva?.id ? { sociedad_id: sociedadActiva.id } : {}),
         } as any);
         if (error) throw error;
       }
@@ -762,30 +764,33 @@ export default function FinanzasPage() {
 
   async function handleToggleGasto(id: string, activo: boolean) {
     try {
-      await supabase.from("gastos_fijos").update({ activo: !activo } as any).eq("id", id);
+      const { error } = await supabase.from("gastos_fijos").update({ activo: !activo } as any).eq("id", id);
+      if (error) throw error;
       await fetchData();
     } catch (err) {
-      console.error("Error toggling gasto:", err);
+      alert("Error al cambiar estado: " + (err instanceof Error ? err.message : String(err)));
     }
   }
 
   async function handleDeleteGasto(id: string) {
     if (!confirm("Seguro que queres eliminar este gasto fijo?")) return;
     try {
-      await supabase.from("gastos_fijos").delete().eq("id", id);
+      const { error } = await supabase.from("gastos_fijos").delete().eq("id", id);
+      if (error) throw error;
       await fetchData();
     } catch (err) {
-      console.error("Error deleting gasto:", err);
+      alert("Error al eliminar: " + (err instanceof Error ? err.message : String(err)));
     }
   }
 
   async function handleDeleteMov(id: string) {
     if (!confirm("¿Seguro que queres eliminar este movimiento?")) return;
     try {
-      await supabase.from("movimientos").delete().eq("id", id);
+      const { error } = await supabase.from("movimientos").delete().eq("id", id);
+      if (error) throw error;
       await fetchData();
     } catch (err) {
-      console.error("Error eliminando:", err);
+      alert("Error al eliminar: " + (err instanceof Error ? err.message : String(err)));
     }
   }
 
@@ -840,11 +845,13 @@ export default function FinanzasPage() {
         conciliado: false,
       };
       if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
-      await supabase.from("movimientos").insert(movData as any);
+      const { error: movErr } = await supabase.from("movimientos").insert(movData as any);
+      if (movErr) throw movErr;
 
       // If cruce with cheque, mark cheque as conciliado
       if (opForm.cheque_cruce_id) {
-        await supabase.from("movimientos").update({ conciliado: true } as any).eq("id", opForm.cheque_cruce_id);
+        const { error: cheqErr } = await supabase.from("movimientos").update({ conciliado: true } as any).eq("id", opForm.cheque_cruce_id);
+        if (cheqErr) throw cheqErr;
       }
 
       setOpModalOpen(false);
@@ -859,16 +866,18 @@ export default function FinanzasPage() {
   async function handleAnularOP(id: string) {
     if (!confirm("¿Seguro que queres anular esta orden de pago?")) return;
     try {
-      await (supabase as any).from("ordenes_pago").update({ estado: "anulada" }).eq("id", id);
+      const { error } = await (supabase as any).from("ordenes_pago").update({ estado: "anulada" }).eq("id", id);
+      if (error) throw error;
       await fetchData();
-    } catch (err) { console.error("Error anulando OP:", err); }
+    } catch (err) { alert("Error anulando OP: " + (err instanceof Error ? err.message : String(err))); }
   }
 
   async function handlePagarOP(id: string) {
     try {
-      await (supabase as any).from("ordenes_pago").update({ estado: "pagada" }).eq("id", id);
+      const { error } = await (supabase as any).from("ordenes_pago").update({ estado: "pagada" }).eq("id", id);
+      if (error) throw error;
       await fetchData();
-    } catch (err) { console.error("Error marcando OP como pagada:", err); }
+    } catch (err) { alert("Error marcando OP como pagada: " + (err instanceof Error ? err.message : String(err))); }
   }
 
   function handleGenerarComprobante(op: OrdenPagoRow) {
@@ -1006,7 +1015,8 @@ export default function FinanzasPage() {
       };
       if (gmForm.proveedor_id) (movData as any).proveedor_id = gmForm.proveedor_id;
       if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
-      await supabase.from("movimientos").insert(movData as any);
+      const { error: movErr } = await supabase.from("movimientos").insert(movData as any);
+      if (movErr) throw movErr;
 
       setGmModalOpen(false);
       await fetchData();
@@ -1020,9 +1030,10 @@ export default function FinanzasPage() {
   async function handleDeleteGM(id: string) {
     if (!confirm("¿Seguro que queres eliminar este gasto?")) return;
     try {
-      await (supabase as any).from("gastos_manuales").delete().eq("id", id);
+      const { error } = await (supabase as any).from("gastos_manuales").delete().eq("id", id);
+      if (error) throw error;
       await fetchData();
-    } catch (err) { console.error("Error eliminando gasto:", err); }
+    } catch (err) { alert("Error eliminando gasto: " + (err instanceof Error ? err.message : String(err))); }
   }
 
   // ── Facturas compra handlers ──
@@ -1159,7 +1170,8 @@ export default function FinanzasPage() {
       }
       if (sociedadActiva?.id) row.sociedad_id = sociedadActiva.id;
       if (profile?.id) row.user_id = profile.id;
-      await (supabase as any).from("echeqs").insert(row);
+      const { error } = await (supabase as any).from("echeqs").insert(row);
+      if (error) throw error;
       setEcheqModalOpen(false); setEcheqForm(emptyEcheqForm); setEcheqClienteSearch("");
       await fetchData();
     } catch (err) { setEcheqError("Error al crear echeq"); console.error(err); }
@@ -1188,16 +1200,17 @@ export default function FinanzasPage() {
       } else if (action === "rechazar") {
         updates.estado = "rechazado";
       }
-      await (supabase as any).from("echeqs").update(updates).eq("id", echeq.id);
+      const { error } = await (supabase as any).from("echeqs").update(updates).eq("id", echeq.id);
+      if (error) throw error;
       setSelectedEcheq(null); setEcheqActionModal(null); setEcheqDestinoId(""); setEcheqDestinoNombre(""); setEcheqProvSearch("");
       await fetchData();
-    } catch (err) { console.error("Error en accion echeq:", err); }
+    } catch (err) { alert("Error: " + (err instanceof Error ? err.message : String(err))); }
     finally { setEcheqActionSaving(false); }
   }
 
   async function handleDeleteEcheq(id: string) {
     if (!confirm("¿Seguro que querés eliminar este echeq?")) return;
-    try { await (supabase as any).from("echeqs").delete().eq("id", id); await fetchData(); }
+    try { const { error } = await (supabase as any).from("echeqs").delete().eq("id", id); if (error) throw error; await fetchData(); }
     catch (err) { console.error(err); }
   }
 

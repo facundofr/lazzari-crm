@@ -282,11 +282,13 @@ export default function CalendarioPage() {
       descripcion: "",
       color: "#3B82F6",
     });
-    const { data } = await supabase
+    let cq = supabase
       .from("clientes")
       .select("id, razon_social")
       .eq("activo", true)
       .order("razon_social");
+    if (sociedadActiva?.id) cq = cq.eq("sociedad_id" as any, sociedadActiva.id);
+    const { data } = await cq;
     if (data) setClientes(data as { id: string; razon_social: string }[]);
     setCreateModalOpen(true);
   }
@@ -295,7 +297,7 @@ export default function CalendarioPage() {
     if (!createForm.titulo || !createForm.fecha_inicio) return;
     setCreating(true);
     try {
-      await (supabase as any).from("eventos").insert({
+      const { error } = await (supabase as any).from("eventos").insert({
         titulo: createForm.titulo,
         tipo: createForm.tipo,
         fecha_inicio: new Date(createForm.fecha_inicio).toISOString(),
@@ -308,6 +310,7 @@ export default function CalendarioPage() {
         sociedad_id: sociedadActiva?.id || null,
         completado: false,
       });
+      if (error) { alert(error.message); return; }
       setCreateModalOpen(false);
       setSelectedDate(null);
       await fetchData();
@@ -321,7 +324,8 @@ export default function CalendarioPage() {
   // ── Toggle completado ────────────────────────────────────────
   async function toggleCompletado(id: string, current: boolean) {
     try {
-      await (supabase as any).from("eventos").update({ completado: !current }).eq("id", id);
+      const { error } = await (supabase as any).from("eventos").update({ completado: !current }).eq("id", id);
+      if (error) { alert(error.message); return; }
       await fetchData();
       if (detailEvento?.id === id) {
         setDetailEvento((prev) => prev ? { ...prev, completado: !current } : null);
@@ -335,7 +339,8 @@ export default function CalendarioPage() {
   async function handleDeleteEvento(id: string) {
     if (!confirm("Eliminar este evento?")) return;
     try {
-      await (supabase as any).from("eventos").delete().eq("id", id);
+      const { error } = await (supabase as any).from("eventos").delete().eq("id", id);
+      if (error) { alert(error.message); return; }
       setDetailEvento(null);
       await fetchData();
     } catch (err) {

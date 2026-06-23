@@ -109,6 +109,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     observaciones: row.observaciones ?? "",
     notasInternas: row.notas_internas ?? "",
     creadoPor: (row as any).created_by_profile?.full_name ?? row.created_by ?? "",
+    creadoPorId: row.created_by ?? "",
     enviadoAt: row.enviado_at ?? undefined,
     respondidoAt: row.respondido_at ?? undefined,
     createdAt: row.created_at,
@@ -207,8 +208,9 @@ export default function PresupuestosPage() {
   // Detail panel
   const [selected, setSelected] = useState<Presupuesto | null>(null);
 
-  // Vendedor filter
+  // Vendedor & operador filter
   const [vendedorFilter, setVendedorFilter] = useState<string>("");
+  const [operadorFilter, setOperadorFilter] = useState<string>("");
   const [vendedores, setVendedores] = useState<{id: string; full_name: string}[]>([]);
 
   // Email modal
@@ -833,8 +835,15 @@ export default function PresupuestosPage() {
       const matchesFacturado = selectedEstados.has("facturado") && prEsFacturado;
       if (!matchesEstado && !matchesFacturado) return false;
     }
-    if (search && !pr.numero.toLowerCase().includes(search.toLowerCase()) && !pr.clienteNombre.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search) {
+      const s = search.toLowerCase();
+      const matchNumero = pr.numero.toLowerCase().includes(s);
+      const matchCliente = pr.clienteNombre.toLowerCase().includes(s);
+      const matchItems = pr.items?.some(it => (it.descripcion || "").toLowerCase().includes(s) || (it.codigo || "").toLowerCase().includes(s));
+      if (!matchNumero && !matchCliente && !matchItems) return false;
+    }
     if (vendedorFilter && (pr as any).vendedorId !== vendedorFilter) return false;
+    if (operadorFilter && (pr as any).creadoPorId !== operadorFilter) return false;
     // Smart filters
     const fechaFilter = filterValues.fecha as { from?: string; to?: string } | undefined;
     if (fechaFilter?.from && pr.fecha < fechaFilter.from) return false;
@@ -1400,8 +1409,8 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       />
       <div className="p-4 sm:p-8 space-y-6">
         {/* Status multi-select toggles + seguimiento */}
-        <div className="flex items-center gap-3 overflow-x-auto pb-1">
-          <div className="flex gap-2 flex-wrap">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex gap-2 flex-wrap flex-1">
             {/* Botón "Todos" */}
             <button
               onClick={() => toggleEstado("todos")}
@@ -1486,13 +1495,13 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           />
         </div>
 
-        {/* Search + Vendedor filter */}
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1 max-w-md">
+        {/* Search + Vendedor + Operador + Fecha filters */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative flex-1 min-w-[200px] max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
               type="text"
-              placeholder="Buscar por N de PR o cliente..."
+              placeholder="Buscar por N° PR, cliente o items..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
@@ -1504,6 +1513,16 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
           >
             <option value="">Todos los vendedores</option>
+            {vendedores.map((v) => (
+              <option key={v.id} value={v.id}>{v.full_name}</option>
+            ))}
+          </select>
+          <select
+            value={operadorFilter}
+            onChange={(e) => setOperadorFilter(e.target.value)}
+            className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+          >
+            <option value="">Todos los operadores</option>
             {vendedores.map((v) => (
               <option key={v.id} value={v.id}>{v.full_name}</option>
             ))}
@@ -1723,42 +1742,25 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 render: (row) => <span className="font-medium text-xs">{row.clienteNombre}</span>,
               },
               {
-                key: "sucursalNombre" as any, label: "Sucursal", sortable: true,
+                key: "vendedorNombre" as any, label: "Vend / Op", sortable: true,
                 render: (row) => {
-                  const nombre = (row as any).sucursalNombre;
-                  return nombre ? <span className="text-xs text-zinc-600 dark:text-zinc-400">{nombre}</span> : <span className="text-zinc-400 text-xs">—</span>;
-                },
-              },
-              {
-                key: "contactoNombre" as any, label: "Solicitante", sortable: true,
-                render: (row) => {
-                  const nombre = (row as any).contactoNombre;
-                  return nombre ? <span className="text-xs text-zinc-600 dark:text-zinc-400">{nombre}</span> : <span className="text-zinc-400 text-xs">—</span>;
-                },
-              },
-              {
-                key: "vendedorNombre" as any, label: "Vendedor", sortable: true,
-                render: (row) => {
-                  const nombre = (row as any).vendedorNombre;
-                  if (!nombre) return <span className="text-zinc-400 text-xs">—</span>;
-                  const initials = nombre.split(/\s+/).map((w: string) => w.charAt(0).toUpperCase()).join("");
+                  const vend = (row as any).vendedorNombre;
+                  const op = row.creadoPor;
+                  const vendInitials = vend ? vend.split(/\s+/).map((w: string) => w.charAt(0).toUpperCase()).join("") : "";
+                  const opInitials = op ? op.split(/\s+/).map((w: string) => w.charAt(0).toUpperCase()).join("") : "";
+                  if (!vend && !op) return <span className="text-zinc-400 text-xs">—</span>;
+                  if (vend === op || !op) {
+                    return (
+                      <span className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-orange-100 text-[10px] font-bold text-orange-600 dark:bg-orange-900/40 dark:text-orange-300" title={vend}>
+                        {vendInitials}
+                      </span>
+                    );
+                  }
                   return (
-                    <span className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-orange-100 text-[10px] font-bold text-orange-600 dark:bg-orange-900/40 dark:text-orange-300" title={nombre}>
-                      {initials}
-                    </span>
-                  );
-                },
-              },
-              {
-                key: "creadoPor" as any, label: "Operador", sortable: true,
-                render: (row) => {
-                  const nombre = row.creadoPor;
-                  if (!nombre) return <span className="text-zinc-400 text-xs">—</span>;
-                  const initials = nombre.split(/\s+/).map((w: string) => w.charAt(0).toUpperCase()).join("");
-                  return (
-                    <span className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300" title={nombre}>
-                      {initials}
-                    </span>
+                    <div className="flex items-center gap-1">
+                      {vendInitials && <span className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-orange-100 text-[10px] font-bold text-orange-600 dark:bg-orange-900/40 dark:text-orange-300" title={`Vendedor: ${vend}`}>{vendInitials}</span>}
+                      {opInitials && <span className="inline-flex items-center justify-center h-6 w-6 rounded-full bg-zinc-100 text-[10px] font-bold text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300" title={`Operador: ${op}`}>{opInitials}</span>}
+                    </div>
                   );
                 },
               },

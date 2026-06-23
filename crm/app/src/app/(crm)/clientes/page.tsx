@@ -450,7 +450,7 @@ export default function ClientesPage() {
     }
 
     fetchConsumo();
-  }, [selectedCliente]);
+  }, [selectedCliente?.id]);
 
   // Fetch ficha data when historial tab is selected
   useEffect(() => {
@@ -684,7 +684,7 @@ export default function ClientesPage() {
     }
 
     fetchTimeline();
-  }, [selectedCliente, detailTab]);
+  }, [selectedCliente?.id, detailTab]);
 
   // Fetch contactos when a client is selected (polymorphic table, no FK join)
   useEffect(() => {
@@ -952,10 +952,10 @@ export default function ClientesPage() {
     setSaving(true);
     setFormError("");
     try {
+      const { transporte_definido, ...formWithout } = form;
       const payload: Record<string, unknown> = {
-        ...form,
+        ...formWithout,
         email_facturacion: form.email_facturacion?.trim() || null,
-        transporte_definido: form.transporte_definido?.trim() || null,
       };
       if (!editingId && sociedadActiva?.id) {
         payload.sociedad_id = sociedadActiva.id;
@@ -970,17 +970,19 @@ export default function ClientesPage() {
         // Save sucursales changes
         // Delete removed sucursales
         for (const id of removedSucursalIds) {
-          await (supabase as any)
+          const { error: sucErr } = await (supabase as any)
             .from("cliente_sucursales")
             .update({ activo: false })
             .eq("id", id);
+          if (sucErr) throw sucErr;
         }
         // Insert new sucursales
         const newSucs = formSucursales.filter((s) => s.isNew);
         for (const s of newSucs) {
-          await (supabase as any)
+          const { error: sucErr } = await (supabase as any)
             .from("cliente_sucursales")
             .insert({ cliente_id: editingId, nombre: s.nombre, activo: true });
+          if (sucErr) throw sucErr;
         }
 
         toast.success("Cliente actualizado correctamente");
@@ -1359,7 +1361,7 @@ export default function ClientesPage() {
                   <div>
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Informacion general</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <InfoField label="Condicion IVA" value={condicionLabels[selectedCliente.condicionIva]} />
+                      <InfoField label="Condicion IVA" value={condicionLabels[selectedCliente.condicionIva] || selectedCliente.condicionIva} />
                       <div>
                         <p className="text-xs text-zinc-500 dark:text-zinc-400">Email</p>
                         <p className="text-sm font-medium mt-0.5">{selectedCliente.email ? <a href={`mailto:${selectedCliente.email}`} className="text-orange-600 hover:underline">{selectedCliente.email}</a> : "—"}</p>
