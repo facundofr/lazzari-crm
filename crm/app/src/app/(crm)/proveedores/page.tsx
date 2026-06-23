@@ -17,6 +17,7 @@ import {
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
+import { useUser } from "@/lib/auth-context";
 
 const CLASIFICACION_TAGS = [
   "Buen precio", "Precio alto", "Entrega rapida", "Entrega lenta",
@@ -120,6 +121,7 @@ const emptyForm = {
 };
 
 export default function ProveedoresPage() {
+  const { sociedadActiva } = useUser();
   const [tab, setTab] = useState<"proveedores" | "listas">("proveedores");
   const [search, setSearch] = useState("");
   const [filterValues, setFilterValues] = useState<FilterValues>({
@@ -172,14 +174,40 @@ export default function ProveedoresPage() {
   const [aiProveedorId, setAiProveedorId] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
+  const [cuitLoading, setCuitLoading] = useState(false);
+
+  async function handleCuitLookup() {
+    const cuit = form.cuit.replace(/\D/g, "");
+    if (cuit.length !== 11) { toast.warning("CUIT debe tener 11 digitos"); return; }
+    setCuitLoading(true);
+    try {
+      const res = await fetch(`/api/cuit-lookup?cuit=${cuit}`);
+      if (!res.ok) { toast.error("No se pudo consultar el CUIT"); return; }
+      const data = await res.json();
+      if (data.error) { toast.error(data.error); return; }
+      setForm((prev) => ({
+        ...prev,
+        razon_social: data.razon_social || prev.razon_social,
+        condicion_iva: data.condicion_iva || prev.condicion_iva,
+        direccion: data.direccion || prev.direccion,
+        localidad: data.localidad || prev.localidad,
+        provincia: data.provincia || prev.provincia,
+      }));
+      toast.success("Datos cargados desde AFIP");
+    } catch { toast.error("Error al consultar CUIT"); }
+    finally { setCuitLoading(false); }
+  }
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [provRes, listasRes] = await Promise.all([
-        supabase.from("proveedores").select(`*, listas_precios(id, nombre, moneda, vigencia_hasta, estado)`).order("razon_social"),
-        supabase.from("listas_precios").select(`*, proveedores(razon_social), lista_precios_items(*)`).order("created_at", { ascending: false }),
-      ]);
+      let provQuery = supabase.from("proveedores").select(`*, listas_precios(id, nombre, moneda, vigencia_hasta, estado)`).order("razon_social");
+      let listasQuery = supabase.from("listas_precios").select(`*, proveedores(razon_social), lista_precios_items(*)`).order("created_at", { ascending: false });
+      if (sociedadActiva?.id) {
+        provQuery = provQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        listasQuery = listasQuery.eq("sociedad_id" as any, sociedadActiva.id);
+      }
+      const [provRes, listasRes] = await Promise.all([provQuery, listasQuery]);
 
       if (provRes.data && provRes.data.length > 0) {
         setProveedores(provRes.data.map((r) => mapSupabaseProveedor(r as Record<string, unknown>)));
@@ -198,7 +226,7 @@ export default function ProveedoresPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sociedadActiva]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -326,7 +354,9 @@ export default function ProveedoresPage() {
         const { error } = await supabase.from("proveedores").update(form as any).eq("id", editingId);
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("proveedores").insert(form as any);
+        const insertData = { ...form } as any;
+        if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
+        const { error } = await supabase.from("proveedores").insert(insertData);
         if (error) throw error;
       }
       setModalOpen(false);
@@ -391,9 +421,7 @@ export default function ProveedoresPage() {
 
     try {
       // Create the lista
-      const { data: lista, error: listaError } = await supabase
-        .from("listas_precios")
-        .insert({
+      const listaInsert: Record<string, unknown> = {
           nombre: aiResult.nombre_lista || `Lista ${new Date().toLocaleDateString("es-AR")}`,
           proveedor_id: aiProveedorId,
           moneda: aiResult.moneda === "USD" ? "USD" : "ARS",
@@ -402,7 +430,11 @@ export default function ProveedoresPage() {
           estado: "vigente",
           archivo_origen: aiFile?.name || null,
           notas: aiResult.notas || "",
-        })
+      };
+      if (sociedadActiva?.id) listaInsert.sociedad_id = sociedadActiva.id;
+      const { data: lista, error: listaError } = await supabase
+        .from("listas_precios")
+        .insert(listaInsert as any)
         .select("id")
         .single();
 
@@ -759,7 +791,15 @@ export default function ProveedoresPage() {
                 <label className="text-xs font-medium text-zinc-500">Razon social *</label>
                 <input value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
               </div>
-              <div><label className="text-xs font-medium text-zinc-500">CUIT *</label><input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">CUIT *</label>
+                <div className="mt-1 flex gap-1">
+                  <input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} onBlur={() => { if (form.cuit.replace(/\D/g, "").length === 11 && !form.razon_social) handleCuitLookup(); }} className="flex-1 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" placeholder="XX-XXXXXXXX-X" />
+                  <button type="button" onClick={handleCuitLookup} disabled={cuitLoading} className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50 transition-colors whitespace-nowrap" title="Buscar en AFIP">
+                    {cuitLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
               <div><label className="text-xs font-medium text-zinc-500">Rubro</label><input value={form.rubro} onChange={(e) => setForm({ ...form, rubro: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Telefono</label><input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
