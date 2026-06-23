@@ -24,7 +24,60 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   efectivo: { label: "Efectivo", variant: "outline", icon: Wallet },
 };
 
-type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito" | "vencimientos" | "gastos_fijos" | "objetivos";
+type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito" | "vencimientos" | "gastos_fijos" | "objetivos";
+
+// ── Echeq types ──
+interface EcheqRow {
+  id: string;
+  numero: string;
+  banco_emisor: string | null;
+  cuit_emisor: string | null;
+  monto: number;
+  moneda: string;
+  fecha_emision: string | null;
+  fecha_pago: string;
+  estado: "en_cartera" | "endosado" | "depositado" | "cobrado" | "rechazado" | "vencido";
+  origen_tipo: string | null;
+  origen_id: string | null;
+  origen_nombre: string | null;
+  destino_tipo: string | null;
+  destino_id: string | null;
+  destino_nombre: string | null;
+  fecha_endoso: string | null;
+  fecha_deposito: string | null;
+  observaciones: string | null;
+  sociedad_id: string | null;
+  user_id: string | null;
+  created_at: string;
+}
+
+interface ClienteOption {
+  id: string;
+  razon_social: string;
+}
+
+const echeqEstadoConfig: Record<string, { label: string; variant: "info" | "outline" | "warning" | "success" | "danger" }> = {
+  en_cartera: { label: "En cartera", variant: "info" },
+  endosado: { label: "Endosado", variant: "outline" },
+  depositado: { label: "Depositado", variant: "warning" },
+  cobrado: { label: "Cobrado", variant: "success" },
+  rechazado: { label: "Rechazado", variant: "danger" },
+  vencido: { label: "Vencido", variant: "outline" },
+};
+
+const emptyEcheqForm = {
+  numero: "",
+  banco_emisor: "",
+  cuit_emisor: "",
+  monto: 0,
+  moneda: "ARS" as "ARS" | "USD",
+  fecha_emision: "",
+  fecha_pago: new Date().toISOString().slice(0, 10),
+  origen_tipo: "cliente" as "cliente" | "otro",
+  origen_id: "",
+  origen_nombre: "",
+  observaciones: "",
+};
 
 // ── OP & Gastos types ──
 interface ProveedorOption {
@@ -60,6 +113,8 @@ interface GastoManualRow {
   proveedor_id?: string;
   proveedor_nombre?: string;
   categoria: string;
+  tipo_gasto: string;
+  comprobante_url?: string;
   monto: number;
   moneda: "ARS" | "USD";
   notas: string;
@@ -84,6 +139,8 @@ interface FacturaCompraRow {
   estado: "pendiente" | "pagada" | "anulada";
   notas: string;
   created_at: string;
+  archivo_url?: string;
+  archivo_nombre?: string;
 }
 
 interface OCOption {
@@ -107,6 +164,26 @@ const emptyFCForm = {
 
 const GASTO_CATEGORIAS = ["Transporte", "Servicios", "Materiales", "Varios", "Comisiones", "Impuestos"] as const;
 
+const TIPO_GASTO_OPTIONS = [
+  { value: "general", label: "General" },
+  { value: "servicios", label: "Servicios" },
+  { value: "impuestos", label: "Impuestos" },
+  { value: "alquiler", label: "Alquiler" },
+  { value: "seguros", label: "Seguros" },
+  { value: "transporte", label: "Transporte" },
+  { value: "varios", label: "Varios" },
+] as const;
+
+const tipoGastoVariant: Record<string, "success" | "danger" | "warning" | "info" | "outline"> = {
+  general: "outline",
+  servicios: "info",
+  impuestos: "danger",
+  alquiler: "warning",
+  seguros: "success",
+  transporte: "info",
+  varios: "outline",
+};
+
 const emptyOPForm = {
   proveedor_id: "",
   monto_bruto: 0,
@@ -124,6 +201,7 @@ const emptyGastoManualForm = {
   descripcion: "",
   proveedor_id: "",
   categoria: "Varios" as string,
+  tipo_gasto: "general" as string,
   monto: 0,
   moneda: "ARS" as "ARS" | "USD",
   notas: "",
@@ -254,6 +332,8 @@ export default function FinanzasPage() {
   const [gmSaving, setGmSaving] = useState(false);
   const [gmError, setGmError] = useState("");
   const [gmProvSearch, setGmProvSearch] = useState("");
+  const [gmFile, setGmFile] = useState<File | null>(null);
+  const [gmUploading, setGmUploading] = useState(false);
 
   // Facturas compra state
   const [facturasCompra, setFacturasCompra] = useState<FacturaCompraRow[]>([]);
@@ -263,6 +343,26 @@ export default function FinanzasPage() {
   const [fcError, setFcError] = useState("");
   const [fcProvSearch, setFcProvSearch] = useState("");
   const [ocOptions, setOcOptions] = useState<OCOption[]>([]);
+  const [fcFile, setFcFile] = useState<File | null>(null);
+  const [fcUploading, setFcUploading] = useState(false);
+  const [selectedFC, setSelectedFC] = useState<FacturaCompraRow | null>(null);
+
+  // Echeqs state
+  const [echeqs, setEcheqs] = useState<EcheqRow[]>([]);
+  const [echeqModalOpen, setEcheqModalOpen] = useState(false);
+  const [echeqForm, setEcheqForm] = useState(emptyEcheqForm);
+  const [echeqSaving, setEcheqSaving] = useState(false);
+  const [echeqError, setEcheqError] = useState("");
+  const [clientesOptions, setClientesOptions] = useState<ClienteOption[]>([]);
+  const [echeqClienteSearch, setEcheqClienteSearch] = useState("");
+  const [selectedEcheq, setSelectedEcheq] = useState<EcheqRow | null>(null);
+  const [echeqActionModal, setEcheqActionModal] = useState<"endosar" | "depositar" | null>(null);
+  const [echeqActionSaving, setEcheqActionSaving] = useState(false);
+  const [echeqDestinoTipo, setEcheqDestinoTipo] = useState<"proveedor" | "banco">("proveedor");
+  const [echeqDestinoId, setEcheqDestinoId] = useState("");
+  const [echeqDestinoNombre, setEcheqDestinoNombre] = useState("");
+  const [echeqProvSearch, setEcheqProvSearch] = useState("");
+  const [echeqFilterEstado, setEcheqFilterEstado] = useState("");
 
   // ── SmartFilters for Movimientos tab ──
   const movFilterConfigs: FilterConfig[] = [
@@ -524,7 +624,9 @@ export default function FinanzasPage() {
             setGastosManuales(gmData.map((r: any) => ({
               id: r.id, fecha: r.fecha, descripcion: r.descripcion,
               proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? undefined,
-              categoria: r.categoria ?? "Varios", monto: Number(r.monto),
+              categoria: r.categoria ?? "Varios", tipo_gasto: r.tipo_gasto ?? "general",
+              comprobante_url: r.comprobante_url ?? undefined,
+              monto: Number(r.monto),
               moneda: (r.moneda as "ARS" | "USD") ?? "ARS", notas: r.notas ?? "",
               created_at: r.created_at,
             })));
@@ -547,6 +649,8 @@ export default function FinanzasPage() {
               total: Number(r.total), moneda: (r.moneda as "ARS" | "USD") ?? "ARS",
               estado: r.estado ?? "pendiente", notas: r.notas ?? "",
               created_at: r.created_at,
+              archivo_url: r.archivo_url ?? undefined,
+              archivo_nombre: r.archivo_nombre ?? undefined,
             })));
           } else {
             setFacturasCompra([]);
@@ -844,6 +948,7 @@ export default function FinanzasPage() {
     setGmForm(emptyGastoManualForm);
     setGmError("");
     setGmProvSearch("");
+    setGmFile(null);
     setGmModalOpen(true);
   }
 
@@ -853,14 +958,29 @@ export default function FinanzasPage() {
     setGmSaving(true);
     setGmError("");
     try {
+      // Upload comprobante file if provided
+      let comprobanteUrl: string | undefined;
+      if (gmFile) {
+        setGmUploading(true);
+        const ext = gmFile.name.split(".").pop() ?? "pdf";
+        const filePath = `gastos/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+        const { error: upErr } = await supabase.storage.from("comprobantes").upload(filePath, gmFile);
+        setGmUploading(false);
+        if (upErr) throw new Error("Error subiendo comprobante: " + upErr.message);
+        const { data: urlData } = supabase.storage.from("comprobantes").getPublicUrl(filePath);
+        comprobanteUrl = urlData.publicUrl;
+      }
+
       const insertData: Record<string, unknown> = {
         fecha: gmForm.fecha,
         descripcion: gmForm.descripcion,
         categoria: gmForm.categoria,
+        tipo_gasto: gmForm.tipo_gasto,
         monto: gmForm.monto,
         moneda: gmForm.moneda,
         notas: gmForm.notas,
       };
+      if (comprobanteUrl) insertData.comprobante_url = comprobanteUrl;
       if (gmForm.proveedor_id) insertData.proveedor_id = gmForm.proveedor_id;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
 
@@ -903,6 +1023,7 @@ export default function FinanzasPage() {
     setFcForm(emptyFCForm);
     setFcError("");
     setFcProvSearch("");
+    setFcFile(null);
     setFcModalOpen(true);
   }
 
@@ -1286,8 +1407,15 @@ export default function FinanzasPage() {
                     </div>
                   )},
                   { key: "categoria", label: "Categoría", render: (row) => <Badge variant="info">{row.categoria}</Badge> },
+                  { key: "tipo_gasto", label: "Tipo", render: (row) => {
+                    const label = TIPO_GASTO_OPTIONS.find(t => t.value === row.tipo_gasto)?.label ?? row.tipo_gasto;
+                    return <Badge variant={tipoGastoVariant[row.tipo_gasto] ?? "outline"}>{label}</Badge>;
+                  }},
                   { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.monto, row.moneda)}</span> },
                   { key: "moneda", label: "Moneda", render: (row) => <Badge variant="outline">{row.moneda}</Badge> },
+                  { key: "comprobante_url", label: "Comp.", render: (row) => row.comprobante_url ? (
+                    <a href={row.comprobante_url} target="_blank" rel="noopener noreferrer" className="text-orange-500 hover:text-orange-600" title="Ver comprobante"><Paperclip className="h-4 w-4" /></a>
+                  ) : <span className="text-zinc-300 text-xs">—</span> },
                   { key: "actions", label: "", sortable: false, render: (row) => (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       <button onClick={() => handleDeleteGM(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar">
@@ -2474,12 +2602,35 @@ export default function FinanzasPage() {
                 </div>
               </div>
 
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Categoría</label>
+                  <select value={gmForm.categoria} onChange={(e) => setGmForm({ ...gmForm, categoria: e.target.value })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    {GASTO_CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Tipo de gasto</label>
+                  <select value={gmForm.tipo_gasto} onChange={(e) => setGmForm({ ...gmForm, tipo_gasto: e.target.value })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    {TIPO_GASTO_OPTIONS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
               <div>
-                <label className="text-xs font-medium text-zinc-500">Categoría</label>
-                <select value={gmForm.categoria} onChange={(e) => setGmForm({ ...gmForm, categoria: e.target.value })}
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  {GASTO_CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <label className="text-xs font-medium text-zinc-500">Comprobante (opcional)</label>
+                <div className="mt-1 flex items-center gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                    <Upload className="h-4 w-4" />
+                    {gmFile ? gmFile.name : "Subir archivo"}
+                    <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={(e) => setGmFile(e.target.files?.[0] ?? null)} />
+                  </label>
+                  {gmFile && (
+                    <button onClick={() => setGmFile(null)} className="text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
