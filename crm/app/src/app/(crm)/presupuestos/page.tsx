@@ -15,7 +15,7 @@ import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
   Printer, Sparkles, Download, ClipboardCopy, Check, Mail, GripVertical,
-  Phone, CalendarClock, Inbox,
+  Phone, CalendarClock, Inbox, Paperclip, Upload,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -46,6 +46,8 @@ interface SupabasePresupuesto {
   updated_at: string;
   vendedor_id: string | null;
   oc_cliente?: string | null;
+  archivo_url?: string | null;
+  archivo_nombre?: string | null;
   sucursal_id?: string | null;
   contacto_id?: string | null;
   clientes?: { razon_social: string; cuit: string; email?: string | null; telefono?: string | null; direccion?: string | null; localidad?: string | null; provincia?: string | null; condicion_iva?: string | null } | null;
@@ -124,6 +126,8 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     clienteLocalidad: row.clientes?.localidad ?? "",
     clienteProvincia: row.clientes?.provincia ?? "",
     clienteCondicionIva: row.clientes?.condicion_iva ?? "",
+    archivoUrl: row.archivo_url ?? null,
+    archivoNombre: row.archivo_nombre ?? null,
   } as any;
 }
 
@@ -1872,6 +1876,63 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{selected.observaciones}</p>
                 </div>
               )}
+
+              {/* Archivo adjunto */}
+              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2 flex items-center gap-1.5">
+                  <Paperclip className="h-3.5 w-3.5" />
+                  Archivo adjunto
+                </h3>
+                {(selected as any).archivoUrl ? (
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={(selected as any).archivoUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 text-sm text-blue-600 hover:underline dark:text-blue-400"
+                    >
+                      <FileText className="h-4 w-4" />
+                      {(selected as any).archivoNombre || "Descargar"}
+                    </a>
+                    <button
+                      onClick={async () => {
+                        const path = `pr/${selected.id}/${(selected as any).archivoNombre}`;
+                        await supabase.storage.from("presupuestos").remove([path]);
+                        await supabase.from("presupuestos").update({ archivo_url: null, archivo_nombre: null } as any).eq("id", selected.id);
+                        setSelected({ ...selected, archivoUrl: null, archivoNombre: null } as any);
+                        await fetchPresupuestos();
+                        toast.success("Archivo eliminado");
+                      }}
+                      className="text-red-400 hover:text-red-600"
+                      title="Eliminar archivo"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="flex items-center gap-2 cursor-pointer text-sm text-zinc-500 hover:text-orange-600 transition-colors">
+                    <Upload className="h-4 w-4" />
+                    <span>Subir archivo</span>
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const path = `pr/${selected.id}/${file.name}`;
+                        const { error: upErr } = await supabase.storage.from("presupuestos").upload(path, file, { upsert: true });
+                        if (upErr) { toast.error("Error al subir archivo"); return; }
+                        const { data: urlData } = supabase.storage.from("presupuestos").getPublicUrl(path);
+                        await supabase.from("presupuestos").update({ archivo_url: urlData.publicUrl, archivo_nombre: file.name } as any).eq("id", selected.id);
+                        setSelected({ ...selected, archivoUrl: urlData.publicUrl, archivoNombre: file.name } as any);
+                        await fetchPresupuestos();
+                        toast.success("Archivo adjuntado");
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
 
               {/* Motivo rechazo */}
               {selected.motivoRechazo && (
