@@ -33,7 +33,7 @@ interface EcheqRow {
   banco_emisor: string | null;
   cuit_emisor: string | null;
   monto: number;
-  moneda: string;
+  moneda: "USD" | "ARS";
   fecha_emision: string | null;
   fecha_pago: string;
   estado: "en_cartera" | "endosado" | "depositado" | "cobrado" | "rechazado" | "vencido";
@@ -287,7 +287,7 @@ const emptyMovForm = {
 };
 
 export default function FinanzasPage() {
-  const { sociedadActiva } = useUser();
+  const { sociedadActiva, profile } = useUser();
   const [tab, setTab] = useState<FinanzasTab>("movimientos");
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
   const [loading, setLoading] = useState(true);
@@ -663,6 +663,22 @@ export default function FinanzasPage() {
           if (sociedadActiva?.id) qOc = qOc.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: ocData } = await qOc;
           if (ocData) setOcOptions(ocData as OCOption[]);
+        } catch { /* ignore */ }
+
+        // Fetch echeqs
+        try {
+          let qEcheq = (supabase as any).from("echeqs").select("*").order("fecha_pago", { ascending: true });
+          if (sociedadActiva?.id) qEcheq = qEcheq.eq("sociedad_id", sociedadActiva.id);
+          const { data: echeqData } = await qEcheq;
+          if (echeqData) setEcheqs(echeqData as EcheqRow[]);
+        } catch { /* table may not exist yet */ }
+
+        // Fetch clientes for echeq origin
+        try {
+          let qCli = supabase.from("clientes").select("id, razon_social").eq("activo", true).order("razon_social");
+          if (sociedadActiva?.id) qCli = qCli.eq("sociedad_id" as any, sociedadActiva.id);
+          const { data: cliData } = await qCli;
+          if (cliData) setClientesOptions(cliData as ClienteOption[]);
         } catch { /* ignore */ }
 
       } catch (err) {
@@ -1120,6 +1136,79 @@ export default function FinanzasPage() {
     ? proveedoresOptions.filter(p => p.razon_social.toLowerCase().includes(gmProvSearch.toLowerCase()))
     : proveedoresOptions;
 
+  // ── Echeq handlers ──
+  const filteredEcheqs = echeqFilterEstado ? echeqs.filter(e => e.estado === echeqFilterEstado) : echeqs;
+  const echeqsEnCartera = echeqs.filter(e => e.estado === "en_cartera");
+  const echeqsMontoCartera = echeqsEnCartera.reduce((s, e) => s + e.monto, 0);
+  const today = new Date().toISOString().slice(0, 10);
+  const sevenDays = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+  const echeqsPorVencer = echeqsEnCartera.filter(e => e.fecha_pago >= today && e.fecha_pago <= sevenDays).length;
+
+  const filteredClientesEcheq = echeqClienteSearch.trim()
+    ? clientesOptions.filter((c: ClienteOption) => c.razon_social.toLowerCase().includes(echeqClienteSearch.toLowerCase()))
+    : clientesOptions;
+
+  async function handleCreateEcheq() {
+    if (!echeqForm.numero.trim()) { setEcheqError("El numero es obligatorio"); return; }
+    if (echeqForm.monto <= 0) { setEcheqError("El monto debe ser mayor a 0"); return; }
+    setEcheqSaving(true); setEcheqError("");
+    try {
+      const row: Record<string, unknown> = {
+        numero: echeqForm.numero.trim(), banco_emisor: echeqForm.banco_emisor || null,
+        cuit_emisor: echeqForm.cuit_emisor || null, monto: echeqForm.monto,
+        moneda: echeqForm.moneda, fecha_emision: echeqForm.fecha_emision || null,
+        fecha_pago: echeqForm.fecha_pago, estado: "en_cartera",
+        observaciones: echeqForm.observaciones || null,
+      };
+      if (echeqForm.origen_tipo === "cliente" && echeqForm.origen_id) {
+        row.origen_tipo = "cliente"; row.origen_id = echeqForm.origen_id;
+        row.origen_nombre = clientesOptions.find((c: ClienteOption) => c.id === echeqForm.origen_id)?.razon_social || "";
+      } else if (echeqForm.origen_nombre) {
+        row.origen_tipo = "otro"; row.origen_nombre = echeqForm.origen_nombre;
+      }
+      if (sociedadActiva?.id) row.sociedad_id = sociedadActiva.id;
+      if (profile?.id) row.user_id = profile.id;
+      await (supabase as any).from("echeqs").insert(row);
+      setEcheqModalOpen(false); setEcheqForm(emptyEcheqForm); setEcheqClienteSearch("");
+      await fetchData();
+    } catch (err) { setEcheqError("Error al crear echeq"); console.error(err); }
+    finally { setEcheqSaving(false); }
+  }
+
+  async function handleEcheqAction(action: "endosar" | "depositar" | "cobrar" | "rechazar") {
+    if (!selectedEcheq) return;
+    setEcheqActionSaving(true);
+    try {
+      const updates: Record<string, unknown> = {};
+      if (action === "endosar") {
+        updates.estado = "endosado"; updates.fecha_endoso = new Date().toISOString().slice(0, 10);
+        updates.destino_tipo = echeqDestinoTipo;
+        updates.destino_nombre = echeqDestinoTipo === "proveedor"
+          ? proveedoresOptions.find(p => p.id === echeqDestinoId)?.razon_social || echeqDestinoNombre
+          : echeqDestinoNombre;
+        if (echeqDestinoTipo === "proveedor" && echeqDestinoId) updates.destino_id = echeqDestinoId;
+      } else if (action === "depositar") {
+        updates.estado = "depositado"; updates.fecha_deposito = new Date().toISOString().slice(0, 10);
+        if (echeqDestinoNombre) updates.destino_nombre = echeqDestinoNombre;
+        updates.destino_tipo = "banco";
+      } else if (action === "cobrar") {
+        updates.estado = "cobrado";
+      } else if (action === "rechazar") {
+        updates.estado = "rechazado";
+      }
+      await (supabase as any).from("echeqs").update(updates).eq("id", selectedEcheq.id);
+      setSelectedEcheq(null); setEcheqActionModal(null); setEcheqDestinoId(""); setEcheqDestinoNombre(""); setEcheqProvSearch("");
+      await fetchData();
+    } catch (err) { console.error("Error en accion echeq:", err); }
+    finally { setEcheqActionSaving(false); }
+  }
+
+  async function handleDeleteEcheq(id: string) {
+    if (!confirm("¿Seguro que querés eliminar este echeq?")) return;
+    try { await (supabase as any).from("echeqs").delete().eq("id", id); await fetchData(); }
+    catch (err) { console.error(err); }
+  }
+
   // ── Derived calculations ──
   const totalCobros = movimientos.filter((m) => ["cobro", "cheque_recibido", "transferencia"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
   const totalPagos = movimientos.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
@@ -1161,6 +1250,7 @@ export default function FinanzasPage() {
     { id: "facturas_compra", label: "Facturas Compra" },
     { id: "ordenes_pago", label: "Ordenes de Pago" },
     { id: "gastos_manuales", label: "Gastos" },
+    { id: "echeqs", label: "Echeqs" },
     { id: "cc_clientes", label: "CC Clientes" },
     { id: "cc_proveedores", label: "CC Proveedores" },
     { id: "cheques", label: "E-Cheques" },
@@ -1490,7 +1580,199 @@ export default function FinanzasPage() {
           </Card>
         )}
 
-        {/* ── E-Cheques ── */}
+        {/* ── Echeqs ── */}
+        {tab === "echeqs" && (
+          <>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-4 mb-4">
+              <StatCard title="En cartera" value={`${echeqsEnCartera.length} — ${formatCurrency(echeqsMontoCartera)}`} icon={Wallet} iconColor="text-blue-600" />
+              <StatCard title="Por vencer (7 días)" value={String(echeqsPorVencer)} icon={Clock} iconColor="text-amber-500" />
+              <StatCard title="Endosados" value={String(echeqs.filter(e => e.estado === "endosado").length)} icon={ArrowUpRight} iconColor="text-purple-500" />
+              <StatCard title="Cobrados" value={String(echeqs.filter(e => e.estado === "cobrado").length)} icon={CheckCircle2} iconColor="text-green-600" />
+            </div>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <select value={echeqFilterEstado} onChange={(e) => setEcheqFilterEstado(e.target.value)}
+                  className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="">Todos los estados</option>
+                  {Object.entries(echeqEstadoConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+              <button onClick={() => { setEcheqForm(emptyEcheqForm); setEcheqError(""); setEcheqClienteSearch(""); setEcheqModalOpen(true); }}
+                className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">
+                <Plus className="h-4 w-4" /> Registrar echeq
+              </button>
+            </div>
+            <Card className="p-0 overflow-hidden">
+              <DataTable<EcheqRow>
+                columns={[
+                  { key: "numero", label: "Número", sortable: true, render: (row) => <span className="font-mono font-medium">{row.numero}</span> },
+                  { key: "banco_emisor", label: "Banco", sortable: true, render: (row) => <span className="text-zinc-500">{row.banco_emisor || "—"}</span> },
+                  { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.monto, row.moneda)}</span> },
+                  { key: "fecha_pago", label: "Fecha pago", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha_pago)}</span> },
+                  { key: "estado", label: "Estado", sortable: true, render: (row) => {
+                    const cfg = echeqEstadoConfig[row.estado] || { label: row.estado, variant: "outline" as const };
+                    return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+                  }},
+                  { key: "origen_nombre", label: "Origen", render: (row) => <span className="text-sm">{row.origen_nombre || "—"}</span> },
+                  { key: "destino_nombre", label: "Destino", render: (row) => <span className="text-sm">{row.destino_nombre || "—"}</span> },
+                  { key: "actions", label: "", sortable: false, render: (row) => (
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {row.estado === "en_cartera" && (
+                        <>
+                          <button onClick={() => { setSelectedEcheq(row); setEcheqActionModal("endosar"); }} className="rounded p-1.5 text-zinc-400 hover:bg-purple-100 hover:text-purple-600" title="Endosar"><ArrowUpRight className="h-3.5 w-3.5" /></button>
+                          <button onClick={() => { setSelectedEcheq(row); setEcheqActionModal("depositar"); }} className="rounded p-1.5 text-zinc-400 hover:bg-amber-100 hover:text-amber-600" title="Depositar"><Landmark className="h-3.5 w-3.5" /></button>
+                          <button onClick={() => { setSelectedEcheq(row); handleEcheqAction("cobrar"); }} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar cobrado"><CheckCircle2 className="h-3.5 w-3.5" /></button>
+                          <button onClick={() => { setSelectedEcheq(row); handleEcheqAction("rechazar"); }} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Rechazar"><Ban className="h-3.5 w-3.5" /></button>
+                        </>
+                      )}
+                      <button onClick={() => handleDeleteEcheq(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar"><Trash2 className="h-3.5 w-3.5" /></button>
+                    </div>
+                  )},
+                ]}
+                data={filteredEcheqs}
+                emptyMessage="No hay echeqs registrados"
+              />
+            </Card>
+          </>
+        )}
+
+        {/* ── Echeq Create Modal ── */}
+        {echeqModalOpen && (
+          <>
+            <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setEcheqModalOpen(false)} />
+            <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-lg font-bold dark:text-white">Registrar Echeq</h2>
+                <button onClick={() => setEcheqModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              </div>
+              {echeqError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{echeqError}</div>}
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Número *</label>
+                    <input value={echeqForm.numero} onChange={(e) => setEcheqForm({ ...echeqForm, numero: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Banco emisor</label>
+                    <input value={echeqForm.banco_emisor} onChange={(e) => setEcheqForm({ ...echeqForm, banco_emisor: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Monto *</label>
+                    <input type="number" value={echeqForm.monto || ""} onChange={(e) => setEcheqForm({ ...echeqForm, monto: Number(e.target.value) })}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Moneda</label>
+                    <select value={echeqForm.moneda} onChange={(e) => setEcheqForm({ ...echeqForm, moneda: e.target.value as "ARS" | "USD" })}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                      <option value="ARS">ARS</option><option value="USD">USD</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">CUIT emisor</label>
+                    <input value={echeqForm.cuit_emisor} onChange={(e) => setEcheqForm({ ...echeqForm, cuit_emisor: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Fecha emisión</label>
+                    <input type="date" value={echeqForm.fecha_emision} onChange={(e) => setEcheqForm({ ...echeqForm, fecha_emision: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Fecha pago *</label>
+                    <input type="date" value={echeqForm.fecha_pago} onChange={(e) => setEcheqForm({ ...echeqForm, fecha_pago: e.target.value })}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Origen</label>
+                  <div className="flex gap-2 mt-1 mb-2">
+                    <button onClick={() => setEcheqForm({ ...echeqForm, origen_tipo: "cliente", origen_nombre: "" })}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium ${echeqForm.origen_tipo === "cliente" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>Cliente</button>
+                    <button onClick={() => setEcheqForm({ ...echeqForm, origen_tipo: "otro", origen_id: "" })}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium ${echeqForm.origen_tipo === "otro" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>Otro</button>
+                  </div>
+                  {echeqForm.origen_tipo === "cliente" ? (
+                    <select value={echeqForm.origen_id} onChange={(e) => setEcheqForm({ ...echeqForm, origen_id: e.target.value })}
+                      className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                      <option value="">Seleccionar cliente</option>
+                      {clientesOptions.map((c: ClienteOption) => <option key={c.id} value={c.id}>{c.razon_social}</option>)}
+                    </select>
+                  ) : (
+                    <input value={echeqForm.origen_nombre} onChange={(e) => setEcheqForm({ ...echeqForm, origen_nombre: e.target.value })}
+                      placeholder="Nombre del origen" className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  )}
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Observaciones</label>
+                  <textarea value={echeqForm.observaciones} onChange={(e) => setEcheqForm({ ...echeqForm, observaciones: e.target.value })}
+                    rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+                <button onClick={() => setEcheqModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
+                <button onClick={handleCreateEcheq} disabled={echeqSaving}
+                  className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                  {echeqSaving && <Loader2 className="h-4 w-4 animate-spin" />} Registrar
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Echeq Action Modal (Endosar/Depositar) ── */}
+        {echeqActionModal && selectedEcheq && (
+          <>
+            <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setEcheqActionModal(null)} />
+            <div className="fixed inset-4 z-50 m-auto h-fit max-h-[70vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+              <h2 className="text-lg font-bold mb-4 dark:text-white">{echeqActionModal === "endosar" ? "Endosar echeq" : "Depositar echeq"}</h2>
+              <p className="text-sm text-zinc-500 mb-4">Echeq #{selectedEcheq.numero} — {formatCurrency(selectedEcheq.monto, selectedEcheq.moneda)}</p>
+              <div className="space-y-4">
+                {echeqActionModal === "endosar" && (
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Destino</label>
+                    <div className="flex gap-2 mt-1 mb-2">
+                      <button onClick={() => setEcheqDestinoTipo("proveedor")} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${echeqDestinoTipo === "proveedor" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>Proveedor</button>
+                      <button onClick={() => setEcheqDestinoTipo("banco")} className={`rounded-lg px-3 py-1.5 text-xs font-medium ${echeqDestinoTipo === "banco" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>Banco</button>
+                    </div>
+                    {echeqDestinoTipo === "proveedor" ? (
+                      <select value={echeqDestinoId} onChange={(e) => setEcheqDestinoId(e.target.value)}
+                        className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                        <option value="">Seleccionar proveedor</option>
+                        {proveedoresOptions.map(p => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
+                      </select>
+                    ) : (
+                      <input value={echeqDestinoNombre} onChange={(e) => setEcheqDestinoNombre(e.target.value)}
+                        placeholder="Nombre del banco" className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    )}
+                  </div>
+                )}
+                {echeqActionModal === "depositar" && (
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Banco destino</label>
+                    <input value={echeqDestinoNombre} onChange={(e) => setEcheqDestinoNombre(e.target.value)}
+                      placeholder="Nombre del banco" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+                <button onClick={() => setEcheqActionModal(null)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
+                <button onClick={() => handleEcheqAction(echeqActionModal)} disabled={echeqActionSaving}
+                  className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                  {echeqActionSaving && <Loader2 className="h-4 w-4 animate-spin" />} {echeqActionModal === "endosar" ? "Endosar" : "Depositar"}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ── E-Cheques (legacy mock) ── */}
         {tab === "cheques" && (
           <Card>
             <CardHeader><CardTitle>E-Cheques</CardTitle></CardHeader>

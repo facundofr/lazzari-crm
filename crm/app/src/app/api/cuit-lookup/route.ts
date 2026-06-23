@@ -1,28 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
+import * as fs from "fs";
+import * as path from "path";
 
 /**
  * GET /api/cuit-lookup?cuit=XXXXXXXXXXX
- * Consulta el padron de AFIP via la API gratuita de tangofactura
- * y devuelve razon social, condicion IVA, direccion, localidad, provincia.
+ * Consulta el padron de AFIP via ws_sr_padron (autenticado con certificado ARCA)
+ * Fallback: intenta múltiples APIs públicas gratuitas.
  */
 
-interface TangoResponse {
-  success: boolean;
-  errorGetData: boolean;
-  errorMessage: string | null;
-  razonSocial: string;
-  tipoPersona: string;
-  tipoClave: string;
-  estadoClave: string;
-  domicilioFiscal: {
-    direccion: string;
-    localidad: string;
-    codPostal: string;
-    idProvincia: string;
-    descripcionProvincia: string;
-  };
-  idImpuesto: number[];
-  impuestos: string[];
+let Arca: any;
+let arcaPromise: Promise<void> | null = null;
+
+async function loadArca() {
+  if (!arcaPromise) {
+    arcaPromise = import("@ramiidv/arca-facturacion").then((mod) => {
+      Arca = mod.Arca;
+    });
+  }
+  await arcaPromise;
+}
+
+function getArcaInstance() {
+  const certPath = path.join(process.cwd(), "..", "certs", "lazzari.crt");
+  const keyPath = path.join(process.cwd(), "..", "certs", "lazzari.key");
+
+  let cert = "";
+  if (process.env.ARCA_CERT_B64) {
+    cert = Buffer.from(process.env.ARCA_CERT_B64, "base64").toString("utf-8");
+  } else if (fs.existsSync(certPath)) {
+    cert = fs.readFileSync(certPath, "utf-8");
+  }
+
+  let key = "";
+  if (process.env.ARCA_KEY_B64) {
+    key = Buffer.from(process.env.ARCA_KEY_B64, "base64").toString("utf-8");
+  } else if (fs.existsSync(keyPath)) {
+    key = fs.readFileSync(keyPath, "utf-8");
+  }
+
+  if (!cert || !key) return null;
+
+  const cuit = Number(process.env.ARCA_CUIT || "20379309128");
+  const production = process.env.ARCA_PRODUCTION !== "false";
+  return new Arca({ cuit, cert, key, production });
 }
 
 function detectCondicionIva(impuestoIds: number[]): string {
@@ -33,31 +53,84 @@ function detectCondicionIva(impuestoIds: number[]): string {
 }
 
 const PROVINCIA_MAP: Record<string, string> = {
-  "0": "CABA",
-  "1": "Buenos Aires",
-  "2": "Catamarca",
-  "3": "Córdoba",
-  "4": "Corrientes",
-  "5": "Entre Ríos",
-  "6": "Jujuy",
-  "7": "Mendoza",
-  "8": "La Rioja",
-  "9": "Salta",
-  "10": "San Juan",
-  "11": "San Luis",
-  "12": "Santa Fe",
-  "13": "Santiago del Estero",
-  "14": "Tucumán",
-  "16": "Chaco",
-  "17": "Chubut",
-  "18": "Formosa",
-  "19": "Misiones",
-  "20": "Neuquén",
-  "21": "La Pampa",
-  "22": "Río Negro",
-  "23": "Santa Cruz",
+  "0": "CABA", "1": "Buenos Aires", "2": "Catamarca", "3": "Córdoba",
+  "4": "Corrientes", "5": "Entre Ríos", "6": "Jujuy", "7": "Mendoza",
+  "8": "La Rioja", "9": "Salta", "10": "San Juan", "11": "San Luis",
+  "12": "Santa Fe", "13": "Santiago del Estero", "14": "Tucumán",
+  "16": "Chaco", "17": "Chubut", "18": "Formosa", "19": "Misiones",
+  "20": "Neuquén", "21": "La Pampa", "22": "Río Negro", "23": "Santa Cruz",
   "24": "Tierra del Fuego",
 };
+
+// Try ARCA padron (authenticated, most reliable)
+async function tryArcaPadron(cuit: string) {
+  try {
+    await loadArca();
+    const arca = getArcaInstance();
+    if (!arca) return null;
+
+    // Use padron A13 (basic) — consultarCuit method
+    // Returns: { cuit, nombre, tipoPersona, estadoClave, domicilioFiscal?, impuestos?, raw }
+    const persona = await arca.consultarCuit(Number(cuit));
+    if (!persona) return null;
+
+    const impuestoIds = (persona.impuestos || []).map((i: any) => i.id);
+    const domicilio = persona.domicilioFiscal || {};
+
+    return {
+      razon_social: persona.nombre || "",
+      condicion_iva: detectCondicionIva(impuestoIds),
+      direccion: domicilio.direccion || "",
+      localidad: domicilio.localidad || "",
+      provincia: PROVINCIA_MAP[String(domicilio.codPostal?.slice(0, 1))] || "",
+      cp: domicilio.codPostal || "",
+      tipo_persona: persona.tipoPersona || "",
+      estado_clave: persona.estadoClave || "",
+    };
+  } catch (err) {
+    console.error("ARCA padron error:", err);
+    return null;
+  }
+}
+
+// Fallback: try public APIs
+async function tryPublicAPIs(cuit: string) {
+  const apis = [
+    `https://afip.tangofactura.com/Rest/GetContribuyente?cuit=${cuit}`,
+    `https://afip.tangofactura.com/Rest/GetContribuyenteById?cuit=${cuit}`,
+  ];
+
+  for (const url of apis) {
+    try {
+      const res = await fetch(url, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) continue;
+
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("json")) continue;
+
+      const data = await res.json();
+      if (data.errorGetData || !data.razonSocial) continue;
+
+      const provinciaId = data.domicilioFiscal?.idProvincia ?? "";
+      return {
+        razon_social: data.razonSocial,
+        condicion_iva: detectCondicionIva(data.idImpuesto || []),
+        direccion: data.domicilioFiscal?.direccion || "",
+        localidad: data.domicilioFiscal?.localidad || "",
+        provincia: PROVINCIA_MAP[provinciaId] || data.domicilioFiscal?.descripcionProvincia || "",
+        cp: data.domicilioFiscal?.codPostal || "",
+        tipo_persona: data.tipoPersona || "",
+        estado_clave: data.estadoClave || "",
+      };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
 
 export async function GET(request: NextRequest) {
   const cuit = request.nextUrl.searchParams.get("cuit")?.replace(/\D/g, "");
@@ -69,52 +142,20 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  try {
-    const res = await fetch(
-      `https://afip.tangofactura.com/Rest/GetContribuyenteById?cuit=${cuit}`,
-      {
-        headers: { "Accept": "application/json" },
-        signal: AbortSignal.timeout(10000),
-      }
-    );
-
-    if (!res.ok) {
-      return NextResponse.json(
-        { error: `Error consultando AFIP (HTTP ${res.status})` },
-        { status: 502 }
-      );
-    }
-
-    const data: TangoResponse = await res.json();
-
-    if (data.errorGetData || !data.razonSocial) {
-      return NextResponse.json(
-        { error: data.errorMessage || "CUIT no encontrado en el padron de AFIP" },
-        { status: 404 }
-      );
-    }
-
-    const provinciaId = data.domicilioFiscal?.idProvincia ?? "";
-    const provincia =
-      PROVINCIA_MAP[provinciaId] ||
-      data.domicilioFiscal?.descripcionProvincia ||
-      "";
-
-    return NextResponse.json({
-      razon_social: data.razonSocial,
-      condicion_iva: detectCondicionIva(data.idImpuesto || []),
-      direccion: data.domicilioFiscal?.direccion || "",
-      localidad: data.domicilioFiscal?.localidad || "",
-      provincia,
-      cp: data.domicilioFiscal?.codPostal || "",
-      tipo_persona: data.tipoPersona || "",
-      estado_clave: data.estadoClave || "",
-    });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Error desconocido";
-    return NextResponse.json(
-      { error: `No se pudo consultar AFIP: ${message}` },
-      { status: 500 }
-    );
+  // Try ARCA authenticated padron first (most reliable)
+  const arcaResult = await tryArcaPadron(cuit);
+  if (arcaResult) {
+    return NextResponse.json(arcaResult);
   }
+
+  // Fallback to public APIs
+  const publicResult = await tryPublicAPIs(cuit);
+  if (publicResult) {
+    return NextResponse.json(publicResult);
+  }
+
+  return NextResponse.json(
+    { error: "No se pudo consultar el CUIT. Los servicios de AFIP pueden estar temporalmente no disponibles. Intenta nuevamente en unos minutos." },
+    { status: 503 }
+  );
 }
