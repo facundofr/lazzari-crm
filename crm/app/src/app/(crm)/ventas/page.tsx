@@ -354,12 +354,11 @@ export default function VentasPage() {
       if (sociedadActiva?.id) {
         maxQuery = maxQuery.eq("sociedad_id" as any, sociedadActiva.id);
       }
-      const { data: maxRow } = await maxQuery
+      const { data: maxRows } = await maxQuery
         .order("numero", { ascending: false })
-        .limit(1)
-        .single();
+        .limit(1);
 
-      const nextNumero = (maxRow?.numero || 0) + 1;
+      const nextNumero = ((maxRows && maxRows.length > 0 ? maxRows[0].numero : 0) || 0) + 1;
 
       // Calculate totals
       let subtotal: number;

@@ -658,8 +658,8 @@ ${f.cae ? `
             </div>
             <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
               <p className="text-xs font-medium text-zinc-500 mb-2">CUIT emisor</p>
-              <p className="text-xl font-bold font-mono dark:text-white">20-37930912-8</p>
-              <p className="text-xs text-zinc-400 mt-1">Augusto Lazzari</p>
+              <p className="text-xl font-bold font-mono dark:text-white">{emisorData.cuit}</p>
+              <p className="text-xs text-zinc-400 mt-1">{emisorData.razonSocial}</p>
             </div>
           </div>
         </Card>

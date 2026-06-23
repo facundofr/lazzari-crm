@@ -711,7 +711,7 @@ export default function FinanzasPage() {
     setSaving(true);
     setFormError("");
     try {
-      const { error } = await supabase.from("movimientos").insert(movForm);
+      const { error } = await supabase.from("movimientos").insert({ ...movForm, sociedad_id: sociedadActiva?.id || null } as any);
       if (error) throw error;
       setModalOpen(false);
       setMovForm(emptyMovForm);
@@ -1175,8 +1175,9 @@ export default function FinanzasPage() {
     finally { setEcheqSaving(false); }
   }
 
-  async function handleEcheqAction(action: "endosar" | "depositar" | "cobrar" | "rechazar") {
-    if (!selectedEcheq) return;
+  async function handleEcheqAction(action: "endosar" | "depositar" | "cobrar" | "rechazar", echeqOverride?: typeof selectedEcheq) {
+    const echeq = echeqOverride || selectedEcheq;
+    if (!echeq) return;
     setEcheqActionSaving(true);
     try {
       const updates: Record<string, unknown> = {};
@@ -1196,7 +1197,7 @@ export default function FinanzasPage() {
       } else if (action === "rechazar") {
         updates.estado = "rechazado";
       }
-      await (supabase as any).from("echeqs").update(updates).eq("id", selectedEcheq.id);
+      await (supabase as any).from("echeqs").update(updates).eq("id", echeq.id);
       setSelectedEcheq(null); setEcheqActionModal(null); setEcheqDestinoId(""); setEcheqDestinoNombre(""); setEcheqProvSearch("");
       await fetchData();
     } catch (err) { console.error("Error en accion echeq:", err); }
@@ -1307,7 +1308,7 @@ export default function FinanzasPage() {
           <Card className="p-0 overflow-hidden">
             <DataTable<MovimientoRow>
               columns={[
-                { key: "tipo", label: "Tipo", sortable: true, render: (row) => { const cfg = tipoConfig[row.tipo]; const Icon = cfg.icon; return (<div className="flex items-center gap-2"><Icon className="h-4 w-4 text-zinc-400" /><Badge variant={cfg.variant}>{cfg.label}</Badge></div>); }},
+                { key: "tipo", label: "Tipo", sortable: true, render: (row) => { const cfg = tipoConfig[row.tipo] || { label: row.tipo, variant: "outline" as const, icon: Wallet }; const Icon = cfg.icon; return (<div className="flex items-center gap-2"><Icon className="h-4 w-4 text-zinc-400" /><Badge variant={cfg.variant}>{cfg.label}</Badge></div>); }},
                 { key: "descripcion", label: "Descripcion", sortable: true, render: (row) => (
                   <div>
                     <span className="font-medium">{row.descripcion}</span>
@@ -1621,8 +1622,8 @@ export default function FinanzasPage() {
                         <>
                           <button onClick={() => { setSelectedEcheq(row); setEcheqActionModal("endosar"); }} className="rounded p-1.5 text-zinc-400 hover:bg-purple-100 hover:text-purple-600" title="Endosar"><ArrowUpRight className="h-3.5 w-3.5" /></button>
                           <button onClick={() => { setSelectedEcheq(row); setEcheqActionModal("depositar"); }} className="rounded p-1.5 text-zinc-400 hover:bg-amber-100 hover:text-amber-600" title="Depositar"><Landmark className="h-3.5 w-3.5" /></button>
-                          <button onClick={() => { setSelectedEcheq(row); handleEcheqAction("cobrar"); }} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar cobrado"><CheckCircle2 className="h-3.5 w-3.5" /></button>
-                          <button onClick={() => { setSelectedEcheq(row); handleEcheqAction("rechazar"); }} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Rechazar"><Ban className="h-3.5 w-3.5" /></button>
+                          <button onClick={() => handleEcheqAction("cobrar", row)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar cobrado"><CheckCircle2 className="h-3.5 w-3.5" /></button>
+                          <button onClick={() => handleEcheqAction("rechazar", row)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Rechazar"><Ban className="h-3.5 w-3.5" /></button>
                         </>
                       )}
                       <button onClick={() => handleDeleteEcheq(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar"><Trash2 className="h-3.5 w-3.5" /></button>

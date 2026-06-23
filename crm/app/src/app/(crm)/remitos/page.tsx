@@ -152,9 +152,9 @@ export default function RemitosPage() {
 
         const { data, error } = await q;
 
-        if (!error && data && data.length > 0) {
+        if (!error && data) {
           setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "" })) as RemitoRow[]);
-        } else {
+        } else if (error) {
           setRemitos(mockRemitos.map((r) => ({
             id: r.id, numero: r.numero, cliente_id: r.clienteId,
             presupuesto_id: r.presupuestoId || null, fecha: r.fecha,
@@ -228,6 +228,7 @@ export default function RemitosPage() {
         presupuesto_id: createForm.presupuesto_id || null,
         estado: "pendiente",
         valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : null,
+        sociedad_id: sociedadActiva?.id || null,
       });
       setCreateModalOpen(false);
       await fetchData();
@@ -278,6 +279,7 @@ export default function RemitosPage() {
           observaciones: `Generado desde presupuesto ${p.numero}`,
           presupuesto_id: p.id,
           estado: "pendiente",
+          sociedad_id: sociedadActiva?.id || null,
         }).select("id").single();
 
         if (remitoData && p.presupuesto_items.length > 0) {

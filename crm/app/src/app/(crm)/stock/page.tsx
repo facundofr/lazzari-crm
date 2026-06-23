@@ -8,6 +8,7 @@ import { StatCard } from "@/components/ui/stat-card";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { formatCurrency } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
+import { useUser } from "@/lib/auth-context";
 import { mockProducts } from "@/lib/mock-data";
 import {
   Package, AlertTriangle, Search, Loader2, X, Pencil, Plus, Minus,
@@ -77,6 +78,7 @@ const emptyForm = {
 };
 
 export default function StockPage() {
+  const { sociedadActiva } = useUser();
   const [search, setSearch] = useState("");
   const [productos, setProductos] = useState<ProductRow[]>([]);
   const [proveedoresList, setProveedoresList] = useState<ProveedorOption[]>([]);
@@ -119,14 +121,16 @@ export default function StockPage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const { data, error } = await supabase
+      let q = supabase
         .from("productos")
         .select(`*, proveedores(razon_social)`)
         .order("codigo");
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data, error } = await q;
 
-      if (!error && data && data.length > 0) {
+      if (!error && data) {
         setProductos(data as unknown as ProductRow[]);
-      } else {
+      } else if (error) {
         setProductos(mockProducts.map((p) => ({
           id: p.id, codigo: p.codigo, nombre: p.nombre, categoria: p.categoria,
           marca: null,
@@ -148,7 +152,7 @@ export default function StockPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [sociedadActiva]);
 
   const fetchProveedores = useCallback(async () => {
     try {

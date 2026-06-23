@@ -270,7 +270,7 @@ export default function PresupuestosPage() {
 
   // Warning PRs previos
   const [prWarningModal, setPrWarningModal] = useState<{ matches: { numero: string; estado: string; fecha: string; codigos: string[] }[] } | null>(null);
-  const [prWarningBypass, setPrWarningBypass] = useState(false);
+  const prWarningBypassRef = useRef(false);
 
   // AI presupuesto
   const [showAIPanel, setShowAIPanel] = useState(false);
@@ -632,7 +632,7 @@ export default function PresupuestosPage() {
     }
 
     // Check for previous PRs with same client + articles (skip if already bypassed)
-    if (!prWarningBypass && validItems.length > 0) {
+    if (!prWarningBypassRef.current && validItems.length > 0) {
       try {
         const codigos = validItems.map((it) => it.codigo).filter(Boolean);
         if (codigos.length > 0) {
@@ -649,6 +649,8 @@ export default function PresupuestosPage() {
           if (prevPRs && prevPRs.length > 0) {
             const matches: { numero: string; estado: string; fecha: string; codigos: string[] }[] = [];
             for (const pr of prevPRs) {
+              // Skip self when editing
+              if (editingPRId && pr.id === editingPRId) continue;
               const prCodigos = (pr.presupuesto_items || []).map((i: any) => i.codigo).filter(Boolean);
               const overlap = codigos.filter((c: string) => prCodigos.includes(c));
               if (overlap.length > 0) {
@@ -663,7 +665,7 @@ export default function PresupuestosPage() {
         }
       } catch { /* ignore check errors, proceed normally */ }
     }
-    setPrWarningBypass(false); // Reset for next time
+    prWarningBypassRef.current = false; // Reset for next time
 
     setNewPRSaving(true);
     try {
@@ -686,7 +688,11 @@ export default function PresupuestosPage() {
         unidad: it.unidad,
         precio_costo: it.precio_costo,
         markup_porcentaje: it.markup_porcentaje,
+        precio_venta: it.precio_venta,
         iva_porcentaje: it.iva_porcentaje,
+        subtotal: it.subtotal,
+        iva: it.iva,
+        total: it.total,
         orden: it.orden,
         proveedor_id: it.proveedor_id || null,
         lista_item_id: it.lista_item_id || null,
@@ -1115,6 +1121,7 @@ export default function PresupuestosPage() {
 
       setEsSolicitud(fullPR.estado === "solicitud");
       setEditingPRId(pr.id);
+      setClientSearch("");
       setSelected(null);
       setShowNewPR(true);
     } catch (err) {
@@ -1162,6 +1169,7 @@ export default function PresupuestosPage() {
           presupuesto_id: pr.id,
           estado: "pendiente",
           sociedad_id: sociedadActiva?.id || null,
+          created_by: profile?.id || null,
         })
         .select("id")
         .single();
@@ -2191,14 +2199,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       {/* ==================== NUEVO PR MODAL ==================== */}
       <Modal
         open={showNewPR}
-        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); }}
+        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
         title={editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
         description={editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="xl"
         footer={
           <>
             <button
-              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); }}
+              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
               className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
             >
               Cancelar
@@ -2687,8 +2695,8 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             <button
               onClick={() => {
                 setPrWarningModal(null);
-                setPrWarningBypass(true);
-                setTimeout(() => handleCreatePR(), 50);
+                prWarningBypassRef.current = true;
+                handleCreatePR();
               }}
               className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
             >

@@ -67,22 +67,35 @@ async function tryArcaPadron(cuit: string) {
   try {
     await loadArca();
     const arca = getArcaInstance();
-    if (!arca) return null;
+    if (!arca) {
+      console.warn("ARCA padron: no cert/key configured, skipping");
+      return null;
+    }
 
-    // Use padron A13 (basic) — consultarCuit method
-    // Returns: { cuit, nombre, tipoPersona, estadoClave, domicilioFiscal?, impuestos?, raw }
     const persona = await arca.consultarCuit(Number(cuit));
     if (!persona) return null;
 
     const impuestoIds = (persona.impuestos || []).map((i: any) => i.id);
     const domicilio = persona.domicilioFiscal || {};
 
+    // Try to resolve provincia from codPostal or from the raw domicilio data
+    let provincia = "";
+    if (domicilio.codPostal && domicilio.codPostal.length >= 1) {
+      // codPostal prefix sometimes maps to provincia, but it's unreliable
+      // Prefer descripcionProvincia if available from raw data
+      provincia = (domicilio as any).descripcionProvincia || (domicilio as any).nombreProvincia || "";
+    }
+    // If still empty, check idProvincia in domicilio
+    if (!provincia && (domicilio as any).idProvincia != null) {
+      provincia = PROVINCIA_MAP[String((domicilio as any).idProvincia)] || "";
+    }
+
     return {
       razon_social: persona.nombre || "",
       condicion_iva: detectCondicionIva(impuestoIds),
       direccion: domicilio.direccion || "",
       localidad: domicilio.localidad || "",
-      provincia: PROVINCIA_MAP[String(domicilio.codPostal?.slice(0, 1))] || "",
+      provincia,
       cp: domicilio.codPostal || "",
       tipo_persona: persona.tipoPersona || "",
       estado_clave: persona.estadoClave || "",
@@ -93,43 +106,47 @@ async function tryArcaPadron(cuit: string) {
   }
 }
 
-// Fallback: try public APIs
-async function tryPublicAPIs(cuit: string) {
-  const apis = [
-    `https://afip.tangofactura.com/Rest/GetContribuyente?cuit=${cuit}`,
-    `https://afip.tangofactura.com/Rest/GetContribuyenteById?cuit=${cuit}`,
-  ];
+// Fallback: try ARCA with the other sociedad cert (Grupo LA)
+async function tryArcaPadronGrupoLA(cuit: string) {
+  try {
+    await loadArca();
 
-  for (const url of apis) {
-    try {
-      const res = await fetch(url, {
-        headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) continue;
-
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.includes("json")) continue;
-
-      const data = await res.json();
-      if (data.errorGetData || !data.razonSocial) continue;
-
-      const provinciaId = data.domicilioFiscal?.idProvincia ?? "";
-      return {
-        razon_social: data.razonSocial,
-        condicion_iva: detectCondicionIva(data.idImpuesto || []),
-        direccion: data.domicilioFiscal?.direccion || "",
-        localidad: data.domicilioFiscal?.localidad || "",
-        provincia: PROVINCIA_MAP[provinciaId] || data.domicilioFiscal?.descripcionProvincia || "",
-        cp: data.domicilioFiscal?.codPostal || "",
-        tipo_persona: data.tipoPersona || "",
-        estado_clave: data.estadoClave || "",
-      };
-    } catch {
-      continue;
+    let cert = "";
+    if (process.env.ARCA_GRUPOLA_CERT_B64) {
+      cert = Buffer.from(process.env.ARCA_GRUPOLA_CERT_B64, "base64").toString("utf-8");
     }
+    let key = "";
+    if (process.env.ARCA_GRUPOLA_KEY_B64) {
+      key = Buffer.from(process.env.ARCA_GRUPOLA_KEY_B64, "base64").toString("utf-8");
+    }
+
+    if (!cert || !key) return null;
+
+    const arca = new Arca({ cuit: 30719396042, cert, key, production: process.env.ARCA_PRODUCTION !== "false" });
+    const persona = await arca.consultarCuit(Number(cuit));
+    if (!persona) return null;
+
+    const impuestoIds = (persona.impuestos || []).map((i: any) => i.id);
+    const domicilio = persona.domicilioFiscal || {};
+    let provincia = (domicilio as any).descripcionProvincia || (domicilio as any).nombreProvincia || "";
+    if (!provincia && (domicilio as any).idProvincia != null) {
+      provincia = PROVINCIA_MAP[String((domicilio as any).idProvincia)] || "";
+    }
+
+    return {
+      razon_social: persona.nombre || "",
+      condicion_iva: detectCondicionIva(impuestoIds),
+      direccion: domicilio.direccion || "",
+      localidad: domicilio.localidad || "",
+      provincia,
+      cp: domicilio.codPostal || "",
+      tipo_persona: persona.tipoPersona || "",
+      estado_clave: persona.estadoClave || "",
+    };
+  } catch (err) {
+    console.error("ARCA Grupo LA padron error:", err);
+    return null;
   }
-  return null;
 }
 
 export async function GET(request: NextRequest) {
@@ -148,14 +165,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(arcaResult);
   }
 
-  // Fallback to public APIs
-  const publicResult = await tryPublicAPIs(cuit);
-  if (publicResult) {
-    return NextResponse.json(publicResult);
+  // Fallback: try with Grupo LA cert
+  const grupoLAResult = await tryArcaPadronGrupoLA(cuit);
+  if (grupoLAResult) {
+    return NextResponse.json(grupoLAResult);
   }
 
   return NextResponse.json(
-    { error: "No se pudo consultar el CUIT. Los servicios de AFIP pueden estar temporalmente no disponibles. Intenta nuevamente en unos minutos." },
+    { error: "No se pudo consultar el CUIT. Verifica que los certificados ARCA estén configurados y que el CUIT sea válido." },
     { status: 503 }
   );
 }

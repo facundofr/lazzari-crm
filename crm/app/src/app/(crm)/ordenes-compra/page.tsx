@@ -210,9 +210,9 @@ export default function OrdenesCompraPage() {
 
       const { data, error } = await q;
 
-      if (!error && data && data.length > 0) {
+      if (!error && data) {
         setOrdenes(data as unknown as OCRow[]);
-      } else {
+      } else if (error) {
         setOrdenes(mockOrdenesCompra.map(mapMockToOCRow));
       }
     } catch {
@@ -280,6 +280,7 @@ export default function OrdenesCompraPage() {
         observaciones: formData.observaciones,
         estado: "borrador",
         subtotal: 0, iva: 0, total: 0,
+        sociedad_id: sociedadActiva?.id || null,
       } as any);
       if (error) throw error;
       setCreateOpen(false);
