@@ -6,10 +6,10 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail } from "lucide-react";
+import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatCurrency } from "@/lib/utils";
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -34,6 +34,13 @@ const estadoConfig: Record<string, { label: string; variant: "success" | "warnin
   parcial: { label: "Parcial", variant: "info" },
 };
 
+const transporteEstadoConfig: Record<string, { label: string; variant: "success" | "warning" | "info" | "danger" }> = {
+  solicitado: { label: "Solicitado", variant: "warning" },
+  en_transito: { label: "En tránsito", variant: "info" },
+  entregado: { label: "Entregado", variant: "success" },
+  cancelado: { label: "Cancelado", variant: "danger" },
+};
+
 interface RemitoRow {
   id: string;
   numero: string;
@@ -55,6 +62,16 @@ interface RemitoDetailItem {
   cantidad: number;
   unidad: string | null;
   orden: number;
+}
+
+interface TransporteLinked {
+  id: string;
+  transportista: string;
+  estado: string;
+  fecha: string;
+  destino: string | null;
+  costo: number | null;
+  moneda: string;
 }
 
 interface PresupuestoIA {
@@ -91,6 +108,22 @@ export default function RemitosPage() {
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [detailPRNumero, setDetailPRNumero] = useState<string | null>(null);
   const [detailFacturas, setDetailFacturas] = useState<{ id: string; numero: string; tipo: string; total: number; estado: string }[]>([]);
+  const [detailTransportes, setDetailTransportes] = useState<TransporteLinked[]>([]);
+
+  // Create transporte from remito
+  const [createTransporteOpen, setCreateTransporteOpen] = useState(false);
+  const [transporteForm, setTransporteForm] = useState({
+    transportista: "",
+    destino: "",
+    origen: "",
+    fecha: new Date().toISOString().split("T")[0],
+    costo: "",
+    moneda: "ARS" as "ARS" | "USD",
+    bultos: "",
+    tipo_vehiculo: "",
+    notas: "",
+  });
+  const [creatingTransporte, setCreatingTransporte] = useState(false);
 
   // IA generation modal state
   const [iaModalOpen, setIaModalOpen] = useState(false);
@@ -178,13 +211,17 @@ export default function RemitosPage() {
       } finally {
         setLoading(false);
       }
-  }, [sociedadActiva]);
+  }, [sociedadActiva?.id]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
   async function handleEstadoChange(id: string, estado: "pendiente" | "entregado" | "parcial") {
     try {
-      await supabase.from("remitos").update({ estado }).eq("id", id);
+      const { error } = await supabase.from("remitos").update({ estado }).eq("id", id);
+      if (error) {
+        alert("Error al actualizar estado: " + error.message);
+        return;
+      }
       await fetchData();
     } catch (err) {
       console.error("Error updating remito:", err);
@@ -206,9 +243,12 @@ export default function RemitosPage() {
       presupuesto_id: "",
       valor_declarado: "",
     });
-    // Fetch clientes and presupuestos in parallel
+
+    let clienteQ = supabase.from("clientes").select("id, razon_social").eq("activo", true).order("razon_social");
+    if (sociedadActiva?.id) clienteQ = clienteQ.eq("sociedad_id" as any, sociedadActiva.id);
+
     const [clientesRes, presupuestosRes] = await Promise.all([
-      supabase.from("clientes").select("id, razon_social").eq("activo", true).order("razon_social"),
+      clienteQ,
       supabase.from("presupuestos").select("id, numero, subtotal").eq("estado", "aprobado"),
     ]);
     if (clientesRes.data) setClientes(clientesRes.data as { id: string; razon_social: string }[]);
@@ -220,7 +260,7 @@ export default function RemitosPage() {
     if (!createForm.numero || !createForm.cliente_id || !createForm.fecha) return;
     setCreating(true);
     try {
-      await (supabase.from("remitos") as any).insert({
+      const { error } = await (supabase.from("remitos") as any).insert({
         numero: createForm.numero,
         cliente_id: createForm.cliente_id,
         fecha: createForm.fecha,
@@ -230,6 +270,10 @@ export default function RemitosPage() {
         valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : null,
         sociedad_id: sociedadActiva?.id || null,
       });
+      if (error) {
+        alert("Error al crear remito: " + error.message);
+        return;
+      }
       setCreateModalOpen(false);
       await fetchData();
     } catch (err) {
@@ -272,7 +316,7 @@ export default function RemitosPage() {
         const p = presupuestosIA.find((x) => x.id === pId);
         if (!p) continue;
         const numero = `R-0001-${String(idx).padStart(8, "0")}`;
-        const { data: remitoData } = await (supabase.from("remitos") as any).insert({
+        const { data: remitoData, error: rErr } = await (supabase.from("remitos") as any).insert({
           numero,
           cliente_id: p.cliente_id,
           fecha: new Date().toISOString().split("T")[0],
@@ -281,6 +325,11 @@ export default function RemitosPage() {
           estado: "pendiente",
           sociedad_id: sociedadActiva?.id || null,
         }).select("id").single();
+
+        if (rErr) {
+          console.error("Error creating remito:", rErr);
+          continue;
+        }
 
         if (remitoData && p.presupuesto_items.length > 0) {
           const items = p.presupuesto_items.map((item, idx) => ({
@@ -308,6 +357,8 @@ export default function RemitosPage() {
     setDetailLoading(true);
     setDetailPRNumero(null);
     setDetailFacturas([]);
+    setDetailTransportes([]);
+    setCreateTransporteOpen(false);
     try {
       // Fetch items
       const itemsPromise = supabase
@@ -324,15 +375,23 @@ export default function RemitosPage() {
         ? supabase.from("facturas").select("id, numero, tipo, total, estado").eq("presupuesto_id" as any, row.presupuesto_id)
         : null;
 
-      const [itemsRes, prRes, facturasRes] = await Promise.all([
+      // Fetch linked transportes
+      const transportesPromise = (supabase as any)
+        .from("transportes")
+        .select("id, transportista, estado, fecha, destino, costo, moneda")
+        .eq("remito_id", row.id);
+
+      const [itemsRes, prRes, facturasRes, transportesRes] = await Promise.all([
         itemsPromise,
         prPromise,
         facturasPromise,
+        transportesPromise,
       ]);
 
       setDetailItems((itemsRes.data as unknown as RemitoDetailItem[]) || []);
       if (prRes?.data) setDetailPRNumero((prRes.data as any).numero || null);
       if (facturasRes?.data) setDetailFacturas((facturasRes.data as any[]) || []);
+      if (transportesRes?.data) setDetailTransportes((transportesRes.data as TransporteLinked[]) || []);
     } catch {
       setDetailItems([]);
     } finally {
@@ -432,6 +491,43 @@ export default function RemitosPage() {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
+  async function handleCreateTransporteFromRemito() {
+    if (!detailRemito || !transporteForm.transportista) return;
+    setCreatingTransporte(true);
+    try {
+      const { error } = await (supabase as any).from("transportes").insert({
+        sociedad_id: sociedadActiva?.id,
+        transportista: transporteForm.transportista,
+        destino: transporteForm.destino || null,
+        origen: transporteForm.origen || null,
+        cliente_id: detailRemito.cliente_id,
+        remito_id: detailRemito.id,
+        fecha: transporteForm.fecha,
+        costo: transporteForm.costo ? Number(transporteForm.costo) : null,
+        moneda: transporteForm.moneda,
+        bultos: transporteForm.bultos ? Number(transporteForm.bultos) : null,
+        tipo_vehiculo: transporteForm.tipo_vehiculo || null,
+        notas: transporteForm.notas || null,
+        estado: "solicitado",
+      });
+      if (error) {
+        alert("Error al crear transporte: " + error.message);
+        return;
+      }
+      setCreateTransporteOpen(false);
+      // Refresh transportes in detail
+      const { data: tData } = await (supabase as any)
+        .from("transportes")
+        .select("id, transportista, estado, fecha, destino, costo, moneda")
+        .eq("remito_id", detailRemito.id);
+      if (tData) setDetailTransportes(tData as TransporteLinked[]);
+    } catch (err) {
+      console.error("Error creating transporte:", err);
+    } finally {
+      setCreatingTransporte(false);
+    }
+  }
+
   if (loading) {
     return (
       <>
@@ -519,17 +615,13 @@ export default function RemitosPage() {
               },
             ]}
             data={remitos.filter((r) => {
-              // fecha filter
               const fechaFilter = smartFilterValues.fecha as { from?: string; to?: string } | undefined;
               if (fechaFilter?.from && r.fecha < fechaFilter.from) return false;
               if (fechaFilter?.to && r.fecha > fechaFilter.to) return false;
-              // estado filter
               const estadoFilter = smartFilterValues.estado as string;
               if (estadoFilter && r.estado !== estadoFilter) return false;
-              // cliente filter
               const clienteFilter = smartFilterValues.cliente as string;
               if (clienteFilter && r.clientes?.razon_social !== clienteFilter) return false;
-              // vinculado filter
               const vinculadoFilter = smartFilterValues.vinculado as string;
               if (vinculadoFilter === "si" && !r.presupuesto_id) return false;
               if (vinculadoFilter === "no" && r.presupuesto_id) return false;
@@ -540,7 +632,7 @@ export default function RemitosPage() {
         </Card>
       </div>
 
-      {/* ── Detail Side Panel ───────────────────────────────────────── */}
+      {/* Detail Side Panel */}
       {detailRemito && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-black/30" onClick={() => setDetailRemito(null)} />
@@ -629,6 +721,107 @@ export default function RemitosPage() {
                 )}
               </div>
 
+              {/* Linked transportes */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs text-zinc-400 font-medium">Transporte</span>
+                  {!createTransporteOpen && (
+                    <button
+                      onClick={() => {
+                        setTransporteForm({
+                          transportista: "", destino: "", origen: "",
+                          fecha: new Date().toISOString().split("T")[0],
+                          costo: "", moneda: "ARS", bultos: "", tipo_vehiculo: "", notas: "",
+                        });
+                        setCreateTransporteOpen(true);
+                      }}
+                      className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium"
+                    >
+                      <Plus className="h-3 w-3" /> Agregar transporte
+                    </button>
+                  )}
+                </div>
+
+                {detailTransportes.length > 0 ? (
+                  <div className="space-y-2">
+                    {detailTransportes.map(t => {
+                      const cfg = transporteEstadoConfig[t.estado] || { label: t.estado, variant: "info" as const };
+                      return (
+                        <div key={t.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Truck className="h-4 w-4 text-zinc-400" />
+                              <span className="font-medium text-sm dark:text-white">{t.transportista}</span>
+                              <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                            </div>
+                            <span className="text-xs text-zinc-400">{formatDate(t.fecha)}</span>
+                          </div>
+                          <div className="flex items-center gap-4 mt-1.5 text-xs text-zinc-500">
+                            {t.destino && <span>Destino: {t.destino}</span>}
+                            {t.costo != null && (
+                              <span className="font-mono text-emerald-600 dark:text-emerald-400">
+                                {formatCurrency(t.costo, t.moneda as "USD" | "ARS")}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : !createTransporteOpen ? (
+                  <p className="text-sm text-zinc-400 text-center py-3 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700">
+                    Sin transporte asignado
+                  </p>
+                ) : null}
+
+                {/* Inline create transporte form */}
+                {createTransporteOpen && (
+                  <div className="rounded-lg border border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-950/20 p-3 space-y-2 mt-2">
+                    <p className="text-xs font-medium text-orange-600 dark:text-orange-400 mb-2">Nuevo transporte para este remito</p>
+                    <div>
+                      <input type="text" value={transporteForm.transportista} onChange={e => setTransporteForm({ ...transporteForm, transportista: e.target.value })}
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                        placeholder="Transportista *" autoFocus />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="text" value={transporteForm.origen} onChange={e => setTransporteForm({ ...transporteForm, origen: e.target.value })}
+                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Origen" />
+                      <input type="text" value={transporteForm.destino} onChange={e => setTransporteForm({ ...transporteForm, destino: e.target.value })}
+                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Destino" />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <input type="date" value={transporteForm.fecha} onChange={e => setTransporteForm({ ...transporteForm, fecha: e.target.value })}
+                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      <input type="number" step="0.01" value={transporteForm.costo} onChange={e => setTransporteForm({ ...transporteForm, costo: e.target.value })}
+                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Monto (opc.)" />
+                      <select value={transporteForm.moneda} onChange={e => setTransporteForm({ ...transporteForm, moneda: e.target.value as "ARS" | "USD" })}
+                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                        <option value="ARS">ARS</option>
+                        <option value="USD">USD</option>
+                      </select>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="number" min="0" value={transporteForm.bultos} onChange={e => setTransporteForm({ ...transporteForm, bultos: e.target.value })}
+                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Bultos" />
+                      <input type="text" value={transporteForm.tipo_vehiculo} onChange={e => setTransporteForm({ ...transporteForm, tipo_vehiculo: e.target.value })}
+                        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Tipo vehículo" />
+                    </div>
+                    <textarea value={transporteForm.notas} onChange={e => setTransporteForm({ ...transporteForm, notas: e.target.value })}
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" rows={1} placeholder="Notas..." />
+                    <div className="flex justify-end gap-2">
+                      <button onClick={() => setCreateTransporteOpen(false)} className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">
+                        Cancelar
+                      </button>
+                      <button onClick={handleCreateTransporteFromRemito} disabled={creatingTransporte || !transporteForm.transportista}
+                        className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-50 flex items-center gap-1">
+                        {creatingTransporte && <Loader2 className="h-3 w-3 animate-spin" />}
+                        Crear transporte
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Linked facturas */}
               {detailFacturas.length > 0 && (
                 <div>
@@ -700,7 +893,7 @@ export default function RemitosPage() {
       {/* Create Remito Modal */}
       {createModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <Card className="w-full max-w-lg p-6 space-y-4">
+          <Card className="w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold dark:text-white">Nuevo Remito</h2>
               <button onClick={() => setCreateModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">

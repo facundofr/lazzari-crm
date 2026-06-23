@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
-import { Truck, Plus, X, Loader2, CheckCircle2, Clock, Package, MapPin } from "lucide-react";
+import { Truck, Plus, X, Loader2, CheckCircle2, Clock, Package, MapPin, FileText, Link2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -40,6 +40,7 @@ interface TransporteRow {
   created_by: string | null;
   created_at: string;
   clientes: { razon_social: string } | null;
+  remitos: { numero: string; estado: string } | null;
 }
 
 export default function TransportesPage() {
@@ -49,13 +50,15 @@ export default function TransportesPage() {
 
   // Create modal state
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
+  const [clientes, setClientes] = useState<{ id: string; razon_social: string; direccion?: string; localidad?: string }[]>([]);
+  const [remitosDisponibles, setRemitosDisponibles] = useState<{ id: string; numero: string; cliente_id: string; clienteNombre: string; estado: string }[]>([]);
   const [creating, setCreating] = useState(false);
   const [createForm, setCreateForm] = useState({
     transportista: "",
     destino: "",
     origen: "",
     cliente_id: "",
+    remito_id: "",
     fecha: new Date().toISOString().split("T")[0],
     costo: "",
     moneda: "ARS" as "ARS" | "USD",
@@ -67,6 +70,20 @@ export default function TransportesPage() {
 
   // Detail panel
   const [detailTransporte, setDetailTransporte] = useState<TransporteRow | null>(null);
+  // Edit mode
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState({
+    transportista: "",
+    destino: "",
+    origen: "",
+    costo: "",
+    moneda: "ARS" as "ARS" | "USD",
+    bultos: "",
+    tipo_vehiculo: "",
+    descripcion_carga: "",
+    notas: "",
+  });
+  const [saving, setSaving] = useState(false);
 
   // SmartFilters state
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
@@ -95,7 +112,7 @@ export default function TransportesPage() {
     try {
       let q = (supabase as any)
         .from("transportes")
-        .select(`*, clientes(razon_social)`)
+        .select(`*, clientes(razon_social), remitos(numero, estado)`)
         .order("fecha", { ascending: false });
 
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
@@ -112,13 +129,17 @@ export default function TransportesPage() {
     } finally {
       setLoading(false);
     }
-  }, [sociedadActiva]);
+  }, [sociedadActiva?.id]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
   async function handleEstadoChange(id: string, estado: string) {
     try {
-      await (supabase as any).from("transportes").update({ estado }).eq("id", id);
+      const { error } = await (supabase as any).from("transportes").update({ estado }).eq("id", id);
+      if (error) {
+        alert("Error al actualizar estado: " + error.message);
+        return;
+      }
       await fetchData();
       if (detailTransporte?.id === id) {
         setDetailTransporte((prev) => prev ? { ...prev, estado } : null);
@@ -134,6 +155,7 @@ export default function TransportesPage() {
       destino: "",
       origen: "",
       cliente_id: "",
+      remito_id: "",
       fecha: new Date().toISOString().split("T")[0],
       costo: "",
       moneda: "ARS",
@@ -142,25 +164,40 @@ export default function TransportesPage() {
       tipo_vehiculo: "",
       notas: "",
     });
-    const { data } = await supabase
-      .from("clientes")
-      .select("id, razon_social")
-      .eq("activo", true)
-      .order("razon_social");
-    if (data) setClientes(data as { id: string; razon_social: string }[]);
+
+    // Fetch clientes and remitos pendientes in parallel
+    let clienteQ = supabase.from("clientes").select("id, razon_social, direccion, localidad").eq("activo", true).order("razon_social");
+    if (sociedadActiva?.id) clienteQ = clienteQ.eq("sociedad_id" as any, sociedadActiva.id);
+
+    let remitoQ = (supabase as any).from("remitos").select("id, numero, cliente_id, clientes(razon_social), estado").in("estado", ["pendiente", "parcial"]).order("fecha", { ascending: false });
+    if (sociedadActiva?.id) remitoQ = remitoQ.eq("sociedad_id", sociedadActiva.id);
+
+    const [clientesRes, remitosRes] = await Promise.all([clienteQ, remitoQ]);
+
+    if (clientesRes.data) setClientes(clientesRes.data as any[]);
+    if (remitosRes.data) {
+      setRemitosDisponibles((remitosRes.data as any[]).map((r: any) => ({
+        id: r.id,
+        numero: r.numero,
+        cliente_id: r.cliente_id,
+        clienteNombre: r.clientes?.razon_social || "",
+        estado: r.estado,
+      })));
+    }
     setCreateModalOpen(true);
   }
 
   async function handleCreateTransporte() {
-    if (!createForm.transportista || !createForm.destino || !createForm.fecha) return;
+    if (!createForm.transportista || !createForm.fecha) return;
     setCreating(true);
     try {
-      await (supabase as any).from("transportes").insert({
+      const { error } = await (supabase as any).from("transportes").insert({
         sociedad_id: sociedadActiva?.id,
         transportista: createForm.transportista,
-        destino: createForm.destino,
+        destino: createForm.destino || null,
         origen: createForm.origen || null,
         cliente_id: createForm.cliente_id || null,
+        remito_id: createForm.remito_id || null,
         fecha: createForm.fecha,
         costo: createForm.costo ? Number(createForm.costo) : null,
         moneda: createForm.moneda,
@@ -170,6 +207,10 @@ export default function TransportesPage() {
         notas: createForm.notas || null,
         estado: "solicitado",
       });
+      if (error) {
+        alert("Error al crear transporte: " + error.message);
+        return;
+      }
       setCreateModalOpen(false);
       await fetchData();
     } catch (err) {
@@ -181,6 +222,64 @@ export default function TransportesPage() {
 
   function handleRowClick(row: TransporteRow) {
     setDetailTransporte(row);
+    setEditing(false);
+  }
+
+  function startEditing() {
+    if (!detailTransporte) return;
+    setEditForm({
+      transportista: detailTransporte.transportista,
+      destino: detailTransporte.destino || "",
+      origen: detailTransporte.origen || "",
+      costo: detailTransporte.costo != null ? String(detailTransporte.costo) : "",
+      moneda: detailTransporte.moneda as "ARS" | "USD",
+      bultos: detailTransporte.bultos != null ? String(detailTransporte.bultos) : "",
+      tipo_vehiculo: detailTransporte.tipo_vehiculo || "",
+      descripcion_carga: detailTransporte.descripcion_carga || "",
+      notas: detailTransporte.notas || "",
+    });
+    setEditing(true);
+  }
+
+  async function handleSaveEdit() {
+    if (!detailTransporte) return;
+    setSaving(true);
+    try {
+      const { error } = await (supabase as any).from("transportes").update({
+        transportista: editForm.transportista,
+        destino: editForm.destino || null,
+        origen: editForm.origen || null,
+        costo: editForm.costo ? Number(editForm.costo) : null,
+        moneda: editForm.moneda,
+        bultos: editForm.bultos ? Number(editForm.bultos) : null,
+        tipo_vehiculo: editForm.tipo_vehiculo || null,
+        descripcion_carga: editForm.descripcion_carga || null,
+        notas: editForm.notas || null,
+      }).eq("id", detailTransporte.id);
+      if (error) {
+        alert("Error al guardar: " + error.message);
+        return;
+      }
+      setEditing(false);
+      await fetchData();
+      // Refresh detail
+      const { data } = await (supabase as any).from("transportes").select("*, clientes(razon_social), remitos(numero, estado)").eq("id", detailTransporte.id).single();
+      if (data) setDetailTransporte(data as unknown as TransporteRow);
+    } catch (err) {
+      console.error("Error saving:", err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // When selecting a remito in create form, auto-fill cliente
+  function handleRemitoSelect(remitoId: string) {
+    const remito = remitosDisponibles.find(r => r.id === remitoId);
+    setCreateForm(prev => ({
+      ...prev,
+      remito_id: remitoId,
+      cliente_id: remito ? remito.cliente_id : prev.cliente_id,
+    }));
   }
 
   // Apply filters
@@ -210,7 +309,7 @@ export default function TransportesPage() {
     <>
       <Header
         title="Transportes"
-        subtitle="Gestión de viajes y comisiones"
+        subtitle="Gestión de viajes y entregas"
         action={{ label: "Nuevo transporte", onClick: openCreateModal }}
       />
       <div className="p-4 sm:p-8 space-y-6">
@@ -233,7 +332,7 @@ export default function TransportesPage() {
               },
               {
                 key: "transportista",
-                label: "Transporte",
+                label: "Transportista",
                 sortable: true,
                 render: (row) => (
                   <div className="flex items-center gap-2">
@@ -243,27 +342,32 @@ export default function TransportesPage() {
                 ),
               },
               {
-                key: "origen",
-                label: "Desde",
+                key: "clientes",
+                label: "Cliente",
                 sortable: false,
                 render: (row) => (
-                  <span className="text-sm dark:text-zinc-300">{row.origen || "—"}</span>
+                  <span className="text-sm dark:text-zinc-300">{row.clientes?.razon_social || "—"}</span>
                 ),
               },
               {
                 key: "destino",
-                label: "Hasta",
+                label: "Destino",
                 sortable: false,
                 render: (row) => (
                   <span className="text-sm dark:text-zinc-300">{row.destino || "—"}</span>
                 ),
               },
               {
-                key: "bultos",
-                label: "Bultos",
-                sortable: true,
-                render: (row) => (
-                  <span className="font-medium dark:text-white">{row.bultos != null ? row.bultos : "—"}</span>
+                key: "remito_id",
+                label: "Remito",
+                sortable: false,
+                render: (row) => row.remitos ? (
+                  <div className="flex items-center gap-1">
+                    <FileText className="h-3 w-3 text-blue-500" />
+                    <span className="text-xs font-mono text-blue-600 dark:text-blue-400">{row.remitos.numero}</span>
+                  </div>
+                ) : (
+                  <span className="text-zinc-400">—</span>
                 ),
               },
               {
@@ -272,7 +376,7 @@ export default function TransportesPage() {
                 sortable: true,
                 render: (row) => (
                   <span className="font-mono text-sm dark:text-white">
-                    {row.costo != null ? formatCurrency(row.costo, row.moneda as "USD" | "ARS") : "—"}
+                    {row.costo != null ? formatCurrency(row.costo, row.moneda as "USD" | "ARS") : <span className="text-zinc-400">Sin costo</span>}
                   </span>
                 ),
               },
@@ -328,10 +432,10 @@ export default function TransportesPage() {
         </Card>
       </div>
 
-      {/* ── Detail Side Panel ───────────────────────────────────────── */}
+      {/* Detail Side Panel */}
       {detailTransporte && (
         <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setDetailTransporte(null)} />
+          <div className="absolute inset-0 bg-black/30" onClick={() => { setDetailTransporte(null); setEditing(false); }} />
           <div className="relative w-full max-w-xl bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
               <div>
@@ -343,14 +447,24 @@ export default function TransportesPage() {
                 </div>
                 <p className="text-sm text-zinc-400 mt-0.5">{formatDate(detailTransporte.fecha)}</p>
               </div>
-              <button onClick={() => setDetailTransporte(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                <X className="h-5 w-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {!editing && detailTransporte.estado !== "entregado" && detailTransporte.estado !== "cancelado" && (
+                  <button
+                    onClick={startEditing}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                  >
+                    Editar
+                  </button>
+                )}
+                <button onClick={() => { setDetailTransporte(null); setEditing(false); }} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
             </div>
 
             <div className="px-6 py-5 space-y-5">
               {/* Action buttons */}
-              {detailTransporte.estado !== "entregado" && detailTransporte.estado !== "cancelado" && (
+              {!editing && detailTransporte.estado !== "entregado" && detailTransporte.estado !== "cancelado" && (
                 <div className="flex flex-wrap gap-2">
                   {detailTransporte.estado === "solicitado" && (
                     <button
@@ -371,79 +485,170 @@ export default function TransportesPage() {
                 </div>
               )}
 
-              {/* Info grid */}
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="text-zinc-400">Cliente</span>
-                  <p className="font-medium dark:text-white">{detailTransporte.clientes?.razon_social || "—"}</p>
-                </div>
-                <div>
-                  <span className="text-zinc-400">Tipo de vehículo</span>
-                  <p className="font-medium dark:text-white">{detailTransporte.tipo_vehiculo || "—"}</p>
-                </div>
-                <div>
-                  <span className="text-zinc-400">Origen</span>
-                  <div className="flex items-center gap-1.5">
-                    <MapPin className="h-3.5 w-3.5 text-zinc-400" />
-                    <p className="font-medium dark:text-white">{detailTransporte.origen || "—"}</p>
-                  </div>
-                </div>
-                <div>
-                  <span className="text-zinc-400">Destino</span>
-                  <div className="flex items-center gap-1.5">
-                    <MapPin className="h-3.5 w-3.5 text-orange-500" />
-                    <p className="font-medium dark:text-white">{detailTransporte.destino || "—"}</p>
-                  </div>
-                </div>
-                <div>
-                  <span className="text-zinc-400">Costo</span>
-                  <p className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
-                    {detailTransporte.costo != null ? formatCurrency(detailTransporte.costo, detailTransporte.moneda as "USD" | "ARS") : "—"}
-                  </p>
-                </div>
-                <div>
-                  <span className="text-zinc-400">Bultos</span>
-                  <p className="font-medium dark:text-white">
-                    {detailTransporte.bultos != null ? detailTransporte.bultos : "—"}
-                  </p>
-                </div>
-                {detailTransporte.comision_porcentaje != null && (
+              {editing ? (
+                /* Edit form */
+                <div className="space-y-3">
                   <div>
-                    <span className="text-zinc-400">Comisión (%)</span>
-                    <p className="font-medium dark:text-white">{detailTransporte.comision_porcentaje}%</p>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Transportista</label>
+                    <input type="text" value={editForm.transportista} onChange={e => setEditForm({ ...editForm, transportista: e.target.value })}
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                   </div>
-                )}
-                {detailTransporte.comision_monto != null && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Origen</label>
+                      <input type="text" value={editForm.origen} onChange={e => setEditForm({ ...editForm, origen: e.target.value })}
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Destino</label>
+                      <input type="text" value={editForm.destino} onChange={e => setEditForm({ ...editForm, destino: e.target.value })}
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Monto (opcional)</label>
+                      <input type="number" step="0.01" value={editForm.costo} onChange={e => setEditForm({ ...editForm, costo: e.target.value })}
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Sin costo" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Moneda</label>
+                      <select value={editForm.moneda} onChange={e => setEditForm({ ...editForm, moneda: e.target.value as "ARS" | "USD" })}
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                        <option value="ARS">ARS</option>
+                        <option value="USD">USD</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Bultos</label>
+                      <input type="number" min="0" value={editForm.bultos} onChange={e => setEditForm({ ...editForm, bultos: e.target.value })}
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo vehículo</label>
+                      <input type="text" value={editForm.tipo_vehiculo} onChange={e => setEditForm({ ...editForm, tipo_vehiculo: e.target.value })}
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Semi, Chasis..." />
+                    </div>
+                  </div>
                   <div>
-                    <span className="text-zinc-400">Comisión ($)</span>
-                    <p className="font-mono font-medium text-orange-600 dark:text-orange-400">
-                      {formatCurrency(detailTransporte.comision_monto, detailTransporte.moneda as "USD" | "ARS")}
-                    </p>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Descripción de carga</label>
+                    <textarea value={editForm.descripcion_carga} onChange={e => setEditForm({ ...editForm, descripcion_carga: e.target.value })}
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" rows={2} />
                   </div>
-                )}
-              </div>
-
-              {/* Descripcion carga */}
-              {detailTransporte.descripcion_carga && (
-                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
-                  <span className="text-xs text-zinc-400 block mb-1">Descripción de carga</span>
-                  <p className="text-sm dark:text-zinc-300">{detailTransporte.descripcion_carga}</p>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Notas</label>
+                    <textarea value={editForm.notas} onChange={e => setEditForm({ ...editForm, notas: e.target.value })}
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" rows={2} />
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <button onClick={() => setEditing(false)} className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">
+                      Cancelar
+                    </button>
+                    <button onClick={handleSaveEdit} disabled={saving || !editForm.transportista}
+                      className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50 flex items-center gap-2">
+                      {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                      Guardar
+                    </button>
+                  </div>
                 </div>
-              )}
+              ) : (
+                <>
+                  {/* Info grid */}
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-zinc-400">Cliente</span>
+                      <p className="font-medium dark:text-white">{detailTransporte.clientes?.razon_social || "—"}</p>
+                    </div>
+                    <div>
+                      <span className="text-zinc-400">Tipo de vehículo</span>
+                      <p className="font-medium dark:text-white">{detailTransporte.tipo_vehiculo || "—"}</p>
+                    </div>
+                    <div>
+                      <span className="text-zinc-400">Origen</span>
+                      <div className="flex items-center gap-1.5">
+                        <MapPin className="h-3.5 w-3.5 text-zinc-400" />
+                        <p className="font-medium dark:text-white">{detailTransporte.origen || "—"}</p>
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-zinc-400">Destino</span>
+                      <div className="flex items-center gap-1.5">
+                        <MapPin className="h-3.5 w-3.5 text-orange-500" />
+                        <p className="font-medium dark:text-white">{detailTransporte.destino || "—"}</p>
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-zinc-400">Costo</span>
+                      <p className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
+                        {detailTransporte.costo != null ? formatCurrency(detailTransporte.costo, detailTransporte.moneda as "USD" | "ARS") : <span className="text-zinc-400 font-sans">Sin costo asignado</span>}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-zinc-400">Bultos</span>
+                      <p className="font-medium dark:text-white">
+                        {detailTransporte.bultos != null ? detailTransporte.bultos : "—"}
+                      </p>
+                    </div>
+                    {detailTransporte.comision_porcentaje != null && (
+                      <div>
+                        <span className="text-zinc-400">Comisión (%)</span>
+                        <p className="font-medium dark:text-white">{detailTransporte.comision_porcentaje}%</p>
+                      </div>
+                    )}
+                    {detailTransporte.comision_monto != null && (
+                      <div>
+                        <span className="text-zinc-400">Comisión ($)</span>
+                        <p className="font-mono font-medium text-orange-600 dark:text-orange-400">
+                          {formatCurrency(detailTransporte.comision_monto, detailTransporte.moneda as "USD" | "ARS")}
+                        </p>
+                      </div>
+                    )}
+                  </div>
 
-              {/* Notas */}
-              {detailTransporte.notas && (
-                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
-                  <span className="text-xs text-zinc-400 block mb-1">Notas</span>
-                  <p className="text-sm dark:text-zinc-300">{detailTransporte.notas}</p>
-                </div>
+                  {/* Linked remito */}
+                  {detailTransporte.remitos && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 p-3">
+                      <span className="text-xs text-blue-500 block mb-1">Remito vinculado</span>
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-blue-500" />
+                        <button
+                          onClick={() => window.open("/remitos", "_self")}
+                          className="font-mono text-sm font-bold text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                          {detailTransporte.remitos.numero}
+                        </button>
+                        <Badge variant={detailTransporte.remitos.estado === "entregado" ? "success" : detailTransporte.remitos.estado === "parcial" ? "info" : "warning"}>
+                          {detailTransporte.remitos.estado}
+                        </Badge>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Descripcion carga */}
+                  {detailTransporte.descripcion_carga && (
+                    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
+                      <span className="text-xs text-zinc-400 block mb-1">Descripción de carga</span>
+                      <p className="text-sm dark:text-zinc-300">{detailTransporte.descripcion_carga}</p>
+                    </div>
+                  )}
+
+                  {/* Notas */}
+                  {detailTransporte.notas && (
+                    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
+                      <span className="text-xs text-zinc-400 block mb-1">Notas</span>
+                      <p className="text-sm dark:text-zinc-300">{detailTransporte.notas}</p>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* ── Create Modal ───────────────────────────────────────── */}
+      {/* Create Modal */}
       {createModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <Card className="w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
@@ -464,6 +669,44 @@ export default function TransportesPage() {
                   placeholder="Nombre del transportista"
                 />
               </div>
+
+              {/* Remito vinculado */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                  <span className="flex items-center gap-1.5"><Link2 className="h-3.5 w-3.5" /> Vincular a remito (opcional)</span>
+                </label>
+                <select
+                  value={createForm.remito_id}
+                  onChange={(e) => handleRemitoSelect(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                >
+                  <option value="">Sin remito</option>
+                  {remitosDisponibles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.numero} — {r.clienteNombre}
+                    </option>
+                  ))}
+                </select>
+                {createForm.remito_id && (
+                  <p className="text-xs text-blue-500 mt-1">El cliente se seleccionó automáticamente del remito.</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente</label>
+                <select
+                  value={createForm.cliente_id}
+                  onChange={(e) => setCreateForm({ ...createForm, cliente_id: e.target.value })}
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                  disabled={!!createForm.remito_id}
+                >
+                  <option value="">Seleccionar cliente...</option>
+                  {clientes.map((c) => (
+                    <option key={c.id} value={c.id}>{c.razon_social}</option>
+                  ))}
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Origen</label>
@@ -476,7 +719,7 @@ export default function TransportesPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Destino *</label>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Destino</label>
                   <input
                     type="text"
                     value={createForm.destino}
@@ -485,19 +728,6 @@ export default function TransportesPage() {
                     placeholder="Ciudad de destino"
                   />
                 </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente</label>
-                <select
-                  value={createForm.cliente_id}
-                  onChange={(e) => setCreateForm({ ...createForm, cliente_id: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                >
-                  <option value="">Seleccionar cliente...</option>
-                  {clientes.map((c) => (
-                    <option key={c.id} value={c.id}>{c.razon_social}</option>
-                  ))}
-                </select>
               </div>
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha *</label>
@@ -521,14 +751,14 @@ export default function TransportesPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Monto</label>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Monto (opcional)</label>
                   <input
                     type="number"
                     step="0.01"
                     value={createForm.costo}
                     onChange={(e) => setCreateForm({ ...createForm, costo: e.target.value })}
                     className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                    placeholder="0.00"
+                    placeholder="Sin costo"
                   />
                 </div>
                 <div>
@@ -583,7 +813,7 @@ export default function TransportesPage() {
               </button>
               <button
                 onClick={handleCreateTransporte}
-                disabled={creating || !createForm.transportista || !createForm.destino}
+                disabled={creating || !createForm.transportista}
                 className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
               >
                 {creating ? "Creando..." : "Crear Transporte"}
