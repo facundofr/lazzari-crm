@@ -372,7 +372,10 @@ export default function VentasPage() {
         total = subtotal + iva;
       } else {
         total = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
-        subtotal = total / 1.21;
+        subtotal = emitItems.reduce((sum, it) => {
+          const rate = (it.iva_porcentaje || 21) / 100;
+          return sum + (it.cantidad * it.precio_unitario) / (1 + rate);
+        }, 0);
         iva = total - subtotal;
       }
 
@@ -474,13 +477,21 @@ export default function VentasPage() {
   }
 
   async function handleMarcarEntregado(remitoId: string) {
-    await supabase.from("remitos").update({ estado: "entregado" } as any).eq("id", remitoId);
+    const { error } = await supabase.from("remitos").update({ estado: "entregado" } as any).eq("id", remitoId);
+    if (error) {
+      alert("Error al marcar como entregado: " + error.message);
+      return;
+    }
     await fetchData();
   }
 
   async function handleMarcarPagada(facturaId: string) {
     if (!confirm("¿Marcar esta factura como pagada?")) return;
-    await supabase.from("facturas").update({ estado: "pagada" } as any).eq("id", facturaId);
+    const { error } = await supabase.from("facturas").update({ estado: "pagada" } as any).eq("id", facturaId);
+    if (error) {
+      alert("Error al marcar como pagada: " + error.message);
+      return;
+    }
     await fetchData();
   }
 

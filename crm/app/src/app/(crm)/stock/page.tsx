@@ -241,7 +241,15 @@ export default function StockPage() {
   });
 
   const stockBajo = productos.filter((p) => p.stock < p.stock_minimo);
-  const valorStock = productos.reduce((acc, p) => acc + Number(p.precio_costo) * p.stock, 0);
+  const valorStockByMoneda = productos.reduce((acc, p) => {
+    const mon = p.moneda_costo || "ARS";
+    acc[mon] = (acc[mon] || 0) + Number(p.precio_costo) * p.stock;
+    return acc;
+  }, {} as Record<string, number>);
+  const monedas = Object.keys(valorStockByMoneda);
+  const valorStockLabel = monedas.length <= 1
+    ? formatCurrency(valorStockByMoneda[monedas[0] || "ARS"] || 0, (monedas[0] || "ARS") as "USD" | "ARS")
+    : monedas.map(m => formatCurrency(valorStockByMoneda[m], m as "USD" | "ARS")).join(" + ");
 
   // Fetch price history when a product is selected for adjustment
   const fetchPrecioHistorial = useCallback(async (productId: string) => {
@@ -381,6 +389,11 @@ export default function StockPage() {
     try {
       let newStock: number;
       if (adjustMode === "set") {
+        if (adjustAmount < 0) {
+          alert("El stock no puede ser negativo.");
+          setSaving(false);
+          return;
+        }
         newStock = adjustAmount;
       } else {
         newStock = Math.max(0, adjustModal.stock + adjustAmount);
@@ -417,7 +430,7 @@ export default function StockPage() {
       <div className="p-4 sm:p-8 space-y-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard title="Total articulos" value={String(productos.length)} icon={Package} iconColor="text-blue-600" />
-          <StatCard title="Valor de stock" value={formatCurrency(valorStock)} icon={Package} iconColor="text-emerald-600" />
+          <StatCard title="Valor de stock" value={valorStockLabel} icon={Package} iconColor="text-emerald-600" />
           <StatCard title="Stock bajo" value={String(stockBajo.length)} icon={AlertTriangle} iconColor="text-red-500" />
           <StatCard title="Categorias" value={String(categorias.length)} icon={Package} iconColor="text-violet-600" />
         </div>

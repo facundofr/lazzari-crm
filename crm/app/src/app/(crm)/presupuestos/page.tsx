@@ -775,10 +775,17 @@ export default function PresupuestosPage() {
         setShowNewPR(false);
         setEsSolicitud(false);
         setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
-        await fetchPresupuestos();
-        // Mostrar diálogo post-creación con opciones correo/PDF
-        const createdPR = presupuestos.find((p) => p.id === newRow.id) || mapToPresupuesto(newRow as any);
+
+        // Fetch the newly created PR with full joins before refreshing the list
+        const { data: fullRow } = await (supabase as any)
+          .from("presupuestos")
+          .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre), contacto:contacto_id(nombre), presupuesto_items(*)`)
+          .eq("id", newRow.id)
+          .single();
+        const createdPR = fullRow ? mapToPresupuesto(fullRow as any) : mapToPresupuesto(newRow as any);
         setPostCreatePR(createdPR);
+
+        await fetchPresupuestos();
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : JSON.stringify(err);

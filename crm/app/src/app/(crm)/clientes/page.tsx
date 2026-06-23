@@ -869,7 +869,7 @@ export default function ClientesPage() {
       c.email, c.telefono, c.localidad, c.provincia, c.listaPrecio,
       c.saldoCuentaCorriente, c.limiteCredito, c.activo ? "Activo" : "Inactivo",
     ]);
-    const csv = [headers, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
+    const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1004,7 +1004,8 @@ export default function ClientesPage() {
 
   async function handleToggleActivo(c: ClienteExt) {
     try {
-      await supabase.from("clientes").update({ activo: !c.activo }).eq("id", c.id);
+      const { error } = await supabase.from("clientes").update({ activo: !c.activo }).eq("id", c.id);
+      if (error) throw error;
       toast.info(c.activo ? "Cliente desactivado" : "Cliente activado");
       await fetchClientes();
     } catch (err) {
@@ -1016,7 +1017,8 @@ export default function ClientesPage() {
   async function handleDelete(id: string) {
     if (!confirm("¿Seguro que queres eliminar este cliente? Esta accion no se puede deshacer.")) return;
     try {
-      await supabase.from("clientes").delete().eq("id", id);
+      const { error } = await supabase.from("clientes").delete().eq("id", id);
+      if (error) throw error;
       setSelectedCliente(null);
       toast.success("Cliente eliminado");
       await fetchClientes();
@@ -1059,8 +1061,10 @@ export default function ClientesPage() {
       lines.push(`${comprobante} | ${formatDate(f.fecha)} | ${venc} | ${formatCurrency(f.total, f.moneda as "ARS" | "USD")} | ${mora > 0 ? mora + " dias" : "Al dia"}`);
     }
     lines.push("");
-    const totalAdeudado = facturas.reduce((sum, f) => sum + f.total, 0);
-    lines.push(`Total pendiente: ${formatCurrency(totalAdeudado)}`);
+    const totalsByMoneda: Record<string, number> = {};
+    facturas.forEach((f) => { totalsByMoneda[f.moneda || "ARS"] = (totalsByMoneda[f.moneda || "ARS"] || 0) + f.total; });
+    const totalParts = Object.entries(totalsByMoneda).map(([mon, total]) => formatCurrency(total, mon as "ARS" | "USD"));
+    lines.push(`Total pendiente: ${totalParts.join(" + ")}`);
     lines.push("");
     lines.push("Quedamos a disposicion para cualquier consulta.");
     lines.push("Saludos cordiales,");
@@ -2002,9 +2006,17 @@ export default function ClientesPage() {
                         {/* Total row */}
                         <div className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-3 flex items-center justify-between">
                           <span className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">Total adeudado</span>
-                          <span className="text-sm font-bold font-mono text-red-600 dark:text-red-400">
-                            {formatCurrency(ccFacturas.reduce((sum, f) => sum + f.total, 0))}
-                          </span>
+                          <div className="flex flex-col items-end gap-0.5">
+                            {(() => {
+                              const totals: Record<string, number> = {};
+                              ccFacturas.forEach((f) => { totals[f.moneda || "ARS"] = (totals[f.moneda || "ARS"] || 0) + f.total; });
+                              return Object.entries(totals).map(([mon, total]) => (
+                                <span key={mon} className="text-sm font-bold font-mono text-red-600 dark:text-red-400">
+                                  {formatCurrency(total, mon as "ARS" | "USD")}
+                                </span>
+                              ));
+                            })()}
+                          </div>
                         </div>
                       </div>
                     </div>
