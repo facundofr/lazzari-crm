@@ -696,7 +696,7 @@ export default function ClientesPage() {
           .select("*, vendedor:vendedor_id(id, full_name)")
           .eq("entity_type", "cliente")
           .eq("entity_id", selectedCliente!.id);
-        if (data && data.length > 0) {
+        if (data) {
           const mapped = data.map((c: Record<string, unknown>) => {
             const vendedor = c.vendedor as Record<string, unknown> | null;
             return {
@@ -817,7 +817,7 @@ export default function ClientesPage() {
       if (error) {
         console.error("Error fetching clientes:", error);
         setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—" })));
-      } else if (data && data.length > 0) {
+      } else if (data) {
         setClientes(data.map((row) => mapRow({ ...row, contactos: [] } as unknown as ClienteRow)));
       } else {
         setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—" })));
@@ -1055,7 +1055,7 @@ export default function ClientesPage() {
     for (const f of facturas) {
       const comprobante = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
       const venc = f.fecha_vencimiento ? formatDate(f.fecha_vencimiento) : "—";
-      const mora = calcDiasMora(f.fecha);
+      const mora = calcDiasMora(f.fecha_vencimiento || f.fecha);
       lines.push(`${comprobante} | ${formatDate(f.fecha)} | ${venc} | ${formatCurrency(f.total, f.moneda as "ARS" | "USD")} | ${mora > 0 ? mora + " dias" : "Al dia"}`);
     }
     lines.push("");
@@ -1974,7 +1974,7 @@ export default function ClientesPage() {
                             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                               {ccFacturas.map((f) => {
                                 const comprobante = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
-                                const mora = calcDiasMora(f.fecha);
+                                const mora = calcDiasMora(f.fecha_vencimiento || f.fecha);
                                 return (
                                   <tr key={f.id} className="bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                                     <td className="px-3 py-2.5 font-medium text-zinc-800 dark:text-zinc-200 whitespace-nowrap">{comprobante}</td>

@@ -515,9 +515,9 @@ export default function PresupuestosPage() {
       }
 
       const { data, error } = res;
-      if (!error && data && data.length > 0) {
+      if (!error && data) {
         setPresupuestos((data as unknown as SupabasePresupuesto[]).map(mapToPresupuesto));
-      } else {
+      } else if (error) {
         setPresupuestos(mockPresupuestos);
       }
     } catch {
@@ -595,16 +595,18 @@ export default function PresupuestosPage() {
     if (!showNewPR) return;
     async function fetchClientes() {
       try {
-        const { data } = await supabase
+        let q = supabase
           .from("clientes")
           .select("id, razon_social")
           .eq("activo", true)
           .order("razon_social");
+        if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data } = await q;
         if (data) setClientes(data);
       } catch { /* ignore */ }
     }
     fetchClientes();
-  }, [showNewPR]);
+  }, [showNewPR, sociedadActiva]);
 
   function updateNewPRItem(index: number, field: keyof NewPRItem | "costo_moneda", value: string | number) {
     setNewPR((prev) => {

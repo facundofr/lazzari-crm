@@ -407,36 +407,27 @@ export default function FinanzasPage() {
           .order("fecha", { ascending: false });
         if (sociedadActiva?.id) qMov = qMov.eq("sociedad_id" as any, sociedadActiva.id);
 
+        let qCcCli = (supabase as any).from("v_cuenta_corriente_clientes").select("*");
+        if (sociedadActiva?.id) qCcCli = qCcCli.eq("sociedad_id", sociedadActiva.id);
+        let qCcProv = (supabase as any).from("v_cuenta_corriente_proveedores").select("*");
+        if (sociedadActiva?.id) qCcProv = qCcProv.eq("sociedad_id", sociedadActiva.id);
+        let qExt = (supabase as any).from("extractos_bancarios").select(`*, extracto_movimientos(*)`).order("created_at", { ascending: false });
+        if (sociedadActiva?.id) qExt = qExt.eq("sociedad_id", sociedadActiva.id);
+        let qLc = (supabase as any).from("lineas_credito").select(`*, proveedores(razon_social)`).order("vencimiento");
+        if (sociedadActiva?.id) qLc = qLc.eq("sociedad_id", sociedadActiva.id);
+        let qGf = (supabase as any).from("gastos_fijos").select("*").order("categoria");
+        if (sociedadActiva?.id) qGf = qGf.eq("sociedad_id", sociedadActiva.id);
+        let qObj = (supabase as any).from("objetivos").select("*, profiles:usuario_id(full_name)").order("periodo_inicio", { ascending: false });
+        if (sociedadActiva?.id) qObj = qObj.eq("sociedad_id", sociedadActiva.id);
+
         const [movRes, ccCliRes, ccProvRes, extRes, lcRes, gfRes, objRes] = await Promise.all([
-          qMov,
-          supabase
-            .from("v_cuenta_corriente_clientes")
-            .select("*"),
-          supabase
-            .from("v_cuenta_corriente_proveedores")
-            .select("*"),
-          supabase
-            .from("extractos_bancarios")
-            .select(`*, extracto_movimientos(*)`)
-            .order("created_at", { ascending: false }),
-          supabase
-            .from("lineas_credito")
-            .select(`*, proveedores(razon_social)`)
-            .order("vencimiento"),
-          supabase
-            .from("gastos_fijos")
-            .select("*")
-            .order("categoria"),
-          supabase
-            .from("objetivos")
-            .select("*, profiles:usuario_id(full_name)")
-            .order("periodo_inicio", { ascending: false }),
+          qMov, qCcCli, qCcProv, qExt, qLc, qGf, qObj,
         ]);
 
         // Use Supabase data if available, otherwise fall back to mock data mapped to snake_case
-        if (movRes.data && movRes.data.length > 0) {
+        if (movRes.data) {
           setMovimientos(movRes.data as MovimientoRow[]);
-        } else {
+        } else if (movRes.error) {
           setMovimientos(
             mockMovimientos.map((m) => ({
               id: m.id,
@@ -455,7 +446,7 @@ export default function FinanzasPage() {
           );
         }
 
-        if (ccCliRes.data && ccCliRes.data.length > 0) {
+        if (ccCliRes.data) {
           setCcClientes(ccCliRes.data.map((r: any) => ({
             id: r.id,
             razon_social: r.razon_social,
@@ -465,7 +456,7 @@ export default function FinanzasPage() {
             limite_credito: r.limite_credito,
             saldo_cuenta_corriente: r.saldo ?? r.saldo_cuenta_corriente ?? 0,
           })));
-        } else {
+        } else if (ccCliRes.error) {
           setCcClientes(
             mockClients.map((c) => ({
               id: c.id,
@@ -479,7 +470,7 @@ export default function FinanzasPage() {
           );
         }
 
-        if (ccProvRes.data && ccProvRes.data.length > 0) {
+        if (ccProvRes.data) {
           setCcProveedores(ccProvRes.data.map((r: any) => ({
             id: r.id,
             razon_social: r.razon_social,
@@ -490,7 +481,7 @@ export default function FinanzasPage() {
             limite_credito: r.limite_credito,
             saldo_cuenta_corriente: r.saldo ?? r.saldo_cuenta_corriente ?? 0,
           })));
-        } else {
+        } else if (ccProvRes.error) {
           setCcProveedores(
             mockProveedores.map((p) => ({
               id: p.id,
@@ -505,9 +496,9 @@ export default function FinanzasPage() {
           );
         }
 
-        if (extRes.data && extRes.data.length > 0) {
+        if (extRes.data) {
           setExtractos(extRes.data as ExtractoRow[]);
-        } else {
+        } else if (extRes.error) {
           setExtractos(
             mockExtractos.map((e) => ({
               id: e.id,
@@ -534,9 +525,9 @@ export default function FinanzasPage() {
           );
         }
 
-        if (lcRes.data && lcRes.data.length > 0) {
+        if (lcRes.data) {
           setLineasCredito(lcRes.data as LineaCreditoRow[]);
-        } else {
+        } else if (lcRes.error) {
           setLineasCredito(
             mockLineasCredito.map((lc) => ({
               id: lc.id,
@@ -557,7 +548,7 @@ export default function FinanzasPage() {
           );
         }
 
-        if (gfRes.data && gfRes.data.length > 0) {
+        if (gfRes.data) {
           setGastosFijos(gfRes.data.map((g: any) => ({
             id: g.id, descripcion: g.descripcion, categoria: g.categoria,
             monto: Number(g.monto), moneda: g.moneda, activo: g.activo,
@@ -565,7 +556,7 @@ export default function FinanzasPage() {
           })));
         }
 
-        if (objRes.data && objRes.data.length > 0) {
+        if (objRes.data) {
           setObjetivos(objRes.data.map((o: any) => ({
             id: o.id, nombre: o.nombre, tipo: o.tipo,
             montoTarget: Number(o.monto_target), moneda: o.moneda,
@@ -596,7 +587,7 @@ export default function FinanzasPage() {
           let qOp = (supabase as any).from("ordenes_pago").select("*, proveedores(razon_social)").order("fecha", { ascending: false });
           if (sociedadActiva?.id) qOp = qOp.eq("sociedad_id", sociedadActiva.id);
           const { data: opData } = await qOp;
-          if (opData && opData.length > 0) {
+          if (opData) {
             setOrdenesPago(opData.map((r: any) => ({
               id: r.id, fecha: r.fecha, proveedor_id: r.proveedor_id,
               proveedor_nombre: r.proveedores?.razon_social ?? "—",
@@ -620,7 +611,7 @@ export default function FinanzasPage() {
           let qGm = (supabase as any).from("gastos_manuales").select("*, proveedores(razon_social)").order("fecha", { ascending: false });
           if (sociedadActiva?.id) qGm = qGm.eq("sociedad_id", sociedadActiva.id);
           const { data: gmData } = await qGm;
-          if (gmData && gmData.length > 0) {
+          if (gmData) {
             setGastosManuales(gmData.map((r: any) => ({
               id: r.id, fecha: r.fecha, descripcion: r.descripcion,
               proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? undefined,
@@ -638,7 +629,7 @@ export default function FinanzasPage() {
           let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero)").order("fecha", { ascending: false });
           if (sociedadActiva?.id) qFc = qFc.eq("sociedad_id", sociedadActiva.id);
           const { data: fcData } = await qFc;
-          if (fcData && fcData.length > 0) {
+          if (fcData) {
             setFacturasCompra(fcData.map((r: any) => ({
               id: r.id, numero_factura: r.numero_factura,
               proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? "—",

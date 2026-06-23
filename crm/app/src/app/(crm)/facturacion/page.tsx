@@ -149,9 +149,9 @@ export default function FacturacionPage() {
 
       const { data, error } = await query;
 
-      if (!error && data && data.length > 0) {
+      if (!error && data) {
         setFacturas(data as unknown as FacturaRow[]);
-      } else {
+      } else if (error) {
         setFacturas(mockFacturas.map((f) => ({
           id: f.id, tipo: f.tipo, punto_venta: f.puntoVenta, numero: f.numero,
           cliente_id: f.clienteId, fecha: f.fecha, cae: f.cae, cae_vencimiento: f.caeVencimiento,
@@ -200,7 +200,8 @@ export default function FacturacionPage() {
     setEmitResult(null);
     setEmitOpen(true);
     // Fetch clientes
-    supabase.from("clientes").select("id, razon_social, cuit, condicion_iva").eq("activo", true).order("razon_social")
+    const q = supabase.from("clientes").select("id, razon_social, cuit, condicion_iva").eq("activo", true).order("razon_social");
+    (sociedadActiva?.id ? q.eq("sociedad_id" as any, sociedadActiva.id) : q)
       .then(({ data }) => { if (data) setClientes(data as ClienteOption[]); });
   };
 
@@ -379,7 +380,7 @@ export default function FacturacionPage() {
     const qrData = JSON.stringify({
       ver: 1, fecha: f.fecha, cuit: emisorData.cuitNumero, ptoVta: f.punto_venta,
       tipoCmp: { FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13 }[f.tipo] || 1,
-      nroCmp: f.numero, importe: Number(f.total), moneda: "PES", ctz: 1,
+      nroCmp: f.numero, importe: Number(f.total), moneda: isUSDPdf ? "DOL" : "PES", ctz: isUSDPdf ? Number(f.tipo_cambio) : 1,
       tipoDocRec: cli?.cuit ? 80 : 99, nroDocRec: cli?.cuit ? Number(cli.cuit.replace(/-/g, "")) : 0,
       tipoCodAut: "E", codAut: Number(f.cae || 0),
     });
