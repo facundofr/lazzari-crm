@@ -419,7 +419,8 @@ export default function VentasPage() {
           : it.cantidad * it.precio_unitario,
         orden: idx,
       }));
-      await (supabase.from("factura_items") as any).insert(facturaItems);
+      const { error: itemsError } = await (supabase.from("factura_items") as any).insert(facturaItems);
+      if (itemsError) throw itemsError;
 
       const comp = `${emitTipo} ${String(pvCrm).padStart(4, "0")}-${String(nextNumero).padStart(8, "0")}`;
       setEmitSuccess(`${comp} emitida (manual, sin CAE)`);
@@ -464,7 +465,10 @@ export default function VentasPage() {
           unidad: "u",
           orden: idx,
         }));
-        await (supabase.from("remito_items") as any).insert(items);
+        const { error: riError } = await (supabase.from("remito_items") as any).insert(items);
+        if (riError) {
+          console.error("Error creando remito items:", riError);
+        }
       }
 
       await fetchData();

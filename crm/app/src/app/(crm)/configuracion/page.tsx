@@ -118,14 +118,14 @@ export default function ConfiguracionPage() {
   });
 
   useEffect(() => {
-    async function fetchData() {
+    async function fetchUsers() {
       // Fetch real users from profiles
       try {
         const { data: profiles } = await supabase
           .from("profiles")
           .select("id, full_name, email, role, active, created_at")
           .order("created_at", { ascending: false });
-        if (profiles && profiles.length > 0) {
+        if (profiles) {
           setDbUsers(profiles.map((p: any) => ({
             id: p.id,
             name: p.full_name || p.email || "—",
@@ -141,17 +141,26 @@ export default function ConfiguracionPage() {
         setDbUsers(mockUsers);
       }
       setUsersLoading(false);
+    }
+    fetchUsers();
+  }, []);
 
-      // Fetch empresa config (key/value jsonb table)
+  // Fetch empresa config scoped to sociedadActiva
+  useEffect(() => {
+    async function fetchEmpresaConfig() {
+      if (!sociedadActiva) return;
+      // Reset to defaults when switching sociedad
+      setEmpresa({ razon_social: "", cuit: "", condicion_iva: "", direccion: "", punto_venta: "", inicio_actividades: "" });
       try {
-        const { data: config } = await supabase
+        const { data: config } = await (supabase as any)
           .from("configuracion")
           .select("key, value")
-          .in("key", ["empresa"]);
-        if (config && config.length > 0) {
+          .eq("key", "empresa")
+          .eq("sociedad_id", sociedadActiva.id);
+        if (config) {
           const empresaConfig = config.find((c: any) => c.key === "empresa");
           if (empresaConfig) {
-            const val = (empresaConfig as any).value || {};
+            const val = empresaConfig.value || {};
             setEmpresa({
               razon_social: val.razon_social || "",
               cuit: val.cuit || "",
@@ -166,8 +175,8 @@ export default function ConfiguracionPage() {
         // Config table may not exist yet — leave defaults
       }
     }
-    fetchData();
-  }, []);
+    fetchEmpresaConfig();
+  }, [sociedadActiva]);
 
   // Fetch email templates when sociedadActiva changes
   useEffect(() => {
@@ -178,7 +187,7 @@ export default function ConfiguracionPage() {
           .from("email_templates")
           .select("tipo, asunto, cuerpo")
           .eq("sociedad_id", sociedadActiva.id);
-        if (data && data.length > 0) {
+        if (data) {
           const loaded = { ...DEFAULT_TEMPLATES };
           for (const row of data) {
             if (row.tipo in loaded) {
@@ -212,7 +221,7 @@ export default function ConfiguracionPage() {
     if (!sociedadActiva) return;
     setTemplateSaving(tipo);
     try {
-      await (supabase as any).from("email_templates").upsert(
+      const { error } = await (supabase as any).from("email_templates").upsert(
         {
           sociedad_id: sociedadActiva.id,
           tipo,
@@ -221,10 +230,15 @@ export default function ConfiguracionPage() {
         },
         { onConflict: "sociedad_id,tipo" }
       );
+      if (error) {
+        alert("Error al guardar plantilla de email: " + error.message);
+        return;
+      }
       setTemplateSaved(tipo);
       setTimeout(() => setTemplateSaved(null), 3000);
     } catch (err) {
       console.error("Error saving email template:", err);
+      alert("Error al guardar plantilla de email.");
     } finally {
       setTemplateSaving(null);
     }
@@ -301,9 +315,17 @@ export default function ConfiguracionPage() {
         activo: comisionForm.activo,
       };
       if (editingComision) {
-        await (supabase as any).from("comision_reglas").update(payload).eq("id", editingComision.id);
+        const { error } = await (supabase as any).from("comision_reglas").update(payload).eq("id", editingComision.id);
+        if (error) {
+          alert("Error al actualizar regla de comisión: " + error.message);
+          return;
+        }
       } else {
-        await (supabase as any).from("comision_reglas").insert(payload);
+        const { error } = await (supabase as any).from("comision_reglas").insert(payload);
+        if (error) {
+          alert("Error al crear regla de comisión: " + error.message);
+          return;
+        }
       }
       // Re-fetch
       const { data } = await (supabase as any)
@@ -315,6 +337,7 @@ export default function ConfiguracionPage() {
       resetComisionForm();
     } catch (err) {
       console.error("Error saving comision regla:", err);
+      alert("Error al guardar regla de comisión.");
     } finally {
       setComisionSaving(false);
     }
@@ -323,19 +346,29 @@ export default function ConfiguracionPage() {
   async function handleDeleteComision(id: string) {
     if (!sociedadActiva) return;
     try {
-      await (supabase as any).from("comision_reglas").delete().eq("id", id);
+      const { error } = await (supabase as any).from("comision_reglas").delete().eq("id", id);
+      if (error) {
+        alert("Error al eliminar regla de comisión: " + error.message);
+        return;
+      }
       setComisionReglas((prev) => prev.filter((r) => r.id !== id));
     } catch (err) {
       console.error("Error deleting comision regla:", err);
+      alert("Error al eliminar regla de comisión.");
     }
   }
 
   async function handleToggleComisionActivo(regla: ComisionRegla) {
     try {
-      await (supabase as any).from("comision_reglas").update({ activo: !regla.activo }).eq("id", regla.id);
+      const { error } = await (supabase as any).from("comision_reglas").update({ activo: !regla.activo }).eq("id", regla.id);
+      if (error) {
+        alert("Error al cambiar estado de comisión: " + error.message);
+        return;
+      }
       setComisionReglas((prev) => prev.map((r) => r.id === regla.id ? { ...r, activo: !r.activo } : r));
     } catch (err) {
       console.error("Error toggling comision:", err);
+      alert("Error al cambiar estado de comisión.");
     }
   }
 
@@ -384,16 +417,22 @@ export default function ConfiguracionPage() {
   }
 
   async function handleSaveEmpresa() {
+    if (!sociedadActiva) return;
     setSaving(true);
     try {
-      await supabase.from("configuracion").upsert(
-        { key: "empresa", value: empresa } as any,
-        { onConflict: "key" }
+      const { error } = await (supabase as any).from("configuracion").upsert(
+        { key: "empresa", value: empresa, sociedad_id: sociedadActiva.id },
+        { onConflict: "sociedad_id,key" }
       );
+      if (error) {
+        alert("Error al guardar configuración de empresa: " + error.message);
+        return;
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (err) {
       console.error("Error saving empresa config:", err);
+      alert("Error al guardar configuración de empresa.");
     } finally {
       setSaving(false);
     }
@@ -405,7 +444,7 @@ export default function ConfiguracionPage() {
     setNotifs((prev) => ({ ...prev, [key]: newValue }));
     setNotifSaved(null);
     try {
-      await (supabase as any).from("notification_preferences").upsert(
+      const { error } = await (supabase as any).from("notification_preferences").upsert(
         {
           user_id: profile.id,
           [key]: newValue,
@@ -413,12 +452,18 @@ export default function ConfiguracionPage() {
         },
         { onConflict: "user_id" }
       );
+      if (error) {
+        setNotifs((prev) => ({ ...prev, [key]: !newValue }));
+        alert("Error al guardar preferencia de notificación: " + error.message);
+        return;
+      }
       setNotifSaved(key);
       setTimeout(() => setNotifSaved(null), 2000);
     } catch (err) {
       // Revert on error
       setNotifs((prev) => ({ ...prev, [key]: !newValue }));
       console.error("Error saving notification preference:", err);
+      alert("Error al guardar preferencia de notificación.");
     }
   }
 

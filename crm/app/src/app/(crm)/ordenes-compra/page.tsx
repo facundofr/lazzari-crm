@@ -227,16 +227,18 @@ export default function OrdenesCompraPage() {
   // ── Fetch proveedores for the create modal ───────────────────────
   const fetchProveedores = useCallback(async () => {
     try {
-      const { data } = await supabase
+      let q = supabase
         .from("proveedores")
         .select("id, razon_social")
         .eq("activo", true)
         .order("razon_social");
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data } = await q;
       if (data && data.length > 0) {
         setProveedores(data as unknown as ProveedorOption[]);
       }
     } catch { /* ignore */ }
-  }, []);
+  }, [sociedadActiva]);
 
   // ── Fetch detail items ───────────────────────────────────────────
   const fetchDetailItems = useCallback(async (ocId: string) => {
@@ -347,17 +349,27 @@ export default function OrdenesCompraPage() {
         // Update stock in productos if producto_id exists
         if (item.producto_id) {
           // Fetch current stock
-          const { data: prod } = await (supabase as any)
+          const { data: prod, error: prodFetchErr } = await (supabase as any)
             .from("productos")
             .select("stock")
             .eq("id", item.producto_id)
             .single();
+          if (prodFetchErr) {
+            console.error("Error al obtener stock:", prodFetchErr);
+            alert(`Error al obtener stock del producto ${item.codigo}: ${prodFetchErr.message}`);
+            throw prodFetchErr;
+          }
           if (prod) {
             const currentStock = Number(prod.stock) || 0;
-            await (supabase as any)
+            const { error: stockErr } = await (supabase as any)
               .from("productos")
               .update({ stock: currentStock + qtyRecibida })
               .eq("id", item.producto_id);
+            if (stockErr) {
+              console.error("Error al actualizar stock:", stockErr);
+              alert(`Error al actualizar stock del producto ${item.codigo}: ${stockErr.message}`);
+              throw stockErr;
+            }
           }
         }
       }
@@ -377,7 +389,11 @@ export default function OrdenesCompraPage() {
       else if (someReceived) newEstado = "recibida_parcial";
 
       if (newEstado !== detailOC.estado) {
-        await supabase.from("ordenes_compra").update({ estado: newEstado } as any).eq("id", detailOC.id);
+        const { error: estadoErr } = await supabase.from("ordenes_compra").update({ estado: newEstado } as any).eq("id", detailOC.id);
+        if (estadoErr) {
+          alert(`Error al actualizar estado de la OC: ${estadoErr.message}`);
+          throw estadoErr;
+        }
       }
 
       // Update local state
@@ -407,27 +423,43 @@ export default function OrdenesCompraPage() {
       for (const item of detailItems) {
         const qtyRecibida = qtys[item.id] || 0;
         if (qtyRecibida <= 0) continue;
-        await supabase
+        const { error: itemErr } = await supabase
           .from("orden_compra_items")
           .update({ cantidad_recibida: item.cantidad } as any)
           .eq("id", item.id);
+        if (itemErr) {
+          alert(`Error al actualizar item ${item.codigo}: ${itemErr.message}`);
+          throw itemErr;
+        }
         // Update stock
         if (item.producto_id) {
-          const { data: prod } = await (supabase as any)
+          const { data: prod, error: prodFetchErr } = await (supabase as any)
             .from("productos")
             .select("stock")
             .eq("id", item.producto_id)
             .single();
+          if (prodFetchErr) {
+            alert(`Error al obtener stock del producto ${item.codigo}: ${prodFetchErr.message}`);
+            throw prodFetchErr;
+          }
           if (prod) {
             const currentStock = Number(prod.stock) || 0;
-            await (supabase as any)
+            const { error: stockErr } = await (supabase as any)
               .from("productos")
               .update({ stock: currentStock + qtyRecibida })
               .eq("id", item.producto_id);
+            if (stockErr) {
+              alert(`Error al actualizar stock del producto ${item.codigo}: ${stockErr.message}`);
+              throw stockErr;
+            }
           }
         }
       }
-      await supabase.from("ordenes_compra").update({ estado: "recibida" } as any).eq("id", detailOC.id);
+      const { error: estadoErr } = await supabase.from("ordenes_compra").update({ estado: "recibida" } as any).eq("id", detailOC.id);
+      if (estadoErr) {
+        alert(`Error al marcar OC como recibida: ${estadoErr.message}`);
+        throw estadoErr;
+      }
       setDetailOC({ ...detailOC, estado: "recibida" });
       setDetailItems((prev) => prev.map((it) => ({ ...it, cantidad_recibida: it.cantidad })));
       setRecepcionQtys({});
@@ -715,10 +747,12 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
     setConsolidateLoading(true);
     try {
       // Get approved presupuestos that have items with proveedor_id
-      const { data: prs } = await supabase
+      let prQuery = supabase
         .from("presupuestos")
         .select("id, numero, cliente_id, moneda, clientes(razon_social)")
         .eq("estado", "aprobado");
+      if (sociedadActiva?.id) prQuery = prQuery.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: prs } = await prQuery;
 
       if (!prs || prs.length === 0) {
         setConsolidateGroups([]);
@@ -727,11 +761,13 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       }
 
       // Get existing OCs to know which PR items already have OC
-      const { data: existingOCs } = await supabase
+      let existingOCsQuery = supabase
         .from("ordenes_compra")
         .select("presupuesto_origen_id")
         .not("presupuesto_origen_id", "is", null)
         .not("estado", "eq", "cancelada");
+      if (sociedadActiva?.id) existingOCsQuery = existingOCsQuery.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: existingOCs } = await existingOCsQuery;
       const ocPRIds = new Set((existingOCs || []).map((oc: any) => oc.presupuesto_origen_id));
 
       // Get items for PRs that don't have OC yet
@@ -865,7 +901,11 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           orden: idx,
         }));
 
-        await supabase.from("orden_compra_items").insert(ocItems as any);
+        const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
+        if (itemsErr) {
+          console.error("Error al insertar items de OC consolidada:", itemsErr);
+          alert(`Error al insertar items para proveedor ${group.nombre}: ${itemsErr.message}`);
+        }
         created++;
       }
 
@@ -1216,8 +1256,13 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Observaciones</label>
-                <textarea value={formData.observaciones} onChange={(e) => setFormData((p) => ({ ...p, observaciones: e.target.value }))} rows={3} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm resize-none" />
+                <label className="block text-sm font-medium mb-1 dark:text-zinc-300">
+                  <span className="flex items-center gap-1.5">
+                    <MessageSquare className="h-3.5 w-3.5 text-zinc-400" />
+                    Observaciones / Comentarios
+                  </span>
+                </label>
+                <textarea value={formData.observaciones} onChange={(e) => setFormData((p) => ({ ...p, observaciones: e.target.value }))} rows={3} placeholder="Notas internas, instrucciones especiales, condiciones de entrega..." className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm resize-none dark:text-white focus:ring-2 focus:ring-orange-500 focus:border-orange-500" />
               </div>
             </div>
             <div className="flex justify-end gap-3 px-6 py-4 border-t border-zinc-200 dark:border-zinc-700">
@@ -1572,13 +1617,18 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 </div>
               </div>
 
-              {/* Observaciones */}
-              {detailOC.observaciones && (
-                <div className="text-sm">
-                  <span className="text-zinc-400">Observaciones</span>
-                  <p className="mt-1 text-zinc-700 dark:text-zinc-300">{detailOC.observaciones}</p>
-                </div>
-              )}
+              {/* Observaciones / Comentarios */}
+              <div className="text-sm">
+                <span className="text-zinc-400 flex items-center gap-1.5">
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  Observaciones / Comentarios
+                </span>
+                {detailOC.observaciones ? (
+                  <p className="mt-1 text-zinc-700 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3 py-2">{detailOC.observaciones}</p>
+                ) : (
+                  <p className="mt-1 text-zinc-300 dark:text-zinc-600 italic">Sin observaciones</p>
+                )}
+              </div>
 
               {/* Notas de recepcion */}
               {(detailOC.notas_recepcion || ["recibida_parcial", "confirmada", "enviada"].includes(detailOC.estado)) && (
