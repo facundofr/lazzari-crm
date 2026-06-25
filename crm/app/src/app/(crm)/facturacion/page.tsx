@@ -99,10 +99,12 @@ export default function FacturacionPage() {
   const [emitResult, setEmitResult] = useState<any>(null);
   const [emitError, setEmitError] = useState("");
   const [clientes, setClientes] = useState<ClienteOption[]>([]);
+  const [emitManual, setEmitManual] = useState(false);
   const [emitData, setEmitData] = useState({
     tipo: "FA",
     cliente_id: "",
     punto_venta: 15,
+    numero_manual: "",
     moneda: "ARS" as "ARS" | "USD",
     tipo_cambio: 0,
     items: [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] as EmitItem[],
@@ -187,10 +189,12 @@ export default function FacturacionPage() {
 
   // ── Emit handlers ──────────────────────────────────────────────
   const openEmitModal = (prefill?: { cliente_id: string; tipo?: string; items?: EmitItem[]; moneda?: "ARS" | "USD"; tipo_cambio?: number }) => {
+    setEmitManual(false);
     setEmitData({
       tipo: prefill?.tipo || "FB",
       cliente_id: prefill?.cliente_id || "",
       punto_venta: emisorData.ptoVta,
+      numero_manual: "",
       moneda: prefill?.moneda || "ARS",
       tipo_cambio: prefill?.tipo_cambio || 0,
       items: prefill?.items || [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],
@@ -275,6 +279,81 @@ export default function FacturacionPage() {
       }
     } catch (err: unknown) {
       setEmitError(err instanceof Error ? err.message : "Error de conexion");
+      setEmitStep("error");
+    }
+  };
+
+  const handleEmitManual = async () => {
+    if (!emitData.cliente_id) { setEmitError("Selecciona un cliente"); return; }
+    if (emitData.items.some((it) => !it.descripcion || it.precio_unitario <= 0)) {
+      setEmitError("Completa todos los items con descripcion y precio"); return;
+    }
+    const numManual = Number(emitData.numero_manual);
+    if (!numManual || numManual <= 0) {
+      setEmitError("Ingresa el numero de comprobante"); return;
+    }
+
+    setEmitStep("emitting");
+    setEmitError("");
+
+    try {
+      const cliente = clientes.find(c => c.id === emitData.cliente_id);
+      const today = new Date().toISOString().split("T")[0];
+
+      // Insert factura directly without ARCA
+      const { data: newFactura, error: facturaErr } = await (supabase as any)
+        .from("facturas")
+        .insert({
+          tipo: emitData.tipo,
+          punto_venta: emitData.punto_venta,
+          numero: numManual,
+          cliente_id: emitData.cliente_id === "consumidor_final" ? null : emitData.cliente_id,
+          fecha: today,
+          cae: null,
+          cae_vencimiento: null,
+          subtotal: emitTotals.neto,
+          iva: emitTotals.iva,
+          total: emitTotals.total,
+          moneda: emitData.moneda,
+          tipo_cambio: emitData.moneda === "USD" && emitData.tipo_cambio > 0 ? emitData.tipo_cambio : null,
+          estado: "emitida",
+          sociedad_id: sociedadActiva?.id || null,
+        })
+        .select("id")
+        .single();
+
+      if (facturaErr) throw new Error(facturaErr.message);
+
+      // Insert items
+      if (newFactura) {
+        const itemRows = emitData.items.map((it, idx) => {
+          const neto = isFacturaA ? it.cantidad * it.precio_unitario : Math.round(it.cantidad * it.precio_unitario / 1.21 * 100) / 100;
+          return {
+            factura_id: newFactura.id,
+            descripcion: it.descripcion,
+            cantidad: it.cantidad,
+            precio_unitario: it.precio_unitario,
+            iva_porcentaje: isFacturaA ? it.iva_porcentaje : 21,
+            subtotal: neto,
+            orden: idx,
+          };
+        });
+        await (supabase as any).from("factura_items").insert(itemRows);
+      }
+
+      const comp = formatComprobante(emitData.tipo, emitData.punto_venta, numManual);
+      setEmitResult({
+        comprobante: comp,
+        cae: null,
+        cae_vencimiento: null,
+        total: emitTotals.total,
+        manual: true,
+        cliente: cliente?.razon_social || "Consumidor Final",
+      });
+      setEmitStep("success");
+      await fetchData();
+    } catch (err: unknown) {
+      setEmitError(err instanceof Error ? err.message : "Error al guardar factura");
       setEmitStep("error");
     }
   };
@@ -590,7 +669,7 @@ ${f.cae ? `
               )},
               { key: "cae", label: "CAE", render: (r) => r.cae
                 ? <span className="font-mono text-xs text-emerald-600 dark:text-emerald-400">{r.cae.slice(-8)}</span>
-                : <span className="text-zinc-300">{"\u2014"}</span>
+                : <span className="text-xs text-zinc-400 italic">Manual</span>
               },
               { key: "estado", label: "Estado", sortable: true, render: (r) => (
                 <Badge variant={estadoConfig[r.estado]?.variant || "info"}>
@@ -674,8 +753,8 @@ ${f.cae ? `
           <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
               <div>
-                <h2 className="text-lg font-bold dark:text-white">Emitir factura ARCA</h2>
-                <p className="text-sm text-zinc-400">Se autorizara en tiempo real con ARCA</p>
+                <h2 className="text-lg font-bold dark:text-white">{emitManual ? "Factura manual" : "Emitir factura ARCA"}</h2>
+                <p className="text-sm text-zinc-400">{emitManual ? "Se guarda sin autorizar en ARCA (sin CAE)" : "Se autorizara en tiempo real con ARCA"}</p>
               </div>
               <button onClick={() => setEmitOpen(false)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
                 <X className="h-5 w-5" />
@@ -685,6 +764,22 @@ ${f.cae ? `
             {emitStep === "form" && (
               <div className="p-6 space-y-5">
                 {emitError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{emitError}</div>}
+
+                {/* Toggle ARCA / Manual */}
+                <div className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
+                  <button
+                    onClick={() => setEmitManual(false)}
+                    className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${!emitManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
+                  >
+                    <ShieldCheck className="h-3.5 w-3.5" /> Con ARCA
+                  </button>
+                  <button
+                    onClick={() => setEmitManual(true)}
+                    className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${emitManual ? "bg-zinc-700 text-white dark:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
+                  >
+                    <FileCheck className="h-3.5 w-3.5" /> Manual (sin CAE)
+                  </button>
+                </div>
 
                 {/* Tipo + Cliente + PV */}
                 <div className="grid grid-cols-12 gap-4">
@@ -711,11 +806,27 @@ ${f.cae ? `
                   </div>
                   <div className="col-span-2">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">PV</label>
-                    <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 text-sm font-mono text-zinc-500 dark:text-zinc-400">
-                      {String(emitData.punto_venta).padStart(4, "0")}
-                    </div>
+                    {emitManual ? (
+                      <input type="number" min={1} value={emitData.punto_venta} onChange={(e) => setEmitData((p) => ({ ...p, punto_venta: Number(e.target.value) }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                    ) : (
+                      <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 text-sm font-mono text-zinc-500 dark:text-zinc-400">
+                        {String(emitData.punto_venta).padStart(4, "0")}
+                      </div>
+                    )}
                   </div>
                 </div>
+
+                {emitManual && (
+                  <div className="grid grid-cols-12 gap-4">
+                    <div className="col-span-4">
+                      <label className="block text-sm font-medium mb-1 dark:text-zinc-300">N° Comprobante *</label>
+                      <input type="number" min={1} value={emitData.numero_manual} onChange={(e) => setEmitData((p) => ({ ...p, numero_manual: e.target.value }))} placeholder="00000001" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                    </div>
+                    <div className="col-span-8 flex items-end">
+                      <p className="text-xs text-amber-600 dark:text-amber-400 pb-2">Esta factura no se autoriza con ARCA. No tendrá CAE.</p>
+                    </div>
+                  </div>
+                )}
 
                 {/* Moneda + Tipo de cambio */}
                 <div className="grid grid-cols-12 gap-4">
@@ -811,9 +922,15 @@ ${f.cae ? `
 
                 <div className="flex justify-end gap-3 pt-2">
                   <button onClick={() => setEmitOpen(false)} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cancelar</button>
-                  <button onClick={handleEmit} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors">
-                    <ShieldCheck className="h-4 w-4" /> Emitir con ARCA
-                  </button>
+                  {emitManual ? (
+                    <button onClick={handleEmitManual} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-zinc-700 text-white hover:bg-zinc-800 transition-colors">
+                      <FileCheck className="h-4 w-4" /> Guardar manual
+                    </button>
+                  ) : (
+                    <button onClick={handleEmit} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors">
+                      <ShieldCheck className="h-4 w-4" /> Emitir con ARCA
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -821,8 +938,8 @@ ${f.cae ? `
             {emitStep === "emitting" && (
               <div className="p-12 flex flex-col items-center gap-4">
                 <Loader2 className="h-10 w-10 animate-spin text-orange-500" />
-                <p className="text-sm text-zinc-500">Autorizando con ARCA...</p>
-                <p className="text-xs text-zinc-400">Esto puede tomar unos segundos</p>
+                <p className="text-sm text-zinc-500">{emitManual ? "Guardando factura..." : "Autorizando con ARCA..."}</p>
+                {!emitManual && <p className="text-xs text-zinc-400">Esto puede tomar unos segundos</p>}
               </div>
             )}
 
@@ -832,12 +949,18 @@ ${f.cae ? `
                   <div className="rounded-full bg-emerald-100 p-3 dark:bg-emerald-900/30">
                     <CheckCircle2 className="h-8 w-8 text-emerald-600" />
                   </div>
-                  <h3 className="text-lg font-bold dark:text-white">Factura emitida exitosamente</h3>
+                  <h3 className="text-lg font-bold dark:text-white">{emitResult.manual ? "Factura guardada" : "Factura emitida exitosamente"}</h3>
                 </div>
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30 p-4 space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">Comprobante</span><span className="font-mono font-bold">{emitResult.comprobante}</span></div>
-                  <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">CAE</span><span className="font-mono">{emitResult.cae}</span></div>
-                  <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">Vto CAE</span><span>{emitResult.cae_vencimiento ? formatDate(emitResult.cae_vencimiento) : "\u2014"}</span></div>
+                  {emitResult.manual ? (
+                    <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">CAE</span><span className="text-zinc-400 italic">Sin CAE (manual)</span></div>
+                  ) : (
+                    <>
+                      <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">CAE</span><span className="font-mono">{emitResult.cae}</span></div>
+                      <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">Vto CAE</span><span>{emitResult.cae_vencimiento ? formatDate(emitResult.cae_vencimiento) : "\u2014"}</span></div>
+                    </>
+                  )}
                   <div className="flex justify-between border-t border-emerald-200 dark:border-emerald-700 pt-2"><span className="text-emerald-700 dark:text-emerald-400 font-semibold">Total</span><span className="font-mono font-bold">{formatCurrency(emitResult.total)}</span></div>
                 </div>
                 <div className="flex justify-center gap-3">
