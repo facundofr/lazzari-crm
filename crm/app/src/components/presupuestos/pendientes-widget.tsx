@@ -167,7 +167,7 @@ export function PendientesWidget({ presupuestoOptions = [] }: PendientesWidgetPr
 
       {/* Collapsible panel */}
       {open && (
-        <div className="fixed right-8 top-20 z-50 w-96 max-h-[80vh] rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900 flex flex-col">
+        <div className="absolute right-0 top-full mt-2 z-50 w-96 max-h-[70vh] rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900 flex flex-col">
           {/* Header */}
           <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
             <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">

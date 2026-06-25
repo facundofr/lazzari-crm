@@ -974,7 +974,11 @@ export default function PresupuestosPage() {
           orden: idx + 1,
           cantidad_recibida: 0,
         }));
-        await supabase.from("orden_compra_items").insert(ocItems);
+        const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems);
+        if (itemsErr) {
+          console.error("Error inserting OC items:", itemsErr);
+          toast.warning(`OC creada pero falló la carga de items: ${itemsErr.message}`);
+        }
         ocsCreated++;
       }
 
