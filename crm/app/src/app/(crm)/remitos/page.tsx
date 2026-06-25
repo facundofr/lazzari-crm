@@ -98,7 +98,7 @@ export default function RemitosPage() {
     valor_declarado: "",
   });
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
-  const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; subtotal: number | null }[]>([]);
+  const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; subtotal: number | null; cliente_id: string | null }[]>([]);
   const [creating, setCreating] = useState(false);
 
   // Detail panel
@@ -249,10 +249,10 @@ export default function RemitosPage() {
 
     const [clientesRes, presupuestosRes] = await Promise.all([
       clienteQ,
-      supabase.from("presupuestos").select("id, numero, subtotal").eq("estado", "aprobado"),
+      supabase.from("presupuestos").select("id, numero, subtotal, cliente_id").eq("estado", "aprobado"),
     ]);
     if (clientesRes.data) setClientes(clientesRes.data as { id: string; razon_social: string }[]);
-    if (presupuestosRes.data) setPresupuestosAprobados(presupuestosRes.data as { id: string; numero: string; subtotal: number | null }[]);
+    if (presupuestosRes.data) setPresupuestosAprobados(presupuestosRes.data as { id: string; numero: string; subtotal: number | null; cliente_id: string | null }[]);
     setCreateModalOpen(true);
   }
 
@@ -953,6 +953,7 @@ export default function RemitosPage() {
                     setCreateForm((prev) => ({
                       ...prev,
                       presupuesto_id: prId,
+                      cliente_id: pr?.cliente_id || prev.cliente_id,
                       valor_declarado: prev.valor_declarado === "" || presupuestosAprobados.some((p) => p.subtotal && String(p.subtotal) === prev.valor_declarado)
                         ? autoValor
                         : prev.valor_declarado,

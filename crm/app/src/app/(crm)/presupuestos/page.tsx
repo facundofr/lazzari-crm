@@ -202,8 +202,9 @@ export default function PresupuestosPage() {
   const [search, setSearch] = useState("");
   const [presupuestos, setPresupuestos] = useState<Presupuesto[]>([]);
   const [loading, setLoading] = useState(true);
-  // IDs de presupuestos que tienen factura asociada
+  // IDs de presupuestos que tienen factura/remito asociado
   const [facturadoIds, setFacturadoIds] = useState<Set<string>>(new Set());
+  const [remitidoIds, setRemitidoIds] = useState<Set<string>>(new Set());
 
   // Detail panel
   const [selected, setSelected] = useState<Presupuesto | null>(null);
@@ -557,7 +558,7 @@ export default function PresupuestosPage() {
     checkAprobadosSinCostos();
   }, [presupuestos]);
 
-  // Fetch IDs de presupuestos facturados
+  // Fetch IDs de presupuestos facturados y remitidos
   useEffect(() => {
     async function fetchFacturadoIds() {
       try {
@@ -572,7 +573,21 @@ export default function PresupuestosPage() {
         // ignore
       }
     }
+    async function fetchRemitidoIds() {
+      try {
+        const { data } = await supabase
+          .from("remitos")
+          .select("presupuesto_id")
+          .not("presupuesto_id", "is", null);
+        if (data) {
+          setRemitidoIds(new Set(data.map((r: any) => r.presupuesto_id).filter(Boolean)));
+        }
+      } catch {
+        // ignore
+      }
+    }
     fetchFacturadoIds();
+    fetchRemitidoIds();
   }, [presupuestos]);
 
   useEffect(() => {
@@ -1800,6 +1815,24 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 },
               },
               {
+                key: "tracking" as any, label: "Seguimiento", sortable: false,
+                render: (row) => {
+                  if (row.estado !== "aprobado") return <span className="text-zinc-300 text-xs">—</span>;
+                  const entregado = remitidoIds.has(row.id);
+                  const facturado = facturadoIds.has(row.id);
+                  return (
+                    <div className="flex items-center gap-1">
+                      <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold ${entregado ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"}`} title={entregado ? "Tiene remito" : "Sin remito"}>
+                        <Truck className="h-3 w-3" />{entregado ? "E" : "—"}
+                      </span>
+                      <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold ${facturado ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"}`} title={facturado ? "Tiene factura" : "Sin factura"}>
+                        <FileText className="h-3 w-3" />{facturado ? "F" : "—"}
+                      </span>
+                    </div>
+                  );
+                },
+              },
+              {
                 key: "actions", label: "", sortable: false,
                 render: (row) => (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -1976,21 +2009,25 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <p className="text-sm font-medium">{selected.creadoPor}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-zinc-500">Vendedor</p>
-                  {(selected as any).vendedorNombre ? (
-                    <div className="flex items-center gap-2 mt-0.5">
-                      {(selected as any).vendedorAvatar ? (
-                        <img src={(selected as any).vendedorAvatar} alt="" className="h-5 w-5 rounded-full object-cover" />
-                      ) : (
-                        <div className="h-5 w-5 rounded-full bg-orange-100 flex items-center justify-center text-[10px] font-bold text-orange-600">
-                          {(selected as any).vendedorNombre.charAt(0).toUpperCase()}
-                        </div>
-                      )}
-                      <p className="text-sm font-medium">{(selected as any).vendedorNombre}</p>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-zinc-400">&mdash;</p>
-                  )}
+                  <p className="text-xs text-zinc-500">Vendedor / Operador</p>
+                  <select
+                    value={(selected as any).vendedorId || ""}
+                    onChange={async (e) => {
+                      const newVendedorId = e.target.value || null;
+                      const { error } = await supabase.from("presupuestos").update({ vendedor_id: newVendedorId } as any).eq("id", selected.id);
+                      if (error) { toast.error("Error al cambiar vendedor"); return; }
+                      const v = vendedores.find(v => v.id === newVendedorId);
+                      setSelected({ ...selected, vendedorId: newVendedorId, vendedorNombre: v?.full_name || "" } as any);
+                      await fetchPresupuestos();
+                      toast.success("Vendedor actualizado");
+                    }}
+                    className="mt-0.5 w-full rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-sm font-medium dark:border-zinc-700 dark:text-white"
+                  >
+                    <option value="">Sin asignar</option>
+                    {vendedores.map(v => (
+                      <option key={v.id} value={v.id}>{v.full_name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <p className="text-xs text-zinc-500">Moneda</p>
