@@ -160,6 +160,7 @@ const emptyFCForm = {
   percepciones: 0,
   moneda: "ARS" as "ARS" | "USD",
   notas: "",
+  solo_iva: false,
 };
 
 const GASTO_CATEGORIAS = ["Transporte", "Servicios", "Materiales", "Varios", "Comisiones", "Impuestos"] as const;
@@ -346,6 +347,9 @@ export default function FinanzasPage() {
   const [fcFile, setFcFile] = useState<File | null>(null);
   const [fcUploading, setFcUploading] = useState(false);
   const [selectedFC, setSelectedFC] = useState<FacturaCompraRow | null>(null);
+  const [newArticleOpen, setNewArticleOpen] = useState(false);
+  const [newArticle, setNewArticle] = useState({ codigo: "", descripcion: "", categoria: "", unidad: "UN", precio: 0 });
+  const [newArticleSaving, setNewArticleSaving] = useState(false);
 
   // Echeqs state
   const [echeqs, setEcheqs] = useState<EcheqRow[]>([]);
@@ -642,6 +646,7 @@ export default function FinanzasPage() {
               created_at: r.created_at,
               archivo_url: r.archivo_url ?? undefined,
               archivo_nombre: r.archivo_nombre ?? undefined,
+              solo_iva: r.solo_iva ?? false,
             })));
           } else {
             setFacturasCompra([]);
@@ -1067,8 +1072,9 @@ export default function FinanzasPage() {
         moneda: fcForm.moneda,
         notas: fcForm.notas,
         estado: "pendiente",
+        solo_iva: fcForm.solo_iva,
       };
-      if (fcForm.orden_compra_id) insertData.orden_compra_id = fcForm.orden_compra_id;
+      if (fcForm.orden_compra_id && !fcForm.solo_iva) insertData.orden_compra_id = fcForm.orden_compra_id;
       if (fcForm.fecha_vencimiento) insertData.fecha_vencimiento = fcForm.fecha_vencimiento;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
 
@@ -1118,6 +1124,63 @@ export default function FinanzasPage() {
       await (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id);
       await fetchData();
     } catch (err) { console.error("Error anulando FC:", err); }
+  }
+
+  async function handleCreateArticle() {
+    if (!newArticle.codigo.trim() || !newArticle.descripcion.trim()) return;
+    if (!fcForm.proveedor_id) return;
+    setNewArticleSaving(true);
+    try {
+      // Find or create a lista_precios for this proveedor
+      let listaId: string | null = null;
+      const { data: existingListas } = await (supabase as any)
+        .from("listas_precios")
+        .select("id")
+        .eq("proveedor_id", fcForm.proveedor_id)
+        .eq("estado", "vigente")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (existingListas && existingListas.length > 0) {
+        listaId = existingListas[0].id;
+      } else {
+        // Create a new lista
+        const provNombre = proveedoresOptions.find(p => p.id === fcForm.proveedor_id)?.razon_social || "Proveedor";
+        const { data: newLista, error: listaErr } = await (supabase as any)
+          .from("listas_precios")
+          .insert({
+            nombre: `Lista ${provNombre}`,
+            proveedor_id: fcForm.proveedor_id,
+            moneda: fcForm.moneda,
+            estado: "vigente",
+            sociedad_id: sociedadActiva?.id || null,
+          })
+          .select("id")
+          .single();
+        if (listaErr) throw listaErr;
+        listaId = newLista.id;
+      }
+
+      const { error: itemErr } = await supabase.from("lista_precios_items").insert({
+        lista_id: listaId,
+        codigo: newArticle.codigo.trim(),
+        descripcion: newArticle.descripcion.trim(),
+        categoria: newArticle.categoria.trim() || "General",
+        unidad: newArticle.unidad || "UN",
+        precio: newArticle.precio,
+        descuento: 0,
+        precio_neto: newArticle.precio,
+      } as any);
+      if (itemErr) throw itemErr;
+
+      setNewArticle({ codigo: "", descripcion: "", categoria: "", unidad: "UN", precio: 0 });
+      setNewArticleOpen(false);
+      alert("Artículo creado en la lista de precios del proveedor");
+    } catch (err) {
+      alert("Error al crear artículo: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setNewArticleSaving(false);
+    }
   }
 
   const filteredProveedoresFC = fcProvSearch.trim()
@@ -1367,6 +1430,7 @@ export default function FinanzasPage() {
                     <div>
                       <span className="font-medium">{row.proveedor_nombre}</span>
                       {row.oc_numero && <p className="text-xs text-zinc-400">OC: {row.oc_numero}</p>}
+                      {(row as any).solo_iva && <Badge variant="purple">Solo IVA</Badge>}
                     </div>
                   )},
                   { key: "subtotal", label: "Subtotal", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.subtotal, row.moneda)}</span> },
@@ -2640,7 +2704,18 @@ export default function FinanzasPage() {
                 </div>
               )}
 
+              {/* Solo IVA toggle */}
+              <label className="flex items-center gap-3 rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
+                <input type="checkbox" checked={fcForm.solo_iva} onChange={(e) => setFcForm({ ...fcForm, solo_iva: e.target.checked, orden_compra_id: e.target.checked ? "" : fcForm.orden_compra_id })}
+                  className="rounded border-zinc-300 text-orange-500 focus:ring-orange-500" />
+                <div>
+                  <span className="text-sm font-medium dark:text-white">Solo IVA (crédito fiscal)</span>
+                  <p className="text-xs text-zinc-400">Factura que solo afecta libro IVA, sin vincular a OC ni compras</p>
+                </div>
+              </label>
+
               {/* OC opcional */}
+              {!fcForm.solo_iva && (
               <div>
                 <label className="text-xs font-medium text-zinc-500">Orden de compra (opcional)</label>
                 <select value={fcForm.orden_compra_id} onChange={(e) => setFcForm({ ...fcForm, orden_compra_id: e.target.value })}
@@ -2654,6 +2729,7 @@ export default function FinanzasPage() {
                   <p className="text-xs text-zinc-400 mt-1">No hay OCs para este proveedor</p>
                 )}
               </div>
+              )}
 
               {/* Adjuntar PDF */}
               <div>
@@ -2676,6 +2752,49 @@ export default function FinanzasPage() {
                 <textarea value={fcForm.notas} onChange={(e) => setFcForm({ ...fcForm, notas: e.target.value })}
                   rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Observaciones, condiciones de pago..." />
               </div>
+
+              {/* Nuevo artículo desde FC */}
+              {fcForm.proveedor_id && (
+                <div className="border border-dashed border-zinc-300 dark:border-zinc-600 rounded-lg overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setNewArticleOpen(!newArticleOpen)}
+                    className="w-full flex items-center justify-between px-3 py-2 text-sm text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors"
+                  >
+                    <span className="flex items-center gap-1.5"><Plus className="h-3.5 w-3.5" /> Nuevo artículo desde esta factura</span>
+                    <span className="text-xs text-zinc-400">{newArticleOpen ? "▲" : "▼"}</span>
+                  </button>
+                  {newArticleOpen && (
+                    <div className="px-3 pb-3 space-y-2 border-t border-zinc-200 dark:border-zinc-700 pt-3">
+                      <p className="text-xs text-zinc-400">Se agrega a la lista de precios del proveedor seleccionado</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input value={newArticle.codigo} onChange={(e) => setNewArticle({ ...newArticle, codigo: e.target.value })}
+                          placeholder="Código *" className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                        <input value={newArticle.categoria} onChange={(e) => setNewArticle({ ...newArticle, categoria: e.target.value })}
+                          placeholder="Categoría" className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      </div>
+                      <input value={newArticle.descripcion} onChange={(e) => setNewArticle({ ...newArticle, descripcion: e.target.value })}
+                        placeholder="Descripción *" className="w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      <div className="grid grid-cols-3 gap-2">
+                        <select value={newArticle.unidad} onChange={(e) => setNewArticle({ ...newArticle, unidad: e.target.value })}
+                          className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                          <option value="UN">UN</option>
+                          <option value="MT">MT</option>
+                          <option value="KG">KG</option>
+                          <option value="LT">LT</option>
+                          <option value="JG">JG</option>
+                        </select>
+                        <input type="number" step="0.01" value={newArticle.precio || ""} onChange={(e) => setNewArticle({ ...newArticle, precio: Number(e.target.value) })}
+                          placeholder="Precio" className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                        <button onClick={handleCreateArticle} disabled={newArticleSaving || !newArticle.codigo.trim() || !newArticle.descripcion.trim()}
+                          className="flex items-center justify-center gap-1 rounded-lg bg-emerald-500 px-2 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50 transition-colors">
+                          {newArticleSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />} Crear
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
               <button onClick={() => setFcModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
