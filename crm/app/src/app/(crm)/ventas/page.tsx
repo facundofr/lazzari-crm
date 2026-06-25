@@ -229,8 +229,9 @@ export default function VentasPage() {
       if (filterVendedor !== "todos" && v.presupuesto.vendedor_id !== filterVendedor) return false;
       if (filterStatus) {
         const st = getVentaStatus(v);
+        // Pipeline secuencial: Pend. entrega → Pend. factura → Facturadas → Cobradas
         if (filterStatus === "pend_entrega" && st.entregado) return false;
-        if (filterStatus === "pend_factura" && st.facturado) return false;
+        if (filterStatus === "pend_factura" && (!st.entregado || st.facturado)) return false;
         if (filterStatus === "facturadas" && (!st.facturado || st.cobrado)) return false;
         if (filterStatus === "cobradas" && !st.cobrado) return false;
       }
@@ -244,8 +245,9 @@ export default function VentasPage() {
       filterVendedor === "todos" || v.presupuesto.vendedor_id === filterVendedor
     );
     const total = base.length;
+    // Pipeline secuencial: cada venta cae en UNA sola categoría
     const pendEntrega = base.filter(v => !getVentaStatus(v).entregado).length;
-    const pendFactura = base.filter(v => !getVentaStatus(v).facturado).length;
+    const pendFactura = base.filter(v => { const s = getVentaStatus(v); return s.entregado && !s.facturado; }).length;
     const facturadas = base.filter(v => { const s = getVentaStatus(v); return s.facturado && !s.cobrado; }).length;
     const cobradas = base.filter(v => getVentaStatus(v).cobrado).length;
     const montoTotal = base.reduce((sum, v) => sum + (v.presupuesto.total || 0), 0);

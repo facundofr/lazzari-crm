@@ -625,8 +625,12 @@ export default function PresupuestosPage() {
   }
 
   async function handleCreatePR() {
-    if (!newPR.cliente_id || !newPR.vendedor_id) {
-      toast.warning("Selecciona un cliente y un vendedor");
+    if (!newPR.cliente_id) {
+      toast.warning("Selecciona un cliente");
+      return;
+    }
+    if (!esSolicitud && !newPR.vendedor_id) {
+      toast.warning("Selecciona un vendedor");
       return;
     }
     const validItems = newPR.items.filter((it) => it.descripcion.trim() && it.cantidad > 0);
@@ -746,7 +750,7 @@ export default function PresupuestosPage() {
           .from("presupuestos")
           .insert({
             cliente_id: newPR.cliente_id,
-            vendedor_id: newPR.vendedor_id,
+            vendedor_id: newPR.vendedor_id || null,
             sucursal_id: newPR.sucursal_id || null,
             contacto_id: newPR.contacto_id || null,
             created_by: profile?.id,
@@ -785,7 +789,13 @@ export default function PresupuestosPage() {
           .eq("id", newRow.id)
           .single();
         const createdPR = fullRow ? mapToPresupuesto(fullRow as any) : mapToPresupuesto(newRow as any);
-        setPostCreatePR(createdPR);
+
+        // Solo mostrar popup post-creacion para presupuestos, no para solicitudes
+        if (!esSolicitud) {
+          setPostCreatePR(createdPR);
+        } else {
+          toast.success(`Solicitud ${createdPR.numero} creada`);
+        }
 
         await fetchPresupuestos();
       }
