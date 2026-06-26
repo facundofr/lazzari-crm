@@ -158,6 +158,63 @@ async function tryArcaPadronGrupoLA(cuit: string) {
   }
 }
 
+// Fallback: padrón público de AFIP (sin certificados)
+async function tryPadronPublico(cuit: string) {
+  const urls = [
+    `https://soa.afip.gob.ar/sr-padron/v2/persona/${cuit}`,
+    `https://afip.tangofactura.com/Rest/GetContribuyenteFull?cuit=${cuit}`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        headers: { "Accept": "application/json" },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+
+      // soa.afip.gob.ar format
+      if (data?.data) {
+        const p = data.data;
+        const impuestoIds = (p.impuestos || []).map((i: any) => Number(i.idImpuesto || i.id));
+        const dom = p.domicilioFiscal || {};
+        const provincia =
+          dom.descripcionProvincia || dom.nombreProvincia ||
+          PROVINCIA_MAP[String(dom.idProvincia ?? "")] || "";
+        return {
+          razon_social: p.nombre || p.razonSocial || "",
+          condicion_iva: detectCondicionIva(impuestoIds),
+          direccion: dom.direccion || "",
+          localidad: dom.localidad || "",
+          provincia,
+          cp: dom.codPostal || "",
+          tipo_persona: p.tipoPersona || "",
+          estado_clave: p.estadoClave || "",
+        };
+      }
+
+      // tangofactura format
+      if (data?.Contribuyente) {
+        const p = data.Contribuyente;
+        return {
+          razon_social: p.razonSocial || p.nombre || "",
+          condicion_iva: p.condicionIva || "CF",
+          direccion: p.direccion || "",
+          localidad: p.localidad || "",
+          provincia: p.provincia || "",
+          cp: p.cp || "",
+          tipo_persona: "",
+          estado_clave: "",
+        };
+      }
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   const cuit = request.nextUrl.searchParams.get("cuit")?.replace(/\D/g, "");
 
@@ -168,20 +225,20 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Try ARCA authenticated padron first (most reliable)
+  // 1. Try ARCA authenticated padron (más datos, requiere cert)
   const arcaResult = await tryArcaPadron(cuit);
-  if (arcaResult) {
-    return NextResponse.json(arcaResult);
-  }
+  if (arcaResult) return NextResponse.json(arcaResult);
 
-  // Fallback: try with Grupo LA cert
+  // 2. Fallback: Grupo LA cert
   const grupoLAResult = await tryArcaPadronGrupoLA(cuit);
-  if (grupoLAResult) {
-    return NextResponse.json(grupoLAResult);
-  }
+  if (grupoLAResult) return NextResponse.json(grupoLAResult);
+
+  // 3. Fallback: padrón público sin certificados
+  const publicResult = await tryPadronPublico(cuit);
+  if (publicResult) return NextResponse.json(publicResult);
 
   return NextResponse.json(
-    { error: "Los servidores de ARCA/AFIP no están respondiendo en este momento (WSAA caído). Intentá de nuevo más tarde o ingresá los datos manualmente." },
+    { error: "No se pudo obtener datos del CUIT. Ingresá los datos manualmente." },
     { status: 503 }
   );
 }
