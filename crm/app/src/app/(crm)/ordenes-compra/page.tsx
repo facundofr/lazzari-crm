@@ -151,7 +151,9 @@ export default function OrdenesCompraPage() {
     fecha_entrega_estimada: "",
     moneda: "ARS" as "ARS" | "USD",
     observaciones: "",
+    presupuesto_origen_id: "",
   });
+  const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; clienteNombre: string }[]>([]);
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -263,10 +265,19 @@ export default function OrdenesCompraPage() {
 
   // ── Handlers ─────────────────────────────────────────────────────
   const openCreateModal = () => {
-    setFormData({ proveedor_id: "", fecha: new Date().toISOString().slice(0, 10), fecha_entrega_estimada: "", moneda: "ARS", observaciones: "" });
+    setFormData({ proveedor_id: "", fecha: new Date().toISOString().slice(0, 10), fecha_entrega_estimada: "", moneda: "ARS", observaciones: "", presupuesto_origen_id: "" });
     setFormError("");
     setCreateOpen(true);
     fetchProveedores();
+    // Load approved presupuestos for linking
+    (async () => {
+      try {
+        let q = (supabase as any).from("presupuestos").select("id, numero, clientes(razon_social)").eq("estado", "aprobado").order("created_at", { ascending: false }).limit(100);
+        if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
+        const { data } = await q;
+        if (data) setPresupuestosAprobados(data.map((p: any) => ({ id: p.id, numero: p.numero, clienteNombre: p.clientes?.razon_social || "" })));
+      } catch { /* ignore */ }
+    })();
   };
 
   const handleCreate = async () => {
@@ -283,6 +294,7 @@ export default function OrdenesCompraPage() {
         estado: "borrador",
         subtotal: 0, iva: 0, total: 0,
         sociedad_id: sociedadActiva?.id || null,
+        presupuesto_origen_id: formData.presupuesto_origen_id || null,
       } as any);
       if (error) throw error;
       setCreateOpen(false);
@@ -1236,6 +1248,13 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 <select value={formData.proveedor_id} onChange={(e) => setFormData((p) => ({ ...p, proveedor_id: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
                   <option value="">Seleccionar proveedor...</option>
                   {proveedores.map((prov) => <option key={prov.id} value={prov.id}>{prov.razon_social}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Vincular a PR (opcional)</label>
+                <select value={formData.presupuesto_origen_id} onChange={(e) => setFormData((p) => ({ ...p, presupuesto_origen_id: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                  <option value="">Sin presupuesto asociado</option>
+                  {presupuestosAprobados.map((p) => <option key={p.id} value={p.id}>{p.numero} — {p.clienteNombre}</option>)}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-4">

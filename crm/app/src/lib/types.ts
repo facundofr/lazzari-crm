@@ -125,6 +125,7 @@ export interface Client {
   emailFacturacion?: string | null;
   envioAutomatico?: boolean;
   transporteDefinido?: string;
+  flete?: string | null;
 }
 
 export interface Sucursal {

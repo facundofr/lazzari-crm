@@ -44,7 +44,7 @@ const COMISION_TIPO_BADGE: Record<ComisionTipo, "info" | "purple" | "warning"> =
   monto_fijo: "warning",
 };
 
-type TemplateTipo = "presupuesto" | "factura" | "remito";
+type TemplateTipo = "presupuesto" | "factura" | "remito" | "cuenta_corriente";
 
 interface EmailTemplate {
   tipo: TemplateTipo;
@@ -68,6 +68,11 @@ const DEFAULT_TEMPLATES: Record<TemplateTipo, EmailTemplate> = {
     asunto: "Remito {{numero}} — {{sociedad}}",
     cuerpo: "Estimado/a,\n\nAdjuntamos el remito {{numero}}.\n\nSaludos,\n{{sociedad}}",
   },
+  cuenta_corriente: {
+    tipo: "cuenta_corriente",
+    asunto: "Estado de cuenta — {{sociedad}}",
+    cuerpo: "Estimado/a,\n\nAdjuntamos el estado de su cuenta corriente al {{fecha}}.\n\nSaldo actual: {{saldo}}\n\nAnte cualquier consulta, no dude en contactarnos.\n\nSaludos,\n{{sociedad}}",
+  },
 };
 
 const roleBadgeVariant: Record<Role, "success" | "warning" | "danger" | "info" | "purple" | "outline"> = {
@@ -88,6 +93,7 @@ export default function ConfiguracionPage() {
 
   // Email templates state
   const [templates, setTemplates] = useState<Record<TemplateTipo, EmailTemplate>>({ ...DEFAULT_TEMPLATES });
+  const [changingRoleUserId, setChangingRoleUserId] = useState<string | null>(null);
   const [templateSaving, setTemplateSaving] = useState<TemplateTipo | null>(null);
   const [templateSaved, setTemplateSaved] = useState<TemplateTipo | null>(null);
 
@@ -521,7 +527,33 @@ export default function ConfiguracionPage() {
                       </div>
                     ),
                   },
-                  { key: "role", label: "Rol", sortable: true, render: (row) => <Badge variant={roleBadgeVariant[row.role]}>{ROLE_LABELS[row.role]}</Badge> },
+                  {
+                    key: "role", label: "Rol", sortable: true,
+                    render: (row) => changingRoleUserId === row.id ? (
+                      <select
+                        defaultValue={row.role}
+                        autoFocus
+                        onBlur={() => setChangingRoleUserId(null)}
+                        onChange={async (e) => {
+                          const newRole = e.target.value as Role;
+                          const { error } = await supabase.from("profiles").update({ role: newRole } as any).eq("id", row.id);
+                          if (error) { alert("Error al cambiar rol: " + error.message); }
+                          else {
+                            setDbUsers(prev => prev.map(u => u.id === row.id ? { ...u, role: newRole } : u));
+                          }
+                          setChangingRoleUserId(null);
+                        }}
+                        className="rounded-md border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-2 py-1 text-xs"
+                      >
+                        {(Object.entries(ROLE_LABELS) as [Role, string][]).map(([r, l]) => <option key={r} value={r}>{l}</option>)}
+                      </select>
+                    ) : (
+                      <button onClick={() => setChangingRoleUserId(row.id)} className="flex items-center gap-1.5 group" title="Click para cambiar rol">
+                        <Badge variant={roleBadgeVariant[row.role]}>{ROLE_LABELS[row.role]}</Badge>
+                        <span className="text-xs text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity">✎</span>
+                      </button>
+                    ),
+                  },
                   { key: "active", label: "Estado", sortable: true, render: (row) => <Badge variant={row.active ? "success" : "outline"}>{row.active ? "Activo" : "Inactivo"}</Badge> },
                   { key: "createdAt", label: "Registrado", sortable: true, render: (row) => <span className="text-zinc-400 text-xs">{row.createdAt}</span> },
                 ]}
@@ -929,9 +961,9 @@ export default function ConfiguracionPage() {
               </p>
             </div>
 
-            {(["presupuesto", "factura", "remito"] as TemplateTipo[]).map((tipo) => {
+            {(["presupuesto", "factura", "remito", "cuenta_corriente"] as TemplateTipo[]).map((tipo) => {
               const template = templates[tipo];
-              const label = tipo === "presupuesto" ? "Presupuesto" : tipo === "factura" ? "Factura" : "Remito";
+              const label = tipo === "presupuesto" ? "Presupuesto" : tipo === "factura" ? "Factura" : tipo === "remito" ? "Remito" : "Cuenta corriente";
               const isSaving = templateSaving === tipo;
               const isSaved = templateSaved === tipo;
 

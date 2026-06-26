@@ -60,6 +60,7 @@ interface ClienteRow {
   email_facturacion?: string | null;
   envio_automatico?: boolean;
   transporte_definido?: string | null;
+  flete?: string | null;
   created_at: string;
   updated_at: string;
   assigned_profile: { full_name: string } | null;
@@ -91,6 +92,7 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
     emailFacturacion: row.email_facturacion ?? null,
     envioAutomatico: row.envio_automatico ?? true,
     transporteDefinido: row.transporte_definido ?? "",
+    flete: row.flete ?? "",
     createdAt: row.created_at ?? "",
     updatedAt: row.updated_at ?? "",
     contactos: Array.isArray(row.contactos) ? (row.contactos as Array<Record<string, unknown>>).map((c) => ({
@@ -192,6 +194,8 @@ const emptyForm = {
   email_facturacion: "",
   envio_automatico: true,
   transporte_definido: "",
+  assigned_to: "" as string | null,
+  flete: "",
 };
 
 type DetailTab = "datos" | "contactos" | "sucursales" | "historial" | "actividad" | "cc";
@@ -268,6 +272,15 @@ export default function ClientesPage() {
   const [editingContactoId, setEditingContactoId] = useState<string | null>(null);
   const [contactoForm, setContactoForm] = useState<ContactoFormType>(emptyContactoForm);
   const [savingContacto, setSavingContacto] = useState(false);
+
+  // Contactos en modal (multi-contact)
+  type ContactoModal = { id?: string; nombre: string; cargo: string; email: string; telefono: string; whatsapp: string; sucursal_id: string; principal: boolean; notas: string; isNew?: boolean };
+  const emptyContactoModal: ContactoModal = { nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", sucursal_id: "", principal: false, notas: "" };
+  const [formContactos, setFormContactos] = useState<ContactoModal[]>([]);
+  const [newContactoModal, setNewContactoModal] = useState<ContactoModal>(emptyContactoModal);
+  const [showContactoModalForm, setShowContactoModalForm] = useState(false);
+  const [removedContactoIds, setRemovedContactoIds] = useState<string[]>([]);
+  const [contactosModalLoading, setContactosModalLoading] = useState(false);
 
   // Sucursales CRUD desde panel de detalle
   type SucursalDetailForm = { nombre: string; direccion: string; localidad: string; provincia: string; cp: string; telefono: string; email: string };
@@ -932,10 +945,16 @@ export default function ClientesPage() {
       email_facturacion: c.emailFacturacion ?? "",
       envio_automatico: c.envioAutomatico ?? true,
       transporte_definido: c.transporteDefinido ?? "",
+      assigned_to: (c as any).assignedTo || null,
+      flete: (c as any).flete || "",
     });
     setFormError("");
     setCuitLookupMsg(null);
     setRemovedSucursalIds([]);
+    setRemovedContactoIds([]);
+    setFormContactos([]);
+    setShowContactoModalForm(false);
+    setNewContactoModal({ nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", sucursal_id: "", principal: false, notas: "" });
     setNewSucursal({ nombre: "", direccion: "", localidad: "", provincia: "", cp: "", telefono: "", email: "" });
     setShowSucursalForm(false);
     // Fetch sucursales for this client
@@ -958,6 +977,32 @@ export default function ClientesPage() {
         );
         setSucursalesLoading(false);
       });
+    // Fetch contacts
+    setContactosModalLoading(true);
+    (supabase as any)
+      .from("contactos")
+      .select("id, nombre, cargo, email, telefono, whatsapp, sucursal_id, principal, notas")
+      .eq("entity_type", "cliente")
+      .eq("entity_id", c.id)
+      .order("principal", { ascending: false })
+      .then(({ data }: { data: any[] | null }) => {
+        setFormContactos((data || []).map((ct: any) => ({
+          id: ct.id, nombre: ct.nombre || "", cargo: ct.cargo || "",
+          email: ct.email || "", telefono: ct.telefono || "",
+          whatsapp: ct.whatsapp || "", sucursal_id: ct.sucursal_id || "",
+          principal: ct.principal ?? false, notas: ct.notas || "",
+        })));
+        setContactosModalLoading(false);
+      })
+      .catch(() => {
+        setFormContactos((c.contactos || []).map((ct) => ({
+          id: ct.id, nombre: ct.nombre, cargo: ct.cargo || "",
+          email: ct.email || "", telefono: ct.telefono || "",
+          whatsapp: "", sucursal_id: ct.sucursalId || "",
+          principal: ct.principal, notas: "",
+        })));
+        setContactosModalLoading(false);
+      });
     setModalOpen(true);
   }
 
@@ -977,6 +1022,8 @@ export default function ClientesPage() {
       const payload: Record<string, unknown> = {
         ...formWithout,
         email_facturacion: form.email_facturacion?.trim() || null,
+        assigned_to: (form as any).assigned_to || null,
+        flete: (form as any).flete?.trim() || null,
       };
       if (!editingId && sociedadActiva?.id) {
         payload.sociedad_id = sociedadActiva.id;
@@ -1015,12 +1062,49 @@ export default function ClientesPage() {
           if (sucErr) throw sucErr;
         }
 
+        // Save contact changes
+        for (const id of removedContactoIds) {
+          await (supabase as any).from("contactos").delete().eq("id", id);
+        }
+        const newContsEdit = formContactos.filter((ct) => ct.isNew);
+        for (const ct of newContsEdit) {
+          await (supabase as any).from("contactos").insert({
+            entity_type: "cliente", entity_id: editingId,
+            nombre: ct.nombre, cargo: ct.cargo || null,
+            email: ct.email || null, telefono: ct.telefono || null,
+            whatsapp: ct.whatsapp || null, sucursal_id: ct.sucursal_id || null,
+            principal: ct.principal, notas: ct.notas || null,
+          });
+        }
+        const existingContsEdit = formContactos.filter((ct) => ct.id && !ct.isNew);
+        for (const ct of existingContsEdit) {
+          await (supabase as any).from("contactos").update({
+            nombre: ct.nombre, cargo: ct.cargo || null,
+            email: ct.email || null, telefono: ct.telefono || null,
+            whatsapp: ct.whatsapp || null, sucursal_id: ct.sucursal_id || null,
+            principal: ct.principal, notas: ct.notas || null,
+          }).eq("id", ct.id!);
+        }
         toast.success("Cliente actualizado correctamente");
       } else {
-        const { error } = await supabase
+        const { data: inserted, error } = await supabase
           .from("clientes")
-          .insert(payload as any);
+          .insert(payload as any)
+          .select("id")
+          .single();
         if (error) throw error;
+        // Save new contacts for new client
+        const newClientId = inserted.id;
+        const newConts = formContactos.filter((ct) => ct.isNew);
+        for (const ct of newConts) {
+          await (supabase as any).from("contactos").insert({
+            entity_type: "cliente", entity_id: newClientId,
+            nombre: ct.nombre, cargo: ct.cargo || null,
+            email: ct.email || null, telefono: ct.telefono || null,
+            whatsapp: ct.whatsapp || null, sucursal_id: ct.sucursal_id || null,
+            principal: ct.principal, notas: ct.notas || null,
+          });
+        }
         toast.success("Cliente creado correctamente");
       }
       setModalOpen(false);
@@ -1576,6 +1660,8 @@ export default function ClientesPage() {
                       <InfoField label="Dias CC" value={String(selectedCliente.diasCuentaCorriente)} />
                       <InfoField label="Limite credito" value={formatCurrency(selectedCliente.limiteCredito)} />
                       <InfoField label="Saldo CC" value={formatCurrency(selectedCliente.saldoCuentaCorriente)} highlight />
+                      {(selectedCliente as any).flete && <InfoField label="Flete" value={(selectedCliente as any).flete} />}
+                      {(selectedCliente as any).vendedorNombre && (selectedCliente as any).vendedorNombre !== "—" && <InfoField label="Vendedor asignado" value={(selectedCliente as any).vendedorNombre} />}
                       <InfoField label="Transporte definido" value={selectedCliente.transporteDefinido || "—"} />
                     </div>
                   </div>
@@ -2435,9 +2521,93 @@ export default function ClientesPage() {
             </div>
           )}
 
+          {/* Section: Contactos comerciales */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Contactos comerciales</p>
+            {contactosModalLoading ? (
+              <div className="flex items-center gap-2 text-sm text-zinc-400 py-2"><Loader2 className="h-4 w-4 animate-spin" /> Cargando contactos...</div>
+            ) : (
+              <>
+                {formContactos.length > 0 && (
+                  <div className="space-y-2 mb-3">
+                    {formContactos.map((ct, idx) => (
+                      <div key={ct.id || idx} className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-800">
+                        <div className="flex items-center justify-between">
+                          <div className="min-w-0">
+                            <span className="text-sm font-medium text-zinc-700 dark:text-zinc-200">{ct.nombre}</span>
+                            {ct.cargo && <span className="ml-2 text-xs text-zinc-400">{ct.cargo}</span>}
+                            {ct.principal && <span className="ml-2 text-[10px] font-medium text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded dark:bg-orange-900/30 dark:text-orange-400">Principal</span>}
+                            {ct.isNew && <span className="ml-2 text-[10px] font-medium text-green-600 bg-green-50 px-1.5 py-0.5 rounded dark:bg-green-900/30 dark:text-green-400">Nuevo</span>}
+                          </div>
+                          <button type="button" onClick={() => {
+                            if (ct.id && !ct.isNew) setRemovedContactoIds((prev) => [...prev, ct.id!]);
+                            setFormContactos((prev) => prev.filter((_, i) => i !== idx));
+                          }} className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 transition-colors ml-2">
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                        {(ct.email || ct.telefono || ct.notas) && (
+                          <div className="flex flex-col gap-0.5 mt-1">
+                            {(ct.email || ct.telefono) && (
+                              <div className="flex gap-3">
+                                {ct.email && <span className="text-xs text-zinc-400">{ct.email}</span>}
+                                {ct.telefono && <span className="text-xs text-zinc-400">{ct.telefono}</span>}
+                              </div>
+                            )}
+                            {ct.notas && <span className="text-xs text-zinc-400 italic">{ct.notas}</span>}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {!showContactoModalForm ? (
+                  <button type="button" onClick={() => setShowContactoModalForm(true)} className="flex items-center gap-1.5 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-500 hover:bg-zinc-100 dark:border-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-400 dark:hover:bg-zinc-700 transition-colors w-full justify-center">
+                    <Plus className="h-3.5 w-3.5" /> Agregar contacto
+                  </button>
+                ) : (
+                  <div className="rounded-lg border border-orange-200 bg-orange-50/50 dark:border-orange-900/40 dark:bg-orange-900/10 p-3 space-y-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input label="Nombre *" value={newContactoModal.nombre} onChange={(e) => setNewContactoModal((p) => ({ ...p, nombre: e.target.value }))} placeholder="Juan Pérez" />
+                      <Input label="Cargo" value={newContactoModal.cargo} onChange={(e) => setNewContactoModal((p) => ({ ...p, cargo: e.target.value }))} placeholder="Compras, Gerente..." />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input label="Email" type="email" value={newContactoModal.email} onChange={(e) => setNewContactoModal((p) => ({ ...p, email: e.target.value }))} />
+                      <Input label="Teléfono" value={newContactoModal.telefono} onChange={(e) => setNewContactoModal((p) => ({ ...p, telefono: e.target.value }))} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Input label="WhatsApp" value={newContactoModal.whatsapp} onChange={(e) => setNewContactoModal((p) => ({ ...p, whatsapp: e.target.value }))} />
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Sucursal</label>
+                        <select value={newContactoModal.sucursal_id} onChange={(e) => setNewContactoModal((p) => ({ ...p, sucursal_id: e.target.value }))} className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                          <option value="">— Sin asignar</option>
+                          {formSucursales.map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <Textarea label="Comentario" value={newContactoModal.notas} onChange={(e) => setNewContactoModal((p) => ({ ...p, notas: e.target.value }))} placeholder="Horario de atención, preferencias, etc." rows={2} />
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" checked={newContactoModal.principal} onChange={(e) => setNewContactoModal((p) => ({ ...p, principal: e.target.checked }))} className="h-4 w-4 rounded border-zinc-300 text-orange-500 focus:ring-orange-500" />
+                      <span className="text-xs text-zinc-600 dark:text-zinc-400">Contacto principal</span>
+                    </label>
+                    <div className="flex justify-end gap-2 pt-1">
+                      <button type="button" onClick={() => { setShowContactoModalForm(false); setNewContactoModal({ nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", sucursal_id: "", principal: false, notas: "" }); }} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700">Cancelar</button>
+                      <button type="button" onClick={() => {
+                        if (!newContactoModal.nombre.trim()) return;
+                        setFormContactos((prev) => [...prev, { ...newContactoModal, nombre: newContactoModal.nombre.trim(), isNew: true }]);
+                        setNewContactoModal({ nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", sucursal_id: "", principal: false, notas: "" });
+                        setShowContactoModalForm(false);
+                      }} className="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600">Agregar</button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
           {/* Section: Contacto */}
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Contacto</p>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Email y comunicacion</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input
                 label="Email"
@@ -2544,6 +2714,23 @@ export default function ClientesPage() {
                 type="number"
                 value={String(form.limite_credito)}
                 onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })}
+              />
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Vendedor asignado</label>
+                <select
+                  value={form.assigned_to || ""}
+                  onChange={(e) => setForm({ ...form, assigned_to: e.target.value || null })}
+                  className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                >
+                  <option value="">Sin asignar</option>
+                  {vendedores.map((v) => <option key={v.id} value={v.id}>{v.full_name}</option>)}
+                </select>
+              </div>
+              <Input
+                label="Flete"
+                value={(form as any).flete || ""}
+                onChange={(e) => setForm({ ...form, flete: e.target.value } as any)}
+                placeholder="Ej: Andreani, correo propio, etc."
               />
             </div>
           </div>

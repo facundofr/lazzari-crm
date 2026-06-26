@@ -1963,7 +1963,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <Mail className="h-3.5 w-3.5" />
                   Email
                 </button>
-                {["solicitud", "pendiente", "rechazado", "postergado"].includes(selected.estado) && (
+                {["solicitud", "pendiente", "rechazado", "postergado", "aprobado"].includes(selected.estado) && (
                   <button
                     onClick={() => handleEditPR(selected)}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 transition-colors"
@@ -2013,7 +2013,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <p className="text-sm font-medium">{selected.creadoPor}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-zinc-500">Vendedor / Operador</p>
+                  <p className="text-xs text-zinc-500">Vendedor</p>
                   <select
                     value={(selected as any).vendedorId || ""}
                     onChange={async (e) => {
@@ -2024,6 +2024,27 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       setSelected({ ...selected, vendedorId: newVendedorId, vendedorNombre: v?.full_name || "" } as any);
                       await fetchPresupuestos();
                       toast.success("Vendedor actualizado");
+                    }}
+                    className="mt-0.5 w-full rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-sm font-medium dark:border-zinc-700 dark:text-white"
+                  >
+                    <option value="">Sin asignar</option>
+                    {vendedores.map(v => (
+                      <option key={v.id} value={v.id}>{v.full_name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500">Operador</p>
+                  <select
+                    value={(selected as any).creadoPorId || ""}
+                    onChange={async (e) => {
+                      const newOpId = e.target.value || null;
+                      const { error } = await supabase.from("presupuestos").update({ created_by: newOpId } as any).eq("id", selected.id);
+                      if (error) { toast.error("Error al cambiar operador"); return; }
+                      const v = vendedores.find(v => v.id === newOpId);
+                      setSelected({ ...selected, creadoPorId: newOpId || "", creadoPor: v?.full_name || "" } as any);
+                      await fetchPresupuestos();
+                      toast.success("Operador actualizado");
                     }}
                     className="mt-0.5 w-full rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-sm font-medium dark:border-zinc-700 dark:text-white"
                   >
@@ -2093,11 +2114,15 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                         <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">Markup</th>
                         <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">P. Venta</th>
                         <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Total</th>
+                        <th className="px-3 py-2 text-center text-xs font-semibold text-zinc-500" title="Entregado">E</th>
+                        <th className="px-3 py-2 text-center text-xs font-semibold text-zinc-500" title="Facturado">F</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                       {selected.items.map((item) => {
                         const belowCost = item.precioVenta < item.precioCosto;
+                        const entregado = (item as any).entregado ?? false;
+                        const facturado = (item as any).facturado ?? false;
                         return (
                         <tr key={item.id} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
@@ -2112,6 +2137,32 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                             </span>
                           </td>
                           <td className="px-3 py-2 text-right font-mono font-semibold">{formatCurrency(item.total)}</td>
+                          <td className="px-3 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={entregado}
+                              onChange={async (e) => {
+                                const val = e.target.checked;
+                                await supabase.from("presupuesto_items").update({ entregado: val } as any).eq("id", item.id);
+                                setSelected({ ...selected, items: selected.items.map(it => it.id === item.id ? { ...it, entregado: val } as any : it) });
+                              }}
+                              className="h-4 w-4 accent-emerald-500 cursor-pointer"
+                              title="Entregado"
+                            />
+                          </td>
+                          <td className="px-3 py-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={facturado}
+                              onChange={async (e) => {
+                                const val = e.target.checked;
+                                await supabase.from("presupuesto_items").update({ facturado: val } as any).eq("id", item.id);
+                                setSelected({ ...selected, items: selected.items.map(it => it.id === item.id ? { ...it, facturado: val } as any : it) });
+                              }}
+                              className="h-4 w-4 accent-blue-500 cursor-pointer"
+                              title="Facturado"
+                            />
+                          </td>
                         </tr>
                         );
                       })}
