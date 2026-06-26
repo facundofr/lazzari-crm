@@ -96,7 +96,8 @@ interface LibroIVACompraRow {
 const COLORS = ["#f97316", "#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#eab308"];
 
 export default function ReportesPage() {
-  const { sociedadActiva } = useUser();
+  const { sociedadActiva, profile } = useUser();
+  const isAdmin = profile?.role && ["super_admin", "admin", "administrativo"].includes(profile.role);
   const [activeTab, setActiveTab] = useState<"comercial" | "comisiones" | "articulos" | "libro_iva">("comercial");
   const [monedaReporte, setMonedaReporte] = useState<"original" | "ARS" | "USD">("original");
   const [tipoCambioReporte, setTipoCambioReporte] = useState<number>(1200);
@@ -235,7 +236,7 @@ export default function ReportesPage() {
         const { data: prs, error } = await comPrsQuery;
 
         if (error || !prs || prs.length === 0) {
-          setComisionesData(buildMockComisiones());
+          setComisionesData([]);
           return;
         }
 
@@ -247,7 +248,7 @@ export default function ReportesPage() {
           .in("id", vendedorIds);
 
         if (!profiles || profiles.length === 0) {
-          setComisionesData(buildMockComisiones());
+          setComisionesData([]);
           return;
         }
 
@@ -284,9 +285,9 @@ export default function ReportesPage() {
           };
         });
 
-        setComisionesData(result.length > 0 ? result : buildMockComisiones());
+        setComisionesData(result);
       } catch {
-        setComisionesData(buildMockComisiones());
+        setComisionesData([]);
       } finally {
         setComisionesLoading(false);
       }
@@ -588,19 +589,21 @@ export default function ReportesPage() {
               Analisis comercial
             </span>
           </button>
-          <button
-            onClick={() => setActiveTab("comisiones")}
-            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
-              activeTab === "comisiones"
-                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
-                : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
-            }`}
-          >
-            <span className="flex items-center gap-2">
-              <Percent className="h-4 w-4" />
-              Comisiones
-            </span>
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => setActiveTab("comisiones")}
+              className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === "comisiones"
+                  ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
+                  : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <Percent className="h-4 w-4" />
+                Comisiones
+              </span>
+            </button>
+          )}
           <button
             onClick={() => setActiveTab("articulos")}
             className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
