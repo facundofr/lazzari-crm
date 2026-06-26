@@ -85,12 +85,12 @@ export default function DashboardPage() {
   const [kpi, setKpi] = useState(mockKPIs);
   const [presupuestosPorEstado, setPresupuestosPorEstado] = useState(mockPresupuestosPorEstado);
   const [ventasPorMes, setVentasPorMes] = useState(mockVentasPorMes);
-  const [presupuestos, setPresupuestos] = useState(mockPresupuestos.slice(0, 5));
-  const [alerts, setAlerts] = useState(mockAlerts);
-  const [topClientes, setTopClientes] = useState(mockTopClientes);
-  const [activity, setActivity] = useState(mockActivity);
-  const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>(mockGastosFijos);
-  const [objetivos, setObjetivos] = useState<Objetivo[]>(mockObjetivos);
+  const [presupuestos, setPresupuestos] = useState<typeof mockPresupuestos>([]);
+  const [alerts, setAlerts] = useState<typeof mockAlerts>([]);
+  const [topClientes, setTopClientes] = useState<typeof mockTopClientes>([]);
+  const [activity, setActivity] = useState<typeof mockActivity>([]);
+  const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>([]);
+  const [objetivos, setObjetivos] = useState<Objetivo[]>([]);
 
   useEffect(() => {
     async function fetchAll() {
@@ -178,18 +178,18 @@ export default function DashboardPage() {
         if (!kpiResult.error && kpiResult.data) {
           const d = kpiResult.data as Record<string, number>;
           setKpi({
-            ventasMes: d.ventas_mes ?? mockKPIs.ventasMes,
-            ventasMesAnterior: d.ventas_mes_anterior ?? mockKPIs.ventasMesAnterior,
-            presupuestosActivos: d.presupuestos_activos ?? mockKPIs.presupuestosActivos,
-            presupuestosPendientes: d.presupuestos_pendientes ?? mockKPIs.presupuestosPendientes,
-            tasaConversion: d.tasa_conversion ?? mockKPIs.tasaConversion,
-            tasaConversionAnterior: d.tasa_conversion_anterior ?? mockKPIs.tasaConversionAnterior,
-            cobranzasMes: d.cobranzas_mes ?? mockKPIs.cobranzasMes,
-            cobranzasPendientes: d.cobranzas_pendientes ?? mockKPIs.cobranzasPendientes,
-            clientesActivos: d.clientes_activos ?? mockKPIs.clientesActivos,
-            stockBajo: d.stock_bajo ?? mockKPIs.stockBajo,
-            facturadoMes: d.facturado_mes ?? mockKPIs.facturadoMes,
-            margenPromedio: d.margen_promedio ?? mockKPIs.margenPromedio,
+            ventasMes: d.ventas_mes ?? 0,
+            ventasMesAnterior: d.ventas_mes_anterior ?? 0,
+            presupuestosActivos: d.presupuestos_activos ?? 0,
+            presupuestosPendientes: d.presupuestos_pendientes ?? 0,
+            tasaConversion: d.tasa_conversion ?? 0,
+            tasaConversionAnterior: d.tasa_conversion_anterior ?? 0,
+            cobranzasMes: d.cobranzas_mes ?? 0,
+            cobranzasPendientes: d.cobranzas_pendientes ?? 0,
+            clientesActivos: d.clientes_activos ?? 0,
+            stockBajo: d.stock_bajo ?? 0,
+            facturadoMes: d.facturado_mes ?? 0,
+            margenPromedio: d.margen_promedio ?? 0,
           });
         }
 
@@ -227,36 +227,35 @@ export default function DashboardPage() {
         }
 
         // --- Ultimos presupuestos ---
-        if (!presupuestosRecentResult.error && presupuestosRecentResult.data?.length) {
-          setPresupuestos(presupuestosRecentResult.data.map((p: any) => ({
+        if (!presupuestosRecentResult.error) {
+          setPresupuestos((presupuestosRecentResult.data ?? []).map((p: any) => ({
             ...p,
             clienteNombre: p.clientes?.razon_social || "N/A",
           })));
         }
 
         // --- Alertas ---
-        if (!alertasResult.error && alertasResult.data?.length) {
-          setAlerts(alertasResult.data.map((a: any) => ({
+        if (!alertasResult.error) {
+          setAlerts((alertasResult.data ?? []).map((a: any) => ({
             id: a.id, type: a.tipo, title: a.title, description: a.description,
             entityId: a.entity_id, module: a.module, read: a.read, createdAt: a.created_at,
           })));
         }
 
         // --- Top clientes ---
-        if (!topClientesResult.error && topClientesResult.data?.length) {
+        if (!topClientesResult.error) {
           const totals: Record<string, { nombre: string; facturado: number }> = {};
-          topClientesResult.data.forEach((f: any) => {
+          (topClientesResult.data ?? []).forEach((f: any) => {
             const id = f.cliente_id;
             if (!totals[id]) totals[id] = { nombre: f.clientes?.razon_social || "N/A", facturado: 0 };
             totals[id].facturado += Number(f.total);
           });
-          const sorted = Object.values(totals).sort((a, b) => b.facturado - a.facturado).slice(0, 5);
-          if (sorted.length > 0) setTopClientes(sorted);
+          setTopClientes(Object.values(totals).sort((a, b) => b.facturado - a.facturado).slice(0, 5));
         }
 
         // --- Actividad reciente ---
-        if (!activityResult.error && activityResult.data?.length) {
-          setActivity(activityResult.data.map((a: any) => ({
+        if (!activityResult.error) {
+          setActivity((activityResult.data ?? []).map((a: any) => ({
             id: a.id, userId: a.user_id, userName: a.profiles?.full_name || "Usuario",
             action: a.action, module: a.module, entityId: a.entity_id,
             details: a.details, createdAt: a.created_at,
@@ -264,8 +263,8 @@ export default function DashboardPage() {
         }
 
         // --- Gastos fijos ---
-        if (!gastosFijosResult.error && gastosFijosResult.data?.length) {
-          setGastosFijos(gastosFijosResult.data.map((g: any) => ({
+        if (!gastosFijosResult.error) {
+          setGastosFijos((gastosFijosResult.data ?? []).map((g: any) => ({
             id: g.id, descripcion: g.descripcion, categoria: g.categoria,
             monto: Number(g.monto), moneda: g.moneda, activo: g.activo,
             notas: g.notas ?? "", createdAt: g.created_at,
@@ -273,8 +272,8 @@ export default function DashboardPage() {
         }
 
         // --- Objetivos ---
-        if (!objetivosResult.error && objetivosResult.data?.length) {
-          setObjetivos(objetivosResult.data.map((o: any) => ({
+        if (!objetivosResult.error) {
+          setObjetivos((objetivosResult.data ?? []).map((o: any) => ({
             id: o.id, nombre: o.nombre, tipo: o.tipo,
             montoTarget: Number(o.monto_target), moneda: o.moneda,
             periodoInicio: o.periodo_inicio, periodoFin: o.periodo_fin,

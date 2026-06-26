@@ -305,8 +305,8 @@ export default function FinanzasPage() {
   const [ccProveedores, setCcProveedores] = useState<CCRow[]>([]);
   const [extractos, setExtractos] = useState<ExtractoRow[]>([]);
   const [lineasCredito, setLineasCredito] = useState<LineaCreditoRow[]>([]);
-  const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>(mockGastosFijos);
-  const [objetivos, setObjetivos] = useState<Objetivo[]>(mockObjetivos);
+  const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>([]);
+  const [objetivos, setObjetivos] = useState<Objetivo[]>([]);
 
   // Gastos fijos modal
   const [gastoModalOpen, setGastoModalOpen] = useState(false);
@@ -2036,16 +2036,6 @@ export default function FinanzasPage() {
                 tipo: "cc_vencimiento",
               });
             });
-
-          // Mock data fallback if no items found
-          if (items.length === 0) {
-            items.push(
-              { id: "mock-1", fecha: new Date("2026-06-15"), fechaStr: "2026-06-15", entidad: "Tenaris", descripcion: "Cheque emitido #4521", monto: 3855000, tipo: "cheque" },
-              { id: "mock-2", fecha: new Date("2026-06-16"), fechaStr: "2026-06-16", entidad: "Duo Matic", descripcion: "FC proveedor A-0012-00045821", monto: 1200000, tipo: "factura" },
-              { id: "mock-3", fecha: new Date("2026-06-30"), fechaStr: "2026-06-30", entidad: "Banco Nacion", descripcion: "Linea de credito bancaria — cuota mensual", monto: 3000000, tipo: "linea_credito" },
-              { id: "mock-4", fecha: new Date("2026-06-20"), fechaStr: "2026-06-20", entidad: "Flexitallic", descripcion: "FC proveedor A-0008-00012390", monto: 450000, tipo: "factura" },
-            );
-          }
 
           // Sort by date
           items.sort((a, b) => a.fecha.getTime() - b.fecha.getTime());
