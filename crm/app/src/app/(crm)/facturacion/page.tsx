@@ -91,7 +91,7 @@ export default function FacturacionPage() {
   const [detailItems, setDetailItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number; subtotal: number }[]>([]);
 
   // ARCA status
-  const [arcaStatus, setArcaStatus] = useState<{ connected: boolean; error?: string; production?: boolean; ptoVta?: number } | null>(null);
+  const [arcaStatus, setArcaStatus] = useState<{ connected: boolean; certOk?: boolean; error?: string; afipError?: string; production?: boolean; ptoVta?: number } | null>(null);
 
   // Emit modal
   const [emitOpen, setEmitOpen] = useState(false);
@@ -179,13 +179,15 @@ export default function FacturacionPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Check ARCA status on mount
+  // Check ARCA status when sociedad changes
   useEffect(() => {
-    fetch(`/api/facturacion?action=status&sociedad_id=${sociedadActiva?.id || ""}`)
+    if (!sociedadActiva?.id) return;
+    setArcaStatus(null); // reset to loading while fetching
+    fetch(`/api/facturacion?action=status&sociedad_id=${sociedadActiva.id}`)
       .then((r) => r.json())
       .then(setArcaStatus)
       .catch(() => setArcaStatus({ connected: false, error: "No se pudo verificar" }));
-  }, [sociedadActiva]);
+  }, [sociedadActiva?.id]);
 
   // ── Emit handlers ──────────────────────────────────────────────
   const openEmitModal = (prefill?: { cliente_id: string; tipo?: string; items?: EmitItem[]; moneda?: "ARS" | "USD"; tipo_cambio?: number }) => {
@@ -715,11 +717,17 @@ ${f.cae ? `
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <div className={`h-2 w-2 rounded-full ${arcaStatus?.connected ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"}`} />
+                <div className={`h-2 w-2 rounded-full ${arcaStatus?.connected ? "bg-emerald-500" : arcaStatus === null ? "bg-zinc-300 dark:bg-zinc-600 animate-pulse" : arcaStatus?.certOk ? "bg-amber-400" : "bg-red-400"}`} />
                 <span className="text-xs text-zinc-500">
-                  {arcaStatus?.connected ? `Produccion — PV ${arcaStatus.ptoVta}` : "Pendiente de configuracion"}
+                  {arcaStatus === null ? "Verificando..." : arcaStatus.connected ? `Produccion — PV ${arcaStatus.ptoVta}` : arcaStatus?.certOk ? `Configurado — PV ${arcaStatus.ptoVta}` : "Sin conexion"}
                 </span>
               </div>
+              {arcaStatus && !arcaStatus.connected && arcaStatus.afipError && (
+                <p className="text-xs text-amber-500 mt-1 leading-tight">AFIP no responde ahora (normal)</p>
+              )}
+              {arcaStatus && !arcaStatus.connected && arcaStatus.error && !arcaStatus.certOk && (
+                <p className="text-xs text-red-500 mt-1 leading-tight">{arcaStatus.error}</p>
+              )}
             </div>
             <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700 space-y-3">
               <div className="flex items-center gap-2">
@@ -732,9 +740,9 @@ ${f.cae ? `
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <div className={`h-2 w-2 rounded-full ${arcaStatus?.connected ? "bg-emerald-500" : "bg-amber-400"}`} />
+                <div className={`h-2 w-2 rounded-full ${arcaStatus?.connected || arcaStatus?.certOk ? "bg-emerald-500" : "bg-red-400"}`} />
                 <span className="text-xs text-zinc-500">
-                  {arcaStatus?.connected ? "Certificado valido" : "Pendiente — subir .crt a crm/certs/"}
+                  {arcaStatus?.connected || arcaStatus?.certOk ? "Certificado configurado" : "Certificado no configurado"}
                 </span>
               </div>
             </div>

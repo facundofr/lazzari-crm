@@ -375,20 +375,32 @@ export async function GET(req: NextRequest) {
   const action = req.nextUrl.searchParams.get("action");
 
   if (action === "status") {
+    await loadArca();
+    const sociedadId = req.nextUrl.searchParams.get("sociedad_id") || undefined;
+    let arcaConfig: ArcaConfig;
     try {
-      await loadArca();
-      const sociedadId = req.nextUrl.searchParams.get("sociedad_id") || undefined;
-      let arcaConfig: ArcaConfig;
-      try {
-        arcaConfig = getArcaConfigBySociedad(sociedadId);
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "Sociedad no valida";
-        return NextResponse.json({ connected: false, error: message });
-      }
+      arcaConfig = getArcaConfigBySociedad(sociedadId);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Sociedad no valida";
+      return NextResponse.json({ connected: false, certOk: false, error: message });
+    }
+
+    // First: check if cert/key are present (no network call)
+    let certOk = false;
+    try {
+      getArcaInstance(arcaConfig); // throws if cert/key missing
+      certOk = true;
+    } catch {
+      return NextResponse.json({ connected: false, certOk: false, error: "Certificado no configurado", ptoVta: arcaConfig.ptoVta, cuit: String(arcaConfig.cuit) });
+    }
+
+    // Second: try AFIP connectivity (may fail due to network/AFIP downtime)
+    try {
       const arca = getArcaInstance(arcaConfig);
       const lastVoucher = await arca.ultimoComprobante(arcaConfig.ptoVta, 1);
       return NextResponse.json({
         connected: true,
+        certOk: true,
         production: true,
         lastVoucher,
         ptoVta: arcaConfig.ptoVta,
@@ -397,7 +409,8 @@ export async function GET(req: NextRequest) {
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Error de conexion";
-      return NextResponse.json({ connected: false, error: message });
+      // Cert is OK but AFIP is unreachable — still return certOk: true
+      return NextResponse.json({ connected: false, certOk: true, afipError: message, ptoVta: arcaConfig.ptoVta, cuit: String(arcaConfig.cuit) });
     }
   }
 

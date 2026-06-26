@@ -2365,13 +2365,89 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           </label>}
         </div>
 
-        {esSolicitud && !editingPRId && (
-          <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-300">
-            <Inbox className="inline h-4 w-4 mr-1.5 -mt-0.5" />
-            <strong>Modo solicitud:</strong> Se registra el pedido del cliente sin formalizar un presupuesto. Los items son opcionales. Luego podras convertirlo a presupuesto.
-          </div>
-        )}
+        {/* ── MODO SOLICITUD: formulario simplificado ── */}
+        {esSolicitud && !editingPRId ? (
+          <div className="space-y-4">
+            {/* Cliente */}
+            <div className="relative" ref={clientSearchRef}>
+              <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Cliente *</label>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                <input
+                  type="text"
+                  value={clientSearch || (newPR.cliente_id ? clientes.find(c => c.id === newPR.cliente_id)?.razon_social || "" : "")}
+                  onChange={(e) => { setClientSearch(e.target.value); setClientDropdownOpen(true); if (!e.target.value) setNewPR((p) => ({ ...p, cliente_id: "" })); }}
+                  onFocus={() => setClientDropdownOpen(true)}
+                  placeholder="Buscar cliente..."
+                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-3 text-sm text-zinc-800 placeholder:text-zinc-400 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                />
+                {newPR.cliente_id && (
+                  <button onClick={() => { setNewPR((p) => ({ ...p, cliente_id: "" })); setClientSearch(""); }} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 hover:text-zinc-600">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+              {clientDropdownOpen && clientSearch && (
+                <div className="absolute left-0 top-full z-50 mt-1 w-full max-h-48 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                  {filteredClientes.length === 0 ? (
+                    <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
+                  ) : filteredClientes.slice(0, 20).map((c) => (
+                    <button key={c.id} onClick={() => { setNewPR((p) => ({ ...p, cliente_id: c.id })); setClientSearch(c.razon_social); setClientDropdownOpen(false); }}
+                      className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${c.id === newPR.cliente_id ? "bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400" : "text-zinc-700 dark:text-zinc-300"}`}>
+                      {c.razon_social}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {clienteSucursales.length > 0 && (
+                <Select label="Sucursal" value={newPR.sucursal_id}
+                  onChange={(e) => setNewPR((p) => ({ ...p, sucursal_id: e.target.value, contacto_id: "" }))}
+                  placeholder="Sucursal (opcional)"
+                  options={clienteSucursales.map((s) => ({ value: s.id, label: s.nombre }))}
+                />
+              )}
+              {clienteContactos.length > 0 && (
+                <Select label="Contacto solicitante" value={newPR.contacto_id}
+                  onChange={(e) => setNewPR((p) => ({ ...p, contacto_id: e.target.value }))}
+                  placeholder="¿Quién solicitó? (opcional)"
+                  options={(newPR.sucursal_id ? clienteContactos.filter((c) => !c.sucursal_id || c.sucursal_id === newPR.sucursal_id) : clienteContactos)
+                    .map((c) => ({ value: c.id, label: c.cargo ? `${c.nombre} (${c.cargo})` : c.nombre }))}
+                />
+              )}
+            </div>
+
+            {/* Descripción de lo que necesita */}
+            <div>
+              <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                ¿Qué necesita el cliente? <span className="text-zinc-400 font-normal">(opcional)</span>
+              </label>
+              <textarea
+                value={newPR.observaciones}
+                onChange={(e) => setNewPR((p) => ({ ...p, observaciones: e.target.value }))}
+                rows={4}
+                placeholder="Ej: Necesita válvulas para planta de gas, urgente para la semana que viene. Me va a mandar la lista por WhatsApp."
+                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-800 placeholder:text-zinc-400 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-none"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                Notas internas <span className="text-zinc-400 font-normal">(solo vos)</span>
+              </label>
+              <textarea
+                value={newPR.notas_internas}
+                onChange={(e) => setNewPR((p) => ({ ...p, notas_internas: e.target.value }))}
+                rows={2}
+                placeholder="Contexto interno, precio estimado, urgencia..."
+                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-800 placeholder:text-zinc-400 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-none"
+              />
+            </div>
+          </div>
+        ) : (
+        /* ── MODO PRESUPUESTO: formulario completo ── */
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
           <div className="relative" ref={clientSearchRef}>
             <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Cliente *</label>
@@ -2492,9 +2568,10 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             })}
           />
         </div>
+        )}
 
-        {/* Items */}
-        <div className="mb-4">
+        {/* Items — solo en modo presupuesto completo */}
+        {(!esSolicitud || editingPRId) && <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-3">
               <label className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Items</label>
@@ -2727,7 +2804,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               )}
             </div>
           </div>
-        </div>
+        </div>}
 
         {/* Notas internas (NO se envian al cliente) — van primero */}
         <Textarea

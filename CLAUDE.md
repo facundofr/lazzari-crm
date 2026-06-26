@@ -48,7 +48,7 @@ crm/app/src/
 
 ### CRM Modules (routes under `app/(crm)/`)
 
-dashboard, clientes, proveedores, presupuestos, ordenes-compra, stock, facturacion, remitos, finanzas, reportes, configuracion
+dashboard, clientes, proveedores, presupuestos, ordenes-compra, stock, facturacion, remitos, finanzas, reportes, configuracion, transportes, ventas, calendario
 
 ### Auth & Session Flow
 
@@ -78,6 +78,22 @@ Server-side API route that uses Claude with Supabase tool use. The AI can run SE
 
 Five roles defined in `lib/types.ts`: `super_admin`, `admin`, `vendedor`, `administrativo`, `viewer`. Permissions enforced client-side via `ROLE_PERMISSIONS` map and server-side via Supabase RLS policies on `profiles.role`.
 
+### Multi-Sociedad Architecture
+
+The app operates under two legal entities (sociedades), selectable via `sociedadActiva` from `useUser()`:
+
+- **Lazzari** — id `eee2a3c8-fe6c-494d-bd2f-7a5d8067d021`, color `#FF4500`, punto de venta 15, CUIT 20379309128
+- **Grupo LA** — id `fee94607-747a-4e87-ba24-aff9032f7a56`, color `#2563EB`, punto de venta 10, CUIT 30719396042
+
+Every query that reads/writes data must filter by `sociedad_id`. User access is scoped via `user_sociedades` table (some users can only see one sociedad).
+
+### ARCA / AFIP Integration (`app/api/facturacion/route.ts`, `app/api/cuit-lookup/route.ts`)
+
+- Certificates stored in `crm/certs/` locally; on Vercel loaded from env vars as base64 (`ARCA_CERT_B64`/`ARCA_KEY_B64` for Lazzari, `ARCA_GRUPOLA_CERT_B64`/`ARCA_GRUPOLA_KEY_B64` for Grupo LA).
+- CUIT lookup chain: ARCA Lazzari cert → ARCA Grupo LA cert → scraping cuitonline.com.
+- Status check: cert validation (no network) → AFIP connectivity test. `certOk=true` + `connected=false` is normal on Vercel (IP blocking); WSFE still works for invoicing.
+- Factura A: IVA discriminado. Factura B: IVA incluido (never discriminate per-item in PDF).
+
 ### Database
 
 Supabase project ID: `ycuzszzskqatlegtbgbq`. Full schema plan in `SUPABASE_PLAN.md` (27 tables across 9 layers). Key design decisions:
@@ -88,6 +104,8 @@ Supabase project ID: `ycuzszzskqatlegtbgbq`. Full schema plan in `SUPABASE_PLAN.
 - RLS enabled on all tables; role-based access from `profiles`
 - Some FK joins (e.g., `created_by`) may be null — avoid inner joins on nullable FKs
 - Polymorphic contacts table: `contactos` with `entity_type` (cliente/proveedor) and `entity_id`
+- `clientes` has `email_facturacion` (text) and `envio_automatico` (boolean NOT NULL) — no `transporte_definido` column
+- Tables not in generated types (use `(supabase as any).from("table")`): `pendientes`, `notification_preferences`, `facturas_compra`, `comision_reglas`, `ordenes_pago`, `gastos_manuales`, `email_templates`, `contactos`, `user_sociedades`, `eventos`, `echeqs`, `fichas_relevamiento`, `cliente_sucursales`
 
 ### Environment Variables
 
@@ -95,6 +113,8 @@ Supabase project ID: `ycuzszzskqatlegtbgbq`. Full schema plan in `SUPABASE_PLAN.
 NEXT_PUBLIC_SUPABASE_URL      # Supabase project URL
 NEXT_PUBLIC_SUPABASE_ANON_KEY # Supabase anonymous key
 ANTHROPIC_API_KEY             # Server-side only, used by api/ai route
+ARCA_CERT_B64 / ARCA_KEY_B64                      # Lazzari AFIP cert (base64)
+ARCA_GRUPOLA_CERT_B64 / ARCA_GRUPOLA_KEY_B64      # Grupo LA AFIP cert (base64)
 ```
 
 ### Path Alias
@@ -112,6 +132,13 @@ ANTHROPIC_API_KEY             # Server-side only, used by api/ai route
 - **Currency:** Dual currency support (USD/ARS) throughout. `formatCurrency()` from `lib/utils.ts`
 - **Dates:** `formatDate()` / `formatDateTime()` from `lib/utils.ts` using `Intl.DateTimeFormat("es-AR")`
 - **Next.js version warning:** This is Next.js 15 — APIs may differ from training data. Read docs in `node_modules/next/dist/docs/` before using new APIs (see `crm/app/AGENTS.md`).
+- **Badge variants:** `default | success | warning | danger | info | purple | orange | outline` — never use `"destructive"` or `"secondary"`.
+- **statusConfig lookups:** always include a fallback: `statusConfig[x] || { label: x, variant: "outline" }`
+- **Untyped tables:** use `(supabase as any).from("tableName")` and `.eq("col" as any, val)` for columns not in generated types.
+- **useEffect deps:** use `selectedItem?.id` (primitive) not the full object to avoid infinite refetch loops.
+- **Mutations:** always destructure `{ error }` from Supabase mutations and throw/alert on failure.
+- **Mock data fallback:** check `if (error)` to fall back, not `if (!data.length)` — an empty table is valid data.
+- **Large page files** (clientes/page.tsx is 2500+ lines): use targeted Edit tool calls with sufficient context to ensure uniqueness, or Python patch scripts for multi-hunk changes.
 
 ## Key Files
 
