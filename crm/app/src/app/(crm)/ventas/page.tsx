@@ -94,6 +94,16 @@ function getVentaStatus(v: Venta): VentaStatus {
   };
 }
 
+// Asigna cada venta a UN SOLO bucket del pipeline (mutuamente exclusivos)
+type VentaStage = "pend_entrega" | "pend_factura" | "facturadas" | "cobradas";
+function getVentaStage(v: Venta): VentaStage {
+  const s = getVentaStatus(v);
+  if (s.cobrado) return "cobradas";
+  if (s.facturado) return "facturadas";
+  if (s.entregado) return "pend_factura";
+  return "pend_entrega";
+}
+
 // Keep getVentaStep for KPI filtering compatibility
 function getVentaStep(v: Venta): VentaStep {
   const s = getVentaStatus(v);
@@ -228,12 +238,7 @@ export default function VentasPage() {
     return ventas.filter(v => {
       if (filterVendedor !== "todos" && v.presupuesto.vendedor_id !== filterVendedor) return false;
       if (filterStatus) {
-        const st = getVentaStatus(v);
-        // Pipeline secuencial: Pend. entrega → Pend. factura → Facturadas → Cobradas
-        if (filterStatus === "pend_entrega" && st.entregado) return false;
-        if (filterStatus === "pend_factura" && (!st.entregado || st.facturado)) return false;
-        if (filterStatus === "facturadas" && (!st.facturado || st.cobrado)) return false;
-        if (filterStatus === "cobradas" && !st.cobrado) return false;
+        if (getVentaStage(v) !== filterStatus) return false;
       }
       return true;
     });
@@ -245,11 +250,11 @@ export default function VentasPage() {
       filterVendedor === "todos" || v.presupuesto.vendedor_id === filterVendedor
     );
     const total = base.length;
-    // Pipeline secuencial: cada venta cae en UNA sola categoría
-    const pendEntrega = base.filter(v => !getVentaStatus(v).entregado).length;
-    const pendFactura = base.filter(v => { const s = getVentaStatus(v); return s.entregado && !s.facturado; }).length;
-    const facturadas = base.filter(v => { const s = getVentaStatus(v); return s.facturado && !s.cobrado; }).length;
-    const cobradas = base.filter(v => getVentaStatus(v).cobrado).length;
+    // Pipeline secuencial mutuamente exclusivo via getVentaStage
+    const pendEntrega = base.filter(v => getVentaStage(v) === "pend_entrega").length;
+    const pendFactura = base.filter(v => getVentaStage(v) === "pend_factura").length;
+    const facturadas = base.filter(v => getVentaStage(v) === "facturadas").length;
+    const cobradas = base.filter(v => getVentaStage(v) === "cobradas").length;
     const montoTotal = base.reduce((sum, v) => sum + (v.presupuesto.total || 0), 0);
     return { total, pendEntrega, pendFactura, facturadas, cobradas, montoTotal };
   }, [ventas, filterVendedor]);

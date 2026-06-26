@@ -287,13 +287,29 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   async function markAllRead() {
     const unreadIds = unread.map((a) => a.id);
     if (unreadIds.length === 0) return;
-
-    await supabase
-      .from("alertas")
-      .update({ read: true })
-      .in("id", unreadIds);
-
+    await supabase.from("alertas").update({ read: true }).in("id", unreadIds);
     setAlerts((prev) => prev.map((a) => ({ ...a, read: true })));
+  }
+
+  async function markOneRead(id: string) {
+    await supabase.from("alertas").update({ read: true }).eq("id", id);
+    setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, read: true } : a)));
+  }
+
+  function handleAlertClick(alert: AlertRow) {
+    const moduleRoutes: Record<string, string> = {
+      clientes: "/clientes",
+      presupuestos: "/presupuestos",
+      facturacion: "/facturacion",
+      stock: "/stock",
+      finanzas: "/finanzas",
+      remitos: "/remitos",
+      proveedores: "/proveedores",
+    };
+    const route = moduleRoutes[alert.module] || `/${alert.module}`;
+    markOneRead(alert.id);
+    setAlertsOpen(false);
+    router.push(route);
   }
 
   return (
@@ -543,51 +559,104 @@ export function Header({ title, subtitle, action }: HeaderProps) {
           {alertsOpen && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setAlertsOpen(false)} />
-              <div className="absolute right-0 top-full z-50 mt-2 w-[calc(100vw-2rem)] sm:w-96 max-w-96 rounded-xl border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-                <div className="flex items-center justify-between border-b border-zinc-200 p-4 dark:border-zinc-700">
+              <div className="absolute right-0 top-full z-50 mt-2 w-[calc(100vw-2rem)] sm:w-[420px] rounded-2xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900 overflow-hidden">
+                {/* Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800">
                   <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-zinc-900 dark:text-white">Alertas</h3>
-                    {unread.length > 0 && <Badge variant="danger">{unread.length} nuevas</Badge>}
+                    <Bell className="h-4 w-4 text-zinc-500" />
+                    <span className="font-semibold text-sm text-zinc-900 dark:text-white">Notificaciones</span>
+                    {unread.length > 0 && (
+                      <span className="inline-flex items-center justify-center h-5 min-w-5 rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
+                        {unread.length}
+                      </span>
+                    )}
                   </div>
-                  <button
-                    onClick={() => setAlertsOpen(false)}
-                    className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-                <div className="max-h-96 overflow-y-auto">
-                  {alerts.map((alert) => {
-                    const Icon = alertIcons[alert.tipo] || AlertTriangle;
-                    return (
-                      <div
-                        key={alert.id}
-                        className={`flex gap-3 border-b border-zinc-100 p-4 last:border-0 dark:border-zinc-800 ${
-                          !alert.read ? "bg-orange-50/50 dark:bg-orange-950/20" : ""
-                        }`}
+                  <div className="flex items-center gap-1">
+                    {unread.length > 0 && (
+                      <button
+                        onClick={markAllRead}
+                        className="rounded-lg px-2 py-1 text-xs font-medium text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/30 transition-colors"
                       >
-                        <div className={`mt-0.5 rounded-md p-1.5 ${!alert.read ? "bg-orange-100 text-orange-600" : "bg-zinc-100 text-zinc-400"}`}>
-                          <Icon className="h-3.5 w-3.5" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200 truncate">{alert.title}</p>
-                            <Badge variant={alertVariant[alert.tipo]}>{alert.module}</Badge>
-                          </div>
-                          <p className="mt-0.5 text-xs text-zinc-500 line-clamp-2">{alert.description}</p>
-                          <p className="mt-1 text-xs text-zinc-400">{formatDateTime(alert.created_at)}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
+                        Marcar todas leídas
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setAlertsOpen(false)}
+                      className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 transition-colors"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
-                <div className="border-t border-zinc-200 p-3 dark:border-zinc-700">
-                  <button
-                    onClick={markAllRead}
-                    className="w-full rounded-lg py-2 text-center text-xs font-medium text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/30"
-                  >
-                    Marcar todas como leidas
-                  </button>
+
+                {/* List */}
+                <div className="max-h-[420px] overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800">
+                  {alerts.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <div className="rounded-full bg-zinc-100 p-3 dark:bg-zinc-800 mb-3">
+                        <Bell className="h-5 w-5 text-zinc-400" />
+                      </div>
+                      <p className="text-sm font-medium text-zinc-500">Sin notificaciones</p>
+                      <p className="text-xs text-zinc-400 mt-0.5">Todo al día 👍</p>
+                    </div>
+                  ) : (
+                    alerts.map((alert) => {
+                      const Icon = alertIcons[alert.tipo] || AlertTriangle;
+                      const variant = alertVariant[alert.tipo] || "info";
+                      const iconColors: Record<string, string> = {
+                        danger: "bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400",
+                        warning: "bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400",
+                        info: "bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400",
+                        purple: "bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400",
+                      };
+                      return (
+                        <div
+                          key={alert.id}
+                          className={`group flex gap-3 px-4 py-3 transition-colors cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/60 ${
+                            !alert.read ? "bg-orange-50/40 dark:bg-orange-950/10" : ""
+                          }`}
+                          onClick={() => handleAlertClick(alert)}
+                        >
+                          {/* Dot indicator */}
+                          <div className="flex items-start pt-1">
+                            {!alert.read && (
+                              <span className="inline-block h-2 w-2 rounded-full bg-orange-500 shrink-0" />
+                            )}
+                            {alert.read && <span className="inline-block h-2 w-2 shrink-0" />}
+                          </div>
+
+                          {/* Icon */}
+                          <div className={`mt-0.5 shrink-0 rounded-lg p-1.5 ${iconColors[variant] || iconColors.info}`}>
+                            <Icon className="h-3.5 w-3.5" />
+                          </div>
+
+                          {/* Content */}
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-sm font-medium truncate ${!alert.read ? "text-zinc-900 dark:text-white" : "text-zinc-600 dark:text-zinc-300"}`}>
+                              {alert.title}
+                            </p>
+                            <p className="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400 line-clamp-2">{alert.description}</p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <span className="text-[10px] text-zinc-400">{formatDateTime(alert.created_at)}</span>
+                              <span className="text-[10px] text-zinc-300 dark:text-zinc-600">·</span>
+                              <span className="text-[10px] font-medium text-orange-400 capitalize">{alert.module}</span>
+                            </div>
+                          </div>
+
+                          {/* Mark read button */}
+                          {!alert.read && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); markOneRead(alert.id); }}
+                              title="Marcar como leída"
+                              className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity mt-0.5 rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-700"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             </>

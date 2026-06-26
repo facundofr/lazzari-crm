@@ -904,7 +904,7 @@ export default function PresupuestosPage() {
         .single();
       const moneda = prHeader?.moneda ?? "USD";
       const prNumero = prHeader?.numero ?? "";
-      const sociedadId = prHeader?.sociedad_id ?? null;
+      const sociedadId = prHeader?.sociedad_id ?? sociedadActiva?.id ?? null;
 
       // Check if OCs already exist for this PR (avoid duplicates on re-approval)
       const { data: existingOCs } = await supabase
