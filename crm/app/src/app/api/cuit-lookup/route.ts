@@ -158,6 +158,70 @@ async function tryArcaPadronGrupoLA(cuit: string) {
   }
 }
 
+// Fallback: scraping de cuitonline.com (HTML)
+async function tryCuitOnline(cuit: string) {
+  try {
+    const res = await fetch(`https://www.cuitonline.com/search.php?q=${cuit}`, {
+      headers: {
+        "Accept": "text/html,application/xhtml+xml",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    // No results page
+    if (html.includes("no obtuvo resultados")) return null;
+
+    // Extract razon_social from <h2 class="denominacion">
+    const nombreMatch = html.match(/<h2[^>]*class="denominacion"[^>]*>([^<]+)</);
+    if (!nombreMatch) return null;
+    const razon_social = nombreMatch[1].trim();
+
+    // Extract condicion IVA
+    let condicion_iva = "CF";
+    const ivaMatch = html.match(/IVA:(?:&nbsp;|\s)+([^<\n&]+)/);
+    if (ivaMatch) {
+      const ivaText = ivaMatch[1].trim().toLowerCase();
+      if (ivaText.includes("inscripto") || ivaText.includes("responsable")) condicion_iva = "RI";
+      else if (ivaText.includes("monotributo") || ivaText.includes("monotributista")) condicion_iva = "Monotributo";
+      else if (ivaText.includes("exento")) condicion_iva = "Exento";
+    }
+    if (html.includes("linea-monotributo-persona") && condicion_iva === "CF") condicion_iva = "Monotributo";
+
+    // Extract localidad and provincia from page title
+    // Format: "NOMBRE (CUIT), Localidad (Provincia) - Cuit Online"
+    let localidad = "";
+    let provincia = "";
+    const titleMatch = html.match(/<title>([^<]+)<\/title>/);
+    if (titleMatch) {
+      const locMatch = titleMatch[1].match(/\([\d\-]+\),\s*([^(]+?)\s*\(([^)]+)\)/);
+      if (locMatch) {
+        localidad = locMatch[1].trim();
+        provincia = locMatch[2].trim();
+      }
+    }
+
+    let tipo_persona = "";
+    if (html.includes("Persona Jurídica") || html.includes("Persona Juridica")) tipo_persona = "JURIDICA";
+    else if (html.includes("Persona Física") || html.includes("Persona Fisica")) tipo_persona = "FISICA";
+
+    return {
+      razon_social,
+      condicion_iva,
+      direccion: "",
+      localidad,
+      provincia,
+      cp: "",
+      tipo_persona,
+      estado_clave: "ACTIVO",
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Fallback: padrón público de AFIP (sin certificados)
 async function tryPadronPublico(cuit: string) {
   const urls = [
@@ -236,6 +300,10 @@ export async function GET(request: NextRequest) {
   // 3. Fallback: padrón público sin certificados
   const publicResult = await tryPadronPublico(cuit);
   if (publicResult) return NextResponse.json(publicResult);
+
+  // 4. Fallback: scraping cuitonline.com
+  const cuitOnlineResult = await tryCuitOnline(cuit);
+  if (cuitOnlineResult) return NextResponse.json(cuitOnlineResult);
 
   return NextResponse.json(
     { error: "No se pudo obtener datos del CUIT. Ingresá los datos manualmente." },
