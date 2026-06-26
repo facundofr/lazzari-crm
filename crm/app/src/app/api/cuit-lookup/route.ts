@@ -137,26 +137,30 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
   };
 }
 
-async function tryArcaPadron(cuit: string) {
+async function tryArcaPadron(cuit: string, debug: string[] = []) {
   try {
     await loadArca();
 
     let cert = "";
     if (process.env.ARCA_CERT_B64) {
       cert = Buffer.from(process.env.ARCA_CERT_B64, "base64").toString("utf-8");
+      debug.push("Lazzari: cert desde env var OK");
     } else {
       const certPath = path.join(process.cwd(), "..", "certs", "lazzari.crt");
       if (fs.existsSync(certPath)) cert = fs.readFileSync(certPath, "utf-8");
+      debug.push(cert ? "Lazzari: cert desde archivo OK" : "Lazzari: cert NO encontrado");
     }
     let key = "";
     if (process.env.ARCA_KEY_B64) {
       key = Buffer.from(process.env.ARCA_KEY_B64, "base64").toString("utf-8");
+      debug.push("Lazzari: key desde env var OK");
     } else {
       const keyPath = path.join(process.cwd(), "..", "certs", "lazzari.key");
       if (fs.existsSync(keyPath)) key = fs.readFileSync(keyPath, "utf-8");
+      debug.push(key ? "Lazzari: key desde archivo OK" : "Lazzari: key NO encontrado");
     }
     if (!cert || !key) {
-      console.warn("ARCA padron: no cert/key configurado");
+      debug.push("Lazzari: cert/key faltante, skip");
       return null;
     }
 
@@ -164,41 +168,56 @@ async function tryArcaPadron(cuit: string) {
     const production = process.env.ARCA_PRODUCTION !== "false";
     const arca = new Arca({ cuit: arcaCuit, cert, key, production });
 
+    debug.push("Lazzari: obteniendo auth WSAA...");
     const auth = await arca.getAuth("ws_sr_padron_a13");
-    return await soapPadronA13(auth, cuit);
+    debug.push("Lazzari: auth OK, consultando padron...");
+    const result = await soapPadronA13(auth, cuit);
+    debug.push("Lazzari: padron OK");
+    return result;
   } catch (err: any) {
-    console.warn("ARCA padron Lazzari error:", err.message);
+    debug.push(`Lazzari error: ${err.message}`);
     return null;
   }
 }
 
-async function tryArcaPadronGrupoLA(cuit: string) {
+async function tryArcaPadronGrupoLA(cuit: string, debug: string[] = []) {
   try {
     await loadArca();
 
     let cert = "";
     if (process.env.ARCA_GRUPOLA_CERT_B64) {
       cert = Buffer.from(process.env.ARCA_GRUPOLA_CERT_B64, "base64").toString("utf-8");
+      debug.push("GrupoLA: cert desde env var OK");
     } else {
       const certPath = path.join(process.cwd(), "..", "certs", "GrupoLa-crm.crt");
       if (fs.existsSync(certPath)) cert = fs.readFileSync(certPath, "utf-8");
+      debug.push(cert ? "GrupoLA: cert desde archivo OK" : "GrupoLA: cert NO encontrado");
     }
     let key = "";
     if (process.env.ARCA_GRUPOLA_KEY_B64) {
       key = Buffer.from(process.env.ARCA_GRUPOLA_KEY_B64, "base64").toString("utf-8");
+      debug.push("GrupoLA: key desde env var OK");
     } else {
       const keyPath = path.join(process.cwd(), "..", "certs", "grupoLA.key");
       if (fs.existsSync(keyPath)) key = fs.readFileSync(keyPath, "utf-8");
+      debug.push(key ? "GrupoLA: key desde archivo OK" : "GrupoLA: key NO encontrado");
     }
-    if (!cert || !key) return null;
+    if (!cert || !key) {
+      debug.push("GrupoLA: cert/key faltante, skip");
+      return null;
+    }
 
     const production = process.env.ARCA_PRODUCTION !== "false";
     const arca = new Arca({ cuit: 30719396042, cert, key, production });
 
+    debug.push("GrupoLA: obteniendo auth WSAA...");
     const auth = await arca.getAuth("ws_sr_padron_a13");
-    return await soapPadronA13(auth, cuit);
+    debug.push("GrupoLA: auth OK, consultando padron...");
+    const result = await soapPadronA13(auth, cuit);
+    debug.push("GrupoLA: padron OK");
+    return result;
   } catch (err: any) {
-    console.warn("ARCA padron GrupoLA error:", err.message);
+    debug.push(`GrupoLA error: ${err.message}`);
     return null;
   }
 }
@@ -260,20 +279,26 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  const debug: string[] = [];
+
   // 1. ARCA padron A13 con cert Lazzari
-  const arcaResult = await tryArcaPadron(cuit);
-  if (arcaResult) return NextResponse.json(arcaResult);
+  try {
+    const arcaResult = await tryArcaPadron(cuit, debug);
+    if (arcaResult) return NextResponse.json(arcaResult);
+  } catch {}
 
   // 2. Fallback: cert Grupo LA
-  const grupoLAResult = await tryArcaPadronGrupoLA(cuit);
-  if (grupoLAResult) return NextResponse.json(grupoLAResult);
+  try {
+    const grupoLAResult = await tryArcaPadronGrupoLA(cuit, debug);
+    if (grupoLAResult) return NextResponse.json(grupoLAResult);
+  } catch {}
 
   // 3. Fallback: scraping cuitonline.com
   const cuitOnlineResult = await tryCuitOnline(cuit);
   if (cuitOnlineResult) return NextResponse.json(cuitOnlineResult);
 
   return NextResponse.json(
-    { error: "No se pudo obtener datos del CUIT. Ingresá los datos manualmente." },
+    { error: "No se pudo obtener datos del CUIT. Ingresá los datos manualmente.", debug },
     { status: 503 }
   );
 }
