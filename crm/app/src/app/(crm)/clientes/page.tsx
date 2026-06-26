@@ -269,6 +269,14 @@ export default function ClientesPage() {
   const [contactoForm, setContactoForm] = useState<ContactoFormType>(emptyContactoForm);
   const [savingContacto, setSavingContacto] = useState(false);
 
+  // Sucursales CRUD desde panel de detalle
+  type SucursalDetailForm = { nombre: string; direccion: string; localidad: string; provincia: string; cp: string; telefono: string; email: string };
+  const emptySucursalDetailForm: SucursalDetailForm = { nombre: "", direccion: "", localidad: "", provincia: "", cp: "", telefono: "", email: "" };
+  const [addingSucursal, setAddingSucursal] = useState(false);
+  const [editingSucursalId, setEditingSucursalId] = useState<string | null>(null);
+  const [sucursalDetailForm, setSucursalDetailForm] = useState<SucursalDetailForm>(emptySucursalDetailForm);
+  const [savingSucursal, setSavingSucursal] = useState(false);
+
   // Detail
   const [selectedCliente, setSelectedCliente] = useState<ClienteExt | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("datos");
@@ -1168,6 +1176,64 @@ export default function ClientesPage() {
     }
   }
 
+  async function handleSaveSucursalDetail() {
+    if (!selectedCliente || !sucursalDetailForm.nombre.trim()) return;
+    setSavingSucursal(true);
+    try {
+      if (editingSucursalId) {
+        const { error } = await (supabase as any).from("cliente_sucursales").update({
+          nombre: sucursalDetailForm.nombre.trim(),
+          direccion: sucursalDetailForm.direccion || null,
+          localidad: sucursalDetailForm.localidad || null,
+          provincia: sucursalDetailForm.provincia || null,
+          cp: sucursalDetailForm.cp || null,
+          telefono: sucursalDetailForm.telefono || null,
+          email: sucursalDetailForm.email || null,
+        }).eq("id", editingSucursalId);
+        if (error) throw error;
+        toast.success("Sucursal actualizada");
+      } else {
+        const { error } = await (supabase as any).from("cliente_sucursales").insert({
+          cliente_id: selectedCliente.id,
+          nombre: sucursalDetailForm.nombre.trim(),
+          direccion: sucursalDetailForm.direccion || null,
+          localidad: sucursalDetailForm.localidad || null,
+          provincia: sucursalDetailForm.provincia || null,
+          cp: sucursalDetailForm.cp || null,
+          telefono: sucursalDetailForm.telefono || null,
+          email: sucursalDetailForm.email || null,
+          activo: true,
+        });
+        if (error) throw error;
+        toast.success("Sucursal agregada");
+      }
+      setAddingSucursal(false);
+      setEditingSucursalId(null);
+      setSucursalDetailForm(emptySucursalDetailForm);
+      // Refresh sucursales
+      const { data } = await (supabase as any).from("cliente_sucursales").select("id, nombre, direccion, localidad, provincia, cp, telefono, email").eq("cliente_id", selectedCliente.id).eq("activo", true).order("nombre");
+      if (data) {
+        setSelectedCliente((prev) => prev ? { ...prev, sucursales: data.map((s: any) => ({ id: s.id, nombre: s.nombre ?? "", direccion: s.direccion ?? "", localidad: s.localidad ?? "", provincia: s.provincia ?? "", cp: s.cp ?? "", telefono: s.telefono ?? "", email: s.email ?? "" })) } : prev);
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Error al guardar sucursal");
+    } finally {
+      setSavingSucursal(false);
+    }
+  }
+
+  async function handleDeleteSucursalDetail(sucursalId: string) {
+    if (!selectedCliente) return;
+    try {
+      const { error } = await (supabase as any).from("cliente_sucursales").update({ activo: false }).eq("id", sucursalId);
+      if (error) throw error;
+      setSelectedCliente((prev) => prev ? { ...prev, sucursales: (prev.sucursales || []).filter((s) => s.id !== sucursalId) } : prev);
+      toast.success("Sucursal eliminada");
+    } catch {
+      toast.error("Error al eliminar sucursal");
+    }
+  }
+
   async function handleSaveContacto() {
     if (!selectedCliente || !contactoForm.nombre.trim()) return;
     setSavingContacto(true);
@@ -1669,6 +1735,45 @@ export default function ClientesPage() {
               {/* ---- TAB: SUCURSALES ---- */}
               {detailTab === "sucursales" && (
                 <>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs text-zinc-500">{selectedCliente.sucursales?.length || 0} sucursal{(selectedCliente.sucursales?.length || 0) !== 1 ? "es" : ""}</span>
+                    {!addingSucursal && !editingSucursalId && (
+                      <button onClick={() => { setAddingSucursal(true); setSucursalDetailForm(emptySucursalDetailForm); }} className="flex items-center gap-1 rounded-lg bg-orange-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-orange-600 transition-colors">
+                        <Plus className="h-3.5 w-3.5" /> Nueva sucursal
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Form agregar/editar sucursal */}
+                  {(addingSucursal || editingSucursalId) && (
+                    <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50/50 dark:border-orange-900/40 dark:bg-orange-900/10 p-3 space-y-2">
+                      <p className="text-xs font-semibold text-orange-600 dark:text-orange-400">{editingSucursalId ? "Editar sucursal" : "Nueva sucursal"}</p>
+                      <Input label="Nombre *" value={sucursalDetailForm.nombre} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, nombre: e.target.value }))} placeholder="Ej: Sucursal Córdoba" />
+                      <Input label="Dirección" value={sucursalDetailForm.direccion} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, direccion: e.target.value }))} placeholder="Calle y número" />
+                      <div className="grid grid-cols-3 gap-2">
+                        <Input label="Localidad" value={sucursalDetailForm.localidad} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, localidad: e.target.value }))} />
+                        <Input label="CP" value={sucursalDetailForm.cp} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, cp: e.target.value }))} />
+                        <div className="space-y-1.5">
+                          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Provincia</label>
+                          <select value={sucursalDetailForm.provincia} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, provincia: e.target.value }))} className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                            <option value="">—</option>
+                            {provincias.map((p) => <option key={p} value={p}>{p}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="Teléfono" value={sucursalDetailForm.telefono} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, telefono: e.target.value }))} />
+                        <Input label="Email" value={sucursalDetailForm.email} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, email: e.target.value }))} />
+                      </div>
+                      <div className="flex justify-end gap-2 pt-1">
+                        <button type="button" onClick={() => { setAddingSucursal(false); setEditingSucursalId(null); setSucursalDetailForm(emptySucursalDetailForm); }} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700">Cancelar</button>
+                        <button type="button" onClick={handleSaveSucursalDetail} disabled={savingSucursal || !sucursalDetailForm.nombre.trim()} className="flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                          {savingSucursal && <Loader2 className="h-3 w-3 animate-spin" />} Guardar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {(!selectedCliente.sucursales || selectedCliente.sucursales.length === 0) ? (
                     <EmptyState icon={<Building2 className="h-6 w-6" />} text="Sin sucursales registradas" />
                   ) : (
@@ -1683,7 +1788,10 @@ export default function ClientesPage() {
                                   <Building2 className="h-3.5 w-3.5 text-orange-500" />
                                   {s.nombre}
                                 </p>
-                                <button onClick={() => { setEditingId(selectedCliente.id); openEdit(selectedCliente); }} className="text-xs text-zinc-400 hover:text-orange-500 transition-colors flex items-center gap-1"><Pencil className="h-3 w-3" /></button>
+                                <div className="flex items-center gap-1">
+                                  <button onClick={() => { setEditingSucursalId(s.id); setAddingSucursal(false); setSucursalDetailForm({ nombre: s.nombre, direccion: s.direccion || "", localidad: s.localidad || "", provincia: s.provincia || "", cp: s.cp || "", telefono: s.telefono || "", email: s.email || "" }); }} className="rounded p-1 text-zinc-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"><Pencil className="h-3.5 w-3.5" /></button>
+                                  <button onClick={() => handleDeleteSucursalDetail(s.id)} className="rounded p-1 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"><Trash2 className="h-3.5 w-3.5" /></button>
+                                </div>
                               </div>
                               {(s.direccion || s.localidad || s.provincia) && (
                                 <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
@@ -1692,19 +1800,11 @@ export default function ClientesPage() {
                                 </div>
                               )}
                               <div className="flex gap-4 mt-1">
-                                {s.telefono && (
-                                  <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-                                    <Phone className="h-3 w-3" /> {s.telefono}
-                                  </div>
-                                )}
-                                {s.email && (
-                                  <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-                                    <Mail className="h-3 w-3" /> {s.email}
-                                  </div>
-                                )}
+                                {s.telefono && <div className="flex items-center gap-1.5 text-xs text-zinc-500"><Phone className="h-3 w-3" /> {s.telefono}</div>}
+                                {s.email && <div className="flex items-center gap-1.5 text-xs text-zinc-500"><Mail className="h-3 w-3" /> {s.email}</div>}
                               </div>
                             </div>
-                            {contactosSuc.length > 0 && (
+                            {contactosSuc.length > 0 ? (
                               <div className="border-t border-zinc-100 dark:border-zinc-700 divide-y divide-zinc-100 dark:divide-zinc-700">
                                 {contactosSuc.map((c) => (
                                   <div key={c.id} className="px-3 py-2.5 bg-white dark:bg-zinc-900">
@@ -1713,24 +1813,15 @@ export default function ClientesPage() {
                                       {c.principal && <Badge variant="info">Principal</Badge>}
                                     </div>
                                     {c.cargo && <p className="text-xs text-zinc-500 mt-0.5">{c.cargo}</p>}
-                                    <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
-                                      {c.email && (
-                                        <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-                                          <Mail className="h-3 w-3" /> {c.email}
-                                        </div>
-                                      )}
-                                      {c.telefono && (
-                                        <div className="flex items-center gap-1.5 text-xs text-zinc-500">
-                                          <Phone className="h-3 w-3" /> {c.telefono}
-                                        </div>
-                                      )}
+                                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                                      {c.email && <div className="flex items-center gap-1 text-xs text-zinc-400"><Mail className="h-3 w-3" /> {c.email}</div>}
+                                      {c.telefono && <div className="flex items-center gap-1 text-xs text-zinc-400"><Phone className="h-3 w-3" /> {c.telefono}</div>}
                                     </div>
                                   </div>
                                 ))}
                               </div>
-                            )}
-                            {contactosSuc.length === 0 && (
-                              <div className="px-3 py-2 bg-white dark:bg-zinc-900 text-xs text-zinc-400 italic">Sin contactos asignados</div>
+                            ) : (
+                              <div className="px-3 py-2 bg-white dark:bg-zinc-900 text-xs text-zinc-400 italic">Sin contactos — agregá uno desde la pestaña Contactos</div>
                             )}
                           </div>
                         );
