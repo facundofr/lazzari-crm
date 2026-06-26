@@ -253,10 +253,21 @@ export default function ClientesPage() {
   const [cuitLookupMsg, setCuitLookupMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // Sucursales in modal (edit mode only)
-  const [formSucursales, setFormSucursales] = useState<{ id: string; nombre: string; isNew?: boolean }[]>([]);
-  const [newSucursalNombre, setNewSucursalNombre] = useState("");
+  type SucursalForm = { id: string; nombre: string; direccion: string; localidad: string; provincia: string; cp: string; telefono: string; email: string; isNew?: boolean };
+  const emptySucursalForm = { nombre: "", direccion: "", localidad: "", provincia: "", cp: "", telefono: "", email: "" };
+  const [formSucursales, setFormSucursales] = useState<SucursalForm[]>([]);
+  const [newSucursal, setNewSucursal] = useState(emptySucursalForm);
+  const [showSucursalForm, setShowSucursalForm] = useState(false);
   const [sucursalesLoading, setSucursalesLoading] = useState(false);
   const [removedSucursalIds, setRemovedSucursalIds] = useState<string[]>([]);
+
+  // Contactos CRUD desde panel de detalle
+  type ContactoFormType = { nombre: string; cargo: string; email: string; telefono: string; whatsapp: string; sucursal_id: string; principal: boolean; notas: string };
+  const emptyContactoForm: ContactoFormType = { nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", sucursal_id: "", principal: false, notas: "" };
+  const [addingContacto, setAddingContacto] = useState(false);
+  const [editingContactoId, setEditingContactoId] = useState<string | null>(null);
+  const [contactoForm, setContactoForm] = useState<ContactoFormType>(emptyContactoForm);
+  const [savingContacto, setSavingContacto] = useState(false);
 
   // Detail
   const [selectedCliente, setSelectedCliente] = useState<ClienteExt | null>(null);
@@ -886,7 +897,8 @@ export default function ClientesPage() {
     setFormError("");
     setCuitLookupMsg(null);
     setFormSucursales([]);
-    setNewSucursalNombre("");
+    setNewSucursal({ nombre: "", direccion: "", localidad: "", provincia: "", cp: "", telefono: "", email: "" });
+    setShowSucursalForm(false);
     setRemovedSucursalIds([]);
     setModalOpen(true);
   }
@@ -916,24 +928,25 @@ export default function ClientesPage() {
     setFormError("");
     setCuitLookupMsg(null);
     setRemovedSucursalIds([]);
-    setNewSucursalNombre("");
+    setNewSucursal({ nombre: "", direccion: "", localidad: "", provincia: "", cp: "", telefono: "", email: "" });
+    setShowSucursalForm(false);
     // Fetch sucursales for this client
     setSucursalesLoading(true);
     (supabase as any)
       .from("cliente_sucursales")
-      .select("id, nombre")
+      .select("id, nombre, direccion, localidad, provincia, cp, telefono, email")
       .eq("cliente_id", c.id)
       .eq("activo", true)
       .order("nombre")
       .then(({ data }: { data: any[] | null }) => {
         setFormSucursales(
-          (data || []).map((s: any) => ({ id: s.id, nombre: s.nombre || "" }))
+          (data || []).map((s: any) => ({ id: s.id, nombre: s.nombre || "", direccion: s.direccion || "", localidad: s.localidad || "", provincia: s.provincia || "", cp: s.cp || "", telefono: s.telefono || "", email: s.email || "" }))
         );
         setSucursalesLoading(false);
       })
       .catch(() => {
         setFormSucursales(
-          (c.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }))
+          (c.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre, direccion: s.direccion || "", localidad: s.localidad || "", provincia: s.provincia || "", cp: s.cp || "", telefono: s.telefono || "", email: s.email || "" }))
         );
         setSucursalesLoading(false);
       });
@@ -981,7 +994,16 @@ export default function ClientesPage() {
         for (const s of newSucs) {
           const { error: sucErr } = await (supabase as any)
             .from("cliente_sucursales")
-            .insert({ cliente_id: editingId, nombre: s.nombre, activo: true });
+            .insert({ cliente_id: editingId, nombre: s.nombre, direccion: s.direccion || null, localidad: s.localidad || null, provincia: s.provincia || null, cp: s.cp || null, telefono: s.telefono || null, email: s.email || null, activo: true });
+          if (sucErr) throw sucErr;
+        }
+        // Update existing sucursales (non-new)
+        const existingSucs = formSucursales.filter((s) => !s.isNew);
+        for (const s of existingSucs) {
+          const { error: sucErr } = await (supabase as any)
+            .from("cliente_sucursales")
+            .update({ nombre: s.nombre, direccion: s.direccion || null, localidad: s.localidad || null, provincia: s.provincia || null, cp: s.cp || null, telefono: s.telefono || null, email: s.email || null })
+            .eq("id", s.id);
           if (sucErr) throw sucErr;
         }
 
@@ -1143,6 +1165,66 @@ export default function ClientesPage() {
       toast.success("Vendedor asignado correctamente");
     } catch {
       toast.error("Error al asignar vendedor");
+    }
+  }
+
+  async function handleSaveContacto() {
+    if (!selectedCliente || !contactoForm.nombre.trim()) return;
+    setSavingContacto(true);
+    try {
+      if (editingContactoId) {
+        const { error } = await (supabase as any).from("contactos").update({
+          nombre: contactoForm.nombre.trim(),
+          cargo: contactoForm.cargo || null,
+          email: contactoForm.email || null,
+          telefono: contactoForm.telefono || null,
+          whatsapp: contactoForm.whatsapp || null,
+          sucursal_id: contactoForm.sucursal_id || null,
+          principal: contactoForm.principal,
+          notas: contactoForm.notas || null,
+        }).eq("id", editingContactoId);
+        if (error) throw error;
+        toast.success("Contacto actualizado");
+      } else {
+        const { error } = await (supabase as any).from("contactos").insert({
+          entity_type: "cliente",
+          entity_id: selectedCliente.id,
+          nombre: contactoForm.nombre.trim(),
+          cargo: contactoForm.cargo || null,
+          email: contactoForm.email || null,
+          telefono: contactoForm.telefono || null,
+          whatsapp: contactoForm.whatsapp || null,
+          sucursal_id: contactoForm.sucursal_id || null,
+          principal: contactoForm.principal,
+          notas: contactoForm.notas || null,
+        });
+        if (error) throw error;
+        toast.success("Contacto agregado");
+      }
+      setAddingContacto(false);
+      setEditingContactoId(null);
+      setContactoForm(emptyContactoForm);
+      // Refresh contactos
+      const { data } = await (supabase as any).from("contactos").select("*, vendedor:vendedor_id(id, full_name)").eq("entity_type", "cliente").eq("entity_id", selectedCliente.id);
+      if (data) {
+        setSelectedCliente((prev) => prev ? { ...prev, contactos: data.map((c: any) => ({ id: c.id, nombre: c.nombre ?? "", cargo: c.cargo ?? "", email: c.email ?? "", telefono: c.telefono ?? "", principal: c.principal ?? false, fechaCumpleanos: c.fecha_cumpleanos ?? null, notas: c.notas ?? null, sucursalId: c.sucursal_id ?? null, vendedorId: c.vendedor_id ?? null, vendedorNombre: c.vendedor?.full_name ?? null, whatsapp: c.whatsapp ?? "" })) } : prev);
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Error al guardar contacto");
+    } finally {
+      setSavingContacto(false);
+    }
+  }
+
+  async function handleDeleteContacto(contactoId: string) {
+    if (!selectedCliente) return;
+    try {
+      const { error } = await (supabase as any).from("contactos").delete().eq("id", contactoId);
+      if (error) throw error;
+      setSelectedCliente((prev) => prev ? { ...prev, contactos: prev.contactos.filter((c) => c.id !== contactoId) } : prev);
+      toast.success("Contacto eliminado");
+    } catch {
+      toast.error("Error al eliminar contacto");
     }
   }
 
@@ -1447,6 +1529,50 @@ export default function ClientesPage() {
               {/* ---- TAB: CONTACTOS ---- */}
               {detailTab === "contactos" && (
                 <>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-xs text-zinc-500">{selectedCliente.contactos?.length || 0} contacto{(selectedCliente.contactos?.length || 0) !== 1 ? "s" : ""}</span>
+                    {!addingContacto && !editingContactoId && (
+                      <button onClick={() => { setAddingContacto(true); setContactoForm(emptyContactoForm); }} className="flex items-center gap-1 rounded-lg bg-orange-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-orange-600 transition-colors">
+                        <Plus className="h-3.5 w-3.5" /> Agregar
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Formulario agregar/editar contacto */}
+                  {(addingContacto || editingContactoId) && (
+                    <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50/50 dark:border-orange-900/40 dark:bg-orange-900/10 p-3 space-y-2">
+                      <p className="text-xs font-semibold text-orange-600 dark:text-orange-400">{editingContactoId ? "Editar contacto" : "Nuevo contacto"}</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="Nombre *" value={contactoForm.nombre} onChange={(e) => setContactoForm((p) => ({ ...p, nombre: e.target.value }))} />
+                        <Input label="Cargo" value={contactoForm.cargo} onChange={(e) => setContactoForm((p) => ({ ...p, cargo: e.target.value }))} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="Email" type="email" value={contactoForm.email} onChange={(e) => setContactoForm((p) => ({ ...p, email: e.target.value }))} />
+                        <Input label="Teléfono" value={contactoForm.telefono} onChange={(e) => setContactoForm((p) => ({ ...p, telefono: e.target.value }))} />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="WhatsApp" value={contactoForm.whatsapp} onChange={(e) => setContactoForm((p) => ({ ...p, whatsapp: e.target.value }))} />
+                        <div className="space-y-1.5">
+                          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Sucursal</label>
+                          <select value={contactoForm.sucursal_id} onChange={(e) => setContactoForm((p) => ({ ...p, sucursal_id: e.target.value }))} className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                            <option value="">General</option>
+                            {(selectedCliente.sucursales || []).map((s) => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={contactoForm.principal} onChange={(e) => setContactoForm((p) => ({ ...p, principal: e.target.checked }))} className="h-3.5 w-3.5 rounded border-zinc-300 text-orange-500" />
+                        <span className="text-xs text-zinc-600 dark:text-zinc-400">Contacto principal</span>
+                      </label>
+                      <div className="flex justify-end gap-2 pt-1">
+                        <button type="button" onClick={() => { setAddingContacto(false); setEditingContactoId(null); setContactoForm(emptyContactoForm); }} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700">Cancelar</button>
+                        <button type="button" onClick={handleSaveContacto} disabled={savingContacto || !contactoForm.nombre.trim()} className="flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                          {savingContacto && <Loader2 className="h-3 w-3 animate-spin" />} Guardar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   {(!selectedCliente.contactos || selectedCliente.contactos.length === 0) ? (
                     <EmptyState icon={<User className="h-6 w-6" />} text="Sin contactos registrados" />
                   ) : (
@@ -1489,7 +1615,11 @@ export default function ClientesPage() {
                                         {c.cargo && <p className="text-xs text-zinc-500">{c.cargo}</p>}
                                       </div>
                                     </div>
-                                    {c.principal && <Badge variant="info">Principal</Badge>}
+                                    <div className="flex items-center gap-1.5">
+                                      {c.principal && <Badge variant="info">Principal</Badge>}
+                                      <button onClick={() => { setEditingContactoId(c.id); setAddingContacto(false); setContactoForm({ nombre: c.nombre, cargo: c.cargo || "", email: c.email || "", telefono: c.telefono || "", whatsapp: (c as any).whatsapp || "", sucursal_id: c.sucursalId || "", principal: c.principal, notas: c.notas || "" }); }} className="rounded p-1 text-zinc-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"><Pencil className="h-3.5 w-3.5" /></button>
+                                      <button onClick={() => handleDeleteContacto(c.id)} className="rounded p-1 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"><Trash2 className="h-3.5 w-3.5" /></button>
+                                    </div>
                                   </div>
                                   <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 pl-10">
                                     {c.email && (
@@ -1548,10 +1678,13 @@ export default function ClientesPage() {
                         return (
                           <div key={s.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
                             <div className="bg-zinc-50 p-3 dark:bg-zinc-800/50">
-                              <p className="text-sm font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
-                                <Building2 className="h-3.5 w-3.5 text-orange-500" />
-                                {s.nombre}
-                              </p>
+                              <div className="flex items-center justify-between">
+                                <p className="text-sm font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
+                                  <Building2 className="h-3.5 w-3.5 text-orange-500" />
+                                  {s.nombre}
+                                </p>
+                                <button onClick={() => { setEditingId(selectedCliente.id); openEdit(selectedCliente); }} className="text-xs text-zinc-400 hover:text-orange-500 transition-colors flex items-center gap-1"><Pencil className="h-3 w-3" /></button>
+                              </div>
                               {(s.direccion || s.localidad || s.provincia) && (
                                 <div className="flex items-center gap-1.5 mt-1 text-xs text-zinc-500">
                                   <MapPin className="h-3 w-3" />
@@ -2173,43 +2306,39 @@ export default function ClientesPage() {
                   ) : (
                     <p className="text-sm text-zinc-400 italic mb-3">Sin sucursales registradas</p>
                   )}
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1">
-                      <Input
-                        label=""
-                        value={newSucursalNombre}
-                        onChange={(e) => setNewSucursalNombre(e.target.value)}
-                        placeholder="Nombre de la sucursal"
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            if (newSucursalNombre.trim()) {
-                              setFormSucursales((prev) => [
-                                ...prev,
-                                { id: `new-${Date.now()}`, nombre: newSucursalNombre.trim(), isNew: true },
-                              ]);
-                              setNewSucursalNombre("");
-                            }
-                          }
-                        }}
-                      />
-                    </div>
+                  {!showSucursalForm ? (
                     <button
                       type="button"
-                      onClick={() => {
-                        if (newSucursalNombre.trim()) {
-                          setFormSucursales((prev) => [
-                            ...prev,
-                            { id: `new-${Date.now()}`, nombre: newSucursalNombre.trim(), isNew: true },
-                          ]);
-                          setNewSucursalNombre("");
-                        }
-                      }}
-                      className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 transition-colors"
+                      onClick={() => setShowSucursalForm(true)}
+                      className="flex items-center gap-1.5 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-3 py-2 text-sm font-medium text-zinc-500 hover:bg-zinc-100 dark:border-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-400 dark:hover:bg-zinc-700 transition-colors w-full justify-center"
                     >
-                      <Plus className="h-3.5 w-3.5" /> Agregar
+                      <Plus className="h-3.5 w-3.5" /> Nueva sucursal
                     </button>
-                  </div>
+                  ) : (
+                    <div className="rounded-lg border border-orange-200 bg-orange-50/50 dark:border-orange-900/40 dark:bg-orange-900/10 p-3 space-y-2">
+                      <Input label="Nombre *" value={newSucursal.nombre} onChange={(e) => setNewSucursal((p) => ({ ...p, nombre: e.target.value }))} placeholder="Ej: Sucursal Córdoba" />
+                      <Input label="Dirección" value={newSucursal.direccion} onChange={(e) => setNewSucursal((p) => ({ ...p, direccion: e.target.value }))} placeholder="Calle y número" />
+                      <div className="grid grid-cols-3 gap-2">
+                        <Input label="Localidad" value={newSucursal.localidad} onChange={(e) => setNewSucursal((p) => ({ ...p, localidad: e.target.value }))} />
+                        <Input label="CP" value={newSucursal.cp} onChange={(e) => setNewSucursal((p) => ({ ...p, cp: e.target.value }))} />
+                        <div className="space-y-1.5">
+                          <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Provincia</label>
+                          <select value={newSucursal.provincia} onChange={(e) => setNewSucursal((p) => ({ ...p, provincia: e.target.value }))} className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                            <option value="">—</option>
+                            {provincias.map((p) => <option key={p} value={p}>{p}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Input label="Teléfono" value={newSucursal.telefono} onChange={(e) => setNewSucursal((p) => ({ ...p, telefono: e.target.value }))} />
+                        <Input label="Email" value={newSucursal.email} onChange={(e) => setNewSucursal((p) => ({ ...p, email: e.target.value }))} />
+                      </div>
+                      <div className="flex justify-end gap-2 pt-1">
+                        <button type="button" onClick={() => { setShowSucursalForm(false); setNewSucursal({ nombre: "", direccion: "", localidad: "", provincia: "", cp: "", telefono: "", email: "" }); }} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700">Cancelar</button>
+                        <button type="button" onClick={() => { if (!newSucursal.nombre.trim()) return; setFormSucursales((prev) => [...prev, { id: `new-${Date.now()}`, ...newSucursal, nombre: newSucursal.nombre.trim(), isNew: true }]); setNewSucursal({ nombre: "", direccion: "", localidad: "", provincia: "", cp: "", telefono: "", email: "" }); setShowSucursalForm(false); }} className="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600">Agregar</button>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
