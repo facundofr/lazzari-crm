@@ -2716,18 +2716,13 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => updateNewPRItem(idx, "costo_moneda" as any, item.costo_moneda === "USD" ? "ARS" : "USD")}
-                            className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border transition-colors ${
-                              item.costo_moneda === "USD"
-                                ? "border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
-                                : "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
-                            }`}
-                            title="Click para cambiar moneda del costo"
-                          >
+                          <span className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border ${
+                            item.costo_moneda === "USD"
+                              ? "border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
+                              : "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                          }`}>
                             {item.costo_moneda === "USD" ? "US$" : "AR$"}
-                          </button>
+                          </span>
                           <input type="number" value={item.precio_costo || ""} onChange={(e) => updateNewPRItem(idx, "precio_costo", Number(e.target.value))}
                             className="w-full min-w-0 rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                         </div>
