@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2 } from "lucide-react";
+import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, ShieldCheck } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -131,6 +131,10 @@ export default function RemitosPage() {
   const [selectedPresupuestos, setSelectedPresupuestos] = useState<Set<string>>(new Set());
   const [generatingIA, setGeneratingIA] = useState(false);
   const [iaSuccess, setIaSuccess] = useState("");
+
+  // Autorizar AFIP (WSREMHOM)
+  const [autorizandoAFIP, setAutorizandoAFIP] = useState(false);
+  const [afipError, setAfipError] = useState("");
 
   // SmartFilters state
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
@@ -352,6 +356,35 @@ export default function RemitosPage() {
     }
   }
 
+  async function handleAutorizarAFIP() {
+    if (!detailRemito) return;
+    setAutorizandoAFIP(true);
+    setAfipError("");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch("/api/remito", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          remito_id: detailRemito.id,
+          sociedad_id: sociedadActiva?.id,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || json.error) throw new Error(json.error || "Error al autorizar");
+      // Actualizar el estado local del remito con el CAR obtenido
+      setDetailRemito({ ...detailRemito, cae: json.car });
+      await fetchData();
+    } catch (err: any) {
+      setAfipError(err.message || "Error al conectar con AFIP");
+    } finally {
+      setAutorizandoAFIP(false);
+    }
+  }
+
   async function handleRowClick(row: RemitoRow) {
     setDetailRemito(row);
     setDetailLoading(true);
@@ -477,6 +510,16 @@ export default function RemitosPage() {
         <tbody>${items.map((it, i) => `<tr><td>${i + 1}</td><td>${it.descripcion}</td><td>${it.cantidad}</td><td>${it.unidad || "u"}</td></tr>`).join("")}</tbody>
       </table>
     </div>
+    ${detailTransportes.length > 0 ? `
+    <div class="section">
+      <h3>Transporte</h3>
+      ${detailTransportes.map(t => `
+        <div class="field"><label>Transportista</label><span>${t.transportista}</span></div>
+        ${t.destino ? `<div class="field"><label>Destino / Dirección de entrega</label><span>${t.destino}</span></div>` : ""}
+        ${t.costo ? `<div class="field"><label>Costo flete</label><span>$ ${Number(t.costo).toLocaleString("es-AR", { minimumFractionDigits: 2 })} ${t.moneda || ""}</span></div>` : ""}
+        <div class="field"><label>Estado transporte</label><span>${t.estado}</span></div>
+      `).join("")}
+    </div>` : ""}
     ${r.valor_declarado ? `<div class="obs" style="font-size:14px;font-weight:bold;margin-top:16px;background:#fff3e0;border:1px solid #ff9800;padding:12px;border-radius:4px"><strong>VALOR DECLARADO:</strong> $ ${Number(r.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>` : ""}
     ${r.observaciones ? `<div class="obs"><strong>Observaciones:</strong> ${r.observaciones}</div>` : ""}
     <div class="footer">
@@ -665,19 +708,30 @@ export default function RemitosPage() {
 
             <div className="px-6 py-5 space-y-5">
               {/* Action buttons */}
-              {detailRemito.estado !== "entregado" && (
-                <div className="flex flex-wrap gap-2">
-                  {detailRemito.estado === "pendiente" && (
-                    <button onClick={() => { handleEstadoChange(detailRemito.id, "parcial"); setDetailRemito({ ...detailRemito, estado: "parcial" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors">
-                      <Package className="h-4 w-4" /> Entrega parcial
-                    </button>
-                  )}
-                  {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
-                    <button onClick={() => { handleEstadoChange(detailRemito.id, "entregado"); setDetailRemito({ ...detailRemito, estado: "entregado" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition-colors">
-                      <CheckCircle2 className="h-4 w-4" /> Marcar entregado
-                    </button>
-                  )}
-                </div>
+              <div className="flex flex-wrap gap-2">
+                {detailRemito.estado !== "entregado" && detailRemito.estado === "pendiente" && (
+                  <button onClick={() => { handleEstadoChange(detailRemito.id, "parcial"); setDetailRemito({ ...detailRemito, estado: "parcial" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors">
+                    <Package className="h-4 w-4" /> Entrega parcial
+                  </button>
+                )}
+                {detailRemito.estado !== "entregado" && (detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
+                  <button onClick={() => { handleEstadoChange(detailRemito.id, "entregado"); setDetailRemito({ ...detailRemito, estado: "entregado" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition-colors">
+                    <CheckCircle2 className="h-4 w-4" /> Marcar entregado
+                  </button>
+                )}
+                {!detailRemito.cae && (
+                  <button
+                    onClick={handleAutorizarAFIP}
+                    disabled={autorizandoAFIP}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60 transition-colors"
+                  >
+                    {autorizandoAFIP ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+                    {autorizandoAFIP ? "Autorizando…" : "Autorizar AFIP"}
+                  </button>
+                )}
+              </div>
+              {afipError && (
+                <p className="text-xs text-red-500 -mt-3">{afipError}</p>
               )}
 
               {/* Info */}

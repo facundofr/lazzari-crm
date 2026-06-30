@@ -220,7 +220,7 @@ export default function FacturacionPage() {
     }));
   };
 
-  const isFacturaA = emitData.tipo === "FA" || emitData.tipo === "NCA";
+  const isFacturaA = emitData.tipo === "FA" || emitData.tipo === "NCA" || emitData.tipo === "FCEA";
 
   const isUSD = emitData.moneda === "USD";
   const tc = emitData.tipo_cambio || 0;
@@ -462,7 +462,7 @@ export default function FacturacionPage() {
     const isUSDPdf = f.moneda === "USD" && f.tipo_cambio;
     const qrData = JSON.stringify({
       ver: 1, fecha: f.fecha, cuit: emisorData.cuitNumero, ptoVta: f.punto_venta,
-      tipoCmp: { FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13 }[f.tipo] || 1,
+      tipoCmp: ({ FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13, FCEA: 201, FCEB: 206 } as Record<string, number>)[f.tipo] || 1,
       nroCmp: f.numero, importe: Number(f.total), moneda: isUSDPdf ? "DOL" : "PES", ctz: isUSDPdf ? Number(f.tipo_cambio) : 1,
       tipoDocRec: cli?.cuit ? 80 : 99, nroDocRec: cli?.cuit ? Number(cli.cuit.replace(/-/g, "")) : 0,
       tipoCodAut: "E", codAut: Number(f.cae || 0),
@@ -526,7 +526,7 @@ export default function FacturacionPage() {
     </div>
   </div>
   <div class="fc-right">
-    <div class="comp-tipo">${f.tipo.startsWith("NC") ? "NOTA DE CREDITO" : "FACTURA"}</div>
+    <div class="comp-tipo">${f.tipo.startsWith("NC") ? "NOTA DE CRÉDITO" : f.tipo.startsWith("FCE") ? "FACTURA DE CRÉDITO ELECTRÓNICA" : "FACTURA"}</div>
     <div class="comp-num">N° ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}</div>
     <div class="comp-fecha">Fecha: ${formatDate(f.fecha)}</div>
   </div>
@@ -798,7 +798,11 @@ ${f.cae ? `
                         <option value="FA">Factura A</option>
                         <option value="FB">Factura B</option>
                       </optgroup>
-                      <optgroup label="Notas de credito">
+                      <optgroup label="Factura de Crédito Electrónica">
+                        <option value="FCEA">FCE A (MiPyMEs)</option>
+                        <option value="FCEB">FCE B (MiPyMEs)</option>
+                      </optgroup>
+                      <optgroup label="Notas de crédito">
                         <option value="NCA">NC A</option>
                         <option value="NCB">NC B</option>
                       </optgroup>
@@ -1024,6 +1028,19 @@ ${f.cae ? `
                 <button onClick={() => handlePrintFactura(detailFactura)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
                   <Download className="h-3.5 w-3.5" /> PDF
                 </button>
+                {(detailFactura.tipo === "FA" || detailFactura.tipo === "FB") && detailFactura.estado !== "anulada" && (
+                  <button
+                    onClick={() => {
+                      const ncTipo = detailFactura.tipo === "FA" ? "NCA" : "NCB";
+                      openEmitModal({ cliente_id: detailFactura.cliente_id, tipo: ncTipo });
+                      setDetailFactura(null);
+                    }}
+                    className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/30 transition-colors"
+                    title="Emitir Nota de Crédito"
+                  >
+                    <XCircle className="h-3.5 w-3.5" /> NC
+                  </button>
+                )}
                 <button onClick={() => setDetailFactura(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
                   <X className="h-5 w-5" />
                 </button>

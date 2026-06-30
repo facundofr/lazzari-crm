@@ -15,7 +15,7 @@ import {
   Search, Send, Eye, Copy, FileText, CheckCircle2, XCircle, Clock,
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
   Printer, Sparkles, Download, ClipboardCopy, Check, Mail, GripVertical,
-  Phone, CalendarClock, Inbox, Paperclip, Upload, Truck,
+  Phone, CalendarClock, Inbox, Paperclip, Upload, Truck, Receipt,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -263,6 +263,14 @@ export default function PresupuestosPage() {
   const [costosFaltantesModal, setCostosFaltantesModal] = useState<{ id: string; count: number; motivo?: string } | null>(null);
   // Track PRs aprobados con costos faltantes (set of PR ids)
   const [prsSinCostos, setPrsSinCostos] = useState<Set<string>>(new Set());
+
+  // Facturar desde PR
+  const [facturarModal, setFacturarModal] = useState<Presupuesto | null>(null);
+  const [facturarTipo, setFacturarTipo] = useState<"FA" | "FB">("FB");
+  const [facturarManual, setFacturarManual] = useState(false);
+  const [facturarNumManual, setFacturarNumManual] = useState("");
+  const [facturarEmitting, setFacturarEmitting] = useState(false);
+  const [facturarError, setFacturarError] = useState("");
 
   // Nuevo PR modal
   const [showNewPR, setShowNewPR] = useState(false);
@@ -533,6 +541,39 @@ export default function PresupuestosPage() {
   useEffect(() => {
     fetchPresupuestos();
   }, [fetchPresupuestos]);
+
+  // Fetch items separately when selected PR has no items (fallback query omitted them)
+  useEffect(() => {
+    if (!selected?.id || selected.items.length > 0) return;
+    (async () => {
+      const { data } = await supabase
+        .from("presupuesto_items")
+        .select("*")
+        .eq("presupuesto_id", selected.id)
+        .order("orden", { ascending: true });
+      if (data && data.length > 0) {
+        setSelected(prev => prev ? {
+          ...prev,
+          items: data.map((it: any, idx: number) => ({
+            id: it.id ?? `item-${idx}`,
+            productoId: "",
+            codigo: it.codigo,
+            descripcion: it.descripcion,
+            categoria: it.categoria,
+            cantidad: it.cantidad,
+            unidad: it.unidad,
+            precioCosto: it.precio_costo,
+            markupPorcentaje: it.markup_porcentaje,
+            precioVenta: it.precio_venta,
+            subtotal: it.subtotal,
+            ivaPorcentaje: it.iva_porcentaje ?? 21,
+            iva: it.iva,
+            total: it.total,
+          }))
+        } : null);
+      }
+    })();
+  }, [selected?.id]);
 
   // Check approved PRs for missing costs
   useEffect(() => {
@@ -1239,6 +1280,61 @@ export default function PresupuestosPage() {
     } catch (err) {
       console.error("Error creating remito:", err);
       toast.error("Error al crear remito");
+    }
+  }
+
+  async function handleFacturarFromPR() {
+    if (!facturarModal || !sociedadActiva) return;
+    setFacturarEmitting(true);
+    setFacturarError("");
+    try {
+      let items = facturarModal.items;
+      if (items.length === 0) {
+        const { data } = await supabase.from("presupuesto_items").select("*").eq("presupuesto_id", facturarModal.id).order("orden");
+        items = (data || []).map((it: any) => ({ ...it, precioVenta: it.precio_venta, ivaPorcentaje: it.iva_porcentaje ?? 21 } as any));
+      }
+      const ptoVta = sociedadActiva.nombre === "Grupo LA" ? 10 : 15;
+      const { data: { session } } = await supabase.auth.getSession();
+      const body: Record<string, unknown> = {
+        tipo: facturarTipo,
+        cliente_id: facturarModal.clienteId,
+        punto_venta: ptoVta,
+        moneda: facturarModal.moneda,
+        tipo_cambio: null,
+        items: items.map((it: any) => ({
+          descripcion: it.descripcion,
+          cantidad: it.cantidad,
+          precio_unitario: it.precioVenta ?? it.precio_venta ?? 0,
+          iva_porcentaje: it.ivaPorcentaje ?? it.iva_porcentaje ?? 21,
+        })),
+        sociedad_id: sociedadActiva.id,
+        presupuesto_id: facturarModal.id,
+      };
+      if (facturarManual) {
+        body.manual = true;
+        body.numero_manual = Number(facturarNumManual);
+      }
+      const res = await fetch("/api/facturacion", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok || json.error) throw new Error(json.error || "Error al facturar");
+      toast.success(`Factura emitida${json.numero ? `: ${json.tipo || facturarTipo} ${json.numero}` : ""}`);
+      setFacturarModal(null);
+      setFacturarTipo("FB");
+      setFacturarManual(false);
+      setFacturarNumManual("");
+      setFacturadoIds(prev => new Set([...prev, facturarModal!.id]));
+      await fetchPresupuestos();
+    } catch (err: any) {
+      setFacturarError(err.message || "Error al emitir factura");
+    } finally {
+      setFacturarEmitting(false);
     }
   }
 
@@ -1981,6 +2077,16 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   >
                     <Truck className="h-3.5 w-3.5" />
                     Remitar
+                  </button>
+                )}
+                {selected.estado === "aprobado" && (
+                  <button
+                    onClick={() => { setFacturarModal(selected); setFacturarError(""); setFacturarTipo("FB"); setFacturarManual(false); setFacturarNumManual(""); }}
+                    className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-950/30 transition-colors"
+                    title="Emitir factura desde este presupuesto"
+                  >
+                    <Receipt className="h-3.5 w-3.5" />
+                    Facturar
                   </button>
                 )}
                 <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
@@ -3075,6 +3181,73 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <p className="text-xs mt-1">Busca por codigo de proveedor o descripcion del producto</p>
                 </div>
               )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ==================== FACTURAR DESDE PR MODAL ==================== */}
+      {facturarModal && (
+        <>
+          <div className="fixed inset-0 z-[70] bg-black/40" onClick={() => !facturarEmitting && setFacturarModal(null)} />
+          <div className="fixed inset-4 z-[70] m-auto h-fit max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-4 dark:border-zinc-700">
+              <div className="flex items-center gap-2">
+                <Receipt className="h-5 w-5 text-blue-500" />
+                <h3 className="font-semibold text-zinc-900 dark:text-white">Facturar desde {facturarModal.numero}</h3>
+              </div>
+              <button onClick={() => setFacturarModal(null)} disabled={facturarEmitting} className="rounded p-1 text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              {facturarError && <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{facturarError}</div>}
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2">Tipo de comprobante</label>
+                <div className="flex gap-2">
+                  {(["FA", "FB"] as const).map(t => (
+                    <button key={t} onClick={() => { setFacturarTipo(t); setFacturarManual(false); }}
+                      className={`flex-1 rounded-lg border-2 py-2 text-sm font-semibold transition-colors ${facturarTipo === t && !facturarManual ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300" : "border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"}`}>
+                      Factura {t.replace("F", "")}
+                    </button>
+                  ))}
+                  <button onClick={() => setFacturarManual(true)}
+                    className={`flex-1 rounded-lg border-2 py-2 text-sm font-semibold transition-colors ${facturarManual ? "border-amber-500 bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-300" : "border-zinc-200 text-zinc-600 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"}`}>
+                    Manual
+                  </button>
+                </div>
+                {facturarManual && (
+                  <div className="mt-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 space-y-2">
+                    <p className="text-xs text-amber-700 dark:text-amber-400">Factura manual: no se autoriza con ARCA, no tendrá CAE.</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-xs text-zinc-500">Tipo</label>
+                        <select value={facturarTipo} onChange={(e) => setFacturarTipo(e.target.value as "FA" | "FB")}
+                          className="mt-0.5 w-full rounded border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                          <option value="FB">Factura B</option>
+                          <option value="FA">Factura A</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs text-zinc-500">N° Comprobante</label>
+                        <input type="number" value={facturarNumManual} onChange={(e) => setFacturarNumManual(e.target.value)}
+                          placeholder="00000001" className="mt-0.5 w-full rounded border border-zinc-200 px-2 py-1.5 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 text-sm space-y-1">
+                <div className="flex justify-between"><span className="text-zinc-500">Cliente</span><span className="font-medium">{facturarModal.clienteNombre}</span></div>
+                <div className="flex justify-between"><span className="text-zinc-500">Items</span><span className="font-medium">{facturarModal.items.length}</span></div>
+                <div className="flex justify-between"><span className="text-zinc-500">Total</span><span className="font-mono font-bold">{formatCurrency(facturarModal.total, facturarModal.moneda)}</span></div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
+              <button onClick={() => setFacturarModal(null)} disabled={facturarEmitting} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
+              <button onClick={handleFacturarFromPR} disabled={facturarEmitting || (facturarManual && !facturarNumManual)}
+                className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                {facturarEmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Receipt className="h-4 w-4" />}
+                {facturarEmitting ? "Emitiendo..." : "Emitir factura"}
+              </button>
             </div>
           </div>
         </>

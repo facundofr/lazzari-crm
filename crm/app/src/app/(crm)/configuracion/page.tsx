@@ -7,7 +7,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { mockUsers } from "@/lib/mock-data";
 import { ROLE_LABELS, ROLE_PERMISSIONS } from "@/lib/types";
 import type { User, Role } from "@/lib/types";
-import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2, Mail, Save, RotateCcw, Percent, Plus, Trash2, X } from "lucide-react";
+import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2, Mail, Save, RotateCcw, Percent, Plus, Trash2, X, ShieldCheck } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
@@ -85,7 +85,7 @@ const roleBadgeVariant: Record<Role, "success" | "warning" | "danger" | "info" |
 
 export default function ConfiguracionPage() {
   const { sociedadActiva, profile } = useUser();
-  const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas" | "comisiones">("usuarios");
+  const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas" | "comisiones" | "retenciones">("usuarios");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dbUsers, setDbUsers] = useState<User[]>([]);
@@ -112,6 +112,19 @@ export default function ConfiguracionPage() {
     activo: true,
   });
   const [comisionSaving, setComisionSaving] = useState(false);
+
+  // Retenciones config state
+  const [retencionCfg, setRetencionCfg] = useState({
+    aplica_iva: true,
+    minimo_iva: 130000,
+    tasa_iva_ri: 10.5,
+    aplica_ganancias: true,
+    minimo_ganancias: 400000,
+    tasa_ganancias_ri: 3.5,
+    tasa_ganancias_no_inscripto: 28,
+  });
+  const [retencionCfgSaving, setRetencionCfgSaving] = useState(false);
+  const [retencionCfgSaved, setRetencionCfgSaved] = useState(false);
 
   // Empresa form — controlled inputs
   const [empresa, setEmpresa] = useState({
@@ -286,6 +299,23 @@ export default function ConfiguracionPage() {
       setComisionesLoading(false);
     }
     if (tab === "comisiones") fetchComisiones();
+
+    if (tab === "retenciones" && sociedadActiva?.id) {
+      (async () => {
+        try {
+          const { data } = await (supabase as any).from("retencion_config").select("*").eq("sociedad_id", sociedadActiva.id).single();
+          if (data) setRetencionCfg({
+            aplica_iva: data.aplica_iva ?? true,
+            minimo_iva: data.minimo_iva ?? 130000,
+            tasa_iva_ri: data.tasa_iva_ri ?? 10.5,
+            aplica_ganancias: data.aplica_ganancias ?? true,
+            minimo_ganancias: data.minimo_ganancias ?? 400000,
+            tasa_ganancias_ri: data.tasa_ganancias_ri ?? 3.5,
+            tasa_ganancias_no_inscripto: data.tasa_ganancias_no_inscripto ?? 28,
+          });
+        } catch { /* use defaults */ }
+      })();
+    }
   }, [sociedadActiva, tab]);
 
   function resetComisionForm() {
@@ -375,6 +405,24 @@ export default function ConfiguracionPage() {
     } catch (err) {
       console.error("Error toggling comision:", err);
       alert("Error al cambiar estado de comisión.");
+    }
+  }
+
+  async function handleSaveRetencionCfg() {
+    if (!sociedadActiva?.id) return;
+    setRetencionCfgSaving(true);
+    try {
+      const { error } = await (supabase as any).from("retencion_config").upsert(
+        { sociedad_id: sociedadActiva.id, ...retencionCfg, updated_at: new Date().toISOString() },
+        { onConflict: "sociedad_id" }
+      );
+      if (error) throw error;
+      setRetencionCfgSaved(true);
+      setTimeout(() => setRetencionCfgSaved(false), 2500);
+    } catch (err: any) {
+      alert("Error al guardar configuración de retenciones: " + err.message);
+    } finally {
+      setRetencionCfgSaving(false);
     }
   }
 
@@ -481,6 +529,7 @@ export default function ConfiguracionPage() {
     { id: "notificaciones" as const, label: "Notificaciones", icon: Bell },
     { id: "plantillas" as const, label: "Plantillas de Email", icon: Mail },
     { id: "comisiones" as const, label: "Comisiones", icon: Percent },
+    { id: "retenciones" as const, label: "Retenciones", icon: ShieldCheck },
   ];
 
   return (
@@ -948,6 +997,146 @@ export default function ConfiguracionPage() {
                 })}
               </div>
             )}
+          </div>
+        )}
+
+        {tab === "retenciones" && (
+          <div className="space-y-6 max-w-2xl">
+            <div>
+              <h3 className="font-semibold text-zinc-900 dark:text-white">Configuración de Retenciones</h3>
+              <p className="text-sm text-zinc-500 mt-1">
+                Definí los montos mínimos y tasas para el cálculo automático de retenciones en Órdenes de Pago.
+                {sociedadActiva && <span className="ml-1 font-medium text-zinc-700 dark:text-zinc-300">Sociedad: {sociedadActiva.nombre}</span>}
+              </p>
+            </div>
+
+            {/* IVA */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-lg bg-blue-50 p-2 text-blue-600 dark:bg-blue-900/30">
+                      <ShieldCheck className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <CardTitle>Retención IVA</CardTitle>
+                      <p className="text-xs text-zinc-400 mt-0.5">RG 2854 — aplica a Responsables Inscriptos</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRetencionCfg(prev => ({ ...prev, aplica_iva: !prev.aplica_iva }))}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${retencionCfg.aplica_iva ? "bg-blue-500" : "bg-zinc-300 dark:bg-zinc-600"}`}
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${retencionCfg.aplica_iva ? "translate-x-4.5" : "translate-x-0.5"}`} />
+                  </button>
+                </div>
+              </CardHeader>
+              {retencionCfg.aplica_iva && (
+                <div className="grid grid-cols-2 gap-4 pt-2">
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Mínimo no imponible (ARS)</label>
+                    <input
+                      type="number"
+                      value={retencionCfg.minimo_iva}
+                      onChange={(e) => setRetencionCfg(prev => ({ ...prev, minimo_iva: Number(e.target.value) }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    />
+                    <p className="text-xs text-zinc-400 mt-1">Si el pago es mayor a este monto, se aplica retención</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Tasa RI (%)</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={retencionCfg.tasa_iva_ri}
+                      onChange={(e) => setRetencionCfg(prev => ({ ...prev, tasa_iva_ri: Number(e.target.value) }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    />
+                  </div>
+                </div>
+              )}
+            </Card>
+
+            {/* Ganancias */}
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-lg bg-violet-50 p-2 text-violet-600 dark:bg-violet-900/30">
+                      <ShieldCheck className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <CardTitle>Retención Ganancias</CardTitle>
+                      <p className="text-xs text-zinc-400 mt-0.5">RG 830 — aplica a proveedores inscriptos</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRetencionCfg(prev => ({ ...prev, aplica_ganancias: !prev.aplica_ganancias }))}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${retencionCfg.aplica_ganancias ? "bg-violet-500" : "bg-zinc-300 dark:bg-zinc-600"}`}
+                  >
+                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${retencionCfg.aplica_ganancias ? "translate-x-4.5" : "translate-x-0.5"}`} />
+                  </button>
+                </div>
+              </CardHeader>
+              {retencionCfg.aplica_ganancias && (
+                <div className="grid grid-cols-2 gap-4 pt-2">
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Mínimo no imponible (ARS)</label>
+                    <input
+                      type="number"
+                      value={retencionCfg.minimo_ganancias}
+                      onChange={(e) => setRetencionCfg(prev => ({ ...prev, minimo_ganancias: Number(e.target.value) }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Tasa RI (%)</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={retencionCfg.tasa_ganancias_ri}
+                      onChange={(e) => setRetencionCfg(prev => ({ ...prev, tasa_ganancias_ri: Number(e.target.value) }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <label className="text-xs font-medium text-zinc-500">Tasa no inscripto / no categorizado (%)</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={retencionCfg.tasa_ganancias_no_inscripto}
+                      onChange={(e) => setRetencionCfg(prev => ({ ...prev, tasa_ganancias_no_inscripto: Number(e.target.value) }))}
+                      className="mt-1 w-40 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    />
+                    <p className="text-xs text-zinc-400 mt-1">Se aplica cuando AFIP no puede determinar la condición del proveedor</p>
+                  </div>
+                </div>
+              )}
+            </Card>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleSaveRetencionCfg}
+                disabled={retencionCfgSaving}
+                className="flex items-center gap-2 rounded-lg bg-orange-500 px-5 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+              >
+                {retencionCfgSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                Guardar configuración
+              </button>
+              {retencionCfgSaved && (
+                <span className="flex items-center gap-1.5 text-sm text-emerald-600">
+                  <CheckCircle2 className="h-4 w-4" /> Guardado
+                </span>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 p-4 text-sm text-zinc-500 space-y-1">
+              <p className="font-medium text-zinc-700 dark:text-zinc-300">¿Cómo funciona?</p>
+              <p>Al crear una Orden de Pago y seleccionar el proveedor, el sistema consulta automáticamente el padrón de AFIP para determinar su condición (RI, Monotributo, etc.) y pre-completa las retenciones según esta configuración.</p>
+              <p className="mt-1">El usuario puede editar los valores antes de confirmar.</p>
+            </div>
           </div>
         )}
 

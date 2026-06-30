@@ -33,7 +33,7 @@ No test framework is configured yet.
 
 ```
 crm/app/src/
-  app/(crm)/              # Route group — 11 CRM modules behind auth
+  app/(crm)/              # Route group — 14 CRM modules behind auth
   app/api/ai/             # AI agent API route (Claude + Supabase tool use)
   app/api/parse-lista-precios/ # PDF price list parser
   components/layout/      # Sidebar, Header, AIWidget
@@ -90,7 +90,7 @@ Every query that reads/writes data must filter by `sociedad_id`. User access is 
 ### ARCA / AFIP Integration (`app/api/facturacion/route.ts`, `app/api/cuit-lookup/route.ts`)
 
 - Certificates stored in `crm/certs/` locally; on Vercel loaded from env vars as base64 (`ARCA_CERT_B64`/`ARCA_KEY_B64` for Lazzari, `ARCA_GRUPOLA_CERT_B64`/`ARCA_GRUPOLA_KEY_B64` for Grupo LA).
-- CUIT lookup chain: ARCA Lazzari cert → ARCA Grupo LA cert → scraping cuitonline.com.
+- CUIT lookup chain: ARCA Lazzari cert → ARCA Grupo LA cert → scraping cuitonline.com. Uses raw SOAP fetch (not `@ramiidv/arca-facturacion` which has a namespace bug in padrón).
 - Status check: cert validation (no network) → AFIP connectivity test. `certOk=true` + `connected=false` is normal on Vercel (IP blocking); WSFE still works for invoicing.
 - Factura A: IVA discriminado. Factura B: IVA incluido (never discriminate per-item in PDF).
 
@@ -103,9 +103,14 @@ Supabase project ID: `ycuzszzskqatlegtbgbq`. Full schema plan in `SUPABASE_PLAN.
 - Auto-numbering via PG function `generate_document_number()` (e.g., `PR-2026-0049`)
 - RLS enabled on all tables; role-based access from `profiles`
 - Some FK joins (e.g., `created_by`) may be null — avoid inner joins on nullable FKs
-- Polymorphic contacts table: `contactos` with `entity_type` (cliente/proveedor) and `entity_id`
+- Polymorphic contacts table: `contactos` with columns: `id, entity_type (cliente|proveedor), entity_id, nombre, cargo, email, telefono, principal, fecha_cumpleanos, notas, sucursal_id, whatsapp, vendedor_id`
+- `cliente_sucursales` columns: `id, cliente_id, nombre, direccion, localidad, provincia, cp, telefono, email, principal, activo, notas`
 - `clientes` has `email_facturacion` (text) and `envio_automatico` (boolean NOT NULL) — no `transporte_definido` column
 - Tables not in generated types (use `(supabase as any).from("table")`): `pendientes`, `notification_preferences`, `facturas_compra`, `comision_reglas`, `ordenes_pago`, `gastos_manuales`, `email_templates`, `contactos`, `user_sociedades`, `eventos`, `echeqs`, `fichas_relevamiento`, `cliente_sucursales`
+
+### Storage Buckets
+
+`certificados`, `comprobantes`, `facturas-compra`, `presupuestos`
 
 ### Environment Variables
 

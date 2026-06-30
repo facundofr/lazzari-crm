@@ -83,6 +83,7 @@ const emptyEcheqForm = {
 interface ProveedorOption {
   id: string;
   razon_social: string;
+  cuit?: string | null;
 }
 
 interface OrdenPagoRow {
@@ -158,7 +159,9 @@ const emptyFCForm = {
   subtotal: 0,
   iva_porcentaje: 21,
   percepciones: 0,
+  percepciones_detalle: [] as { tipo: "iibb" | "ganancias" | "iva" | "municipal"; monto: number; localidad?: string }[],
   moneda: "ARS" as "ARS" | "USD",
+  cae: "",
   notas: "",
   solo_iva: false,
 };
@@ -320,6 +323,13 @@ export default function FinanzasPage() {
   const [opForm, setOpForm] = useState(emptyOPForm);
   const [opSaving, setOpSaving] = useState(false);
   const [opError, setOpError] = useState("");
+  const [opFile, setOpFile] = useState<File | null>(null);
+  const [opProvCondicion, setOpProvCondicion] = useState<string | null>(null);
+  const [opCondicionLoading, setOpCondicionLoading] = useState(false);
+  const [retencionConfig, setRetencionConfig] = useState({
+    aplica_iva: true, minimo_iva: 130000, tasa_iva_ri: 10.5,
+    aplica_ganancias: true, minimo_ganancias: 400000, tasa_ganancias_ri: 3.5, tasa_ganancias_no_inscripto: 28,
+  });
   const [proveedoresOptions, setProveedoresOptions] = useState<ProveedorOption[]>([]);
   const [chequesRecibidos, setChequesRecibidos] = useState<MovimientoRow[]>([]);
   const [proveedorSearch, setProveedorSearch] = useState("");
@@ -343,6 +353,7 @@ export default function FinanzasPage() {
   const [fcSaving, setFcSaving] = useState(false);
   const [fcError, setFcError] = useState("");
   const [fcProvSearch, setFcProvSearch] = useState("");
+  const [fcProvFocused, setFcProvFocused] = useState(false);
   const [ocOptions, setOcOptions] = useState<OCOption[]>([]);
   const [fcFile, setFcFile] = useState<File | null>(null);
   const [fcUploading, setFcUploading] = useState(false);
@@ -572,11 +583,27 @@ export default function FinanzasPage() {
 
         // Fetch proveedores list for OP/gastos selectors
         try {
-          let qProv = supabase.from("proveedores").select("id, razon_social").order("razon_social");
+          let qProv = supabase.from("proveedores").select("id, razon_social, cuit").order("razon_social");
           if (sociedadActiva?.id) qProv = qProv.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: provData } = await qProv;
           if (provData) setProveedoresOptions(provData as ProveedorOption[]);
         } catch { /* ignore */ }
+
+        // Fetch retencion config
+        try {
+          if (sociedadActiva?.id) {
+            const { data: retCfg } = await (supabase as any).from("retencion_config").select("*").eq("sociedad_id", sociedadActiva.id).single();
+            if (retCfg) setRetencionConfig({
+              aplica_iva: retCfg.aplica_iva ?? true,
+              minimo_iva: retCfg.minimo_iva ?? 130000,
+              tasa_iva_ri: retCfg.tasa_iva_ri ?? 10.5,
+              aplica_ganancias: retCfg.aplica_ganancias ?? true,
+              minimo_ganancias: retCfg.minimo_ganancias ?? 400000,
+              tasa_ganancias_ri: retCfg.tasa_ganancias_ri ?? 3.5,
+              tasa_ganancias_no_inscripto: retCfg.tasa_ganancias_no_inscripto ?? 28,
+            });
+          }
+        } catch { /* use defaults */ }
 
         // Fetch cheques recibidos no conciliados (for cruce)
         try {
@@ -799,10 +826,48 @@ export default function FinanzasPage() {
     }
   }
 
+  // ── OP auto-retenciones ──
+  // 1. Cuando cambia el proveedor → consultar AFIP para obtener condición IVA
+  useEffect(() => {
+    if (!opModalOpen) return;
+    if (!opForm.proveedor_id) { setOpProvCondicion(null); return; }
+    const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
+    if (!prov?.cuit) { setOpProvCondicion(null); return; }
+    const cuit = prov.cuit.replace(/-/g, "");
+    setOpCondicionLoading(true);
+    setOpProvCondicion(null);
+    fetch(`/api/cuit-lookup?cuit=${cuit}`)
+      .then(r => r.json())
+      .then(data => { setOpProvCondicion(data.condicion_iva ?? ""); })
+      .catch(() => { setOpProvCondicion(null); })
+      .finally(() => setOpCondicionLoading(false));
+  }, [opForm.proveedor_id, opModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 2. Cuando tenemos condición y monto → auto-calcular retenciones
+  useEffect(() => {
+    if (opProvCondicion === null || opForm.monto_bruto <= 0) return;
+    let retencion_pct = 0;
+    let aplica_ganancias = false;
+    let retencion_ganancias_pct = 0;
+    if (opProvCondicion === "RI") {
+      if (retencionConfig.aplica_iva && opForm.monto_bruto >= retencionConfig.minimo_iva) {
+        retencion_pct = retencionConfig.tasa_iva_ri;
+      }
+      if (retencionConfig.aplica_ganancias && opForm.monto_bruto >= retencionConfig.minimo_ganancias) {
+        aplica_ganancias = true;
+        retencion_ganancias_pct = retencionConfig.tasa_ganancias_ri;
+      }
+    }
+    // Monotributo / Exento / CF / vacío → sin retención (usuario puede agregar manual)
+    setOpForm(prev => ({ ...prev, retencion_pct, aplica_ganancias, retencion_ganancias_pct }));
+  }, [opProvCondicion, opForm.monto_bruto, retencionConfig]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── OP handlers ──
   function openOPModal() {
     setOpForm(emptyOPForm);
     setOpError("");
+    setOpFile(null);
+    setOpProvCondicion(null);
     setProveedorSearch("");
     setOpModalOpen(true);
   }
@@ -835,8 +900,20 @@ export default function FinanzasPage() {
       if (opForm.cheque_cruce_id) insertData.cheque_cruce_id = opForm.cheque_cruce_id;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
 
-      const { error } = await (supabase as any).from("ordenes_pago").insert(insertData);
+      const { data: opData, error } = await (supabase as any).from("ordenes_pago").insert(insertData).select("id").single();
       if (error) throw error;
+
+      // Upload comprobante file if provided
+      if (opFile && opData?.id) {
+        const ext = opFile.name.split(".").pop() || "pdf";
+        const filePath = `${sociedadActiva?.id || "default"}/op-${opData.id}/comprobante.${ext}`;
+        const { error: upErr } = await supabase.storage.from("comprobantes").upload(filePath, opFile, { upsert: true });
+        if (!upErr) {
+          const { data: urlData } = supabase.storage.from("comprobantes").getPublicUrl(filePath);
+          await (supabase as any).from("ordenes_pago").update({ archivo_url: urlData.publicUrl, archivo_nombre: opFile.name }).eq("id", opData.id);
+        }
+      }
+      setOpFile(null);
 
       // Also create a movimiento for the payment
       const provNombre = proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social ?? "";
@@ -1076,6 +1153,8 @@ export default function FinanzasPage() {
       };
       if (fcForm.orden_compra_id && !fcForm.solo_iva) insertData.orden_compra_id = fcForm.orden_compra_id;
       if (fcForm.fecha_vencimiento) insertData.fecha_vencimiento = fcForm.fecha_vencimiento;
+      if (fcForm.cae.trim()) insertData.cae = fcForm.cae.trim();
+      if (fcForm.percepciones_detalle.length > 0) insertData.percepciones_detalle = JSON.stringify(fcForm.percepciones_detalle);
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
 
       const { data: fcData, error } = await (supabase as any).from("facturas_compra").insert(insertData).select("id").single();
@@ -1185,7 +1264,7 @@ export default function FinanzasPage() {
 
   const filteredProveedoresFC = fcProvSearch.trim()
     ? proveedoresOptions.filter(p => p.razon_social.toLowerCase().includes(fcProvSearch.toLowerCase()))
-    : proveedoresOptions;
+    : proveedoresOptions.slice(0, 20);
 
   // OCs filtered by selected proveedor (for optional linking)
   const filteredOCsForFC = fcForm.proveedor_id
@@ -2390,9 +2469,20 @@ export default function FinanzasPage() {
                     />
                   </div>
                   {opForm.proveedor_id && (
-                    <div className="mt-1 flex items-center gap-1">
+                    <div className="mt-1 flex items-center gap-2 flex-wrap">
                       <Badge variant="success">{proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social}</Badge>
-                      <button onClick={() => { setOpForm({ ...opForm, proveedor_id: "" }); setProveedorSearch(""); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
+                      <button onClick={() => { setOpForm({ ...opForm, proveedor_id: "" }); setProveedorSearch(""); setOpProvCondicion(null); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
+                      {opCondicionLoading && <span className="flex items-center gap-1 text-xs text-zinc-400"><Loader2 className="h-3 w-3 animate-spin" />Consultando AFIP…</span>}
+                      {!opCondicionLoading && opProvCondicion !== null && (
+                        <span className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
+                          opProvCondicion === "RI" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" :
+                          opProvCondicion === "Monotributo" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" :
+                          "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
+                        }`}>
+                          <ShieldCheck className="h-3 w-3" />
+                          {opProvCondicion === "RI" ? "Responsable Inscripto" : opProvCondicion === "Monotributo" ? "Monotributo" : opProvCondicion || "Sin datos AFIP"}
+                        </span>
+                      )}
                     </div>
                   )}
                   {!opForm.proveedor_id && proveedorSearch.trim() && filteredProveedoresOP.length > 0 && (
@@ -2428,9 +2518,14 @@ export default function FinanzasPage() {
                 </div>
               </div>
 
-              {/* Retención general */}
+              {/* Retención IVA */}
               <div>
-                <label className="text-xs font-medium text-zinc-500">% Retención</label>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-medium text-zinc-500">Ret. IVA (%)</label>
+                  {opProvCondicion !== null && opForm.retencion_pct > 0 && (
+                    <span className="text-xs bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 px-1.5 py-0.5 rounded font-medium">Auto AFIP</span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 mt-1">
                   <input type="number" step="0.5" value={opForm.retencion_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_pct: Number(e.target.value) })}
                     className="w-24 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0" />
@@ -2452,6 +2547,9 @@ export default function FinanzasPage() {
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="h-4 w-4 text-violet-500" />
                     <label className="text-xs font-semibold text-violet-700 dark:text-violet-300">Retención de Ganancias</label>
+                    {opProvCondicion !== null && opForm.aplica_ganancias && (
+                      <span className="text-xs bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-400 px-1.5 py-0.5 rounded font-medium">Auto AFIP</span>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -2543,6 +2641,19 @@ export default function FinanzasPage() {
                 </div>
               )}
 
+              {/* Adjuntar comprobante */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Adjuntar comprobante (PDF)</label>
+                <div className="mt-1 flex items-center gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-sm text-zinc-500 hover:border-orange-400 hover:text-orange-500 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-orange-500">
+                    <Upload className="h-4 w-4" />
+                    {opFile ? opFile.name : "Seleccionar PDF"}
+                    <input type="file" accept=".pdf,.jpg,.png" className="hidden" onChange={(e) => setOpFile(e.target.files?.[0] || null)} />
+                  </label>
+                  {opFile && <button onClick={() => setOpFile(null)} className="text-zinc-400 hover:text-red-500"><X className="h-4 w-4" /></button>}
+                </div>
+              </div>
+
               <div>
                 <label className="text-xs font-medium text-zinc-500">Notas</label>
                 <textarea value={opForm.notas} onChange={(e) => setOpForm({ ...opForm, notas: e.target.value })}
@@ -2584,6 +2695,8 @@ export default function FinanzasPage() {
                     <input
                       value={fcProvSearch}
                       onChange={(e) => { setFcProvSearch(e.target.value); if (fcForm.proveedor_id) setFcForm({ ...fcForm, proveedor_id: "", orden_compra_id: "" }); }}
+                      onFocus={() => setFcProvFocused(true)}
+                      onBlur={() => setTimeout(() => setFcProvFocused(false), 150)}
                       placeholder="Buscar proveedor..."
                       className="w-full px-2 py-2 text-sm bg-transparent dark:text-white outline-none"
                     />
@@ -2594,7 +2707,7 @@ export default function FinanzasPage() {
                       <button onClick={() => { setFcForm({ ...fcForm, proveedor_id: "", orden_compra_id: "" }); setFcProvSearch(""); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
                     </div>
                   )}
-                  {!fcForm.proveedor_id && fcProvSearch.trim() && filteredProveedoresFC.length > 0 && (
+                  {!fcForm.proveedor_id && (fcProvFocused || fcProvSearch.trim()) && filteredProveedoresFC.length > 0 && (
                     <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
                       {filteredProveedoresFC.slice(0, 8).map(p => (
                         <button key={p.id} onClick={() => { setFcForm({ ...fcForm, proveedor_id: p.id, orden_compra_id: "" }); setFcProvSearch(p.razon_social); }}
@@ -2612,6 +2725,15 @@ export default function FinanzasPage() {
                 <label className="text-xs font-medium text-zinc-500">Número de factura *</label>
                 <input value={fcForm.numero_factura} onChange={(e) => setFcForm({ ...fcForm, numero_factura: e.target.value })}
                   className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: 0001-00012345" />
+              </div>
+
+              {/* Número + CAE */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">CAE (opcional)</label>
+                  <input value={fcForm.cae} onChange={(e) => setFcForm({ ...fcForm, cae: e.target.value })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Número CAE del proveedor" />
+                </div>
               </div>
 
               {/* Fecha y fecha vencimiento */}
@@ -2664,11 +2786,58 @@ export default function FinanzasPage() {
                   </div>
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-zinc-500">Percepciones</label>
+                  <label className="text-xs font-medium text-zinc-500">Percepciones (total)</label>
                   <input type="number" value={fcForm.percepciones || ""} onChange={(e) => setFcForm({ ...fcForm, percepciones: Number(e.target.value) })}
                     className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0" />
                 </div>
               </div>
+
+              {/* Percepciones desglose */}
+              {(fcForm.percepciones > 0 || fcForm.percepciones_detalle.length > 0) && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium text-zinc-500">Detalle de percepciones</label>
+                    <button type="button"
+                      onClick={() => setFcForm({ ...fcForm, percepciones_detalle: [...fcForm.percepciones_detalle, { tipo: "iibb", monto: 0, localidad: "" }] })}
+                      className="text-xs text-orange-500 hover:text-orange-600 font-medium">+ Agregar línea</button>
+                  </div>
+                  <div className="space-y-2">
+                    {fcForm.percepciones_detalle.map((p, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <select value={p.tipo}
+                          onChange={(e) => { const d = [...fcForm.percepciones_detalle]; d[idx] = { ...d[idx], tipo: e.target.value as any }; setFcForm({ ...fcForm, percepciones_detalle: d }); }}
+                          className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                          <option value="iibb">IIBB</option>
+                          <option value="ganancias">Ganancias</option>
+                          <option value="iva">IVA</option>
+                          <option value="municipal">Municipal</option>
+                        </select>
+                        {p.tipo === "iibb" && (
+                          <input value={p.localidad || ""} placeholder="Provincia"
+                            onChange={(e) => { const d = [...fcForm.percepciones_detalle]; d[idx] = { ...d[idx], localidad: e.target.value }; setFcForm({ ...fcForm, percepciones_detalle: d }); }}
+                            className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                        )}
+                        <input type="number" step="0.01" value={p.monto || ""}
+                          onChange={(e) => {
+                            const d = [...fcForm.percepciones_detalle];
+                            d[idx] = { ...d[idx], monto: Number(e.target.value) };
+                            const total = d.reduce((s, x) => s + (x.monto || 0), 0);
+                            setFcForm({ ...fcForm, percepciones_detalle: d, percepciones: total });
+                          }}
+                          className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="$ monto" />
+                        <button type="button" onClick={() => {
+                          const d = fcForm.percepciones_detalle.filter((_, i) => i !== idx);
+                          const total = d.reduce((s, x) => s + (x.monto || 0), 0);
+                          setFcForm({ ...fcForm, percepciones_detalle: d, percepciones: total });
+                        }} className="text-zinc-400 hover:text-red-500"><X className="h-3 w-3" /></button>
+                      </div>
+                    ))}
+                    {fcForm.percepciones_detalle.length === 0 && (
+                      <p className="text-xs text-zinc-400">Podés desglosar las percepciones por tipo arriba.</p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Calculated totals */}
               {fcForm.subtotal > 0 && (
