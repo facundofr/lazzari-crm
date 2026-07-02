@@ -9,7 +9,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { formatCurrency } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -138,6 +138,7 @@ interface FacturaCompraRow {
   total: number;
   moneda: "ARS" | "USD";
   estado: "pendiente" | "pagada" | "anulada";
+  tipo: "mercaderia" | "solo_iva";
   notas: string;
   created_at: string;
   archivo_url?: string;
@@ -151,6 +152,7 @@ interface OCOption {
 }
 
 const emptyFCForm = {
+  tipo_fc: "mercaderia" as "mercaderia" | "solo_iva",
   numero_factura: "",
   proveedor_id: "",
   orden_compra_id: "",
@@ -165,6 +167,16 @@ const emptyFCForm = {
   notas: "",
   solo_iva: false,
 };
+
+interface FCItem {
+  tempId: string;
+  producto_id: string;
+  codigo: string;
+  descripcion: string;
+  cantidad: number;
+  precio_unitario: number;
+  unidad: string;
+}
 
 const GASTO_CATEGORIAS = ["Transporte", "Servicios", "Materiales", "Varios", "Comisiones", "Impuestos"] as const;
 
@@ -361,6 +373,11 @@ export default function FinanzasPage() {
   const [newArticleOpen, setNewArticleOpen] = useState(false);
   const [newArticle, setNewArticle] = useState({ codigo: "", descripcion: "", categoria: "", unidad: "UN", precio: 0 });
   const [newArticleSaving, setNewArticleSaving] = useState(false);
+  // FC items (mercadería)
+  const [fcItems, setFcItems] = useState<FCItem[]>([]);
+  const [fcProdSearch, setFcProdSearch] = useState("");
+  const [fcProdFocused, setFcProdFocused] = useState(false);
+  const [fcProductos, setFcProductos] = useState<{ id: string; codigo: string; nombre: string; precio_costo: number; unidad: string; stock: number }[]>([]);
 
   // Echeqs state
   const [echeqs, setEcheqs] = useState<EcheqRow[]>([]);
@@ -670,6 +687,7 @@ export default function FinanzasPage() {
               iva: Number(r.iva), percepciones: Number(r.percepciones ?? 0),
               total: Number(r.total), moneda: (r.moneda as "ARS" | "USD") ?? "ARS",
               estado: r.estado ?? "pendiente", notas: r.notas ?? "",
+              tipo: (r.tipo as "mercaderia" | "solo_iva") ?? (r.solo_iva ? "solo_iva" : "mercaderia"),
               created_at: r.created_at,
               archivo_url: r.archivo_url ?? undefined,
               archivo_nombre: r.archivo_nombre ?? undefined,
@@ -1119,12 +1137,23 @@ export default function FinanzasPage() {
   }
 
   // ── Facturas compra handlers ──
-  function openFCModal() {
+  async function openFCModal() {
     setFcForm(emptyFCForm);
     setFcError("");
     setFcProvSearch("");
     setFcFile(null);
+    setFcItems([]);
+    setFcProdSearch("");
     setFcModalOpen(true);
+    // Load productos for item search if not already loaded
+    if (fcProductos.length === 0) {
+      try {
+        let q = supabase.from("productos").select("id, codigo, nombre, precio_costo, unidad, stock").eq("activo", true).order("nombre");
+        if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data } = await q;
+        if (data) setFcProductos(data as any[]);
+      } catch { /* ignore */ }
+    }
   }
 
   const fcIva = fcForm.subtotal * (fcForm.iva_porcentaje / 100);
@@ -1134,6 +1163,7 @@ export default function FinanzasPage() {
     if (!fcForm.proveedor_id) { setFcError("Seleccioná un proveedor"); return; }
     if (!fcForm.numero_factura.trim()) { setFcError("El número de factura es obligatorio"); return; }
     if (fcForm.subtotal <= 0) { setFcError("El subtotal debe ser mayor a 0"); return; }
+    const isMercaderia = fcForm.tipo_fc === "mercaderia";
     setFcSaving(true);
     setFcError("");
     try {
@@ -1149,9 +1179,10 @@ export default function FinanzasPage() {
         moneda: fcForm.moneda,
         notas: fcForm.notas,
         estado: "pendiente",
-        solo_iva: fcForm.solo_iva,
+        solo_iva: !isMercaderia,
+        tipo: fcForm.tipo_fc,
       };
-      if (fcForm.orden_compra_id && !fcForm.solo_iva) insertData.orden_compra_id = fcForm.orden_compra_id;
+      if (fcForm.orden_compra_id && isMercaderia) insertData.orden_compra_id = fcForm.orden_compra_id;
       if (fcForm.fecha_vencimiento) insertData.fecha_vencimiento = fcForm.fecha_vencimiento;
       if (fcForm.cae.trim()) insertData.cae = fcForm.cae.trim();
       if (fcForm.percepciones_detalle.length > 0) insertData.percepciones_detalle = JSON.stringify(fcForm.percepciones_detalle);
@@ -1159,6 +1190,34 @@ export default function FinanzasPage() {
 
       const { data: fcData, error } = await (supabase as any).from("facturas_compra").insert(insertData).select("id").single();
       if (error) throw error;
+
+      // Insert items and update stock (solo para mercadería)
+      if (isMercaderia && fcItems.length > 0 && fcData?.id) {
+        const itemsToInsert = fcItems.map((it) => ({
+          factura_compra_id: fcData.id,
+          producto_id: it.producto_id || null,
+          codigo: it.codigo || null,
+          descripcion: it.descripcion,
+          cantidad: it.cantidad,
+          precio_unitario: it.precio_unitario,
+          unidad: it.unidad,
+          sociedad_id: sociedadActiva?.id || null,
+        }));
+        await (supabase as any).from("facturas_compra_items").insert(itemsToInsert);
+
+        // Update stock for each item that has a producto_id
+        for (const it of fcItems.filter((i) => i.producto_id)) {
+          await supabase.rpc("increment_stock" as any, { p_producto_id: it.producto_id, p_cantidad: it.cantidad }).catch(() => {
+            // fallback manual update
+            (supabase as any).from("productos").rpc; // noop, handled below
+          });
+          // Direct update as fallback (RPC may not exist)
+          const prod = fcProductos.find((p) => p.id === it.producto_id);
+          if (prod !== undefined) {
+            await (supabase as any).from("productos").update({ stock: (prod.stock || 0) + it.cantidad }).eq("id", it.producto_id);
+          }
+        }
+      }
 
       // Upload PDF if provided
       if (fcFile && fcData?.id) {
@@ -1516,7 +1575,7 @@ export default function FinanzasPage() {
                     <div>
                       <span className="font-medium">{row.proveedor_nombre}</span>
                       {row.oc_numero && <p className="text-xs text-zinc-400">OC: {row.oc_numero}</p>}
-                      {(row as any).solo_iva && <Badge variant="purple">Solo IVA</Badge>}
+                      {row.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : <Badge variant="info">Mercadería</Badge>}
                     </div>
                   )},
                   { key: "subtotal", label: "Subtotal", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.subtotal, row.moneda)}</span> },
@@ -2694,6 +2753,22 @@ export default function FinanzasPage() {
             </div>
             {fcError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{fcError}</div>}
             <div className="space-y-4">
+              {/* Tipo de factura selector */}
+              <div className="grid grid-cols-2 gap-3">
+                <button type="button" onClick={() => setFcForm({ ...fcForm, tipo_fc: "mercaderia", solo_iva: false })}
+                  className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-colors ${fcForm.tipo_fc === "mercaderia" ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
+                  <ShoppingCart className={`h-5 w-5 ${fcForm.tipo_fc === "mercaderia" ? "text-orange-500" : "text-zinc-400"}`} />
+                  <span className={`text-sm font-semibold ${fcForm.tipo_fc === "mercaderia" ? "text-orange-700 dark:text-orange-300" : "text-zinc-600 dark:text-zinc-300"}`}>Compra de mercadería</span>
+                  <span className="text-xs text-zinc-400 text-center">Entra al stock</span>
+                </button>
+                <button type="button" onClick={() => setFcForm({ ...fcForm, tipo_fc: "solo_iva", solo_iva: true })}
+                  className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-colors ${fcForm.tipo_fc === "solo_iva" ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
+                  <FileText className={`h-5 w-5 ${fcForm.tipo_fc === "solo_iva" ? "text-blue-500" : "text-zinc-400"}`} />
+                  <span className={`text-sm font-semibold ${fcForm.tipo_fc === "solo_iva" ? "text-blue-700 dark:text-blue-300" : "text-zinc-600 dark:text-zinc-300"}`}>Solo IVA / contable</span>
+                  <span className="text-xs text-zinc-400 text-center">Solo libro IVA, sin stock</span>
+                </button>
+              </div>
+
               {/* Proveedor selector with search */}
               <div>
                 <label className="text-xs font-medium text-zinc-500">Proveedor *</label>
@@ -2871,18 +2946,71 @@ export default function FinanzasPage() {
                 </div>
               )}
 
-              {/* Solo IVA toggle */}
-              <label className="flex items-center gap-3 rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
-                <input type="checkbox" checked={fcForm.solo_iva} onChange={(e) => setFcForm({ ...fcForm, solo_iva: e.target.checked, orden_compra_id: e.target.checked ? "" : fcForm.orden_compra_id })}
-                  className="rounded border-zinc-300 text-orange-500 focus:ring-orange-500" />
+              {/* Items de mercadería */}
+              {fcForm.tipo_fc === "mercaderia" && (
                 <div>
-                  <span className="text-sm font-medium dark:text-white">Solo IVA (crédito fiscal)</span>
-                  <p className="text-xs text-zinc-400">Factura que solo afecta libro IVA, sin vincular a OC ni compras</p>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-medium text-zinc-500">Items recibidos (para stock)</label>
+                    <button type="button"
+                      onClick={() => setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: "", codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, unidad: "UN" }])}
+                      className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium">
+                      <Plus className="h-3.5 w-3.5" /> Agregar item
+                    </button>
+                  </div>
+                  {/* Buscador de producto */}
+                  <div className="relative mb-2">
+                    <div className="flex items-center border border-dashed border-zinc-300 rounded-lg dark:border-zinc-600 overflow-hidden">
+                      <Search className="h-4 w-4 text-zinc-400 ml-3 flex-shrink-0" />
+                      <input value={fcProdSearch} onChange={(e) => setFcProdSearch(e.target.value)}
+                        onFocus={() => setFcProdFocused(true)} onBlur={() => setTimeout(() => setFcProdFocused(false), 150)}
+                        placeholder="Buscar producto del catálogo para agregar..."
+                        className="w-full px-2 py-2 text-xs bg-transparent dark:text-white outline-none" />
+                    </div>
+                    {(fcProdFocused || fcProdSearch.trim()) && (() => {
+                      const matches = fcProductos.filter((p) => (p.nombre + p.codigo).toLowerCase().includes(fcProdSearch.toLowerCase())).slice(0, 6);
+                      return matches.length > 0 ? (
+                        <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                          {matches.map((p) => (
+                            <button key={p.id} type="button" onClick={() => {
+                              setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: p.id, codigo: p.codigo, descripcion: p.nombre, cantidad: 1, precio_unitario: Number(p.precio_costo), unidad: p.unidad || "UN" }]);
+                              setFcProdSearch("");
+                            }} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex items-center justify-between">
+                              <span><span className="font-mono text-zinc-400 mr-2">{p.codigo}</span>{p.nombre}</span>
+                              <span className="text-zinc-400">Stock: {p.stock}</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null;
+                    })()}
+                  </div>
+                  {fcItems.length > 0 ? (
+                    <div className="space-y-2">
+                      {fcItems.map((it, idx) => (
+                        <div key={it.tempId} className="grid grid-cols-12 gap-1.5 items-center rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-2">
+                          <input value={it.descripcion} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], descripcion: e.target.value }; setFcItems(n); }}
+                            placeholder="Descripción *" className="col-span-5 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                          <input type="number" value={it.cantidad || ""} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], cantidad: Number(e.target.value) }; setFcItems(n); }}
+                            placeholder="Cant." className="col-span-2 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                          <input type="number" value={it.precio_unitario || ""} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], precio_unitario: Number(e.target.value) }; setFcItems(n); }}
+                            placeholder="$ unit." className="col-span-3 rounded border border-zinc-200 px-2 py-1 text-xs font-mono dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                          <span className="col-span-1 text-xs text-zinc-400 text-center">{it.unidad}</span>
+                          <button type="button" onClick={() => setFcItems(fcItems.filter((_, i) => i !== idx))} className="col-span-1 text-zinc-400 hover:text-red-500 flex justify-center"><X className="h-3.5 w-3.5" /></button>
+                        </div>
+                      ))}
+                      <div className="text-right text-xs text-zinc-400 pr-1">
+                        {fcItems.length} item{fcItems.length !== 1 ? "s" : ""} — Total merch: {formatCurrency(fcItems.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0), fcForm.moneda)}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-zinc-400 text-center py-3 border border-dashed border-zinc-200 dark:border-zinc-700 rounded-lg">
+                      Opcional — agregá los artículos recibidos para actualizar el stock
+                    </p>
+                  )}
                 </div>
-              </label>
+              )}
 
               {/* OC opcional */}
-              {!fcForm.solo_iva && (
+              {fcForm.tipo_fc === "mercaderia" && (
               <div>
                 <label className="text-xs font-medium text-zinc-500">Orden de compra (opcional)</label>
                 <select value={fcForm.orden_compra_id} onChange={(e) => setFcForm({ ...fcForm, orden_compra_id: e.target.value })}

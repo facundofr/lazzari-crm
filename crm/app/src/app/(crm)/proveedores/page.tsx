@@ -174,6 +174,9 @@ export default function ProveedoresPage() {
   const [aiError, setAiError] = useState("");
   const [aiSaving, setAiSaving] = useState(false);
   const [aiProveedorId, setAiProveedorId] = useState("");
+  const [aiNewProvOpen, setAiNewProvOpen] = useState(false);
+  const [aiNewProvForm, setAiNewProvForm] = useState({ razon_social: "", cuit: "", rubro: "" });
+  const [aiNewProvSaving, setAiNewProvSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
   const [cuitLoading, setCuitLoading] = useState(false);
@@ -414,6 +417,30 @@ export default function ProveedoresPage() {
       setAiError("Error de conexion. Intenta de nuevo.");
     } finally {
       setAiParsing(false);
+    }
+  }
+
+  async function handleAiCreateNewProv() {
+    if (!aiNewProvForm.razon_social.trim()) return;
+    setAiNewProvSaving(true);
+    try {
+      const insertData: Record<string, unknown> = {
+        razon_social: aiNewProvForm.razon_social.trim(),
+        rubro: aiNewProvForm.rubro.trim() || "General",
+        activo: true,
+      };
+      if (aiNewProvForm.cuit.trim()) insertData.cuit = aiNewProvForm.cuit.trim();
+      if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
+      const { data, error } = await supabase.from("proveedores").insert(insertData as any).select("id").single();
+      if (error) throw error;
+      await fetchData();
+      setAiProveedorId(data.id);
+      setAiNewProvOpen(false);
+      setAiNewProvForm({ razon_social: "", cuit: "", rubro: "" });
+    } catch (err) {
+      alert("Error creando proveedor: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setAiNewProvSaving(false);
     }
   }
 
@@ -966,14 +993,43 @@ export default function ProveedoresPage() {
               </label>
               <select
                 value={aiProveedorId}
-                onChange={(e) => setAiProveedorId(e.target.value)}
+                onChange={(e) => {
+                  if (e.target.value === "__nuevo__") { setAiNewProvOpen(true); setAiNewProvForm({ razon_social: aiResult?.proveedor || "", cuit: "", rubro: "" }); }
+                  else setAiProveedorId(e.target.value);
+                }}
                 className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
               >
                 <option value="">Seleccionar proveedor...</option>
                 {proveedores.map((p) => (
                   <option key={p.id} value={p.id}>{p.razonSocial}</option>
                 ))}
+                <option value="__nuevo__">＋ Crear nuevo proveedor...</option>
               </select>
+              {aiProveedorId && aiProveedorId !== "__nuevo__" && (
+                <p className="text-xs text-emerald-600 mt-1">✓ {proveedores.find(p => p.id === aiProveedorId)?.razonSocial}</p>
+              )}
+              {/* Mini form para crear proveedor nuevo */}
+              {aiNewProvOpen && (
+                <div className="mt-3 rounded-xl border border-dashed border-orange-300 bg-orange-50 dark:bg-orange-950/20 dark:border-orange-800 p-4 space-y-3">
+                  <p className="text-xs font-semibold text-orange-700 dark:text-orange-300">Nuevo proveedor</p>
+                  <input value={aiNewProvForm.razon_social} onChange={(e) => setAiNewProvForm({ ...aiNewProvForm, razon_social: e.target.value })}
+                    placeholder="Razón social *" className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input value={aiNewProvForm.cuit} onChange={(e) => setAiNewProvForm({ ...aiNewProvForm, cuit: e.target.value })}
+                      placeholder="CUIT (opcional)" className="rounded-lg border border-zinc-300 px-3 py-2 text-sm font-mono dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                    <input value={aiNewProvForm.rubro} onChange={(e) => setAiNewProvForm({ ...aiNewProvForm, rubro: e.target.value })}
+                      placeholder="Rubro (opcional)" className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => setAiNewProvOpen(false)} className="flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-700">Cancelar</button>
+                    <button onClick={handleAiCreateNewProv} disabled={aiNewProvSaving || !aiNewProvForm.razon_social.trim()}
+                      className="flex-1 flex items-center justify-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                      {aiNewProvSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Crear proveedor
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Metadata */}
