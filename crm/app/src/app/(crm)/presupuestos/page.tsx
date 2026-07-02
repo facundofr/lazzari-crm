@@ -301,6 +301,25 @@ export default function PresupuestosPage() {
     });
   }
 
+  const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string } | null>(null);
+  const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
+
+  async function fetchCotizBna() {
+    setCotizBnaLoading(true);
+    try {
+      const res = await fetch("/api/cotizacion-bna");
+      if (res.ok) {
+        const data = await res.json();
+        setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente });
+        if (!newPR.tipo_cambio) {
+          setNewPR((p) => ({ ...p, tipo_cambio: data.valor_venta }));
+        }
+      }
+    } catch { /* silencioso */ } finally {
+      setCotizBnaLoading(false);
+    }
+  }
+
   const [clientes, setClientes] = useState<{id: string; razon_social: string}[]>([]);
   const [newPR, setNewPR] = useState({
     cliente_id: "",
@@ -2650,21 +2669,38 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             })}
             options={[{ value: "ARS", label: "ARS — Pesos" }, { value: "USD", label: "USD — Dolares" }]}
           />
-          <Input
-            label="Tipo de cambio"
-            type="number"
-            step="0.01"
-            value={newPR.tipo_cambio || ""}
-            onChange={(e) => setNewPR((p) => {
-              const tc = Number(e.target.value);
-              const items = p.items.map(it => {
-                const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc);
-                return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
-              });
-              return { ...p, tipo_cambio: tc, items };
-            })}
-            placeholder="Solo si costo esta en otra moneda"
-          />
+          <div>
+            <Input
+              label="Tipo de cambio"
+              type="number"
+              step="0.01"
+              value={newPR.tipo_cambio || ""}
+              onChange={(e) => setNewPR((p) => {
+                const tc = Number(e.target.value);
+                const items = p.items.map(it => {
+                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc);
+                  return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+                });
+                return { ...p, tipo_cambio: tc, items };
+              })}
+              placeholder="Solo si costo esta en otra moneda"
+            />
+            <div className="mt-1 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={fetchCotizBna}
+                disabled={cotizBnaLoading}
+                className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+              >
+                {cotizBnaLoading ? "Consultando BNA…" : "Traer cotización BNA"}
+              </button>
+              {cotizBna && (
+                <span className="text-xs text-zinc-400">
+                  Venta: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha} · {cotizBna.fuente})
+                </span>
+              )}
+            </div>
+          </div>
           <Input
             label="Markup general %"
             type="number"
