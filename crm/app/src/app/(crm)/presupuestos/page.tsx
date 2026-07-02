@@ -162,6 +162,7 @@ interface ProductSuggestion {
   id: string;
   codigo: string;
   descripcion: string;
+  variante?: string;
   categoria: string;
   unidad: string;
   precio_neto: number;
@@ -169,7 +170,30 @@ interface ProductSuggestion {
   proveedor_nombre: string;
   proveedor_id: string;
   lista_nombre: string;
+  lista_id: string;
   moneda: string;
+}
+
+interface PriceTier {
+  lista_item_id: string;
+  variante: string;
+  min: number;
+  max: number;
+  precio_neto: number;
+  moneda: string;
+}
+
+/** Parsea variantes tipo "1-9 un", "10-49", "50+", "hasta 20" → rango */
+function parseQuantityRange(variante?: string | null): { min: number; max: number } | null {
+  if (!variante) return null;
+  const s = variante.trim();
+  const rangeMatch = s.match(/^(\d+)\s*[-–a]\s*(\d+)/);
+  if (rangeMatch) return { min: parseInt(rangeMatch[1]), max: parseInt(rangeMatch[2]) };
+  const plusMatch = s.match(/^(\d+)\s*\+/);
+  if (plusMatch) return { min: parseInt(plusMatch[1]), max: Infinity };
+  const hastaMatch = s.match(/hasta\s+(\d+)/i);
+  if (hastaMatch) return { min: 1, max: parseInt(hastaMatch[1]) };
+  return null;
 }
 
 function calcItemTotals(item: NewPRItem) {
@@ -373,6 +397,8 @@ export default function PresupuestosPage() {
   const [productSearchLoading, setProductSearchLoading] = useState(false);
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const productSearchInputRef = useRef<HTMLInputElement>(null);
+  // Precios escalonados por cantidad: índice de item → tiers disponibles
+  const [priceTiersMap, setPriceTiersMap] = useState<Record<number, PriceTier[]>>({});
 
   function openProductSearch(idx: number) {
     setProductSearchIdx(idx);
@@ -389,7 +415,7 @@ export default function PresupuestosPage() {
       const { data, error } = await supabase
         .from("lista_precios_items")
         .select(`
-          id, codigo, descripcion, categoria, unidad, precio, precio_neto,
+          id, codigo, descripcion, variante, categoria, unidad, precio, precio_neto, lista_id,
           listas_precios:lista_id(nombre, moneda, proveedor_id, proveedores:proveedor_id(razon_social))
         `)
         .or(`codigo.ilike.%${query}%,descripcion.ilike.%${query}%`)
@@ -403,6 +429,7 @@ export default function PresupuestosPage() {
           id: d.id,
           codigo: d.codigo ?? "",
           descripcion: d.descripcion ?? "",
+          variante: d.variante ?? undefined,
           categoria: d.categoria ?? "",
           unidad: d.unidad ?? "UN",
           precio_neto: d.precio_neto ?? d.precio ?? 0,
@@ -410,6 +437,7 @@ export default function PresupuestosPage() {
           proveedor_nombre: d.listas_precios?.proveedores?.razon_social ?? "—",
           proveedor_id: d.listas_precios?.proveedor_id ?? "",
           lista_nombre: d.listas_precios?.nombre ?? "",
+          lista_id: d.lista_id ?? "",
           moneda: d.listas_precios?.moneda ?? "ARS",
         }));
       setProductSearchResults(mapped);
@@ -426,10 +454,10 @@ export default function PresupuestosPage() {
     searchTimeoutRef.current = setTimeout(() => doProductSearch(value), 300);
   }
 
-  function handleProductSelect(suggestion: ProductSuggestion) {
+  async function handleProductSelect(suggestion: ProductSuggestion) {
+    const idx = productSearchIdx;
     setNewPR((prev) => {
       const items = [...prev.items];
-      const idx = productSearchIdx;
       const markup = items[idx].markup_porcentaje || prev.markup_general;
       const costoMoneda = (suggestion.moneda || "USD") as "ARS" | "USD";
       const costoConv = convertCosto(suggestion.precio_neto, costoMoneda, prev.moneda, prev.tipo_cambio);
@@ -451,6 +479,31 @@ export default function PresupuestosPage() {
       return { ...prev, items };
     });
     setProductSearchOpen(false);
+
+    // Buscar escalones de precio (misma lista, mismo código, distintas variantes con rangos)
+    if (suggestion.lista_id && suggestion.codigo) {
+      try {
+        const { data: siblings } = await supabase
+          .from("lista_precios_items")
+          .select("id, variante, precio_neto, precio")
+          .eq("lista_id" as any, suggestion.lista_id)
+          .eq("codigo", suggestion.codigo);
+
+        if (siblings && siblings.length > 1) {
+          const tiers: PriceTier[] = (siblings as any[])
+            .map((s) => {
+              const range = parseQuantityRange(s.variante);
+              if (!range) return null;
+              return { lista_item_id: s.id, variante: s.variante || "", min: range.min, max: range.max, precio_neto: s.precio_neto ?? s.precio ?? 0, moneda: suggestion.moneda };
+            })
+            .filter(Boolean)
+            .sort((a, b) => a!.min - b!.min) as PriceTier[];
+          if (tiers.length > 1) {
+            setPriceTiersMap((prev) => ({ ...prev, [idx]: tiers }));
+          }
+        }
+      } catch { /* ignore */ }
+    }
   }
 
   async function handleAIGenerate() {
@@ -690,6 +743,24 @@ export default function PresupuestosPage() {
     setNewPR((prev) => {
       const items = [...prev.items];
       const item = { ...items[index], [field]: value };
+
+      // Auto-switch precio por escalon cuando cambia la cantidad
+      if (field === "cantidad") {
+        const tiers = priceTiersMap[index];
+        if (tiers && tiers.length > 0) {
+          const qty = Number(value);
+          const matchingTier = tiers.find((t) => qty >= t.min && qty <= t.max);
+          if (matchingTier && matchingTier.precio_neto !== item.precio_costo) {
+            item.precio_costo = matchingTier.precio_neto;
+            item.lista_item_id = matchingTier.lista_item_id;
+            const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio);
+            item.precio_venta = Number((costoConv * (1 + item.markup_porcentaje / 100)).toFixed(2));
+            // Notificar el cambio de escalon (via setTimeout para salir del setState)
+            setTimeout(() => toast.success(`Precio actualizado: ${matchingTier.variante}`), 0);
+          }
+        }
+      }
+
       // Auto-calc precio_venta when costo, markup, or costo_moneda change
       if (field === "precio_costo" || field === "markup_porcentaje" || field === "costo_moneda") {
         const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio);
@@ -2883,8 +2954,16 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                         </span>
                       </td>
                       <td className="px-2 py-1.5">
-                        <input type="number" value={item.cantidad} onChange={(e) => updateNewPRItem(idx, "cantidad", Number(e.target.value))}
-                          className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                        <div className="relative">
+                          <input type="number" value={item.cantidad} onChange={(e) => updateNewPRItem(idx, "cantidad", Number(e.target.value))}
+                            className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                          {priceTiersMap[idx] && priceTiersMap[idx].length > 0 && (
+                            <span title={`Precios escalonados:\n${priceTiersMap[idx].map(t => `${t.variante}: ${t.moneda === "USD" ? "US$" : "$"}${t.precio_neto}`).join("\n")}`}
+                              className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-blue-500 text-[8px] text-white font-bold cursor-help">
+                              ↗
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1">
@@ -3221,6 +3300,11 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                           <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/30 dark:text-blue-400">
                             {s.proveedor_nombre}
                           </span>
+                          {s.variante && (
+                            <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-950/30 dark:text-amber-400">
+                              {s.variante}
+                            </span>
+                          )}
                           {s.categoria && (
                             <span className="text-[10px] text-zinc-400">{s.categoria}</span>
                           )}
