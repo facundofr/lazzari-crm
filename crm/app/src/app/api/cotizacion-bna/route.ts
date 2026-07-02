@@ -1,40 +1,43 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
 /**
- * GET /api/cotizacion-bna
+ * GET /api/cotizacion-bna?modalidad=divisas|billetes
  * Devuelve la cotización oficial del dólar (BNA).
+ * modalidad=divisas (default) — Cotización Divisas (usada para operaciones de comercio exterior)
+ * modalidad=billetes — Cotización Billetes (dinero en efectivo)
+ *
  * Lógica:
  *   1. Busca el valor de hoy en cotizaciones_dolar (cache DB)
- *   2. Si no está, scrape BNA → luego intenta Bluelytics como backup
+ *   2. Si no está, scrape BNA → luego intenta Bluelytics como backup (solo divisas)
  *   3. Guarda en DB para futuros pedidos del día
  *   4. Si todo falla, retorna el valor más reciente guardado en DB
  */
 
 const TODAY = () => new Date().toISOString().split("T")[0];
 
-function parseBnaHtml(html: string): { compra: number; venta: number } | null {
-  // Extraer específicamente la sección id="divisas" (Cotización Divisas, no Billetes)
-  const divisasMatch = html.match(/id="divisas"[\s\S]*?(?=id="|$)/i);
-  const section = divisasMatch ? divisasMatch[0] : html;
+const parse = (s: string) => {
+  if (s.includes(",")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
+  return parseFloat(s);
+};
+
+function parseBnaHtml(html: string, modalidad: "divisas" | "billetes"): { compra: number; venta: number } | null {
+  // Extraer la sección correcta por id
+  const sectionMatch = html.match(new RegExp(`id="${modalidad}"[\\s\\S]*?(?=id="|$)`, "i"));
+  const section = sectionMatch ? sectionMatch[0] : html;
 
   const match = section.match(
     /Dolar\s+U\.S\.A[\s\S]*?<td[^>]*>([\d.,]+)<\/td>\s*<td[^>]*>([\d.,]+)<\/td>/i
   );
   if (!match) return null;
 
-  // Divisas usa punto como decimal (1488.0000); Billetes usa coma (1510,00)
-  const parse = (s: string) => {
-    if (s.includes(",")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
-    return parseFloat(s);
-  };
   const compra = parse(match[1]);
   const venta = parse(match[2]);
   if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
   return { compra, venta };
 }
 
-async function scrapeBna(): Promise<{ compra: number; venta: number; fuente: string } | null> {
+async function scrapeBna(modalidad: "divisas" | "billetes"): Promise<{ compra: number; venta: number; fuente: string } | null> {
   try {
     const res = await fetch("https://www.bna.com.ar/Personas", {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; LazzariCRM/1.0)" },
@@ -42,7 +45,7 @@ async function scrapeBna(): Promise<{ compra: number; venta: number; fuente: str
     });
     if (!res.ok) return null;
     const html = await res.text();
-    const parsed = parseBnaHtml(html);
+    const parsed = parseBnaHtml(html, modalidad);
     if (!parsed) return null;
     return { ...parsed, fuente: "BNA" };
   } catch {
@@ -66,7 +69,11 @@ async function fetchBluelytics(): Promise<{ compra: number; venta: number; fuent
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const modalidad = (req.nextUrl.searchParams.get("modalidad") || "divisas") as "divisas" | "billetes";
+  // tipo en DB: "oficial_divisas" o "oficial_billetes"
+  const tipoDb = modalidad === "billetes" ? "oficial_billetes" : "oficial_divisas";
+
   const supabase = await createSupabaseServer();
   const today = TODAY();
 
@@ -74,7 +81,7 @@ export async function GET() {
   const { data: cached } = await (supabase as any)
     .from("cotizaciones_dolar")
     .select("fecha, tipo, valor_compra, valor_venta, fuente, es_manual")
-    .eq("tipo", "oficial")
+    .eq("tipo", tipoDb)
     .eq("fecha", today)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -83,7 +90,8 @@ export async function GET() {
   if (cached) {
     return NextResponse.json({
       fecha: cached.fecha,
-      tipo: "oficial",
+      modalidad,
+      tipo: tipoDb,
       valor_compra: Number(cached.valor_compra),
       valor_venta: Number(cached.valor_venta),
       fuente: cached.fuente,
@@ -92,17 +100,22 @@ export async function GET() {
     });
   }
 
-  // 2. Intentar scrape BNA → fallback Bluelytics
-  const scraped = (await scrapeBna()) ?? (await fetchBluelytics());
+  // 2. Scrape BNA
+  let scraped = await scrapeBna(modalidad);
+
+  // Fallback Bluelytics solo para divisas (no tiene datos de billetes)
+  if (!scraped && modalidad === "divisas") {
+    scraped = await fetchBluelytics();
+  }
 
   if (scraped) {
-    // 3. Guardar en DB (best-effort)
+    // 3. Guardar en DB (best-effort, upsert por fecha+tipo)
     await (supabase as any)
       .from("cotizaciones_dolar")
       .upsert(
         {
           fecha: today,
-          tipo: "oficial",
+          tipo: tipoDb,
           valor_compra: scraped.compra,
           valor_venta: scraped.venta,
           fuente: scraped.fuente,
@@ -113,7 +126,8 @@ export async function GET() {
 
     return NextResponse.json({
       fecha: today,
-      tipo: "oficial",
+      modalidad,
+      tipo: tipoDb,
       valor_compra: scraped.compra,
       valor_venta: scraped.venta,
       fuente: scraped.fuente,
@@ -122,11 +136,11 @@ export async function GET() {
     });
   }
 
-  // 4. Fallback: último valor guardado en DB (cualquier día)
+  // 4. Fallback: último valor guardado en DB para este tipo
   const { data: ultimo } = await (supabase as any)
     .from("cotizaciones_dolar")
     .select("fecha, tipo, valor_compra, valor_venta, fuente, es_manual")
-    .eq("tipo", "oficial")
+    .eq("tipo", tipoDb)
     .order("fecha", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -134,7 +148,8 @@ export async function GET() {
   if (ultimo) {
     return NextResponse.json({
       fecha: ultimo.fecha,
-      tipo: "oficial",
+      modalidad,
+      tipo: tipoDb,
       valor_compra: Number(ultimo.valor_compra),
       valor_venta: Number(ultimo.valor_venta),
       fuente: ultimo.fuente,

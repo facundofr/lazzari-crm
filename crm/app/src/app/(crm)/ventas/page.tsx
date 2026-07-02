@@ -145,17 +145,17 @@ export default function VentasPage() {
   const [emitError, setEmitError] = useState("");
   const [emitSuccess, setEmitSuccess] = useState("");
   const [emitManual, setEmitManual] = useState(false);
-  const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string } | null>(null);
+  const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
 
-  async function fetchCotizBna(autoFill = true) {
+  async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas") {
     setCotizBnaLoading(true);
     try {
-      const res = await fetch("/api/cotizacion-bna");
+      const res = await fetch(`/api/cotizacion-bna?modalidad=${modalidad}`);
       if (res.ok) {
         const data = await res.json();
-        setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente });
-        if (autoFill && !emitTipoCambio) setEmitTipoCambio(data.valor_venta);
+        setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
+        setEmitTipoCambio(data.valor_venta);
       }
     } catch { /* silencioso */ } finally {
       setCotizBnaLoading(false);
@@ -1089,18 +1089,17 @@ export default function VentasPage() {
                           placeholder="Ej: 1450.00"
                           className="w-32 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-900 px-2 py-1 text-sm font-mono dark:text-white"
                         />
-                        <button
-                          type="button"
-                          onClick={() => fetchCotizBna(true)}
-                          disabled={cotizBnaLoading}
-                          className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap"
-                        >
-                          {cotizBnaLoading ? "Consultando…" : "Traer BNA"}
+                        <button type="button" onClick={() => fetchCotizBna("divisas")} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap">
+                          {cotizBnaLoading ? "…" : "Divisas"}
+                        </button>
+                        <span className="text-xs text-zinc-400">·</span>
+                        <button type="button" onClick={() => fetchCotizBna("billetes")} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap">
+                          {cotizBnaLoading ? "…" : "Billetes"}
                         </button>
                       </div>
                     </div>
                     {cotizBna && (
-                      <p className="text-xs text-zinc-500 mt-1">BNA Divisas Venta: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha} · {cotizBna.fuente})</p>
+                      <p className="text-xs text-zinc-500 mt-1">BNA {cotizBna.modalidad} venta: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})</p>
                     )}
                     <p className="text-xs text-amber-500 mt-1">ARCA requiere la cotizacion oficial para facturas en USD. Los montos van en dolares.</p>
                   </div>

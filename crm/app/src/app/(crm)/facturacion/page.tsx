@@ -104,19 +104,17 @@ export default function FacturacionPage() {
   const [emitError, setEmitError] = useState("");
   const [clientes, setClientes] = useState<ClienteOption[]>([]);
   const [emitManual, setEmitManual] = useState(false);
-  const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string } | null>(null);
+  const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
 
-  async function fetchCotizBna() {
+  async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas") {
     setCotizBnaLoading(true);
     try {
-      const res = await fetch("/api/cotizacion-bna");
+      const res = await fetch(`/api/cotizacion-bna?modalidad=${modalidad}`);
       if (res.ok) {
         const data = await res.json();
-        setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente });
-        if (!emitData.tipo_cambio) {
-          setEmitData((p) => ({ ...p, tipo_cambio: data.valor_venta }));
-        }
+        setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
+        setEmitData((p) => ({ ...p, tipo_cambio: data.valor_venta }));
       }
     } catch { /* silencioso */ } finally {
       setCotizBnaLoading(false);
@@ -1034,11 +1032,16 @@ ${f.cae ? `
                     <div className="col-span-8">
                       <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cotizacion USD/ARS *</label>
                       <input type="number" step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) }))} placeholder="Ej: 1450.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
-                      <div className="mt-1 flex items-center gap-2">
-                        <button type="button" onClick={fetchCotizBna} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
-                          {cotizBnaLoading ? "Consultando BNA…" : "Traer cotización BNA"}
+                      <div className="mt-1 flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-zinc-400">BNA:</span>
+                        <button type="button" onClick={() => fetchCotizBna("divisas")} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
+                          {cotizBnaLoading ? "…" : "Divisas"}
                         </button>
-                        {cotizBna && <span className="text-xs text-zinc-400">Venta: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha} · {cotizBna.fuente})</span>}
+                        <span className="text-xs text-zinc-300">·</span>
+                        <button type="button" onClick={() => fetchCotizBna("billetes")} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
+                          {cotizBnaLoading ? "…" : "Billetes"}
+                        </button>
+                        {cotizBna && <span className="text-xs text-zinc-400">→ Venta {cotizBna.modalidad}: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})</span>}
                       </div>
                     </div>
                   )}
