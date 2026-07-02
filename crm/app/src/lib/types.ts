@@ -410,6 +410,7 @@ export interface ListaPreciosItem {
   id: string;
   codigo: string;
   descripcion: string;
+  variante?: string;
   categoria: string;
   unidad: string;
   precio: number;

@@ -91,6 +91,7 @@ function mapSupabaseLista(row: Record<string, unknown>): ListaPrecios {
     estado: row.estado as ListaPrecios["estado"],
     items: items.map((item: Record<string, unknown>) => ({
       id: item.id as string, codigo: item.codigo as string, descripcion: item.descripcion as string,
+      variante: (item.variante as string) || undefined,
       categoria: item.categoria as string, unidad: item.unidad as string, precio: Number(item.precio),
       descuento: Number(item.descuento) || 0, precioNeto: Number(item.precio_neto),
     })),
@@ -162,6 +163,7 @@ export default function ProveedoresPage() {
     items: Array<{
       codigo: string;
       descripcion: string;
+      variante?: string;
       categoria: string;
       unidad: string;
       precio: number;
@@ -446,6 +448,7 @@ export default function ProveedoresPage() {
           lista_id: lista.id,
           codigo: item.codigo,
           descripcion: item.descripcion,
+          variante: item.variante || null,
           categoria: item.categoria,
           unidad: item.unidad,
           precio: item.precio,
@@ -453,7 +456,7 @@ export default function ProveedoresPage() {
           precio_neto: item.precio_neto,
         }));
 
-        const { error: itemsError } = await supabase
+        const { error: itemsError } = await (supabase as any)
           .from("lista_precios_items")
           .insert(items);
 
@@ -689,6 +692,7 @@ export default function ProveedoresPage() {
                           columns={[
                             { key: "codigo", label: "Codigo", render: (row) => <span className="font-mono text-xs font-bold">{row.codigo}</span> },
                             { key: "descripcion", label: "Articulo", render: (row) => <span className="font-medium">{row.descripcion}</span> },
+                            { key: "variante", label: "Variante", render: (row) => <span className="text-zinc-500 text-xs">{row.variante || "—"}</span> },
                             { key: "categoria", label: "Categoria", render: (row) => <Badge variant="outline">{row.categoria}</Badge> },
                             { key: "unidad", label: "Un.", render: (row) => <span className="text-zinc-400">{row.unidad}</span> },
                             { key: "precio", label: "P. Lista", className: "text-right", render: (row) => <span className="font-mono block text-right text-zinc-400 line-through">{lista.moneda === "USD" ? `USD ${row.precio.toFixed(2)}` : formatCurrency(row.precio)}</span> },
@@ -1005,6 +1009,7 @@ export default function ProveedoresPage() {
                   <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-zinc-500">Codigo</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-zinc-500">Descripcion</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-zinc-500 hidden md:table-cell">Variante</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-zinc-500 hidden sm:table-cell">Categoria</th>
                     <th className="px-3 py-2 text-left text-xs font-semibold uppercase text-zinc-500">Un.</th>
                     <th className="px-3 py-2 text-right text-xs font-semibold uppercase text-zinc-500">Precio</th>
@@ -1018,6 +1023,7 @@ export default function ProveedoresPage() {
                     <tr key={i} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                       <td className="px-3 py-2 font-mono text-xs font-bold">{item.codigo || "—"}</td>
                       <td className="px-3 py-2 max-w-[200px] truncate">{item.descripcion}</td>
+                      <td className="px-3 py-2 text-zinc-500 hidden md:table-cell">{item.variante || "—"}</td>
                       <td className="px-3 py-2 text-zinc-500 hidden sm:table-cell">{item.categoria}</td>
                       <td className="px-3 py-2 text-zinc-400">{item.unidad}</td>
                       <td className="px-3 py-2 text-right font-mono">{item.precio.toFixed(2)}</td>
