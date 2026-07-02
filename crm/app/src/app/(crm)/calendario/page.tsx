@@ -117,6 +117,7 @@ export default function CalendarioPage() {
     cliente_id: "",
     descripcion: "",
     color: "#3B82F6",
+    asignado_a: "", // user_id del responsable
   });
 
   // Filters
@@ -281,6 +282,7 @@ export default function CalendarioPage() {
       cliente_id: "",
       descripcion: "",
       color: "#3B82F6",
+      asignado_a: profile?.id || "",
     });
     let cq = supabase
       .from("clientes")
@@ -306,7 +308,7 @@ export default function CalendarioPage() {
         cliente_id: createForm.cliente_id || null,
         descripcion: createForm.descripcion || null,
         color: createForm.color,
-        user_id: profile?.id || null,
+        user_id: createForm.asignado_a || profile?.id || null,
         sociedad_id: sociedadActiva?.id || null,
         completado: false,
       });
@@ -350,6 +352,22 @@ export default function CalendarioPage() {
 
   // ── Today key ────────────────────────────────────────────────
   const todayKey = toDateKey(today);
+
+  // ── Upcoming + overdue events (next 14 days) ─────────────────
+  const upcomingAndOverdue = useMemo(() => {
+    const todayStart = new Date(todayKey + "T00:00:00");
+    const in14Days = new Date(todayStart.getTime() + 14 * 86400000);
+    return filteredEventos
+      .filter((e) => !e.completado)
+      .map((e) => {
+        const d = parseLocalDate(e.fecha_inicio);
+        const isOverdue = d < todayStart;
+        const isUpcoming = d >= todayStart && d <= in14Days;
+        return { ...e, isOverdue, isUpcoming, fechaDate: d };
+      })
+      .filter((e) => e.isOverdue || e.isUpcoming)
+      .sort((a, b) => a.fechaDate.getTime() - b.fechaDate.getTime());
+  }, [filteredEventos, todayKey]);
 
   // ── Events for selected date ─────────────────────────────────
   const selectedDateEvents = selectedDate ? (eventsByDate[selectedDate] || []) : [];
@@ -523,6 +541,56 @@ export default function CalendarioPage() {
             })}
           </div>
         </Card>
+
+        {/* ── Upcoming & Overdue ──────────────────────────────────── */}
+        {upcomingAndOverdue.length > 0 && (
+          <Card className="p-4 sm:p-6">
+            <h3 className="text-base font-semibold text-zinc-900 dark:text-white mb-3 flex items-center gap-2">
+              <CalendarIcon className="h-4 w-4 text-orange-500" />
+              Próximos 14 días y vencidos
+              <span className="ml-1 rounded-full bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-xs text-zinc-500">{upcomingAndOverdue.length}</span>
+            </h3>
+            <div className="space-y-1.5">
+              {upcomingAndOverdue.map((ev) => {
+                const cfg = tipoConfig[ev.tipo] || tipoConfig.otro;
+                const dateLabel = ev.isOverdue
+                  ? `Vencido — ${formatDate(ev.fecha_inicio)}`
+                  : formatDate(ev.fecha_inicio);
+                return (
+                  <div
+                    key={ev.id}
+                    onClick={() => setDetailEvento(ev)}
+                    className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50 ${
+                      ev.isOverdue
+                        ? "border-red-200 dark:border-red-900/40 bg-red-50/50 dark:bg-red-950/10"
+                        : "border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                    }`}
+                  >
+                    <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: ev.color }} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium dark:text-white truncate">{ev.titulo}</p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                        <span className={`text-xs ${ev.isOverdue ? "text-red-500 font-medium" : "text-zinc-400"}`}>{dateLabel}</span>
+                        {ev.clientes?.razon_social && <span className="text-xs text-zinc-400 truncate">· {ev.clientes.razon_social}</span>}
+                      </div>
+                    </div>
+                    {ev.profiles && (
+                      <span className="text-xs text-zinc-400 shrink-0" title="Responsable">{ev.profiles.full_name?.split(" ")[0] || "—"}</span>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleCompletado(ev.id, ev.completado); }}
+                      className="rounded p-1.5 text-zinc-400 hover:bg-emerald-100 hover:text-emerald-600 dark:hover:bg-emerald-900/30 transition-colors"
+                      title="Marcar completado"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        )}
 
         {/* ── Selected Date Events List ───────────────────────────── */}
         {selectedDate && (
@@ -792,18 +860,33 @@ export default function CalendarioPage() {
                   Todo el dia
                 </label>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente</label>
-                <select
-                  value={createForm.cliente_id}
-                  onChange={(e) => setCreateForm({ ...createForm, cliente_id: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                >
-                  <option value="">Seleccionar cliente...</option>
-                  {clientes.map((c) => (
-                    <option key={c.id} value={c.id}>{c.razon_social}</option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente</label>
+                  <select
+                    value={createForm.cliente_id}
+                    onChange={(e) => setCreateForm({ ...createForm, cliente_id: e.target.value })}
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                  >
+                    <option value="">Sin cliente</option>
+                    {clientes.map((c) => (
+                      <option key={c.id} value={c.id}>{c.razon_social}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Responsable</label>
+                  <select
+                    value={createForm.asignado_a}
+                    onChange={(e) => setCreateForm({ ...createForm, asignado_a: e.target.value })}
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                  >
+                    <option value="">Sin asignar</option>
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id}>{u.full_name || u.id}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Descripcion</label>

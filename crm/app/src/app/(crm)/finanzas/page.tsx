@@ -1271,9 +1271,15 @@ export default function FinanzasPage() {
     ? ocOptions.filter(oc => oc.proveedor_id === fcForm.proveedor_id)
     : ocOptions;
 
-  // Filtered proveedores for search
+  // Filtered proveedores for search (by razon_social, nombre, or CUIT)
   const filteredProveedoresOP = proveedorSearch.trim()
-    ? proveedoresOptions.filter(p => p.razon_social.toLowerCase().includes(proveedorSearch.toLowerCase()))
+    ? proveedoresOptions.filter(p => {
+        const q = proveedorSearch.toLowerCase().replace(/[-\s]/g, "");
+        return (
+          p.razon_social.toLowerCase().includes(q) ||
+          (p.cuit || "").replace(/[-\s]/g, "").includes(q)
+        );
+      })
     : proveedoresOptions;
 
   const filteredProveedoresGM = gmProvSearch.trim()
@@ -2487,10 +2493,11 @@ export default function FinanzasPage() {
                   )}
                   {!opForm.proveedor_id && proveedorSearch.trim() && filteredProveedoresOP.length > 0 && (
                     <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
-                      {filteredProveedoresOP.slice(0, 8).map(p => (
+                      {filteredProveedoresOP.slice(0, 10).map(p => (
                         <button key={p.id} onClick={() => { setOpForm({ ...opForm, proveedor_id: p.id }); setProveedorSearch(p.razon_social); }}
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white">
-                          {p.razon_social}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex items-center justify-between gap-2">
+                          <span>{p.razon_social}</span>
+                          {p.cuit && <span className="text-xs text-zinc-400 font-mono shrink-0">{p.cuit}</span>}
                         </button>
                       ))}
                     </div>
