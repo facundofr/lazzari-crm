@@ -752,11 +752,8 @@ export default function PresupuestosPage() {
         unidad: it.unidad ?? "u",
         precio_costo: it.precio_costo ?? 0,
         markup_porcentaje: it.markup_porcentaje ?? 0,
-        // precio_venta es columna generada (GENERATED ALWAYS AS) — no se inserta
         iva_porcentaje: it.iva_porcentaje ?? 21,
-        subtotal: it.subtotal ?? 0,
-        iva: it.iva ?? 0,
-        total: it.total ?? 0,
+        // precio_venta, subtotal, iva, total son columnas generadas por DB — no se insertan
         orden: it.orden,
         proveedor_id: it.proveedor_id || null,
         lista_item_id: it.lista_item_id || null,
