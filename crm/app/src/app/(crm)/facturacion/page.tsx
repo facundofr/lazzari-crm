@@ -41,8 +41,12 @@ interface FacturaRow {
   estado: string;
   presupuesto_id: string | null;
   oc_cliente?: string | null;
+  factura_origen_id?: string | null;
+  total_acreditado?: number | null;
   clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string } | null;
 }
+
+type NcItem = { descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number };
 
 interface ClienteOption {
   id: string;
@@ -127,6 +131,150 @@ export default function FacturacionPage() {
     tipo_cambio: 0,
     items: [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] as EmitItem[],
   });
+
+  // ── NC (Nota de Crédito) modal ────────────────────────────────
+  const [ncOpen, setNcOpen] = useState(false);
+  const [ncFactura, setNcFactura] = useState<FacturaRow | null>(null);
+  const [ncItems, setNcItems] = useState<NcItem[]>([]);
+  const [ncManual, setNcManual] = useState(false);
+  const [ncNumero, setNcNumero] = useState("");
+  const [ncSaving, setNcSaving] = useState(false);
+  const [ncError, setNcError] = useState("");
+  const [ncStep, setNcStep] = useState<"form" | "saving" | "success" | "error">("form");
+  const [ncResult, setNcResult] = useState<string>("");
+  const [detailNCs, setDetailNCs] = useState<FacturaRow[]>([]);
+
+  const isFacturaANc = ncFactura?.tipo === "FA" || ncFactura?.tipo === "FCEA";
+
+  const ncTotals = ncItems.reduce((acc, it) => {
+    if (isFacturaANc) {
+      const neto = it.cantidad * it.precio_unitario;
+      const iva = neto * (it.iva_porcentaje / 100);
+      return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + neto + iva };
+    } else {
+      const total = it.cantidad * it.precio_unitario;
+      const neto = Math.round(total / 1.21 * 100) / 100;
+      const iva = Math.round((total - neto) * 100) / 100;
+      return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + total };
+    }
+  }, { neto: 0, iva: 0, total: 0 });
+
+  async function openNcModal(factura: FacturaRow) {
+    // Cargar items de la factura original
+    const { data: items } = await supabase
+      .from("factura_items")
+      .select("descripcion, cantidad, precio_unitario, iva_porcentaje")
+      .eq("factura_id", factura.id)
+      .order("orden");
+
+    setNcFactura(factura);
+    setNcItems(
+      items && items.length > 0
+        ? items.map(it => ({ descripcion: it.descripcion, cantidad: Number(it.cantidad), precio_unitario: Number(it.precio_unitario), iva_porcentaje: Number(it.iva_porcentaje) || 21 }))
+        : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]
+    );
+    setNcManual(arcaStatus?.certOk === false);
+    setNcNumero("");
+    setNcError("");
+    setNcStep("form");
+    setNcResult("");
+    setNcOpen(true);
+  }
+
+  async function handleCreateNC() {
+    if (!ncFactura) return;
+    if (ncItems.some(it => !it.descripcion || it.precio_unitario <= 0)) {
+      setNcError("Completa todos los items con descripción y precio"); return;
+    }
+    if (ncManual && (!ncNumero || Number(ncNumero) <= 0)) {
+      setNcError("Ingresá el número de comprobante"); return;
+    }
+
+    const ncTipo = ncFactura.tipo === "FA" || ncFactura.tipo === "FCEA" ? "NCA" : "NCB";
+    setNcStep("saving");
+    setNcError("");
+
+    try {
+      if (!ncManual) {
+        // Electrónica via ARCA
+        const { data: { session } } = await supabase.auth.getSession();
+        const res = await fetch("/api/facturacion", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+          },
+          body: JSON.stringify({
+            tipo: ncTipo,
+            cliente_id: ncFactura.cliente_id,
+            punto_venta: emisorData.ptoVta,
+            moneda: ncFactura.moneda || "ARS",
+            tipo_cambio: ncFactura.tipo_cambio || null,
+            items: ncItems,
+            sociedad_id: sociedadActiva?.id,
+            factura_origen_id: ncFactura.id,
+          }),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || "Error al emitir NC");
+
+        // Actualizar total_acreditado en la factura original
+        await (supabase as any).from("facturas").update({
+          total_acreditado: (Number(ncFactura.total_acreditado) || 0) + ncTotals.total,
+        }).eq("id", ncFactura.id);
+
+        setNcResult(data.factura.comprobante + (data.factura.cae ? ` — CAE: ${data.factura.cae}` : ""));
+      } else {
+        // Manual sin ARCA
+        const today = new Date().toISOString().split("T")[0];
+        const { data: newNc, error: ncErr } = await (supabase as any)
+          .from("facturas")
+          .insert({
+            tipo: ncTipo,
+            punto_venta: emisorData.ptoVta,
+            numero: Number(ncNumero),
+            cliente_id: ncFactura.cliente_id,
+            fecha: today,
+            cae: null,
+            cae_vencimiento: null,
+            subtotal: ncTotals.neto,
+            iva: ncTotals.iva,
+            total: ncTotals.total,
+            moneda: ncFactura.moneda || "ARS",
+            tipo_cambio: ncFactura.tipo_cambio || null,
+            estado: "emitida",
+            sociedad_id: sociedadActiva?.id || null,
+            factura_origen_id: ncFactura.id,
+          })
+          .select("id")
+          .single();
+
+        if (ncErr) throw new Error(ncErr.message);
+
+        if (newNc) {
+          const itemRows = ncItems.map((it, idx) => {
+            const neto = isFacturaANc ? it.cantidad * it.precio_unitario : Math.round(it.cantidad * it.precio_unitario / 1.21 * 100) / 100;
+            return { factura_id: newNc.id, descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: it.precio_unitario, iva_porcentaje: isFacturaANc ? it.iva_porcentaje : 21, subtotal: neto, orden: idx };
+          });
+          await (supabase as any).from("factura_items").insert(itemRows);
+        }
+
+        await (supabase as any).from("facturas").update({
+          total_acreditado: (Number(ncFactura.total_acreditado) || 0) + ncTotals.total,
+        }).eq("id", ncFactura.id);
+
+        setNcResult(formatComprobante(ncTipo, emisorData.ptoVta, Number(ncNumero)) + " (manual)");
+      }
+
+      setNcStep("success");
+      await fetchData();
+    } catch (err: unknown) {
+      setNcError(err instanceof Error ? err.message : "Error al crear NC");
+      setNcStep("error");
+    } finally {
+      setNcSaving(false);
+    }
+  }
 
   // Filters
   const filterConfigs: FilterConfig[] = [
@@ -711,8 +859,13 @@ ${f.cae ? `
             data={filteredFacturas}
             onRowClick={(f) => {
               setDetailFactura(f);
+              setDetailNCs([]);
               supabase.from("factura_items").select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal").eq("factura_id", f.id).order("orden")
                 .then(({ data }) => setDetailItems((data || []).map(d => ({ ...d, subtotal: d.subtotal ?? 0 }))));
+              // Cargar NCs relacionadas a esta factura
+              (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, total, estado")
+                .eq("factura_origen_id", f.id).order("fecha", { ascending: false })
+                .then(({ data }: { data: FacturaRow[] | null }) => setDetailNCs(data || []));
             }}
           />
         </Card>
@@ -1057,13 +1210,9 @@ ${f.cae ? `
                 <button onClick={() => handlePrintFactura(detailFactura)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
                   <Download className="h-3.5 w-3.5" /> PDF
                 </button>
-                {(detailFactura.tipo === "FA" || detailFactura.tipo === "FB") && detailFactura.estado !== "anulada" && (
+                {(detailFactura.tipo === "FA" || detailFactura.tipo === "FB" || detailFactura.tipo === "FCEA" || detailFactura.tipo === "FCEB") && detailFactura.estado !== "anulada" && (
                   <button
-                    onClick={() => {
-                      const ncTipo = detailFactura.tipo === "FA" ? "NCA" : "NCB";
-                      openEmitModal({ cliente_id: detailFactura.cliente_id, tipo: ncTipo });
-                      setDetailFactura(null);
-                    }}
+                    onClick={() => openNcModal(detailFactura)}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/30 transition-colors"
                     title="Emitir Nota de Crédito"
                   >
@@ -1165,6 +1314,31 @@ ${f.cae ? `
                 </div>
               </div>
 
+              {/* Notas de crédito relacionadas */}
+              {detailNCs.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Notas de crédito</h4>
+                  <div className="space-y-1.5">
+                    {detailNCs.map((nc) => (
+                      <div key={nc.id} className="flex items-center justify-between rounded-lg border border-amber-100 dark:border-amber-900/40 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs">
+                        <div>
+                          <span className="font-mono font-semibold text-amber-800 dark:text-amber-300">{formatComprobante(nc.tipo, nc.punto_venta, nc.numero)}</span>
+                          <span className="text-zinc-400 ml-2">{formatDate(nc.fecha)}</span>
+                          {nc.cae && <span className="text-emerald-600 dark:text-emerald-400 ml-2">CAE ✓</span>}
+                        </div>
+                        <span className="font-mono font-semibold text-amber-700 dark:text-amber-400">{formatCurrency(Number(nc.total))}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {Number(detailFactura.total_acreditado) > 0 && (
+                    <div className="mt-2 flex justify-between text-xs text-amber-700 dark:text-amber-400 font-medium px-1">
+                      <span>Total acreditado</span>
+                      <span className="font-mono">{formatCurrency(Number(detailFactura.total_acreditado))}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Acciones */}
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Acciones</h4>
@@ -1182,6 +1356,196 @@ ${f.cae ? `
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── NC Modal ─────────────────────────────────────────────── */}
+      {ncOpen && ncFactura && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
+              <div>
+                <h2 className="text-lg font-bold dark:text-white">Nota de Crédito</h2>
+                <p className="text-sm text-zinc-400">
+                  Para {formatComprobante(ncFactura.tipo, ncFactura.punto_venta, ncFactura.numero)} — {ncFactura.clientes?.razon_social}
+                </p>
+              </div>
+              <button onClick={() => setNcOpen(false)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {ncStep === "form" && (
+              <div className="p-6 space-y-5">
+                {ncError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{ncError}</div>}
+
+                {/* Referencia a la factura original */}
+                <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 p-3 text-sm">
+                  <div className="flex justify-between mb-1">
+                    <span className="text-zinc-500">Comprobante original</span>
+                    <span className="font-mono font-semibold">{formatComprobante(ncFactura.tipo, ncFactura.punto_venta, ncFactura.numero)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Total original</span>
+                    <span className="font-mono">{formatCurrency(Number(ncFactura.total))}</span>
+                  </div>
+                  {Number(ncFactura.total_acreditado) > 0 && (
+                    <div className="flex justify-between text-amber-600 dark:text-amber-400 mt-1">
+                      <span>Ya acreditado</span>
+                      <span className="font-mono">{formatCurrency(Number(ncFactura.total_acreditado))}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Toggle ARCA / Manual */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
+                    <button
+                      onClick={() => setNcManual(false)}
+                      disabled={arcaStatus?.certOk === false}
+                      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${!ncManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                    >
+                      <ShieldCheck className="h-3.5 w-3.5" /> Con ARCA
+                    </button>
+                    <button
+                      onClick={() => setNcManual(true)}
+                      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${ncManual ? "bg-zinc-700 text-white dark:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
+                    >
+                      <FileCheck className="h-3.5 w-3.5" /> Manual (sin CAE)
+                    </button>
+                  </div>
+                  {arcaStatus?.certOk === false && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                      <AlertTriangle className="h-3 w-3" /> ARCA no configurado — solo modo manual disponible.
+                    </p>
+                  )}
+                </div>
+
+                {/* Número manual */}
+                {ncManual && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1 dark:text-zinc-300">N° Comprobante *</label>
+                      <input type="number" min={1} value={ncNumero} onChange={(e) => setNcNumero(e.target.value)} placeholder="00000001" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                    </div>
+                    <div className="flex items-end pb-2">
+                      <p className="text-xs text-amber-600 dark:text-amber-400">Sin CAE. Ajustá el número al talonario.</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Items NC — editables para NC parcial */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium dark:text-zinc-300">
+                      Items a acreditar <span className="text-xs font-normal text-zinc-400">(editá para NC parcial)</span>
+                    </label>
+                    <button
+                      onClick={() => setNcItems(p => [...p, { descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }])}
+                      className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium"
+                    >
+                      <Plus className="h-3 w-3" /> Agregar
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {ncItems.map((item, idx) => (
+                      <div key={idx} className="grid grid-cols-12 gap-2 items-start">
+                        <div className={isFacturaANc ? "col-span-5" : "col-span-7"}>
+                          {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">Descripción</label>}
+                          <input value={item.descripcion} onChange={(e) => setNcItems(p => p.map((it, i) => i === idx ? { ...it, descripcion: e.target.value } : it))} placeholder="Descripción" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                        </div>
+                        <div className="col-span-2">
+                          {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">Cant.</label>}
+                          <input type="number" min={0} step="0.01" value={item.cantidad} onChange={(e) => setNcItems(p => p.map((it, i) => i === idx ? { ...it, cantidad: Number(e.target.value) } : it))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                        </div>
+                        <div className="col-span-2">
+                          {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">{isFacturaANc ? "Neto unit." : "Precio"}</label>}
+                          <input type="number" step="0.01" min={0} value={item.precio_unitario || ""} onChange={(e) => setNcItems(p => p.map((it, i) => i === idx ? { ...it, precio_unitario: Number(e.target.value) } : it))} placeholder="0.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                        </div>
+                        {isFacturaANc && (
+                          <div className="col-span-2">
+                            {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">IVA %</label>}
+                            <select value={item.iva_porcentaje} onChange={(e) => setNcItems(p => p.map((it, i) => i === idx ? { ...it, iva_porcentaje: Number(e.target.value) } : it))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                              <option value={21}>21%</option>
+                              <option value={10.5}>10.5%</option>
+                              <option value={27}>27%</option>
+                              <option value={0}>0%</option>
+                            </select>
+                          </div>
+                        )}
+                        <div className="col-span-1 flex items-end">
+                          {ncItems.length > 1 && (
+                            <button onClick={() => setNcItems(p => p.filter((_, i) => i !== idx))} className="p-2 rounded hover:bg-red-50 text-red-400 hover:text-red-500">
+                              <Minus className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Totals */}
+                <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4 space-y-2 text-sm">
+                  {isFacturaANc ? (
+                    <>
+                      <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(ncTotals.neto)}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(ncTotals.iva)}</span></div>
+                      <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-700 pt-2 font-semibold text-base">
+                        <span>Total NC</span><span className="font-mono">{formatCurrency(ncTotals.total)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex justify-between font-semibold text-base">
+                      <span>Total NC</span><span className="font-mono">{formatCurrency(ncTotals.total)}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-3 pt-2">
+                  <button onClick={() => setNcOpen(false)} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cancelar</button>
+                  <button
+                    onClick={handleCreateNC}
+                    disabled={ncSaving || ncTotals.total <= 0}
+                    className={`flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg text-white transition-colors disabled:opacity-50 ${ncManual ? "bg-zinc-700 hover:bg-zinc-800" : "bg-orange-500 hover:bg-orange-600"}`}
+                  >
+                    {ncManual ? <FileCheck className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
+                    {ncManual ? "Guardar NC manual" : "Emitir NC con ARCA"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {ncStep === "saving" && (
+              <div className="p-12 flex flex-col items-center gap-4">
+                <Loader2 className="h-10 w-10 animate-spin text-orange-500" />
+                <p className="text-sm text-zinc-500">{ncManual ? "Guardando nota de crédito..." : "Autorizando NC con ARCA..."}</p>
+              </div>
+            )}
+
+            {ncStep === "success" && (
+              <div className="p-8 flex flex-col items-center gap-4">
+                <div className="rounded-full bg-emerald-100 p-3 dark:bg-emerald-900/30">
+                  <CheckCircle2 className="h-8 w-8 text-emerald-600" />
+                </div>
+                <h3 className="text-lg font-bold dark:text-white">Nota de Crédito emitida</h3>
+                <p className="text-sm font-mono text-emerald-700 dark:text-emerald-400">{ncResult}</p>
+                <p className="text-xs text-zinc-400">Total acreditado: {formatCurrency(ncTotals.total)}</p>
+                <button onClick={() => setNcOpen(false)} className="mt-2 px-6 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600">Cerrar</button>
+              </div>
+            )}
+
+            {ncStep === "error" && (
+              <div className="p-8 flex flex-col items-center gap-4">
+                <div className="rounded-full bg-red-100 p-3 dark:bg-red-900/30">
+                  <AlertTriangle className="h-8 w-8 text-red-600" />
+                </div>
+                <h3 className="text-lg font-bold dark:text-white">Error al emitir NC</h3>
+                <p className="text-sm text-red-600 dark:text-red-400 text-center">{ncError}</p>
+                <button onClick={() => setNcStep("form")} className="px-6 py-2 rounded-lg border border-zinc-300 dark:border-zinc-700 text-sm font-medium dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800">Volver</button>
+              </div>
+            )}
           </div>
         </div>
       )}
