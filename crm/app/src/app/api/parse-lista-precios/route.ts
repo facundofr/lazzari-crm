@@ -60,7 +60,7 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "API key de Claude no configurada" }, { status: 500 });
     }
 
-    const client = new Anthropic({ apiKey });
+    const client = new Anthropic({ apiKey, timeout: 300_000 });
 
     // Read file as base64
     const arrayBuffer = await file.arrayBuffer();
@@ -106,7 +106,8 @@ export async function POST(request: NextRequest) {
       text: "Extraé todos los productos de esta lista de precios y devolvé el JSON según las instrucciones.",
     });
 
-    const response = await client.messages.create({
+    // Use streaming to avoid SDK timeout check for large max_tokens
+    const stream = client.messages.stream({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 32000,
       system: EXTRACTION_PROMPT,
@@ -117,6 +118,8 @@ export async function POST(request: NextRequest) {
         },
       ],
     });
+
+    const response = await stream.finalMessage();
 
     const textBlock = response.content.find((block) => block.type === "text");
     const rawText = textBlock && textBlock.type === "text" ? textBlock.text : "";
