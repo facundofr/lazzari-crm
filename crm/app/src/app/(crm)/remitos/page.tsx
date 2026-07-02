@@ -100,6 +100,7 @@ export default function RemitosPage() {
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
   const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; subtotal: number | null; cliente_id: string | null }[]>([]);
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState("");
 
   // Detail panel
   const [detailRemito, setDetailRemito] = useState<RemitoRow | null>(null);
@@ -263,7 +264,10 @@ export default function RemitosPage() {
   }
 
   async function handleCreateRemito() {
-    if (!createForm.numero || !createForm.cliente_id || !createForm.fecha) return;
+    setCreateError("");
+    if (!createForm.numero.trim()) { setCreateError("El número de remito es obligatorio"); return; }
+    if (!createForm.cliente_id) { setCreateError("Seleccioná un cliente"); return; }
+    if (!createForm.fecha) { setCreateError("La fecha es obligatoria"); return; }
     setCreating(true);
     try {
       const { error } = await (supabase.from("remitos") as any).insert({
@@ -1076,16 +1080,19 @@ export default function RemitosPage() {
                 )}
               </div>
             </div>
+            {createError && (
+              <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{createError}</p>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button
-                onClick={() => setCreateModalOpen(false)}
+                onClick={() => { setCreateModalOpen(false); setCreateError(""); }}
                 className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
               >
                 Cancelar
               </button>
               <button
                 onClick={handleCreateRemito}
-                disabled={creating || !createForm.numero || !createForm.cliente_id}
+                disabled={creating}
                 className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
               >
                 {creating ? "Creando..." : "Crear Remito"}
