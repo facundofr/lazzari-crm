@@ -1210,8 +1210,33 @@ export default function ClientesPage() {
           .select("id")
           .single();
         if (error) throw error;
-        // Save new contacts for new client
         const newClientId = inserted.id;
+
+        // Auto-crear "Sucursal Principal" si hay dirección y no se agregaron sucursales manualmente
+        const hasAddress = form.direccion?.trim() || form.localidad?.trim() || form.provincia?.trim();
+        if (hasAddress && formSucursales.length === 0) {
+          await (supabase as any).from("cliente_sucursales").insert({
+            cliente_id: newClientId,
+            nombre: "Sucursal Principal",
+            direccion: form.direccion?.trim() || null,
+            localidad: form.localidad?.trim() || null,
+            provincia: form.provincia?.trim() || null,
+            cp: form.cp?.trim() || null,
+            telefono: form.telefono?.trim() || null,
+            email: form.email?.trim() || null,
+            principal: true,
+            activo: true,
+          });
+        }
+        // Insertar sucursales agregadas manualmente
+        for (const s of formSucursales.filter((s) => s.isNew)) {
+          await (supabase as any).from("cliente_sucursales").insert({
+            cliente_id: newClientId, nombre: s.nombre, direccion: s.direccion || null,
+            localidad: s.localidad || null, provincia: s.provincia || null, cp: s.cp || null,
+            telefono: s.telefono || null, email: s.email || null, activo: true,
+          });
+        }
+        // Save new contacts for new client
         const newConts = formContactos.filter((ct) => ct.isNew);
         for (const ct of newConts) {
           await (supabase as any).from("contactos").insert({
