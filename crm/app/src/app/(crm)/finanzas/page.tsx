@@ -1207,11 +1207,6 @@ export default function FinanzasPage() {
 
         // Update stock for each item that has a producto_id
         for (const it of fcItems.filter((i) => i.producto_id)) {
-          await supabase.rpc("increment_stock" as any, { p_producto_id: it.producto_id, p_cantidad: it.cantidad }).catch(() => {
-            // fallback manual update
-            (supabase as any).from("productos").rpc; // noop, handled below
-          });
-          // Direct update as fallback (RPC may not exist)
           const prod = fcProductos.find((p) => p.id === it.producto_id);
           if (prod !== undefined) {
             await (supabase as any).from("productos").update({ stock: (prod.stock || 0) + it.cantidad }).eq("id", it.producto_id);
