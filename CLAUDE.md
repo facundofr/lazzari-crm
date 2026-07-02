@@ -35,7 +35,9 @@ No test framework is configured yet.
 crm/app/src/
   app/(crm)/              # Route group — 14 CRM modules behind auth
   app/api/ai/             # AI agent API route (Claude + Supabase tool use)
-  app/api/parse-lista-precios/ # PDF price list parser
+  app/api/ai-presupuesto/ # AI route: sugiere items de presupuesto desde listas_precios vigentes
+  app/api/parse-lista-precios/ # PDF price list parser (streaming, claude-haiku-4-5, max_tokens 32000)
+  app/api/remito/         # Autoriza remitos electrónicos via AFIP WSREMHOM
   components/layout/      # Sidebar, Header, AIWidget
   components/ui/          # Badge, Card, StatCard, DataTable, SmartFilters, Modal, Toast, Input, EmptyState
   lib/supabase/queries/   # Data access layer — one file per module
@@ -74,6 +76,8 @@ function mapToClient(row: ClienteRow): Client { ... }            // defined in t
 
 Server-side API route that uses Claude with Supabase tool use. The AI can run SELECT/INSERT/UPDATE queries against the database, with role-based write permissions enforced via `TABLE_ACCESS` and `ROLE_HIERARCHY` maps. The floating `AIWidget` component (`components/layout/ai-widget.tsx`) provides the chat UI.
 
+**`api/parse-lista-precios`:** MUST use `client.messages.stream()` + `stream.finalMessage()` (NOT `.create()`) — the Anthropic SDK requires streaming when `max_tokens` ≥ 32000. Uses `claude-haiku-4-5-20251001` with a 300s client timeout. Default validity when not in the PDF: today → +2 months.
+
 ### Role System
 
 Five roles defined in `lib/types.ts`: `super_admin`, `admin`, `vendedor`, `administrativo`, `viewer`. Permissions enforced client-side via `ROLE_PERMISSIONS` map and server-side via Supabase RLS policies on `profiles.role`.
@@ -106,7 +110,8 @@ Supabase project ID: `ycuzszzskqatlegtbgbq`. Full schema plan in `SUPABASE_PLAN.
 - Polymorphic contacts table: `contactos` with columns: `id, entity_type (cliente|proveedor), entity_id, nombre, cargo, email, telefono, principal, fecha_cumpleanos, notas, sucursal_id, whatsapp, vendedor_id`
 - `cliente_sucursales` columns: `id, cliente_id, nombre, direccion, localidad, provincia, cp, telefono, email, principal, activo, notas`
 - `clientes` has `email_facturacion` (text) and `envio_automatico` (boolean NOT NULL) — no `transporte_definido` column
-- Tables not in generated types (use `(supabase as any).from("table")`): `pendientes`, `notification_preferences`, `facturas_compra`, `comision_reglas`, `ordenes_pago`, `gastos_manuales`, `email_templates`, `contactos`, `user_sociedades`, `eventos`, `echeqs`, `fichas_relevamiento`, `cliente_sucursales`
+- Tables not in generated types (use `(supabase as any).from("table")`): `pendientes`, `notification_preferences`, `facturas_compra`, `comision_reglas`, `ordenes_pago`, `gastos_manuales`, `email_templates`, `contactos`, `user_sociedades`, `eventos`, `echeqs`, `fichas_relevamiento`, `cliente_sucursales`, `retencion_config`
+- `retencion_config` columns: `sociedad_id` (UNIQUE), `aplica_iva`, `minimo_iva`, `tasa_iva_ri`, `aplica_ganancias`, `minimo_ganancias`, `tasa_ganancias_ri`, `tasa_ganancias_no_inscripto`
 
 ### Storage Buckets
 
