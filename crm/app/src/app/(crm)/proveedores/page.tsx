@@ -426,7 +426,7 @@ export default function ProveedoresPage() {
           proveedor_id: aiProveedorId,
           moneda: aiResult.moneda === "USD" ? "USD" : "ARS",
           vigencia_desde: aiResult.vigencia_desde || new Date().toISOString().slice(0, 10),
-          vigencia_hasta: aiResult.vigencia_hasta || new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().slice(0, 10),
+          vigencia_hasta: aiResult.vigencia_hasta || new Date(new Date().setMonth(new Date().getMonth() + 2)).toISOString().slice(0, 10),
           estado: "vigente",
           archivo_origen: aiFile?.name || null,
           notas: aiResult.notas || "",
