@@ -14,12 +14,20 @@ import { createSupabaseServer } from "@/lib/supabase/server";
 const TODAY = () => new Date().toISOString().split("T")[0];
 
 function parseBnaHtml(html: string): { compra: number; venta: number } | null {
-  // BNA tabla: <td ...>Dólar U.S.A.</td> seguido de compra y venta
-  const match = html.match(
-    /D[oó]lar\s+U\.?S\.?A\.?[\s\S]*?<\/td>\s*<td[^>]*>([\d.,]+)<\/td>\s*<td[^>]*>([\d.,]+)<\/td>/i
+  // Extraer específicamente la sección id="divisas" (Cotización Divisas, no Billetes)
+  const divisasMatch = html.match(/id="divisas"[\s\S]*?(?=id="|$)/i);
+  const section = divisasMatch ? divisasMatch[0] : html;
+
+  const match = section.match(
+    /Dolar\s+U\.S\.A[\s\S]*?<td[^>]*>([\d.,]+)<\/td>\s*<td[^>]*>([\d.,]+)<\/td>/i
   );
   if (!match) return null;
-  const parse = (s: string) => parseFloat(s.replace(/\./g, "").replace(",", "."));
+
+  // Divisas usa punto como decimal (1488.0000); Billetes usa coma (1510,00)
+  const parse = (s: string) => {
+    if (s.includes(",")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
+    return parseFloat(s);
+  };
   const compra = parse(match[1]);
   const venta = parse(match[2]);
   if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
