@@ -100,6 +100,24 @@ export default function FacturacionPage() {
   const [emitError, setEmitError] = useState("");
   const [clientes, setClientes] = useState<ClienteOption[]>([]);
   const [emitManual, setEmitManual] = useState(false);
+  const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string } | null>(null);
+  const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
+
+  async function fetchCotizBna() {
+    setCotizBnaLoading(true);
+    try {
+      const res = await fetch("/api/cotizacion-bna");
+      if (res.ok) {
+        const data = await res.json();
+        setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente });
+        if (!emitData.tipo_cambio) {
+          setEmitData((p) => ({ ...p, tipo_cambio: data.valor_venta }));
+        }
+      }
+    } catch { /* silencioso */ } finally {
+      setCotizBnaLoading(false);
+    }
+  }
   const [emitData, setEmitData] = useState({
     tipo: "FA",
     cliente_id: "",
@@ -191,7 +209,9 @@ export default function FacturacionPage() {
 
   // ── Emit handlers ──────────────────────────────────────────────
   const openEmitModal = (prefill?: { cliente_id: string; tipo?: string; items?: EmitItem[]; moneda?: "ARS" | "USD"; tipo_cambio?: number }) => {
-    setEmitManual(false);
+    // Si el cert no está configurado, forzar modo manual
+    setEmitManual(arcaStatus?.certOk === false);
+    setCotizBna(null);
     setEmitData({
       tipo: prefill?.tipo || "FB",
       cliente_id: prefill?.cliente_id || "",
@@ -774,19 +794,27 @@ ${f.cae ? `
                 {emitError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{emitError}</div>}
 
                 {/* Toggle ARCA / Manual */}
-                <div className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
-                  <button
-                    onClick={() => setEmitManual(false)}
-                    className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${!emitManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
-                  >
-                    <ShieldCheck className="h-3.5 w-3.5" /> Con ARCA
-                  </button>
-                  <button
-                    onClick={() => setEmitManual(true)}
-                    className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${emitManual ? "bg-zinc-700 text-white dark:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
-                  >
-                    <FileCheck className="h-3.5 w-3.5" /> Manual (sin CAE)
-                  </button>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
+                    <button
+                      onClick={() => setEmitManual(false)}
+                      disabled={arcaStatus?.certOk === false}
+                      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${!emitManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"} disabled:opacity-40 disabled:cursor-not-allowed`}
+                    >
+                      <ShieldCheck className="h-3.5 w-3.5" /> Con ARCA
+                    </button>
+                    <button
+                      onClick={() => setEmitManual(true)}
+                      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${emitManual ? "bg-zinc-700 text-white dark:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
+                    >
+                      <FileCheck className="h-3.5 w-3.5" /> Manual (sin CAE)
+                    </button>
+                  </div>
+                  {arcaStatus?.certOk === false && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                      <AlertTriangle className="h-3 w-3" /> ARCA no configurado para esta sociedad — solo modo manual disponible.
+                    </p>
+                  )}
                 </div>
 
                 {/* Tipo + Cliente + PV */}
@@ -850,14 +878,15 @@ ${f.cae ? `
                     </select>
                   </div>
                   {isUSD && (
-                    <div className="col-span-4">
+                    <div className="col-span-8">
                       <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cotizacion USD/ARS *</label>
                       <input type="number" step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) }))} placeholder="Ej: 1450.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
-                    </div>
-                  )}
-                  {isUSD && (
-                    <div className="col-span-4 flex items-end">
-                      <p className="text-xs text-zinc-400 pb-2">ARCA requiere la cotizacion oficial para facturas en USD.</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <button type="button" onClick={fetchCotizBna} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
+                          {cotizBnaLoading ? "Consultando BNA…" : "Traer cotización BNA"}
+                        </button>
+                        {cotizBna && <span className="text-xs text-zinc-400">Venta: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha} · {cotizBna.fuente})</span>}
+                      </div>
                     </div>
                   )}
                 </div>

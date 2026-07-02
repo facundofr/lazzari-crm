@@ -145,6 +145,22 @@ export default function VentasPage() {
   const [emitError, setEmitError] = useState("");
   const [emitSuccess, setEmitSuccess] = useState("");
   const [emitManual, setEmitManual] = useState(false);
+  const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string } | null>(null);
+  const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
+
+  async function fetchCotizBna(autoFill = true) {
+    setCotizBnaLoading(true);
+    try {
+      const res = await fetch("/api/cotizacion-bna");
+      if (res.ok) {
+        const data = await res.json();
+        setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente });
+        if (autoFill && !emitTipoCambio) setEmitTipoCambio(data.valor_venta);
+      }
+    } catch { /* silencioso */ } finally {
+      setCotizBnaLoading(false);
+    }
+  }
 
   // Tab: pipeline vs fichas
   const [ventasTab, setVentasTab] = useState<"pipeline" | "fichas">("pipeline");
@@ -165,7 +181,7 @@ export default function VentasPage() {
       let presupuestosQuery = supabase
         .from("presupuestos")
         .select(`
-          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id,
+          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id, modalidad_emision,
           vendedor_profile:vendedor_id(full_name, avatar_url),
           clientes(razon_social, cuit, condicion_iva),
           presupuesto_items(descripcion, cantidad, precio_venta, iva_porcentaje, total)
@@ -284,7 +300,8 @@ export default function VentasPage() {
     setEmitTipoCambio(p.tipo_cambio || 0);
     setEmitError("");
     setEmitSuccess("");
-    setEmitManual(false);
+    setEmitManual((p as any).modalidad_emision === "manual");
+    setCotizBna(null);
     setEmitModalOpen(true);
   }
 
@@ -1061,7 +1078,7 @@ export default function VentasPage() {
                 {/* Moneda / Tipo de cambio */}
                 {emitVenta.presupuesto.moneda === "USD" && (
                   <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3">
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-4 flex-wrap">
                       <div className="text-sm text-amber-700 dark:text-amber-400 font-medium">Factura en USD</div>
                       <div className="flex items-center gap-2">
                         <label className="text-xs text-amber-600 dark:text-amber-500">Cotizacion USD/ARS *</label>
@@ -1072,8 +1089,19 @@ export default function VentasPage() {
                           placeholder="Ej: 1450.00"
                           className="w-32 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-900 px-2 py-1 text-sm font-mono dark:text-white"
                         />
+                        <button
+                          type="button"
+                          onClick={() => fetchCotizBna(true)}
+                          disabled={cotizBnaLoading}
+                          className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {cotizBnaLoading ? "Consultando…" : "Traer BNA"}
+                        </button>
                       </div>
                     </div>
+                    {cotizBna && (
+                      <p className="text-xs text-zinc-500 mt-1">BNA Divisas Venta: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha} · {cotizBna.fuente})</p>
+                    )}
                     <p className="text-xs text-amber-500 mt-1">ARCA requiere la cotizacion oficial para facturas en USD. Los montos van en dolares.</p>
                   </div>
                 )}
