@@ -452,7 +452,7 @@ export default function VentasPage() {
           observaciones: `Desde presupuesto ${p.numero}`,
           estado: "pendiente",
           oc_cliente: (p as any).oc_cliente || null,
-          sociedad_id: (p as any).sociedad_id || null,
+          sociedad_id: sociedadActiva?.id || null,
         })
         .select("id")
         .single();
