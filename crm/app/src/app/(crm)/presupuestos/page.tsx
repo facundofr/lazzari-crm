@@ -745,18 +745,18 @@ export default function PresupuestosPage() {
 
       const buildItemRows = (prId: string) => itemsWithTotals.map((it) => ({
         presupuesto_id: prId,
-        codigo: it.codigo,
+        codigo: it.codigo ?? "",
         descripcion: it.descripcion,
-        categoria: it.categoria,
+        categoria: it.categoria ?? null,
         cantidad: it.cantidad,
-        unidad: it.unidad,
-        precio_costo: it.precio_costo,
-        markup_porcentaje: it.markup_porcentaje,
-        precio_venta: it.precio_venta,
-        iva_porcentaje: it.iva_porcentaje,
-        subtotal: it.subtotal,
-        iva: it.iva,
-        total: it.total,
+        unidad: it.unidad ?? "u",
+        precio_costo: it.precio_costo ?? 0,
+        markup_porcentaje: it.markup_porcentaje ?? 0,
+        precio_venta: it.precio_venta ?? 0,
+        iva_porcentaje: it.iva_porcentaje ?? 21,
+        subtotal: it.subtotal ?? 0,
+        iva: it.iva ?? 0,
+        total: it.total ?? 0,
         orden: it.orden,
         proveedor_id: it.proveedor_id || null,
         lista_item_id: it.lista_item_id || null,
@@ -788,7 +788,7 @@ export default function PresupuestosPage() {
         await supabase.from("presupuesto_items").delete().eq("presupuesto_id", editingPRId);
         if (itemsWithTotals.length > 0) {
           const { error: itemsError } = await supabase.from("presupuesto_items").insert(buildItemRows(editingPRId) as any);
-          if (itemsError) console.error("Error inserting items:", itemsError);
+          if (itemsError) throw new Error("Error al guardar items: " + itemsError.message);
         }
 
         setShowNewPR(false);
@@ -831,7 +831,7 @@ export default function PresupuestosPage() {
 
         if (newRow && itemsWithTotals.length > 0) {
           const { error: itemsError } = await supabase.from("presupuesto_items").insert(buildItemRows(newRow.id) as any);
-          if (itemsError) console.error("Error inserting items:", itemsError);
+          if (itemsError) throw new Error("Error al guardar items: " + itemsError.message);
         }
 
         setShowNewPR(false);
