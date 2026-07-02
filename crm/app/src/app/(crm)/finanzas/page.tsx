@@ -1400,17 +1400,16 @@ export default function FinanzasPage() {
 
   const tabs: { id: FinanzasTab; label: string }[] = [
     { id: "movimientos", label: "Movimientos" },
-    { id: "facturas_compra", label: "Facturas Compra" },
-    { id: "ordenes_pago", label: "Ordenes de Pago" },
+    { id: "facturas_compra", label: "Fact. Compra" },
+    { id: "ordenes_pago", label: "OP" },
     { id: "gastos_manuales", label: "Gastos" },
     { id: "echeqs", label: "Echeqs" },
     { id: "cc_clientes", label: "CC Clientes" },
-    { id: "cc_proveedores", label: "CC Proveedores" },
-    { id: "cheques", label: "E-Cheques" },
+    { id: "cc_proveedores", label: "CC Prov." },
     { id: "extractos", label: "Extractos" },
-    { id: "lineas_credito", label: "Lineas credito" },
+    { id: "lineas_credito", label: "Crédito" },
     { id: "vencimientos", label: "Vencimientos" },
-    { id: "gastos_fijos", label: "Gastos fijos" },
+    { id: "gastos_fijos", label: "G. Fijos" },
     { id: "objetivos", label: "Objetivos" },
   ];
 
@@ -1438,15 +1437,17 @@ export default function FinanzasPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-fit overflow-x-auto">
-          {tabs.map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`rounded-md px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                tab === t.id ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-              }`}>
-              {t.label}
-            </button>
-          ))}
+        <div className="w-full overflow-x-auto pb-1">
+          <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-max">
+            {tabs.map((t) => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                  tab === t.id ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                }`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* ── Movimientos ── */}
