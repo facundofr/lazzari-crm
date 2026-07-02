@@ -5,26 +5,49 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
-import { Truck, Plus, X, Loader2, CheckCircle2, Clock, Package, MapPin, FileText, Link2 } from "lucide-react";
+import {
+  Truck, Plus, X, Loader2, CheckCircle2, Building2,
+  MapPin, FileText, Link2, Phone, Mail, User, Pencil,
+  ToggleLeft, ToggleRight, Package,
+} from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
+import { useToast } from "@/components/ui/toast";
 
-const estadoConfig: Record<string, { label: string; variant: "success" | "warning" | "info" | "danger" }> = {
+// ── Tipos ─────────────────────────────────────────────────────────────
+interface TransportistaRow {
+  id: string;
+  nombre: string;
+  razon_social: string | null;
+  cuit: string | null;
+  telefono: string | null;
+  email: string | null;
+  direccion: string | null;
+  localidad: string | null;
+  provincia: string | null;
+  contacto_principal: string | null;
+  observaciones: string | null;
+  activo: boolean;
+  created_at: string;
+}
+
+const envioEstadoConfig: Record<string, { label: string; variant: "success" | "warning" | "info" | "danger" }> = {
   solicitado: { label: "Solicitado", variant: "warning" },
   en_transito: { label: "En tránsito", variant: "info" },
   entregado: { label: "Entregado", variant: "success" },
   cancelado: { label: "Cancelado", variant: "danger" },
 };
 
-interface TransporteRow {
+interface EnvioRow {
   id: string;
   sociedad_id: string;
   fecha: string;
   cliente_id: string | null;
   remito_id: string | null;
   transportista: string;
+  transportista_id: string | null;
   tipo_vehiculo: string | null;
   origen: string | null;
   destino: string | null;
@@ -33,28 +56,57 @@ interface TransporteRow {
   bultos: number | null;
   costo: number | null;
   moneda: string;
-  comision_porcentaje: number | null;
-  comision_monto: number | null;
   estado: string;
   notas: string | null;
-  created_by: string | null;
   created_at: string;
   clientes: { razon_social: string } | null;
   remitos: { numero: string; estado: string } | null;
 }
 
+type ActiveTab = "catalogo" | "envios";
+
+// ── Helpers ────────────────────────────────────────────────────────────
+const emptyTransportistaForm = {
+  nombre: "",
+  razon_social: "",
+  cuit: "",
+  telefono: "",
+  email: "",
+  direccion: "",
+  localidad: "",
+  provincia: "",
+  contacto_principal: "",
+  observaciones: "",
+};
+
 export default function TransportesPage() {
   const { sociedadActiva } = useUser();
-  const [transportes, setTransportes] = useState<TransporteRow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { toast } = useToast();
 
-  // Create modal state
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [clientes, setClientes] = useState<{ id: string; razon_social: string; direccion?: string; localidad?: string }[]>([]);
-  const [remitosDisponibles, setRemitosDisponibles] = useState<{ id: string; numero: string; cliente_id: string; clienteNombre: string; estado: string }[]>([]);
-  const [creating, setCreating] = useState(false);
-  const [createForm, setCreateForm] = useState({
-    transportista: "",
+  const [activeTab, setActiveTab] = useState<ActiveTab>("catalogo");
+
+  // ── Catálogo state ────────────────────────────────────────────────
+  const [transportistas, setTransportistas] = useState<TransportistaRow[]>([]);
+  const [catLoading, setCatLoading] = useState(true);
+  const [selectedTransportista, setSelectedTransportista] = useState<TransportistaRow | null>(null);
+
+  // Create/Edit transportista modal
+  const [catModalOpen, setCatModalOpen] = useState(false);
+  const [catEditingId, setCatEditingId] = useState<string | null>(null);
+  const [catForm, setCatForm] = useState(emptyTransportistaForm);
+  const [catSaving, setCatSaving] = useState(false);
+  const [catFormErrors, setCatFormErrors] = useState<Record<string, string>>({});
+
+  // ── Envíos state ──────────────────────────────────────────────────
+  const [envios, setEnvios] = useState<EnvioRow[]>([]);
+  const [enviosLoading, setEnviosLoading] = useState(true);
+  const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
+  const [remitosDisponibles, setRemitosDisponibles] = useState<{ id: string; numero: string; cliente_id: string; clienteNombre: string }[]>([]);
+  const [createEnvioOpen, setCreateEnvioOpen] = useState(false);
+  const [creatingEnvio, setCreatingEnvio] = useState(false);
+  const [envioForm, setEnvioForm] = useState({
+    transportista_id: "",
+    transportista_nombre: "",  // fallback texto libre
     destino: "",
     origen: "",
     cliente_id: "",
@@ -67,759 +119,764 @@ export default function TransportesPage() {
     tipo_vehiculo: "",
     notas: "",
   });
-
-  // Detail panel
-  const [detailTransporte, setDetailTransporte] = useState<TransporteRow | null>(null);
-  // Edit mode
-  const [editing, setEditing] = useState(false);
-  const [editForm, setEditForm] = useState({
-    transportista: "",
-    destino: "",
-    origen: "",
-    costo: "",
-    moneda: "ARS" as "ARS" | "USD",
-    bultos: "",
-    tipo_vehiculo: "",
-    descripcion_carga: "",
-    notas: "",
+  const [detailEnvio, setDetailEnvio] = useState<EnvioRow | null>(null);
+  const [editingEnvio, setEditingEnvio] = useState(false);
+  const [editEnvioForm, setEditEnvioForm] = useState({
+    destino: "", origen: "", costo: "", moneda: "ARS" as "ARS" | "USD",
+    bultos: "", tipo_vehiculo: "", descripcion_carga: "", notas: "",
   });
-  const [saving, setSaving] = useState(false);
+  const [savingEnvio, setSavingEnvio] = useState(false);
 
-  // SmartFilters state
-  const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
-    fecha: { from: "", to: "" },
-    estado: "",
-    transportista: "",
-  });
-
-  const smartFilterConfigs: FilterConfig[] = [
+  const [envioFilterValues, setEnvioFilterValues] = useState<FilterValues>({ fecha: { from: "", to: "" }, estado: "" });
+  const envioFilterConfigs: FilterConfig[] = [
     { key: "fecha", label: "Fecha", type: "date-range" },
-    {
-      key: "estado",
-      label: "Estado",
-      type: "select",
-      options: [
-        { value: "solicitado", label: "Solicitado" },
-        { value: "en_transito", label: "En tránsito" },
-        { value: "entregado", label: "Entregado" },
-        { value: "cancelado", label: "Cancelado" },
-      ],
-    },
-    { key: "transportista", label: "Transportista", type: "select" as const, options: [] },
+    { key: "estado", label: "Estado", type: "select", options: [
+      { value: "solicitado", label: "Solicitado" }, { value: "en_transito", label: "En tránsito" },
+      { value: "entregado", label: "Entregado" }, { value: "cancelado", label: "Cancelado" },
+    ]},
   ];
 
-  const fetchData = useCallback(async () => {
+  // ── Fetch catálogo ────────────────────────────────────────────────
+  const fetchTransportistas = useCallback(async () => {
+    setCatLoading(true);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("transportistas")
+        .select("*")
+        .order("nombre");
+      if (!error && data) setTransportistas(data as TransportistaRow[]);
+      else setTransportistas([]);
+    } catch { setTransportistas([]); }
+    finally { setCatLoading(false); }
+  }, []);
+
+  // ── Fetch envíos ──────────────────────────────────────────────────
+  const fetchEnvios = useCallback(async () => {
+    setEnviosLoading(true);
     try {
       let q = (supabase as any)
         .from("transportes")
         .select(`*, clientes(razon_social), remitos(numero, estado)`)
         .order("fecha", { ascending: false });
-
-      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
-
+      if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
       const { data, error } = await q;
-
-      if (!error && data) {
-        setTransportes(data as unknown as TransporteRow[]);
-      } else {
-        setTransportes([]);
-      }
-    } catch {
-      setTransportes([]);
-    } finally {
-      setLoading(false);
-    }
+      if (!error && data) setEnvios(data as EnvioRow[]);
+      else setEnvios([]);
+    } catch { setEnvios([]); }
+    finally { setEnviosLoading(false); }
   }, [sociedadActiva?.id]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { fetchTransportistas(); }, [fetchTransportistas]);
+  useEffect(() => { fetchEnvios(); }, [fetchEnvios]);
 
-  async function handleEstadoChange(id: string, estado: string) {
-    try {
-      const { error } = await (supabase as any).from("transportes").update({ estado }).eq("id", id);
-      if (error) {
-        alert("Error al actualizar estado: " + error.message);
-        return;
-      }
-      await fetchData();
-      if (detailTransporte?.id === id) {
-        setDetailTransporte((prev) => prev ? { ...prev, estado } : null);
-      }
-    } catch (err) {
-      console.error("Error updating transporte:", err);
-    }
+  // ── Catálogo CRUD ─────────────────────────────────────────────────
+  function openCatCreate() {
+    setCatEditingId(null);
+    setCatForm(emptyTransportistaForm);
+    setCatFormErrors({});
+    setCatModalOpen(true);
   }
 
-  async function openCreateModal() {
-    setCreateForm({
-      transportista: "",
-      destino: "",
-      origen: "",
-      cliente_id: "",
-      remito_id: "",
+  function openCatEdit(t: TransportistaRow) {
+    setCatEditingId(t.id);
+    setCatForm({
+      nombre: t.nombre,
+      razon_social: t.razon_social ?? "",
+      cuit: t.cuit ?? "",
+      telefono: t.telefono ?? "",
+      email: t.email ?? "",
+      direccion: t.direccion ?? "",
+      localidad: t.localidad ?? "",
+      provincia: t.provincia ?? "",
+      contacto_principal: t.contacto_principal ?? "",
+      observaciones: t.observaciones ?? "",
+    });
+    setCatFormErrors({});
+    setCatModalOpen(true);
+  }
+
+  function validateCatForm() {
+    const errs: Record<string, string> = {};
+    if (!catForm.nombre.trim()) errs.nombre = "El nombre es obligatorio";
+    return errs;
+  }
+
+  async function handleSaveTransportista() {
+    const errs = validateCatForm();
+    if (Object.keys(errs).length > 0) { setCatFormErrors(errs); return; }
+    setCatSaving(true);
+    try {
+      const payload = {
+        nombre: catForm.nombre.trim(),
+        razon_social: catForm.razon_social.trim() || null,
+        cuit: catForm.cuit.trim() || null,
+        telefono: catForm.telefono.trim() || null,
+        email: catForm.email.trim() || null,
+        direccion: catForm.direccion.trim() || null,
+        localidad: catForm.localidad.trim() || null,
+        provincia: catForm.provincia.trim() || null,
+        contacto_principal: catForm.contacto_principal.trim() || null,
+        observaciones: catForm.observaciones.trim() || null,
+      };
+      if (catEditingId) {
+        const { error } = await (supabase as any).from("transportistas").update(payload).eq("id", catEditingId);
+        if (error) throw error;
+        toast.success("Transportista actualizado");
+      } else {
+        const { error } = await (supabase as any).from("transportistas").insert(payload);
+        if (error) throw error;
+        toast.success("Transportista creado");
+      }
+      setCatModalOpen(false);
+      await fetchTransportistas();
+    } catch (err: any) {
+      toast.error(err.message || "Error al guardar");
+    } finally { setCatSaving(false); }
+  }
+
+  async function handleToggleActivo(t: TransportistaRow) {
+    try {
+      const { error } = await (supabase as any).from("transportistas").update({ activo: !t.activo }).eq("id", t.id);
+      if (error) throw error;
+      toast.success(t.activo ? "Transportista desactivado" : "Transportista activado");
+      await fetchTransportistas();
+      if (selectedTransportista?.id === t.id) setSelectedTransportista({ ...t, activo: !t.activo });
+    } catch { toast.error("Error al cambiar estado"); }
+  }
+
+  // ── Envíos CRUD ───────────────────────────────────────────────────
+  async function openCreateEnvio() {
+    setEnvioForm({
+      transportista_id: "", transportista_nombre: "",
+      destino: "", origen: "", cliente_id: "", remito_id: "",
       fecha: new Date().toISOString().split("T")[0],
-      costo: "",
-      moneda: "ARS",
-      bultos: "",
-      descripcion_carga: "",
-      tipo_vehiculo: "",
-      notas: "",
+      costo: "", moneda: "ARS", bultos: "", descripcion_carga: "", tipo_vehiculo: "", notas: "",
     });
 
-    // Fetch clientes and remitos pendientes in parallel
-    let clienteQ = supabase.from("clientes").select("id, razon_social, direccion, localidad").eq("activo", true).order("razon_social");
-    if (sociedadActiva?.id) clienteQ = clienteQ.eq("sociedad_id" as any, sociedadActiva.id);
+    let cliQ = supabase.from("clientes").select("id, razon_social").eq("activo", true).order("razon_social");
+    if (sociedadActiva?.id) cliQ = cliQ.eq("sociedad_id" as any, sociedadActiva.id);
+    let remQ = (supabase as any).from("remitos").select("id, numero, cliente_id, clientes(razon_social), estado").in("estado", ["pendiente", "parcial"]).order("fecha", { ascending: false });
+    if (sociedadActiva?.id) remQ = remQ.eq("sociedad_id", sociedadActiva.id);
 
-    let remitoQ = (supabase as any).from("remitos").select("id, numero, cliente_id, clientes(razon_social), estado").in("estado", ["pendiente", "parcial"]).order("fecha", { ascending: false });
-    if (sociedadActiva?.id) remitoQ = remitoQ.eq("sociedad_id", sociedadActiva.id);
-
-    const [clientesRes, remitosRes] = await Promise.all([clienteQ, remitoQ]);
-
-    if (clientesRes.data) setClientes(clientesRes.data as any[]);
-    if (remitosRes.data) {
-      setRemitosDisponibles((remitosRes.data as any[]).map((r: any) => ({
-        id: r.id,
-        numero: r.numero,
-        cliente_id: r.cliente_id,
-        clienteNombre: r.clientes?.razon_social || "",
-        estado: r.estado,
-      })));
-    }
-    setCreateModalOpen(true);
+    const [cliRes, remRes] = await Promise.all([cliQ, remQ]);
+    if (cliRes.data) setClientes(cliRes.data as any[]);
+    if (remRes.data) setRemitosDisponibles((remRes.data as any[]).map((r: any) => ({ id: r.id, numero: r.numero, cliente_id: r.cliente_id, clienteNombre: r.clientes?.razon_social || "" })));
+    setCreateEnvioOpen(true);
   }
 
-  async function handleCreateTransporte() {
-    if (!createForm.transportista || !createForm.fecha) return;
-    setCreating(true);
+  async function handleCreateEnvio() {
+    if (!envioForm.fecha) return;
+    const transportistaName = transportistas.find(t => t.id === envioForm.transportista_id)?.nombre || envioForm.transportista_nombre;
+    if (!transportistaName) { toast.error("Seleccioná o ingresá un transportista"); return; }
+    setCreatingEnvio(true);
     try {
       const { error } = await (supabase as any).from("transportes").insert({
         sociedad_id: sociedadActiva?.id,
-        transportista: createForm.transportista,
-        destino: createForm.destino || null,
-        origen: createForm.origen || null,
-        cliente_id: createForm.cliente_id || null,
-        remito_id: createForm.remito_id || null,
-        fecha: createForm.fecha,
-        costo: createForm.costo ? Number(createForm.costo) : null,
-        moneda: createForm.moneda,
-        bultos: createForm.bultos ? Number(createForm.bultos) : null,
-        descripcion_carga: createForm.descripcion_carga || null,
-        tipo_vehiculo: createForm.tipo_vehiculo || null,
-        notas: createForm.notas || null,
+        transportista: transportistaName,
+        transportista_id: envioForm.transportista_id || null,
+        destino: envioForm.destino || null,
+        origen: envioForm.origen || null,
+        cliente_id: envioForm.cliente_id || null,
+        remito_id: envioForm.remito_id || null,
+        fecha: envioForm.fecha,
+        costo: envioForm.costo ? Number(envioForm.costo) : null,
+        moneda: envioForm.moneda,
+        bultos: envioForm.bultos ? Number(envioForm.bultos) : null,
+        descripcion_carga: envioForm.descripcion_carga || null,
+        tipo_vehiculo: envioForm.tipo_vehiculo || null,
+        notas: envioForm.notas || null,
         estado: "solicitado",
       });
-      if (error) {
-        alert("Error al crear transporte: " + error.message);
-        return;
-      }
-      setCreateModalOpen(false);
-      await fetchData();
-    } catch (err) {
-      console.error("Error creating transporte:", err);
-    } finally {
-      setCreating(false);
-    }
+      if (error) throw error;
+      setCreateEnvioOpen(false);
+      toast.success("Envío registrado");
+      await fetchEnvios();
+    } catch (err: any) { toast.error(err.message || "Error al crear envío"); }
+    finally { setCreatingEnvio(false); }
   }
 
-  function handleRowClick(row: TransporteRow) {
-    setDetailTransporte(row);
-    setEditing(false);
+  async function handleEnvioEstado(id: string, estado: string) {
+    const { error } = await (supabase as any).from("transportes").update({ estado }).eq("id", id);
+    if (error) { toast.error("Error al actualizar estado"); return; }
+    await fetchEnvios();
+    if (detailEnvio?.id === id) setDetailEnvio(prev => prev ? { ...prev, estado } : null);
   }
 
-  function startEditing() {
-    if (!detailTransporte) return;
-    setEditForm({
-      transportista: detailTransporte.transportista,
-      destino: detailTransporte.destino || "",
-      origen: detailTransporte.origen || "",
-      costo: detailTransporte.costo != null ? String(detailTransporte.costo) : "",
-      moneda: detailTransporte.moneda as "ARS" | "USD",
-      bultos: detailTransporte.bultos != null ? String(detailTransporte.bultos) : "",
-      tipo_vehiculo: detailTransporte.tipo_vehiculo || "",
-      descripcion_carga: detailTransporte.descripcion_carga || "",
-      notas: detailTransporte.notas || "",
-    });
-    setEditing(true);
-  }
-
-  async function handleSaveEdit() {
-    if (!detailTransporte) return;
-    setSaving(true);
+  async function handleSaveEnvio() {
+    if (!detailEnvio) return;
+    setSavingEnvio(true);
     try {
       const { error } = await (supabase as any).from("transportes").update({
-        transportista: editForm.transportista,
-        destino: editForm.destino || null,
-        origen: editForm.origen || null,
-        costo: editForm.costo ? Number(editForm.costo) : null,
-        moneda: editForm.moneda,
-        bultos: editForm.bultos ? Number(editForm.bultos) : null,
-        tipo_vehiculo: editForm.tipo_vehiculo || null,
-        descripcion_carga: editForm.descripcion_carga || null,
-        notas: editForm.notas || null,
-      }).eq("id", detailTransporte.id);
-      if (error) {
-        alert("Error al guardar: " + error.message);
-        return;
-      }
-      setEditing(false);
-      await fetchData();
-      // Refresh detail
-      const { data } = await (supabase as any).from("transportes").select("*, clientes(razon_social), remitos(numero, estado)").eq("id", detailTransporte.id).single();
-      if (data) setDetailTransporte(data as unknown as TransporteRow);
-    } catch (err) {
-      console.error("Error saving:", err);
-    } finally {
-      setSaving(false);
-    }
+        destino: editEnvioForm.destino || null, origen: editEnvioForm.origen || null,
+        costo: editEnvioForm.costo ? Number(editEnvioForm.costo) : null,
+        moneda: editEnvioForm.moneda, bultos: editEnvioForm.bultos ? Number(editEnvioForm.bultos) : null,
+        tipo_vehiculo: editEnvioForm.tipo_vehiculo || null,
+        descripcion_carga: editEnvioForm.descripcion_carga || null,
+        notas: editEnvioForm.notas || null,
+      }).eq("id", detailEnvio.id);
+      if (error) throw error;
+      setEditingEnvio(false);
+      toast.success("Envío actualizado");
+      await fetchEnvios();
+      const { data } = await (supabase as any).from("transportes").select("*, clientes(razon_social), remitos(numero, estado)").eq("id", detailEnvio.id).single();
+      if (data) setDetailEnvio(data as EnvioRow);
+    } catch (err: any) { toast.error(err.message || "Error al guardar"); }
+    finally { setSavingEnvio(false); }
   }
 
-  // When selecting a remito in create form, auto-fill cliente
-  function handleRemitoSelect(remitoId: string) {
-    const remito = remitosDisponibles.find(r => r.id === remitoId);
-    setCreateForm(prev => ({
-      ...prev,
-      remito_id: remitoId,
-      cliente_id: remito ? remito.cliente_id : prev.cliente_id,
-    }));
-  }
-
-  // Apply filters
-  const filteredTransportes = transportes.filter((t) => {
-    const fechaFilter = smartFilterValues.fecha as { from?: string; to?: string } | undefined;
-    if (fechaFilter?.from && t.fecha < fechaFilter.from) return false;
-    if (fechaFilter?.to && t.fecha > fechaFilter.to) return false;
-    const estadoFilter = smartFilterValues.estado as string;
-    if (estadoFilter && t.estado !== estadoFilter) return false;
-    const transportistaFilter = smartFilterValues.transportista as string;
-    if (transportistaFilter && !t.transportista.toLowerCase().includes(transportistaFilter.toLowerCase())) return false;
+  // ── Filtros envíos ────────────────────────────────────────────────
+  const filteredEnvios = envios.filter(e => {
+    const f = envioFilterValues.fecha as { from?: string; to?: string };
+    if (f?.from && e.fecha < f.from) return false;
+    if (f?.to && e.fecha > f.to) return false;
+    const est = envioFilterValues.estado as string;
+    if (est && e.estado !== est) return false;
     return true;
   });
 
-  if (loading) {
-    return (
-      <>
-        <Header title="Transportes" subtitle="Cargando..." />
-        <div className="flex items-center justify-center h-96">
-          <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
-        </div>
-      </>
-    );
-  }
+  const activeTransportistas = transportistas.filter(t => t.activo);
 
+  // ── Render ────────────────────────────────────────────────────────
   return (
     <>
       <Header
         title="Transportes"
-        subtitle="Gestión de viajes y entregas"
-        action={{ label: "Nuevo transporte", onClick: openCreateModal }}
+        subtitle={activeTab === "catalogo" ? `${activeTransportistas.length} transportistas activos` : `${envios.length} envíos registrados`}
+        action={activeTab === "catalogo"
+          ? { label: "Nuevo transportista", onClick: openCatCreate }
+          : { label: "Registrar envío", onClick: openCreateEnvio }
+        }
       />
-      <div className="p-4 sm:p-8 space-y-6">
-        <SmartFilters
-          filters={smartFilterConfigs}
-          values={smartFilterValues}
-          onChange={setSmartFilterValues}
-        />
 
-        <Card className="p-0 overflow-hidden">
-          <DataTable<TransporteRow>
-            columns={[
-              {
-                key: "fecha",
-                label: "Fecha",
-                sortable: true,
-                render: (row) => (
-                  <span className="text-zinc-500 dark:text-zinc-400">{formatDate(row.fecha)}</span>
-                ),
-              },
-              {
-                key: "transportista",
-                label: "Transportista",
-                sortable: true,
-                render: (row) => (
-                  <div className="flex items-center gap-2">
-                    <Truck className="h-4 w-4 text-zinc-400" />
-                    <span className="font-medium dark:text-white">{row.transportista}</span>
-                  </div>
-                ),
-              },
-              {
-                key: "clientes",
-                label: "Cliente",
-                sortable: false,
-                render: (row) => (
-                  <span className="text-sm dark:text-zinc-300">{row.clientes?.razon_social || "—"}</span>
-                ),
-              },
-              {
-                key: "destino",
-                label: "Destino",
-                sortable: false,
-                render: (row) => (
-                  <span className="text-sm dark:text-zinc-300">{row.destino || "—"}</span>
-                ),
-              },
-              {
-                key: "remito_id",
-                label: "Remito",
-                sortable: false,
-                render: (row) => row.remitos ? (
-                  <div className="flex items-center gap-1">
-                    <FileText className="h-3 w-3 text-blue-500" />
-                    <span className="text-xs font-mono text-blue-600 dark:text-blue-400">{row.remitos.numero}</span>
-                  </div>
-                ) : (
-                  <span className="text-zinc-400">—</span>
-                ),
-              },
-              {
-                key: "costo",
-                label: "Monto",
-                sortable: true,
-                render: (row) => (
-                  <span className="font-mono text-sm dark:text-white">
-                    {row.costo != null ? formatCurrency(row.costo, row.moneda as "USD" | "ARS") : <span className="text-zinc-400">Sin costo</span>}
-                  </span>
-                ),
-              },
-              {
-                key: "estado",
-                label: "Estado",
-                sortable: true,
-                render: (row) => {
-                  const cfg = estadoConfig[row.estado] || { label: row.estado, variant: "info" as const };
-                  return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
-                },
-              },
-              {
-                key: "actions",
-                label: "",
-                sortable: false,
-                render: (row) => (
-                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    {row.estado === "solicitado" && (
-                      <button
-                        onClick={() => handleEstadoChange(row.id, "en_transito")}
-                        className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600 dark:hover:bg-blue-900/30"
-                        title="Marcar en tránsito"
-                      >
-                        <Truck className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    {row.estado === "en_transito" && (
-                      <button
-                        onClick={() => handleEstadoChange(row.id, "entregado")}
-                        className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600 dark:hover:bg-green-900/30"
-                        title="Marcar entregado"
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                    {row.estado === "solicitado" && (
-                      <button
-                        onClick={() => handleEstadoChange(row.id, "cancelado")}
-                        className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30"
-                        title="Cancelar"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                ),
-              },
-            ]}
-            data={filteredTransportes}
-            onRowClick={handleRowClick}
-          />
-        </Card>
+      <div className="p-4 sm:p-8 space-y-6">
+        {/* Tabs */}
+        <div className="flex gap-1 rounded-lg bg-zinc-100 dark:bg-zinc-800 p-1 w-fit">
+          {([
+            { key: "catalogo" as const, label: "Catálogo de transportistas", icon: <Building2 className="h-3.5 w-3.5" /> },
+            { key: "envios" as const, label: "Historial de envíos", icon: <Truck className="h-3.5 w-3.5" /> },
+          ]).map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                activeTab === tab.key
+                  ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm"
+                  : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300"
+              }`}
+            >
+              {tab.icon}
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── TAB: CATÁLOGO ─────────────────────────────────────────── */}
+        {activeTab === "catalogo" && (
+          <>
+            {catLoading ? (
+              <div className="flex items-center justify-center h-48">
+                <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
+              </div>
+            ) : (
+              <Card className="p-0 overflow-hidden">
+                <DataTable<TransportistaRow>
+                  columns={[
+                    {
+                      key: "nombre", label: "Transportista", sortable: true,
+                      render: (row) => (
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                            <Truck className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <p className="font-medium dark:text-white">{row.nombre}</p>
+                            {row.razon_social && row.razon_social !== row.nombre && (
+                              <p className="text-xs text-zinc-400">{row.razon_social}</p>
+                            )}
+                          </div>
+                        </div>
+                      ),
+                    },
+                    { key: "cuit", label: "CUIT", sortable: false, render: (row) => <span className="font-mono text-sm dark:text-zinc-300">{row.cuit || "—"}</span> },
+                    { key: "telefono", label: "Teléfono", sortable: false, render: (row) => <span className="text-sm dark:text-zinc-300">{row.telefono || "—"}</span> },
+                    { key: "localidad", label: "Ubicación", sortable: true, render: (row) => (
+                      <span className="text-xs text-zinc-500">{[row.localidad, row.provincia].filter(Boolean).join(", ") || "—"}</span>
+                    )},
+                    { key: "contacto_principal", label: "Contacto", sortable: false, render: (row) => <span className="text-sm dark:text-zinc-300">{row.contacto_principal || "—"}</span> },
+                    { key: "activo", label: "Estado", sortable: true, render: (row) => (
+                      <Badge variant={row.activo ? "success" : "danger"}>{row.activo ? "Activo" : "Inactivo"}</Badge>
+                    )},
+                    {
+                      key: "actions", label: "", sortable: false,
+                      render: (row) => (
+                        <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                          <button onClick={() => openCatEdit(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Editar">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button onClick={() => handleToggleActivo(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={row.activo ? "Desactivar" : "Activar"}>
+                            {row.activo ? <ToggleRight className="h-3.5 w-3.5 text-green-500" /> : <ToggleLeft className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
+                      ),
+                    },
+                  ]}
+                  data={transportistas}
+                  onRowClick={setSelectedTransportista}
+                  emptyMessage="Sin transportistas. Creá el primero con el botón de arriba."
+                />
+              </Card>
+            )}
+          </>
+        )}
+
+        {/* ── TAB: ENVÍOS ──────────────────────────────────────────── */}
+        {activeTab === "envios" && (
+          <>
+            <SmartFilters filters={envioFilterConfigs} values={envioFilterValues} onChange={setEnvioFilterValues} />
+            {enviosLoading ? (
+              <div className="flex items-center justify-center h-48">
+                <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
+              </div>
+            ) : (
+              <Card className="p-0 overflow-hidden">
+                <DataTable<EnvioRow>
+                  columns={[
+                    { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500 dark:text-zinc-400">{formatDate(row.fecha)}</span> },
+                    { key: "transportista", label: "Transportista", sortable: true, render: (row) => (
+                      <div className="flex items-center gap-2"><Truck className="h-4 w-4 text-zinc-400" /><span className="font-medium dark:text-white">{row.transportista}</span></div>
+                    )},
+                    { key: "clientes", label: "Cliente", sortable: false, render: (row) => <span className="text-sm dark:text-zinc-300">{row.clientes?.razon_social || "—"}</span> },
+                    { key: "destino", label: "Destino", sortable: false, render: (row) => <span className="text-sm dark:text-zinc-300">{row.destino || "—"}</span> },
+                    { key: "remito_id", label: "Remito", sortable: false, render: (row) => row.remitos ? (
+                      <div className="flex items-center gap-1">
+                        <FileText className="h-3 w-3 text-blue-500" />
+                        <span className="text-xs font-mono text-blue-600 dark:text-blue-400">{row.remitos.numero}</span>
+                      </div>
+                    ) : <span className="text-zinc-400">—</span> },
+                    { key: "costo", label: "Costo", sortable: true, render: (row) => (
+                      <span className="font-mono text-sm dark:text-white">
+                        {row.costo != null ? formatCurrency(row.costo, row.moneda as "USD" | "ARS") : <span className="text-zinc-400">—</span>}
+                      </span>
+                    )},
+                    { key: "estado", label: "Estado", sortable: true, render: (row) => {
+                      const cfg = envioEstadoConfig[row.estado] || { label: row.estado, variant: "info" as const };
+                      return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+                    }},
+                    { key: "actions", label: "", sortable: false, render: (row) => (
+                      <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                        {row.estado === "solicitado" && (
+                          <button onClick={() => handleEnvioEstado(row.id, "en_transito")} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600 dark:hover:bg-blue-900/30" title="En tránsito">
+                            <Truck className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        {(row.estado === "solicitado" || row.estado === "en_transito") && (
+                          <button onClick={() => handleEnvioEstado(row.id, "entregado")} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600 dark:hover:bg-green-900/30" title="Entregado">
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        {row.estado === "solicitado" && (
+                          <button onClick={() => handleEnvioEstado(row.id, "cancelado")} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30" title="Cancelar">
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    )},
+                  ]}
+                  data={filteredEnvios}
+                  onRowClick={(row) => { setDetailEnvio(row); setEditingEnvio(false); }}
+                  emptyMessage="Sin envíos registrados para los filtros actuales."
+                />
+              </Card>
+            )}
+          </>
+        )}
       </div>
 
-      {/* Detail Side Panel */}
-      {detailTransporte && (
+      {/* ── PANEL DETALLE: TRANSPORTISTA ───────────────────────────── */}
+      {selectedTransportista && (
         <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/30" onClick={() => { setDetailTransporte(null); setEditing(false); }} />
-          <div className="relative w-full max-w-xl bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setSelectedTransportista(null)} />
+          <div className="relative w-full max-w-md bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto">
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
               <div>
-                <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-semibold dark:text-white">{detailTransporte.transportista}</h2>
-                  <Badge variant={(estadoConfig[detailTransporte.estado] || { variant: "info" as const }).variant}>
-                    {(estadoConfig[detailTransporte.estado] || { label: detailTransporte.estado }).label}
-                  </Badge>
-                </div>
-                <p className="text-sm text-zinc-400 mt-0.5">{formatDate(detailTransporte.fecha)}</p>
+                <h2 className="text-lg font-semibold dark:text-white">{selectedTransportista.nombre}</h2>
+                <Badge variant={selectedTransportista.activo ? "success" : "danger"} className="mt-1">
+                  {selectedTransportista.activo ? "Activo" : "Inactivo"}
+                </Badge>
               </div>
               <div className="flex items-center gap-2">
-                {!editing && detailTransporte.estado !== "entregado" && detailTransporte.estado !== "cancelado" && (
-                  <button
-                    onClick={startEditing}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
-                  >
-                    Editar
-                  </button>
-                )}
-                <button onClick={() => { setDetailTransporte(null); setEditing(false); }} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <button onClick={() => { openCatEdit(selectedTransportista); setSelectedTransportista(null); }} className="px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800">
+                  Editar
+                </button>
+                <button onClick={() => setSelectedTransportista(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
                   <X className="h-5 w-5" />
                 </button>
               </div>
             </div>
+            <div className="px-6 py-5 space-y-4 text-sm">
+              {selectedTransportista.razon_social && (
+                <div><span className="text-zinc-400">Razón social</span><p className="font-medium dark:text-white mt-0.5">{selectedTransportista.razon_social}</p></div>
+              )}
+              {selectedTransportista.cuit && (
+                <div><span className="text-zinc-400">CUIT</span><p className="font-mono font-medium dark:text-white mt-0.5">{selectedTransportista.cuit}</p></div>
+              )}
+              <div className="grid grid-cols-2 gap-4">
+                {selectedTransportista.telefono && (
+                  <div>
+                    <span className="text-zinc-400">Teléfono</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <Phone className="h-3.5 w-3.5 text-zinc-400" />
+                      <a href={`tel:${selectedTransportista.telefono}`} className="font-medium dark:text-white hover:text-orange-500">{selectedTransportista.telefono}</a>
+                    </div>
+                  </div>
+                )}
+                {selectedTransportista.email && (
+                  <div>
+                    <span className="text-zinc-400">Email</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <Mail className="h-3.5 w-3.5 text-zinc-400" />
+                      <a href={`mailto:${selectedTransportista.email}`} className="font-medium dark:text-white hover:text-orange-500 truncate">{selectedTransportista.email}</a>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {(selectedTransportista.localidad || selectedTransportista.provincia) && (
+                <div>
+                  <span className="text-zinc-400">Ubicación</span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <MapPin className="h-3.5 w-3.5 text-zinc-400" />
+                    <p className="font-medium dark:text-white">{[selectedTransportista.direccion, selectedTransportista.localidad, selectedTransportista.provincia].filter(Boolean).join(", ")}</p>
+                  </div>
+                </div>
+              )}
+              {selectedTransportista.contacto_principal && (
+                <div>
+                  <span className="text-zinc-400">Contacto principal</span>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <User className="h-3.5 w-3.5 text-zinc-400" />
+                    <p className="font-medium dark:text-white">{selectedTransportista.contacto_principal}</p>
+                  </div>
+                </div>
+              )}
+              {selectedTransportista.observaciones && (
+                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
+                  <span className="text-xs text-zinc-400 block mb-1">Observaciones</span>
+                  <p className="dark:text-zinc-300">{selectedTransportista.observaciones}</p>
+                </div>
+              )}
+              <div className="pt-2">
+                <button
+                  onClick={() => handleToggleActivo(selectedTransportista)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                    selectedTransportista.activo
+                      ? "border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-900/20"
+                      : "border-green-200 text-green-600 hover:bg-green-50 dark:border-green-800 dark:hover:bg-green-900/20"
+                  }`}
+                >
+                  {selectedTransportista.activo ? <><ToggleLeft className="h-4 w-4" /> Desactivar</> : <><ToggleRight className="h-4 w-4" /> Activar</>}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
-            <div className="px-6 py-5 space-y-5">
-              {/* Action buttons */}
-              {!editing && detailTransporte.estado !== "entregado" && detailTransporte.estado !== "cancelado" && (
+      {/* ── PANEL DETALLE: ENVÍO ────────────────────────────────────── */}
+      {detailEnvio && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-black/30" onClick={() => { setDetailEnvio(null); setEditingEnvio(false); }} />
+          <div className="relative w-full max-w-md bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
+              <div>
+                <h2 className="text-lg font-semibold dark:text-white">{detailEnvio.transportista}</h2>
+                <Badge variant={(envioEstadoConfig[detailEnvio.estado] || { variant: "info" as const }).variant} className="mt-1">
+                  {(envioEstadoConfig[detailEnvio.estado] || { label: detailEnvio.estado }).label}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2">
+                {!editingEnvio && !["entregado", "cancelado"].includes(detailEnvio.estado) && (
+                  <button
+                    onClick={() => { setEditingEnvio(true); setEditEnvioForm({ destino: detailEnvio.destino || "", origen: detailEnvio.origen || "", costo: detailEnvio.costo != null ? String(detailEnvio.costo) : "", moneda: detailEnvio.moneda as "ARS" | "USD", bultos: detailEnvio.bultos != null ? String(detailEnvio.bultos) : "", tipo_vehiculo: detailEnvio.tipo_vehiculo || "", descripcion_carga: detailEnvio.descripcion_carga || "", notas: detailEnvio.notas || "" }); }}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                  >Editar</button>
+                )}
+                <button onClick={() => { setDetailEnvio(null); setEditingEnvio(false); }} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-5 w-5" /></button>
+              </div>
+            </div>
+            <div className="px-6 py-5 space-y-4 text-sm">
+              {/* Acciones estado */}
+              {!editingEnvio && !["entregado", "cancelado"].includes(detailEnvio.estado) && (
                 <div className="flex flex-wrap gap-2">
-                  {detailTransporte.estado === "solicitado" && (
-                    <button
-                      onClick={() => { handleEstadoChange(detailTransporte.id, "en_transito"); setDetailTransporte({ ...detailTransporte, estado: "en_transito" }); }}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
-                    >
+                  {detailEnvio.estado === "solicitado" && (
+                    <button onClick={() => handleEnvioEstado(detailEnvio.id, "en_transito")} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600">
                       <Truck className="h-4 w-4" /> En tránsito
                     </button>
                   )}
-                  {(detailTransporte.estado === "solicitado" || detailTransporte.estado === "en_transito") && (
-                    <button
-                      onClick={() => { handleEstadoChange(detailTransporte.id, "entregado"); setDetailTransporte({ ...detailTransporte, estado: "entregado" }); }}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition-colors"
-                    >
-                      <CheckCircle2 className="h-4 w-4" /> Marcar entregado
+                  <button onClick={() => handleEnvioEstado(detailEnvio.id, "entregado")} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600">
+                    <CheckCircle2 className="h-4 w-4" /> Marcar entregado
+                  </button>
+                  {detailEnvio.estado === "solicitado" && (
+                    <button onClick={() => handleEnvioEstado(detailEnvio.id, "cancelado")} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-900/20">
+                      <X className="h-4 w-4" /> Cancelar
                     </button>
                   )}
                 </div>
               )}
 
-              {editing ? (
-                /* Edit form */
+              {editingEnvio ? (
                 <div className="space-y-3">
-                  <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Transportista</label>
-                    <input type="text" value={editForm.transportista} onChange={e => setEditForm({ ...editForm, transportista: e.target.value })}
-                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                  </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Origen</label>
-                      <input type="text" value={editForm.origen} onChange={e => setEditForm({ ...editForm, origen: e.target.value })}
-                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Origen</label>
+                      <input type="text" value={editEnvioForm.origen} onChange={e => setEditEnvioForm({ ...editEnvioForm, origen: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Destino</label>
-                      <input type="text" value={editForm.destino} onChange={e => setEditForm({ ...editForm, destino: e.target.value })}
-                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Destino</label>
+                      <input type="text" value={editEnvioForm.destino} onChange={e => setEditEnvioForm({ ...editEnvioForm, destino: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Monto (opcional)</label>
-                      <input type="number" step="0.01" value={editForm.costo} onChange={e => setEditForm({ ...editForm, costo: e.target.value })}
-                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Sin costo" />
+                      <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Costo (interno)</label>
+                      <input type="number" step="0.01" value={editEnvioForm.costo} onChange={e => setEditEnvioForm({ ...editEnvioForm, costo: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Sin costo" />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Moneda</label>
-                      <select value={editForm.moneda} onChange={e => setEditForm({ ...editForm, moneda: e.target.value as "ARS" | "USD" })}
-                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                        <option value="ARS">ARS</option>
-                        <option value="USD">USD</option>
+                      <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Moneda</label>
+                      <select value={editEnvioForm.moneda} onChange={e => setEditEnvioForm({ ...editEnvioForm, moneda: e.target.value as "ARS" | "USD" })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                        <option value="ARS">ARS</option><option value="USD">USD</option>
                       </select>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Bultos</label>
-                      <input type="number" min="0" value={editForm.bultos} onChange={e => setEditForm({ ...editForm, bultos: e.target.value })}
-                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Bultos</label>
+                      <input type="number" min="0" value={editEnvioForm.bultos} onChange={e => setEditEnvioForm({ ...editEnvioForm, bultos: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo vehículo</label>
-                      <input type="text" value={editForm.tipo_vehiculo} onChange={e => setEditForm({ ...editForm, tipo_vehiculo: e.target.value })}
-                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Semi, Chasis..." />
+                      <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo vehículo</label>
+                      <input type="text" value={editEnvioForm.tipo_vehiculo} onChange={e => setEditEnvioForm({ ...editEnvioForm, tipo_vehiculo: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Descripción de carga</label>
-                    <textarea value={editForm.descripcion_carga} onChange={e => setEditForm({ ...editForm, descripcion_carga: e.target.value })}
-                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" rows={2} />
+                    <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Descripción de carga</label>
+                    <textarea value={editEnvioForm.descripcion_carga} onChange={e => setEditEnvioForm({ ...editEnvioForm, descripcion_carga: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" rows={2} />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Notas</label>
-                    <textarea value={editForm.notas} onChange={e => setEditForm({ ...editForm, notas: e.target.value })}
-                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" rows={2} />
+                    <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">Notas</label>
+                    <textarea value={editEnvioForm.notas} onChange={e => setEditEnvioForm({ ...editEnvioForm, notas: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" rows={2} />
                   </div>
-                  <div className="flex justify-end gap-2 pt-1">
-                    <button onClick={() => setEditing(false)} className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">
-                      Cancelar
-                    </button>
-                    <button onClick={handleSaveEdit} disabled={saving || !editForm.transportista}
-                      className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50 flex items-center gap-2">
-                      {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                      Guardar
+                  <div className="flex justify-end gap-2">
+                    <button onClick={() => setEditingEnvio(false)} className="px-4 py-2 rounded-lg border border-zinc-300 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">Cancelar</button>
+                    <button onClick={handleSaveEnvio} disabled={savingEnvio} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-600 text-white text-sm hover:bg-orange-700 disabled:opacity-50">
+                      {savingEnvio && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Guardar
                     </button>
                   </div>
                 </div>
               ) : (
-                <>
-                  {/* Info grid */}
-                  <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div><span className="text-zinc-400">Cliente</span><p className="font-medium dark:text-white mt-0.5">{detailEnvio.clientes?.razon_social || "—"}</p></div>
+                    <div><span className="text-zinc-400">Fecha</span><p className="font-medium dark:text-white mt-0.5">{formatDate(detailEnvio.fecha)}</p></div>
+                    <div><span className="text-zinc-400">Origen</span><p className="font-medium dark:text-white mt-0.5">{detailEnvio.origen || "—"}</p></div>
+                    <div><span className="text-zinc-400">Destino</span><p className="font-medium dark:text-white mt-0.5">{detailEnvio.destino || "—"}</p></div>
                     <div>
-                      <span className="text-zinc-400">Cliente</span>
-                      <p className="font-medium dark:text-white">{detailTransporte.clientes?.razon_social || "—"}</p>
-                    </div>
-                    <div>
-                      <span className="text-zinc-400">Tipo de vehículo</span>
-                      <p className="font-medium dark:text-white">{detailTransporte.tipo_vehiculo || "—"}</p>
-                    </div>
-                    <div>
-                      <span className="text-zinc-400">Origen</span>
-                      <div className="flex items-center gap-1.5">
-                        <MapPin className="h-3.5 w-3.5 text-zinc-400" />
-                        <p className="font-medium dark:text-white">{detailTransporte.origen || "—"}</p>
-                      </div>
-                    </div>
-                    <div>
-                      <span className="text-zinc-400">Destino</span>
-                      <div className="flex items-center gap-1.5">
-                        <MapPin className="h-3.5 w-3.5 text-orange-500" />
-                        <p className="font-medium dark:text-white">{detailTransporte.destino || "—"}</p>
-                      </div>
-                    </div>
-                    <div>
-                      <span className="text-zinc-400">Costo</span>
-                      <p className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
-                        {detailTransporte.costo != null ? formatCurrency(detailTransporte.costo, detailTransporte.moneda as "USD" | "ARS") : <span className="text-zinc-400 font-sans">Sin costo asignado</span>}
+                      <span className="text-zinc-400">Costo flete <span className="text-xs">(interno)</span></span>
+                      <p className="font-mono font-medium text-emerald-600 dark:text-emerald-400 mt-0.5">
+                        {detailEnvio.costo != null ? formatCurrency(detailEnvio.costo, detailEnvio.moneda as "USD" | "ARS") : "—"}
                       </p>
                     </div>
-                    <div>
-                      <span className="text-zinc-400">Bultos</span>
-                      <p className="font-medium dark:text-white">
-                        {detailTransporte.bultos != null ? detailTransporte.bultos : "—"}
-                      </p>
-                    </div>
-                    {detailTransporte.comision_porcentaje != null && (
-                      <div>
-                        <span className="text-zinc-400">Comisión (%)</span>
-                        <p className="font-medium dark:text-white">{detailTransporte.comision_porcentaje}%</p>
-                      </div>
-                    )}
-                    {detailTransporte.comision_monto != null && (
-                      <div>
-                        <span className="text-zinc-400">Comisión ($)</span>
-                        <p className="font-mono font-medium text-orange-600 dark:text-orange-400">
-                          {formatCurrency(detailTransporte.comision_monto, detailTransporte.moneda as "USD" | "ARS")}
-                        </p>
-                      </div>
-                    )}
+                    <div><span className="text-zinc-400">Bultos</span><p className="font-medium dark:text-white mt-0.5">{detailEnvio.bultos ?? "—"}</p></div>
+                    {detailEnvio.tipo_vehiculo && <div><span className="text-zinc-400">Vehículo</span><p className="font-medium dark:text-white mt-0.5">{detailEnvio.tipo_vehiculo}</p></div>}
                   </div>
-
-                  {/* Linked remito */}
-                  {detailTransporte.remitos && (
+                  {detailEnvio.remitos && (
                     <div className="rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 p-3">
                       <span className="text-xs text-blue-500 block mb-1">Remito vinculado</span>
                       <div className="flex items-center gap-2">
                         <FileText className="h-4 w-4 text-blue-500" />
-                        <button
-                          onClick={() => window.open("/remitos", "_self")}
-                          className="font-mono text-sm font-bold text-blue-600 dark:text-blue-400 hover:underline"
-                        >
-                          {detailTransporte.remitos.numero}
-                        </button>
-                        <Badge variant={detailTransporte.remitos.estado === "entregado" ? "success" : detailTransporte.remitos.estado === "parcial" ? "info" : "warning"}>
-                          {detailTransporte.remitos.estado}
+                        <span className="font-mono text-sm font-bold text-blue-600 dark:text-blue-400">{detailEnvio.remitos.numero}</span>
+                        <Badge variant={detailEnvio.remitos.estado === "entregado" ? "success" : detailEnvio.remitos.estado === "parcial" ? "info" : "warning"}>
+                          {detailEnvio.remitos.estado}
                         </Badge>
                       </div>
                     </div>
                   )}
-
-                  {/* Descripcion carga */}
-                  {detailTransporte.descripcion_carga && (
+                  {detailEnvio.descripcion_carga && (
                     <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
                       <span className="text-xs text-zinc-400 block mb-1">Descripción de carga</span>
-                      <p className="text-sm dark:text-zinc-300">{detailTransporte.descripcion_carga}</p>
+                      <p className="dark:text-zinc-300">{detailEnvio.descripcion_carga}</p>
                     </div>
                   )}
-
-                  {/* Notas */}
-                  {detailTransporte.notas && (
+                  {detailEnvio.notas && (
                     <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
                       <span className="text-xs text-zinc-400 block mb-1">Notas</span>
-                      <p className="text-sm dark:text-zinc-300">{detailTransporte.notas}</p>
+                      <p className="dark:text-zinc-300">{detailEnvio.notas}</p>
                     </div>
                   )}
-                </>
+                </div>
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Create Modal */}
-      {createModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <Card className="w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold dark:text-white">Nuevo Transporte</h2>
-              <button onClick={() => setCreateModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
-                <X className="h-5 w-5" />
+      {/* ── MODAL CREAR/EDITAR TRANSPORTISTA ───────────────────────── */}
+      {catModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg bg-white dark:bg-zinc-900 rounded-xl shadow-2xl overflow-y-auto max-h-[90vh]">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
+              <h2 className="text-lg font-semibold dark:text-white">{catEditingId ? "Editar transportista" : "Nuevo transportista"}</h2>
+              <button onClick={() => setCatModalOpen(false)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Nombre comercial *</label>
+                <input type="text" value={catForm.nombre} onChange={e => setCatForm({ ...catForm, nombre: e.target.value })} className={`w-full rounded-lg border px-3 py-2 text-sm dark:bg-zinc-800 dark:text-white ${catFormErrors.nombre ? "border-red-400 dark:border-red-500" : "border-zinc-300 dark:border-zinc-700"}`} placeholder="Ej: Andreani, OCA, Transporte ABC" />
+                {catFormErrors.nombre && <p className="mt-1 text-xs text-red-500">{catFormErrors.nombre}</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Razón social</label>
+                <input type="text" value={catForm.razon_social} onChange={e => setCatForm({ ...catForm, razon_social: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">CUIT</label>
+                  <input type="text" value={catForm.cuit} onChange={e => setCatForm({ ...catForm, cuit: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="20-12345678-9" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Teléfono</label>
+                  <input type="text" value={catForm.telefono} onChange={e => setCatForm({ ...catForm, telefono: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Email</label>
+                <input type="email" value={catForm.email} onChange={e => setCatForm({ ...catForm, email: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Dirección</label>
+                <input type="text" value={catForm.direccion} onChange={e => setCatForm({ ...catForm, direccion: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Localidad</label>
+                  <input type="text" value={catForm.localidad} onChange={e => setCatForm({ ...catForm, localidad: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Provincia</label>
+                  <input type="text" value={catForm.provincia} onChange={e => setCatForm({ ...catForm, provincia: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Contacto principal</label>
+                <input type="text" value={catForm.contacto_principal} onChange={e => setCatForm({ ...catForm, contacto_principal: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Nombre y apellido" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Observaciones</label>
+                <textarea value={catForm.observaciones} onChange={e => setCatForm({ ...catForm, observaciones: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" rows={2} />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 px-6 pb-5">
+              <button onClick={() => setCatModalOpen(false)} className="px-4 py-2 rounded-lg border border-zinc-300 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">Cancelar</button>
+              <button onClick={handleSaveTransportista} disabled={catSaving} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-600 text-white text-sm hover:bg-orange-700 disabled:opacity-50">
+                {catSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {catEditingId ? "Guardar cambios" : "Crear transportista"}
               </button>
             </div>
-            <div className="space-y-3">
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL CREAR ENVÍO ───────────────────────────────────────── */}
+      {createEnvioOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg bg-white dark:bg-zinc-900 rounded-xl shadow-2xl overflow-y-auto max-h-[90vh]">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
+              <h2 className="text-lg font-semibold dark:text-white">Registrar envío</h2>
+              <button onClick={() => setCreateEnvioOpen(false)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="px-6 py-5 space-y-3">
+              {/* Transportista desde catálogo */}
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Transportista *</label>
-                <input
-                  type="text"
-                  value={createForm.transportista}
-                  onChange={(e) => setCreateForm({ ...createForm, transportista: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  placeholder="Nombre del transportista"
-                />
+                <select value={envioForm.transportista_id} onChange={e => setEnvioForm({ ...envioForm, transportista_id: e.target.value, transportista_nombre: "" })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white">
+                  <option value="">Seleccionar del catálogo...</option>
+                  {activeTransportistas.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                </select>
+                {!envioForm.transportista_id && (
+                  <div className="mt-2">
+                    <input type="text" value={envioForm.transportista_nombre} onChange={e => setEnvioForm({ ...envioForm, transportista_nombre: e.target.value })} placeholder="O ingresá nombre manualmente..." className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                    <p className="text-xs text-zinc-400 mt-0.5">El transportista no quedará en el catálogo si lo ingresás manualmente.</p>
+                  </div>
+                )}
               </div>
-
-              {/* Remito vinculado */}
+              {/* Vincular a remito */}
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
                   <span className="flex items-center gap-1.5"><Link2 className="h-3.5 w-3.5" /> Vincular a remito (opcional)</span>
                 </label>
-                <select
-                  value={createForm.remito_id}
-                  onChange={(e) => handleRemitoSelect(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                >
+                <select value={envioForm.remito_id} onChange={e => { const rem = remitosDisponibles.find(r => r.id === e.target.value); setEnvioForm({ ...envioForm, remito_id: e.target.value, cliente_id: rem?.cliente_id || envioForm.cliente_id }); }} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white">
                   <option value="">Sin remito</option>
-                  {remitosDisponibles.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {r.numero} — {r.clienteNombre}
-                    </option>
-                  ))}
+                  {remitosDisponibles.map(r => <option key={r.id} value={r.id}>{r.numero} — {r.clienteNombre}</option>)}
                 </select>
-                {createForm.remito_id && (
-                  <p className="text-xs text-blue-500 mt-1">El cliente se seleccionó automáticamente del remito.</p>
-                )}
               </div>
-
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente</label>
-                <select
-                  value={createForm.cliente_id}
-                  onChange={(e) => setCreateForm({ ...createForm, cliente_id: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  disabled={!!createForm.remito_id}
-                >
+                <select value={envioForm.cliente_id} onChange={e => setEnvioForm({ ...envioForm, cliente_id: e.target.value })} disabled={!!envioForm.remito_id} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white disabled:opacity-60">
                   <option value="">Seleccionar cliente...</option>
-                  {clientes.map((c) => (
-                    <option key={c.id} value={c.id}>{c.razon_social}</option>
-                  ))}
+                  {clientes.map(c => <option key={c.id} value={c.id}>{c.razon_social}</option>)}
                 </select>
               </div>
-
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Origen</label>
-                  <input
-                    type="text"
-                    value={createForm.origen}
-                    onChange={(e) => setCreateForm({ ...createForm, origen: e.target.value })}
-                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                    placeholder="Ciudad de origen"
-                  />
+                  <input type="text" value={envioForm.origen} onChange={e => setEnvioForm({ ...envioForm, origen: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" placeholder="Ciudad de origen" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Destino</label>
-                  <input
-                    type="text"
-                    value={createForm.destino}
-                    onChange={(e) => setCreateForm({ ...createForm, destino: e.target.value })}
-                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                    placeholder="Ciudad de destino"
-                  />
+                  <input type="text" value={envioForm.destino} onChange={e => setEnvioForm({ ...envioForm, destino: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" placeholder="Ciudad de destino" />
                 </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha *</label>
-                <input
-                  type="date"
-                  value={createForm.fecha}
-                  onChange={(e) => setCreateForm({ ...createForm, fecha: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Bultos</label>
-                <input
-                  type="number"
-                  min="0"
-                  value={createForm.bultos}
-                  onChange={(e) => setCreateForm({ ...createForm, bultos: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  placeholder="Cantidad de bultos"
-                />
+                <input type="date" value={envioForm.fecha} onChange={e => setEnvioForm({ ...envioForm, fecha: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Monto (opcional)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={createForm.costo}
-                    onChange={(e) => setCreateForm({ ...createForm, costo: e.target.value })}
-                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                    placeholder="Sin costo"
-                  />
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Costo flete <span className="text-xs text-zinc-400">(interno)</span></label>
+                  <input type="number" step="0.01" value={envioForm.costo} onChange={e => setEnvioForm({ ...envioForm, costo: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" placeholder="Sin costo" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Moneda</label>
-                  <select
-                    value={createForm.moneda}
-                    onChange={(e) => setCreateForm({ ...createForm, moneda: e.target.value as "ARS" | "USD" })}
-                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  >
-                    <option value="ARS">ARS</option>
-                    <option value="USD">USD</option>
+                  <select value={envioForm.moneda} onChange={e => setEnvioForm({ ...envioForm, moneda: e.target.value as "ARS" | "USD" })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white">
+                    <option value="ARS">ARS</option><option value="USD">USD</option>
                   </select>
                 </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo de vehículo</label>
-                <input
-                  type="text"
-                  value={createForm.tipo_vehiculo}
-                  onChange={(e) => setCreateForm({ ...createForm, tipo_vehiculo: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  placeholder="Ej: Semi, Chasis, Balancín..."
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Bultos</label>
+                  <input type="number" min="0" value={envioForm.bultos} onChange={e => setEnvioForm({ ...envioForm, bultos: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo vehículo</label>
+                  <input type="text" value={envioForm.tipo_vehiculo} onChange={e => setEnvioForm({ ...envioForm, tipo_vehiculo: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" placeholder="Semi, chasis..." />
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Descripción de carga</label>
-                <textarea
-                  value={createForm.descripcion_carga}
-                  onChange={(e) => setCreateForm({ ...createForm, descripcion_carga: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  rows={2}
-                  placeholder="Detalle de la mercadería..."
-                />
+                <textarea value={envioForm.descripcion_carga} onChange={e => setEnvioForm({ ...envioForm, descripcion_carga: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" rows={2} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Notas</label>
-                <textarea
-                  value={createForm.notas}
-                  onChange={(e) => setCreateForm({ ...createForm, notas: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  rows={2}
-                  placeholder="Notas adicionales..."
-                />
+                <textarea value={envioForm.notas} onChange={e => setEnvioForm({ ...envioForm, notas: e.target.value })} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" rows={2} />
               </div>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => setCreateModalOpen(false)}
-                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleCreateTransporte}
-                disabled={creating || !createForm.transportista}
-                className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
-              >
-                {creating ? "Creando..." : "Crear Transporte"}
+            <div className="flex justify-end gap-2 px-6 pb-5">
+              <button onClick={() => setCreateEnvioOpen(false)} className="px-4 py-2 rounded-lg border border-zinc-300 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">Cancelar</button>
+              <button onClick={handleCreateEnvio} disabled={creatingEnvio} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-600 text-white text-sm hover:bg-orange-700 disabled:opacity-50">
+                {creatingEnvio && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Registrar envío
               </button>
             </div>
-          </Card>
+          </div>
         </div>
       )}
     </>

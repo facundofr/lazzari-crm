@@ -198,7 +198,7 @@ const emptyForm = {
   flete: "",
 };
 
-type DetailTab = "datos" | "contactos" | "sucursales" | "historial" | "actividad" | "cc";
+type DetailTab = "datos" | "contactos" | "sucursales" | "relevamiento" | "historial" | "actividad" | "cc";
 
 interface CCFactura {
   id: string;
@@ -283,8 +283,8 @@ export default function ClientesPage() {
   const [contactosModalLoading, setContactosModalLoading] = useState(false);
 
   // Sucursales CRUD desde panel de detalle
-  type SucursalDetailForm = { nombre: string; direccion: string; localidad: string; provincia: string; cp: string; telefono: string; email: string };
-  const emptySucursalDetailForm: SucursalDetailForm = { nombre: "", direccion: "", localidad: "", provincia: "", cp: "", telefono: "", email: "" };
+  type SucursalDetailForm = { nombre: string; direccion: string; localidad: string; provincia: string; cp: string; telefono: string; email: string; transportista_id: string; principal: boolean };
+  const emptySucursalDetailForm: SucursalDetailForm = { nombre: "", direccion: "", localidad: "", provincia: "", cp: "", telefono: "", email: "", transportista_id: "", principal: false };
   const [addingSucursal, setAddingSucursal] = useState(false);
   const [editingSucursalId, setEditingSucursalId] = useState<string | null>(null);
   const [sucursalDetailForm, setSucursalDetailForm] = useState<SucursalDetailForm>(emptySucursalDetailForm);
@@ -309,6 +309,39 @@ export default function ClientesPage() {
 
   // Vendedores list (for assigning to contactos)
   const [vendedores, setVendedores] = useState<{id: string; full_name: string}[]>([]);
+
+  // Transportistas catalog (for sucursales)
+  const [transportistas, setTransportistas] = useState<{id: string; nombre: string}[]>([]);
+
+  // Per-field form errors
+  const [formFieldErrors, setFormFieldErrors] = useState<Record<string, string>>({});
+
+  // Relevamiento state
+  interface FichaRelevamiento {
+    id: string;
+    fecha: string;
+    tipo: string;
+    descripcion: string;
+    productos_interes: string | null;
+    productos_habituales: string | null;
+    frecuencia_compra: string | null;
+    marcas_preferidas: string | null;
+    talles: string | null;
+    medidas: string | null;
+    especificaciones: string | null;
+    observaciones_generales: string | null;
+    proxima_accion: string | null;
+    fecha_proxima_accion: string | null;
+    updated_at: string | null;
+    profiles?: { full_name: string } | null;
+  }
+  const [fichasRelevamiento, setFichasRelevamiento] = useState<FichaRelevamiento[]>([]);
+  const [relevLoading, setRelevLoading] = useState(false);
+  const [relevModalOpen, setRelevModalOpen] = useState(false);
+  const [relevEditingId, setRelevEditingId] = useState<string | null>(null);
+  const [relevSaving, setRelevSaving] = useState(false);
+  const emptyRelevForm = { descripcion: "", productos_habituales: "", frecuencia_compra: "", marcas_preferidas: "", talles: "", medidas: "", especificaciones: "", observaciones_generales: "", proxima_accion: "", fecha_proxima_accion: "" };
+  const [relevForm, setRelevForm] = useState(emptyRelevForm);
 
   // Ficha completa
   const [fichaData, setFichaData] = useState<FichaData>({
@@ -384,6 +417,74 @@ export default function ClientesPage() {
     }
     fetchVendedores();
   }, []);
+
+  // Fetch transportistas catalog on mount
+  useEffect(() => {
+    async function fetchTransportistas() {
+      try {
+        const { data } = await (supabase as any).from("transportistas").select("id, nombre").eq("activo", true).order("nombre");
+        if (data) setTransportistas(data as { id: string; nombre: string }[]);
+      } catch { /* ignore */ }
+    }
+    fetchTransportistas();
+  }, []);
+
+  // Fetch fichas de relevamiento when tab is selected
+  useEffect(() => {
+    if (!selectedCliente || detailTab !== "relevamiento") return;
+    const clienteId = selectedCliente.id;
+    setRelevLoading(true);
+    async function fetchFichas() {
+      try {
+        const { data } = await (supabase as any)
+          .from("fichas_relevamiento")
+          .select("*, profiles:actualizado_por(full_name)")
+          .eq("cliente_id", clienteId)
+          .order("updated_at", { ascending: false });
+        setFichasRelevamiento(data || []);
+      } catch { setFichasRelevamiento([]); }
+      finally { setRelevLoading(false); }
+    }
+    fetchFichas();
+  }, [selectedCliente?.id, detailTab]);
+
+  async function handleSaveRelevamiento() {
+    if (!selectedCliente || !relevForm.descripcion.trim()) return;
+    setRelevSaving(true);
+    try {
+      const payload = {
+        cliente_id: selectedCliente.id,
+        sociedad_id: sociedadActiva?.id,
+        descripcion: relevForm.descripcion.trim(),
+        productos_habituales: relevForm.productos_habituales || null,
+        frecuencia_compra: relevForm.frecuencia_compra || null,
+        marcas_preferidas: relevForm.marcas_preferidas || null,
+        talles: relevForm.talles || null,
+        medidas: relevForm.medidas || null,
+        especificaciones: relevForm.especificaciones || null,
+        observaciones_generales: relevForm.observaciones_generales || null,
+        proxima_accion: relevForm.proxima_accion || null,
+        fecha_proxima_accion: relevForm.fecha_proxima_accion || null,
+        actualizado_at: new Date().toISOString(),
+      };
+      if (relevEditingId) {
+        const { error } = await (supabase as any).from("fichas_relevamiento").update(payload).eq("id", relevEditingId);
+        if (error) throw error;
+        toast.success("Relevamiento actualizado");
+      } else {
+        const { error } = await (supabase as any).from("fichas_relevamiento").insert({ ...payload, fecha: new Date().toISOString().split("T")[0], tipo: "relevamiento" });
+        if (error) throw error;
+        toast.success("Relevamiento guardado");
+      }
+      setRelevModalOpen(false);
+      setRelevEditingId(null);
+      setRelevForm(emptyRelevForm);
+      // Refresh
+      const { data } = await (supabase as any).from("fichas_relevamiento").select("*, profiles:actualizado_por(full_name)").eq("cliente_id", selectedCliente.id).order("updated_at", { ascending: false });
+      setFichasRelevamiento(data || []);
+    } catch (err: any) { toast.error(err.message || "Error al guardar relevamiento"); }
+    finally { setRelevSaving(false); }
+  }
 
   useEffect(() => {
     if (!selectedCliente) return;
@@ -1007,14 +1108,30 @@ export default function ClientesPage() {
   }
 
   async function handleSave() {
-    if (!form.razon_social.trim()) {
-      setFormError("La razon social es obligatoria");
-      return;
-    }
+    // Validación por campo
+    const fieldErrs: Record<string, string> = {};
+    if (!form.razon_social.trim()) fieldErrs.razon_social = "La razón social es obligatoria";
     if (!form.cuit.trim()) {
-      setFormError("El CUIT es obligatorio");
+      fieldErrs.cuit = "El CUIT es obligatorio";
+    } else {
+      const cleanCuit = form.cuit.replace(/\D/g, "");
+      if (cleanCuit.length !== 11) fieldErrs.cuit = "El CUIT debe tener 11 dígitos";
+    }
+    if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+      fieldErrs.email = "El email no tiene un formato válido";
+    }
+    if (Object.keys(fieldErrs).length > 0) {
+      setFormFieldErrors(fieldErrs);
+      setFormError("");
+      // Scroll to first error
+      const firstKey = Object.keys(fieldErrs)[0];
+      setTimeout(() => {
+        const el = document.getElementById(`field-${firstKey}`);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }, 50);
       return;
     }
+    setFormFieldErrors({});
     setSaving(true);
     setFormError("");
     try {
@@ -1227,6 +1344,7 @@ export default function ClientesPage() {
     { key: "datos", label: "Datos", icon: <FileText className="h-3.5 w-3.5" /> },
     { key: "contactos", label: "Contactos", icon: <User className="h-3.5 w-3.5" /> },
     { key: "sucursales", label: "Sucursales", icon: <Building2 className="h-3.5 w-3.5" /> },
+    { key: "relevamiento", label: "Relevamiento", icon: <ShoppingBag className="h-3.5 w-3.5" /> },
     { key: "historial", label: "Historial", icon: <BarChart3 className="h-3.5 w-3.5" /> },
     { key: "actividad", label: "Actividad", icon: <Clock className="h-3.5 w-3.5" /> },
     { key: "cc", label: "Cta. Cte.", icon: <CreditCard className="h-3.5 w-3.5" /> },
@@ -1264,40 +1382,43 @@ export default function ClientesPage() {
     if (!selectedCliente || !sucursalDetailForm.nombre.trim()) return;
     setSavingSucursal(true);
     try {
+      const sucursalPayload = {
+        nombre: sucursalDetailForm.nombre.trim(),
+        direccion: sucursalDetailForm.direccion || null,
+        localidad: sucursalDetailForm.localidad || null,
+        provincia: sucursalDetailForm.provincia || null,
+        cp: sucursalDetailForm.cp || null,
+        telefono: sucursalDetailForm.telefono || null,
+        email: sucursalDetailForm.email || null,
+        transportista_id: sucursalDetailForm.transportista_id || null,
+        principal: sucursalDetailForm.principal,
+      };
       if (editingSucursalId) {
-        const { error } = await (supabase as any).from("cliente_sucursales").update({
-          nombre: sucursalDetailForm.nombre.trim(),
-          direccion: sucursalDetailForm.direccion || null,
-          localidad: sucursalDetailForm.localidad || null,
-          provincia: sucursalDetailForm.provincia || null,
-          cp: sucursalDetailForm.cp || null,
-          telefono: sucursalDetailForm.telefono || null,
-          email: sucursalDetailForm.email || null,
-        }).eq("id", editingSucursalId);
+        const { error } = await (supabase as any).from("cliente_sucursales").update(sucursalPayload).eq("id", editingSucursalId);
         if (error) throw error;
+        // Si se marcó como principal, desmarcar las demás
+        if (sucursalDetailForm.principal) {
+          await (supabase as any).from("cliente_sucursales").update({ principal: false }).eq("cliente_id", selectedCliente.id).neq("id", editingSucursalId);
+        }
         toast.success("Sucursal actualizada");
       } else {
-        const { error } = await (supabase as any).from("cliente_sucursales").insert({
-          cliente_id: selectedCliente.id,
-          nombre: sucursalDetailForm.nombre.trim(),
-          direccion: sucursalDetailForm.direccion || null,
-          localidad: sucursalDetailForm.localidad || null,
-          provincia: sucursalDetailForm.provincia || null,
-          cp: sucursalDetailForm.cp || null,
-          telefono: sucursalDetailForm.telefono || null,
-          email: sucursalDetailForm.email || null,
-          activo: true,
-        });
+        const { error } = await (supabase as any).from("cliente_sucursales").insert({ cliente_id: selectedCliente.id, ...sucursalPayload, activo: true });
         if (error) throw error;
+        // Si se marcó como principal, desmarcar las demás
+        if (sucursalDetailForm.principal) {
+          const { data: newSuc } = await (supabase as any).from("cliente_sucursales").select("id").eq("cliente_id", selectedCliente.id).order("created_at", { ascending: false }).limit(1).single();
+          if (newSuc) await (supabase as any).from("cliente_sucursales").update({ principal: false }).eq("cliente_id", selectedCliente.id).neq("id", newSuc.id);
+        }
         toast.success("Sucursal agregada");
       }
       setAddingSucursal(false);
       setEditingSucursalId(null);
       setSucursalDetailForm(emptySucursalDetailForm);
       // Refresh sucursales
-      const { data } = await (supabase as any).from("cliente_sucursales").select("id, nombre, direccion, localidad, provincia, cp, telefono, email").eq("cliente_id", selectedCliente.id).eq("activo", true).order("nombre");
+      const { data } = await (supabase as any).from("cliente_sucursales").select("id, nombre, direccion, localidad, provincia, cp, telefono, email, principal, transportista_id").eq("cliente_id", selectedCliente.id).eq("activo", true).order("principal", { ascending: false });
       if (data) {
-        setSelectedCliente((prev) => prev ? { ...prev, sucursales: data.map((s: any) => ({ id: s.id, nombre: s.nombre ?? "", direccion: s.direccion ?? "", localidad: s.localidad ?? "", provincia: s.provincia ?? "", cp: s.cp ?? "", telefono: s.telefono ?? "", email: s.email ?? "" })) } : prev);
+        const tMap = new Map(transportistas.map(t => [t.id, t.nombre]));
+        setSelectedCliente((prev) => prev ? { ...prev, sucursales: data.map((s: any) => ({ id: s.id, nombre: s.nombre ?? "", direccion: s.direccion ?? "", localidad: s.localidad ?? "", provincia: s.provincia ?? "", cp: s.cp ?? "", telefono: s.telefono ?? "", email: s.email ?? "", principal: s.principal ?? false, transportistaId: s.transportista_id ?? null, transportistaNombre: s.transportista_id ? tMap.get(s.transportista_id) ?? null : null })) } : prev);
       }
     } catch (err: any) {
       toast.error(err.message || "Error al guardar sucursal");
@@ -1851,6 +1972,20 @@ export default function ClientesPage() {
                         <Input label="Teléfono" value={sucursalDetailForm.telefono} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, telefono: e.target.value }))} />
                         <Input label="Email" value={sucursalDetailForm.email} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, email: e.target.value }))} />
                       </div>
+                      <div className="space-y-1.5">
+                        <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Transportista asignado</label>
+                        <select value={sucursalDetailForm.transportista_id} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, transportista_id: e.target.value }))} className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                          <option value="">Sin transportista definido</option>
+                          {transportistas.map((t) => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                        </select>
+                        {transportistas.length === 0 && (
+                          <p className="text-xs text-zinc-400">Cargá transportistas desde el módulo Transportes → Catálogo</p>
+                        )}
+                      </div>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={sucursalDetailForm.principal} onChange={(e) => setSucursalDetailForm((p) => ({ ...p, principal: e.target.checked }))} className="h-3.5 w-3.5 rounded border-zinc-300 text-orange-500" />
+                        <span className="text-xs text-zinc-600 dark:text-zinc-400">Sucursal predeterminada</span>
+                      </label>
                       <div className="flex justify-end gap-2 pt-1">
                         <button type="button" onClick={() => { setAddingSucursal(false); setEditingSucursalId(null); setSucursalDetailForm(emptySucursalDetailForm); }} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700">Cancelar</button>
                         <button type="button" onClick={handleSaveSucursalDetail} disabled={savingSucursal || !sucursalDetailForm.nombre.trim()} className="flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600 disabled:opacity-50">
@@ -1870,12 +2005,15 @@ export default function ClientesPage() {
                           <div key={s.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
                             <div className="bg-zinc-50 p-3 dark:bg-zinc-800/50">
                               <div className="flex items-center justify-between">
-                                <p className="text-sm font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
-                                  <Building2 className="h-3.5 w-3.5 text-orange-500" />
-                                  {s.nombre}
-                                </p>
+                                <div className="flex items-center gap-2">
+                                  <p className="text-sm font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
+                                    <Building2 className="h-3.5 w-3.5 text-orange-500" />
+                                    {s.nombre}
+                                  </p>
+                                  {s.principal && <Badge variant="info">Principal</Badge>}
+                                </div>
                                 <div className="flex items-center gap-1">
-                                  <button onClick={() => { setEditingSucursalId(s.id); setAddingSucursal(false); setSucursalDetailForm({ nombre: s.nombre, direccion: s.direccion || "", localidad: s.localidad || "", provincia: s.provincia || "", cp: s.cp || "", telefono: s.telefono || "", email: s.email || "" }); }} className="rounded p-1 text-zinc-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"><Pencil className="h-3.5 w-3.5" /></button>
+                                  <button onClick={() => { setEditingSucursalId(s.id); setAddingSucursal(false); setSucursalDetailForm({ nombre: s.nombre, direccion: s.direccion || "", localidad: s.localidad || "", provincia: s.provincia || "", cp: s.cp || "", telefono: s.telefono || "", email: s.email || "", transportista_id: (s as any).transportistaId || "", principal: s.principal ?? false }); }} className="rounded p-1 text-zinc-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"><Pencil className="h-3.5 w-3.5" /></button>
                                   <button onClick={() => handleDeleteSucursalDetail(s.id)} className="rounded p-1 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"><Trash2 className="h-3.5 w-3.5" /></button>
                                 </div>
                               </div>
@@ -1885,9 +2023,12 @@ export default function ClientesPage() {
                                   {[s.direccion, s.localidad, s.provincia].filter(Boolean).join(", ")}
                                 </div>
                               )}
-                              <div className="flex gap-4 mt-1">
+                              <div className="flex flex-wrap gap-4 mt-1">
                                 {s.telefono && <div className="flex items-center gap-1.5 text-xs text-zinc-500"><Phone className="h-3 w-3" /> {s.telefono}</div>}
                                 {s.email && <div className="flex items-center gap-1.5 text-xs text-zinc-500"><Mail className="h-3 w-3" /> {s.email}</div>}
+                                {(s as any).transportistaNombre && (
+                                  <div className="flex items-center gap-1.5 text-xs text-zinc-500"><Truck className="h-3 w-3 text-blue-500" /> {(s as any).transportistaNombre}</div>
+                                )}
                               </div>
                             </div>
                             {contactosSuc.length > 0 ? (
@@ -1912,6 +2053,133 @@ export default function ClientesPage() {
                           </div>
                         );
                       })}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ---- TAB: RELEVAMIENTO ---- */}
+              {detailTab === "relevamiento" && (
+                <>
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">Relevamiento de necesidades</p>
+                      <p className="text-xs text-zinc-400 mt-0.5">Productos, marcas, frecuencias y especificaciones habituales del cliente</p>
+                    </div>
+                    <button onClick={() => { setRelevEditingId(null); setRelevForm(emptyRelevForm); setRelevModalOpen(true); }} className="flex items-center gap-1 rounded-lg bg-orange-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-orange-600 transition-colors">
+                      <Plus className="h-3.5 w-3.5" /> Nuevo registro
+                    </button>
+                  </div>
+
+                  {relevLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="h-5 w-5 animate-spin text-orange-500" />
+                    </div>
+                  ) : fichasRelevamiento.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-center">
+                      <ShoppingBag className="h-8 w-8 text-zinc-300 mb-3" />
+                      <p className="text-sm font-medium text-zinc-500">Sin relevamiento registrado</p>
+                      <p className="text-xs text-zinc-400 mt-1">Cargá el primer registro para documentar las necesidades del cliente</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {fichasRelevamiento.map((f) => (
+                        <div key={f.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                          <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-3 flex items-center justify-between">
+                            <div>
+                              <p className="text-xs text-zinc-400">{formatDate(f.updated_at || f.fecha)}</p>
+                              {f.profiles?.full_name && <p className="text-xs text-zinc-400">por {f.profiles.full_name}</p>}
+                            </div>
+                            <button onClick={() => { setRelevEditingId(f.id); setRelevForm({ descripcion: f.descripcion || "", productos_habituales: f.productos_habituales || "", frecuencia_compra: f.frecuencia_compra || "", marcas_preferidas: f.marcas_preferidas || "", talles: f.talles || "", medidas: f.medidas || "", especificaciones: f.especificaciones || "", observaciones_generales: f.observaciones_generales || "", proxima_accion: f.proxima_accion || "", fecha_proxima_accion: f.fecha_proxima_accion || "" }); setRelevModalOpen(true); }} className="rounded p-1 text-zinc-400 hover:text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"><Pencil className="h-3.5 w-3.5" /></button>
+                          </div>
+                          <div className="px-4 py-3 space-y-2 text-sm">
+                            {f.descripcion && <p className="text-zinc-700 dark:text-zinc-300">{f.descripcion}</p>}
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                              {f.productos_habituales && <div><span className="text-zinc-400">Productos habituales: </span><span className="text-zinc-700 dark:text-zinc-300">{f.productos_habituales}</span></div>}
+                              {f.frecuencia_compra && <div><span className="text-zinc-400">Frecuencia: </span><span className="text-zinc-700 dark:text-zinc-300">{f.frecuencia_compra}</span></div>}
+                              {f.marcas_preferidas && <div><span className="text-zinc-400">Marcas: </span><span className="text-zinc-700 dark:text-zinc-300">{f.marcas_preferidas}</span></div>}
+                              {f.talles && <div><span className="text-zinc-400">Talles: </span><span className="text-zinc-700 dark:text-zinc-300">{f.talles}</span></div>}
+                              {f.medidas && <div><span className="text-zinc-400">Medidas: </span><span className="text-zinc-700 dark:text-zinc-300">{f.medidas}</span></div>}
+                              {f.especificaciones && <div className="col-span-2"><span className="text-zinc-400">Especificaciones: </span><span className="text-zinc-700 dark:text-zinc-300">{f.especificaciones}</span></div>}
+                            </div>
+                            {f.observaciones_generales && (
+                              <div className="rounded bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">{f.observaciones_generales}</div>
+                            )}
+                            {f.proxima_accion && (
+                              <div className="flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400">
+                                <CalendarDays className="h-3 w-3" />
+                                Próxima acción: {f.proxima_accion}{f.fecha_proxima_accion ? ` — ${formatDate(f.fecha_proxima_accion)}` : ""}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Modal relevamiento */}
+                  {relevModalOpen && (
+                    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+                      <div className="w-full max-w-lg bg-white dark:bg-zinc-900 rounded-xl shadow-2xl overflow-y-auto max-h-[90vh]">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
+                          <h3 className="text-base font-semibold dark:text-white">{relevEditingId ? "Editar relevamiento" : "Nuevo relevamiento"}</h3>
+                          <button onClick={() => setRelevModalOpen(false)} className="text-zinc-400 hover:text-zinc-600"><X className="h-5 w-5" /></button>
+                        </div>
+                        <div className="px-6 py-4 space-y-3">
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Descripción general *</label>
+                            <textarea value={relevForm.descripcion} onChange={e => setRelevForm(p => ({ ...p, descripcion: e.target.value }))} rows={3} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Descripción del relevamiento, contexto de la visita o la necesidad..." />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Productos/servicios habituales</label>
+                            <textarea value={relevForm.productos_habituales} onChange={e => setRelevForm(p => ({ ...p, productos_habituales: e.target.value }))} rows={2} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Válvulas de compuerta, mangueras hidráulicas..." />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Frecuencia de compra</label>
+                              <input type="text" value={relevForm.frecuencia_compra} onChange={e => setRelevForm(p => ({ ...p, frecuencia_compra: e.target.value }))} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Mensual, trimestral..." />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Marcas preferidas</label>
+                              <input type="text" value={relevForm.marcas_preferidas} onChange={e => setRelevForm(p => ({ ...p, marcas_preferidas: e.target.value }))} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Pavan, Parker..." />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Talles</label>
+                              <input type="text" value={relevForm.talles} onChange={e => setRelevForm(p => ({ ...p, talles: e.target.value }))} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder='Ej: 1/2", 3/4", 1"' />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Medidas</label>
+                              <input type="text" value={relevForm.medidas} onChange={e => setRelevForm(p => ({ ...p, medidas: e.target.value }))} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: DN25, DN50..." />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Especificaciones frecuentes</label>
+                            <textarea value={relevForm.especificaciones} onChange={e => setRelevForm(p => ({ ...p, especificaciones: e.target.value }))} rows={2} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Acero inoxidable, presión máx. 16 bar..." />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Observaciones generales</label>
+                            <textarea value={relevForm.observaciones_generales} onChange={e => setRelevForm(p => ({ ...p, observaciones_generales: e.target.value }))} rows={2} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Próxima acción</label>
+                              <input type="text" value={relevForm.proxima_accion} onChange={e => setRelevForm(p => ({ ...p, proxima_accion: e.target.value }))} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Enviar cotización..." />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha próxima acción</label>
+                              <input type="date" value={relevForm.fecha_proxima_accion} onChange={e => setRelevForm(p => ({ ...p, fecha_proxima_accion: e.target.value }))} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex justify-end gap-2 px-6 pb-5">
+                          <button onClick={() => setRelevModalOpen(false)} className="px-4 py-2 rounded-lg border border-zinc-300 text-sm hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">Cancelar</button>
+                          <button onClick={handleSaveRelevamiento} disabled={relevSaving || !relevForm.descripcion.trim()} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-orange-600 text-white text-sm hover:bg-orange-700 disabled:opacity-50">
+                            {relevSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />} Guardar
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </>
@@ -2377,22 +2645,24 @@ export default function ClientesPage() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Identificacion</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2">
+              <div className="sm:col-span-2" id="field-razon_social">
                 <Input
                   label="Razon social *"
                   value={form.razon_social}
-                  onChange={(e) => setForm({ ...form, razon_social: e.target.value })}
+                  onChange={(e) => { setForm({ ...form, razon_social: e.target.value }); setFormFieldErrors((p) => ({ ...p, razon_social: "" })); }}
                   placeholder="Nombre o razon social"
+                  error={formFieldErrors.razon_social}
                 />
               </div>
-              <div>
+              <div id="field-cuit">
                 <div className="flex items-end gap-2">
                   <div className="flex-1">
                     <Input
                       label="CUIT *"
                       value={form.cuit}
-                      onChange={(e) => { setForm({ ...form, cuit: e.target.value }); setCuitLookupMsg(null); }}
+                      onChange={(e) => { setForm({ ...form, cuit: e.target.value }); setCuitLookupMsg(null); setFormFieldErrors((p) => ({ ...p, cuit: "" })); }}
                       placeholder="XX-XXXXXXXX-X"
+                      error={formFieldErrors.cuit}
                       onBlur={() => {
                         const clean = form.cuit.replace(/\D/g, "");
                         if (clean.length === 11 && !form.razon_social) handleCuitLookup();
@@ -2609,12 +2879,15 @@ export default function ClientesPage() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Email y comunicacion</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input
-                label="Email"
-                type="email"
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-              />
+              <div id="field-email">
+                <Input
+                  label="Email"
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => { setForm({ ...form, email: e.target.value }); setFormFieldErrors((p) => ({ ...p, email: "" })); }}
+                  error={formFieldErrors.email}
+                />
+              </div>
               <Input
                 label="Telefono"
                 value={form.telefono}

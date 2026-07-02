@@ -145,7 +145,7 @@ export const mockFacturas: Factura[] = [
       { id: "fi2", descripcion: "Brida slip-on 6\" 150#", cantidad: 60, precioUnitario: 94920, iva: 21, subtotal: 5695200 },
       { id: "fi3", descripcion: "Junta espirometálica 4\" 150#", cantidad: 60, precioUnitario: 17980, iva: 21, subtotal: 1078800 },
     ],
-    subtotal: 12171000, iva: 2555910, total: 14726910, estado: "emitida", createdAt: "2026-05-18",
+    subtotal: 12171000, iva: 2555910, total: 14726910, estado: "emitida", modalidadEmision: "electronica", createdAt: "2026-05-18",
   },
 ];
 

@@ -312,6 +312,9 @@ export default function PresupuestosPage() {
     markup_general: 30,
     observaciones: "",
     notas_internas: "",
+    vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
+    tipo_comprobante: "" as string,
+    modalidad_emision: "sin_definir" as "electronica" | "manual" | "sin_definir",
     items: [{ ...emptyItem, markup_porcentaje: 30 }] as NewPRItem[],
   });
 
@@ -777,6 +780,9 @@ export default function PresupuestosPage() {
             tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
             observaciones: newPR.observaciones,
             notas_internas: newPR.notas_internas,
+            vencimiento: newPR.vencimiento,
+            tipo_comprobante: newPR.tipo_comprobante || null,
+            modalidad_emision: newPR.modalidad_emision,
           } as any)
           .eq("id", editingPRId);
         if (error) throw new Error(error.message);
@@ -791,13 +797,12 @@ export default function PresupuestosPage() {
         setShowNewPR(false);
         setEsSolicitud(false);
         setEditingPRId(null);
-        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
+        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
         await fetchPresupuestos();
         toast.success("Presupuesto actualizado");
       } else {
         // ── CREATE new PR ──
         const today = new Date().toISOString().split("T")[0];
-        const vencimiento = new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0];
 
         const { data: newRow, error } = await supabase
           .from("presupuestos")
@@ -809,7 +814,7 @@ export default function PresupuestosPage() {
             created_by: profile?.id,
             sociedad_id: sociedadActiva?.id || null,
             fecha: today,
-            vencimiento,
+            vencimiento: newPR.vencimiento,
             estado: esSolicitud ? "solicitud" : "pendiente",
             enviado_at: esSolicitud ? null : new Date().toISOString(),
             markup_general: newPR.markup_general,
@@ -820,6 +825,8 @@ export default function PresupuestosPage() {
             tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
             observaciones: newPR.observaciones,
             notas_internas: newPR.notas_internas,
+            tipo_comprobante: newPR.tipo_comprobante || null,
+            modalidad_emision: newPR.modalidad_emision,
           } as any)
           .select()
           .single();
@@ -833,7 +840,7 @@ export default function PresupuestosPage() {
 
         setShowNewPR(false);
         setEsSolicitud(false);
-        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
+        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
 
         // Fetch the newly created PR with full joins before refreshing the list
         const { data: fullRow } = await (supabase as any)
@@ -1201,6 +1208,9 @@ export default function PresupuestosPage() {
         markup_general: Number(fullPR.markup_general) || 30,
         observaciones: fullPR.observaciones || "",
         notas_internas: fullPR.notas_internas || "",
+        vencimiento: fullPR.vencimiento || new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
+        tipo_comprobante: (fullPR as any).tipo_comprobante || "",
+        modalidad_emision: (fullPR as any).modalidad_emision || "sin_definir",
         items: items.length > 0 ? items : [{ ...emptyItem, markup_porcentaje: Number(fullPR.markup_general) || 30 }],
       });
 
@@ -1661,22 +1671,21 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             .filter((pr) => pr.estado === "solicitud" || pr.estado === "pendiente" || pr.estado === "postergado" || pr.estado === "vencido")
             .map((pr) => {
               const fechaRef = pr.enviadoAt || pr.fecha;
-              const refDate = new Date(fechaRef);
-              const diffMs = today.getTime() - refDate.getTime();
-              const diasSinRespuesta = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
-              const vencDate = new Date(pr.vencimiento);
-              const vencido = vencDate < today;
+              const vencDate = new Date(pr.vencimiento + "T23:59:59");
+              const diffMs = vencDate.getTime() - today.getTime();
+              const diasRestantes = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+              const vencido = diasRestantes < 0;
               let urgencia: "verde" | "amarillo" | "naranja" | "rojo";
-              if (vencido || diasSinRespuesta > 21) urgencia = "rojo";
-              else if (diasSinRespuesta > 14) urgencia = "naranja";
-              else if (diasSinRespuesta > 7) urgencia = "amarillo";
+              if (vencido || diasRestantes < 0) urgencia = "rojo";
+              else if (diasRestantes <= 3) urgencia = "naranja";
+              else if (diasRestantes <= 7) urgencia = "amarillo";
               else urgencia = "verde";
-              return { ...pr, diasSinRespuesta, vencido, urgencia, fechaRef };
+              return { ...pr, diasRestantes, vencido, urgencia, fechaRef };
             })
             .sort((a, b) => {
               const urgOrder = { rojo: 0, naranja: 1, amarillo: 2, verde: 3 };
               if (urgOrder[a.urgencia] !== urgOrder[b.urgencia]) return urgOrder[a.urgencia] - urgOrder[b.urgencia];
-              return b.diasSinRespuesta - a.diasSinRespuesta;
+              return a.diasRestantes - b.diasRestantes;
             });
 
           const urgenciaColors = {
@@ -1686,7 +1695,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             rojo: { border: "border-red-400", bg: "bg-red-50 dark:bg-red-950/20", badge: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300", dot: "bg-red-500" },
           };
 
-          const urgenciaLabels = { verde: "< 7 dias", amarillo: "7-14 dias", naranja: "14-21 dias", rojo: "> 21 dias / vencido" };
+          const urgenciaLabels = { verde: "8+ dias", amarillo: "4-7 dias", naranja: "1-3 dias", rojo: "Vencido" };
 
           const countByUrgencia = { verde: 0, amarillo: 0, naranja: 0, rojo: 0 };
           trackingPRs.forEach((pr) => { countByUrgencia[pr.urgencia]++; });
@@ -1737,22 +1746,21 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mt-1">{pr.clienteNombre}</p>
                             </div>
                             <div className={`flex flex-col items-center rounded-lg px-3 py-1.5 ${colors.badge}`}>
-                              <span className="text-xl font-bold leading-none">{pr.diasSinRespuesta}</span>
-                              <span className="text-[10px] font-medium uppercase mt-0.5">dias</span>
+                              <span className="text-xl font-bold leading-none">{pr.vencido ? "EXP" : pr.diasRestantes}</span>
+                              <span className="text-[10px] font-medium uppercase mt-0.5">{pr.vencido ? "vencido" : "dias"}</span>
                             </div>
                           </div>
 
                           {/* Info */}
                           <div className="grid grid-cols-2 gap-2 text-xs">
                             <div>
-                              <span className="text-zinc-400">Enviado</span>
+                              <span className="text-zinc-400">Fecha</span>
                               <p className="font-medium text-zinc-600 dark:text-zinc-300">{formatDate(pr.fechaRef)}</p>
                             </div>
                             <div>
                               <span className="text-zinc-400">Vence</span>
-                              <p className={`font-medium ${pr.vencido ? "text-red-600 dark:text-red-400" : "text-zinc-600 dark:text-zinc-300"}`}>
+                              <p className={`font-medium ${pr.vencido ? "text-red-600 dark:text-red-400 font-semibold" : pr.diasRestantes <= 7 ? "text-orange-600 dark:text-orange-400 font-semibold" : "text-zinc-600 dark:text-zinc-300"}`}>
                                 {formatDate(pr.vencimiento)}
-                                {pr.vencido && <span className="ml-1 text-[10px] font-bold uppercase">Vencido</span>}
                               </p>
                             </div>
                             <div>
@@ -2415,14 +2423,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       {/* ==================== NUEVO PR MODAL ==================== */}
       <Modal
         open={showNewPR}
-        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
+        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
         title={editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
         description={editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="xl"
         footer={
           <>
             <button
-              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
+              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
               className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
             >
               Cancelar
@@ -2669,6 +2677,33 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               });
               return { ...p, markup_general: mg, items };
             })}
+          />
+          <Input
+            label="Fecha de vencimiento"
+            type="date"
+            value={newPR.vencimiento}
+            min={new Date().toISOString().split("T")[0]}
+            onChange={(e) => setNewPR((p) => ({ ...p, vencimiento: e.target.value }))}
+          />
+          <Select
+            label="Tipo de comprobante"
+            value={newPR.tipo_comprobante}
+            onChange={(e) => setNewPR((p) => ({ ...p, tipo_comprobante: e.target.value }))}
+            options={[
+              { value: "", label: "Presupuesto (default)" },
+              { value: "orden_venta", label: "Orden de venta" },
+              { value: "cotizacion", label: "Cotización" },
+            ]}
+          />
+          <Select
+            label="Modalidad de emisión"
+            value={newPR.modalidad_emision}
+            onChange={(e) => setNewPR((p) => ({ ...p, modalidad_emision: e.target.value as any }))}
+            options={[
+              { value: "sin_definir", label: "Sin definir" },
+              { value: "electronica", label: "Electrónica (AFIP)" },
+              { value: "manual", label: "Manual" },
+            ]}
           />
         </div>
         )}

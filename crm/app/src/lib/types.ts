@@ -140,6 +140,24 @@ export interface Sucursal {
   principal?: boolean;
   activo?: boolean;
   notas?: string;
+  transportistaId?: string | null;
+  transportistaNombre?: string | null;
+}
+
+export interface Transportista {
+  id: string;
+  nombre: string;
+  razonSocial?: string | null;
+  cuit?: string | null;
+  telefono?: string | null;
+  email?: string | null;
+  direccion?: string | null;
+  localidad?: string | null;
+  provincia?: string | null;
+  contactoPrincipal?: string | null;
+  observaciones?: string | null;
+  activo: boolean;
+  createdAt: string;
 }
 
 export interface Contacto {
@@ -227,6 +245,8 @@ export interface PresupuestoItem {
 
 // ── Facturacion ──────────────────────────────────────────────────
 export type ComprobanteType = "FA" | "FB" | "FC" | "NCA" | "NCB" | "NCC" | "NDA" | "NDB" | "NDC";
+export type ModalidadEmision = "electronica" | "manual" | "sin_definir";
+export type FacturaEstado = "borrador" | "pendiente_emision" | "emitiendo" | "emitida" | "error_emision" | "anulada" | "vencida" | "pagada" | "parcialmente_acreditada" | "totalmente_acreditada";
 
 export interface Factura {
   id: string;
@@ -236,6 +256,7 @@ export interface Factura {
   clienteId: string;
   clienteNombre: string;
   presupuestoId?: string;
+  remitoId?: string | null;
   fecha: string;
   cae: string;
   caeVencimiento: string;
@@ -243,9 +264,37 @@ export interface Factura {
   subtotal: number;
   iva: number;
   total: number;
+  totalAcreditado?: number;
   moneda?: "ARS" | "USD";
   tipoCambio?: number | null;
-  estado: "emitida" | "pagada" | "anulada" | "vencida";
+  modalidadEmision: ModalidadEmision;
+  estado: FacturaEstado;
+  errorEmision?: string | null;
+  createdAt: string;
+}
+
+export interface NotaCredito {
+  id: string;
+  facturaId: string;
+  tipo: ComprobanteType;
+  modalidadEmision: ModalidadEmision;
+  puntoVenta: number;
+  numero?: number | null;
+  fecha: string;
+  motivo?: string | null;
+  cae?: string | null;
+  caeVencimiento?: string | null;
+  subtotal: number;
+  iva: number;
+  total: number;
+  moneda: "ARS" | "USD";
+  tipoCambio?: number | null;
+  estado: string;
+  errorEmision?: string | null;
+  esTotal: boolean;
+  clienteId?: string | null;
+  presupuestoId?: string | null;
+  remitoId?: string | null;
   createdAt: string;
 }
 

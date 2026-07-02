@@ -113,6 +113,7 @@ export default function RemitosPage() {
   // Create transporte from remito
   const [createTransporteOpen, setCreateTransporteOpen] = useState(false);
   const [transporteForm, setTransporteForm] = useState({
+    transportista_id: "",
     transportista: "",
     destino: "",
     origen: "",
@@ -124,6 +125,7 @@ export default function RemitosPage() {
     notas: "",
   });
   const [creatingTransporte, setCreatingTransporte] = useState(false);
+  const [catalogTransportistas, setCatalogTransportistas] = useState<{ id: string; nombre: string }[]>([]);
 
   // IA generation modal state
   const [iaModalOpen, setIaModalOpen] = useState(false);
@@ -535,12 +537,16 @@ export default function RemitosPage() {
   }
 
   async function handleCreateTransporteFromRemito() {
-    if (!detailRemito || !transporteForm.transportista) return;
+    const nombreTransportista = transporteForm.transportista_id && transporteForm.transportista_id !== "__manual"
+      ? (catalogTransportistas.find(t => t.id === transporteForm.transportista_id)?.nombre || transporteForm.transportista)
+      : transporteForm.transportista;
+    if (!detailRemito || !nombreTransportista) return;
     setCreatingTransporte(true);
     try {
       const { error } = await (supabase as any).from("transportes").insert({
         sociedad_id: sociedadActiva?.id,
-        transportista: transporteForm.transportista,
+        transportista: nombreTransportista,
+        transportista_id: (transporteForm.transportista_id && transporteForm.transportista_id !== "__manual") ? transporteForm.transportista_id : null,
         destino: transporteForm.destino || null,
         origen: transporteForm.origen || null,
         cliente_id: detailRemito.cliente_id,
@@ -781,13 +787,18 @@ export default function RemitosPage() {
                   <span className="text-xs text-zinc-400 font-medium">Transporte</span>
                   {!createTransporteOpen && (
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         setTransporteForm({
-                          transportista: "", destino: "", origen: "",
+                          transportista_id: "", transportista: "", destino: "", origen: "",
                           fecha: new Date().toISOString().split("T")[0],
                           costo: "", moneda: "ARS", bultos: "", tipo_vehiculo: "", notas: "",
                         });
                         setCreateTransporteOpen(true);
+                        // Fetch transportistas catalog
+                        try {
+                          const { data } = await (supabase as any).from("transportistas").select("id, nombre").eq("activo", true).order("nombre");
+                          if (data) setCatalogTransportistas(data as { id: string; nombre: string }[]);
+                        } catch { /* ignore */ }
                       }}
                       className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium"
                     >
@@ -833,9 +844,30 @@ export default function RemitosPage() {
                   <div className="rounded-lg border border-orange-200 dark:border-orange-800 bg-orange-50/50 dark:bg-orange-950/20 p-3 space-y-2 mt-2">
                     <p className="text-xs font-medium text-orange-600 dark:text-orange-400 mb-2">Nuevo transporte para este remito</p>
                     <div>
-                      <input type="text" value={transporteForm.transportista} onChange={e => setTransporteForm({ ...transporteForm, transportista: e.target.value })}
-                        className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                        placeholder="Transportista *" autoFocus />
+                      {catalogTransportistas.length > 0 ? (
+                        <select
+                          value={transporteForm.transportista_id}
+                          onChange={e => {
+                            const id = e.target.value;
+                            const found = catalogTransportistas.find(t => t.id === id);
+                            setTransporteForm({ ...transporteForm, transportista_id: id, transportista: found?.nombre || (id === "__manual" ? transporteForm.transportista : "") });
+                          }}
+                          className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                        >
+                          <option value="">Seleccionar transportista *</option>
+                          {catalogTransportistas.map(t => <option key={t.id} value={t.id}>{t.nombre}</option>)}
+                          <option value="__manual">Otro (ingresar manualmente)</option>
+                        </select>
+                      ) : (
+                        <input type="text" value={transporteForm.transportista} onChange={e => setTransporteForm({ ...transporteForm, transportista: e.target.value })}
+                          className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                          placeholder="Transportista *" autoFocus />
+                      )}
+                      {transporteForm.transportista_id === "__manual" && (
+                        <input type="text" value={transporteForm.transportista} onChange={e => setTransporteForm({ ...transporteForm, transportista: e.target.value })}
+                          className="w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white mt-1"
+                          placeholder="Nombre del transportista *" autoFocus />
+                      )}
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <input type="text" value={transporteForm.origen} onChange={e => setTransporteForm({ ...transporteForm, origen: e.target.value })}
@@ -866,7 +898,8 @@ export default function RemitosPage() {
                       <button onClick={() => setCreateTransporteOpen(false)} className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300">
                         Cancelar
                       </button>
-                      <button onClick={handleCreateTransporteFromRemito} disabled={creatingTransporte || !transporteForm.transportista}
+                      <button onClick={handleCreateTransporteFromRemito}
+                        disabled={creatingTransporte || (!transporteForm.transportista && !transporteForm.transportista_id) || (transporteForm.transportista_id === "__manual" && !transporteForm.transportista)}
                         className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-50 flex items-center gap-1">
                         {creatingTransporte && <Loader2 className="h-3 w-3 animate-spin" />}
                         Crear transporte
@@ -1022,7 +1055,9 @@ export default function RemitosPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Valor declarado ($)</label>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                  Valor declarado ($) <span className="text-zinc-400 font-normal">(requerido para transporte)</span>
+                </label>
                 <input
                   type="number"
                   step="0.01"
@@ -1031,6 +1066,11 @@ export default function RemitosPage() {
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   placeholder="Ingrese el valor declarado..."
                 />
+                {!createForm.valor_declarado && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                    Sin valor declarado el transportista no puede completar el remito de manera correcta.
+                  </p>
+                )}
                 {createForm.presupuesto_id && createForm.valor_declarado && (
                   <p className="text-xs text-zinc-400 mt-1">Sugerido desde el neto del presupuesto. Podés modificarlo.</p>
                 )}
