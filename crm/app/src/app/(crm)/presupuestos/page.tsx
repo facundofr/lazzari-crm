@@ -342,7 +342,7 @@ export default function PresupuestosPage() {
     }
   }
 
-  const [clientes, setClientes] = useState<{id: string; razon_social: string}[]>([]);
+  const [clientes, setClientes] = useState<{id: string; razon_social: string; markup_predeterminado?: number | null}[]>([]);
   const [newPR, setNewPR] = useState({
     cliente_id: "",
     vendedor_id: "",
@@ -726,14 +726,14 @@ export default function PresupuestosPage() {
     if (!showNewPR) return;
     async function fetchClientes() {
       try {
-        let q = supabase
+        let q = (supabase as any)
           .from("clientes")
-          .select("id, razon_social")
+          .select("id, razon_social, markup_predeterminado")
           .eq("activo", true)
           .order("razon_social");
-        if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+        if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
         const { data } = await q;
-        if (data) setClientes(data);
+        if (data) setClientes(data as {id: string; razon_social: string; markup_predeterminado?: number | null}[]);
       } catch { /* ignore */ }
     }
     fetchClientes();
@@ -2591,9 +2591,9 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   {filteredClientes.length === 0 ? (
                     <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
                   ) : filteredClientes.slice(0, 20).map((c) => (
-                    <button key={c.id} onClick={() => { setNewPR((p) => ({ ...p, cliente_id: c.id })); setClientSearch(c.razon_social); setClientDropdownOpen(false); }}
+                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; setNewPR((p) => { const markup = mg ?? p.markup_general; return { ...p, cliente_id: c.id, markup_general: markup, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number(((it.costo_moneda === "USD" ? it.precio_costo * (p.tipo_cambio || 1) : it.precio_costo) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); }}
                       className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${c.id === newPR.cliente_id ? "bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400" : "text-zinc-700 dark:text-zinc-300"}`}>
-                      {c.razon_social}
+                      {c.razon_social}{c.markup_predeterminado != null && <span className="ml-auto text-xs text-zinc-400">{c.markup_predeterminado}%</span>}
                     </button>
                   ))}
                 </div>
@@ -2682,13 +2682,17 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     <button
                       key={c.id}
                       onClick={() => {
-                        setNewPR((p) => ({ ...p, cliente_id: c.id }));
+                        const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined;
+                        setNewPR((p) => {
+                          const markup = mg ?? p.markup_general;
+                          return { ...p, cliente_id: c.id, markup_general: markup, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number(((it.costo_moneda === "USD" ? it.precio_costo * (p.tipo_cambio || 1) : it.precio_costo) * (1 + markup / 100)).toFixed(2)) })) };
+                        });
                         setClientSearch(c.razon_social);
                         setClientDropdownOpen(false);
                       }}
                       className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${c.id === newPR.cliente_id ? "bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400" : "text-zinc-700 dark:text-zinc-300"}`}
                     >
-                      {c.razon_social}
+                      {c.razon_social}{c.markup_predeterminado != null && <span className="ml-auto text-xs text-zinc-400">{c.markup_predeterminado}%</span>}
                     </button>
                   ))
                 )}

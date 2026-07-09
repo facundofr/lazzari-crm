@@ -57,6 +57,7 @@ interface ClienteRow {
   notas: string;
   activo: boolean;
   assigned_to: string | null;
+  markup_predeterminado?: number | null;
   email_facturacion?: string | null;
   envio_automatico?: boolean;
   transporte_definido?: string | null;
@@ -89,6 +90,7 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
     notas: row.notas ?? "",
     activo: row.activo ?? true,
     assignedTo: row.assigned_to ?? undefined,
+    markupPredeterminado: row.markup_predeterminado != null ? Number(row.markup_predeterminado) : null,
     emailFacturacion: row.email_facturacion ?? null,
     envioAutomatico: row.envio_automatico ?? true,
     transporteDefinido: row.transporte_definido ?? "",
@@ -191,6 +193,7 @@ const emptyForm = {
   forma_pago: "Transferencia",
   limite_credito: 0,
   notas: "",
+  markup_predeterminado: null as number | null,
   email_facturacion: "",
   envio_automatico: true,
   transporte_definido: "",
@@ -1043,6 +1046,7 @@ export default function ClientesPage() {
       forma_pago: c.formaPago,
       limite_credito: c.limiteCredito,
       notas: c.notas,
+      markup_predeterminado: (c as any).markupPredeterminado ?? null,
       email_facturacion: c.emailFacturacion ?? "",
       envio_automatico: c.envioAutomatico ?? true,
       transporte_definido: c.transporteDefinido ?? "",
@@ -1135,9 +1139,10 @@ export default function ClientesPage() {
     setSaving(true);
     setFormError("");
     try {
-      const { transporte_definido, ...formWithout } = form;
+      const { transporte_definido, markup_predeterminado, ...formWithout } = form;
       const payload: Record<string, unknown> = {
         ...formWithout,
+        markup_predeterminado: markup_predeterminado != null && markup_predeterminado !== (0 as any) ? markup_predeterminado : null,
         email_facturacion: form.email_facturacion?.trim() || null,
         assigned_to: (form as any).assigned_to || null,
         flete: (form as any).flete?.trim() || null,
@@ -3012,6 +3017,13 @@ export default function ClientesPage() {
                 type="number"
                 value={String(form.limite_credito)}
                 onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })}
+              />
+              <Input
+                label="Markup predeterminado (%)"
+                type="number"
+                value={form.markup_predeterminado != null ? String(form.markup_predeterminado) : ""}
+                onChange={(e) => setForm({ ...form, markup_predeterminado: e.target.value ? Number(e.target.value) : null })}
+                placeholder="Ej: 30"
               />
               <div className="space-y-1.5">
                 <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Vendedor asignado</label>

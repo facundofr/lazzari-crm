@@ -122,6 +122,7 @@ export interface Client {
   createdAt: string;
   updatedAt: string;
   assignedTo?: string; // vendedor asignado
+  markupPredeterminado?: number | null;
   emailFacturacion?: string | null;
   envioAutomatico?: boolean;
   transporteDefinido?: string;
