@@ -9,7 +9,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { formatCurrency } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -137,7 +137,7 @@ interface FacturaCompraRow {
   percepciones: number;
   total: number;
   moneda: "ARS" | "USD";
-  estado: "pendiente" | "pagada" | "anulada";
+  estado: "pendiente" | "pagada" | "anulada" | "recibida";
   tipo: "mercaderia" | "solo_iva";
   notas: string;
   created_at: string;
@@ -1205,13 +1205,7 @@ export default function FinanzasPage() {
         }));
         await (supabase as any).from("facturas_compra_items").insert(itemsToInsert);
 
-        // Update stock for each item that has a producto_id
-        for (const it of fcItems.filter((i) => i.producto_id)) {
-          const prod = fcProductos.find((p) => p.id === it.producto_id);
-          if (prod !== undefined) {
-            await (supabase as any).from("productos").update({ stock: (prod.stock || 0) + it.cantidad }).eq("id", it.producto_id);
-          }
-        }
+        // Stock se actualiza al marcar como "recibida" (handleRecibirFC)
       }
 
       // Upload PDF if provided
@@ -1257,6 +1251,24 @@ export default function FinanzasPage() {
       await (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id);
       await fetchData();
     } catch (err) { console.error("Error anulando FC:", err); }
+  }
+
+  async function handleRecibirFC(id: string) {
+    try {
+      // Fetch items for this FC
+      const { data: items } = await (supabase as any).from("facturas_compra_items").select("producto_id, cantidad").eq("factura_compra_id", id);
+      if (items && items.length > 0) {
+        for (const it of items.filter((i: any) => i.producto_id)) {
+          const { data: prod } = await (supabase as any).from("productos").select("stock").eq("id", it.producto_id).single();
+          if (prod) {
+            await (supabase as any).from("productos").update({ stock: (prod.stock || 0) + it.cantidad }).eq("id", it.producto_id);
+          }
+        }
+      }
+      await (supabase as any).from("facturas_compra").update({ estado: "recibida" }).eq("id", id);
+      alert("FC marcada como recibida — stock actualizado");
+      await fetchData();
+    } catch (err) { console.error("Error marcando FC como recibida:", err); }
   }
 
   async function handleCreateArticle() {
@@ -1584,8 +1596,8 @@ export default function FinanzasPage() {
                   { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.total, row.moneda)}</span> },
                   { key: "fecha_vencimiento", label: "Vto.", sortable: true, render: (row) => row.fecha_vencimiento ? <span className="text-zinc-500 text-xs">{formatDate(row.fecha_vencimiento)}</span> : <span className="text-zinc-300">—</span> },
                   { key: "estado", label: "Estado", sortable: true, render: (row) => (
-                    <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : "warning"}>
-                      {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : "Pendiente"}
+                    <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : row.estado === "recibida" ? "info" : "warning"}>
+                      {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : row.estado === "recibida" ? "Recibida" : "Pendiente"}
                     </Badge>
                   )},
                   { key: "actions", label: "", sortable: false, render: (row) => (
@@ -1596,6 +1608,11 @@ export default function FinanzasPage() {
                         </a>
                       )}
                       {row.estado === "pendiente" && (
+                        <button onClick={() => handleRecibirFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Marcar como recibida (actualiza stock)">
+                          <Package className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                      {(row.estado === "pendiente" || row.estado === "recibida") && (
                         <>
                           <button onClick={() => handlePagarFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar como pagada">
                             <CheckCircle2 className="h-3.5 w-3.5" />

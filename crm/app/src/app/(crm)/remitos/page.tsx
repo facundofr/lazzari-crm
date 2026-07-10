@@ -51,7 +51,8 @@ interface RemitoRow {
   estado: string;
   observaciones: string;
   valor_declarado: number | null;
-  clientes: { razon_social: string; email?: string } | null;
+  clientes: { razon_social: string; email?: string; cuit?: string; direccion?: string } | null;
+  sucursal_nombre?: string;
   clienteNombre: string;
   remito_items: { id: string }[];
 }
@@ -185,7 +186,7 @@ export default function RemitosPage() {
       try {
         let q = supabase
           .from("remitos")
-          .select(`*, clientes(razon_social, email), remito_items(id)`)
+          .select(`*, clientes(razon_social, email, cuit, direccion), remito_items(id)`)
           .order("fecha", { ascending: false });
 
         if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
@@ -408,7 +409,7 @@ export default function RemitosPage() {
 
       // If linked to a PR, fetch PR number and linked facturas
       const prPromise = row.presupuesto_id
-        ? supabase.from("presupuestos").select("numero").eq("id", row.presupuesto_id).single()
+        ? supabase.from("presupuestos").select("numero, sucursal_id").eq("id", row.presupuesto_id).single()
         : null;
       const facturasPromise = row.presupuesto_id
         ? supabase.from("facturas").select("id, numero, tipo, total, estado").eq("presupuesto_id" as any, row.presupuesto_id)
@@ -428,7 +429,15 @@ export default function RemitosPage() {
       ]);
 
       setDetailItems((itemsRes.data as unknown as RemitoDetailItem[]) || []);
-      if (prRes?.data) setDetailPRNumero((prRes.data as any).numero || null);
+      if (prRes?.data) {
+        setDetailPRNumero((prRes.data as any).numero || null);
+        // Fetch sucursal name if PR has sucursal_id
+        const sucId = (prRes.data as any).sucursal_id;
+        if (sucId) {
+          const { data: sucData } = await (supabase as any).from("cliente_sucursales").select("nombre").eq("id", sucId).single();
+          if (sucData) setDetailRemito((prev) => prev ? { ...prev, sucursal_nombre: sucData.nombre } : prev);
+        }
+      }
       if (facturasRes?.data) setDetailFacturas((facturasRes.data as any[]) || []);
       if (transportesRes?.data) setDetailTransportes((transportesRes.data as TransporteLinked[]) || []);
     } catch {
@@ -507,7 +516,10 @@ export default function RemitosPage() {
     </div>
     <div class="section">
       <h3>Cliente</h3>
-      <div class="field"><label>Razon Social</label><span>${r.clientes?.razon_social || "—"}</span></div>
+      <div class="field"><label>Razón Social</label><span>${r.clientes?.razon_social || "—"}</span></div>
+      ${r.clientes?.cuit ? `<div class="field"><label>CUIT</label><span>${r.clientes.cuit}</span></div>` : ""}
+      ${r.clientes?.direccion ? `<div class="field"><label>Dirección</label><span>${r.clientes.direccion}</span></div>` : ""}
+      ${r.sucursal_nombre ? `<div class="field"><label>Sucursal</label><span>${r.sucursal_nombre}</span></div>` : ""}
     </div>
     <div class="section">
       <h3>Items</h3>

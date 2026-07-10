@@ -386,7 +386,7 @@ export default function FacturacionPage() {
     }));
   };
 
-  const isFacturaA = emitData.tipo === "FA" || emitData.tipo === "NCA" || emitData.tipo === "FCEA";
+  const isFacturaA = emitData.tipo === "FA" || emitData.tipo === "NCA" || emitData.tipo === "FCEA" || emitData.tipo === "NCEA";
 
   const isUSD = emitData.moneda === "USD";
   const tc = emitData.tipo_cambio || 0;
@@ -494,18 +494,14 @@ export default function FacturacionPage() {
 
       // Insert items
       if (newFactura) {
-        const itemRows = emitData.items.map((it, idx) => {
-          const neto = isFacturaA ? it.cantidad * it.precio_unitario : Math.round(it.cantidad * it.precio_unitario / 1.21 * 100) / 100;
-          return {
+        const itemRows = emitData.items.map((it, idx) => ({
             factura_id: newFactura.id,
             descripcion: it.descripcion,
             cantidad: it.cantidad,
             precio_unitario: it.precio_unitario,
             iva_porcentaje: isFacturaA ? it.iva_porcentaje : 21,
-            subtotal: neto,
             orden: idx,
-          };
-        });
+          }));
         await (supabase as any).from("factura_items").insert(itemRows);
       }
 
@@ -984,6 +980,8 @@ ${f.cae ? `
                       <optgroup label="Notas de crédito">
                         <option value="NCA">NC A</option>
                         <option value="NCB">NC B</option>
+                        <option value="NCEA">NCE A (MiPyMEs)</option>
+                        <option value="NCEB">NCE B (MiPyMEs)</option>
                       </optgroup>
                     </select>
                   </div>

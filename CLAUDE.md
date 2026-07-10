@@ -110,8 +110,12 @@ Supabase project ID: `ycuzszzskqatlegtbgbq`. Full schema plan in `SUPABASE_PLAN.
 - Polymorphic contacts table: `contactos` with columns: `id, entity_type (cliente|proveedor), entity_id, nombre, cargo, email, telefono, principal, fecha_cumpleanos, notas, sucursal_id, whatsapp, vendedor_id`
 - `cliente_sucursales` columns: `id, cliente_id, nombre, direccion, localidad, provincia, cp, telefono, email, principal, activo, notas`
 - `clientes` has `email_facturacion` (text) and `envio_automatico` (boolean NOT NULL) — no `transporte_definido` column
-- Tables not in generated types (use `(supabase as any).from("table")`): `pendientes`, `notification_preferences`, `facturas_compra`, `comision_reglas`, `ordenes_pago`, `gastos_manuales`, `email_templates`, `contactos`, `user_sociedades`, `eventos`, `echeqs`, `fichas_relevamiento`, `cliente_sucursales`, `retencion_config`
+- Tables not in generated types (use `(supabase as any).from("table")`): `pendientes`, `notification_preferences`, `facturas_compra`, `comision_reglas`, `ordenes_pago`, `gastos_manuales`, `email_templates`, `contactos`, `user_sociedades`, `eventos`, `echeqs`, `fichas_relevamiento`, `cliente_sucursales`, `retencion_config`, `facturas_compra_items`
 - `retencion_config` columns: `sociedad_id` (UNIQUE), `aplica_iva`, `minimo_iva`, `tasa_iva_ri`, `aplica_ganancias`, `minimo_ganancias`, `tasa_ganancias_ri`, `tasa_ganancias_no_inscripto`
+- `facturas_compra` extra columns: `tipo` ("mercaderia"|"solo_iva"), `cae` (text nullable)
+- `facturas_compra_items` columns: `id, factura_compra_id, producto_id (nullable FK), codigo, descripcion, cantidad, precio_unitario, unidad, sociedad_id, created_at`
+- `lista_precios_items` has `variante` (text nullable): used for sizes/talles AND quantity price tiers (e.g. "1-9 un", "10-49 un", "50+"). Multiple rows with same `codigo` = same product with different variants/tiers.
+- `productos` stock column is `stock` (integer), NOT `stock_actual`
 
 ### Storage Buckets
 
@@ -149,6 +153,9 @@ ARCA_GRUPOLA_CERT_B64 / ARCA_GRUPOLA_KEY_B64      # Grupo LA AFIP cert (base64)
 - **Mutations:** always destructure `{ error }` from Supabase mutations and throw/alert on failure.
 - **Mock data fallback:** check `if (error)` to fall back, not `if (!data.length)` — an empty table is valid data.
 - **Large page files** (clientes/page.tsx is 2500+ lines): use targeted Edit tool calls with sufficient context to ensure uniqueness, or Python patch scripts for multi-hunk changes.
+- **Finanzas tabs:** wrap in `<div className="w-full overflow-x-auto">` + inner `<div className="flex ... w-max">` for horizontal scroll on small screens.
+- **Precios escalonados:** `parseQuantityRange(variante)` detecta rangos en variante. `priceTiersMap` en presupuestos guarda tiers por índice de item. `updateNewPRItem` auto-aplica precio correcto al cambiar cantidad.
+- **BNA cotización:** `GET /api/cotizacion-bna?modalidad=divisas|billetes`. Cachea en `cotizaciones_dolar` por tipo (`oficial_divisas`/`oficial_billetes`). Siempre presentar ambos botones en UIs que usen tipo de cambio.
 
 ## Key Files
 

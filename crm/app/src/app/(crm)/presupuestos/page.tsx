@@ -139,6 +139,7 @@ const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warn
   rechazado: { label: "Rechazado", variant: "danger", icon: XCircle },
   postergado: { label: "Postergado", variant: "purple", icon: PauseCircle },
   vencido: { label: "Vencido", variant: "danger", icon: Clock },
+  remitido: { label: "Remitido", variant: "info", icon: Truck },
 };
 
 interface NewPRItem {
@@ -1229,7 +1230,7 @@ export default function PresupuestosPage() {
       }
 
       if (presupuesto_items && presupuesto_items.length > 0) {
-        const items = presupuesto_items.map(({ id: _iid, presupuesto_id: _pid, created_at: _ica, ...itemRest }: Record<string, unknown>) => ({
+        const items = presupuesto_items.map(({ id: _iid, presupuesto_id: _pid, created_at: _ica, precio_venta: _pv, subtotal: _st, iva: _iv, total: _tot, ...itemRest }: Record<string, unknown>) => ({
           ...itemRest,
           presupuesto_id: newPRRow.id,
         }));
@@ -1371,7 +1372,12 @@ export default function PresupuestosPage() {
       }));
       await (supabase as any).from("remito_items").insert(remitoItems);
 
+      // Block PR — mark as remitido so it can't be remitted again
+      await supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", pr.id);
+      setRemitidoIds((prev) => new Set([...prev, pr.id]));
+
       toast.success(`Remito ${numero} creado exitosamente`);
+      await fetchPresupuestos();
     } catch (err) {
       console.error("Error creating remito:", err);
       toast.error("Error al crear remito");
@@ -2162,7 +2168,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     Editar
                   </button>
                 )}
-                {selected.estado === "aprobado" && (
+                {selected.estado === "aprobado" && !remitidoIds.has(selected.id) && (
                   <button
                     onClick={() => handleRemitar(selected)}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950/30 transition-colors"
@@ -2795,23 +2801,25 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             onChange={(e) => setNewPR((p) => ({ ...p, vencimiento: e.target.value }))}
           />
           <Select
-            label="Tipo de comprobante"
-            value={newPR.tipo_comprobante}
-            onChange={(e) => setNewPR((p) => ({ ...p, tipo_comprobante: e.target.value }))}
+            label="Facturación"
+            value={newPR.tipo_comprobante === "A" ? "A" : newPR.tipo_comprobante === "B" ? "B" : newPR.modalidad_emision === "manual" ? "manual" : ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "A") {
+                setNewPR((p) => ({ ...p, tipo_comprobante: "A", modalidad_emision: "electronica" }));
+              } else if (v === "B") {
+                setNewPR((p) => ({ ...p, tipo_comprobante: "B", modalidad_emision: "electronica" }));
+              } else if (v === "manual") {
+                setNewPR((p) => ({ ...p, tipo_comprobante: "", modalidad_emision: "manual" }));
+              } else {
+                setNewPR((p) => ({ ...p, tipo_comprobante: "", modalidad_emision: "sin_definir" }));
+              }
+            }}
             options={[
-              { value: "", label: "Presupuesto (default)" },
-              { value: "orden_venta", label: "Orden de venta" },
-              { value: "cotizacion", label: "Cotización" },
-            ]}
-          />
-          <Select
-            label="Modalidad de emisión"
-            value={newPR.modalidad_emision}
-            onChange={(e) => setNewPR((p) => ({ ...p, modalidad_emision: e.target.value as any }))}
-            options={[
-              { value: "sin_definir", label: "Sin definir" },
-              { value: "electronica", label: "Electrónica (AFIP)" },
-              { value: "manual", label: "Manual" },
+              { value: "", label: "Sin definir" },
+              { value: "A", label: "Factura A (IVA discriminado)" },
+              { value: "B", label: "Factura B (IVA incluido)" },
+              { value: "manual", label: "Manual (sin ARCA)" },
             ]}
           />
         </div>

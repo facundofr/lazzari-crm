@@ -14,7 +14,14 @@ import { createSupabaseServer } from "@/lib/supabase/server";
  *   4. Si todo falla, retorna el valor más reciente guardado en DB
  */
 
-const TODAY = () => new Date().toISOString().split("T")[0];
+// Cierre del día hábil anterior
+const YESTERDAY = () => {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  if (d.getDay() === 0) d.setDate(d.getDate() - 2);
+  if (d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return d.toISOString().split("T")[0];
+};
 
 const parse = (s: string) => {
   if (s.includes(",")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
@@ -75,7 +82,7 @@ export async function GET(req: NextRequest) {
   const tipoDb = modalidad === "billetes" ? "oficial_billetes" : "oficial_divisas";
 
   const supabase = await createSupabaseServer();
-  const today = TODAY();
+  const today = YESTERDAY();
 
   // 1. Buscar en DB el valor de hoy
   const { data: cached } = await (supabase as any)

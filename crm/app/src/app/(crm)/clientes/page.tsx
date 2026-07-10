@@ -345,6 +345,9 @@ export default function ClientesPage() {
   const [relevSaving, setRelevSaving] = useState(false);
   const emptyRelevForm = { descripcion: "", productos_habituales: "", frecuencia_compra: "", marcas_preferidas: "", talles: "", medidas: "", especificaciones: "", observaciones_generales: "", proxima_accion: "", fecha_proxima_accion: "" };
   const [relevForm, setRelevForm] = useState(emptyRelevForm);
+  const [relevProdSearch, setRelevProdSearch] = useState("");
+  const [relevProdResults, setRelevProdResults] = useState<{ codigo: string; descripcion: string; variante?: string; proveedor_nombre?: string }[]>([]);
+  const [relevProdSearching, setRelevProdSearching] = useState(false);
 
   // Ficha completa
   const [fichaData, setFichaData] = useState<FichaData>({
@@ -431,6 +434,38 @@ export default function ClientesPage() {
     }
     fetchTransportistas();
   }, []);
+
+  async function doRelevProdSearch(term: string) {
+    setRelevProdSearch(term);
+    if (term.length < 2) { setRelevProdResults([]); return; }
+    setRelevProdSearching(true);
+    try {
+      const { data } = await (supabase as any)
+        .from("lista_precios_items")
+        .select("codigo, descripcion, variante, listas_precios(proveedores(razon_social))")
+        .or(`codigo.ilike.%${term}%,descripcion.ilike.%${term}%`)
+        .limit(15);
+      if (data) {
+        setRelevProdResults(data.map((d: any) => ({
+          codigo: d.codigo,
+          descripcion: d.descripcion,
+          variante: d.variante || undefined,
+          proveedor_nombre: d.listas_precios?.proveedores?.razon_social || undefined,
+        })));
+      }
+    } catch { setRelevProdResults([]); }
+    finally { setRelevProdSearching(false); }
+  }
+
+  function addRelevProduct(prod: { codigo: string; descripcion: string; variante?: string }) {
+    const label = `${prod.codigo} — ${prod.descripcion}${prod.variante ? ` (${prod.variante})` : ""}`;
+    setRelevForm(p => ({
+      ...p,
+      productos_habituales: p.productos_habituales ? `${p.productos_habituales}\n${label}` : label,
+    }));
+    setRelevProdSearch("");
+    setRelevProdResults([]);
+  }
 
   // Fetch fichas de relevamiento when tab is selected
   useEffect(() => {
@@ -2162,7 +2197,32 @@ export default function ClientesPage() {
                           </div>
                           <div>
                             <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Productos/servicios habituales</label>
-                            <textarea value={relevForm.productos_habituales} onChange={e => setRelevForm(p => ({ ...p, productos_habituales: e.target.value }))} rows={2} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Válvulas de compuerta, mangueras hidráulicas..." />
+                            <div className="relative mb-2">
+                              <div className="flex items-center gap-2">
+                                <Search className="h-4 w-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                                <input
+                                  type="text"
+                                  value={relevProdSearch}
+                                  onChange={e => doRelevProdSearch(e.target.value)}
+                                  placeholder="Buscar producto del catálogo..."
+                                  className="w-full rounded-lg border border-zinc-300 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                                />
+                                {relevProdSearching && <Loader2 className="h-4 w-4 animate-spin text-orange-500 absolute right-3 top-1/2 -translate-y-1/2" />}
+                              </div>
+                              {relevProdResults.length > 0 && (
+                                <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl">
+                                  {relevProdResults.map((p, i) => (
+                                    <button key={i} type="button" onClick={() => addRelevProduct(p)} className="w-full text-left px-3 py-2 text-sm hover:bg-orange-50 dark:hover:bg-orange-900/20 border-b border-zinc-100 dark:border-zinc-700 last:border-0">
+                                      <span className="font-mono text-orange-600 text-xs">{p.codigo}</span>{" "}
+                                      <span className="text-zinc-700 dark:text-zinc-300">{p.descripcion}</span>
+                                      {p.variante && <span className="ml-1 text-xs text-amber-600 bg-amber-50 dark:bg-amber-900/30 px-1.5 py-0.5 rounded">{p.variante}</span>}
+                                      {p.proveedor_nombre && <span className="ml-1 text-xs text-zinc-400">({p.proveedor_nombre})</span>}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <textarea value={relevForm.productos_habituales} onChange={e => setRelevForm(p => ({ ...p, productos_habituales: e.target.value }))} rows={3} className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Válvulas de compuerta, mangueras hidráulicas..." />
                           </div>
                           <div className="grid grid-cols-2 gap-3">
                             <div>

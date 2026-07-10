@@ -194,7 +194,7 @@ export interface Product {
 }
 
 // ── Presupuestos ─────────────────────────────────────────────────
-export type PRStatus = "solicitud" | "pendiente" | "aprobado" | "rechazado" | "postergado" | "vencido";
+export type PRStatus = "solicitud" | "pendiente" | "aprobado" | "rechazado" | "postergado" | "vencido" | "remitido";
 
 export interface Presupuesto {
   id: string;

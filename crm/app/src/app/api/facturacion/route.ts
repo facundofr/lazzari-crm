@@ -21,6 +21,8 @@ const CBTE_TIPO_MAP: Record<string, number> = {
   FA: 1, FB: 6,
   NCA: 3, NCB: 8,
   NDA: 2, NDB: 7,
+  FCEA: 201, FCEB: 206,
+  NCEA: 203, NCEB: 208,
 };
 
 // Multi-sociedad ARCA configuration
