@@ -406,6 +406,10 @@ export default function FinanzasPage() {
   const [echeqProvSearch, setEcheqProvSearch] = useState("");
   const [echeqFilterEstado, setEcheqFilterEstado] = useState("");
 
+  // Balance projection
+  interface BalanceBand { banda: string; moneda: string; total: number }
+  const [balanceData, setBalanceData] = useState<{ cobrar: BalanceBand[]; pagar: BalanceBand[]; echeqs: BalanceBand[] } | null>(null);
+
   // ── SmartFilters for Movimientos tab ──
   const movFilterConfigs: FilterConfig[] = [
     { key: "fecha", label: "Fecha", type: "date-range" },
@@ -723,6 +727,12 @@ export default function FinanzasPage() {
           const { data: echeqData } = await qEcheq;
           if (echeqData) setEcheqs(echeqData as EcheqRow[]);
         } catch { /* table may not exist yet */ }
+
+        // Fetch balance projection
+        try {
+          const { data: balData } = await (supabase as any).rpc("get_balance_projection", sociedadActiva?.id ? { p_sociedad_id: sociedadActiva.id } : {});
+          if (balData) setBalanceData(balData as any);
+        } catch { /* ignore */ }
 
         // Fetch clientes for echeq origin
         try {
@@ -1542,6 +1552,21 @@ export default function FinanzasPage() {
   const totalUtilizadoCredito = lineasCredito.reduce((a, lc) => a + lc.monto_utilizado, 0);
   const totalLineas = lineasCredito.reduce((a, lc) => a + lc.monto_total, 0);
 
+  // ── Balance projection helpers ──
+  function sumBands(items: { banda: string; moneda: string; total: number }[], moneda: string, bandas: string[]): number {
+    return items.filter(i => i.moneda === moneda && bandas.includes(i.banda)).reduce((s, i) => s + Number(i.total), 0);
+  }
+  const balCobrarARS = balanceData ? sumBands(balanceData.cobrar, "ARS", ["vencido", "7dias", "15dias", "mas15"]) : 0;
+  const balCobrarUSD = balanceData ? sumBands(balanceData.cobrar, "USD", ["vencido", "7dias", "15dias", "mas15"]) : 0;
+  const balPagarARS = balanceData ? sumBands(balanceData.pagar, "ARS", ["vencido", "7dias", "15dias", "mas15"]) : 0;
+  const balPagarUSD = balanceData ? sumBands(balanceData.pagar, "USD", ["vencido", "7dias", "15dias", "mas15"]) : 0;
+  const balCobrar7ARS = balanceData ? sumBands(balanceData.cobrar, "ARS", ["vencido", "7dias"]) : 0;
+  const balCobrar15ARS = balanceData ? sumBands(balanceData.cobrar, "ARS", ["vencido", "7dias", "15dias"]) : 0;
+  const balPagar7ARS = balanceData ? sumBands(balanceData.pagar, "ARS", ["vencido", "7dias"]) : 0;
+  const balPagar15ARS = balanceData ? sumBands(balanceData.pagar, "ARS", ["vencido", "7dias", "15dias"]) : 0;
+  const balVencidoCobrarARS = balanceData ? sumBands(balanceData.cobrar, "ARS", ["vencido"]) : 0;
+  const balVencidoPagarARS = balanceData ? sumBands(balanceData.pagar, "ARS", ["vencido"]) : 0;
+
   const tabs: { id: FinanzasTab; label: string }[] = [
     { id: "movimientos", label: "Movimientos" },
     { id: "facturas_compra", label: "Fact. Compra" },
@@ -1579,6 +1604,63 @@ export default function FinanzasPage() {
           <StatCard title="Saldo CC clientes" value={formatCurrency(ccClientes.reduce((a, c) => a + c.saldo_cuenta_corriente, 0))} icon={Wallet} iconColor="text-blue-600" />
           <StatCard title="Credito disponible" value={formatCurrency(totalDisponibleCredito)} icon={CreditCard} iconColor="text-emerald-600" />
         </div>
+
+        {/* ── Balance Debe / Haber ── */}
+        {balanceData && (
+          <Card className="p-4">
+            <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
+              <Target className="h-4 w-4 text-orange-500" />
+              Balance — Proyección de cobranzas vs pagos
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-zinc-200 dark:border-zinc-700">
+                    <th className="text-left py-2 px-3 text-xs font-medium text-zinc-500">Concepto</th>
+                    <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500 text-red-500">Vencido</th>
+                    <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500">Prox. 7 días</th>
+                    <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500">Prox. 15 días</th>
+                    <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500">Total pendiente</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b border-zinc-100 dark:border-zinc-800">
+                    <td className="py-2 px-3 font-medium text-emerald-700 dark:text-emerald-400">A cobrar (facturas emitidas)</td>
+                    <td className="py-2 px-3 text-right font-mono text-red-600">{formatCurrency(balVencidoCobrarARS)}</td>
+                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balCobrar7ARS)}</td>
+                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balCobrar15ARS)}</td>
+                    <td className="py-2 px-3 text-right font-mono font-semibold text-emerald-600">{formatCurrency(balCobrarARS)}</td>
+                  </tr>
+                  <tr className="border-b border-zinc-100 dark:border-zinc-800">
+                    <td className="py-2 px-3 font-medium text-red-700 dark:text-red-400">A pagar (FC pendientes)</td>
+                    <td className="py-2 px-3 text-right font-mono text-red-600">{formatCurrency(balVencidoPagarARS)}</td>
+                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balPagar7ARS)}</td>
+                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balPagar15ARS)}</td>
+                    <td className="py-2 px-3 text-right font-mono font-semibold text-red-600">{formatCurrency(balPagarARS)}</td>
+                  </tr>
+                  <tr className="bg-zinc-50 dark:bg-zinc-800/50 font-semibold">
+                    <td className="py-2 px-3">Balance neto ARS</td>
+                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balVencidoCobrarARS - balVencidoPagarARS)}</td>
+                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balCobrar7ARS - balPagar7ARS)}</td>
+                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balCobrar15ARS - balPagar15ARS)}</td>
+                    <td className={`py-2 px-3 text-right font-mono text-lg ${(balCobrarARS - balPagarARS) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                      {formatCurrency(balCobrarARS - balPagarARS)}
+                    </td>
+                  </tr>
+                  {(balCobrarUSD > 0 || balPagarUSD > 0) && (
+                    <tr className="bg-zinc-50 dark:bg-zinc-800/50 font-semibold border-t border-zinc-200 dark:border-zinc-700">
+                      <td className="py-2 px-3">Balance neto USD</td>
+                      <td className="py-2 px-3 text-right font-mono" colSpan={3}></td>
+                      <td className={`py-2 px-3 text-right font-mono ${(balCobrarUSD - balPagarUSD) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                        {formatCurrency(balCobrarUSD - balPagarUSD, "USD")}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
 
         {/* Tabs */}
         <div className="w-full overflow-x-auto pb-1">
