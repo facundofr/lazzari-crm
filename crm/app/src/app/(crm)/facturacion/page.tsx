@@ -13,7 +13,7 @@ import { mockFacturas } from "@/lib/mock-data";
 import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
-  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail,
+  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, FileText,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 
@@ -546,6 +546,59 @@ export default function FacturacionPage() {
   }
 
   // ── Copy & PDF ─────────────────────────────────────────────────
+  // Cobro modal
+  const [cobroModalId, setCobroModalId] = useState<string | null>(null);
+  const [cobroForm, setCobroForm] = useState({
+    tipo: "transferencia" as "cobro" | "transferencia" | "efectivo" | "cheque_recibido",
+    monto: "",
+    fecha: new Date().toISOString().split("T")[0],
+    descripcion: "",
+  });
+  const [cobroSaving, setCobroSaving] = useState(false);
+
+  async function handleRegistrarCobro() {
+    if (!cobroModalId || !cobroForm.monto) return;
+    const factura = facturas.find(f => f.id === cobroModalId);
+    if (!factura) return;
+    setCobroSaving(true);
+    try {
+      const monto = Number(cobroForm.monto);
+      // Insert movimiento
+      const { error: movErr } = await (supabase as any).from("movimientos").insert({
+        tipo: cobroForm.tipo,
+        cliente_id: factura.cliente_id || null,
+        factura_id: cobroModalId,
+        descripcion: cobroForm.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}`,
+        monto,
+        moneda: factura.moneda || "ARS",
+        fecha: cobroForm.fecha,
+        conciliado: false,
+        created_by: (await supabase.auth.getUser()).data.user?.id || null,
+        sociedad_id: sociedadActiva?.id || null,
+      });
+      if (movErr) throw movErr;
+
+      // Check if fully paid (total_acreditado from NC + all cobros)
+      const totalFactura = Number(factura.total) - Number(factura.total_acreditado || 0);
+      const { data: movs } = await (supabase as any).from("movimientos").select("monto").eq("factura_id", cobroModalId);
+      const totalCobrado = (movs || []).reduce((s: number, m: any) => s + Number(m.monto), 0);
+
+      if (totalCobrado >= totalFactura) {
+        await supabase.from("facturas").update({ estado: "pagada" } as any).eq("id", cobroModalId);
+      }
+
+      setCobroModalId(null);
+      await fetchData();
+      if (detailFactura?.id === cobroModalId) {
+        setDetailFactura(prev => prev ? { ...prev, estado: totalCobrado >= totalFactura ? "pagada" : prev.estado } : null);
+      }
+    } catch (err: any) {
+      alert("Error al registrar cobro: " + (err.message || JSON.stringify(err)));
+    } finally {
+      setCobroSaving(false);
+    }
+  }
+
   const [copied, setCopied] = useState(false);
   function handleCopy(f: FacturaRow) {
     const lines = [
@@ -1350,8 +1403,19 @@ ${f.cae ? `
                 <div className="space-y-2">
                   {detailFactura.estado === "emitida" && (
                     <>
-                      <button onClick={() => handleMarcarPagada(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
-                        <CheckCircle2 className="h-4 w-4" /> Marcar como pagada
+                      <button onClick={() => {
+                        setCobroForm({
+                          tipo: "transferencia",
+                          monto: String(Number(detailFactura.total) - Number(detailFactura.total_acreditado || 0)),
+                          fecha: new Date().toISOString().split("T")[0],
+                          descripcion: "",
+                        });
+                        setCobroModalId(detailFactura.id);
+                      }} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
+                        <DollarSign className="h-4 w-4" /> Registrar cobro
+                      </button>
+                      <button onClick={() => openNcModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-blue-950/30">
+                        <FileText className="h-4 w-4" /> Emitir Nota de Crédito
                       </button>
                       <button onClick={() => handleAnular(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-red-950/30">
                         <XCircle className="h-4 w-4" /> Anular comprobante
@@ -1364,6 +1428,69 @@ ${f.cae ? `
           </div>
         </div>
       )}
+
+      {/* ── Cobro Modal ──────────────────────────────────────────── */}
+      {cobroModalId && (() => {
+        const f = facturas.find(ff => ff.id === cobroModalId);
+        if (!f) return null;
+        const saldo = Number(f.total) - Number(f.total_acreditado || 0);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+            <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-md mx-4">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-700">
+                <div>
+                  <h3 className="font-semibold dark:text-white">Registrar cobro</h3>
+                  <p className="text-xs text-zinc-400 mt-0.5">{formatComprobante(f.tipo, f.punto_venta, f.numero)} — Saldo: {formatCurrency(saldo, f.moneda as "ARS" | "USD")}</p>
+                </div>
+                <button onClick={() => setCobroModalId(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              </div>
+              <div className="p-5 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Forma de pago *</label>
+                  <select value={cobroForm.tipo} onChange={(e) => setCobroForm(p => ({ ...p, tipo: e.target.value as any }))}
+                    className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                    <option value="transferencia">Transferencia</option>
+                    <option value="efectivo">Efectivo</option>
+                    <option value="cheque_recibido">Cheque</option>
+                    <option value="cobro">Otro</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Monto *</label>
+                    <input type="number" step="0.01" value={cobroForm.monto} onChange={(e) => setCobroForm(p => ({ ...p, monto: e.target.value }))}
+                      className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha *</label>
+                    <input type="date" value={cobroForm.fecha} onChange={(e) => setCobroForm(p => ({ ...p, fecha: e.target.value }))}
+                      className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Descripción</label>
+                  <input type="text" value={cobroForm.descripcion} onChange={(e) => setCobroForm(p => ({ ...p, descripcion: e.target.value }))}
+                    placeholder="Ej: TRF Banco Nación" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                </div>
+                {Number(cobroForm.monto) >= saldo && (
+                  <div className="flex items-center gap-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 px-3 py-2">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                    <p className="text-xs text-emerald-700 dark:text-emerald-300">Cubre el saldo completo — la factura se marcará como pagada</p>
+                  </div>
+                )}
+              </div>
+              <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
+                <button onClick={() => setCobroModalId(null)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
+                <button onClick={handleRegistrarCobro} disabled={cobroSaving || !cobroForm.monto || Number(cobroForm.monto) <= 0}
+                  className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+                  {cobroSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Registrar cobro
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── NC Modal ─────────────────────────────────────────────── */}
       {ncOpen && ncFactura && (
