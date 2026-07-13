@@ -174,7 +174,7 @@ export default function FacturacionPage() {
         ? items.map(it => ({ descripcion: it.descripcion, cantidad: Number(it.cantidad), precio_unitario: Number(it.precio_unitario), iva_porcentaje: Number(it.iva_porcentaje) || 21 }))
         : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]
     );
-    setNcManual(arcaStatus?.certOk === false);
+    setNcManual(arcaStatus !== null && arcaStatus.certOk === false);
     setNcNumero("");
     setNcError("");
     setNcStep("form");
@@ -353,13 +353,13 @@ export default function FacturacionPage() {
     fetch(`/api/facturacion?action=status&sociedad_id=${sociedadActiva.id}`)
       .then((r) => r.json())
       .then(setArcaStatus)
-      .catch(() => setArcaStatus({ connected: false, error: "No se pudo verificar" }));
+      .catch(() => setArcaStatus({ connected: false, certOk: true, error: "No se pudo verificar estado — puede emitir igualmente" }));
   }, [sociedadActiva?.id]);
 
   // ── Emit handlers ──────────────────────────────────────────────
   const openEmitModal = (prefill?: { cliente_id: string; tipo?: string; items?: EmitItem[]; moneda?: "ARS" | "USD"; tipo_cambio?: number }) => {
-    // Si el cert no está configurado, forzar modo manual
-    setEmitManual(arcaStatus?.certOk === false);
+    // Solo forzar manual si certOk es explícitamente false (certificado no encontrado)
+    setEmitManual(arcaStatus !== null && arcaStatus.certOk === false);
     setCotizBna(null);
     setEmitData({
       tipo: prefill?.tipo || "FB",
@@ -910,9 +910,9 @@ ${f.cae ? `
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <div className={`h-2 w-2 rounded-full ${arcaStatus?.connected || arcaStatus?.certOk ? "bg-emerald-500" : "bg-red-400"}`} />
+                <div className={`h-2 w-2 rounded-full ${arcaStatus === null ? "bg-zinc-300 dark:bg-zinc-600 animate-pulse" : arcaStatus?.connected || arcaStatus?.certOk ? "bg-emerald-500" : "bg-red-400"}`} />
                 <span className="text-xs text-zinc-500">
-                  {arcaStatus?.connected || arcaStatus?.certOk ? "Certificado configurado" : "Certificado no configurado"}
+                  {arcaStatus === null ? "Verificando..." : arcaStatus?.connected || arcaStatus?.certOk ? "Certificado configurado" : "Certificado no configurado"}
                 </span>
               </div>
             </div>
@@ -948,7 +948,7 @@ ${f.cae ? `
                   <div className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
                     <button
                       onClick={() => setEmitManual(false)}
-                      disabled={arcaStatus?.certOk === false}
+                      disabled={arcaStatus !== null && arcaStatus.certOk === false}
                       className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${!emitManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"} disabled:opacity-40 disabled:cursor-not-allowed`}
                     >
                       <ShieldCheck className="h-3.5 w-3.5" /> Con ARCA
@@ -960,7 +960,7 @@ ${f.cae ? `
                       <FileCheck className="h-3.5 w-3.5" /> Manual (sin CAE)
                     </button>
                   </div>
-                  {arcaStatus?.certOk === false && (
+                  {arcaStatus !== null && arcaStatus.certOk === false && (
                     <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
                       <AlertTriangle className="h-3 w-3" /> ARCA no configurado para esta sociedad — solo modo manual disponible.
                     </p>
@@ -1408,7 +1408,7 @@ ${f.cae ? `
                   <div className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
                     <button
                       onClick={() => setNcManual(false)}
-                      disabled={arcaStatus?.certOk === false}
+                      disabled={arcaStatus !== null && arcaStatus.certOk === false}
                       className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${!ncManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"} disabled:opacity-40 disabled:cursor-not-allowed`}
                     >
                       <ShieldCheck className="h-3.5 w-3.5" /> Con ARCA
@@ -1420,7 +1420,7 @@ ${f.cae ? `
                       <FileCheck className="h-3.5 w-3.5" /> Manual (sin CAE)
                     </button>
                   </div>
-                  {arcaStatus?.certOk === false && (
+                  {arcaStatus !== null && arcaStatus.certOk === false && (
                     <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
                       <AlertTriangle className="h-3 w-3" /> ARCA no configurado — solo modo manual disponible.
                     </p>
