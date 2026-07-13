@@ -186,6 +186,26 @@ export default function OrdenesCompraPage() {
   const [consolidateCreating, setConsolidateCreating] = useState(false);
   const [consolidateSuccessMsg, setConsolidateSuccessMsg] = useState("");
 
+  // Items sin proveedor modal
+  interface ItemSinProveedor {
+    item_id: string;
+    pr_id: string;
+    pr_numero: string;
+    cliente_nombre: string;
+    codigo: string;
+    descripcion: string;
+    cantidad: number;
+    precio_costo: number;
+    unidad: string;
+    moneda: string;
+    proveedor_id: string; // to be assigned
+  }
+  const [sinProveedorOpen, setSinProveedorOpen] = useState(false);
+  const [sinProveedorItems, setSinProveedorItems] = useState<ItemSinProveedor[]>([]);
+  const [sinProveedorLoading, setSinProveedorLoading] = useState(false);
+  const [sinProveedorSaving, setSinProveedorSaving] = useState(false);
+  const [sinProveedorProvs, setSinProveedorProvs] = useState<ProveedorOption[]>([]);
+
   // Detail panel
   const [detailOC, setDetailOC] = useState<OCRow | null>(null);
   const [detailItems, setDetailItems] = useState<DetailItem[]>([]);
@@ -933,6 +953,91 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
     }
   };
 
+  // ── Items sin proveedor ────────────────────────────────────────
+  const openSinProveedorModal = async () => {
+    setSinProveedorOpen(true);
+    setSinProveedorLoading(true);
+    try {
+      // Fetch approved/remitido PRs
+      let prQuery = (supabase as any).from("presupuestos").select("id, numero, moneda, clientes(razon_social)").in("estado", ["aprobado", "remitido"]);
+      if (sociedadActiva?.id) prQuery = prQuery.eq("sociedad_id", sociedadActiva.id);
+      const { data: prs } = await prQuery;
+      if (!prs || prs.length === 0) { setSinProveedorItems([]); return; }
+
+      const prIds = prs.map((p: any) => p.id);
+      const { data: items } = await supabase
+        .from("presupuesto_items")
+        .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id")
+        .in("presupuesto_id", prIds) as { data: any[] | null };
+
+      const sinProv = (items || []).filter((it: any) => !it.proveedor_id);
+      const prMap = new Map((prs as any[]).map((p: any) => [p.id, p]));
+
+      setSinProveedorItems(sinProv.map((it: any) => {
+        const pr = prMap.get(it.presupuesto_id) as any;
+        return {
+          item_id: it.id,
+          pr_id: it.presupuesto_id,
+          pr_numero: pr?.numero || "",
+          cliente_nombre: pr?.clientes?.razon_social || "",
+          codigo: it.codigo || "",
+          descripcion: it.descripcion || "",
+          cantidad: it.cantidad,
+          precio_costo: it.precio_costo || 0,
+          unidad: it.unidad || "UN",
+          moneda: pr?.moneda || "USD",
+          proveedor_id: "",
+        };
+      }));
+
+      // Load proveedores for assignment
+      let provQ = supabase.from("proveedores").select("id, razon_social").eq("activo", true).order("razon_social");
+      if (sociedadActiva?.id) provQ = provQ.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: provs } = await provQ;
+      if (provs) setSinProveedorProvs(provs as unknown as ProveedorOption[]);
+    } catch (err) {
+      console.error("Error loading items sin proveedor:", err);
+      setSinProveedorItems([]);
+    } finally {
+      setSinProveedorLoading(false);
+    }
+  };
+
+  const handleAsignarProveedores = async () => {
+    const toUpdate = sinProveedorItems.filter(it => it.proveedor_id);
+    if (toUpdate.length === 0) return;
+    setSinProveedorSaving(true);
+    try {
+      // Get proveedor names
+      const provIds = [...new Set(toUpdate.map(it => it.proveedor_id))];
+      const provNameMap = new Map(sinProveedorProvs.map(p => [p.id, p.razon_social]));
+
+      let updated = 0;
+      for (const item of toUpdate) {
+        const { error } = await supabase
+          .from("presupuesto_items")
+          .update({
+            proveedor_id: item.proveedor_id,
+            proveedor_nombre: provNameMap.get(item.proveedor_id) || "",
+          } as any)
+          .eq("id", item.item_id);
+        if (!error) updated++;
+      }
+      if (updated > 0) {
+        setSinProveedorItems(prev => prev.filter(it => !it.proveedor_id));
+        setConsolidateSuccessMsg(`Se asignó proveedor a ${updated} item(s)`);
+      }
+      if (sinProveedorItems.filter(it => !it.proveedor_id).length === 0) {
+        setSinProveedorOpen(false);
+      }
+    } catch (err) {
+      console.error("Error asignando proveedores:", err);
+      alert("Error al asignar proveedores");
+    } finally {
+      setSinProveedorSaving(false);
+    }
+  };
+
   // ── Computed ─────────────────────────────────────────────────────
   const filtered = ordenes.filter((oc) => {
     if (filter !== "todas" && oc.estado !== filter) return false;
@@ -982,7 +1087,14 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       />
 
       {/* Secondary action bar */}
-      <div className="px-4 sm:px-8 pt-2 flex justify-end">
+      <div className="px-4 sm:px-8 pt-2 flex justify-end gap-3">
+        <button
+          onClick={openSinProveedorModal}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
+        >
+          <AlertTriangle className="h-4 w-4" />
+          Items sin proveedor
+        </button>
         <button
           onClick={openConsolidateModal}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
@@ -1417,6 +1529,97 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   >
                     {consolidateCreating && <Loader2 className="h-4 w-4 animate-spin" />}
                     Crear OC consolidadas
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Items sin proveedor modal ──────────────────────────────── */}
+      {sinProveedorOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
+              <div>
+                <h2 className="text-lg font-semibold dark:text-white">Items sin proveedor asignado</h2>
+                <p className="text-xs text-zinc-400 mt-0.5">Items de presupuestos aprobados que no tienen proveedor — asigná uno para poder generar OC</p>
+              </div>
+              <button onClick={() => setSinProveedorOpen(false)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {sinProveedorLoading ? (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-orange-500 mb-3" />
+                  <p className="text-sm text-zinc-400">Buscando items sin proveedor...</p>
+                </div>
+              ) : sinProveedorItems.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <CheckCircle2 className="h-10 w-10 text-emerald-400 mb-3" />
+                  <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">Todos los items tienen proveedor</p>
+                  <p className="text-xs text-zinc-400 mt-1">No hay items pendientes de asignación.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {sinProveedorItems.map((item) => (
+                    <div key={item.item_id} className="border border-zinc-200 dark:border-zinc-700 rounded-lg p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {item.codigo && <span className="font-mono text-xs text-zinc-400">{item.codigo}</span>}
+                            <span className="text-sm font-medium dark:text-white">{item.descripcion}</span>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1">
+                            <span className="text-xs text-blue-500 font-mono">{item.pr_numero}</span>
+                            <span className="text-xs text-zinc-400">{item.cliente_nombre}</span>
+                            <span className="text-xs text-zinc-500">{item.cantidad} {item.unidad}</span>
+                            {item.precio_costo > 0 && (
+                              <span className="text-xs text-emerald-600 dark:text-emerald-400">{formatCurrency(item.precio_costo, item.moneda as "ARS" | "USD")} c/u</span>
+                            )}
+                          </div>
+                        </div>
+                        <select
+                          value={item.proveedor_id}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSinProveedorItems(prev => prev.map(it =>
+                              it.item_id === item.item_id ? { ...it, proveedor_id: val } : it
+                            ));
+                          }}
+                          className="text-sm border border-zinc-300 dark:border-zinc-600 rounded-md px-2 py-1.5 bg-white dark:bg-zinc-800 dark:text-white min-w-[180px]"
+                        >
+                          <option value="">Seleccionar proveedor...</option>
+                          {sinProveedorProvs.map(p => (
+                            <option key={p.id} value={p.id}>{p.razon_social}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {sinProveedorItems.length > 0 && !sinProveedorLoading && (
+              <div className="flex items-center justify-between px-6 py-4 border-t border-zinc-200 dark:border-zinc-700">
+                <p className="text-sm text-zinc-500">
+                  {sinProveedorItems.filter(it => it.proveedor_id).length} de {sinProveedorItems.length} items con proveedor asignado
+                </p>
+                <div className="flex gap-3">
+                  <button onClick={() => setSinProveedorOpen(false)} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleAsignarProveedores}
+                    disabled={sinProveedorSaving || sinProveedorItems.every(it => !it.proveedor_id)}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                  >
+                    {sinProveedorSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Guardar proveedores
                   </button>
                 </div>
               </div>

@@ -129,8 +129,7 @@ export default function DashboardPage() {
           gastosFijosResult,
           objetivosResult,
         ] = await Promise.all([
-          // RPC get_dashboard_kpis accepts no parameters (Args: never) — sociedad filter not supported yet
-          supabase.rpc("get_dashboard_kpis"),
+          supabase.rpc("get_dashboard_kpis", sociedadActiva?.id ? { p_sociedad_id: sociedadActiva.id } : {} as any),
           qPresupuestosEstado,
           qPresupuestosRecent,
           (() => {
