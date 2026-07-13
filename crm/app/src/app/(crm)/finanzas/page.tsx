@@ -338,6 +338,10 @@ export default function FinanzasPage() {
   const [opFile, setOpFile] = useState<File | null>(null);
   const [opProvCondicion, setOpProvCondicion] = useState<string | null>(null);
   const [opCondicionLoading, setOpCondicionLoading] = useState(false);
+  // FC pendientes del proveedor para vincular a la OP
+  interface OpFCPendiente { id: string; numero: string; fecha: string; total: number; moneda: string; selected: boolean }
+  const [opFCPendientes, setOpFCPendientes] = useState<OpFCPendiente[]>([]);
+  const [opFCLoading, setOpFCLoading] = useState(false);
   const [retencionConfig, setRetencionConfig] = useState({
     aplica_iva: true, minimo_iva: 130000, tasa_iva_ri: 10.5,
     aplica_ganancias: true, minimo_ganancias: 400000, tasa_ganancias_ri: 3.5, tasa_ganancias_no_inscripto: 28,
@@ -845,10 +849,10 @@ export default function FinanzasPage() {
   }
 
   // ── OP auto-retenciones ──
-  // 1. Cuando cambia el proveedor → consultar AFIP para obtener condición IVA
+  // 1. Cuando cambia el proveedor → consultar AFIP para obtener condición IVA + cargar FC pendientes
   useEffect(() => {
     if (!opModalOpen) return;
-    if (!opForm.proveedor_id) { setOpProvCondicion(null); return; }
+    if (!opForm.proveedor_id) { setOpProvCondicion(null); setOpFCPendientes([]); return; }
     const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
     if (!prov?.cuit) { setOpProvCondicion(null); return; }
     const cuit = prov.cuit.replace(/-/g, "");
@@ -859,6 +863,18 @@ export default function FinanzasPage() {
       .then(data => { setOpProvCondicion(data.condicion_iva ?? ""); })
       .catch(() => { setOpProvCondicion(null); })
       .finally(() => setOpCondicionLoading(false));
+    // Cargar FC pendientes del proveedor
+    setOpFCLoading(true);
+    (async () => {
+      try {
+        let q = (supabase as any).from("facturas_compra").select("id, numero, fecha, total, moneda")
+          .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"]);
+        if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
+        const { data } = await q;
+        setOpFCPendientes((data || []).map((fc: any) => ({ ...fc, selected: false })));
+      } catch { setOpFCPendientes([]); }
+      finally { setOpFCLoading(false); }
+    })();
   }, [opForm.proveedor_id, opModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 2. Cuando tenemos condición y monto → auto-calcular retenciones
@@ -887,6 +903,7 @@ export default function FinanzasPage() {
     setOpFile(null);
     setOpProvCondicion(null);
     setProveedorSearch("");
+    setOpFCPendientes([]);
     setOpModalOpen(true);
   }
 
@@ -932,6 +949,21 @@ export default function FinanzasPage() {
         }
       }
       setOpFile(null);
+
+      // Link selected FC to OP and mark them as pagadas
+      const selectedFCs = opFCPendientes.filter(f => f.selected);
+      if (selectedFCs.length > 0 && opData?.id) {
+        const links = selectedFCs.map(fc => ({
+          orden_pago_id: opData.id,
+          factura_compra_id: fc.id,
+          monto: Number(fc.total),
+        }));
+        await (supabase as any).from("op_facturas_compra").insert(links);
+        // Mark FCs as pagadas
+        for (const fc of selectedFCs) {
+          await (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", fc.id);
+        }
+      }
 
       // Also create a movimiento for the payment
       const provNombre = proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social ?? "";
@@ -2581,6 +2613,43 @@ export default function FinanzasPage() {
                 <label className="text-xs font-medium text-zinc-500">Fecha</label>
                 <input type="date" value={opForm.fecha} onChange={(e) => setOpForm({ ...opForm, fecha: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
               </div>
+
+              {/* Facturas de compra pendientes del proveedor */}
+              {opForm.proveedor_id && (
+                <div>
+                  <label className="text-xs font-medium text-zinc-500 mb-1 block">Facturas a pagar</label>
+                  {opFCLoading ? (
+                    <div className="flex items-center gap-2 text-xs text-zinc-400 py-2"><Loader2 className="h-3 w-3 animate-spin" />Cargando facturas...</div>
+                  ) : opFCPendientes.length === 0 ? (
+                    <p className="text-xs text-zinc-400 py-1">Sin facturas pendientes para este proveedor</p>
+                  ) : (
+                    <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg max-h-40 overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800">
+                      {opFCPendientes.map(fc => (
+                        <label key={fc.id} className="flex items-center gap-3 px-3 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 cursor-pointer">
+                          <input type="checkbox" checked={fc.selected}
+                            onChange={() => {
+                              const updated = opFCPendientes.map(f => f.id === fc.id ? { ...f, selected: !f.selected } : f);
+                              setOpFCPendientes(updated);
+                              const totalSelected = updated.filter(f => f.selected).reduce((s, f) => s + Number(f.total), 0);
+                              if (totalSelected > 0) setOpForm(prev => ({ ...prev, monto_bruto: Math.round(totalSelected * 100) / 100 }));
+                            }}
+                            className="rounded border-zinc-300 text-orange-500 focus:ring-orange-500" />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-sm font-mono dark:text-white">{fc.numero || "S/N"}</span>
+                            <span className="text-xs text-zinc-400 ml-2">{formatDate(fc.fecha)}</span>
+                          </div>
+                          <span className="text-sm font-mono font-medium dark:text-white">{formatCurrency(Number(fc.total), (fc.moneda || "ARS") as "ARS" | "USD")}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {opFCPendientes.some(f => f.selected) && (
+                    <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
+                      {opFCPendientes.filter(f => f.selected).length} FC seleccionada(s) — Total: {formatCurrency(opFCPendientes.filter(f => f.selected).reduce((s, f) => s + Number(f.total), 0), opForm.moneda)}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
