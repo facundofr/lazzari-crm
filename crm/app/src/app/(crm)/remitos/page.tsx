@@ -6,8 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, ShieldCheck } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, ShieldCheck, Trash2, Minus } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency } from "@/lib/utils";
 
@@ -75,6 +75,13 @@ interface TransporteLinked {
   moneda: string;
 }
 
+interface CreateItem {
+  tempId: string;
+  descripcion: string;
+  cantidad: number;
+  unidad: string;
+}
+
 interface PresupuestoIA {
   id: string;
   numero: string;
@@ -84,7 +91,7 @@ interface PresupuestoIA {
 }
 
 export default function RemitosPage() {
-  const { sociedadActiva } = useUser();
+  const { sociedadActiva, profile } = useUser();
   const [remitos, setRemitos] = useState<RemitoRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -98,10 +105,12 @@ export default function RemitosPage() {
     presupuesto_id: "",
     valor_declarado: "",
   });
+  const [createItems, setCreateItems] = useState<CreateItem[]>([]);
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
-  const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; subtotal: number | null; cliente_id: string | null }[]>([]);
+  const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; subtotal: number | null; total: number | null; cliente_id: string | null }[]>([]);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [loadingPRItems, setLoadingPRItems] = useState(false);
 
   // Detail panel
   const [detailRemito, setDetailRemito] = useState<RemitoRow | null>(null);
@@ -182,6 +191,12 @@ export default function RemitosPage() {
     },
   ];
 
+  // PRs filtered by selected client in create modal
+  const filteredPRs = useMemo(() => {
+    if (!createForm.cliente_id) return presupuestosAprobados;
+    return presupuestosAprobados.filter(p => p.cliente_id === createForm.cliente_id);
+  }, [presupuestosAprobados, createForm.cliente_id]);
+
   const fetchData = useCallback(async () => {
       try {
         let q = supabase
@@ -251,17 +266,81 @@ export default function RemitosPage() {
       presupuesto_id: "",
       valor_declarado: "",
     });
+    setCreateItems([]);
+    setCreateError("");
 
     let clienteQ = supabase.from("clientes").select("id, razon_social").eq("activo", true).order("razon_social");
     if (sociedadActiva?.id) clienteQ = clienteQ.eq("sociedad_id" as any, sociedadActiva.id);
 
     const [clientesRes, presupuestosRes] = await Promise.all([
       clienteQ,
-      supabase.from("presupuestos").select("id, numero, subtotal, cliente_id").eq("estado", "aprobado"),
+      (supabase as any).from("presupuestos").select("id, numero, subtotal, total, cliente_id").in("estado", ["aprobado", "remitido"]),
     ]);
     if (clientesRes.data) setClientes(clientesRes.data as { id: string; razon_social: string }[]);
-    if (presupuestosRes.data) setPresupuestosAprobados(presupuestosRes.data as { id: string; numero: string; subtotal: number | null; cliente_id: string | null }[]);
+    if (presupuestosRes.data) setPresupuestosAprobados(presupuestosRes.data as any[]);
     setCreateModalOpen(true);
+  }
+
+  // Fetch items from PR when selected
+  async function handlePRSelect(prId: string) {
+    const pr = presupuestosAprobados.find((p) => p.id === prId);
+    const autoValor = pr?.total ? String(pr.total) : pr?.subtotal ? String(pr.subtotal) : "";
+
+    setCreateForm((prev) => ({
+      ...prev,
+      presupuesto_id: prId,
+      cliente_id: pr?.cliente_id || prev.cliente_id,
+      valor_declarado: prev.valor_declarado === "" || presupuestosAprobados.some((p) => (p.total || p.subtotal) && String(p.total || p.subtotal) === prev.valor_declarado)
+        ? autoValor
+        : prev.valor_declarado,
+    }));
+
+    if (!prId) {
+      setCreateItems([]);
+      return;
+    }
+
+    // Fetch items from presupuesto
+    setLoadingPRItems(true);
+    try {
+      const { data: items } = await supabase
+        .from("presupuesto_items")
+        .select("descripcion, cantidad, unidad")
+        .eq("presupuesto_id", prId)
+        .order("orden");
+
+      if (items && items.length > 0) {
+        setCreateItems(items.map((it: any, idx: number) => ({
+          tempId: `pr-${idx}`,
+          descripcion: it.descripcion || "",
+          cantidad: Number(it.cantidad) || 1,
+          unidad: it.unidad || "UN",
+        })));
+      } else {
+        setCreateItems([]);
+      }
+    } catch {
+      setCreateItems([]);
+    } finally {
+      setLoadingPRItems(false);
+    }
+  }
+
+  function addManualItem() {
+    setCreateItems(prev => [...prev, {
+      tempId: `manual-${Date.now()}`,
+      descripcion: "",
+      cantidad: 1,
+      unidad: "UN",
+    }]);
+  }
+
+  function updateCreateItem(tempId: string, field: keyof CreateItem, value: string | number) {
+    setCreateItems(prev => prev.map(it => it.tempId === tempId ? { ...it, [field]: value } : it));
+  }
+
+  function removeCreateItem(tempId: string) {
+    setCreateItems(prev => prev.filter(it => it.tempId !== tempId));
   }
 
   async function handleCreateRemito() {
@@ -269,9 +348,14 @@ export default function RemitosPage() {
     if (!createForm.numero.trim()) { setCreateError("El número de remito es obligatorio"); return; }
     if (!createForm.cliente_id) { setCreateError("Seleccioná un cliente"); return; }
     if (!createForm.fecha) { setCreateError("La fecha es obligatoria"); return; }
+
+    // Filter out items with empty description
+    const validItems = createItems.filter(it => it.descripcion.trim());
+    if (validItems.length === 0) { setCreateError("Agregá al menos un item al remito"); return; }
+
     setCreating(true);
     try {
-      const { error } = await (supabase.from("remitos") as any).insert({
+      const { data: remitoData, error } = await (supabase.from("remitos") as any).insert({
         numero: createForm.numero,
         cliente_id: createForm.cliente_id,
         fecha: createForm.fecha,
@@ -280,15 +364,32 @@ export default function RemitosPage() {
         estado: "pendiente",
         valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : null,
         sociedad_id: sociedadActiva?.id || null,
-      });
-      if (error) {
-        alert("Error al crear remito: " + error.message);
+        created_by: profile?.id || null,
+      }).select("id").single();
+
+      if (error || !remitoData) {
+        setCreateError("Error al crear remito: " + (error?.message || "sin datos"));
         return;
       }
+
+      // Insert items
+      const remitoItems = validItems.map((it, idx) => ({
+        remito_id: remitoData.id,
+        descripcion: it.descripcion,
+        cantidad: Number(it.cantidad),
+        unidad: it.unidad || "UN",
+        orden: idx,
+      }));
+      const { error: itemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
+      if (itemsErr) {
+        console.error("Error inserting remito items:", itemsErr);
+      }
+
       setCreateModalOpen(false);
       await fetchData();
     } catch (err) {
       console.error("Error creating remito:", err);
+      setCreateError("Error inesperado al crear remito");
     } finally {
       setCreating(false);
     }
@@ -327,6 +428,15 @@ export default function RemitosPage() {
         const p = presupuestosIA.find((x) => x.id === pId);
         if (!p) continue;
         const numero = `R-0001-${String(idx).padStart(8, "0")}`;
+
+        // Fetch total for valor_declarado
+        const { data: prHeader } = await supabase
+          .from("presupuestos")
+          .select("total, subtotal")
+          .eq("id", pId)
+          .single();
+        const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
+
         const { data: remitoData, error: rErr } = await (supabase.from("remitos") as any).insert({
           numero,
           cliente_id: p.cliente_id,
@@ -335,6 +445,8 @@ export default function RemitosPage() {
           presupuesto_id: p.id,
           estado: "pendiente",
           sociedad_id: sociedadActiva?.id || null,
+          valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
+          created_by: profile?.id || null,
         }).select("id").single();
 
         if (rErr) {
@@ -382,7 +494,6 @@ export default function RemitosPage() {
       });
       const json = await res.json();
       if (!res.ok || json.error) throw new Error(json.error || "Error al autorizar");
-      // Actualizar el estado local del remito con el CAR obtenido
       setDetailRemito({ ...detailRemito, cae: json.car });
       await fetchData();
     } catch (err: any) {
@@ -400,22 +511,18 @@ export default function RemitosPage() {
     setDetailTransportes([]);
     setCreateTransporteOpen(false);
     try {
-      // Fetch items
       const itemsPromise = supabase
         .from("remito_items")
         .select("id, descripcion, cantidad, unidad, orden")
         .eq("remito_id", row.id)
         .order("orden", { ascending: true });
 
-      // If linked to a PR, fetch PR number and linked facturas
       const prPromise = row.presupuesto_id
         ? supabase.from("presupuestos").select("numero, sucursal_id").eq("id", row.presupuesto_id).single()
         : null;
       const facturasPromise = row.presupuesto_id
         ? supabase.from("facturas").select("id, numero, tipo, total, estado").eq("presupuesto_id" as any, row.presupuesto_id)
         : null;
-
-      // Fetch linked transportes
       const transportesPromise = (supabase as any)
         .from("transportes")
         .select("id, transportista, estado, fecha, destino, costo, moneda")
@@ -431,7 +538,6 @@ export default function RemitosPage() {
       setDetailItems((itemsRes.data as unknown as RemitoDetailItem[]) || []);
       if (prRes?.data) {
         setDetailPRNumero((prRes.data as any).numero || null);
-        // Fetch sucursal name if PR has sucursal_id
         const sucId = (prRes.data as any).sucursal_id;
         if (sucId) {
           const { data: sucData } = await (supabase as any).from("cliente_sucursales").select("nombre").eq("id", sucId).single();
@@ -483,63 +589,82 @@ export default function RemitosPage() {
     if (!detailRemito) return;
     const r = detailRemito;
     const items = detailItems;
+
+    // Determine sociedad info
+    const isGrupoLA = sociedadActiva?.id === "fee94607-747a-4e87-ba24-aff9032f7a56";
+    const socNombre = isGrupoLA ? "Grupo LA S.A.S." : "Lazzari Soluciones Industriales";
+    const socCuit = isGrupoLA ? "30-71939604-2" : "20-37930912-8";
+    const socColor = isGrupoLA ? "#2563EB" : "#FF4500";
+
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Remito ${r.numero}</title>
     <style>
-      body{font-family:Arial,sans-serif;margin:40px;color:#333}
-      .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #FF4500;padding-bottom:16px;margin-bottom:24px}
-      .logo{font-size:24px;font-weight:bold;color:#FF4500}
-      .logo span{font-size:12px;color:#666;font-weight:normal;display:block}
+      body{font-family:Arial,sans-serif;margin:40px;color:#333;font-size:13px}
+      .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${socColor};padding-bottom:16px;margin-bottom:24px}
+      .logo{font-size:22px;font-weight:bold;color:${socColor}}
+      .logo span{font-size:11px;color:#666;font-weight:normal;display:block;margin-top:2px}
       .doc-info{text-align:right}
-      .doc-info h2{margin:0;font-size:18px}
-      .doc-info p{margin:2px 0;font-size:12px;color:#666}
+      .doc-info h2{margin:0;font-size:20px;color:${socColor}}
+      .doc-info p{margin:2px 0;font-size:12px;color:#555}
       .section{margin-bottom:20px}
-      .section h3{font-size:13px;text-transform:uppercase;color:#999;border-bottom:1px solid #eee;padding-bottom:4px;margin-bottom:8px}
-      .field{display:inline-block;margin-right:24px;margin-bottom:6px}
-      .field label{font-size:11px;color:#999;display:block}
-      .field span{font-size:13px}
+      .section h3{font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:#888;border-bottom:1px solid #e5e5e5;padding-bottom:4px;margin-bottom:10px}
+      .fields{display:flex;flex-wrap:wrap;gap:16px}
+      .field label{font-size:10px;color:#999;display:block;text-transform:uppercase;letter-spacing:0.3px}
+      .field span{font-size:13px;font-weight:500}
       table{width:100%;border-collapse:collapse;margin-top:8px}
-      th{background:#f5f5f5;text-align:left;padding:8px;font-size:12px;border-bottom:2px solid #ddd}
-      td{padding:8px;font-size:12px;border-bottom:1px solid #eee}
-      .footer{margin-top:40px;display:flex;justify-content:space-between}
-      .signature{border-top:1px solid #333;width:200px;text-align:center;padding-top:4px;font-size:11px;color:#666}
-      .obs{background:#f9f9f9;padding:12px;border-radius:4px;font-size:12px;color:#555;margin-top:16px}
+      th{background:#f5f5f5;text-align:left;padding:10px 12px;font-size:11px;border-bottom:2px solid #ddd;text-transform:uppercase;letter-spacing:0.3px;color:#666}
+      td{padding:10px 12px;font-size:12px;border-bottom:1px solid #eee}
+      tr:last-child td{border-bottom:none}
+      .valor-declarado{background:#fff3e0;border:2px solid #ff9800;border-radius:6px;padding:14px 16px;margin-top:20px;font-size:15px;font-weight:bold;color:#e65100}
+      .obs{background:#f9f9f9;padding:12px 16px;border-radius:6px;font-size:12px;color:#555;margin-top:16px;border:1px solid #eee}
+      .footer{margin-top:50px;display:flex;justify-content:space-between;padding-top:20px}
+      .signature{border-top:1px solid #333;width:200px;text-align:center;padding-top:6px;font-size:11px;color:#666}
+      .no-items{text-align:center;color:#999;padding:24px;font-style:italic}
+      @media print{body{margin:20px}}
     </style></head><body>
     <div class="header">
-      <div class="logo">Lazzari<span>Soluciones Industriales</span></div>
+      <div class="logo">${socNombre}<span>CUIT: ${socCuit}</span></div>
       <div class="doc-info">
         <h2>REMITO</h2>
         <p><strong>${r.numero}</strong></p>
         <p>Fecha: ${formatDate(r.fecha)}</p>
-        <p>Estado: ${estadoConfig[r.estado]?.label || r.estado}</p>
         ${r.cae ? `<p>CAE: ${r.cae}</p>` : ""}
       </div>
     </div>
+
     <div class="section">
       <h3>Cliente</h3>
-      <div class="field"><label>Razón Social</label><span>${r.clientes?.razon_social || "—"}</span></div>
-      ${r.clientes?.cuit ? `<div class="field"><label>CUIT</label><span>${r.clientes.cuit}</span></div>` : ""}
-      ${r.clientes?.direccion ? `<div class="field"><label>Dirección</label><span>${r.clientes.direccion}</span></div>` : ""}
-      ${r.sucursal_nombre ? `<div class="field"><label>Sucursal</label><span>${r.sucursal_nombre}</span></div>` : ""}
+      <div class="fields">
+        <div class="field"><label>Razón Social</label><span>${r.clientes?.razon_social || "\u2014"}</span></div>
+        ${r.clientes?.cuit ? `<div class="field"><label>CUIT</label><span>${r.clientes.cuit}</span></div>` : ""}
+        ${r.clientes?.direccion ? `<div class="field"><label>Dirección</label><span>${r.clientes.direccion}</span></div>` : ""}
+        ${r.sucursal_nombre ? `<div class="field"><label>Sucursal</label><span>${r.sucursal_nombre}</span></div>` : ""}
+      </div>
     </div>
+
     <div class="section">
       <h3>Items</h3>
+      ${items.length > 0 ? `
       <table>
-        <thead><tr><th>#</th><th>Descripcion</th><th>Cantidad</th><th>Unidad</th></tr></thead>
-        <tbody>${items.map((it, i) => `<tr><td>${i + 1}</td><td>${it.descripcion}</td><td>${it.cantidad}</td><td>${it.unidad || "u"}</td></tr>`).join("")}</tbody>
-      </table>
+        <thead><tr><th style="width:40px">#</th><th>Descripción</th><th style="width:100px;text-align:right">Cantidad</th><th style="width:80px">Unidad</th></tr></thead>
+        <tbody>${items.map((it, i) => `<tr><td>${i + 1}</td><td>${it.descripcion}</td><td style="text-align:right;font-weight:500">${it.cantidad}</td><td>${it.unidad || "u"}</td></tr>`).join("")}</tbody>
+      </table>` : `<p class="no-items">Sin items</p>`}
     </div>
+
     ${detailTransportes.length > 0 ? `
     <div class="section">
       <h3>Transporte</h3>
+      <div class="fields">
       ${detailTransportes.map(t => `
         <div class="field"><label>Transportista</label><span>${t.transportista}</span></div>
-        ${t.destino ? `<div class="field"><label>Destino / Dirección de entrega</label><span>${t.destino}</span></div>` : ""}
-        ${t.costo ? `<div class="field"><label>Costo flete</label><span>$ ${Number(t.costo).toLocaleString("es-AR", { minimumFractionDigits: 2 })} ${t.moneda || ""}</span></div>` : ""}
-        <div class="field"><label>Estado transporte</label><span>${t.estado}</span></div>
+        ${t.destino ? `<div class="field"><label>Destino</label><span>${t.destino}</span></div>` : ""}
+        ${t.costo ? `<div class="field"><label>Costo flete</label><span>${formatCurrency(Number(t.costo), (t.moneda || "ARS") as "USD" | "ARS")}</span></div>` : ""}
       `).join("")}
+      </div>
     </div>` : ""}
-    ${r.valor_declarado ? `<div class="obs" style="font-size:14px;font-weight:bold;margin-top:16px;background:#fff3e0;border:1px solid #ff9800;padding:12px;border-radius:4px"><strong>VALOR DECLARADO:</strong> $ ${Number(r.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>` : ""}
+
+    ${r.valor_declarado ? `<div class="valor-declarado">VALOR DECLARADO: $ ${Number(r.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>` : ""}
     ${r.observaciones ? `<div class="obs"><strong>Observaciones:</strong> ${r.observaciones}</div>` : ""}
+
     <div class="footer">
       <div class="signature">Firma Emisor</div>
       <div class="signature">Firma Receptor</div>
@@ -580,7 +705,6 @@ export default function RemitosPage() {
         return;
       }
       setCreateTransporteOpen(false);
-      // Refresh transportes in detail
       const { data: tData } = await (supabase as any)
         .from("transportes")
         .select("id, transportista, estado, fecha, destino, costo, moneda")
@@ -608,7 +732,7 @@ export default function RemitosPage() {
     <>
       <Header
         title="Remitos"
-        subtitle="Remitos con CAE — asistidos por IA"
+        subtitle="Remitos de entrega"
         action={{ label: "Nuevo remito", onClick: openCreateModal }}
       />
       <div className="p-4 sm:p-8 space-y-6">
@@ -617,13 +741,13 @@ export default function RemitosPage() {
             <Sparkles className="h-5 w-5 text-violet-600" />
           </div>
           <div className="flex-1">
-            <p className="font-medium text-violet-800 dark:text-violet-300">Asistente IA para remitos</p>
+            <p className="font-medium text-violet-800 dark:text-violet-300">Generar remitos desde PR</p>
             <p className="text-sm text-violet-600 dark:text-violet-400">
-              Generá remitos automáticamente desde presupuestos aprobados. La IA completa items, cantidades y datos de entrega.
+              Generá remitos automáticamente desde presupuestos aprobados con todos sus items.
             </p>
           </div>
           <button onClick={openIAModal} className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700">
-            Generar con IA
+            Generar desde PR
           </button>
         </div>
 
@@ -647,8 +771,12 @@ export default function RemitosPage() {
               },
               { key: "clientes", label: "Cliente", sortable: true, sortKey: "clienteNombre", render: (row) => <span className="font-medium">{row.clientes?.razon_social}</span> },
               { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
-              { key: "remito_items", label: "Items", sortable: false, render: (row) => <span className="text-zinc-500">{row.remito_items.length} productos</span> },
-              { key: "presupuesto_id", label: "PR Origen", sortable: false, render: (row) => row.presupuesto_id ? <Badge variant="info">Vinculado</Badge> : <span className="text-zinc-400">—</span> },
+              { key: "remito_items", label: "Items", sortable: false, render: (row) => (
+                <span className={`text-zinc-500 ${row.remito_items.length === 0 ? "text-red-400 font-medium" : ""}`}>
+                  {row.remito_items.length === 0 ? "Sin items" : `${row.remito_items.length} productos`}
+                </span>
+              ) },
+              { key: "presupuesto_id", label: "PR Origen", sortable: false, render: (row) => row.presupuesto_id ? <Badge variant="info">Vinculado</Badge> : <span className="text-zinc-400">{"\u2014"}</span> },
               {
                 key: "estado", label: "Estado", sortable: true,
                 render: (row) => {
@@ -744,28 +872,38 @@ export default function RemitosPage() {
                 {!detailRemito.cae && (
                   <button
                     onClick={handleAutorizarAFIP}
-                    disabled={autorizandoAFIP}
+                    disabled={autorizandoAFIP || detailItems.length === 0}
                     className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60 transition-colors"
+                    title={detailItems.length === 0 ? "El remito necesita items para autorizar" : ""}
                   >
                     {autorizandoAFIP ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-                    {autorizandoAFIP ? "Autorizando…" : "Autorizar AFIP"}
+                    {autorizandoAFIP ? "Autorizando..." : "Autorizar AFIP"}
                   </button>
                 )}
               </div>
               {afipError && (
                 <p className="text-xs text-red-500 -mt-3">{afipError}</p>
               )}
+              {!detailRemito.cae && detailItems.length === 0 && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 -mt-3">El remito no tiene items. No se puede autorizar en AFIP ni generar PDF completo.</p>
+              )}
 
               {/* Info */}
               <div className="grid grid-cols-2 gap-4 text-sm">
                 <div>
                   <span className="text-zinc-400">Cliente</span>
-                  <p className="font-medium dark:text-white">{detailRemito.clientes?.razon_social || "—"}</p>
+                  <p className="font-medium dark:text-white">{detailRemito.clientes?.razon_social || "\u2014"}</p>
                 </div>
                 <div>
                   <span className="text-zinc-400">Fecha</span>
                   <p className="font-medium dark:text-white">{formatDate(detailRemito.fecha)}</p>
                 </div>
+                {detailRemito.clientes?.cuit && (
+                  <div>
+                    <span className="text-zinc-400">CUIT</span>
+                    <p className="font-medium dark:text-white">{detailRemito.clientes.cuit}</p>
+                  </div>
+                )}
                 {detailRemito.presupuesto_id && detailPRNumero && (
                   <div>
                     <span className="text-zinc-400">Presupuesto origen</span>
@@ -810,7 +948,6 @@ export default function RemitosPage() {
                           costo: "", moneda: "ARS", bultos: "", tipo_vehiculo: "", notas: "",
                         });
                         setCreateTransporteOpen(true);
-                        // Fetch transportistas catalog
                         try {
                           const { data } = await (supabase as any).from("transportistas").select("id, nombre").eq("activo", true).order("nombre");
                           if (data) setCatalogTransportistas(data as { id: string; nombre: string }[]);
@@ -962,16 +1099,16 @@ export default function RemitosPage() {
                 {detailLoading ? (
                   <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-orange-500" /></div>
                 ) : detailItems.length === 0 ? (
-                  <p className="text-sm text-zinc-400 text-center py-4">Sin items</p>
+                  <p className="text-sm text-zinc-400 text-center py-4 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700">Sin items cargados en este remito</p>
                 ) : (
                   <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
-                          <th className="text-left px-3 py-2">#</th>
-                          <th className="text-left px-3 py-2">Descripcion</th>
-                          <th className="text-right px-3 py-2">Cantidad</th>
-                          <th className="text-left px-3 py-2">Unidad</th>
+                          <th className="text-left px-3 py-2 w-10">#</th>
+                          <th className="text-left px-3 py-2">Descripción</th>
+                          <th className="text-right px-3 py-2 w-24">Cantidad</th>
+                          <th className="text-left px-3 py-2 w-20">Unidad</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -996,7 +1133,7 @@ export default function RemitosPage() {
       {/* Create Remito Modal */}
       {createModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <Card className="w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+          <Card className="w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold dark:text-white">Nuevo Remito</h2>
               <button onClick={() => setCreateModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
@@ -1004,21 +1141,36 @@ export default function RemitosPage() {
               </button>
             </div>
             <div className="space-y-3">
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Numero</label>
-                <input
-                  type="text"
-                  value={createForm.numero}
-                  onChange={(e) => setCreateForm({ ...createForm, numero: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  placeholder="R-0001-00000012"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Numero</label>
+                  <input
+                    type="text"
+                    value={createForm.numero}
+                    onChange={(e) => setCreateForm({ ...createForm, numero: e.target.value })}
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                    placeholder="R-0001-00000012"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha</label>
+                  <input
+                    type="date"
+                    value={createForm.fecha}
+                    onChange={(e) => setCreateForm({ ...createForm, fecha: e.target.value })}
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                  />
+                </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente</label>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente *</label>
                 <select
                   value={createForm.cliente_id}
-                  onChange={(e) => setCreateForm({ ...createForm, cliente_id: e.target.value })}
+                  onChange={(e) => {
+                    const clienteId = e.target.value;
+                    setCreateForm((prev) => ({ ...prev, cliente_id: clienteId, presupuesto_id: "" }));
+                    setCreateItems([]);
+                  }}
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                 >
                   <option value="">Seleccionar cliente...</option>
@@ -1028,48 +1180,106 @@ export default function RemitosPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha</label>
-                <input
-                  type="date"
-                  value={createForm.fecha}
-                  onChange={(e) => setCreateForm({ ...createForm, fecha: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Observaciones</label>
-                <textarea
-                  value={createForm.observaciones}
-                  onChange={(e) => setCreateForm({ ...createForm, observaciones: e.target.value })}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  rows={3}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Presupuesto (opcional)</label>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                  Presupuesto {createForm.cliente_id ? "(filtrado por cliente)" : "(opcional)"}
+                </label>
                 <select
                   value={createForm.presupuesto_id}
-                  onChange={(e) => {
-                    const prId = e.target.value;
-                    const pr = presupuestosAprobados.find((p) => p.id === prId);
-                    const autoValor = pr?.subtotal ? String(pr.subtotal) : "";
-                    setCreateForm((prev) => ({
-                      ...prev,
-                      presupuesto_id: prId,
-                      cliente_id: pr?.cliente_id || prev.cliente_id,
-                      valor_declarado: prev.valor_declarado === "" || presupuestosAprobados.some((p) => p.subtotal && String(p.subtotal) === prev.valor_declarado)
-                        ? autoValor
-                        : prev.valor_declarado,
-                    }));
-                  }}
+                  onChange={(e) => handlePRSelect(e.target.value)}
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                 >
                   <option value="">Sin presupuesto</option>
-                  {presupuestosAprobados.map((p) => (
-                    <option key={p.id} value={p.id}>{p.numero}{p.subtotal ? ` — Neto: $${Number(p.subtotal).toLocaleString("es-AR")}` : ""}</option>
+                  {filteredPRs.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.numero}{p.total ? ` — $${Number(p.total).toLocaleString("es-AR")}` : p.subtotal ? ` — Neto: $${Number(p.subtotal).toLocaleString("es-AR")}` : ""}
+                    </option>
                   ))}
                 </select>
+                {createForm.cliente_id && filteredPRs.length === 0 && (
+                  <p className="text-xs text-zinc-400 mt-1">No hay presupuestos aprobados para este cliente</p>
+                )}
               </div>
+
+              {/* Items section */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                    Items del remito *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={addManualItem}
+                    className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium"
+                  >
+                    <Plus className="h-3 w-3" /> Agregar item
+                  </button>
+                </div>
+                {loadingPRItems ? (
+                  <div className="flex items-center justify-center py-4 text-sm text-zinc-400">
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" /> Cargando items del presupuesto...
+                  </div>
+                ) : createItems.length === 0 ? (
+                  <p className="text-xs text-zinc-400 text-center py-4 rounded-lg border border-dashed border-zinc-300 dark:border-zinc-700">
+                    {createForm.presupuesto_id ? "El presupuesto no tiene items" : "Seleccioná un presupuesto o agregá items manualmente"}
+                  </p>
+                ) : (
+                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
+                          <th className="text-left px-3 py-2">Descripción</th>
+                          <th className="text-center px-2 py-2 w-24">Cantidad</th>
+                          <th className="text-center px-2 py-2 w-20">Unidad</th>
+                          <th className="w-10"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {createItems.map((item) => (
+                          <tr key={item.tempId} className="border-t border-zinc-100 dark:border-zinc-800">
+                            <td className="px-2 py-1.5">
+                              <input
+                                type="text"
+                                value={item.descripcion}
+                                onChange={(e) => updateCreateItem(item.tempId, "descripcion", e.target.value)}
+                                className="w-full rounded border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                                placeholder="Descripción del item"
+                              />
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={item.cantidad}
+                                onChange={(e) => updateCreateItem(item.tempId, "cantidad", Number(e.target.value))}
+                                className="w-full rounded border border-zinc-200 px-2 py-1 text-sm text-center dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                              />
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <input
+                                type="text"
+                                value={item.unidad}
+                                onChange={(e) => updateCreateItem(item.tempId, "unidad", e.target.value)}
+                                className="w-full rounded border border-zinc-200 px-2 py-1 text-sm text-center dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                              />
+                            </td>
+                            <td className="px-1 py-1.5">
+                              <button
+                                type="button"
+                                onClick={() => removeCreateItem(item.tempId)}
+                                className="rounded p-1 text-zinc-400 hover:bg-red-100 hover:text-red-500 transition-colors"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
                   Valor declarado ($) <span className="text-zinc-400 font-normal">(requerido para transporte)</span>
@@ -1083,13 +1293,21 @@ export default function RemitosPage() {
                   placeholder="Ingrese el valor declarado..."
                 />
                 {!createForm.valor_declarado && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
-                    Sin valor declarado el transportista no puede completar el remito de manera correcta.
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                    Sin valor declarado el transportista no puede completar el remito.
                   </p>
                 )}
-                {createForm.presupuesto_id && createForm.valor_declarado && (
-                  <p className="text-xs text-zinc-400 mt-1">Sugerido desde el neto del presupuesto. Podés modificarlo.</p>
-                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Observaciones</label>
+                <textarea
+                  value={createForm.observaciones}
+                  onChange={(e) => setCreateForm({ ...createForm, observaciones: e.target.value })}
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                  rows={2}
+                  placeholder="Observaciones opcionales..."
+                />
               </div>
             </div>
             {createError && (
@@ -1107,7 +1325,7 @@ export default function RemitosPage() {
                 disabled={creating}
                 className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
               >
-                {creating ? "Creando..." : "Crear Remito"}
+                {creating ? "Creando..." : `Crear Remito (${createItems.filter(i => i.descripcion.trim()).length} items)`}
               </button>
             </div>
           </Card>
@@ -1121,7 +1339,7 @@ export default function RemitosPage() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Sparkles className="h-5 w-5 text-violet-600" />
-                <h2 className="text-lg font-semibold dark:text-white">Generar Remitos con IA</h2>
+                <h2 className="text-lg font-semibold dark:text-white">Generar Remitos desde Presupuestos</h2>
               </div>
               <button onClick={() => setIaModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
                 <X className="h-5 w-5" />
@@ -1138,7 +1356,7 @@ export default function RemitosPage() {
             ) : (
               <>
                 <p className="text-sm text-zinc-500">
-                  Selecciona presupuestos aprobados para generar remitos automaticamente con sus items.
+                  Seleccioná presupuestos aprobados para generar remitos automáticamente con todos sus items y valor declarado.
                 </p>
                 {presupuestosIA.length === 0 ? (
                   <p className="text-sm text-zinc-400 py-4 text-center">No hay presupuestos aprobados disponibles.</p>
