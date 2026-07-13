@@ -281,12 +281,12 @@ export default function OrdenesCompraPage() {
   };
 
   const handleCreate = async () => {
-    if (!formData.proveedor_id) { setFormError("Selecciona un proveedor"); return; }
+    // proveedor_id es opcional — se puede crear OC sin proveedor
     setFormLoading(true);
     setFormError("");
     try {
       const { error } = await supabase.from("ordenes_compra").insert({
-        proveedor_id: formData.proveedor_id,
+        proveedor_id: formData.proveedor_id || null,
         fecha: formData.fecha,
         fecha_entrega_estimada: formData.fecha_entrega_estimada || null,
         moneda: formData.moneda,
@@ -309,6 +309,7 @@ export default function OrdenesCompraPage() {
   const handleRowClick = (row: OCRow) => {
     setDetailOC(row);
     fetchDetailItems(row.id);
+    if (!row.proveedores) fetchProveedores();
   };
 
   const handleCancel = async (oc: OCRow) => {
@@ -1075,7 +1076,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 sortable: true,
                 render: (row) => (
                   <div>
-                    <span className="font-medium">{row.proveedores?.razon_social || "—"}</span>
+                    <span className={`font-medium ${!row.proveedores?.razon_social ? "text-amber-500 italic" : ""}`}>{row.proveedores?.razon_social || "Sin proveedor"}</span>
                     {row.proveedores?.email && (
                       <a href={`mailto:${row.proveedores.email}`} className="text-xs text-zinc-400 hover:text-orange-500 truncate max-w-[200px] block" onClick={(e) => e.stopPropagation()}>{row.proveedores.email}</a>
                     )}
@@ -1618,7 +1619,32 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     </div>
                   </div>
                 ) : (
-                  <p className="text-sm text-zinc-400">Sin datos del proveedor</p>
+                  <div className="space-y-3">
+                    <p className="text-sm text-amber-600 dark:text-amber-400 font-medium">Sin proveedor asignado</p>
+                    <div>
+                      <select
+                        onChange={async (e) => {
+                          const provId = e.target.value;
+                          if (!provId || !detailOC) return;
+                          const { error } = await supabase.from("ordenes_compra").update({ proveedor_id: provId } as any).eq("id", detailOC.id);
+                          if (error) { alert("Error al asignar proveedor"); return; }
+                          await fetchData();
+                          // Reload detail
+                          const updated = ordenes.find(o => o.id === detailOC.id);
+                          if (updated) setDetailOC(updated);
+                          else {
+                            const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
+                            if (fresh) setDetailOC(fresh as any);
+                          }
+                        }}
+                        className="w-full rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white"
+                        defaultValue=""
+                      >
+                        <option value="">Asignar proveedor...</option>
+                        {proveedores.map((p) => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
+                      </select>
+                    </div>
+                  </div>
                 )}
               </div>
 

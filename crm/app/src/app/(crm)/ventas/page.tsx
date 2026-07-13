@@ -147,11 +147,14 @@ export default function VentasPage() {
   const [emitManual, setEmitManual] = useState(false);
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
+  const [cotizFecha, setCotizFecha] = useState("");
 
-  async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas") {
+  async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas", fecha?: string) {
     setCotizBnaLoading(true);
     try {
-      const res = await fetch(`/api/cotizacion-bna?modalidad=${modalidad}`);
+      const params = new URLSearchParams({ modalidad });
+      if (fecha) params.set("fecha", fecha);
+      const res = await fetch(`/api/cotizacion-bna?${params}`);
       if (res.ok) {
         const data = await res.json();
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
@@ -1089,13 +1092,14 @@ export default function VentasPage() {
                           placeholder="Ej: 1450.00"
                           className="w-32 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-900 px-2 py-1 text-sm font-mono dark:text-white"
                         />
-                        <button type="button" onClick={() => fetchCotizBna("divisas")} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap">
+                        <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap">
                           {cotizBnaLoading ? "…" : "Divisas"}
                         </button>
                         <span className="text-xs text-zinc-400">·</span>
-                        <button type="button" onClick={() => fetchCotizBna("billetes")} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap">
+                        <button type="button" onClick={() => fetchCotizBna("billetes", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap">
                           {cotizBnaLoading ? "…" : "Billetes"}
                         </button>
+                        <input type="date" value={cotizFecha} onChange={e => setCotizFecha(e.target.value)} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
                       </div>
                     </div>
                     {cotizBna && (

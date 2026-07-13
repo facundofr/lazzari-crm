@@ -346,6 +346,10 @@ export default function StockPage() {
         stock_minimo: form.stock_minimo,
       };
 
+      if (!editingId && sociedadActiva?.id) {
+        payload.sociedad_id = sociedadActiva.id;
+      }
+
       if (editingId) {
         const { error } = await (supabase as any).from("productos").update(payload).eq("id", editingId);
         if (error) throw error;

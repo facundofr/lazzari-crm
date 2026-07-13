@@ -78,13 +78,43 @@ async function fetchBluelytics(): Promise<{ compra: number; venta: number; fuent
 
 export async function GET(req: NextRequest) {
   const modalidad = (req.nextUrl.searchParams.get("modalidad") || "divisas") as "divisas" | "billetes";
+  const fechaParam = req.nextUrl.searchParams.get("fecha"); // YYYY-MM-DD opcional
   // tipo en DB: "oficial_divisas" o "oficial_billetes"
   const tipoDb = modalidad === "billetes" ? "oficial_billetes" : "oficial_divisas";
 
   const supabase = await createSupabaseServer();
-  const today = YESTERDAY();
+  const today = fechaParam || YESTERDAY();
 
-  // 1. Buscar en DB el valor de hoy
+  // Si se pidió una fecha específica, solo buscar en DB (no scrapear)
+  if (fechaParam) {
+    const { data: cached } = await (supabase as any)
+      .from("cotizaciones_dolar")
+      .select("fecha, tipo, valor_compra, valor_venta, fuente, es_manual")
+      .eq("tipo", tipoDb)
+      .eq("fecha", fechaParam)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (cached) {
+      return NextResponse.json({
+        fecha: cached.fecha,
+        modalidad,
+        tipo: tipoDb,
+        valor_compra: Number(cached.valor_compra),
+        valor_venta: Number(cached.valor_venta),
+        fuente: cached.fuente,
+        es_manual: cached.es_manual,
+        cached: true,
+      });
+    }
+    return NextResponse.json(
+      { error: `No hay cotización guardada para ${fechaParam}. Puede cargarla manualmente.` },
+      { status: 404 }
+    );
+  }
+
+  // 1. Buscar en DB el valor del día hábil anterior
   const { data: cached } = await (supabase as any)
     .from("cotizaciones_dolar")
     .select("fecha, tipo, valor_compra, valor_venta, fuente, es_manual")

@@ -106,11 +106,14 @@ export default function FacturacionPage() {
   const [emitManual, setEmitManual] = useState(false);
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
+  const [cotizFecha, setCotizFecha] = useState("");
 
-  async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas") {
+  async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas", fecha?: string) {
     setCotizBnaLoading(true);
     try {
-      const res = await fetch(`/api/cotizacion-bna?modalidad=${modalidad}`);
+      const params = new URLSearchParams({ modalidad });
+      if (fecha) params.set("fecha", fecha);
+      const res = await fetch(`/api/cotizacion-bna?${params}`);
       if (res.ok) {
         const data = await res.json();
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
@@ -1032,13 +1035,14 @@ ${f.cae ? `
                       <input type="number" step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) }))} placeholder="Ej: 1450.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
                       <div className="mt-1 flex items-center gap-2 flex-wrap">
                         <span className="text-xs text-zinc-400">BNA:</span>
-                        <button type="button" onClick={() => fetchCotizBna("divisas")} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
+                        <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
                           {cotizBnaLoading ? "…" : "Divisas"}
                         </button>
                         <span className="text-xs text-zinc-300">·</span>
-                        <button type="button" onClick={() => fetchCotizBna("billetes")} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
+                        <button type="button" onClick={() => fetchCotizBna("billetes", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
                           {cotizBnaLoading ? "…" : "Billetes"}
                         </button>
+                        <input type="date" value={cotizFecha} onChange={e => setCotizFecha(e.target.value)} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
                         {cotizBna && <span className="text-xs text-zinc-400">→ Venta {cotizBna.modalidad}: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})</span>}
                       </div>
                     </div>

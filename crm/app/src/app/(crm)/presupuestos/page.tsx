@@ -268,10 +268,16 @@ export default function PresupuestosPage() {
     if (!emailTo || !selected) return;
     setEmailSending(true);
     try {
-      // Use mailto as fallback (real sending requires backend integration)
-      const mailtoUrl = `mailto:${encodeURIComponent(emailTo)}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-      window.open(mailtoUrl, "_blank");
-      toast.success("Se abrió el cliente de email");
+      // 1. Generar PDF del PR en nueva ventana para que el usuario lo guarde/imprima
+      handlePrint(selected);
+
+      // 2. Abrir mailto con el texto (el usuario adjunta el PDF manualmente)
+      setTimeout(() => {
+        const mailtoUrl = `mailto:${encodeURIComponent(emailTo)}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+        window.open(mailtoUrl, "_blank");
+      }, 800);
+
+      toast.success("Se abrió el PDF y el cliente de email. Adjuntá el PDF al mail.");
       setEmailModal(false);
     } catch {
       toast.error("Error al preparar el email");
@@ -329,10 +335,14 @@ export default function PresupuestosPage() {
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
 
-  async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas") {
+  const [cotizFecha, setCotizFecha] = useState("");
+
+  async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas", fecha?: string) {
     setCotizBnaLoading(true);
     try {
-      const res = await fetch(`/api/cotizacion-bna?modalidad=${modalidad}`);
+      const params = new URLSearchParams({ modalidad });
+      if (fecha) params.set("fecha", fecha);
+      const res = await fetch(`/api/cotizacion-bna?${params}`);
       if (res.ok) {
         const data = await res.json();
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
@@ -343,7 +353,17 @@ export default function PresupuestosPage() {
     }
   }
 
-  const [clientes, setClientes] = useState<{id: string; razon_social: string; markup_predeterminado?: number | null}[]>([]);
+  function tipoDocPorCondicion(condicion?: string | null): { tipo_comprobante: string; modalidad_emision: "electronica" | "manual" | "sin_definir" } {
+    switch (condicion) {
+      case "RI": return { tipo_comprobante: "A", modalidad_emision: "electronica" };
+      case "Monotributo": return { tipo_comprobante: "B", modalidad_emision: "electronica" };
+      case "Exento": return { tipo_comprobante: "B", modalidad_emision: "electronica" };
+      case "Consumidor Final": return { tipo_comprobante: "M", modalidad_emision: "electronica" };
+      default: return { tipo_comprobante: "", modalidad_emision: "sin_definir" };
+    }
+  }
+
+  const [clientes, setClientes] = useState<{id: string; razon_social: string; markup_predeterminado?: number | null; condicion_iva?: string | null}[]>([]);
   const [newPR, setNewPR] = useState({
     cliente_id: "",
     vendedor_id: "",
@@ -729,12 +749,12 @@ export default function PresupuestosPage() {
       try {
         let q = (supabase as any)
           .from("clientes")
-          .select("id, razon_social, markup_predeterminado")
+          .select("id, razon_social, markup_predeterminado, condicion_iva")
           .eq("activo", true)
           .order("razon_social");
         if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
         const { data } = await q;
-        if (data) setClientes(data as {id: string; razon_social: string; markup_predeterminado?: number | null}[]);
+        if (data) setClientes(data as {id: string; razon_social: string; markup_predeterminado?: number | null; condicion_iva?: string | null}[]);
       } catch { /* ignore */ }
     }
     fetchClientes();
@@ -766,6 +786,14 @@ export default function PresupuestosPage() {
       if (field === "precio_costo" || field === "markup_porcentaje" || field === "costo_moneda") {
         const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio);
         item.precio_venta = Number((costoConv * (1 + item.markup_porcentaje / 100)).toFixed(2));
+      }
+
+      // Auto-calc markup when precio_venta changes manually
+      if (field === "precio_venta") {
+        const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio);
+        if (costoConv > 0) {
+          item.markup_porcentaje = Number((((Number(value) / costoConv) - 1) * 100).toFixed(2));
+        }
       }
       items[index] = item;
       return { ...prev, items };
@@ -1051,18 +1079,17 @@ export default function PresupuestosPage() {
         return;
       }
 
-      // Group items by proveedor_id (skip items without proveedor)
+      // Group items by proveedor_id (items sin proveedor van a key "__sin_proveedor__")
       const byProveedor: Record<string, any[]> = {};
       for (const item of items) {
-        const provId = (item as any).proveedor_id;
-        if (!provId) continue;
+        const provId = (item as any).proveedor_id || "__sin_proveedor__";
         if (!byProveedor[provId]) byProveedor[provId] = [];
         byProveedor[provId].push(item);
       }
 
       const proveedorIds = Object.keys(byProveedor);
       if (proveedorIds.length === 0) {
-        toast.info("PR aprobado. No se generaron OC (items sin proveedor asignado).");
+        toast.info("PR aprobado. No se generaron OC (sin items).");
         return;
       }
 
@@ -1073,11 +1100,12 @@ export default function PresupuestosPage() {
         const provItems = byProveedor[provId];
         const subtotal = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
         const iva = subtotal * 0.21;
+        const isSinProveedor = provId === "__sin_proveedor__";
 
         const { data: ocRow, error: ocErr } = await supabase
           .from("ordenes_compra")
           .insert({
-            proveedor_id: provId,
+            proveedor_id: isSinProveedor ? null : provId,
             presupuesto_origen_id: prId,
             sociedad_id: sociedadId,
             fecha: today,
@@ -1086,32 +1114,35 @@ export default function PresupuestosPage() {
             subtotal,
             iva,
             total: subtotal + iva,
-            observaciones: `Generada automáticamente desde ${prNumero}`,
-            created_by: profile?.id,
+            observaciones: isSinProveedor
+              ? `Generada desde ${prNumero} — SIN PROVEEDOR ASIGNADO`
+              : `Generada automáticamente desde ${prNumero}`,
+            created_by: profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
           } as any)
           .select()
           .single();
 
         if (ocErr || !ocRow) {
-          console.error("Error creating OC for proveedor:", provId, ocErr);
+          console.error("Error creating OC for proveedor:", provId, JSON.stringify(ocErr));
+          toast.error(`Error al crear OC: ${ocErr?.message ?? "sin datos de respuesta"}`);
           continue;
         }
 
-        // Create OC items (subtotal is GENERATED column — don't insert it)
+        // Create OC items (subtotal is GENERATED ALWAYS — don't insert it)
         const ocItems = provItems.map((it: any, idx: number) => ({
           orden_id: ocRow.id,
-          codigo: it.codigo,
-          descripcion: it.descripcion,
-          cantidad: Number(it.cantidad),
-          unidad: it.unidad,
-          precio_unitario: Number(it.precio_costo),
+          codigo: it.codigo || "",
+          descripcion: it.descripcion || "Sin descripción",
+          cantidad: Number(it.cantidad) || 1,
+          unidad: it.unidad || "u",
+          precio_unitario: Number(it.precio_costo) || 0,
           orden: idx + 1,
           cantidad_recibida: 0,
         }));
         const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems);
         if (itemsErr) {
-          console.error("Error inserting OC items:", itemsErr);
-          toast.warning(`OC creada pero falló la carga de items: ${itemsErr.message}`);
+          console.error("Error inserting OC items:", JSON.stringify(itemsErr));
+          toast.error(`OC ${ocRow.numero ?? ""} creada pero falló la carga de items: ${itemsErr.message}`);
         }
         ocsCreated++;
       }
@@ -1934,18 +1965,24 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 },
               },
               {
-                key: "numero", label: "N° PR", sortable: true,
+                key: "numero", label: "N°", sortable: true,
                 render: (row) => (
                   <div className="flex items-center gap-1.5">
-                    <FileText className="h-3.5 w-3.5 text-zinc-400" />
-                    <span className="font-mono text-xs font-bold">{row.numero}</span>
+                    {row.estado === "solicitud" ? <Inbox className="h-3.5 w-3.5 text-blue-400" /> : <FileText className="h-3.5 w-3.5 text-zinc-400" />}
+                    <span className="font-mono text-xs font-bold">{row.estado === "solicitud" ? row.numero.replace("PR-", "SOL-") : row.numero}</span>
                   </div>
                 ),
               },
               {
-                key: "items", label: "Resumen items", sortable: false,
+                key: "items", label: "Detalle", sortable: false,
                 render: (row) => {
-                  if (!row.items || row.items.length === 0) return <span className="text-zinc-400 text-xs">—</span>;
+                  // Para solicitudes sin items, mostrar observaciones/notas como resumen
+                  if (!row.items || row.items.length === 0) {
+                    const texto = row.observaciones || (row as any).notasInternas || "";
+                    if (!texto) return <span className="text-zinc-400 text-xs">—</span>;
+                    const truncated = texto.length > 60 ? texto.slice(0, 57) + "..." : texto;
+                    return <span className="text-xs text-blue-600 dark:text-blue-400 italic" title={texto}>{truncated}</span>;
+                  }
                   const descs = row.items.slice(0, 2).map(it => it.descripcion || it.codigo || "").filter(Boolean);
                   let text = descs.join(", ");
                   if (text.length > 50) text = text.slice(0, 47) + "...";
@@ -1955,11 +1992,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               },
               {
                 key: "total", label: "Monto", className: "text-right", sortable: true,
-                render: (row) => (
-                  <span className="font-mono text-xs font-semibold block text-right whitespace-nowrap">
-                    {formatCurrency(row.total, row.moneda)}
-                  </span>
-                ),
+                render: (row) => {
+                  if (row.estado === "solicitud") return <span className="text-zinc-400 text-xs">—</span>;
+                  return (
+                    <span className="font-mono text-xs font-semibold block text-right whitespace-nowrap">
+                      {formatCurrency(row.total, row.moneda)}
+                    </span>
+                  );
+                },
               },
               {
                 key: "clienteNombre", label: "Cliente", sortable: true,
@@ -1989,8 +2029,9 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 },
               },
               {
-                key: "enviadoAt" as any, label: "Fecha envio", sortable: true,
+                key: "enviadoAt" as any, label: "Enviado", sortable: true,
                 render: (row) => {
+                  if (row.estado === "solicitud") return <span className="text-zinc-400 text-xs">—</span>;
                   return row.enviadoAt ? <span className="text-xs text-zinc-600 dark:text-zinc-300 whitespace-nowrap">{formatDate(row.enviadoAt)}</span> : <span className="text-zinc-400 text-xs">—</span>;
                 },
               },
@@ -2000,10 +2041,27 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   const cfg = statusConfig[row.estado] || { label: row.estado, variant: "outline" as const, icon: Clock };
                   const Icon = cfg.icon;
                   const sinCostos = row.estado === "aprobado" && prsSinCostos.has(row.id);
+
+                  // Indicador de vencimiento para PRs activos
+                  let vencTag: React.ReactNode = null;
+                  if (["pendiente", "postergado", "solicitud"].includes(row.estado) && row.vencimiento) {
+                    const dias = Math.floor((new Date(row.vencimiento + "T23:59:59").getTime() - Date.now()) / 86400000);
+                    if (dias < 0) {
+                      vencTag = <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" title={`Venció hace ${Math.abs(dias)} días`}>VENCIDO</span>;
+                    } else if (dias <= 5) {
+                      vencTag = <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" title={`Vence en ${dias} días`}>{dias}d</span>;
+                    } else if (dias <= 10) {
+                      vencTag = <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400" title={`Vence en ${dias} días`}>{dias}d</span>;
+                    } else if (dias <= 20) {
+                      vencTag = <span className="rounded px-1 py-0.5 text-[9px] font-bold bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400" title={`Vence en ${dias} días`}>{dias}d</span>;
+                    }
+                  }
+
                   return (
                     <div className="flex items-center gap-1.5">
                       <Icon className="h-3.5 w-3.5" />
                       <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                      {vencTag}
                       {sinCostos && (
                         <span title="Items sin costos cargados">
                           <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
@@ -2230,7 +2288,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       await fetchPresupuestos();
                       toast.success("Vendedor actualizado");
                     }}
-                    className="mt-0.5 w-full rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-sm font-medium dark:border-zinc-700 dark:text-white"
+                    className="mt-0.5 w-full rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                   >
                     <option value="">Sin asignar</option>
                     {vendedores.map(v => (
@@ -2251,7 +2309,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       await fetchPresupuestos();
                       toast.success("Operador actualizado");
                     }}
-                    className="mt-0.5 w-full rounded-md border border-zinc-200 bg-transparent px-2 py-1 text-sm font-medium dark:border-zinc-700 dark:text-white"
+                    className="mt-0.5 w-full rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                   >
                     <option value="">Sin asignar</option>
                     {vendedores.map(v => (
@@ -2597,7 +2655,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   {filteredClientes.length === 0 ? (
                     <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
                   ) : filteredClientes.slice(0, 20).map((c) => (
-                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; setNewPR((p) => { const markup = mg ?? p.markup_general; return { ...p, cliente_id: c.id, markup_general: markup, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number(((it.costo_moneda === "USD" ? it.precio_costo * (p.tipo_cambio || 1) : it.precio_costo) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); }}
+                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; const td = tipoDocPorCondicion(c.condicion_iva); setNewPR((p) => { const markup = mg ?? p.markup_general; return { ...p, cliente_id: c.id, markup_general: markup, ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number(((it.costo_moneda === "USD" ? it.precio_costo * (p.tipo_cambio || 1) : it.precio_costo) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); }}
                       className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${c.id === newPR.cliente_id ? "bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400" : "text-zinc-700 dark:text-zinc-300"}`}>
                       {c.razon_social}{c.markup_predeterminado != null && <span className="ml-auto text-xs text-zinc-400">{c.markup_predeterminado}%</span>}
                     </button>
@@ -2624,29 +2682,16 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               )}
             </div>
 
-            {/* Descripción de lo que necesita */}
+            {/* Descripción de lo que necesita — se guarda en notas_internas (es info interna, no para el cliente) */}
             <div>
               <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                ¿Qué necesita el cliente? <span className="text-zinc-400 font-normal">(opcional)</span>
-              </label>
-              <textarea
-                value={newPR.observaciones}
-                onChange={(e) => setNewPR((p) => ({ ...p, observaciones: e.target.value }))}
-                rows={4}
-                placeholder="Ej: Necesita válvulas para planta de gas, urgente para la semana que viene. Me va a mandar la lista por WhatsApp."
-                className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-800 placeholder:text-zinc-400 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-none"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                Notas internas <span className="text-zinc-400 font-normal">(solo vos)</span>
+                ¿Qué necesita el cliente?
               </label>
               <textarea
                 value={newPR.notas_internas}
                 onChange={(e) => setNewPR((p) => ({ ...p, notas_internas: e.target.value }))}
-                rows={2}
-                placeholder="Contexto interno, precio estimado, urgencia..."
+                rows={4}
+                placeholder="Ej: Necesita válvulas para planta de gas, urgente para la semana que viene. Me va a mandar la lista por WhatsApp."
                 className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-800 placeholder:text-zinc-400 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-none"
               />
             </div>
@@ -2689,9 +2734,10 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       key={c.id}
                       onClick={() => {
                         const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined;
+                        const td = tipoDocPorCondicion(c.condicion_iva);
                         setNewPR((p) => {
                           const markup = mg ?? p.markup_general;
-                          return { ...p, cliente_id: c.id, markup_general: markup, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number(((it.costo_moneda === "USD" ? it.precio_costo * (p.tipo_cambio || 1) : it.precio_costo) * (1 + markup / 100)).toFixed(2)) })) };
+                          return { ...p, cliente_id: c.id, markup_general: markup, ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number(((it.costo_moneda === "USD" ? it.precio_costo * (p.tipo_cambio || 1) : it.precio_costo) * (1 + markup / 100)).toFixed(2)) })) };
                         });
                         setClientSearch(c.razon_social);
                         setClientDropdownOpen(false);
@@ -2766,13 +2812,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             />
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               <span className="text-xs text-zinc-400">BNA:</span>
-              <button type="button" onClick={() => fetchCotizBna("divisas")} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
+              <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
                 {cotizBnaLoading ? "…" : "Divisas"}
               </button>
               <span className="text-xs text-zinc-300">·</span>
-              <button type="button" onClick={() => fetchCotizBna("billetes")} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
+              <button type="button" onClick={() => fetchCotizBna("billetes", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
                 {cotizBnaLoading ? "…" : "Billetes"}
               </button>
+              <input type="date" value={cotizFecha} onChange={e => setCotizFecha(e.target.value)} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
               {cotizBna && (
                 <span className="text-xs text-zinc-400">
                   → Venta {cotizBna.modalidad}: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})
@@ -2801,14 +2848,16 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             onChange={(e) => setNewPR((p) => ({ ...p, vencimiento: e.target.value }))}
           />
           <Select
-            label="Facturación"
-            value={newPR.tipo_comprobante === "A" ? "A" : newPR.tipo_comprobante === "B" ? "B" : newPR.modalidad_emision === "manual" ? "manual" : ""}
+            label="Tipo de documento"
+            value={newPR.tipo_comprobante === "A" ? "A" : newPR.tipo_comprobante === "B" ? "B" : newPR.tipo_comprobante === "M" ? "M" : newPR.modalidad_emision === "manual" ? "manual" : ""}
             onChange={(e) => {
               const v = e.target.value;
               if (v === "A") {
                 setNewPR((p) => ({ ...p, tipo_comprobante: "A", modalidad_emision: "electronica" }));
               } else if (v === "B") {
                 setNewPR((p) => ({ ...p, tipo_comprobante: "B", modalidad_emision: "electronica" }));
+              } else if (v === "M") {
+                setNewPR((p) => ({ ...p, tipo_comprobante: "M", modalidad_emision: "electronica" }));
               } else if (v === "manual") {
                 setNewPR((p) => ({ ...p, tipo_comprobante: "", modalidad_emision: "manual" }));
               } else {
@@ -2817,8 +2866,9 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             }}
             options={[
               { value: "", label: "Sin definir" },
-              { value: "A", label: "Factura A (IVA discriminado)" },
-              { value: "B", label: "Factura B (IVA incluido)" },
+              { value: "A", label: "A — Resp. Inscripto (IVA discriminado)" },
+              { value: "B", label: "B — Monotributo / Exento (IVA incluido)" },
+              { value: "M", label: "M — Consumidor Final" },
               { value: "manual", label: "Manual (sin ARCA)" },
             ]}
           />
@@ -2979,13 +3029,13 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1">
-                          <span className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border ${
+                          <button type="button" onClick={() => updateNewPRItem(idx, "costo_moneda", item.costo_moneda === "USD" ? "ARS" : "USD")} title="Click para cambiar moneda" className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border cursor-pointer hover:opacity-80 transition-opacity ${
                             item.costo_moneda === "USD"
                               ? "border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
                               : "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
                           }`}>
                             {item.costo_moneda === "USD" ? "US$" : "AR$"}
-                          </span>
+                          </button>
                           <input type="number" value={item.precio_costo || ""} onChange={(e) => updateNewPRItem(idx, "precio_costo", Number(e.target.value))}
                             className="w-full min-w-0 rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                         </div>
@@ -3064,7 +3114,8 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           </div>
         </div>}
 
-        {/* Notas internas (NO se envian al cliente) — van primero */}
+        {/* Notas internas y Observaciones — solo en modo presupuesto (solicitud ya tiene los suyos arriba) */}
+        {!esSolicitud && <>
         <Textarea
           label="Notas internas (solo uso interno)"
           value={newPR.notas_internas}
@@ -3073,7 +3124,6 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           placeholder="Margen esperado, contexto de la negociacion, datos internos..."
         />
 
-        {/* Observaciones (van al cliente en PDF/WhatsApp) */}
         <Textarea
           label="Observaciones (visibles para el cliente)"
           value={newPR.observaciones}
@@ -3081,6 +3131,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           rows={2}
           placeholder="Condiciones de pago, plazo de entrega, aclaraciones..."
         />
+        </>}
       </Modal>
 
       {/* ==================== COSTOS FALTANTES MODAL ==================== */}
@@ -3440,7 +3491,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Mensaje</label>
                 <textarea value={emailBody} onChange={(e) => setEmailBody(e.target.value)} rows={8} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-none" />
               </div>
-              <p className="text-xs text-zinc-400">El PDF se adjuntará desde tu cliente de email. Podés editar el template en Configuración.</p>
+              <p className="text-xs text-zinc-400">Se abrirá el PDF del presupuesto y tu cliente de email. Guardá el PDF e incluilo como adjunto.</p>
             </div>
             <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
               <button onClick={() => setEmailModal(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
