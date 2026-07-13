@@ -300,6 +300,8 @@ const emptyMovForm = {
   monto: 0,
   fecha: new Date().toISOString().slice(0, 10),
   moneda: "ARS" as "USD" | "ARS",
+  cliente_id: "",
+  proveedor_id: "",
 };
 
 export default function FinanzasPage() {
@@ -318,6 +320,10 @@ export default function FinanzasPage() {
   const [movimientos, setMovimientos] = useState<MovimientoRow[]>([]);
   const [ccClientes, setCcClientes] = useState<CCRow[]>([]);
   const [ccProveedores, setCcProveedores] = useState<CCRow[]>([]);
+  const [ccClienteSearch, setCcClienteSearch] = useState("");
+  const [ccProveedorSearch, setCcProveedorSearch] = useState("");
+  const [movClienteSearch, setMovClienteSearch] = useState("");
+  const [movProvSearch, setMovProvSearch] = useState("");
   const [extractos, setExtractos] = useState<ExtractoRow[]>([]);
   const [lineasCredito, setLineasCredito] = useState<LineaCreditoRow[]>([]);
   const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>([]);
@@ -756,10 +762,22 @@ export default function FinanzasPage() {
     setSaving(true);
     setFormError("");
     try {
-      const { error } = await supabase.from("movimientos").insert({ ...movForm, sociedad_id: sociedadActiva?.id || null } as any);
+      const insertData: Record<string, unknown> = {
+        tipo: movForm.tipo,
+        descripcion: movForm.descripcion,
+        monto: movForm.monto,
+        moneda: movForm.moneda,
+        fecha: movForm.fecha,
+        sociedad_id: sociedadActiva?.id || null,
+      };
+      if (movForm.cliente_id) insertData.cliente_id = movForm.cliente_id;
+      if (movForm.proveedor_id) insertData.proveedor_id = movForm.proveedor_id;
+      const { error } = await supabase.from("movimientos").insert(insertData as any);
       if (error) throw error;
       setModalOpen(false);
       setMovForm(emptyMovForm);
+      setMovClienteSearch("");
+      setMovProvSearch("");
       await fetchData();
     } catch (err: unknown) {
       setFormError(err instanceof Error ? err.message : "Error al guardar");
@@ -1396,6 +1414,22 @@ export default function FinanzasPage() {
     ? proveedoresOptions.filter(p => p.razon_social.toLowerCase().includes(gmProvSearch.toLowerCase()))
     : proveedoresOptions;
 
+  // ── CC filters ──
+  const filteredCcClientes = ccClienteSearch.trim()
+    ? ccClientes.filter(c => c.razon_social.toLowerCase().includes(ccClienteSearch.toLowerCase()) || c.cuit.includes(ccClienteSearch))
+    : ccClientes;
+  const filteredCcProveedores = ccProveedorSearch.trim()
+    ? ccProveedores.filter(p => p.razon_social.toLowerCase().includes(ccProveedorSearch.toLowerCase()) || p.cuit.includes(ccProveedorSearch))
+    : ccProveedores;
+
+  // ── Mov modal filtered lists ──
+  const filteredMovClientes = movClienteSearch.trim()
+    ? clientesOptions.filter((c: ClienteOption) => c.razon_social.toLowerCase().includes(movClienteSearch.toLowerCase()))
+    : clientesOptions;
+  const filteredMovProvs = movProvSearch.trim()
+    ? proveedoresOptions.filter(p => p.razon_social.toLowerCase().includes(movProvSearch.toLowerCase()))
+    : proveedoresOptions;
+
   // ── Echeq handlers ──
   const filteredEcheqs = echeqFilterEstado ? echeqs.filter(e => e.estado === echeqFilterEstado) : echeqs;
   const echeqsEnCartera = echeqs.filter(e => e.estado === "en_cartera");
@@ -1811,43 +1845,65 @@ export default function FinanzasPage() {
 
         {/* ── CC Clientes ── */}
         {tab === "cc_clientes" && (
-          <Card className="p-0 overflow-hidden">
-            <DataTable<CCRow>
-              columns={[
-                { key: "razon_social", label: "Cliente", render: (row) => <span className="font-medium">{row.razon_social}</span> },
-                { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
-                { key: "dias_cuenta_corriente", label: "Dias CC", render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
-                { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
-                { key: "limite_credito", label: "Limite", className: "text-right", render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
-                { key: "saldo_cuenta_corriente", label: "Saldo", className: "text-right", render: (row) => {
-                  const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
-                  return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
-                }},
-              ]}
-              data={ccClientes}
-            />
-          </Card>
+          <>
+            <div className="mb-4 flex items-center gap-2">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+                <input value={ccClienteSearch} onChange={(e) => setCcClienteSearch(e.target.value)}
+                  placeholder="Buscar por nombre o CUIT..."
+                  className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              {ccClienteSearch && <span className="text-xs text-zinc-500">{filteredCcClientes.length} de {ccClientes.length}</span>}
+            </div>
+            <Card className="p-0 overflow-hidden">
+              <DataTable<CCRow>
+                columns={[
+                  { key: "razon_social", label: "Cliente", sortable: true, render: (row) => <span className="font-medium">{row.razon_social}</span> },
+                  { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
+                  { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
+                  { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
+                  { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
+                  { key: "saldo_cuenta_corriente", label: "Saldo", className: "text-right", sortable: true, render: (row) => {
+                    const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
+                    return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                  }},
+                ]}
+                data={filteredCcClientes}
+              />
+            </Card>
+          </>
         )}
 
         {/* ── CC Proveedores ── */}
         {tab === "cc_proveedores" && (
-          <Card className="p-0 overflow-hidden">
-            <DataTable<CCRow>
-              columns={[
-                { key: "razon_social", label: "Proveedor", render: (row) => <span className="font-medium">{row.razon_social}</span> },
-                { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
-                { key: "rubro", label: "Rubro", render: (row) => <Badge variant="info">{(row.rubro ?? "").split(" ")[0]}</Badge> },
-                { key: "dias_cuenta_corriente", label: "Dias CC", render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
-                { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
-                { key: "limite_credito", label: "Limite", className: "text-right", render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
-                { key: "saldo_cuenta_corriente", label: "Deuda", className: "text-right", render: (row) => {
-                  const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
-                  return (<div className="text-right"><span className={`font-mono font-semibold text-red-600`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
-                }},
-              ]}
-              data={ccProveedores}
-            />
-          </Card>
+          <>
+            <div className="mb-4 flex items-center gap-2">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+                <input value={ccProveedorSearch} onChange={(e) => setCcProveedorSearch(e.target.value)}
+                  placeholder="Buscar por nombre o CUIT..."
+                  className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              {ccProveedorSearch && <span className="text-xs text-zinc-500">{filteredCcProveedores.length} de {ccProveedores.length}</span>}
+            </div>
+            <Card className="p-0 overflow-hidden">
+              <DataTable<CCRow>
+                columns={[
+                  { key: "razon_social", label: "Proveedor", sortable: true, render: (row) => <span className="font-medium">{row.razon_social}</span> },
+                  { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
+                  { key: "rubro", label: "Rubro", render: (row) => <Badge variant="info">{(row.rubro ?? "").split(" ")[0]}</Badge> },
+                  { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
+                  { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
+                  { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
+                  { key: "saldo_cuenta_corriente", label: "Deuda", className: "text-right", sortable: true, render: (row) => {
+                    const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
+                    return (<div className="text-right"><span className={`font-mono font-semibold text-red-600`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                  }},
+                ]}
+                data={filteredCcProveedores}
+              />
+            </Card>
+          </>
         )}
 
         {/* ── Echeqs ── */}
@@ -2550,6 +2606,56 @@ export default function FinanzasPage() {
               <div>
                 <label className="text-xs font-medium text-zinc-500">Fecha</label>
                 <input type="date" value={movForm.fecha} onChange={(e) => setMovForm({ ...movForm, fecha: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              {/* Cliente selector */}
+              <div className="relative">
+                <label className="text-xs font-medium text-zinc-500">Cliente</label>
+                <div className="relative mt-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+                  <input value={movClienteSearch}
+                    onChange={(e) => { setMovClienteSearch(e.target.value); if (movForm.cliente_id) setMovForm({ ...movForm, cliente_id: "" }); }}
+                    placeholder="Buscar cliente..."
+                    className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                {movForm.cliente_id && (
+                  <div className="mt-1 flex items-center gap-2">
+                    <Badge variant="success">{clientesOptions.find((c: ClienteOption) => c.id === movForm.cliente_id)?.razon_social}</Badge>
+                    <button onClick={() => { setMovForm({ ...movForm, cliente_id: "" }); setMovClienteSearch(""); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
+                  </div>
+                )}
+                {!movForm.cliente_id && movClienteSearch.trim() && filteredMovClientes.length > 0 && (
+                  <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                    {filteredMovClientes.slice(0, 8).map((c: ClienteOption) => (
+                      <button key={c.id} onClick={() => { setMovForm({ ...movForm, cliente_id: c.id, proveedor_id: "" }); setMovClienteSearch(c.razon_social); setMovProvSearch(""); }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white">{c.razon_social}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {/* Proveedor selector */}
+              <div className="relative">
+                <label className="text-xs font-medium text-zinc-500">Proveedor</label>
+                <div className="relative mt-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+                  <input value={movProvSearch}
+                    onChange={(e) => { setMovProvSearch(e.target.value); if (movForm.proveedor_id) setMovForm({ ...movForm, proveedor_id: "" }); }}
+                    placeholder="Buscar proveedor..."
+                    className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                {movForm.proveedor_id && (
+                  <div className="mt-1 flex items-center gap-2">
+                    <Badge variant="success">{proveedoresOptions.find(p => p.id === movForm.proveedor_id)?.razon_social}</Badge>
+                    <button onClick={() => { setMovForm({ ...movForm, proveedor_id: "" }); setMovProvSearch(""); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
+                  </div>
+                )}
+                {!movForm.proveedor_id && movProvSearch.trim() && filteredMovProvs.length > 0 && (
+                  <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                    {filteredMovProvs.slice(0, 8).map(p => (
+                      <button key={p.id} onClick={() => { setMovForm({ ...movForm, proveedor_id: p.id, cliente_id: "" }); setMovProvSearch(p.razon_social); setMovClienteSearch(""); }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white">{p.razon_social}</button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
