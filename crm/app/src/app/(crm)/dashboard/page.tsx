@@ -82,9 +82,9 @@ function getGreeting(): string {
 export default function DashboardPage() {
   const { profile, sociedadActiva } = useUser();
   const [loading, setLoading] = useState(true);
-  const [kpi, setKpi] = useState(mockKPIs);
-  const [presupuestosPorEstado, setPresupuestosPorEstado] = useState(mockPresupuestosPorEstado);
-  const [ventasPorMes, setVentasPorMes] = useState(mockVentasPorMes);
+  const [kpi, setKpi] = useState({ ventasMes: 0, ventasMesAnterior: 0, presupuestosActivos: 0, presupuestosPendientes: 0, tasaConversion: 0, tasaConversionAnterior: 0, cobranzasMes: 0, cobranzasPendientes: 0, clientesActivos: 0, stockBajo: 0, facturadoMes: 0, margenPromedio: 0, alertasSinLeer: 0 });
+  const [presupuestosPorEstado, setPresupuestosPorEstado] = useState<{ estado: string; cantidad: number; color: string }[]>([]);
+  const [ventasPorMes, setVentasPorMes] = useState<{ mes: string; monto: number }[]>([]);
   const [presupuestos, setPresupuestos] = useState<typeof mockPresupuestos>([]);
   const [alerts, setAlerts] = useState<typeof mockAlerts>([]);
   const [topClientes, setTopClientes] = useState<typeof mockTopClientes>([]);
@@ -96,6 +96,16 @@ export default function DashboardPage() {
     // Don't fetch until sociedadActiva is loaded
     if (!sociedadActiva?.id) return;
     async function fetchAll() {
+      setLoading(true);
+      // Reset all state to avoid stale mock data when switching sociedad
+      setVentasPorMes([]);
+      setPresupuestosPorEstado([]);
+      setTopClientes([]);
+      setPresupuestos([]);
+      setAlerts([]);
+      setActivity([]);
+      setGastosFijos([]);
+      setObjetivos([]);
       try {
         // Build queries with optional sociedad filter
         let qPresupuestosEstado = supabase.from("presupuestos").select("estado");
@@ -189,6 +199,7 @@ export default function DashboardPage() {
             stockBajo: d.stock_bajo ?? 0,
             facturadoMes: d.facturado_mes ?? 0,
             margenPromedio: d.margen_promedio ?? 0,
+            alertasSinLeer: d.alertas_sin_leer ?? 0,
           });
         }
 
@@ -203,7 +214,7 @@ export default function DashboardPage() {
             cantidad,
             color: estadoColorMap[estado] || "#a1a1aa",
           }));
-          if (mapped.length > 0) setPresupuestosPorEstado(mapped);
+          setPresupuestosPorEstado(mapped);
         }
 
         // --- Facturacion mensual ---
@@ -222,7 +233,9 @@ export default function DashboardPage() {
               mes: monthNames[parseInt(key.split("-")[1]) - 1],
               monto,
             }));
-          if (sorted.length > 0) setVentasPorMes(sorted);
+          setVentasPorMes(sorted);
+        } else if (!facturasResult.error) {
+          setVentasPorMes([]);
         }
 
         // --- Ultimos presupuestos ---
