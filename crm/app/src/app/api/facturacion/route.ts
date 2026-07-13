@@ -114,6 +114,10 @@ export async function POST(req: NextRequest) {
       moneda,         // "ARS" | "USD" (default ARS)
       tipo_cambio,    // number — exchange rate USD→ARS (required when USD)
       sociedad_id,    // optional UUID — defaults to Lazzari
+      oc_cliente,     // optional string — OC number from client
+      solicitado_por, // optional string — who requested it
+      observaciones,  // optional string — visible on invoice
+      nota_interna,   // optional string — internal note
     } = body;
 
     // Resolve ARCA config for the sociedad
@@ -318,6 +322,10 @@ export async function POST(req: NextRequest) {
         tipo_cambio: isUSD ? tc : null,
         estado: "emitida",
         sociedad_id: arcaConfig.id,
+        oc_cliente: oc_cliente || null,
+        solicitado_por: solicitado_por || null,
+        observaciones: observaciones || null,
+        nota_interna: nota_interna || null,
       } as any)
       .select()
       .single();

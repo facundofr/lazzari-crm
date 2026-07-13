@@ -302,6 +302,11 @@ export default function PresupuestosPage() {
   const [facturarNumManual, setFacturarNumManual] = useState("");
   const [facturarEmitting, setFacturarEmitting] = useState(false);
   const [facturarError, setFacturarError] = useState("");
+  const [facturarOCCliente, setFacturarOCCliente] = useState("");
+  const [facturarSolicitadoPor, setFacturarSolicitadoPor] = useState("");
+  const [facturarTipoCambio, setFacturarTipoCambio] = useState("");
+  const [facturarObservaciones, setFacturarObservaciones] = useState("");
+  const [facturarNotaInterna, setFacturarNotaInterna] = useState("");
 
   // Nuevo PR modal
   const [showNewPR, setShowNewPR] = useState(false);
@@ -1432,7 +1437,7 @@ export default function PresupuestosPage() {
         cliente_id: facturarModal.clienteId,
         punto_venta: ptoVta,
         moneda: facturarModal.moneda,
-        tipo_cambio: null,
+        tipo_cambio: facturarTipoCambio ? Number(facturarTipoCambio) : null,
         items: items.map((it: any) => ({
           descripcion: it.descripcion,
           cantidad: it.cantidad,
@@ -1441,6 +1446,10 @@ export default function PresupuestosPage() {
         })),
         sociedad_id: sociedadActiva.id,
         presupuesto_id: facturarModal.id,
+        oc_cliente: facturarOCCliente || null,
+        solicitado_por: facturarSolicitadoPor || null,
+        observaciones: facturarObservaciones || null,
+        nota_interna: facturarNotaInterna || null,
       };
       if (facturarManual) {
         body.manual = true;
@@ -1461,6 +1470,11 @@ export default function PresupuestosPage() {
       setFacturarTipo("FB");
       setFacturarManual(false);
       setFacturarNumManual("");
+      setFacturarOCCliente("");
+      setFacturarSolicitadoPor("");
+      setFacturarTipoCambio("");
+      setFacturarObservaciones("");
+      setFacturarNotaInterna("");
       setFacturadoIds(prev => new Set([...prev, facturarModal!.id]));
       await fetchPresupuestos();
     } catch (err: any) {
@@ -3452,6 +3466,35 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 <div className="flex justify-between"><span className="text-zinc-500">Cliente</span><span className="font-medium">{facturarModal.clienteNombre}</span></div>
                 <div className="flex justify-between"><span className="text-zinc-500">Items</span><span className="font-medium">{facturarModal.items.length}</span></div>
                 <div className="flex justify-between"><span className="text-zinc-500">Total</span><span className="font-mono font-bold">{formatCurrency(facturarModal.total, facturarModal.moneda)}</span></div>
+              </div>
+
+              {/* Campos adicionales */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">N° OC del cliente</label>
+                  <input type="text" value={facturarOCCliente} onChange={(e) => setFacturarOCCliente(e.target.value)}
+                    placeholder="Ej: OC-1234" className="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Solicitado por</label>
+                  <input type="text" value={facturarSolicitadoPor} onChange={(e) => setFacturarSolicitadoPor(e.target.value)}
+                    placeholder="Nombre" className="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tipo de cambio</label>
+                <input type="number" step="0.01" value={facturarTipoCambio} onChange={(e) => setFacturarTipoCambio(e.target.value)}
+                  placeholder="Ej: 1250.50" className="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Observaciones (visible en factura)</label>
+                <textarea value={facturarObservaciones} onChange={(e) => setFacturarObservaciones(e.target.value)}
+                  rows={2} placeholder="Información que aparecerá en el comprobante..." className="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-none" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Nota interna (no visible en factura)</label>
+                <textarea value={facturarNotaInterna} onChange={(e) => setFacturarNotaInterna(e.target.value)}
+                  rows={2} placeholder="Notas internas..." className="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-none" />
               </div>
             </div>
             <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
