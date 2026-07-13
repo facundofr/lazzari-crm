@@ -375,7 +375,7 @@ export default function ClientesPage() {
   const handleCuitLookup = useCallback(async () => {
     const cleanCuit = form.cuit.replace(/\D/g, "");
     if (cleanCuit.length !== 11) {
-      setCuitLookupMsg({ type: "error", text: "El CUIT debe tener 11 digitos" });
+      setCuitLookupMsg({ type: "error", text: "Ingrese un CUIT de 11 dígitos para consultar AFIP" });
       return;
     }
     setCuitLookupLoading(true);
@@ -1008,7 +1008,7 @@ export default function ClientesPage() {
   const filtered = clientes.filter((c) => {
     const matchSearch =
       c.razonSocial.toLowerCase().includes(search.toLowerCase()) ||
-      c.cuit.includes(search) ||
+      (c.cuit || "").includes(search) ||
       c.email.toLowerCase().includes(search.toLowerCase());
     const fProvincia = filterValues.provincia as string;
     const matchProvincia = !fProvincia || c.provincia === fProvincia;
@@ -1150,11 +1150,16 @@ export default function ClientesPage() {
     // Validación por campo
     const fieldErrs: Record<string, string> = {};
     if (!form.razon_social.trim()) fieldErrs.razon_social = "La razón social es obligatoria";
+    const isCF = form.condicion_iva === "CF";
     if (!form.cuit.trim()) {
-      fieldErrs.cuit = "El CUIT es obligatorio";
+      if (!isCF) fieldErrs.cuit = "El CUIT es obligatorio";
     } else {
       const cleanCuit = form.cuit.replace(/\D/g, "");
-      if (cleanCuit.length !== 11) fieldErrs.cuit = "El CUIT debe tener 11 dígitos";
+      if (isCF) {
+        if (![7, 8, 11].includes(cleanCuit.length)) fieldErrs.cuit = "Ingrese un DNI (7-8 dígitos) o CUIT (11 dígitos)";
+      } else {
+        if (cleanCuit.length !== 11) fieldErrs.cuit = "El CUIT debe tener 11 dígitos";
+      }
     }
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
       fieldErrs.email = "El email no tiene un formato válido";
@@ -1638,7 +1643,7 @@ export default function ClientesPage() {
                             </span>
                           )}
                         </div>
-                        <p className="text-xs text-zinc-400">{row.cuit}</p>
+                        <p className="text-xs text-zinc-400">{row.cuit ? (row.cuit.replace(/\D/g, "").length <= 8 ? `DNI ${row.cuit}` : row.cuit) : "Sin CUIT/DNI"}</p>
                       </div>
                     </div>
                     );
@@ -1686,7 +1691,7 @@ export default function ClientesPage() {
                     </div>
                     <div className="min-w-0">
                       <p className="font-semibold text-zinc-900 dark:text-white truncate">{client.razonSocial}</p>
-                      <p className="text-xs text-zinc-400">{client.cuit}</p>
+                      <p className="text-xs text-zinc-400">{client.cuit ? (client.cuit.replace(/\D/g, "").length <= 8 ? `DNI ${client.cuit}` : client.cuit) : "Sin CUIT/DNI"}</p>
                     </div>
                   </div>
                   <Badge variant={client.activo ? "success" : "danger"}>
@@ -1727,7 +1732,7 @@ export default function ClientesPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <h2 className="text-lg font-bold text-zinc-900 dark:text-white truncate">{selectedCliente.razonSocial}</h2>
-                  <p className="text-sm text-zinc-500">{selectedCliente.cuit}</p>
+                  <p className="text-sm text-zinc-500">{selectedCliente.cuit ? (selectedCliente.cuit.replace(/\D/g, "").length <= 8 ? `DNI ${selectedCliente.cuit}` : selectedCliente.cuit) : "Sin CUIT/DNI"}</p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors" title="Editar">
@@ -2748,10 +2753,10 @@ export default function ClientesPage() {
                 <div className="flex items-end gap-2">
                   <div className="flex-1">
                     <Input
-                      label="CUIT *"
+                      label={form.condicion_iva === "CF" ? "CUIT / DNI" : "CUIT *"}
                       value={form.cuit}
                       onChange={(e) => { setForm({ ...form, cuit: e.target.value }); setCuitLookupMsg(null); setFormFieldErrors((p) => ({ ...p, cuit: "" })); }}
-                      placeholder="XX-XXXXXXXX-X"
+                      placeholder={form.condicion_iva === "CF" ? "DNI o CUIT (opcional)" : "XX-XXXXXXXX-X"}
                       error={formFieldErrors.cuit}
                       onBlur={() => {
                         const clean = form.cuit.replace(/\D/g, "");
