@@ -313,6 +313,23 @@ export default function CalendarioPage() {
         completado: false,
       });
       if (error) { alert(error.message); return; }
+
+      // Notify assigned user (if different from creator)
+      const assignedTo = createForm.asignado_a || null;
+      if (assignedTo && assignedTo !== profile?.id) {
+        const fechaLabel = createForm.todo_el_dia
+          ? createForm.fecha_inicio.split("T")[0]
+          : new Date(createForm.fecha_inicio).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+        await (supabase as any).from("alertas").insert({
+          tipo: "seguimiento",
+          title: `Nuevo evento: ${createForm.titulo}`,
+          description: `${profile?.full_name || "Alguien"} te asignó "${createForm.titulo}" para el ${fechaLabel}`,
+          module: "calendario",
+          user_id: assignedTo,
+          sociedad_id: sociedadActiva?.id || null,
+        });
+      }
+
       setCreateModalOpen(false);
       setSelectedDate(null);
       await fetchData();
