@@ -761,6 +761,7 @@ export default function FacturacionPage() {
     ${cli?.direccion ? `<div class="field-label">Domicilio</div><div class="field-value">${cli.direccion}${cli.localidad ? `, ${cli.localidad}` : ""}${cli.provincia ? `, ${cli.provincia}` : ""}</div>` : ""}
     ${cli?.email ? `<div class="field-label">Email</div><div class="field-value">${cli.email}</div>` : ""}
     ${cli?.telefono ? `<div class="field-label">Telefono</div><div class="field-value">${cli.telefono}</div>` : ""}
+    ${f.oc_cliente ? `<div class="field-label" style="margin-top:8px">OC Cliente</div><div class="field-value" style="color:#2563EB;font-weight:700;font-size:13px">${f.oc_cliente}</div>` : ""}
   </div>
 </div>
 

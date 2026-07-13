@@ -54,6 +54,7 @@ interface RemitoRow {
   clientes: { razon_social: string; email?: string; cuit?: string; direccion?: string } | null;
   sucursal_nombre?: string;
   clienteNombre: string;
+  oc_cliente?: string | null;
   remito_items: { id: string }[];
 }
 
@@ -568,6 +569,7 @@ export default function RemitosPage() {
       `Cliente: ${detailRemito.clientes?.razon_social || "\u2014"}`,
       `Fecha: ${formatDate(detailRemito.fecha)}`,
       `Estado: ${estadoConfig[detailRemito.estado]?.label || detailRemito.estado}`,
+      detailRemito.oc_cliente ? `OC Cliente: ${detailRemito.oc_cliente}` : "",
       detailRemito.valor_declarado ? `VALOR DECLARADO: $ ${Number(detailRemito.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "",
       detailRemito.observaciones ? `Obs: ${detailRemito.observaciones}` : "",
       "",
@@ -639,6 +641,7 @@ export default function RemitosPage() {
         ${r.clientes?.cuit ? `<div class="field"><label>CUIT</label><span>${r.clientes.cuit}</span></div>` : ""}
         ${r.clientes?.direccion ? `<div class="field"><label>Dirección</label><span>${r.clientes.direccion}</span></div>` : ""}
         ${r.sucursal_nombre ? `<div class="field"><label>Sucursal</label><span>${r.sucursal_nombre}</span></div>` : ""}
+        ${r.oc_cliente ? `<div class="field"><label>OC Cliente</label><span style="color:#2563EB;font-weight:600">${r.oc_cliente}</span></div>` : ""}
       </div>
     </div>
 
@@ -777,6 +780,7 @@ export default function RemitosPage() {
                   {row.remito_items.length === 0 ? "Sin items" : `${row.remito_items.length} productos`}
                 </span>
               ) },
+              { key: "oc_cliente", label: "OC Cliente", sortable: false, render: (row) => row.oc_cliente ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{row.oc_cliente}</span> : <span className="text-zinc-400">{"\u2014"}</span> },
               { key: "presupuesto_id", label: "PR Origen", sortable: false, render: (row) => row.presupuesto_id ? <Badge variant="info">Vinculado</Badge> : <span className="text-zinc-400">{"\u2014"}</span> },
               {
                 key: "estado", label: "Estado", sortable: true,
@@ -898,6 +902,12 @@ export default function RemitosPage() {
                     >
                       <Badge variant="info">{detailPRNumero}</Badge>
                     </button>
+                  </div>
+                )}
+                {detailRemito.oc_cliente && (
+                  <div>
+                    <span className="text-zinc-400">OC Cliente</span>
+                    <p className="font-mono text-sm font-medium text-blue-600 dark:text-blue-400">{detailRemito.oc_cliente}</p>
                   </div>
                 )}
                 {detailRemito.cae ? (

@@ -1391,6 +1391,7 @@ export default function PresupuestosPage() {
           estado: "pendiente",
           sociedad_id: sociedadActiva?.id || null,
           created_by: profile?.id || null,
+          oc_cliente: pr.ocCliente || null,
         })
         .select("id")
         .single();
@@ -2253,7 +2254,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 )}
                 {selected.estado === "aprobado" && (
                   <button
-                    onClick={() => { setFacturarModal(selected); setFacturarError(""); setFacturarTipo("FB"); setFacturarManual(false); setFacturarNumManual(""); setFacturarMoneda(selected.moneda as "ARS" | "USD"); setFacturarTipoCambio(""); }}
+                    onClick={() => { setFacturarModal(selected); setFacturarError(""); setFacturarTipo("FB"); setFacturarManual(false); setFacturarNumManual(""); setFacturarMoneda(selected.moneda as "ARS" | "USD"); setFacturarTipoCambio(""); setFacturarOCCliente(selected.ocCliente || ""); }}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-950/30 transition-colors"
                     title="Emitir factura desde este presupuesto"
                   >
