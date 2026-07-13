@@ -16,6 +16,7 @@ import {
   Menu,
   Building2,
   ChevronDown,
+  Check,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -244,8 +245,9 @@ export function Header({ title, subtitle, action }: HeaderProps) {
         supabase
           .from("alertas")
           .select("*")
+          .or(`user_id.eq.${profile?.id},user_id.is.null`)
           .order("created_at", { ascending: false })
-          .limit(20),
+          .limit(30),
         profile?.id
           ? (supabase as any)
               .from("notification_preferences")
@@ -648,9 +650,9 @@ export function Header({ title, subtitle, action }: HeaderProps) {
                             <button
                               onClick={(e) => { e.stopPropagation(); markOneRead(alert.id); }}
                               title="Marcar como leída"
-                              className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity mt-0.5 rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-700"
+                              className="shrink-0 mt-0.5 rounded-md p-1.5 text-zinc-400 hover:bg-emerald-100 hover:text-emerald-600 dark:hover:bg-emerald-900/30 dark:hover:text-emerald-400 transition-colors"
                             >
-                              <X className="h-3 w-3" />
+                              <Check className="h-3.5 w-3.5" />
                             </button>
                           )}
                         </div>
