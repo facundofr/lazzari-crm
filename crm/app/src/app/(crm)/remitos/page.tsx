@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus } from "lucide-react";
+import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -145,6 +145,9 @@ export default function RemitosPage() {
   const [generatingIA, setGeneratingIA] = useState(false);
   const [iaSuccess, setIaSuccess] = useState("");
 
+  // AFIP authorization
+  const [autorizandoAFIP, setAutorizandoAFIP] = useState(false);
+  const [afipError, setAfipError] = useState("");
 
   // SmartFilters state
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
@@ -245,6 +248,34 @@ export default function RemitosPage() {
       await fetchData();
     } catch (err) {
       console.error("Error updating remito:", err);
+    }
+  }
+
+  async function handleAutorizarAFIP() {
+    if (!detailRemito) return;
+    setAutorizandoAFIP(true);
+    setAfipError("");
+    try {
+      const res = await fetch("/api/remito", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          remito_id: detailRemito.id,
+          sociedad_id: sociedadActiva?.id || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAfipError(data.error || "Error al autorizar remito");
+        return;
+      }
+      // Update local state with CAE
+      setDetailRemito({ ...detailRemito, cae: data.cae || data.car || "OK" });
+      await fetchData();
+    } catch (err: any) {
+      setAfipError(err.message || "Error de conexión");
+    } finally {
+      setAutorizandoAFIP(false);
     }
   }
 
@@ -869,13 +900,25 @@ export default function RemitosPage() {
                     </button>
                   </div>
                 )}
-                {detailRemito.cae && (
+                {detailRemito.cae ? (
                   <div>
                     <span className="text-zinc-400">CAE</span>
                     <div className="flex items-center gap-2">
                       <p className="font-mono text-xs dark:text-white">{detailRemito.cae}</p>
                       <CopyButton text={detailRemito.cae} />
                     </div>
+                  </div>
+                ) : (
+                  <div>
+                    <button
+                      onClick={handleAutorizarAFIP}
+                      disabled={autorizandoAFIP}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-md text-xs font-medium disabled:opacity-50 transition-colors"
+                    >
+                      {autorizandoAFIP ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                      {autorizandoAFIP ? "Autorizando..." : "Autorizar AFIP"}
+                    </button>
+                    {afipError && <p className="text-xs text-red-500 mt-1">{afipError}</p>}
                   </div>
                 )}
                 {detailRemito.valor_declarado != null && detailRemito.valor_declarado > 0 && (
