@@ -93,6 +93,8 @@ export default function DashboardPage() {
   const [objetivos, setObjetivos] = useState<Objetivo[]>([]);
 
   useEffect(() => {
+    // Don't fetch until sociedadActiva is loaded
+    if (!sociedadActiva?.id) return;
     async function fetchAll() {
       try {
         // Build queries with optional sociedad filter
@@ -111,12 +113,10 @@ export default function DashboardPage() {
           .select("fecha, total")
           .neq("estado", "anulada");
 
-        if (sociedadActiva?.id) {
-          qPresupuestosEstado = qPresupuestosEstado.eq("sociedad_id" as any, sociedadActiva.id);
-          qPresupuestosRecent = qPresupuestosRecent.eq("sociedad_id" as any, sociedadActiva.id);
-          qTopClientes = qTopClientes.eq("sociedad_id" as any, sociedadActiva.id);
-          qFacturasMensuales = qFacturasMensuales.eq("sociedad_id" as any, sociedadActiva.id);
-        }
+        qPresupuestosEstado = qPresupuestosEstado.eq("sociedad_id" as any, sociedadActiva!.id);
+        qPresupuestosRecent = qPresupuestosRecent.eq("sociedad_id" as any, sociedadActiva!.id);
+        qTopClientes = qTopClientes.eq("sociedad_id" as any, sociedadActiva!.id);
+        qFacturasMensuales = qFacturasMensuales.eq("sociedad_id" as any, sociedadActiva!.id);
 
         const [
           kpiResult,
@@ -129,7 +129,7 @@ export default function DashboardPage() {
           gastosFijosResult,
           objetivosResult,
         ] = await Promise.all([
-          supabase.rpc("get_dashboard_kpis", sociedadActiva?.id ? { p_sociedad_id: sociedadActiva.id } : {} as any),
+          supabase.rpc("get_dashboard_kpis", { p_sociedad_id: sociedadActiva!.id } as any),
           qPresupuestosEstado,
           qPresupuestosRecent,
           (() => {
@@ -137,8 +137,8 @@ export default function DashboardPage() {
               .from("alertas")
               .select("*")
               .eq("read", false)
-              .order("created_at", { ascending: false });
-            if (sociedadActiva?.id) qAlertas = qAlertas.eq("sociedad_id", sociedadActiva.id);
+              .order("created_at", { ascending: false })
+              .eq("sociedad_id", sociedadActiva!.id);
             return qAlertas;
           })(),
           qTopClientes,
@@ -147,8 +147,8 @@ export default function DashboardPage() {
               .from("activity_log")
               .select("*, profiles:user_id(full_name)")
               .order("created_at", { ascending: false })
-              .limit(10);
-            if (sociedadActiva?.id) qActivity = qActivity.eq("sociedad_id", sociedadActiva.id);
+              .limit(10)
+              .eq("sociedad_id", sociedadActiva!.id);
             return qActivity;
           })(),
           // Facturación mensual
@@ -158,8 +158,8 @@ export default function DashboardPage() {
             let qGastos = (supabase as any)
               .from("gastos_fijos")
               .select("*")
-              .eq("activo", true);
-            if (sociedadActiva?.id) qGastos = qGastos.eq("sociedad_id", sociedadActiva.id);
+              .eq("activo", true)
+              .eq("sociedad_id", sociedadActiva!.id);
             return qGastos;
           })(),
           // Objetivos activos
@@ -167,8 +167,8 @@ export default function DashboardPage() {
             let qObjetivos = (supabase as any)
               .from("objetivos")
               .select("*, profiles:usuario_id(full_name)")
-              .eq("activo", true);
-            if (sociedadActiva?.id) qObjetivos = qObjetivos.eq("sociedad_id", sociedadActiva.id);
+              .eq("activo", true)
+              .eq("sociedad_id", sociedadActiva!.id);
             return qObjetivos;
           })(),
         ]);
