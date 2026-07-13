@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, ShieldCheck, Trash2, Minus } from "lucide-react";
+import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -145,9 +145,6 @@ export default function RemitosPage() {
   const [generatingIA, setGeneratingIA] = useState(false);
   const [iaSuccess, setIaSuccess] = useState("");
 
-  // Autorizar AFIP (WSREMHOM)
-  const [autorizandoAFIP, setAutorizandoAFIP] = useState(false);
-  const [afipError, setAfipError] = useState("");
 
   // SmartFilters state
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
@@ -475,33 +472,6 @@ export default function RemitosPage() {
     }
   }
 
-  async function handleAutorizarAFIP() {
-    if (!detailRemito) return;
-    setAutorizandoAFIP(true);
-    setAfipError("");
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch("/api/remito", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
-        },
-        body: JSON.stringify({
-          remito_id: detailRemito.id,
-          sociedad_id: sociedadActiva?.id,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || json.error) throw new Error(json.error || "Error al autorizar");
-      setDetailRemito({ ...detailRemito, cae: json.car });
-      await fetchData();
-    } catch (err: any) {
-      setAfipError(err.message || "Error al conectar con AFIP");
-    } finally {
-      setAutorizandoAFIP(false);
-    }
-  }
 
   async function handleRowClick(row: RemitoRow) {
     setDetailRemito(row);
@@ -869,24 +839,7 @@ export default function RemitosPage() {
                     <CheckCircle2 className="h-4 w-4" /> Marcar entregado
                   </button>
                 )}
-                {!detailRemito.cae && (
-                  <button
-                    onClick={handleAutorizarAFIP}
-                    disabled={autorizandoAFIP || detailItems.length === 0}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60 transition-colors"
-                    title={detailItems.length === 0 ? "El remito necesita items para autorizar" : ""}
-                  >
-                    {autorizandoAFIP ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
-                    {autorizandoAFIP ? "Autorizando..." : "Autorizar AFIP"}
-                  </button>
-                )}
               </div>
-              {afipError && (
-                <p className="text-xs text-red-500 -mt-3">{afipError}</p>
-              )}
-              {!detailRemito.cae && detailItems.length === 0 && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 -mt-3">El remito no tiene items. No se puede autorizar en AFIP ni generar PDF completo.</p>
-              )}
 
               {/* Info */}
               <div className="grid grid-cols-2 gap-4 text-sm">
