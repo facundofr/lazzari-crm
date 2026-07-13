@@ -9,7 +9,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { formatCurrency } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -1270,11 +1270,23 @@ export default function FinanzasPage() {
     } catch (err) { console.error("Error eliminando FC:", err); }
   }
 
-  async function handlePagarFC(id: string) {
-    try {
-      await (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", id);
-      await fetchData();
-    } catch (err) { console.error("Error marcando FC como pagada:", err); }
+  function handlePagarFC(id: string) {
+    const fc = facturasCompra.find(f => f.id === id);
+    if (!fc) return;
+    // Open OP modal pre-loaded with this FC
+    setOpForm({
+      ...emptyOPForm,
+      proveedor_id: fc.proveedor_id || "",
+      monto_bruto: fc.total,
+      moneda: (fc.moneda || "ARS") as "ARS" | "USD",
+    });
+    setProveedorSearch(fc.proveedor_nombre || "");
+    setOpError("");
+    setOpFile(null);
+    setOpProvCondicion(null);
+    // Pre-select this FC
+    setOpFCPendientes([{ id: fc.id, numero: fc.numero_factura || "", fecha: fc.fecha, total: fc.total, moneda: fc.moneda || "ARS", selected: true }]);
+    setOpModalOpen(true);
   }
 
   async function handleAnularFC(id: string) {
@@ -1646,8 +1658,8 @@ export default function FinanzasPage() {
                       )}
                       {(row.estado === "pendiente" || row.estado === "recibida") && (
                         <>
-                          <button onClick={() => handlePagarFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar como pagada">
-                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          <button onClick={() => handlePagarFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Pagar — Crear orden de pago">
+                            <DollarSign className="h-3.5 w-3.5" />
                           </button>
                           <button onClick={() => handleAnularFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Anular">
                             <Ban className="h-3.5 w-3.5" />
@@ -2770,21 +2782,67 @@ export default function FinanzasPage() {
                 </select>
               </div>
 
-              {/* Cruce de cheque */}
+              {/* Cruce de cheque / echeq */}
               {(opForm.medio_pago === "cheque" || opForm.medio_pago === "echeq") && (
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Cruzar con cheque recibido (opcional)</label>
-                  <select value={opForm.cheque_cruce_id} onChange={(e) => setOpForm({ ...opForm, cheque_cruce_id: e.target.value })}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                    <option value="">— Sin cruce —</option>
-                    {chequesRecibidos.map(ch => (
-                      <option key={ch.id} value={ch.id}>
-                        {ch.descripcion} — {formatCurrency(ch.monto)} — {formatDate(ch.fecha)}
-                      </option>
-                    ))}
-                  </select>
-                  {chequesRecibidos.length === 0 && (
-                    <p className="text-xs text-zinc-400 mt-1">No hay cheques recibidos disponibles para cruzar</p>
+                <div className="space-y-3 rounded-lg border border-zinc-200 dark:border-zinc-700 p-3">
+                  <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 block">
+                    {opForm.medio_pago === "echeq" ? "Seleccionar E-Cheq de cartera" : "Seleccionar cheque de cartera"}
+                  </label>
+
+                  {/* E-Cheqs en cartera */}
+                  {opForm.medio_pago === "echeq" && (() => {
+                    const enCartera = echeqs.filter(e => e.estado === "en_cartera");
+                    return enCartera.length > 0 ? (
+                      <div className="max-h-32 overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg">
+                        {enCartera.map(e => (
+                          <label key={e.id} className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/30 ${opForm.cheque_cruce_id === e.id ? "bg-orange-50 dark:bg-orange-900/10" : ""}`}>
+                            <input type="radio" name="echeq_cruce" checked={opForm.cheque_cruce_id === e.id}
+                              onChange={() => setOpForm({ ...opForm, cheque_cruce_id: e.id })}
+                              className="text-orange-500 focus:ring-orange-500" />
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm font-mono dark:text-white">{e.numero}</span>
+                              {e.origen_nombre && <span className="text-xs text-zinc-400 ml-2">{e.origen_nombre}</span>}
+                              <span className="text-xs text-zinc-400 ml-2">Vto: {formatDate(e.fecha_pago)}</span>
+                            </div>
+                            <span className="text-sm font-mono font-medium dark:text-white">{formatCurrency(e.monto, e.moneda)}</span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-zinc-400">No hay e-cheqs en cartera</p>
+                    );
+                  })()}
+
+                  {/* Cheques recibidos (movimientos) */}
+                  {opForm.medio_pago === "cheque" && (
+                    chequesRecibidos.length > 0 ? (
+                      <div className="max-h-32 overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg">
+                        {chequesRecibidos.map(ch => (
+                          <label key={ch.id} className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/30 ${opForm.cheque_cruce_id === ch.id ? "bg-orange-50 dark:bg-orange-900/10" : ""}`}>
+                            <input type="radio" name="cheque_cruce" checked={opForm.cheque_cruce_id === ch.id}
+                              onChange={() => setOpForm({ ...opForm, cheque_cruce_id: ch.id })}
+                              className="text-orange-500 focus:ring-orange-500" />
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm dark:text-white">{ch.descripcion}</span>
+                              <span className="text-xs text-zinc-400 ml-2">{formatDate(ch.fecha)}</span>
+                            </div>
+                            <span className="text-sm font-mono font-medium dark:text-white">{formatCurrency(ch.monto)}</span>
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-zinc-400">No hay cheques recibidos en cartera</p>
+                    )
+                  )}
+
+                  {opForm.cheque_cruce_id && (
+                    <button onClick={() => setOpForm({ ...opForm, cheque_cruce_id: "" })} className="text-xs text-orange-500 hover:text-orange-600">
+                      Quitar selección
+                    </button>
+                  )}
+
+                  {!opForm.cheque_cruce_id && (
+                    <p className="text-xs text-zinc-400 italic">Si no seleccionás uno existente, se registra como cheque/echeq nuevo emitido.</p>
                   )}
                 </div>
               )}
