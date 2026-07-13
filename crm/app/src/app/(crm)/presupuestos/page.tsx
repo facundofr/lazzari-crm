@@ -302,6 +302,7 @@ export default function PresupuestosPage() {
   const [facturarNumManual, setFacturarNumManual] = useState("");
   const [facturarEmitting, setFacturarEmitting] = useState(false);
   const [facturarError, setFacturarError] = useState("");
+  const [facturarMoneda, setFacturarMoneda] = useState<"ARS" | "USD">("ARS");
   const [facturarOCCliente, setFacturarOCCliente] = useState("");
   const [facturarSolicitadoPor, setFacturarSolicitadoPor] = useState("");
   const [facturarTipoCambio, setFacturarTipoCambio] = useState("");
@@ -1436,7 +1437,7 @@ export default function PresupuestosPage() {
         tipo: facturarTipo,
         cliente_id: facturarModal.clienteId,
         punto_venta: ptoVta,
-        moneda: facturarModal.moneda,
+        moneda: facturarMoneda,
         tipo_cambio: facturarTipoCambio ? Number(facturarTipoCambio) : null,
         items: items.map((it: any) => ({
           descripcion: it.descripcion,
@@ -2252,7 +2253,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 )}
                 {selected.estado === "aprobado" && (
                   <button
-                    onClick={() => { setFacturarModal(selected); setFacturarError(""); setFacturarTipo("FB"); setFacturarManual(false); setFacturarNumManual(""); }}
+                    onClick={() => { setFacturarModal(selected); setFacturarError(""); setFacturarTipo("FB"); setFacturarManual(false); setFacturarNumManual(""); setFacturarMoneda(selected.moneda as "ARS" | "USD"); setFacturarTipoCambio(""); }}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-950/30 transition-colors"
                     title="Emitir factura desde este presupuesto"
                   >
@@ -3468,6 +3469,29 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 <div className="flex justify-between"><span className="text-zinc-500">Total</span><span className="font-mono font-bold">{formatCurrency(facturarModal.total, facturarModal.moneda)}</span></div>
               </div>
 
+              {/* Moneda de facturación */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Moneda factura</label>
+                  <div className="flex gap-1.5">
+                    {(["ARS", "USD"] as const).map(m => (
+                      <button key={m} onClick={() => setFacturarMoneda(m)}
+                        className={`flex-1 rounded-md border-2 py-1.5 text-xs font-semibold transition-colors ${facturarMoneda === m ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300" : "border-zinc-200 text-zinc-500 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"}`}>
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                  {facturarMoneda !== facturarModal.moneda && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">PR en {facturarModal.moneda} → factura en {facturarMoneda}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tipo de cambio</label>
+                  <input type="number" step="0.01" value={facturarTipoCambio} onChange={(e) => setFacturarTipoCambio(e.target.value)}
+                    placeholder="Ej: 1250.50" className="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+              </div>
+
               {/* Campos adicionales */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -3480,11 +3504,6 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <input type="text" value={facturarSolicitadoPor} onChange={(e) => setFacturarSolicitadoPor(e.target.value)}
                     placeholder="Nombre" className="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                 </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tipo de cambio</label>
-                <input type="number" step="0.01" value={facturarTipoCambio} onChange={(e) => setFacturarTipoCambio(e.target.value)}
-                  placeholder="Ej: 1250.50" className="w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
               </div>
               <div>
                 <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Observaciones (visible en factura)</label>
