@@ -88,6 +88,7 @@ interface ProveedorOption {
 
 interface OrdenPagoRow {
   id: string;
+  numero?: string;
   fecha: string;
   proveedor_id: string;
   proveedor_nombre: string;
@@ -99,6 +100,7 @@ interface OrdenPagoRow {
   neto: number;
   moneda: "ARS" | "USD";
   medio_pago: string;
+  medios_pago?: OpMedioPago[];
   cheque_cruce_id?: string;
   notas: string;
   estado: "pendiente" | "pagada" | "anulada";
@@ -672,7 +674,7 @@ export default function FinanzasPage() {
           const { data: opData } = await qOp;
           if (opData) {
             setOrdenesPago(opData.map((r: any) => ({
-              id: r.id, fecha: r.fecha, proveedor_id: r.proveedor_id,
+              id: r.id, numero: r.numero ?? undefined, fecha: r.fecha, proveedor_id: r.proveedor_id,
               proveedor_nombre: r.proveedores?.razon_social ?? "—",
               monto_bruto: Number(r.monto_bruto), retencion_pct: Number(r.retencion_porcentaje ?? r.retencion_pct ?? 0),
               monto_retencion: Number(r.retencion_monto ?? r.monto_retencion ?? 0),
@@ -680,6 +682,7 @@ export default function FinanzasPage() {
               retencion_ganancias_monto: Number(r.retencion_ganancias_monto ?? 0),
               neto: Number(r.neto_a_pagar ?? r.neto ?? 0),
               moneda: (r.moneda as "ARS" | "USD") ?? "ARS", medio_pago: r.medio_pago ?? "transferencia",
+              medios_pago: r.medios_pago ? (typeof r.medios_pago === "string" ? JSON.parse(r.medios_pago) : r.medios_pago) : undefined,
               cheque_cruce_id: r.cheque_cruce_id, notas: r.notas ?? "",
               estado: r.estado ?? "pendiente",
               comprobante_url: r.comprobante_url ?? undefined,
@@ -1114,55 +1117,93 @@ export default function FinanzasPage() {
     } catch (err) { alert("Error marcando OP como pagada: " + (err instanceof Error ? err.message : String(err))); }
   }
 
-  function handleGenerarComprobante(op: OrdenPagoRow) {
+  async function handleGenerarComprobante(op: OrdenPagoRow) {
     const provNombre = op.proveedor_nombre;
     const totalRetenciones = op.monto_retencion + op.retencion_ganancias_monto;
+    const socNombre = sociedadActiva?.id === "fee94607-747a-4e87-ba24-aff9032f7a56" ? "Grupo LA" : "Lazzari Soluciones Industriales";
+    const medioLabel = (t: string) => t === "transferencia" ? "Transferencia bancaria" : t === "cheque" ? "Cheque" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "efectivo" ? "Efectivo" : t;
+
+    // Fetch linked FCs
+    let fcsHtml = "";
+    try {
+      const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto").eq("orden_pago_id", op.id);
+      if (links && links.length > 0) {
+        const fcIds = links.map((l: any) => l.factura_compra_id);
+        const { data: fcs } = await (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, total").in("id", fcIds);
+        if (fcs && fcs.length > 0) {
+          const rows = fcs.map((fc: any) => {
+            const link = links.find((l: any) => l.factura_compra_id === fc.id);
+            const montoPagado = Number(link?.monto ?? fc.total);
+            return `<tr><td>${fc.numero_factura || "—"}</td><td>${formatDate(fc.fecha)}</td><td style="text-align:right">${formatCurrency(Number(fc.total), op.moneda)}</td><td style="text-align:right">${formatCurrency(montoPagado, op.moneda)}</td></tr>`;
+          }).join("");
+          fcsHtml = `<div class="section"><div class="section-title">Documentos abonados</div>
+            <table><thead><tr><th style="text-align:left">Comprobante</th><th style="text-align:left">Fecha</th><th style="text-align:right">Total</th><th style="text-align:right">Pagado</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+        }
+      }
+    } catch { /* ignore */ }
+
+    // Medios de pago section
+    let mediosHtml = "";
+    const medios = op.medios_pago && op.medios_pago.length > 0 ? op.medios_pago : [{ tipo: op.medio_pago, monto: op.neto, fecha: op.fecha, banco: "", numero_cheque: "", moneda: op.moneda, cotizacion: 1 }];
+    const mediosRows = medios.map((m: any) => {
+      let detail = medioLabel(m.tipo);
+      if (m.banco) detail += ` — ${m.banco}`;
+      if (m.numero_cheque) detail += ` N° ${m.numero_cheque}`;
+      return `<tr><td>${detail}</td><td>${m.fecha ? formatDate(m.fecha) : "—"}</td><td style="text-align:right">${formatCurrency(Number(m.monto), m.moneda || op.moneda)}</td></tr>`;
+    }).join("");
+    mediosHtml = `<div class="section"><div class="section-title">Medios de pago</div>
+      <table><thead><tr><th style="text-align:left">Tipo</th><th style="text-align:left">Fecha</th><th style="text-align:right">Monto</th></tr></thead><tbody>${mediosRows}</tbody></table></div>`;
+
     const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Comprobante OP</title>
+<html><head><meta charset="utf-8"><title>Orden de Pago ${op.numero || ""}</title>
 <style>
-  body { font-family: Arial, sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; color: #333; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #FF4500; padding-bottom: 16px; margin-bottom: 24px; }
-  .title { font-size: 22px; font-weight: bold; color: #FF4500; }
-  .subtitle { font-size: 12px; color: #888; margin-top: 4px; }
-  .section { margin-bottom: 20px; }
-  .section-title { font-size: 13px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 4px; }
-  .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+  body { font-family: Arial, sans-serif; max-width: 750px; margin: 40px auto; padding: 20px; color: #333; font-size: 13px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #FF4500; padding-bottom: 16px; margin-bottom: 20px; }
+  .title { font-size: 20px; font-weight: bold; color: #FF4500; }
+  .subtitle { font-size: 11px; color: #888; margin-top: 2px; }
+  .op-num { font-size: 16px; font-weight: 700; font-family: monospace; }
+  .section { margin-bottom: 16px; }
+  .section-title { font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; border-bottom: 1px solid #ddd; padding-bottom: 3px; }
+  .row { display: flex; justify-content: space-between; padding: 4px 0; }
   .row .label { color: #666; }
   .row .value { font-weight: 600; }
-  .totals { background: #f9f9f9; border-radius: 8px; padding: 16px; margin-top: 16px; }
-  .totals .row { border-bottom: 1px solid #eee; }
-  .totals .row:last-child { border-bottom: none; font-size: 16px; padding-top: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { font-weight: 600; color: #666; border-bottom: 1px solid #ddd; padding: 4px 8px; font-size: 11px; text-transform: uppercase; }
+  td { padding: 5px 8px; border-bottom: 1px solid #f0f0f0; }
+  .totals { background: #f8f8f8; border-radius: 6px; padding: 12px 16px; margin-top: 12px; }
+  .totals .row { padding: 3px 0; }
   .retencion { color: #d97706; }
-  .neto { color: #059669; font-size: 18px; }
-  .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #aaa; border-top: 1px solid #eee; padding-top: 16px; }
+  .neto { color: #059669; font-size: 16px; font-weight: 700; }
+  .footer { margin-top: 30px; text-align: center; font-size: 10px; color: #aaa; border-top: 1px solid #eee; padding-top: 12px; }
   @media print { body { margin: 0; } .no-print { display: none; } }
 </style>
 </head><body>
 <div class="header">
-  <div><div class="title">Comprobante de Pago</div><div class="subtitle">Orden de Pago</div></div>
-  <div style="text-align:right"><div style="font-size:12px;color:#888">Fecha</div><div style="font-weight:600">${formatDate(op.fecha)}</div></div>
+  <div>
+    <div class="title">Orden de Pago</div>
+    <div class="subtitle">${socNombre}</div>
+  </div>
+  <div style="text-align:right">
+    <div class="op-num">${op.numero || "—"}</div>
+    <div style="font-size:12px;color:#888;margin-top:2px">${formatDate(op.fecha)}</div>
+  </div>
 </div>
 <div class="section">
   <div class="section-title">Proveedor</div>
-  <div class="row"><span class="label">Razon social</span><span class="value">${provNombre}</span></div>
+  <div class="row"><span class="label">Razón social</span><span class="value">${provNombre}</span></div>
 </div>
-<div class="section">
-  <div class="section-title">Detalle del pago</div>
-  <div class="row"><span class="label">Medio de pago</span><span class="value">${op.medio_pago === "transferencia" ? "Transferencia bancaria" : op.medio_pago === "cheque" ? "Cheque" : op.medio_pago === "echeq" ? "E-Cheq" : "Efectivo"}</span></div>
-  <div class="row"><span class="label">Moneda</span><span class="value">${op.moneda}</span></div>
-  <div class="row"><span class="label">Estado</span><span class="value">${op.estado === "pagada" ? "Pagada" : op.estado === "anulada" ? "Anulada" : "Pendiente"}</span></div>
-  ${op.notas ? `<div class="row"><span class="label">Observaciones</span><span class="value">${op.notas}</span></div>` : ""}
-</div>
+${fcsHtml}
+${mediosHtml}
 <div class="totals">
-  <div class="section-title">Importes</div>
-  <div class="row"><span class="label">Monto bruto</span><span class="value">${formatCurrency(op.monto_bruto, op.moneda)}</span></div>
-  ${op.monto_retencion > 0 ? `<div class="row"><span class="label">Retención (${op.retencion_pct}%)</span><span class="value retencion">- ${formatCurrency(op.monto_retencion, op.moneda)}</span></div>` : ""}
-  ${op.retencion_ganancias_monto > 0 ? `<div class="row"><span class="label">Ret. Ganancias (${op.retencion_ganancias_pct}%)</span><span class="value retencion">- ${formatCurrency(op.retencion_ganancias_monto, op.moneda)}</span></div>` : ""}
-  ${totalRetenciones > 0 ? `<div class="row"><span class="label">Total retenciones</span><span class="value retencion">- ${formatCurrency(totalRetenciones, op.moneda)}</span></div>` : ""}
-  <div class="row"><span class="label">Neto a pagar</span><span class="value neto">${formatCurrency(op.neto, op.moneda)}</span></div>
+  <div class="section-title">Resumen</div>
+  <div class="row"><span class="label">Subtotal documentos</span><span class="value">${formatCurrency(op.monto_bruto, op.moneda)}</span></div>
+  ${op.monto_retencion > 0 ? `<div class="row"><span class="label">Retención IVA (${op.retencion_pct}%)</span><span class="value retencion">- ${formatCurrency(op.monto_retencion, op.moneda)}</span></div>` : ""}
+  ${op.retencion_ganancias_monto > 0 ? `<div class="row"><span class="label">Retención Ganancias (${op.retencion_ganancias_pct}%)</span><span class="value retencion">- ${formatCurrency(op.retencion_ganancias_monto, op.moneda)}</span></div>` : ""}
+  ${totalRetenciones > 0 ? `<div class="row" style="border-top:1px solid #ddd;margin-top:4px;padding-top:4px"><span class="label">Total retenciones</span><span class="value retencion">- ${formatCurrency(totalRetenciones, op.moneda)}</span></div>` : ""}
+  <div class="row" style="border-top:2px solid #333;margin-top:6px;padding-top:8px"><span class="label" style="font-size:14px">Neto a pagar</span><span class="value neto">${formatCurrency(op.neto, op.moneda)}</span></div>
 </div>
 <div class="footer">
-  Lazzari Soluciones Industriales — Comprobante generado el ${new Date().toLocaleDateString("es-AR")}
+  ${socNombre} — Comprobante generado el ${new Date().toLocaleDateString("es-AR")}
   <br/><button class="no-print" onclick="window.print()" style="margin-top:12px;padding:8px 24px;background:#FF4500;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600">Imprimir</button>
 </div>
 </body></html>`;
@@ -1874,6 +1915,7 @@ export default function FinanzasPage() {
             <Card className="p-0 overflow-hidden">
               <DataTable<OrdenPagoRow>
                 columns={[
+                  { key: "numero", label: "N°", sortable: true, render: (row) => <span className="font-mono text-xs text-zinc-500">{row.numero || "—"}</span> },
                   { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
                   { key: "proveedor_nombre", label: "Proveedor", sortable: true, render: (row) => <span className="font-medium">{row.proveedor_nombre}</span> },
                   { key: "monto_bruto", label: "Monto bruto", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.monto_bruto, row.moneda)}</span> },
@@ -1900,7 +1942,13 @@ export default function FinanzasPage() {
                     );
                   }},
                   { key: "neto", label: "Neto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.neto, row.moneda)}</span> },
-                  { key: "medio_pago", label: "Medio", render: (row) => <Badge variant="outline">{row.medio_pago === "transferencia" ? "Transferencia" : row.medio_pago === "cheque" ? "Cheque" : row.medio_pago === "echeq" ? "E-Cheq" : "Efectivo"}</Badge> },
+                  { key: "medio_pago", label: "Medio", render: (row) => {
+                    const medioLabel = (t: string) => t === "transferencia" ? "Transf." : t === "cheque" ? "Cheque" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "efectivo" ? "Efectivo" : t;
+                    if (row.medios_pago && row.medios_pago.length > 1) {
+                      return <div className="flex flex-wrap gap-1">{row.medios_pago.map((m, i) => <Badge key={i} variant="outline">{medioLabel(m.tipo)}</Badge>)}</div>;
+                    }
+                    return <Badge variant="outline">{medioLabel(row.medio_pago)}</Badge>;
+                  }},
                   { key: "estado", label: "Estado", sortable: true, render: (row) => (
                     <div className="flex items-center gap-1">
                       <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : "warning"}>
@@ -3457,6 +3505,7 @@ export default function FinanzasPage() {
               <div className="flex items-center gap-2">
                 <FileText className="h-5 w-5 text-orange-500" />
                 <h2 className="text-lg font-bold dark:text-white">Orden de Pago</h2>
+                {selectedOP.numero && <span className="font-mono text-sm text-zinc-500">{selectedOP.numero}</span>}
                 <Badge variant={selectedOP.estado === "pagada" ? "success" : selectedOP.estado === "anulada" ? "danger" : "warning"}>
                   {selectedOP.estado === "pagada" ? "Pagada" : selectedOP.estado === "anulada" ? "Anulada" : "Pendiente"}
                 </Badge>
@@ -3477,8 +3526,17 @@ export default function FinanzasPage() {
                     <p className="font-medium dark:text-white">{formatDate(selectedOP.fecha)}</p>
                   </div>
                   <div>
-                    <p className="text-xs font-medium text-zinc-500">Medio de pago</p>
-                    <p className="font-medium dark:text-white">{selectedOP.medio_pago === "transferencia" ? "Transferencia" : selectedOP.medio_pago === "cheque" ? "Cheque" : selectedOP.medio_pago === "echeq" ? "E-Cheq" : "Efectivo"}</p>
+                    <p className="text-xs font-medium text-zinc-500">Medios de pago</p>
+                    {selectedOP.medios_pago && selectedOP.medios_pago.length > 0 ? (
+                      <div className="space-y-1 mt-1">
+                        {selectedOP.medios_pago.map((m, i) => {
+                          const ml = m.tipo === "transferencia" ? "Transf." : m.tipo === "cheque" ? "Cheque" : m.tipo === "echeq" ? "E-Cheq" : m.tipo === "deposito" ? "Depósito" : "Efectivo";
+                          return <p key={i} className="text-sm dark:text-white">{ml}{m.banco ? ` — ${m.banco}` : ""} <span className="font-mono text-xs">{formatCurrency(m.monto, m.moneda || selectedOP.moneda)}</span></p>;
+                        })}
+                      </div>
+                    ) : (
+                      <p className="font-medium dark:text-white">{selectedOP.medio_pago === "transferencia" ? "Transferencia" : selectedOP.medio_pago === "cheque" ? "Cheque" : selectedOP.medio_pago === "echeq" ? "E-Cheq" : "Efectivo"}</p>
+                    )}
                   </div>
                   <div>
                     <p className="text-xs font-medium text-zinc-500">Moneda</p>
