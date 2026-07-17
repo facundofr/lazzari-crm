@@ -200,15 +200,34 @@ const tipoGastoVariant: Record<string, "success" | "danger" | "warning" | "info"
   varios: "outline",
 };
 
+interface OpMedioPago {
+  tempId: string;
+  tipo: "cheque" | "deposito" | "transferencia" | "echeq" | "efectivo";
+  monto: number;
+  fecha: string;
+  banco: string;
+  numero_cheque: string;
+  moneda: "ARS" | "USD";
+  cotizacion: number;
+  echeq_id?: string; // if selecting from cartera
+}
+const makeOpMedio = (): OpMedioPago => ({
+  tempId: Math.random().toString(36).slice(2),
+  tipo: "transferencia",
+  monto: 0,
+  fecha: new Date().toISOString().slice(0, 10),
+  banco: "",
+  numero_cheque: "",
+  moneda: "ARS",
+  cotizacion: 1,
+});
+
 const emptyOPForm = {
   proveedor_id: "",
-  monto_bruto: 0,
   moneda: "ARS" as "ARS" | "USD",
   retencion_pct: 0,
   aplica_ganancias: false,
   retencion_ganancias_pct: 0,
-  medio_pago: "transferencia" as string,
-  cheque_cruce_id: "",
   notas: "",
   fecha: new Date().toISOString().slice(0, 10),
 };
@@ -345,8 +364,10 @@ export default function FinanzasPage() {
   const [opProvCondicion, setOpProvCondicion] = useState<string | null>(null);
   const [opCondicionLoading, setOpCondicionLoading] = useState(false);
   // FC pendientes del proveedor para vincular a la OP
-  interface OpFCPendiente { id: string; numero: string; fecha: string; total: number; moneda: string; selected: boolean }
+  interface OpFCPendiente { id: string; numero: string; fecha: string; total: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number }
   const [opFCPendientes, setOpFCPendientes] = useState<OpFCPendiente[]>([]);
+  const [opMedios, setOpMedios] = useState<OpMedioPago[]>([makeOpMedio()]);
+  const [opMonthlyTotal, setOpMonthlyTotal] = useState(0);
   const [opFCLoading, setOpFCLoading] = useState(false);
   const [retencionConfig, setRetencionConfig] = useState({
     aplica_iva: true, minimo_iva: 130000, tasa_iva_ri: 10.5,
@@ -891,82 +912,135 @@ export default function FinanzasPage() {
       .then(data => { setOpProvCondicion(data.condicion_iva ?? ""); })
       .catch(() => { setOpProvCondicion(null); })
       .finally(() => setOpCondicionLoading(false));
-    // Cargar FC pendientes del proveedor
+    // Cargar FC pendientes del proveedor + total mensual para ganancias
     setOpFCLoading(true);
     (async () => {
       try {
-        let q = (supabase as any).from("facturas_compra").select("id, numero, fecha, total, moneda")
+        // FC pendientes
+        let q = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, total, moneda")
           .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"]);
         if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
         const { data } = await q;
-        setOpFCPendientes((data || []).map((fc: any) => ({ ...fc, selected: false })));
+
+        // Pagos parciales previos: sumar montos ya pagados por FC via op_facturas_compra
+        const fcIds = (data || []).map((fc: any) => fc.id);
+        let pagadoPorFC: Record<string, number> = {};
+        if (fcIds.length > 0) {
+          const { data: opfcData } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto").in("factura_compra_id", fcIds);
+          (opfcData || []).forEach((r: any) => { pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto); });
+        }
+
+        setOpFCPendientes((data || []).map((fc: any) => {
+          const pagado = pagadoPorFC[fc.id] || 0;
+          const saldo = Math.max(0, Number(fc.total) - pagado);
+          return { id: fc.id, numero: fc.numero_factura || "S/N", fecha: fc.fecha, total: Number(fc.total), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: false, monto_a_pagar: saldo };
+        }));
+
+        // Total mensual facturado por este proveedor (para cálculo ganancias)
+        const mesActual = new Date().toISOString().slice(0, 7); // YYYY-MM
+        let qMensual = (supabase as any).from("facturas_compra").select("total")
+          .eq("proveedor_id", opForm.proveedor_id)
+          .gte("fecha", `${mesActual}-01`);
+        if (sociedadActiva?.id) qMensual = qMensual.eq("sociedad_id", sociedadActiva.id);
+        const { data: mensualData } = await qMensual;
+        const totalMes = (mensualData || []).reduce((s: number, r: any) => s + Number(r.total), 0);
+        setOpMonthlyTotal(totalMes);
       } catch { setOpFCPendientes([]); }
       finally { setOpFCLoading(false); }
     })();
   }, [opForm.proveedor_id, opModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 2. Cuando tenemos condición y monto → auto-calcular retenciones
+  // 2. Cuando tenemos condición y monto → auto-calcular retenciones basado en total mensual
+  const opMontoBruto = opFCPendientes.filter(f => f.selected).reduce((s, f) => s + f.monto_a_pagar, 0);
   useEffect(() => {
-    if (opProvCondicion === null || opForm.monto_bruto <= 0) return;
+    if (opProvCondicion === null || opMontoBruto <= 0) return;
     let retencion_pct = 0;
     let aplica_ganancias = false;
     let retencion_ganancias_pct = 0;
     if (opProvCondicion === "RI") {
-      if (retencionConfig.aplica_iva && opForm.monto_bruto >= retencionConfig.minimo_iva) {
+      if (retencionConfig.aplica_iva && opMontoBruto >= retencionConfig.minimo_iva) {
         retencion_pct = retencionConfig.tasa_iva_ri;
       }
-      if (retencionConfig.aplica_ganancias && opForm.monto_bruto >= retencionConfig.minimo_ganancias) {
+      // Ganancias: se aplica cuando el acumulado mensual supera el mínimo
+      const acumuladoMensual = opMonthlyTotal + opMontoBruto;
+      if (retencionConfig.aplica_ganancias && acumuladoMensual >= retencionConfig.minimo_ganancias) {
         aplica_ganancias = true;
         retencion_ganancias_pct = retencionConfig.tasa_ganancias_ri;
       }
     }
-    // Monotributo / Exento / CF / vacío → sin retención (usuario puede agregar manual)
     setOpForm(prev => ({ ...prev, retencion_pct, aplica_ganancias, retencion_ganancias_pct }));
-  }, [opProvCondicion, opForm.monto_bruto, retencionConfig]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [opProvCondicion, opMontoBruto, retencionConfig, opMonthlyTotal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── OP handlers ──
-  function openOPModal() {
-    setOpForm(emptyOPForm);
+  function openOPModal(preloadProveedorId?: string) {
+    setOpForm(preloadProveedorId ? { ...emptyOPForm, proveedor_id: preloadProveedorId } : emptyOPForm);
     setOpError("");
     setOpFile(null);
     setOpProvCondicion(null);
-    setProveedorSearch("");
+    if (preloadProveedorId) {
+      const prov = proveedoresOptions.find(p => p.id === preloadProveedorId);
+      setProveedorSearch(prov?.razon_social || "");
+    } else {
+      setProveedorSearch("");
+    }
     setOpFCPendientes([]);
+    setOpMedios([makeOpMedio()]);
+    setOpMonthlyTotal(0);
     setOpModalOpen(true);
   }
 
-  const opRetencion = opForm.monto_bruto * (opForm.retencion_pct / 100);
-  const opRetencionGanancias = opForm.aplica_ganancias ? opForm.monto_bruto * (opForm.retencion_ganancias_pct / 100) : 0;
-  const opNeto = opForm.monto_bruto - opRetencion - opRetencionGanancias;
+  const opRetencion = opMontoBruto * (opForm.retencion_pct / 100);
+  const opRetencionGanancias = opForm.aplica_ganancias ? opMontoBruto * (opForm.retencion_ganancias_pct / 100) : 0;
+  const opNetoAPagar = opMontoBruto - opRetencion - opRetencionGanancias;
+  const opTotalMedios = opMedios.reduce((s, m) => s + m.monto, 0);
+  const opDiferencia = opNetoAPagar - opTotalMedios - opRetencion - opRetencionGanancias;
 
   async function handleCreateOP() {
     if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
-    if (opForm.monto_bruto <= 0) { setOpError("El monto debe ser mayor a 0"); return; }
+    const selectedFCs = opFCPendientes.filter(f => f.selected);
+    if (selectedFCs.length === 0) { setOpError("Selecciona al menos una factura"); return; }
+    if (opMontoBruto <= 0) { setOpError("El monto a pagar debe ser mayor a 0"); return; }
+    // Validate medios de pago total = neto a pagar
+    const totalMediosVal = opMedios.reduce((s, m) => s + m.monto, 0);
+    const diff = Math.abs(opNetoAPagar - totalMediosVal);
+    if (diff > 1) { setOpError(`Los medios de pago ($${totalMediosVal.toLocaleString()}) no coinciden con el neto a pagar ($${opNetoAPagar.toLocaleString()})`); return; }
+
     setOpSaving(true);
     setOpError("");
     try {
-      // Insert into ordenes_pago table
+      const provNombre = proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social ?? "";
+      // Generate OP number
+      const { data: lastOP } = await (supabase as any).from("ordenes_pago").select("numero").order("created_at", { ascending: false }).limit(1);
+      let nextNum = 1;
+      if (lastOP?.[0]?.numero) {
+        const parts = lastOP[0].numero.split("-");
+        const n = parseInt(parts[parts.length - 1]);
+        if (n > 0) nextNum = n + 1;
+      }
+      const opNumero = `OP-${String(nextNum).padStart(6, "0")}`;
+
       const insertData: Record<string, unknown> = {
+        numero: opNumero,
         fecha: opForm.fecha,
         proveedor_id: opForm.proveedor_id,
-        monto_bruto: opForm.monto_bruto,
+        monto_bruto: opMontoBruto,
         retencion_porcentaje: opForm.retencion_pct,
         retencion_monto: opRetencion,
         retencion_ganancias_pct: opForm.aplica_ganancias ? opForm.retencion_ganancias_pct : 0,
         retencion_ganancias_monto: opRetencionGanancias,
-        neto_a_pagar: opNeto,
+        neto_a_pagar: opNetoAPagar,
         moneda: opForm.moneda,
-        medio_pago: opForm.medio_pago,
+        medio_pago: opMedios[0]?.tipo || "transferencia",
+        medios_pago: JSON.stringify(opMedios.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion, echeq_id: m.echeq_id }))),
         notas: opForm.notas,
-        estado: "pendiente",
+        estado: "pagada",
       };
-      if (opForm.cheque_cruce_id) insertData.cheque_cruce_id = opForm.cheque_cruce_id;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
 
       const { data: opData, error } = await (supabase as any).from("ordenes_pago").insert(insertData).select("id").single();
       if (error) throw error;
 
-      // Upload comprobante file if provided
+      // Upload comprobante
       if (opFile && opData?.id) {
         const ext = opFile.name.split(".").pop() || "pdf";
         const filePath = `${sociedadActiva?.id || "default"}/op-${opData.id}/comprobante.${ext}`;
@@ -978,40 +1052,40 @@ export default function FinanzasPage() {
       }
       setOpFile(null);
 
-      // Link selected FC to OP and mark them as pagadas
-      const selectedFCs = opFCPendientes.filter(f => f.selected);
-      if (selectedFCs.length > 0 && opData?.id) {
+      // Link FCs + update saldo
+      if (opData?.id) {
         const links = selectedFCs.map(fc => ({
           orden_pago_id: opData.id,
           factura_compra_id: fc.id,
-          monto: Number(fc.total),
+          monto: fc.monto_a_pagar,
         }));
         await (supabase as any).from("op_facturas_compra").insert(links);
-        // Mark FCs as pagadas
+        // If monto_a_pagar == saldo_pendiente → pagada; else stays as está
         for (const fc of selectedFCs) {
-          await (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", fc.id);
+          if (Math.abs(fc.monto_a_pagar - fc.saldo_pendiente) < 1) {
+            await (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", fc.id);
+          }
         }
       }
 
-      // Also create a movimiento for the payment
-      const provNombre = proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social ?? "";
+      // Create movimiento
       const movData: Record<string, unknown> = {
         tipo: "pago",
-        descripcion: `OP — ${provNombre} — Neto ${opForm.moneda} ${opNeto.toLocaleString()}`,
-        monto: opNeto,
+        descripcion: `${opNumero} — ${provNombre}`,
+        monto: opNetoAPagar,
         moneda: opForm.moneda,
         fecha: opForm.fecha,
         proveedor_id: opForm.proveedor_id,
         conciliado: false,
       };
       if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
-      const { error: movErr } = await supabase.from("movimientos").insert(movData as any);
-      if (movErr) throw movErr;
+      await supabase.from("movimientos").insert(movData as any);
 
-      // If cruce with cheque, mark cheque as conciliado
-      if (opForm.cheque_cruce_id) {
-        const { error: cheqErr } = await supabase.from("movimientos").update({ conciliado: true } as any).eq("id", opForm.cheque_cruce_id);
-        if (cheqErr) throw cheqErr;
+      // Mark echeqs used as endosado
+      for (const m of opMedios) {
+        if (m.echeq_id) {
+          await (supabase as any).from("echeqs").update({ estado: "endosado", destino_nombre: provNombre }).eq("id", m.echeq_id);
+        }
       }
 
       setOpModalOpen(false);
@@ -1301,19 +1375,8 @@ export default function FinanzasPage() {
   function handlePagarFC(id: string) {
     const fc = facturasCompra.find(f => f.id === id);
     if (!fc) return;
-    // Open OP modal pre-loaded with this FC
-    setOpForm({
-      ...emptyOPForm,
-      proveedor_id: fc.proveedor_id || "",
-      monto_bruto: fc.total,
-      moneda: (fc.moneda || "ARS") as "ARS" | "USD",
-    });
-    setProveedorSearch(fc.proveedor_nombre || "");
-    setOpError("");
-    setOpFile(null);
-    setOpProvCondicion(null);
-    // Pre-select this FC
-    setOpFCPendientes([{ id: fc.id, numero: fc.numero_factura || "", fecha: fc.fecha, total: fc.total, moneda: fc.moneda || "ARS", selected: true }]);
+    // Open OP modal pre-loaded with this FC's proveedor
+    openOPModal(fc.proveedor_id || "");
     setOpModalOpen(true);
   }
 
@@ -1804,7 +1867,7 @@ export default function FinanzasPage() {
                   {formatCurrency(ordenesPago.filter(o => o.estado === "pendiente").reduce((s, o) => s + o.neto, 0))}
                 </span>
               </p>
-              <button onClick={openOPModal} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
+              <button onClick={() => openOPModal()} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
                 <Plus className="h-4 w-4" /> Nueva OP
               </button>
             </div>
@@ -2755,7 +2818,7 @@ export default function FinanzasPage() {
       {opModalOpen && (
         <>
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setOpModalOpen(false)} />
-          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <FileText className="h-5 w-5 text-orange-500" />
@@ -2765,301 +2828,256 @@ export default function FinanzasPage() {
             </div>
             {opError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}
             <div className="space-y-4">
-              {/* Proveedor selector with search */}
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Proveedor *</label>
-                <div className="relative mt-1">
-                  <div className="flex items-center border border-zinc-200 rounded-lg dark:border-zinc-700 overflow-hidden">
-                    <Search className="h-4 w-4 text-zinc-400 ml-3 flex-shrink-0" />
-                    <input
-                      value={proveedorSearch}
-                      onChange={(e) => { setProveedorSearch(e.target.value); if (opForm.proveedor_id) setOpForm({ ...opForm, proveedor_id: "" }); }}
-                      placeholder="Buscar proveedor..."
-                      className="w-full px-2 py-2 text-sm bg-transparent dark:text-white outline-none"
-                    />
+              {/* Proveedor + Fecha */}
+              <div className="grid grid-cols-3 gap-4">
+                <div className="col-span-2 relative">
+                  <label className="text-xs font-medium text-zinc-500">Proveedor *</label>
+                  <div className="relative mt-1">
+                    <div className="flex items-center border border-zinc-200 rounded-lg dark:border-zinc-700 overflow-hidden">
+                      <Search className="h-4 w-4 text-zinc-400 ml-3 flex-shrink-0" />
+                      <input value={proveedorSearch}
+                        onChange={(e) => { setProveedorSearch(e.target.value); if (opForm.proveedor_id) setOpForm({ ...opForm, proveedor_id: "" }); }}
+                        placeholder="Buscar proveedor..." className="w-full px-2 py-2 text-sm bg-transparent dark:text-white outline-none" />
+                    </div>
+                    {opForm.proveedor_id && (
+                      <div className="mt-1 flex items-center gap-2 flex-wrap">
+                        <Badge variant="success">{proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social}</Badge>
+                        <button onClick={() => { setOpForm({ ...opForm, proveedor_id: "" }); setProveedorSearch(""); setOpProvCondicion(null); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
+                        {opCondicionLoading && <span className="flex items-center gap-1 text-xs text-zinc-400"><Loader2 className="h-3 w-3 animate-spin" />AFIP…</span>}
+                        {!opCondicionLoading && opProvCondicion !== null && (
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${opProvCondicion === "RI" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"}`}>
+                            {opProvCondicion === "RI" ? "Resp. Inscripto" : opProvCondicion || "Sin datos"}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {!opForm.proveedor_id && proveedorSearch.trim() && filteredProveedoresOP.length > 0 && (
+                      <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                        {filteredProveedoresOP.slice(0, 10).map(p => (
+                          <button key={p.id} onClick={() => { setOpForm({ ...opForm, proveedor_id: p.id }); setProveedorSearch(p.razon_social); }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex justify-between gap-2">
+                            <span>{p.razon_social}</span>
+                            {p.cuit && <span className="text-xs text-zinc-400 font-mono">{p.cuit}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  {opForm.proveedor_id && (
-                    <div className="mt-1 flex items-center gap-2 flex-wrap">
-                      <Badge variant="success">{proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social}</Badge>
-                      <button onClick={() => { setOpForm({ ...opForm, proveedor_id: "" }); setProveedorSearch(""); setOpProvCondicion(null); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
-                      {opCondicionLoading && <span className="flex items-center gap-1 text-xs text-zinc-400"><Loader2 className="h-3 w-3 animate-spin" />Consultando AFIP…</span>}
-                      {!opCondicionLoading && opProvCondicion !== null && (
-                        <span className={`flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
-                          opProvCondicion === "RI" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" :
-                          opProvCondicion === "Monotributo" ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300" :
-                          "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
-                        }`}>
-                          <ShieldCheck className="h-3 w-3" />
-                          {opProvCondicion === "RI" ? "Responsable Inscripto" : opProvCondicion === "Monotributo" ? "Monotributo" : opProvCondicion || "Sin datos AFIP"}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  {!opForm.proveedor_id && proveedorSearch.trim() && filteredProveedoresOP.length > 0 && (
-                    <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
-                      {filteredProveedoresOP.slice(0, 10).map(p => (
-                        <button key={p.id} onClick={() => { setOpForm({ ...opForm, proveedor_id: p.id }); setProveedorSearch(p.razon_social); }}
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex items-center justify-between gap-2">
-                          <span>{p.razon_social}</span>
-                          {p.cuit && <span className="text-xs text-zinc-400 font-mono shrink-0">{p.cuit}</span>}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Fecha</label>
+                  <input type="date" value={opForm.fecha} onChange={(e) => setOpForm({ ...opForm, fecha: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                 </div>
               </div>
 
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Fecha</label>
-                <input type="date" value={opForm.fecha} onChange={(e) => setOpForm({ ...opForm, fecha: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-
-              {/* Facturas de compra pendientes del proveedor */}
+              {/* ── Documentos a pagar (FC) ── */}
               {opForm.proveedor_id && (
                 <div>
-                  <label className="text-xs font-medium text-zinc-500 mb-1 block">Facturas a pagar</label>
+                  <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 mb-1 block">Documentos a pagar</label>
                   {opFCLoading ? (
                     <div className="flex items-center gap-2 text-xs text-zinc-400 py-2"><Loader2 className="h-3 w-3 animate-spin" />Cargando facturas...</div>
                   ) : opFCPendientes.length === 0 ? (
-                    <p className="text-xs text-zinc-400 py-1">Sin facturas pendientes para este proveedor</p>
+                    <p className="text-xs text-zinc-400 py-1">Sin facturas pendientes</p>
                   ) : (
-                    <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg max-h-40 overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800">
-                      {opFCPendientes.map(fc => (
-                        <label key={fc.id} className="flex items-center gap-3 px-3 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 cursor-pointer">
-                          <input type="checkbox" checked={fc.selected}
-                            onChange={() => {
-                              const updated = opFCPendientes.map(f => f.id === fc.id ? { ...f, selected: !f.selected } : f);
-                              setOpFCPendientes(updated);
-                              const totalSelected = updated.filter(f => f.selected).reduce((s, f) => s + Number(f.total), 0);
-                              if (totalSelected > 0) setOpForm(prev => ({ ...prev, monto_bruto: Math.round(totalSelected * 100) / 100 }));
-                            }}
-                            className="rounded border-zinc-300 text-orange-500 focus:ring-orange-500" />
-                          <div className="flex-1 min-w-0">
-                            <span className="text-sm font-mono dark:text-white">{fc.numero || "S/N"}</span>
-                            <span className="text-xs text-zinc-400 ml-2">{formatDate(fc.fecha)}</span>
-                          </div>
-                          <span className="text-sm font-mono font-medium dark:text-white">{formatCurrency(Number(fc.total), (fc.moneda || "ARS") as "ARS" | "USD")}</span>
-                        </label>
-                      ))}
+                    <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead><tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
+                          <th className="w-8 p-2"></th>
+                          <th className="text-left p-2">N° Factura</th>
+                          <th className="text-left p-2">Fecha</th>
+                          <th className="text-right p-2">Total</th>
+                          <th className="text-right p-2">Saldo</th>
+                          <th className="text-right p-2">A pagar</th>
+                        </tr></thead>
+                        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                          {opFCPendientes.map(fc => (
+                            <tr key={fc.id} className={`hover:bg-zinc-50 dark:hover:bg-zinc-800/30 ${fc.selected ? "bg-orange-50/50 dark:bg-orange-900/10" : ""}`}>
+                              <td className="p-2 text-center">
+                                <input type="checkbox" checked={fc.selected}
+                                  onChange={() => {
+                                    setOpFCPendientes(prev => prev.map(f => f.id === fc.id ? { ...f, selected: !f.selected, monto_a_pagar: !f.selected ? f.saldo_pendiente : 0 } : f));
+                                  }}
+                                  className="rounded border-zinc-300 text-orange-500 focus:ring-orange-500" />
+                              </td>
+                              <td className="p-2 font-mono text-xs dark:text-white">{fc.numero || "S/N"}</td>
+                              <td className="p-2 text-xs text-zinc-500">{formatDate(fc.fecha)}</td>
+                              <td className="p-2 text-right font-mono text-xs text-zinc-500">{formatCurrency(fc.total, fc.moneda as "ARS"|"USD")}</td>
+                              <td className="p-2 text-right font-mono text-xs font-medium dark:text-white">{formatCurrency(fc.saldo_pendiente, fc.moneda as "ARS"|"USD")}</td>
+                              <td className="p-2 text-right">
+                                {fc.selected ? (
+                                  <input type="number" value={fc.monto_a_pagar || ""}
+                                    onChange={(e) => {
+                                      const val = Math.min(Number(e.target.value), fc.saldo_pendiente);
+                                      setOpFCPendientes(prev => prev.map(f => f.id === fc.id ? { ...f, monto_a_pagar: val } : f));
+                                    }}
+                                    className="w-28 text-right rounded border border-zinc-200 px-2 py-1 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                                ) : <span className="text-xs text-zinc-300">—</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
                   )}
-                  {opFCPendientes.some(f => f.selected) && (
-                    <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
-                      {opFCPendientes.filter(f => f.selected).length} FC seleccionada(s) — Total: {formatCurrency(opFCPendientes.filter(f => f.selected).reduce((s, f) => s + Number(f.total), 0), opForm.moneda)}
+                  {opMontoBruto > 0 && (
+                    <div className="flex justify-between items-center mt-2 text-sm">
+                      <span className="text-zinc-500">{opFCPendientes.filter(f => f.selected).length} documento(s) seleccionado(s)</span>
+                      <span className="font-mono font-bold text-orange-600">{formatCurrency(opMontoBruto, opForm.moneda)}</span>
+                    </div>
+                  )}
+                  {opMonthlyTotal > 0 && opProvCondicion === "RI" && (
+                    <p className="text-xs text-violet-600 dark:text-violet-400 mt-1">
+                      Acumulado mes proveedor: {formatCurrency(opMonthlyTotal)} — Con esta OP: {formatCurrency(opMonthlyTotal + opMontoBruto)}
+                      {(opMonthlyTotal + opMontoBruto) >= retencionConfig.minimo_ganancias && " → Aplica retención ganancias"}
                     </p>
                   )}
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Monto bruto *</label>
-                  <input type="number" value={opForm.monto_bruto || ""} onChange={(e) => setOpForm({ ...opForm, monto_bruto: Number(e.target.value) })}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Moneda</label>
-                  <select value={opForm.moneda} onChange={(e) => setOpForm({ ...opForm, moneda: e.target.value as "ARS" | "USD" })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                    <option value="ARS">ARS</option>
-                    <option value="USD">USD</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Retención IVA */}
-              <div>
-                <div className="flex items-center gap-2">
-                  <label className="text-xs font-medium text-zinc-500">Ret. IVA (%)</label>
-                  {opProvCondicion !== null && opForm.retencion_pct > 0 && (
-                    <span className="text-xs bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 px-1.5 py-0.5 rounded font-medium">Auto AFIP</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 mt-1">
-                  <input type="number" step="0.5" value={opForm.retencion_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_pct: Number(e.target.value) })}
-                    className="w-24 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0" />
-                  <span className="text-sm text-zinc-400">%</span>
-                  <div className="flex gap-1 ml-2">
-                    {[2, 3, 6].map(pct => (
-                      <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, retencion_pct: pct })}
-                        className={`rounded px-2 py-1 text-xs font-medium transition-colors ${opForm.retencion_pct === pct ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                        {pct}%
+              {/* ── Retenciones ── */}
+              {opMontoBruto > 0 && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-medium text-zinc-500">Ret. IVA (%)</label>
+                      {opForm.retencion_pct > 0 && <span className="text-xs bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 px-1.5 py-0.5 rounded font-medium">Auto</span>}
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <input type="number" step="0.5" value={opForm.retencion_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_pct: Number(e.target.value) })}
+                        className="w-20 rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      <span className="text-xs text-zinc-400">%</span>
+                      {[2, 3, 6].map(pct => (
+                        <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, retencion_pct: pct })}
+                          className={`rounded px-1.5 py-0.5 text-xs font-medium ${opForm.retencion_pct === pct ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>{pct}%</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-violet-700 dark:text-violet-300 flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" />Ret. Ganancias</label>
+                      <button type="button" onClick={() => setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? 6 : 0 })}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full ${opForm.aplica_ganancias ? "bg-violet-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
+                        <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${opForm.aplica_ganancias ? "translate-x-4.5" : "translate-x-0.5"}`} />
                       </button>
+                    </div>
+                    {opForm.aplica_ganancias && (
+                      <div className="flex items-center gap-2">
+                        <input type="number" step="0.5" value={opForm.retencion_ganancias_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_ganancias_pct: Number(e.target.value) })}
+                          className="w-20 rounded border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                        <span className="text-xs text-zinc-400">%</span>
+                        {[2, 6, 28].map(pct => (
+                          <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, retencion_ganancias_pct: pct })}
+                            className={`rounded px-1.5 py-0.5 text-xs font-medium ${opForm.retencion_ganancias_pct === pct ? "bg-violet-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>{pct}%</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Resumen ── */}
+              {opMontoBruto > 0 && (
+                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1">
+                  <div className="flex justify-between text-sm"><span className="text-zinc-500">Documentos</span><span className="font-mono">{formatCurrency(opMontoBruto, opForm.moneda)}</span></div>
+                  {opRetencion > 0 && <div className="flex justify-between text-sm"><span className="text-zinc-500">Ret. IVA ({opForm.retencion_pct}%)</span><span className="font-mono text-amber-600">- {formatCurrency(opRetencion, opForm.moneda)}</span></div>}
+                  {opRetencionGanancias > 0 && <div className="flex justify-between text-sm"><span className="text-zinc-500 flex items-center gap-1"><ShieldCheck className="h-3 w-3 text-violet-500" />Ret. Ganancias ({opForm.retencion_ganancias_pct}%)</span><span className="font-mono text-violet-600">- {formatCurrency(opRetencionGanancias, opForm.moneda)}</span></div>}
+                  <div className="flex justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1.5">
+                    <span className="text-zinc-700 dark:text-white">Neto a pagar</span>
+                    <span className="font-mono text-emerald-600 text-base">{formatCurrency(opNetoAPagar, opForm.moneda)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Medios de pago (múltiples) ── */}
+              {opMontoBruto > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Medios de pago</label>
+                    <button type="button" onClick={() => setOpMedios([...opMedios, makeOpMedio()])}
+                      className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium"><Plus className="h-3 w-3" />Agregar medio</button>
+                  </div>
+                  <div className="space-y-2">
+                    {opMedios.map((m, idx) => (
+                      <div key={m.tempId} className="flex items-start gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
+                        <select value={m.tipo} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, tipo: e.target.value as OpMedioPago["tipo"], echeq_id: undefined } : x))}
+                          className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                          <option value="transferencia">Transferencia</option>
+                          <option value="deposito">Depósito</option>
+                          <option value="cheque">Cheque</option>
+                          <option value="echeq">E-Cheq</option>
+                          <option value="efectivo">Efectivo</option>
+                        </select>
+                        <input type="number" value={m.monto || ""} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, monto: Number(e.target.value) } : x))}
+                          placeholder="Monto" className="w-28 rounded border border-zinc-200 px-2 py-1.5 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                        <input type="date" value={m.fecha} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, fecha: e.target.value } : x))}
+                          className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                        {(m.tipo === "cheque" || m.tipo === "echeq") && (
+                          <>
+                            <input value={m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value } : x))}
+                              placeholder="Banco" className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                            <input value={m.numero_cheque} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, numero_cheque: e.target.value } : x))}
+                              placeholder="N° cheque" className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          </>
+                        )}
+                        {m.tipo === "echeq" && (() => {
+                          const enCartera = echeqs.filter(e => e.estado === "en_cartera");
+                          return enCartera.length > 0 ? (
+                            <select value={m.echeq_id || ""} onChange={(e) => {
+                              const sel = enCartera.find(x => x.id === e.target.value);
+                              setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, echeq_id: e.target.value || undefined, monto: sel ? sel.monto : x.monto, banco: sel?.banco_emisor || x.banco, numero_cheque: sel?.numero || x.numero_cheque } : x));
+                            }} className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                              <option value="">Manual</option>
+                              {enCartera.map(e => <option key={e.id} value={e.id}>{e.numero} — {formatCurrency(e.monto)}</option>)}
+                            </select>
+                          ) : null;
+                        })()}
+                        {opMedios.length > 1 && (
+                          <button type="button" onClick={() => setOpMedios(prev => prev.filter((_, i) => i !== idx))} className="text-zinc-400 hover:text-red-500 mt-0.5"><Trash2 className="h-3.5 w-3.5" /></button>
+                        )}
+                      </div>
                     ))}
                   </div>
-                </div>
-              </div>
-
-              {/* Retención Ganancias */}
-              <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-violet-500" />
-                    <label className="text-xs font-semibold text-violet-700 dark:text-violet-300">Retención de Ganancias</label>
-                    {opProvCondicion !== null && opForm.aplica_ganancias && (
-                      <span className="text-xs bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-400 px-1.5 py-0.5 rounded font-medium">Auto AFIP</span>
-                    )}
+                  <div className="flex justify-between items-center mt-2 text-sm">
+                    <span className="text-zinc-500">Total medios</span>
+                    <span className={`font-mono font-bold ${Math.abs(opNetoAPagar - opMedios.reduce((s, m) => s + m.monto, 0)) < 1 ? "text-emerald-600" : "text-red-500"}`}>
+                      {formatCurrency(opMedios.reduce((s, m) => s + m.monto, 0), opForm.moneda)}
+                    </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? 6 : 0 })}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${opForm.aplica_ganancias ? "bg-violet-500" : "bg-zinc-300 dark:bg-zinc-600"}`}
-                  >
-                    <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${opForm.aplica_ganancias ? "translate-x-4.5" : "translate-x-0.5"}`} />
-                  </button>
-                </div>
-                {opForm.aplica_ganancias && (
-                  <div>
-                    <label className="text-xs font-medium text-zinc-500">Porcentaje</label>
-                    <div className="flex items-center gap-2 mt-1">
-                      <input type="number" step="0.5" value={opForm.retencion_ganancias_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_ganancias_pct: Number(e.target.value) })}
-                        className="w-24 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0" />
-                      <span className="text-sm text-zinc-400">%</span>
-                      <div className="flex gap-1 ml-2">
-                        {[2, 3, 6, 28].map(pct => (
-                          <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, retencion_ganancias_pct: pct })}
-                            className={`rounded px-2 py-1 text-xs font-medium transition-colors ${opForm.retencion_ganancias_pct === pct ? "bg-violet-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                            {pct}%
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    {opForm.monto_bruto > 0 && (
-                      <p className="text-xs text-violet-600 dark:text-violet-400 mt-1.5">
-                        Base imponible: {formatCurrency(opForm.monto_bruto, opForm.moneda)} → Retención: {formatCurrency(opRetencionGanancias, opForm.moneda)}
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Calculated fields */}
-              {opForm.monto_bruto > 0 && (
-                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1.5">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-500">Monto bruto</span>
-                    <span className="font-mono">{formatCurrency(opForm.monto_bruto, opForm.moneda)}</span>
-                  </div>
-                  {opRetencion > 0 && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-500">Retención ({opForm.retencion_pct}%)</span>
-                      <span className="font-mono text-amber-600">- {formatCurrency(opRetencion, opForm.moneda)}</span>
-                    </div>
+                  {Math.abs(opNetoAPagar - opMedios.reduce((s, m) => s + m.monto, 0)) >= 1 && opMedios.reduce((s, m) => s + m.monto, 0) > 0 && (
+                    <p className="text-xs text-red-500 mt-1">Diferencia: {formatCurrency(opNetoAPagar - opMedios.reduce((s, m) => s + m.monto, 0), opForm.moneda)}</p>
                   )}
-                  {opRetencionGanancias > 0 && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-500 flex items-center gap-1"><ShieldCheck className="h-3 w-3 text-violet-500" />Ret. Ganancias ({opForm.retencion_ganancias_pct}%)</span>
-                      <span className="font-mono text-violet-600">- {formatCurrency(opRetencionGanancias, opForm.moneda)}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1.5">
-                    <span className="text-zinc-700 dark:text-white">Neto a pagar</span>
-                    <span className="font-mono text-emerald-600">{formatCurrency(opNeto, opForm.moneda)}</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Medio de pago */}
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Medio de pago</label>
-                <select value={opForm.medio_pago} onChange={(e) => setOpForm({ ...opForm, medio_pago: e.target.value, cheque_cruce_id: "" })}
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  <option value="transferencia">Transferencia</option>
-                  <option value="cheque">Cheque</option>
-                  <option value="echeq">E-Cheq</option>
-                  <option value="efectivo">Efectivo</option>
-                </select>
-              </div>
-
-              {/* Cruce de cheque / echeq */}
-              {(opForm.medio_pago === "cheque" || opForm.medio_pago === "echeq") && (
-                <div className="space-y-3 rounded-lg border border-zinc-200 dark:border-zinc-700 p-3">
-                  <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-300 block">
-                    {opForm.medio_pago === "echeq" ? "Seleccionar E-Cheq de cartera" : "Seleccionar cheque de cartera"}
-                  </label>
-
-                  {/* E-Cheqs en cartera */}
-                  {opForm.medio_pago === "echeq" && (() => {
-                    const enCartera = echeqs.filter(e => e.estado === "en_cartera");
-                    return enCartera.length > 0 ? (
-                      <div className="max-h-32 overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg">
-                        {enCartera.map(e => (
-                          <label key={e.id} className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/30 ${opForm.cheque_cruce_id === e.id ? "bg-orange-50 dark:bg-orange-900/10" : ""}`}>
-                            <input type="radio" name="echeq_cruce" checked={opForm.cheque_cruce_id === e.id}
-                              onChange={() => setOpForm({ ...opForm, cheque_cruce_id: e.id })}
-                              className="text-orange-500 focus:ring-orange-500" />
-                            <div className="flex-1 min-w-0">
-                              <span className="text-sm font-mono dark:text-white">{e.numero}</span>
-                              {e.origen_nombre && <span className="text-xs text-zinc-400 ml-2">{e.origen_nombre}</span>}
-                              <span className="text-xs text-zinc-400 ml-2">Vto: {formatDate(e.fecha_pago)}</span>
-                            </div>
-                            <span className="text-sm font-mono font-medium dark:text-white">{formatCurrency(e.monto, e.moneda)}</span>
-                          </label>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-zinc-400">No hay e-cheqs en cartera</p>
-                    );
-                  })()}
-
-                  {/* Cheques recibidos (movimientos) */}
-                  {opForm.medio_pago === "cheque" && (
-                    chequesRecibidos.length > 0 ? (
-                      <div className="max-h-32 overflow-y-auto divide-y divide-zinc-100 dark:divide-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg">
-                        {chequesRecibidos.map(ch => (
-                          <label key={ch.id} className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/30 ${opForm.cheque_cruce_id === ch.id ? "bg-orange-50 dark:bg-orange-900/10" : ""}`}>
-                            <input type="radio" name="cheque_cruce" checked={opForm.cheque_cruce_id === ch.id}
-                              onChange={() => setOpForm({ ...opForm, cheque_cruce_id: ch.id })}
-                              className="text-orange-500 focus:ring-orange-500" />
-                            <div className="flex-1 min-w-0">
-                              <span className="text-sm dark:text-white">{ch.descripcion}</span>
-                              <span className="text-xs text-zinc-400 ml-2">{formatDate(ch.fecha)}</span>
-                            </div>
-                            <span className="text-sm font-mono font-medium dark:text-white">{formatCurrency(ch.monto)}</span>
-                          </label>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-zinc-400">No hay cheques recibidos en cartera</p>
-                    )
-                  )}
-
-                  {opForm.cheque_cruce_id && (
-                    <button onClick={() => setOpForm({ ...opForm, cheque_cruce_id: "" })} className="text-xs text-orange-500 hover:text-orange-600">
-                      Quitar selección
-                    </button>
-                  )}
-
-                  {!opForm.cheque_cruce_id && (
-                    <p className="text-xs text-zinc-400 italic">Si no seleccionás uno existente, se registra como cheque/echeq nuevo emitido.</p>
+                  {opMedios.length === 1 && opMedios[0].monto === 0 && opNetoAPagar > 0 && (
+                    <button type="button" onClick={() => setOpMedios([{ ...opMedios[0], monto: Math.round(opNetoAPagar * 100) / 100 }])}
+                      className="text-xs text-orange-500 hover:text-orange-600 mt-1 font-medium">Completar con neto a pagar</button>
                   )}
                 </div>
               )}
 
-              {/* Adjuntar comprobante */}
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Adjuntar comprobante (PDF)</label>
-                <div className="mt-1 flex items-center gap-2">
-                  <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-sm text-zinc-500 hover:border-orange-400 hover:text-orange-500 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-orange-500">
-                    <Upload className="h-4 w-4" />
-                    {opFile ? opFile.name : "Seleccionar PDF"}
-                    <input type="file" accept=".pdf,.jpg,.png" className="hidden" onChange={(e) => setOpFile(e.target.files?.[0] || null)} />
-                  </label>
-                  {opFile && <button onClick={() => setOpFile(null)} className="text-zinc-400 hover:text-red-500"><X className="h-4 w-4" /></button>}
+              {/* Notas + Comprobante */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Notas</label>
+                  <textarea value={opForm.notas} onChange={(e) => setOpForm({ ...opForm, notas: e.target.value })}
+                    rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Observaciones..." />
                 </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Notas</label>
-                <textarea value={opForm.notas} onChange={(e) => setOpForm({ ...opForm, notas: e.target.value })}
-                  rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Notas, nro de comprobante, certificado de retención..." />
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Comprobante (PDF)</label>
+                  <div className="mt-1">
+                    <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-sm text-zinc-500 hover:border-orange-400 dark:border-zinc-600">
+                      <Upload className="h-4 w-4" />{opFile ? opFile.name : "Adjuntar"}
+                      <input type="file" accept=".pdf,.jpg,.png" className="hidden" onChange={(e) => setOpFile(e.target.files?.[0] || null)} />
+                    </label>
+                    {opFile && <button onClick={() => setOpFile(null)} className="text-xs text-red-400 mt-1">Quitar</button>}
+                  </div>
+                </div>
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
               <button onClick={() => setOpModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
-              <button onClick={handleCreateOP} disabled={opSaving || !opForm.proveedor_id || opForm.monto_bruto <= 0}
+              <button onClick={handleCreateOP} disabled={opSaving || !opForm.proveedor_id || opMontoBruto <= 0}
                 className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {opSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                Crear OP
+                Crear Orden de Pago
               </button>
             </div>
           </div>
