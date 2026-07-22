@@ -373,15 +373,15 @@ export default function ClientesPage() {
 
   // CUIT lookup from AFIP padron
   const handleCuitLookup = useCallback(async () => {
-    const cleanCuit = form.cuit.replace(/\D/g, "");
-    if (cleanCuit.length !== 11) {
-      setCuitLookupMsg({ type: "error", text: "Ingrese un CUIT de 11 dígitos para consultar AFIP" });
+    const clean = form.cuit.replace(/\D/g, "");
+    if (![7, 8, 11].includes(clean.length)) {
+      setCuitLookupMsg({ type: "error", text: "Ingrese un DNI (7-8 dígitos) o CUIT (11 dígitos)" });
       return;
     }
     setCuitLookupLoading(true);
     setCuitLookupMsg(null);
     try {
-      const res = await fetch(`/api/cuit-lookup?cuit=${cleanCuit}`);
+      const res = await fetch(`/api/cuit-lookup?cuit=${clean}`);
       const data = await res.json();
       if (!res.ok) {
         setCuitLookupMsg({ type: "error", text: data.error || "Error consultando AFIP" });
@@ -389,6 +389,7 @@ export default function ClientesPage() {
       }
       setForm((prev) => ({
         ...prev,
+        cuit: data.cuit || prev.cuit,
         razon_social: prev.razon_social || data.razon_social || prev.razon_social,
         condicion_iva: data.condicion_iva || prev.condicion_iva,
         direccion: prev.direccion || data.direccion || prev.direccion,
@@ -1152,14 +1153,10 @@ export default function ClientesPage() {
     if (!form.razon_social.trim()) fieldErrs.razon_social = "La razón social es obligatoria";
     const isCF = form.condicion_iva === "CF";
     if (!form.cuit.trim()) {
-      if (!isCF) fieldErrs.cuit = "El CUIT es obligatorio";
+      if (!isCF) fieldErrs.cuit = "El CUIT/DNI es obligatorio";
     } else {
       const cleanCuit = form.cuit.replace(/\D/g, "");
-      if (isCF) {
-        if (![7, 8, 11].includes(cleanCuit.length)) fieldErrs.cuit = "Ingrese un DNI (7-8 dígitos) o CUIT (11 dígitos)";
-      } else {
-        if (cleanCuit.length !== 11) fieldErrs.cuit = "El CUIT debe tener 11 dígitos";
-      }
+      if (![7, 8, 11].includes(cleanCuit.length)) fieldErrs.cuit = "Ingrese un DNI (7-8 dígitos) o CUIT (11 dígitos)";
     }
     if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
       fieldErrs.email = "El email no tiene un formato válido";
@@ -2753,14 +2750,14 @@ export default function ClientesPage() {
                 <div className="flex items-end gap-2">
                   <div className="flex-1">
                     <Input
-                      label={form.condicion_iva === "CF" ? "CUIT / DNI" : "CUIT *"}
+                      label={form.condicion_iva === "CF" ? "CUIT / DNI" : "CUIT / DNI *"}
                       value={form.cuit}
                       onChange={(e) => { setForm({ ...form, cuit: e.target.value }); setCuitLookupMsg(null); setFormFieldErrors((p) => ({ ...p, cuit: "" })); }}
-                      placeholder={form.condicion_iva === "CF" ? "DNI o CUIT (opcional)" : "XX-XXXXXXXX-X"}
+                      placeholder="DNI o CUIT"
                       error={formFieldErrors.cuit}
                       onBlur={() => {
                         const clean = form.cuit.replace(/\D/g, "");
-                        if (clean.length === 11 && !form.razon_social) handleCuitLookup();
+                        if ([7, 8, 11].includes(clean.length) && !form.razon_social) handleCuitLookup();
                       }}
                     />
                   </div>

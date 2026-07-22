@@ -174,36 +174,78 @@ async function tryArcaPadron(cuit: string, label: string, arcaCuit: number, cert
   return await soapPadronA13(auth, cuit);
 }
 
-export async function GET(request: NextRequest) {
-  const cuit = request.nextUrl.searchParams.get("cuit")?.replace(/\D/g, "");
+/** Calcula dígito verificador de CUIT */
+function cuitVerifier(base10: string): number {
+  const weights = [5, 4, 3, 2, 7, 6, 5, 4, 3, 2];
+  let sum = 0;
+  for (let i = 0; i < 10; i++) sum += Number(base10[i]) * weights[i];
+  const mod = 11 - (sum % 11);
+  if (mod === 11) return 0;
+  if (mod === 10) return 9;
+  return mod;
+}
 
-  if (!cuit || cuit.length !== 11) {
-    return NextResponse.json(
-      { error: "CUIT invalido. Debe tener 11 digitos." },
-      { status: 400 }
-    );
+/** Dado un DNI, genera CUITs válidos probando prefijos 20, 27, 23, 24 */
+function dniToCuits(dni: string): string[] {
+  const padded = dni.padStart(8, "0");
+  const cuits: string[] = [];
+  for (const prefix of ["20", "27", "23", "24"]) {
+    const base = prefix + padded;
+    const verifier = cuitVerifier(base);
+    cuits.push(base + verifier);
   }
+  return cuits;
+}
 
-  // Lanzar ambos certs en paralelo — el primero que responda gana
+async function lookupCuit(cuit: string) {
   const lazzariP = tryArcaPadron(
     cuit, "Lazzari", Number(process.env.ARCA_CUIT || "20379309128"),
     process.env.ARCA_CERT_B64, process.env.ARCA_KEY_B64,
     "lazzari.crt", "lazzari.key"
   );
-
   const grupoLAP = tryArcaPadron(
     cuit, "GrupoLA", 30719396042,
     process.env.ARCA_GRUPOLA_CERT_B64, process.env.ARCA_GRUPOLA_KEY_B64,
     "GrupoLa-crm.crt", "grupoLA.key"
   );
+  return await Promise.any([lazzariP, grupoLAP]);
+}
 
+export async function GET(request: NextRequest) {
+  const input = request.nextUrl.searchParams.get("cuit")?.replace(/\D/g, "");
+
+  if (!input || input.length < 7 || input.length === 9 || input.length === 10 || input.length > 11) {
+    return NextResponse.json(
+      { error: "Ingrese un DNI (7-8 dígitos) o CUIT (11 dígitos)." },
+      { status: 400 }
+    );
+  }
+
+  // CUIT directo (11 dígitos)
+  if (input.length === 11) {
+    try {
+      const result = await lookupCuit(input);
+      return NextResponse.json(result);
+    } catch (aggErr: any) {
+      const errors = aggErr.errors?.map((e: any) => e.message) || [aggErr.message];
+      return NextResponse.json(
+        { error: "No se pudo obtener datos del CUIT. Ingresá los datos manualmente.", debug: errors },
+        { status: 503 }
+      );
+    }
+  }
+
+  // DNI (7-8 dígitos) — probar prefijos en paralelo
+  const candidateCuits = dniToCuits(input);
   try {
-    const result = await Promise.any([lazzariP, grupoLAP]);
+    const result = await Promise.any(
+      candidateCuits.map((c) => lookupCuit(c).then((r) => ({ ...r, cuit: c })))
+    );
     return NextResponse.json(result);
   } catch (aggErr: any) {
     const errors = aggErr.errors?.map((e: any) => e.message) || [aggErr.message];
     return NextResponse.json(
-      { error: "No se pudo obtener datos del CUIT. Ingresá los datos manualmente.", debug: errors },
+      { error: "No se encontró persona con ese DNI. Ingresá los datos manualmente.", debug: errors },
       { status: 503 }
     );
   }
