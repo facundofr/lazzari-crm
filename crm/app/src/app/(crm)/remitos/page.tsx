@@ -303,7 +303,11 @@ export default function RemitosPage() {
 
     const [clientesRes, presupuestosRes] = await Promise.all([
       clienteQ,
-      (supabase as any).from("presupuestos").select("id, numero, subtotal, total, cliente_id").in("estado", ["aprobado", "remitido"]),
+      (() => {
+        let prQ = (supabase as any).from("presupuestos").select("id, numero, subtotal, total, cliente_id").in("estado", ["aprobado", "remitido"]);
+        if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id", sociedadActiva.id);
+        return prQ;
+      })(),
     ]);
     if (clientesRes.data) setClientes(clientesRes.data as { id: string; razon_social: string }[]);
     if (presupuestosRes.data) setPresupuestosAprobados(presupuestosRes.data as any[]);
@@ -978,7 +982,21 @@ export default function RemitosPage() {
                               <span className="font-medium text-sm dark:text-white">{t.transportista}</span>
                               <Badge variant={cfg.variant}>{cfg.label}</Badge>
                             </div>
-                            <span className="text-xs text-zinc-400">{formatDate(t.fecha)}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-zinc-400">{formatDate(t.fecha)}</span>
+                              <button
+                                onClick={async () => {
+                                  if (!confirm("¿Eliminar este transporte?")) return;
+                                  const { error } = await (supabase as any).from("transportes").delete().eq("id", t.id);
+                                  if (error) { alert("Error al eliminar transporte"); return; }
+                                  setDetailTransportes((prev) => prev.filter((tr) => tr.id !== t.id));
+                                }}
+                                className="p-1 rounded text-zinc-400 hover:bg-red-100 hover:text-red-500 dark:hover:bg-red-900/30 transition-colors"
+                                title="Eliminar transporte"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </div>
                           <div className="flex items-center gap-4 mt-1.5 text-xs text-zinc-500">
                             {t.destino && <span>Destino: {t.destino}</span>}
