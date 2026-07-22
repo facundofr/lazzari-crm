@@ -3033,7 +3033,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="relative">
-                          <input type="number" value={item.cantidad} onChange={(e) => updateNewPRItem(idx, "cantidad", Number(e.target.value))}
+                          <input type="number" step="any" value={item.cantidad ?? ""} onChange={(e) => updateNewPRItem(idx, "cantidad", e.target.value === "" ? 0 : Number(e.target.value))}
                             className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                           {priceTiersMap[idx] && priceTiersMap[idx].length > 0 && (
                             <span title={`Precios escalonados:\n${priceTiersMap[idx].map(t => `${t.variante}: ${t.moneda === "USD" ? "US$" : "$"}${t.precio_neto}`).join("\n")}`}
@@ -3052,17 +3052,17 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                           }`}>
                             {item.costo_moneda === "USD" ? "US$" : "AR$"}
                           </button>
-                          <input type="number" value={item.precio_costo || ""} onChange={(e) => updateNewPRItem(idx, "precio_costo", Number(e.target.value))}
-                            className="w-full min-w-0 rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                          <input type="number" step="any" value={item.precio_costo ?? ""} onChange={(e) => updateNewPRItem(idx, "precio_costo", e.target.value === "" ? 0 : Number(e.target.value))}
+                            className="w-full min-w-0 rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100 [&::-webkit-inner-spin-button]:appearance-none" />
                         </div>
                       </td>
                       <td className="px-2 py-1.5">
-                        <input type="number" value={item.markup_porcentaje || ""} onChange={(e) => updateNewPRItem(idx, "markup_porcentaje", Number(e.target.value))}
+                        <input type="number" step="any" value={item.markup_porcentaje ?? ""} onChange={(e) => updateNewPRItem(idx, "markup_porcentaje", e.target.value === "" ? 0 : Number(e.target.value))}
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="relative">
-                          <input type="number" value={item.precio_venta || ""} onChange={(e) => updateNewPRItem(idx, "precio_venta", Number(e.target.value))}
+                          <input type="number" step="any" value={item.precio_venta ?? ""} onChange={(e) => updateNewPRItem(idx, "precio_venta", e.target.value === "" ? 0 : Number(e.target.value))}
                             className={`w-full rounded border px-1.5 py-1 text-xs text-right dark:bg-zinc-800 dark:text-white focus:outline-none focus:ring-1 focus:ring-orange-100 ${belowCost ? "border-red-300 dark:border-red-700 focus:border-red-400" : "border-zinc-200 dark:border-zinc-700 focus:border-orange-400"}`} />
                           {belowCost && <AlertTriangle className="absolute right-1 top-1/2 -translate-y-1/2 h-3 w-3 text-red-500" />}
                         </div>
