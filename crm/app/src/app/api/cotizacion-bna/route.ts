@@ -140,8 +140,8 @@ export async function GET(req: NextRequest) {
   // 2. Scrape BNA
   let scraped = await scrapeBna(modalidad);
 
-  // Fallback Bluelytics solo para divisas (no tiene datos de billetes)
-  if (!scraped && modalidad === "divisas") {
+  // Fallback Bluelytics (no distingue divisas/billetes, pero sirve como aproximación)
+  if (!scraped) {
     scraped = await fetchBluelytics();
   }
 
