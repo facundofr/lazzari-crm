@@ -305,18 +305,59 @@ export default function OrdenesCompraPage() {
     setFormLoading(true);
     setFormError("");
     try {
-      const { error } = await supabase.from("ordenes_compra").insert({
+      // If linked to a PR, fetch its items to calculate totals and insert them
+      let prItems: any[] = [];
+      if (formData.presupuesto_origen_id) {
+        let itemsQuery = supabase
+          .from("presupuesto_items")
+          .select("id, codigo, descripcion, cantidad, precio_costo, unidad, producto_id, proveedor_id")
+          .eq("presupuesto_id", formData.presupuesto_origen_id);
+        // If a proveedor is selected, only take items from that proveedor
+        if (formData.proveedor_id) {
+          itemsQuery = itemsQuery.eq("proveedor_id" as any, formData.proveedor_id);
+        }
+        const { data: fetchedItems } = await itemsQuery as { data: any[] | null };
+        prItems = fetchedItems || [];
+      }
+
+      const itemsSubtotal = prItems.reduce((sum, it) => sum + (Number(it.precio_costo) || 0) * (Number(it.cantidad) || 0), 0);
+      const itemsIva = Math.round(itemsSubtotal * 0.21 * 100) / 100;
+
+      const { data: ocRow, error } = await supabase.from("ordenes_compra").insert({
         proveedor_id: formData.proveedor_id || null,
         fecha: formData.fecha,
         fecha_entrega_estimada: formData.fecha_entrega_estimada || null,
         moneda: formData.moneda,
         observaciones: formData.observaciones,
         estado: "borrador",
-        subtotal: 0, iva: 0, total: 0,
+        subtotal: Math.round(itemsSubtotal * 100) / 100,
+        iva: itemsIva,
+        total: Math.round((itemsSubtotal + itemsIva) * 100) / 100,
         sociedad_id: sociedadActiva?.id || null,
         presupuesto_origen_id: formData.presupuesto_origen_id || null,
-      } as any);
+      } as any).select("id").single();
       if (error) throw error;
+
+      // Insert PR items as OC items
+      if (ocRow && prItems.length > 0) {
+        const ocItems = prItems.map((it, idx) => ({
+          orden_id: ocRow.id,
+          codigo: it.codigo || "",
+          descripcion: it.descripcion || "",
+          cantidad: it.cantidad,
+          cantidad_recibida: 0,
+          unidad: it.unidad || "u",
+          precio_unitario: Number(it.precio_costo) || 0,
+          producto_id: it.producto_id || null,
+          orden: idx,
+        }));
+        const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
+        if (itemsErr) {
+          console.error("Error al insertar items de OC:", itemsErr);
+          alert(`OC creada pero error al insertar items: ${itemsErr.message}`);
+        }
+      }
+
       setCreateOpen(false);
       await fetchData();
     } catch (err: unknown) {
@@ -930,7 +971,6 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           cantidad_recibida: 0,
           unidad: it.unidad,
           precio_unitario: it.precio_costo,
-          subtotal: Math.round(it.precio_costo * it.cantidad * 100) / 100,
           orden: idx,
         }));
 
