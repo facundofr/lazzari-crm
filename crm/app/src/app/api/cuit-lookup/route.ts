@@ -5,8 +5,10 @@ import * as path from "path";
 /**
  * GET /api/cuit-lookup?cuit=XXXXXXXXXXX
  * Consulta el padron de AFIP via ws_sr_padron_a13 (autenticado con cert ARCA).
- * Fallback: scraping cuitonline.com
+ * Lazzari y GrupoLA se intentan en paralelo (Promise.any) para máxima velocidad.
  */
+
+export const maxDuration = 25;
 
 let Arca: any;
 let arcaPromise: Promise<void> | null = null;
@@ -30,15 +32,12 @@ const PROVINCIA_MAP: Record<string, string> = {
   "24": "Tierra del Fuego",
 };
 
-/** Extrae texto de un tag XML simple */
 function xmlTag(xml: string, tag: string): string {
   const m = xml.match(new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`));
   return m ? m[1].trim() : "";
 }
 
-/** Extrae el primer domicilio fiscal del XML de respuesta A13 */
 function parseDomicilioFiscal(xml: string) {
-  // Encuentra todos los bloques <domicilio>...</domicilio>
   const blocks: string[] = [];
   let idx = 0;
   while (true) {
@@ -50,7 +49,6 @@ function parseDomicilioFiscal(xml: string) {
     idx = end + 12;
   }
 
-  // Preferir FISCAL
   const fiscal = blocks.find((b) => b.includes("<tipoDomicilio>FISCAL</tipoDomicilio>")) || blocks[0];
   if (!fiscal) return null;
 
@@ -67,10 +65,6 @@ function parseDomicilioFiscal(xml: string) {
   };
 }
 
-/**
- * Llama directamente al SOAP de padron A13 con namespace correcto.
- * La librería @ramiidv/arca-facturacion tiene un bug de namespace en este servicio.
- */
 async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
   const envelope = `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
@@ -90,7 +84,7 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
       method: "POST",
       headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "" },
       body: envelope,
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(10000),
     }
   );
 
@@ -100,7 +94,6 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
     throw new Error(`PadronA13 SOAP error: ${fault}`);
   }
 
-  // Extraer persona del XML
   const razonSocial =
     xmlTag(text, "razonSocial") ||
     [xmlTag(text, "apellido"), xmlTag(text, "nombre")].filter(Boolean).join(" ");
@@ -111,11 +104,8 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
   const tipoPersona = xmlTag(text, "tipoPersona");
   const estadoClave = xmlTag(text, "estadoClave");
 
-  // A13 no trae impuestos — inferir condicion IVA básica
-  // (el usuario puede corregirlo; lo importante es razon_social + domicilio)
   let condicion_iva = "";
-  if (text.includes("<formaJuridica>")) condicion_iva = "RI"; // empresas casi siempre RI
-  // Si hay impuestos en la respuesta los usamos
+  if (text.includes("<formaJuridica>")) condicion_iva = "RI";
   const impuestoMatch = text.match(/<idImpuesto>(\d+)<\/idImpuesto>/g);
   if (impuestoMatch) {
     const ids = impuestoMatch.map((m) => Number(m.replace(/<\/?idImpuesto>/g, "")));
@@ -137,156 +127,51 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
   };
 }
 
-async function tryArcaPadron(cuit: string, debug: string[] = []) {
-  try {
-    await loadArca();
-
-    let cert = "";
-    if (process.env.ARCA_CERT_B64) {
-      cert = Buffer.from(process.env.ARCA_CERT_B64, "base64").toString("utf-8");
-      debug.push("Lazzari: cert desde env var OK");
-    } else {
-      const certPath = path.join(process.cwd(), "..", "certs", "lazzari.crt");
-      if (fs.existsSync(certPath)) cert = fs.readFileSync(certPath, "utf-8");
-      debug.push(cert ? "Lazzari: cert desde archivo OK" : "Lazzari: cert NO encontrado");
-    }
-    let key = "";
-    if (process.env.ARCA_KEY_B64) {
-      key = Buffer.from(process.env.ARCA_KEY_B64, "base64").toString("utf-8");
-      debug.push("Lazzari: key desde env var OK");
-    } else {
-      const keyPath = path.join(process.cwd(), "..", "certs", "lazzari.key");
-      if (fs.existsSync(keyPath)) key = fs.readFileSync(keyPath, "utf-8");
-      debug.push(key ? "Lazzari: key desde archivo OK" : "Lazzari: key NO encontrado");
-    }
-    if (!cert || !key) {
-      debug.push("Lazzari: cert/key faltante, skip");
-      return null;
-    }
-
-    const arcaCuit = Number(process.env.ARCA_CUIT || "20379309128");
-    const production = process.env.ARCA_PRODUCTION !== "false";
-    const arca = new Arca({ cuit: arcaCuit, cert, key, production });
-
-    debug.push("Lazzari: obteniendo auth WSAA...");
-    const auth = await arca.getAuth("ws_sr_padron_a13");
-    debug.push("Lazzari: auth OK, consultando padron...");
-    const result = await soapPadronA13(auth, cuit);
-    debug.push("Lazzari: padron OK");
-    return result;
-  } catch (err: any) {
-    debug.push(`Lazzari error: ${err.message}`);
-    return null;
-  }
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timeout (${ms}ms)`)), ms)
+    ),
+  ]);
 }
 
-async function tryArcaPadronGrupoLA(cuit: string, debug: string[] = []) {
-  try {
-    await loadArca();
-
-    let cert = "";
-    if (process.env.ARCA_GRUPOLA_CERT_B64) {
-      cert = Buffer.from(process.env.ARCA_GRUPOLA_CERT_B64, "base64").toString("utf-8");
-      debug.push("GrupoLA: cert desde env var OK");
-    } else {
-      const certPath = path.join(process.cwd(), "..", "certs", "GrupoLa-crm.crt");
-      if (fs.existsSync(certPath)) cert = fs.readFileSync(certPath, "utf-8");
-      debug.push(cert ? "GrupoLA: cert desde archivo OK" : "GrupoLA: cert NO encontrado");
-    }
-    let key = "";
-    if (process.env.ARCA_GRUPOLA_KEY_B64) {
-      key = Buffer.from(process.env.ARCA_GRUPOLA_KEY_B64, "base64").toString("utf-8");
-      debug.push("GrupoLA: key desde env var OK");
-    } else {
-      const keyPath = path.join(process.cwd(), "..", "certs", "grupoLA.key");
-      if (fs.existsSync(keyPath)) key = fs.readFileSync(keyPath, "utf-8");
-      debug.push(key ? "GrupoLA: key desde archivo OK" : "GrupoLA: key NO encontrado");
-    }
-    if (!cert || !key) {
-      debug.push("GrupoLA: cert/key faltante, skip");
-      return null;
-    }
-
-    const production = process.env.ARCA_PRODUCTION !== "false";
-    const arca = new Arca({ cuit: 30719396042, cert, key, production });
-
-    debug.push("GrupoLA: obteniendo auth WSAA...");
-    const auth = await arca.getAuth("ws_sr_padron_a13");
-    debug.push("GrupoLA: auth OK, consultando padron...");
-    const result = await soapPadronA13(auth, cuit);
-    debug.push("GrupoLA: padron OK");
-    return result;
-  } catch (err: any) {
-    debug.push(`GrupoLA error: ${err.message}`);
-    return null;
+function loadCertKey(
+  certEnv: string | undefined, keyEnv: string | undefined,
+  certFile: string, keyFile: string
+): { cert: string; key: string } | null {
+  let cert = "";
+  if (certEnv) {
+    cert = Buffer.from(certEnv, "base64").toString("utf-8");
+  } else {
+    const certPath = path.join(process.cwd(), "..", "certs", certFile);
+    if (fs.existsSync(certPath)) cert = fs.readFileSync(certPath, "utf-8");
   }
+  let key = "";
+  if (keyEnv) {
+    key = Buffer.from(keyEnv, "base64").toString("utf-8");
+  } else {
+    const keyPath = path.join(process.cwd(), "..", "certs", keyFile);
+    if (fs.existsSync(keyPath)) key = fs.readFileSync(keyPath, "utf-8");
+  }
+  if (!cert || !key) return null;
+  return { cert, key };
 }
 
-// Fallback: scraping cuitonline.com
-async function tryCuitOnline(cuit: string) {
-  try {
-    const res = await fetch(`https://www.cuitonline.com/search.php?q=${cuit}`, {
-      headers: {
-        "Accept": "text/html,application/xhtml+xml",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
+async function tryArcaPadron(cuit: string, label: string, arcaCuit: number, certEnv: string | undefined, keyEnv: string | undefined, certFile: string, keyFile: string): Promise<any> {
+  await loadArca();
+  const creds = loadCertKey(certEnv, keyEnv, certFile, keyFile);
+  if (!creds) throw new Error(`${label}: cert/key faltante`);
 
-    if (html.includes("no obtuvo resultados")) return null;
+  const production = process.env.ARCA_PRODUCTION !== "false";
+  const arca = new Arca({ cuit: arcaCuit, cert: creds.cert, key: creds.key, production });
 
-    const nombreMatch = html.match(/<h2[^>]*class="denominacion"[^>]*>([^<]+)</);
-    if (!nombreMatch) return null;
-    const razon_social = nombreMatch[1].trim();
-
-    let condicion_iva = "CF";
-    const ivaMatch = html.match(/IVA:(?:&nbsp;|\s)+([^<\n&]+)/);
-    if (ivaMatch) {
-      const t = ivaMatch[1].trim().toLowerCase();
-      if (t.includes("inscripto") || t.includes("responsable")) condicion_iva = "RI";
-      else if (t.includes("monotributo") || t.includes("monotributista")) condicion_iva = "Monotributo";
-      else if (t.includes("exento")) condicion_iva = "Exento";
-    }
-    if (html.includes("linea-monotributo-persona") && condicion_iva === "CF") condicion_iva = "Monotributo";
-
-    let localidad = "";
-    let provincia = "";
-    const titleMatch = html.match(/<title>([^<]+)<\/title>/);
-    if (titleMatch) {
-      const locMatch = titleMatch[1].match(/\([\d\-]+\),\s*([^(]+?)\s*\(([^)]+)\)/);
-      if (locMatch) { localidad = locMatch[1].trim(); provincia = locMatch[2].trim(); }
-    }
-
-    let tipo_persona = "";
-    if (html.includes("Persona Jurídica") || html.includes("Persona Juridica")) tipo_persona = "JURIDICA";
-    else if (html.includes("Persona Física") || html.includes("Persona Fisica")) tipo_persona = "FISICA";
-
-    return { razon_social, condicion_iva, direccion: "", localidad, provincia, cp: "", tipo_persona, estado_clave: "ACTIVO" };
-  } catch {
-    return null;
-  }
-}
-
-async function attemptLookup(cuit: string, debug: string[]) {
-  // 1. ARCA padron A13 con cert Lazzari
-  try {
-    const arcaResult = await tryArcaPadron(cuit, debug);
-    if (arcaResult) return arcaResult;
-  } catch {}
-
-  // 2. Fallback: cert Grupo LA
-  try {
-    const grupoLAResult = await tryArcaPadronGrupoLA(cuit, debug);
-    if (grupoLAResult) return grupoLAResult;
-  } catch {}
-
-  // 3. Fallback: scraping cuitonline.com
-  const cuitOnlineResult = await tryCuitOnline(cuit);
-  if (cuitOnlineResult) return cuitOnlineResult;
-
-  return null;
+  const auth = await withTimeout(
+    arca.getAuth("ws_sr_padron_a13"),
+    12000,
+    `${label} WSAA`
+  );
+  return await soapPadronA13(auth, cuit);
 }
 
 export async function GET(request: NextRequest) {
@@ -299,20 +184,27 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const debug: string[] = [];
-
-  // Intentar hasta 2 veces (AFIP puede devolver 500 intermitentemente)
-  for (let attempt = 0; attempt < 2; attempt++) {
-    if (attempt > 0) {
-      debug.push(`--- Reintento ${attempt} ---`);
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-    const result = await attemptLookup(cuit, debug);
-    if (result) return NextResponse.json(result);
-  }
-
-  return NextResponse.json(
-    { error: "No se pudo obtener datos del CUIT. Ingresá los datos manualmente.", debug },
-    { status: 503 }
+  // Lanzar ambos certs en paralelo — el primero que responda gana
+  const lazzariP = tryArcaPadron(
+    cuit, "Lazzari", Number(process.env.ARCA_CUIT || "20379309128"),
+    process.env.ARCA_CERT_B64, process.env.ARCA_KEY_B64,
+    "lazzari.crt", "lazzari.key"
   );
+
+  const grupoLAP = tryArcaPadron(
+    cuit, "GrupoLA", 30719396042,
+    process.env.ARCA_GRUPOLA_CERT_B64, process.env.ARCA_GRUPOLA_KEY_B64,
+    "GrupoLa-crm.crt", "grupoLA.key"
+  );
+
+  try {
+    const result = await Promise.any([lazzariP, grupoLAP]);
+    return NextResponse.json(result);
+  } catch (aggErr: any) {
+    const errors = aggErr.errors?.map((e: any) => e.message) || [aggErr.message];
+    return NextResponse.json(
+      { error: "No se pudo obtener datos del CUIT. Ingresá los datos manualmente.", debug: errors },
+      { status: 503 }
+    );
+  }
 }
