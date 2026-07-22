@@ -269,6 +269,26 @@ async function tryCuitOnline(cuit: string) {
   }
 }
 
+async function attemptLookup(cuit: string, debug: string[]) {
+  // 1. ARCA padron A13 con cert Lazzari
+  try {
+    const arcaResult = await tryArcaPadron(cuit, debug);
+    if (arcaResult) return arcaResult;
+  } catch {}
+
+  // 2. Fallback: cert Grupo LA
+  try {
+    const grupoLAResult = await tryArcaPadronGrupoLA(cuit, debug);
+    if (grupoLAResult) return grupoLAResult;
+  } catch {}
+
+  // 3. Fallback: scraping cuitonline.com
+  const cuitOnlineResult = await tryCuitOnline(cuit);
+  if (cuitOnlineResult) return cuitOnlineResult;
+
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   const cuit = request.nextUrl.searchParams.get("cuit")?.replace(/\D/g, "");
 
@@ -281,21 +301,15 @@ export async function GET(request: NextRequest) {
 
   const debug: string[] = [];
 
-  // 1. ARCA padron A13 con cert Lazzari
-  try {
-    const arcaResult = await tryArcaPadron(cuit, debug);
-    if (arcaResult) return NextResponse.json(arcaResult);
-  } catch {}
-
-  // 2. Fallback: cert Grupo LA
-  try {
-    const grupoLAResult = await tryArcaPadronGrupoLA(cuit, debug);
-    if (grupoLAResult) return NextResponse.json(grupoLAResult);
-  } catch {}
-
-  // 3. Fallback: scraping cuitonline.com
-  const cuitOnlineResult = await tryCuitOnline(cuit);
-  if (cuitOnlineResult) return NextResponse.json(cuitOnlineResult);
+  // Intentar hasta 2 veces (AFIP puede devolver 500 intermitentemente)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) {
+      debug.push(`--- Reintento ${attempt} ---`);
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    const result = await attemptLookup(cuit, debug);
+    if (result) return NextResponse.json(result);
+  }
 
   return NextResponse.json(
     { error: "No se pudo obtener datos del CUIT. Ingresá los datos manualmente.", debug },
