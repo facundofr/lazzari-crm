@@ -281,8 +281,9 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   }, [supabase, profile?.id]);
 
   useEffect(() => {
+    if (!profile?.id) return;
     fetchAlerts();
-  }, [fetchAlerts]);
+  }, [fetchAlerts, profile?.id]);
 
   const unread = alerts.filter((a) => !a.read);
 

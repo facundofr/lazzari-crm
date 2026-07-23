@@ -1355,16 +1355,30 @@ export default function PresupuestosPage() {
     if (!confirm(`¿Generar remito desde ${pr.numero}?`)) return;
     try {
       // Fetch items
-      const { data: items } = await supabase
+      const { data: items, error: itemsQueryErr } = await supabase
         .from("presupuesto_items")
-        .select("descripcion, cantidad, unidad")
+        .select("descripcion, cantidad, unidad, orden")
         .eq("presupuesto_id", pr.id)
         .order("orden");
+
+      if (itemsQueryErr) {
+        console.error("Error fetching presupuesto items:", itemsQueryErr);
+        toast.error("Error al obtener items del presupuesto");
+        return;
+      }
 
       if (!items || items.length === 0) {
         toast.warning("El presupuesto no tiene items para remitar");
         return;
       }
+
+      // Fetch presupuesto total for valor_declarado
+      const { data: prHeader } = await supabase
+        .from("presupuestos")
+        .select("total, subtotal")
+        .eq("id", pr.id)
+        .single();
+      const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
 
       // Get next remito number
       const { data: lastRemito } = await supabase
@@ -1392,12 +1406,14 @@ export default function PresupuestosPage() {
           sociedad_id: sociedadActiva?.id || null,
           created_by: profile?.id || null,
           oc_cliente: pr.ocCliente || null,
+          valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
         })
         .select("id")
         .single();
 
       if (remitoErr || !remitoData) {
-        toast.error("Error al crear remito");
+        console.error("Error creating remito:", remitoErr);
+        toast.error("Error al crear remito: " + (remitoErr?.message || "sin datos"));
         return;
       }
 
@@ -1406,15 +1422,20 @@ export default function PresupuestosPage() {
         descripcion: it.descripcion,
         cantidad: it.cantidad,
         unidad: it.unidad || "UN",
-        orden: idx,
+        orden: it.orden ?? idx,
       }));
-      await (supabase as any).from("remito_items").insert(remitoItems);
+      const { error: remitoItemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
+      if (remitoItemsErr) {
+        console.error("Error inserting remito items:", remitoItemsErr);
+        toast.error("Remito creado pero hubo un error al insertar los items: " + remitoItemsErr.message);
+        return;
+      }
 
       // Block PR — mark as remitido so it can't be remitted again
       await supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", pr.id);
       setRemitidoIds((prev) => new Set([...prev, pr.id]));
 
-      toast.success(`Remito ${numero} creado exitosamente`);
+      toast.success(`Remito ${numero} creado con ${remitoItems.length} items`);
       await fetchPresupuestos();
     } catch (err) {
       console.error("Error creating remito:", err);

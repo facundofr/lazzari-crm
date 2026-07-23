@@ -492,11 +492,14 @@ export default function RemitosPage() {
             remito_id: remitoData.id,
             descripcion: item.descripcion,
             cantidad: item.cantidad,
-            unidad: item.unidad,
+            unidad: item.unidad || "UN",
             orden: idx,
           }));
-          await (supabase.from("remito_items") as any).insert(items);
+          const { error: itemsErr } = await (supabase.from("remito_items") as any).insert(items);
+          if (itemsErr) console.error("Error inserting remito items for PR", p.numero, itemsErr);
         }
+        // Mark PR as remitido
+        await supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", p.id);
         idx++;
       }
       setIaSuccess(`Se generaron ${selectedPresupuestos.size} remito(s) exitosamente.`);

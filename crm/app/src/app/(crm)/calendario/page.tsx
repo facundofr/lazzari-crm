@@ -53,12 +53,14 @@ interface EventoRow {
   cliente_id: string | null;
   presupuesto_id: string | null;
   user_id: string | null;
+  created_by: string | null;
   sociedad_id: string | null;
   color: string;
   completado: boolean;
   created_at: string;
   clientes: { razon_social: string } | null;
   profiles: { full_name: string; email: string } | null;
+  creador: { full_name: string; email: string } | null;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -130,7 +132,7 @@ export default function CalendarioPage() {
     try {
       let q = (supabase as any)
         .from("eventos")
-        .select(`*, clientes(razon_social), profiles(full_name, email)`)
+        .select(`*, clientes(razon_social), profiles(full_name, email), creador:profiles!created_by(full_name, email)`)
         .order("fecha_inicio", { ascending: true });
 
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
@@ -309,6 +311,7 @@ export default function CalendarioPage() {
         descripcion: createForm.descripcion || null,
         color: createForm.color,
         user_id: createForm.asignado_a || profile?.id || null,
+        created_by: profile?.id || null,
         sociedad_id: sociedadActiva?.id || null,
         completado: false,
       });
@@ -538,7 +541,7 @@ export default function CalendarioPage() {
                           e.stopPropagation();
                           setDetailEvento(ev);
                         }}
-                        title={ev.titulo}
+                        title={`${ev.titulo}${ev.creador?.full_name ? ` — ${ev.creador.full_name}` : ""}`}
                       >
                         <span
                           className="inline-block h-1.5 w-1.5 rounded-full shrink-0"
@@ -590,6 +593,7 @@ export default function CalendarioPage() {
                         <Badge variant={cfg.variant}>{cfg.label}</Badge>
                         <span className={`text-xs ${ev.isOverdue ? "text-red-500 font-medium" : "text-zinc-400"}`}>{dateLabel}</span>
                         {ev.clientes?.razon_social && <span className="text-xs text-zinc-400 truncate">· {ev.clientes.razon_social}</span>}
+                        {ev.creador?.full_name && <span className="text-xs text-zinc-400 truncate">· Creado por {ev.creador.full_name.split(" ")[0]}</span>}
                       </div>
                     </div>
                     {ev.profiles && (
@@ -666,6 +670,9 @@ export default function CalendarioPage() {
                           )}
                           {ev.todo_el_dia && (
                             <span className="text-xs text-zinc-400">Todo el dia</span>
+                          )}
+                          {ev.creador?.full_name && (
+                            <span className="text-xs text-zinc-400">· {ev.creador.full_name.split(" ")[0]}</span>
                           )}
                         </div>
                       </div>
@@ -791,6 +798,14 @@ export default function CalendarioPage() {
                     <span className="text-zinc-400">Asignado a</span>
                     <p className="font-medium dark:text-white">
                       {detailEvento.profiles.full_name || detailEvento.profiles.email}
+                    </p>
+                  </div>
+                )}
+                {detailEvento.creador && (
+                  <div>
+                    <span className="text-zinc-400">Creado por</span>
+                    <p className="font-medium dark:text-white">
+                      {detailEvento.creador.full_name || detailEvento.creador.email}
                     </p>
                   </div>
                 )}
