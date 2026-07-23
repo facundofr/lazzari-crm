@@ -351,8 +351,18 @@ export default function FacturacionPage() {
     if (!sociedadActiva?.id) return;
     setArcaStatus(null); // reset to loading while fetching
     fetch(`/api/facturacion?action=status&sociedad_id=${sociedadActiva.id}`)
-      .then((r) => r.json())
-      .then(setArcaStatus)
+      .then((r) => r.ok ? r.json() : r.json().catch(() => null).then((body: any) => {
+        // API returned non-OK status — assume cert exists, connectivity may fail (normal on Vercel)
+        return { connected: false, certOk: true, afipError: body?.error || `HTTP ${r.status}`, ptoVta: body?.ptoVta };
+      }))
+      .then((data: any) => {
+        // Guard against unexpected response shapes — if certOk is missing, default to true
+        if (data && typeof data === "object" && data.certOk !== undefined) {
+          setArcaStatus(data);
+        } else {
+          setArcaStatus({ connected: false, certOk: true, afipError: "No se pudo verificar estado — puede emitir igualmente", ptoVta: data?.ptoVta });
+        }
+      })
       .catch(() => setArcaStatus({ connected: false, certOk: true, error: "No se pudo verificar estado — puede emitir igualmente" }));
   }, [sociedadActiva?.id]);
 
@@ -548,40 +558,65 @@ export default function FacturacionPage() {
   // ── Copy & PDF ─────────────────────────────────────────────────
   // Cobro modal
   const [cobroModalId, setCobroModalId] = useState<string | null>(null);
-  const [cobroForm, setCobroForm] = useState({
-    tipo: "transferencia" as "cobro" | "transferencia" | "efectivo" | "cheque_recibido",
-    monto: "",
-    fecha: new Date().toISOString().split("T")[0],
-    descripcion: "",
-  });
+  type CobroLinea = { tipo: "cobro" | "transferencia" | "efectivo" | "cheque_recibido"; monto: string; descripcion: string };
+  const [cobroLineas, setCobroLineas] = useState<CobroLinea[]>([{ tipo: "transferencia", monto: "", descripcion: "" }]);
+  const [cobroFecha, setCobroFecha] = useState(new Date().toISOString().split("T")[0]);
   const [cobroSaving, setCobroSaving] = useState(false);
+  const [cobroPrevios, setCobroPrevios] = useState<number>(0);
+  const [cobroPreviosLoading, setCobroPreviosLoading] = useState(false);
+
+  async function fetchCobrosPrevios(facturaId: string): Promise<number> {
+    const { data: movs } = await (supabase as any).from("movimientos").select("monto").eq("factura_id", facturaId);
+    return (movs || []).reduce((s: number, m: any) => s + Number(m.monto), 0);
+  }
+
+  async function openCobroModal(factura: FacturaRow) {
+    setCobroPreviosLoading(true);
+    setCobroPrevios(0);
+    setCobroFecha(new Date().toISOString().split("T")[0]);
+    setCobroModalId(factura.id);
+    try {
+      const previos = await fetchCobrosPrevios(factura.id);
+      setCobroPrevios(previos);
+      const saldoReal = Number(factura.total) - Number(factura.total_acreditado || 0) - previos;
+      setCobroLineas([{ tipo: "transferencia", monto: String(Math.max(0, Math.round(saldoReal * 100) / 100)), descripcion: "" }]);
+    } catch {
+      const saldoFallback = Number(factura.total) - Number(factura.total_acreditado || 0);
+      setCobroLineas([{ tipo: "transferencia", monto: String(Math.max(0, saldoFallback)), descripcion: "" }]);
+    } finally {
+      setCobroPreviosLoading(false);
+    }
+  }
 
   async function handleRegistrarCobro() {
-    if (!cobroModalId || !cobroForm.monto) return;
+    const lineasValidas = cobroLineas.filter(l => Number(l.monto) > 0);
+    if (!cobroModalId || lineasValidas.length === 0) return;
     const factura = facturas.find(f => f.id === cobroModalId);
     if (!factura) return;
     setCobroSaving(true);
     try {
-      const monto = Number(cobroForm.monto);
-      // Insert movimiento
-      const { error: movErr } = await (supabase as any).from("movimientos").insert({
-        tipo: cobroForm.tipo,
-        cliente_id: factura.cliente_id || null,
-        factura_id: cobroModalId,
-        descripcion: cobroForm.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}`,
-        monto,
-        moneda: factura.moneda || "ARS",
-        fecha: cobroForm.fecha,
-        conciliado: false,
-        created_by: (await supabase.auth.getUser()).data.user?.id || null,
-        sociedad_id: sociedadActiva?.id || null,
-      });
-      if (movErr) throw movErr;
+      const userId = (await supabase.auth.getUser()).data.user?.id || null;
+      // Insert all movimientos
+      for (const linea of lineasValidas) {
+        const monto = Number(linea.monto);
+        const { error: movErr } = await (supabase as any).from("movimientos").insert({
+          tipo: linea.tipo,
+          cliente_id: factura.cliente_id || null,
+          factura_id: cobroModalId,
+          descripcion: linea.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}`,
+          monto,
+          moneda: factura.moneda || "ARS",
+          fecha: cobroFecha,
+          conciliado: false,
+          created_by: userId,
+          sociedad_id: sociedadActiva?.id || null,
+        });
+        if (movErr) throw movErr;
+      }
 
       // Check if fully paid (total_acreditado from NC + all cobros)
       const totalFactura = Number(factura.total) - Number(factura.total_acreditado || 0);
-      const { data: movs } = await (supabase as any).from("movimientos").select("monto").eq("factura_id", cobroModalId);
-      const totalCobrado = (movs || []).reduce((s: number, m: any) => s + Number(m.monto), 0);
+      const totalCobrado = await fetchCobrosPrevios(cobroModalId);
 
       if (totalCobrado >= totalFactura) {
         await supabase.from("facturas").update({ estado: "pagada" } as any).eq("id", cobroModalId);
@@ -1404,15 +1439,7 @@ ${f.cae ? `
                 <div className="space-y-2">
                   {detailFactura.estado === "emitida" && (
                     <>
-                      <button onClick={() => {
-                        setCobroForm({
-                          tipo: "transferencia",
-                          monto: String(Number(detailFactura.total) - Number(detailFactura.total_acreditado || 0)),
-                          fecha: new Date().toISOString().split("T")[0],
-                          descripcion: "",
-                        });
-                        setCobroModalId(detailFactura.id);
-                      }} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
+                      <button onClick={() => openCobroModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
                         <DollarSign className="h-4 w-4" /> Registrar cobro
                       </button>
                       <button onClick={() => openNcModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-blue-950/30">
@@ -1434,58 +1461,102 @@ ${f.cae ? `
       {cobroModalId && (() => {
         const f = facturas.find(ff => ff.id === cobroModalId);
         if (!f) return null;
-        const saldo = Number(f.total) - Number(f.total_acreditado || 0);
+        const saldo = Number(f.total) - Number(f.total_acreditado || 0) - cobroPrevios;
+        const totalLineas = cobroLineas.reduce((s, l) => s + Number(l.monto || 0), 0);
+        const lineasValidas = cobroLineas.some(l => Number(l.monto) > 0);
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-            <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-md mx-4">
-              <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-700">
+            <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
                 <div>
                   <h3 className="font-semibold dark:text-white">Registrar cobro</h3>
-                  <p className="text-xs text-zinc-400 mt-0.5">{formatComprobante(f.tipo, f.punto_venta, f.numero)} — Saldo: {formatCurrency(saldo, f.moneda as "ARS" | "USD")}</p>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    {formatComprobante(f.tipo, f.punto_venta, f.numero)} — Total: {formatCurrency(Number(f.total), f.moneda as "ARS" | "USD")}
+                  </p>
+                  {cobroPreviosLoading ? (
+                    <p className="text-xs text-zinc-400 mt-0.5 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Calculando saldo...</p>
+                  ) : (
+                    <p className="text-xs font-medium mt-0.5" style={{ color: saldo > 0 ? "#f59e0b" : "#10b981" }}>
+                      {cobroPrevios > 0 && `Cobrado: ${formatCurrency(cobroPrevios, f.moneda as "ARS" | "USD")} — `}
+                      Saldo pendiente: {formatCurrency(Math.max(0, saldo), f.moneda as "ARS" | "USD")}
+                    </p>
+                  )}
                 </div>
                 <button onClick={() => setCobroModalId(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
               </div>
               <div className="p-5 space-y-4">
+                {/* Fecha comun */}
                 <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Forma de pago *</label>
-                  <select value={cobroForm.tipo} onChange={(e) => setCobroForm(p => ({ ...p, tipo: e.target.value as any }))}
-                    className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
-                    <option value="transferencia">Transferencia</option>
-                    <option value="efectivo">Efectivo</option>
-                    <option value="cheque_recibido">Cheque</option>
-                    <option value="cobro">Otro</option>
-                  </select>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha *</label>
+                  <input type="date" value={cobroFecha} onChange={(e) => setCobroFecha(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Monto *</label>
-                    <input type="number" step="0.01" value={cobroForm.monto} onChange={(e) => setCobroForm(p => ({ ...p, monto: e.target.value }))}
-                      className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha *</label>
-                    <input type="date" value={cobroForm.fecha} onChange={(e) => setCobroForm(p => ({ ...p, fecha: e.target.value }))}
-                      className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
-                  </div>
-                </div>
+
+                {/* Lineas de pago */}
                 <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Descripción</label>
-                  <input type="text" value={cobroForm.descripcion} onChange={(e) => setCobroForm(p => ({ ...p, descripcion: e.target.value }))}
-                    placeholder="Ej: TRF Banco Nación" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Medios de pago</label>
+                    <button onClick={() => setCobroLineas(prev => [...prev, { tipo: "transferencia", monto: "", descripcion: "" }])}
+                      className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
+                      <Plus className="h-3 w-3" /> Agregar medio
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {cobroLineas.map((linea, idx) => (
+                      <div key={idx} className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <select value={linea.tipo} onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, tipo: e.target.value as any } : l))}
+                            className="flex-1 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-sm dark:text-white">
+                            <option value="transferencia">Transferencia</option>
+                            <option value="efectivo">Efectivo</option>
+                            <option value="cheque_recibido">Cheque</option>
+                            <option value="cobro">Otro</option>
+                          </select>
+                          <input type="number" step="0.01" placeholder="Monto" value={linea.monto}
+                            onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, monto: e.target.value } : l))}
+                            className="w-32 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-sm font-mono dark:text-white" />
+                          {cobroLineas.length > 1 && (
+                            <button onClick={() => setCobroLineas(prev => prev.filter((_, i) => i !== idx))}
+                              className="p-1 rounded text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30">
+                              <Minus className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        <input type="text" placeholder="Descripcion (opcional)" value={linea.descripcion}
+                          onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, descripcion: e.target.value } : l))}
+                          className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-xs dark:text-white" />
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                {Number(cobroForm.monto) >= saldo && (
+
+                {/* Totales */}
+                {cobroLineas.length > 1 && totalLineas > 0 && (
+                  <div className="flex justify-between text-sm font-medium px-1">
+                    <span className="text-zinc-500">Total a registrar:</span>
+                    <span className="font-mono dark:text-white">{formatCurrency(totalLineas, f.moneda as "ARS" | "USD")}</span>
+                  </div>
+                )}
+
+                {totalLineas >= saldo && saldo > 0 && (
                   <div className="flex items-center gap-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 px-3 py-2">
                     <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                    <p className="text-xs text-emerald-700 dark:text-emerald-300">Cubre el saldo completo — la factura se marcará como pagada</p>
+                    <p className="text-xs text-emerald-700 dark:text-emerald-300">Cubre el saldo completo — la factura se marcara como pagada</p>
+                  </div>
+                )}
+                {totalLineas > saldo && saldo > 0 && (
+                  <div className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-2">
+                    <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                    <p className="text-xs text-amber-700 dark:text-amber-300">El monto excede el saldo pendiente por {formatCurrency(totalLineas - saldo, f.moneda as "ARS" | "USD")}</p>
                   </div>
                 )}
               </div>
               <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
                 <button onClick={() => setCobroModalId(null)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
-                <button onClick={handleRegistrarCobro} disabled={cobroSaving || !cobroForm.monto || Number(cobroForm.monto) <= 0}
+                <button onClick={handleRegistrarCobro} disabled={cobroSaving || !lineasValidas}
                   className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
                   {cobroSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                  Registrar cobro
+                  Registrar cobro{cobroLineas.length > 1 ? "s" : ""}
                 </button>
               </div>
             </div>

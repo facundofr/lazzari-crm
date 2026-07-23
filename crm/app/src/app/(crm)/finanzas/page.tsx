@@ -204,7 +204,7 @@ const tipoGastoVariant: Record<string, "success" | "danger" | "warning" | "info"
 
 interface OpMedioPago {
   tempId: string;
-  tipo: "cheque" | "deposito" | "transferencia" | "echeq" | "efectivo";
+  tipo: "cheque" | "cheque_propio" | "deposito" | "transferencia" | "echeq" | "efectivo";
   monto: number;
   fecha: string;
   banco: string;
@@ -265,7 +265,7 @@ interface MovimientoRow {
 interface CCRow {
   id: string;
   razon_social: string;
-  cuit: string;
+  cuit: string | null;
   rubro?: string;
   dias_cuenta_corriente: number;
   forma_pago: string;
@@ -793,6 +793,7 @@ export default function FinanzasPage() {
   async function handleCreateMov() {
     if (!movForm.descripcion.trim()) { setFormError("La descripcion es obligatoria"); return; }
     if (movForm.monto <= 0) { setFormError("El monto debe ser mayor a 0"); return; }
+    if (!movForm.cliente_id && !movForm.proveedor_id) { setFormError("Debe seleccionar un cliente o proveedor"); return; }
     setSaving(true);
     setFormError("");
     try {
@@ -906,15 +907,19 @@ export default function FinanzasPage() {
     if (!opModalOpen) return;
     if (!opForm.proveedor_id) { setOpProvCondicion(null); setOpFCPendientes([]); return; }
     const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
-    if (!prov?.cuit) { setOpProvCondicion(null); return; }
-    const cuit = prov.cuit.replace(/-/g, "");
-    setOpCondicionLoading(true);
-    setOpProvCondicion(null);
-    fetch(`/api/cuit-lookup?cuit=${cuit}`)
-      .then(r => r.json())
-      .then(data => { setOpProvCondicion(data.condicion_iva ?? ""); })
-      .catch(() => { setOpProvCondicion(null); })
-      .finally(() => setOpCondicionLoading(false));
+    // CUIT lookup (solo si tiene CUIT)
+    if (prov?.cuit) {
+      const cuit = prov.cuit.replace(/-/g, "");
+      setOpCondicionLoading(true);
+      setOpProvCondicion(null);
+      fetch(`/api/cuit-lookup?cuit=${cuit}`)
+        .then(r => r.json())
+        .then(data => { setOpProvCondicion(data.condicion_iva ?? ""); })
+        .catch(() => { setOpProvCondicion(null); })
+        .finally(() => setOpCondicionLoading(false));
+    } else {
+      setOpProvCondicion(null);
+    }
     // Cargar FC pendientes del proveedor + total mensual para ganancias
     setOpFCLoading(true);
     (async () => {
@@ -937,7 +942,7 @@ export default function FinanzasPage() {
           const pagado = pagadoPorFC[fc.id] || 0;
           const saldo = Math.max(0, Number(fc.total) - pagado);
           return { id: fc.id, numero: fc.numero_factura || "S/N", fecha: fc.fecha, total: Number(fc.total), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: false, monto_a_pagar: saldo };
-        }));
+        }).filter((fc: any) => fc.saldo_pendiente > 0));
 
         // Total mensual facturado por este proveedor (para cálculo ganancias)
         const mesActual = new Date().toISOString().slice(0, 7); // YYYY-MM
@@ -1121,7 +1126,7 @@ export default function FinanzasPage() {
     const provNombre = op.proveedor_nombre;
     const totalRetenciones = op.monto_retencion + op.retencion_ganancias_monto;
     const socNombre = sociedadActiva?.id === "fee94607-747a-4e87-ba24-aff9032f7a56" ? "Grupo LA" : "Lazzari Soluciones Industriales";
-    const medioLabel = (t: string) => t === "transferencia" ? "Transferencia bancaria" : t === "cheque" ? "Cheque" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "efectivo" ? "Efectivo" : t;
+    const medioLabel = (t: string) => t === "transferencia" ? "Transferencia bancaria" : t === "cheque" ? "Cheque tercero" : t === "cheque_propio" ? "Cheque propio" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "efectivo" ? "Efectivo" : t;
 
     // Fetch linked FCs
     let fcsHtml = "";
@@ -1269,29 +1274,34 @@ ${mediosHtml}
         tipo_gasto: gmForm.tipo_gasto,
         monto: gmForm.monto,
         moneda: gmForm.moneda,
-        notas: gmForm.notas,
+        notas: gmForm.notas || "",
       };
       if (comprobanteUrl) insertData.comprobante_url = comprobanteUrl;
       if (gmForm.proveedor_id) insertData.proveedor_id = gmForm.proveedor_id;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
+      if (profile?.id) insertData.created_by = profile.id;
 
       const { error } = await (supabase as any).from("gastos_manuales").insert(insertData);
       if (error) throw error;
 
-      // Also create a movimiento
-      const provNombre = gmForm.proveedor_id ? proveedoresOptions.find(p => p.id === gmForm.proveedor_id)?.razon_social : null;
-      const movData: Record<string, unknown> = {
-        tipo: "pago",
-        descripcion: `Gasto — ${gmForm.categoria} — ${gmForm.descripcion}${provNombre ? ` (${provNombre})` : ""}`,
-        monto: gmForm.monto,
-        moneda: gmForm.moneda,
-        fecha: gmForm.fecha,
-        conciliado: false,
-      };
-      if (gmForm.proveedor_id) (movData as any).proveedor_id = gmForm.proveedor_id;
-      if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
-      const { error: movErr } = await supabase.from("movimientos").insert(movData as any);
-      if (movErr) throw movErr;
+      // Also create a movimiento (non-fatal — gasto already saved)
+      try {
+        const provNombre = gmForm.proveedor_id ? proveedoresOptions.find(p => p.id === gmForm.proveedor_id)?.razon_social : null;
+        const movData: Record<string, unknown> = {
+          tipo: "pago",
+          descripcion: `Gasto — ${gmForm.categoria} — ${gmForm.descripcion}${provNombre ? ` (${provNombre})` : ""}`,
+          monto: gmForm.monto,
+          moneda: gmForm.moneda,
+          fecha: gmForm.fecha,
+          conciliado: false,
+        };
+        if (gmForm.proveedor_id) (movData as any).proveedor_id = gmForm.proveedor_id;
+        if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
+        if (profile?.id) (movData as any).created_by = profile.id;
+        await supabase.from("movimientos").insert(movData as any);
+      } catch (movErr) {
+        console.warn("Gasto creado pero error al registrar movimiento:", movErr);
+      }
 
       setGmModalOpen(false);
       await fetchData();
@@ -1530,10 +1540,10 @@ ${mediosHtml}
 
   // ── CC filters ──
   const filteredCcClientes = ccClienteSearch.trim()
-    ? ccClientes.filter(c => c.razon_social.toLowerCase().includes(ccClienteSearch.toLowerCase()) || c.cuit.includes(ccClienteSearch))
+    ? ccClientes.filter(c => c.razon_social.toLowerCase().includes(ccClienteSearch.toLowerCase()) || (c.cuit ?? "").includes(ccClienteSearch))
     : ccClientes;
   const filteredCcProveedores = ccProveedorSearch.trim()
-    ? ccProveedores.filter(p => p.razon_social.toLowerCase().includes(ccProveedorSearch.toLowerCase()) || p.cuit.includes(ccProveedorSearch))
+    ? ccProveedores.filter(p => p.razon_social.toLowerCase().includes(ccProveedorSearch.toLowerCase()) || (p.cuit ?? "").includes(ccProveedorSearch))
     : ccProveedores;
 
   // ── Mov modal filtered lists ──
@@ -1943,7 +1953,7 @@ ${mediosHtml}
                   }},
                   { key: "neto", label: "Neto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.neto, row.moneda)}</span> },
                   { key: "medio_pago", label: "Medio", render: (row) => {
-                    const medioLabel = (t: string) => t === "transferencia" ? "Transf." : t === "cheque" ? "Cheque" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "efectivo" ? "Efectivo" : t;
+                    const medioLabel = (t: string) => t === "transferencia" ? "Transf." : t === "cheque" ? "Cheque" : t === "cheque_propio" ? "Ch. propio" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "efectivo" ? "Efectivo" : t;
                     if (row.medios_pago && row.medios_pago.length > 1) {
                       return <div className="flex flex-wrap gap-1">{row.medios_pago.map((m, i) => <Badge key={i} variant="outline">{medioLabel(m.tipo)}</Badge>)}</div>;
                     }
@@ -3051,7 +3061,8 @@ ${mediosHtml}
                           className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                           <option value="transferencia">Transferencia</option>
                           <option value="deposito">Depósito</option>
-                          <option value="cheque">Cheque</option>
+                          <option value="cheque">Cheque tercero</option>
+                          <option value="cheque_propio">Cheque propio</option>
                           <option value="echeq">E-Cheq</option>
                           <option value="efectivo">Efectivo</option>
                         </select>
@@ -3059,7 +3070,7 @@ ${mediosHtml}
                           placeholder="Monto" className="w-28 rounded border border-zinc-200 px-2 py-1.5 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                         <input type="date" value={m.fecha} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, fecha: e.target.value } : x))}
                           className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                        {(m.tipo === "cheque" || m.tipo === "echeq") && (
+                        {(m.tipo === "cheque" || m.tipo === "cheque_propio" || m.tipo === "echeq") && (
                           <>
                             <input value={m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value } : x))}
                               placeholder="Banco" className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
@@ -3530,12 +3541,12 @@ ${mediosHtml}
                     {selectedOP.medios_pago && selectedOP.medios_pago.length > 0 ? (
                       <div className="space-y-1 mt-1">
                         {selectedOP.medios_pago.map((m, i) => {
-                          const ml = m.tipo === "transferencia" ? "Transf." : m.tipo === "cheque" ? "Cheque" : m.tipo === "echeq" ? "E-Cheq" : m.tipo === "deposito" ? "Depósito" : "Efectivo";
+                          const ml = m.tipo === "transferencia" ? "Transf." : m.tipo === "cheque" ? "Cheque" : m.tipo === "cheque_propio" ? "Ch. propio" : m.tipo === "echeq" ? "E-Cheq" : m.tipo === "deposito" ? "Depósito" : "Efectivo";
                           return <p key={i} className="text-sm dark:text-white">{ml}{m.banco ? ` — ${m.banco}` : ""} <span className="font-mono text-xs">{formatCurrency(m.monto, m.moneda || selectedOP.moneda)}</span></p>;
                         })}
                       </div>
                     ) : (
-                      <p className="font-medium dark:text-white">{selectedOP.medio_pago === "transferencia" ? "Transferencia" : selectedOP.medio_pago === "cheque" ? "Cheque" : selectedOP.medio_pago === "echeq" ? "E-Cheq" : "Efectivo"}</p>
+                      <p className="font-medium dark:text-white">{selectedOP.medio_pago === "transferencia" ? "Transferencia" : selectedOP.medio_pago === "cheque" ? "Cheque tercero" : selectedOP.medio_pago === "cheque_propio" ? "Cheque propio" : selectedOP.medio_pago === "echeq" ? "E-Cheq" : selectedOP.medio_pago === "deposito" ? "Depósito" : "Efectivo"}</p>
                     )}
                   </div>
                   <div>

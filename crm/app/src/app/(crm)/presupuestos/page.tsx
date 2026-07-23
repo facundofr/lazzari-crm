@@ -46,6 +46,8 @@ interface SupabasePresupuesto {
   updated_at: string;
   vendedor_id: string | null;
   oc_cliente?: string | null;
+  tipo_comprobante?: string | null;
+  modalidad_emision?: string | null;
   archivo_url?: string | null;
   archivo_nombre?: string | null;
   sucursal_id?: string | null;
@@ -120,6 +122,8 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     sucursalNombre: row.sucursal?.nombre ?? "",
     contactoNombre: row.contacto?.nombre ?? "",
     ocCliente: row.oc_cliente ?? "",
+    tipoComprobante: row.tipo_comprobante ?? "",
+    modalidadEmision: row.modalidad_emision ?? "sin_definir",
     clienteCuit: row.clientes?.cuit ?? "",
     clienteEmail: row.clientes?.email ?? "",
     clienteTelefono: row.clientes?.telefono ?? "",
@@ -364,7 +368,7 @@ export default function PresupuestosPage() {
       case "RI": return { tipo_comprobante: "A", modalidad_emision: "electronica" };
       case "Monotributo": return { tipo_comprobante: "B", modalidad_emision: "electronica" };
       case "Exento": return { tipo_comprobante: "B", modalidad_emision: "electronica" };
-      case "Consumidor Final": return { tipo_comprobante: "M", modalidad_emision: "electronica" };
+      case "Consumidor Final": return { tipo_comprobante: "B", modalidad_emision: "electronica" };
       default: return { tipo_comprobante: "", modalidad_emision: "sin_definir" };
     }
   }
@@ -813,6 +817,10 @@ export default function PresupuestosPage() {
     }
     if (!esSolicitud && !newPR.vendedor_id) {
       toast.warning("Selecciona un vendedor");
+      return;
+    }
+    if (!esSolicitud && !["A", "B"].includes(newPR.tipo_comprobante)) {
+      toast.warning("Selecciona tipo de documento (A o B)");
       return;
     }
     const validItems = newPR.items.filter((it) => it.descripcion.trim() && it.cantidad > 0);
@@ -1445,6 +1453,10 @@ export default function PresupuestosPage() {
 
   async function handleFacturarFromPR() {
     if (!facturarModal || !sociedadActiva) return;
+    if (facturarMoneda !== facturarModal.moneda && !facturarTipoCambio) {
+      setFacturarError("Ingresa el tipo de cambio para convertir de " + facturarModal.moneda + " a " + facturarMoneda);
+      return;
+    }
     setFacturarEmitting(true);
     setFacturarError("");
     try {
@@ -2275,7 +2287,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 )}
                 {selected.estado === "aprobado" && (
                   <button
-                    onClick={() => { setFacturarModal(selected); setFacturarError(""); setFacturarTipo("FB"); setFacturarManual(false); setFacturarNumManual(""); setFacturarMoneda(selected.moneda as "ARS" | "USD"); setFacturarTipoCambio(""); setFacturarOCCliente(selected.ocCliente || ""); }}
+                    onClick={() => { const tc = (selected as any).tipoComprobante; const tipoFC: "FA" | "FB" = tc === "A" ? "FA" : "FB"; setFacturarModal(selected); setFacturarError(""); setFacturarTipo(tipoFC); setFacturarManual(false); setFacturarNumManual(""); setFacturarMoneda(selected.moneda as "ARS" | "USD"); setFacturarTipoCambio(""); setFacturarOCCliente(selected.ocCliente || ""); }}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-950/30 transition-colors"
                     title="Emitir factura desde este presupuesto"
                   >
@@ -2886,15 +2898,13 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           />
           <Select
             label="Tipo de documento"
-            value={newPR.tipo_comprobante === "A" ? "A" : newPR.tipo_comprobante === "B" ? "B" : newPR.tipo_comprobante === "M" ? "M" : newPR.modalidad_emision === "manual" ? "manual" : ""}
+            value={newPR.tipo_comprobante === "A" ? "A" : newPR.tipo_comprobante === "B" ? "B" : newPR.modalidad_emision === "manual" ? "manual" : ""}
             onChange={(e) => {
               const v = e.target.value;
               if (v === "A") {
                 setNewPR((p) => ({ ...p, tipo_comprobante: "A", modalidad_emision: "electronica" }));
               } else if (v === "B") {
                 setNewPR((p) => ({ ...p, tipo_comprobante: "B", modalidad_emision: "electronica" }));
-              } else if (v === "M") {
-                setNewPR((p) => ({ ...p, tipo_comprobante: "M", modalidad_emision: "electronica" }));
               } else if (v === "manual") {
                 setNewPR((p) => ({ ...p, tipo_comprobante: "", modalidad_emision: "manual" }));
               } else {
@@ -2904,8 +2914,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             options={[
               { value: "", label: "Sin definir" },
               { value: "A", label: "A — Resp. Inscripto (IVA discriminado)" },
-              { value: "B", label: "B — Monotributo / Exento (IVA incluido)" },
-              { value: "M", label: "M — Consumidor Final" },
+              { value: "B", label: "B — Consumidor Final / Monotributo / Exento (IVA incluido)" },
               { value: "manual", label: "Manual (sin ARCA)" },
             ]}
           />
