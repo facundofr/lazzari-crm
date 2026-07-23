@@ -1123,94 +1123,341 @@ export default function FinanzasPage() {
   }
 
   async function handleGenerarComprobante(op: OrdenPagoRow) {
-    const provNombre = op.proveedor_nombre;
-    const totalRetenciones = op.monto_retencion + op.retencion_ganancias_monto;
-    const socNombre = sociedadActiva?.id === "fee94607-747a-4e87-ba24-aff9032f7a56" ? "Grupo LA" : "Lazzari Soluciones Industriales";
-    const medioLabel = (t: string) => t === "transferencia" ? "Transferencia bancaria" : t === "cheque" ? "Cheque tercero" : t === "cheque_propio" ? "Cheque propio" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "efectivo" ? "Efectivo" : t;
+    const isGrupoLA = sociedadActiva?.id === "fee94607-747a-4e87-ba24-aff9032f7a56";
+    const socNombre = isGrupoLA ? "Grupo LA S.A." : "Lazzari Soluciones Industriales";
+    const socCuit = isGrupoLA ? "30-71939604-2" : "20-37930912-8";
+    const socDir = isGrupoLA ? "CHARCAS 5151 Piso 1 Dpto 106" : "PUEYRREDON 653, Pergamino";
+    const socTel = isGrupoLA ? "" : "2477 628958";
+
+    // Fetch proveedor CUIT & dirección
+    let provCuit = "";
+    let provDir = "";
+    try {
+      const { data: provData } = await (supabase as any).from("proveedores").select("cuit, direccion").eq("id", op.proveedor_id).single();
+      if (provData) {
+        provCuit = provData.cuit || "";
+        provDir = provData.direccion || "";
+      }
+    } catch { /* ignore */ }
+
+    // Format CUIT for display (XX-XXXXXXXX-X)
+    const fmtCuit = (c: string) => {
+      const digits = c.replace(/\D/g, "");
+      if (digits.length === 11) return `${digits.slice(0,2)}-${digits.slice(2,10)}-${digits.slice(10)}`;
+      return c;
+    };
+
+    // Monto en letras
+    const montoEnLetras = (monto: number): string => {
+      const unidades = ["", "UN", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE"];
+      const especiales = ["DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISEIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE"];
+      const decenas = ["", "", "VEINTE", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA", "SETENTA", "OCHENTA", "NOVENTA"];
+      const centenas = ["", "CIENTO", "DOSCIENTOS", "TRESCIENTOS", "CUATROCIENTOS", "QUINIENTOS", "SEISCIENTOS", "SETECIENTOS", "OCHOCIENTOS", "NOVECIENTOS"];
+
+      const convertirGrupo = (n: number): string => {
+        if (n === 0) return "";
+        if (n === 100) return "CIEN";
+        let result = "";
+        if (n >= 100) { result += centenas[Math.floor(n / 100)] + " "; n = n % 100; }
+        if (n >= 20) {
+          result += decenas[Math.floor(n / 10)];
+          if (n % 10 > 0) result += (Math.floor(n / 10) === 2 ? "I" : " Y ") + unidades[n % 10];
+        } else if (n >= 10) {
+          result += especiales[n - 10];
+        } else if (n > 0) {
+          result += unidades[n];
+        }
+        return result.trim();
+      };
+
+      const entero = Math.floor(Math.abs(monto));
+      const centavos = Math.round((Math.abs(monto) - entero) * 100);
+      const monedaLabel = op.moneda === "USD" ? "DOLARES ESTADOUNIDENSES" : "PESOS ARGENTINOS";
+
+      if (entero === 0) return `SON ${monedaLabel} CERO CON ${String(centavos).padStart(2, "0")}/100 CENTAVOS`;
+
+      let texto = "";
+      const millones = Math.floor(entero / 1000000);
+      const miles = Math.floor((entero % 1000000) / 1000);
+      const resto = entero % 1000;
+
+      if (millones > 0) {
+        texto += (millones === 1 ? "UN MILLON" : convertirGrupo(millones) + " MILLONES") + " ";
+      }
+      if (miles > 0) {
+        texto += (miles === 1 ? "MIL" : convertirGrupo(miles) + " MIL") + " ";
+      }
+      if (resto > 0) {
+        texto += convertirGrupo(resto);
+      }
+
+      return `SON ${monedaLabel} ${texto.trim()} CON ${String(centavos).padStart(2, "0")}/100 CENTAVOS`;
+    };
+
+    const fechaDD = (f: string) => {
+      try {
+        const d = new Date(f + "T12:00:00");
+        return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
+      } catch { return f; }
+    };
 
     // Fetch linked FCs
-    let fcsHtml = "";
+    let fcsRows: {numero: string; fecha: string; monto: number}[] = [];
     try {
       const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto").eq("orden_pago_id", op.id);
       if (links && links.length > 0) {
         const fcIds = links.map((l: any) => l.factura_compra_id);
         const { data: fcs } = await (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, total").in("id", fcIds);
         if (fcs && fcs.length > 0) {
-          const rows = fcs.map((fc: any) => {
+          fcsRows = fcs.map((fc: any) => {
             const link = links.find((l: any) => l.factura_compra_id === fc.id);
-            const montoPagado = Number(link?.monto ?? fc.total);
-            return `<tr><td>${fc.numero_factura || "—"}</td><td>${formatDate(fc.fecha)}</td><td style="text-align:right">${formatCurrency(Number(fc.total), op.moneda)}</td><td style="text-align:right">${formatCurrency(montoPagado, op.moneda)}</td></tr>`;
-          }).join("");
-          fcsHtml = `<div class="section"><div class="section-title">Documentos abonados</div>
-            <table><thead><tr><th style="text-align:left">Comprobante</th><th style="text-align:left">Fecha</th><th style="text-align:right">Total</th><th style="text-align:right">Pagado</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+            return { numero: fc.numero_factura || "—", fecha: fc.fecha, monto: Number(link?.monto ?? fc.total) };
+          });
         }
       }
     } catch { /* ignore */ }
 
-    // Medios de pago section
-    let mediosHtml = "";
-    const medios = op.medios_pago && op.medios_pago.length > 0 ? op.medios_pago : [{ tipo: op.medio_pago, monto: op.neto, fecha: op.fecha, banco: "", numero_cheque: "", moneda: op.moneda, cotizacion: 1 }];
-    const mediosRows = medios.map((m: any) => {
-      let detail = medioLabel(m.tipo);
-      if (m.banco) detail += ` — ${m.banco}`;
-      if (m.numero_cheque) detail += ` N° ${m.numero_cheque}`;
-      return `<tr><td>${detail}</td><td>${m.fecha ? formatDate(m.fecha) : "—"}</td><td style="text-align:right">${formatCurrency(Number(m.monto), m.moneda || op.moneda)}</td></tr>`;
-    }).join("");
-    mediosHtml = `<div class="section"><div class="section-title">Medios de pago</div>
-      <table><thead><tr><th style="text-align:left">Tipo</th><th style="text-align:left">Fecha</th><th style="text-align:right">Monto</th></tr></thead><tbody>${mediosRows}</tbody></table></div>`;
+    // Separate medios by type
+    const medios = op.medios_pago && op.medios_pago.length > 0 ? op.medios_pago : [{ tipo: op.medio_pago as OpMedioPago["tipo"], monto: op.neto, fecha: op.fecha, banco: "", numero_cheque: "", moneda: op.moneda as "ARS" | "USD", cotizacion: 1, tempId: "" }];
+    const cheques = medios.filter((m) => m.tipo === "cheque" || m.tipo === "cheque_propio" || m.tipo === "echeq");
+    const depositos = medios.filter((m) => m.tipo === "deposito" || m.tipo === "transferencia" || m.tipo === "efectivo");
+
+    const totalCheques = cheques.reduce((s, m) => s + Number(m.monto), 0);
+    const totalDepositos = depositos.reduce((s, m) => s + Number(m.monto), 0);
+    const totalRetIVA = op.monto_retencion || 0;
+    const totalRetGan = op.retencion_ganancias_monto || 0;
+    const totalRetenciones = totalRetIVA + totalRetGan;
+    const totalGeneral = totalCheques + totalDepositos + totalRetenciones;
+
+    // ── Build FCs table ──
+    const fcsHtml = fcsRows.length > 0 ? `
+      <table class="bordered">
+        <thead><tr><th style="text-align:center">Fecha</th><th style="text-align:left">Comprobante</th><th style="text-align:right">Monto abonado</th></tr></thead>
+        <tbody>${fcsRows.map(fc => `<tr><td style="text-align:center">${fechaDD(fc.fecha)}</td><td>${fc.numero}</td><td style="text-align:right">${formatCurrency(fc.monto, op.moneda)}</td></tr>`).join("")}</tbody>
+      </table>` : `<p style="color:#999;font-size:11px">Sin documentos vinculados</p>`;
+
+    // ── Cheques table ──
+    const chequesHtml = cheques.length > 0 ? `
+      <div class="section">
+        <div class="section-title">Cheques</div>
+        <table class="bordered">
+          <thead><tr>
+            <th>Fecha de cheque</th><th>Banco</th><th>N\u00B0 Cheque</th><th>Moneda</th><th style="text-align:right">Importe</th><th style="text-align:right">Cotizaci\u00F3n</th><th style="text-align:right">Importe consolidado</th>
+          </tr></thead>
+          <tbody>${cheques.map((m) => {
+            const importeConsolidado = Number(m.monto) * (Number(m.cotizacion) || 1);
+            return `<tr>
+              <td>${fechaDD(m.fecha)}</td><td>${m.banco || "\u2014"}</td><td>${m.numero_cheque || "\u2014"}</td><td>${m.moneda || op.moneda}</td>
+              <td style="text-align:right">${formatCurrency(Number(m.monto), m.moneda || op.moneda)}</td>
+              <td style="text-align:right">${Number(m.cotizacion) || 1}</td>
+              <td style="text-align:right">${formatCurrency(importeConsolidado, "ARS")}</td>
+            </tr>`;
+          }).join("")}</tbody>
+          <tfoot><tr><td colspan="6" style="text-align:right;font-weight:700">Total Cheques</td><td style="text-align:right;font-weight:700">${formatCurrency(totalCheques, op.moneda)}</td></tr></tfoot>
+        </table>
+      </div>` : "";
+
+    // ── Depósitos / Transferencias table ──
+    const depositosHtml = depositos.length > 0 ? `
+      <div class="section">
+        <div class="section-title">Dep\u00F3sitos / Transferencias</div>
+        <table class="bordered">
+          <thead><tr>
+            <th>Fecha</th><th>Moneda</th><th style="text-align:right">Importe</th><th style="text-align:right">Cotizaci\u00F3n</th><th style="text-align:right">Importe Consolidado</th>
+          </tr></thead>
+          <tbody>${depositos.map((m) => {
+            const importeConsolidado = Number(m.monto) * (Number(m.cotizacion) || 1);
+            return `<tr>
+              <td>${fechaDD(m.fecha)}</td><td>${m.moneda || op.moneda}</td>
+              <td style="text-align:right">${formatCurrency(Number(m.monto), m.moneda || op.moneda)}</td>
+              <td style="text-align:right">${Number(m.cotizacion) || 1}</td>
+              <td style="text-align:right">${formatCurrency(importeConsolidado, "ARS")}</td>
+            </tr>`;
+          }).join("")}</tbody>
+          <tfoot><tr><td colspan="4" style="text-align:right;font-weight:700">Total Dep\u00F3sitos</td><td style="text-align:right;font-weight:700">${formatCurrency(totalDepositos, op.moneda)}</td></tr></tfoot>
+        </table>
+      </div>` : "";
+
+    // ── Retenciones table ──
+    const retencionesItems: {fecha: string; desc: string; monto: number}[] = [];
+    if (totalRetIVA > 0) retencionesItems.push({ fecha: op.fecha, desc: `Retenci\u00F3n IVA (${op.retencion_pct}%)`, monto: totalRetIVA });
+    if (totalRetGan > 0) retencionesItems.push({ fecha: op.fecha, desc: `Retenci\u00F3n Ganancias (${op.retencion_ganancias_pct}%)`, monto: totalRetGan });
+
+    const retencionesHtml = retencionesItems.length > 0 ? `
+      <div class="section">
+        <div class="section-title">Retenciones</div>
+        <table class="bordered">
+          <thead><tr><th>Fecha</th><th>Descripci\u00F3n</th><th>Moneda</th><th style="text-align:right">Importe</th></tr></thead>
+          <tbody>${retencionesItems.map(r => `<tr><td>${fechaDD(r.fecha)}</td><td>${r.desc}</td><td>${op.moneda}</td><td style="text-align:right">${formatCurrency(r.monto, op.moneda)}</td></tr>`).join("")}</tbody>
+          <tfoot><tr><td colspan="3" style="text-align:right;font-weight:700">Total Retenciones</td><td style="text-align:right;font-weight:700">${formatCurrency(totalRetenciones, op.moneda)}</td></tr></tfoot>
+        </table>
+      </div>` : "";
+
+    // ── Certificado de Retención Ganancias (página 2) ──
+    const certRetGanHtml = totalRetGan > 0 ? `
+      <div class="page-break"></div>
+      <div class="cert-page">
+        <div class="cert-header">
+          <div class="cert-logo">${socNombre}</div>
+          <div class="cert-title-block">
+            <div class="cert-main-title">CERT. RET. IMPUESTO A LAS GANANCIAS</div>
+            <table class="cert-info-table">
+              <tr><td>Original</td><td>N\u00B0: ${op.numero || "\u2014"}</td></tr>
+              <tr><td>Fecha: ${fechaDD(op.fecha)}</td><td>CUIT: ${socCuit}</td></tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="cert-section">
+          <div class="cert-section-title">A - Datos del agente de retenci\u00F3n</div>
+          <table class="cert-data">
+            <tr><td class="cert-label">Raz\u00F3n Social:</td><td>${socNombre}</td></tr>
+            <tr><td class="cert-label">CUIT:</td><td>${socCuit}</td></tr>
+            <tr><td class="cert-label">Direcci\u00F3n:</td><td>${socDir}</td></tr>
+          </table>
+        </div>
+
+        <div class="cert-section">
+          <div class="cert-section-title">B - Datos del sujeto retenido</div>
+          <table class="cert-data">
+            <tr><td class="cert-label">Raz\u00F3n Social:</td><td>${op.proveedor_nombre}</td></tr>
+            <tr><td class="cert-label">CUIT:</td><td>${provCuit ? fmtCuit(provCuit) : "\u2014"}</td></tr>
+            <tr><td class="cert-label">Direcci\u00F3n:</td><td>${provDir || "\u2014"}</td></tr>
+          </table>
+        </div>
+
+        <div class="cert-section">
+          <div class="cert-section-title">C - Datos de la retenci\u00F3n</div>
+          <table class="cert-data">
+            <tr><td class="cert-label">R\u00E9gimen:</td><td>78 - Anexo II, inc. f) Enajenaci\u00F3n de bienes muebles y bienes de cambio</td></tr>
+            <tr><td class="cert-label">Importe sujeto a retenci\u00F3n:</td><td>${formatCurrency(op.monto_bruto - totalRetIVA, op.moneda)}</td></tr>
+            <tr><td class="cert-label">Importe retenido:</td><td style="font-weight:700">${formatCurrency(totalRetGan, op.moneda)}</td></tr>
+            <tr><td class="cert-label">Documentos que originan la retenci\u00F3n:</td><td>${op.numero || "\u2014"} (${formatCurrency(totalGeneral, op.moneda)})</td></tr>
+          </table>
+        </div>
+
+        <div class="cert-letras">
+          ${montoEnLetras(totalRetGan)}
+        </div>
+
+        <div class="firma-line">
+          <div class="firma-placeholder"></div>
+          <div class="firma-text">Firma y aclaraci\u00F3n</div>
+        </div>
+      </div>
+    ` : "";
 
     const html = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Orden de Pago ${op.numero || ""}</title>
 <style>
-  body { font-family: Arial, sans-serif; max-width: 750px; margin: 40px auto; padding: 20px; color: #333; font-size: 13px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #FF4500; padding-bottom: 16px; margin-bottom: 20px; }
-  .title { font-size: 20px; font-weight: bold; color: #FF4500; }
-  .subtitle { font-size: 11px; color: #888; margin-top: 2px; }
-  .op-num { font-size: 16px; font-weight: 700; font-family: monospace; }
-  .section { margin-bottom: 16px; }
-  .section-title { font-size: 12px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; border-bottom: 1px solid #ddd; padding-bottom: 3px; }
-  .row { display: flex; justify-content: space-between; padding: 4px 0; }
-  .row .label { color: #666; }
-  .row .value { font-weight: 600; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { font-weight: 600; color: #666; border-bottom: 1px solid #ddd; padding: 4px 8px; font-size: 11px; text-transform: uppercase; }
-  td { padding: 5px 8px; border-bottom: 1px solid #f0f0f0; }
-  .totals { background: #f8f8f8; border-radius: 6px; padding: 12px 16px; margin-top: 12px; }
-  .totals .row { padding: 3px 0; }
-  .retencion { color: #d97706; }
-  .neto { color: #059669; font-size: 16px; font-weight: 700; }
-  .footer { margin-top: 30px; text-align: center; font-size: 10px; color: #aaa; border-top: 1px solid #eee; padding-top: 12px; }
-  @media print { body { margin: 0; } .no-print { display: none; } }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 30px 40px; color: #333; font-size: 12px; line-height: 1.4; }
+
+  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #333; }
+  .header-left { }
+  .header-left .empresa { font-size: 14px; font-weight: 700; }
+  .header-left .dato { font-size: 11px; color: #555; margin-top: 1px; }
+  .header-right { text-align: right; font-size: 11px; }
+  .header-right .dato { margin-bottom: 1px; }
+
+  .op-title { text-align: center; font-size: 16px; font-weight: 700; margin: 16px 0; letter-spacing: 0.5px; }
+
+  .proveedor-bar { background: #e8e8e8; text-align: center; padding: 6px 12px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
+
+  .section { margin-bottom: 14px; }
+  .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; color: #444; border-bottom: 1px solid #ccc; padding-bottom: 2px; }
+
+  table.bordered { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 4px; }
+  table.bordered th { background: #f0f0f0; border: 1px solid #bbb; padding: 4px 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+  table.bordered td { border: 1px solid #ccc; padding: 4px 6px; }
+  table.bordered tfoot td { border-top: 2px solid #999; background: #f8f8f8; }
+
+  .totals-box { border: 2px solid #333; padding: 10px 16px; margin-top: 16px; }
+  .totals-row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 12px; }
+  .totals-row.grand { border-top: 2px solid #333; margin-top: 6px; padding-top: 6px; font-size: 14px; font-weight: 700; }
+  .totals-row .label { }
+  .totals-row .value { font-weight: 600; }
+
+  .letras { font-size: 11px; margin-top: 8px; font-style: italic; color: #555; }
+
+  .firma-line { margin-top: 60px; text-align: center; }
+  .firma-placeholder { border-top: 1px solid #333; width: 250px; margin: 0 auto; }
+  .firma-text { font-size: 11px; color: #666; margin-top: 4px; }
+
+  .page-break { page-break-before: always; margin-top: 40px; }
+
+  /* Certificado retenci\u00F3n */
+  .cert-page { padding-top: 20px; }
+  .cert-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 16px; }
+  .cert-logo { font-size: 16px; font-weight: 700; }
+  .cert-title-block { text-align: right; }
+  .cert-main-title { font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+  .cert-info-table { font-size: 11px; }
+  .cert-info-table td { padding: 1px 8px; }
+  .cert-section { margin-bottom: 14px; }
+  .cert-section-title { font-size: 12px; font-weight: 700; background: #e8e8e8; padding: 4px 8px; margin-bottom: 6px; }
+  .cert-data { font-size: 12px; width: 100%; }
+  .cert-data td { padding: 2px 8px; }
+  .cert-label { font-weight: 600; width: 220px; color: #444; }
+  .cert-letras { font-size: 11px; font-style: italic; color: #555; margin-top: 12px; border: 1px solid #ccc; padding: 8px; background: #fafafa; }
+
+  .no-print { }
+  .print-btn { margin-top: 20px; text-align: center; }
+  .print-btn button { padding: 8px 28px; background: #FF4500; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
+
+  @media print {
+    body { margin: 0; padding: 20px; }
+    .no-print { display: none !important; }
+    .page-break { page-break-before: always; }
+  }
 </style>
 </head><body>
+
+<!-- P\u00C1GINA 1: ORDEN DE PAGO -->
 <div class="header">
-  <div>
-    <div class="title">Orden de Pago</div>
-    <div class="subtitle">${socNombre}</div>
+  <div class="header-left">
+    <div class="empresa">${socNombre}</div>
+    <div class="dato">CUIT: ${socCuit}</div>
+    <div class="dato">${socDir}</div>
   </div>
-  <div style="text-align:right">
-    <div class="op-num">${op.numero || "—"}</div>
-    <div style="font-size:12px;color:#888;margin-top:2px">${formatDate(op.fecha)}</div>
+  <div class="header-right">
+    <div class="dato"><strong>Hoja:</strong> 1</div>
+    <div class="dato"><strong>Fecha:</strong> ${fechaDD(op.fecha)}</div>
+    ${socTel ? `<div class="dato"><strong>Tel\u00E9fono:</strong> ${socTel}</div>` : ""}
   </div>
 </div>
+
+<div class="op-title">Orden de Pago N\u00B0 ${op.numero || "\u2014"}</div>
+
+<div class="proveedor-bar">Proveedor: ${op.proveedor_nombre}</div>
+
 <div class="section">
-  <div class="section-title">Proveedor</div>
-  <div class="row"><span class="label">Razón social</span><span class="value">${provNombre}</span></div>
+  <div class="section-title">Documentos abonados</div>
+  ${fcsHtml}
 </div>
-${fcsHtml}
-${mediosHtml}
-<div class="totals">
-  <div class="section-title">Resumen</div>
-  <div class="row"><span class="label">Subtotal documentos</span><span class="value">${formatCurrency(op.monto_bruto, op.moneda)}</span></div>
-  ${op.monto_retencion > 0 ? `<div class="row"><span class="label">Retención IVA (${op.retencion_pct}%)</span><span class="value retencion">- ${formatCurrency(op.monto_retencion, op.moneda)}</span></div>` : ""}
-  ${op.retencion_ganancias_monto > 0 ? `<div class="row"><span class="label">Retención Ganancias (${op.retencion_ganancias_pct}%)</span><span class="value retencion">- ${formatCurrency(op.retencion_ganancias_monto, op.moneda)}</span></div>` : ""}
-  ${totalRetenciones > 0 ? `<div class="row" style="border-top:1px solid #ddd;margin-top:4px;padding-top:4px"><span class="label">Total retenciones</span><span class="value retencion">- ${formatCurrency(totalRetenciones, op.moneda)}</span></div>` : ""}
-  <div class="row" style="border-top:2px solid #333;margin-top:6px;padding-top:8px"><span class="label" style="font-size:14px">Neto a pagar</span><span class="value neto">${formatCurrency(op.neto, op.moneda)}</span></div>
+
+${chequesHtml}
+${depositosHtml}
+${retencionesHtml}
+
+<div class="totals-box">
+  <div class="totals-row"><span class="label">Total Redondeo:</span><span class="value">${formatCurrency(0, op.moneda)}</span></div>
+  <div class="totals-row grand"><span class="label">Total:</span><span class="value">${formatCurrency(totalGeneral, op.moneda)}</span></div>
 </div>
-<div class="footer">
-  ${socNombre} — Comprobante generado el ${new Date().toLocaleDateString("es-AR")}
-  <br/><button class="no-print" onclick="window.print()" style="margin-top:12px;padding:8px 24px;background:#FF4500;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600">Imprimir</button>
+
+<div class="letras">${montoEnLetras(totalGeneral)}</div>
+
+<div class="firma-line">
+  <div class="firma-placeholder"></div>
+  <div class="firma-text">Firma y aclaraci\u00F3n</div>
 </div>
+
+${certRetGanHtml}
+
+<div class="print-btn no-print">
+  <button onclick="window.print()">Imprimir</button>
+</div>
+
 </body></html>`;
     const w = window.open("", "_blank", "width=800,height=700");
     if (w) { w.document.write(html); w.document.close(); }
