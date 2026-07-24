@@ -1699,9 +1699,11 @@ ${certRetGanHtml}
       const { data: items } = await (supabase as any).from("facturas_compra_items").select("producto_id, cantidad").eq("factura_compra_id", id);
       if (items && items.length > 0) {
         for (const it of items.filter((i: any) => i.producto_id)) {
-          const { data: prod } = await (supabase as any).from("productos").select("stock").eq("id", it.producto_id).single();
-          if (prod) {
-            await (supabase as any).from("productos").update({ stock: (prod.stock || 0) + it.cantidad }).eq("id", it.producto_id);
+          // Atomic stock increment via RPC
+          const { error: stockErr } = await supabase.rpc("increment_stock" as any, { producto_id: it.producto_id, cantidad: it.cantidad });
+          if (stockErr) {
+            console.error("Error al actualizar stock:", stockErr);
+            throw stockErr;
           }
         }
       }

@@ -394,19 +394,19 @@ export default function StockPage() {
     if (!adjustModal) return;
     setSaving(true);
     try {
-      let newStock: number;
       if (adjustMode === "set") {
         if (adjustAmount < 0) {
           alert("El stock no puede ser negativo.");
           setSaving(false);
           return;
         }
-        newStock = adjustAmount;
+        const { error } = await supabase.from("productos").update({ stock: adjustAmount }).eq("id", adjustModal.id);
+        if (error) throw error;
       } else {
-        newStock = Math.max(0, adjustModal.stock + adjustAmount);
+        // Atomic increment via RPC — no read-then-write race condition
+        const { error } = await supabase.rpc("increment_stock" as any, { producto_id: adjustModal.id, cantidad: adjustAmount });
+        if (error) throw error;
       }
-      const { error } = await supabase.from("productos").update({ stock: newStock }).eq("id", adjustModal.id);
-      if (error) throw error;
       setAdjustModal(null);
       await fetchData();
     } catch (err) {

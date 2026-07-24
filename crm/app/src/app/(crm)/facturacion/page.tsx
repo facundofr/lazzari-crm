@@ -601,36 +601,24 @@ export default function FacturacionPage() {
     setCobroSaving(true);
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id || null;
-      // Insert all movimientos
-      for (const linea of lineasValidas) {
-        const monto = Number(linea.monto);
-        const { error: movErr } = await (supabase as any).from("movimientos").insert({
-          tipo: linea.tipo,
-          cliente_id: factura.cliente_id || null,
-          factura_id: cobroModalId,
-          descripcion: linea.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}`,
-          monto,
-          moneda: factura.moneda || "ARS",
-          fecha: cobroFecha,
-          conciliado: false,
-          created_by: userId,
-          sociedad_id: sociedadActiva?.id || null,
-        });
-        if (movErr) throw movErr;
-      }
-
-      // Check if fully paid (total_acreditado from NC + all cobros)
-      const totalFactura = Number(factura.total) - Number(factura.total_acreditado || 0);
-      const totalCobrado = await fetchCobrosPrevios(cobroModalId);
-
-      if (totalCobrado >= totalFactura) {
-        await supabase.from("facturas").update({ estado: "pagada" } as any).eq("id", cobroModalId);
-      }
+      const lineasPayload = lineasValidas.map(l => ({
+        tipo: l.tipo,
+        monto: Number(l.monto),
+        descripcion: l.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}`,
+      }));
+      const { data: rpcResult, error: rpcErr } = await (supabase as any).rpc("registrar_cobro", {
+        p_factura_id: cobroModalId,
+        p_lineas: lineasPayload,
+        p_fecha: cobroFecha,
+        p_sociedad_id: sociedadActiva?.id || null,
+        p_created_by: userId,
+      });
+      if (rpcErr) throw rpcErr;
 
       setCobroModalId(null);
       await fetchData();
       if (detailFactura?.id === cobroModalId) {
-        setDetailFactura(prev => prev ? { ...prev, estado: totalCobrado >= totalFactura ? "pagada" : prev.estado } : null);
+        setDetailFactura(prev => prev ? { ...prev, estado: rpcResult?.pagada ? "pagada" : prev.estado } : null);
       }
     } catch (err: any) {
       alert("Error al registrar cobro: " + (err.message || JSON.stringify(err)));

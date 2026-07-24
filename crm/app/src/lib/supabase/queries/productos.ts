@@ -62,10 +62,8 @@ export async function updateStock(id: string, cantidad: number, operacion: "add"
     const { error } = await supabase.from("productos").update({ stock: cantidad }).eq("id", id);
     if (error) throw error;
   } else {
-    const { data: product, error: fetchError } = await supabase.from("productos").select("stock").eq("id", id).single();
-    if (fetchError) throw fetchError;
-    const newStock = Math.max(0, (product?.stock ?? 0) + cantidad);
-    const { error } = await supabase.from("productos").update({ stock: newStock }).eq("id", id);
+    // Atomic increment via RPC — no read-then-write race condition
+    const { error } = await (supabase as any).rpc("increment_stock", { producto_id: id, cantidad });
     if (error) throw error;
   }
 }

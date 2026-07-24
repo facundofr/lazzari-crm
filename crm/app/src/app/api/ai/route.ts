@@ -3,6 +3,14 @@ import { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
+// Tables that have sociedad_id column — AI queries will be auto-filtered
+const TABLES_WITH_SOCIEDAD = new Set([
+  "clientes", "proveedores", "productos", "presupuestos", "presupuesto_items",
+  "facturas", "remitos", "remito_items", "ordenes_compra", "orden_compra_items",
+  "listas_precios", "lista_precios_items", "movimientos", "transportes", "transportistas",
+  "gastos_manuales", "ordenes_pago", "echeqs", "facturas_compra", "facturas_compra_items", "eventos",
+]);
+
 // Tables the AI can query, grouped by access level
 const TABLE_ACCESS: Record<string, string[]> = {
   // Everyone can read these
@@ -141,7 +149,10 @@ Usa filtros con la sintaxis de Supabase PostgREST: eq, neq, gt, lt, gte, lte, li
   },
 ];
 
-function buildSystemPrompt(userName: string, userRole: string): string {
+function buildSystemPrompt(userName: string, userRole: string, allowedSociedadIds: string[]): string {
+  const sociedadRule = allowedSociedadIds.length > 0
+    ? `\n- IMPORTANTE: El usuario solo tiene acceso a las sociedades con IDs: ${allowedSociedadIds.join(", ")}. SIEMPRE filtrá por sociedad_id usando esos valores en TODAS las consultas a tablas que tengan columna sociedad_id (clientes, proveedores, productos, presupuestos, facturas, remitos, ordenes_compra, movimientos, transportes, transportistas, listas_precios, lista_precios_items, gastos_manuales, ordenes_pago, echeqs, facturas_compra, eventos). Al insertar o modificar registros, usá uno de estos sociedad_id.`
+    : "";
   return `Sos el asistente de IA de Lazzari CRM, una empresa de soluciones industriales (válvulas, caños, bombas, instrumentación) con sede en Argentina. Tu nombre es "Asistente Lazzari".
 
 El usuario actual es **${userName}** con rol **${userRole}**.
@@ -160,7 +171,7 @@ Reglas:
 - Mostrá los datos en formato legible (tablas, listas) y siempre en moneda con formato.
 - Si una consulta falla, explicá el error de forma simple.
 - No muestres IDs internos al usuario salvo que los pida.
-- Podés hacer varias consultas seguidas para armar una respuesta completa.`;
+- Podés hacer varias consultas seguidas para armar una respuesta completa.${sociedadRule}`;
 }
 
 export async function POST(request: NextRequest) {
@@ -192,8 +203,14 @@ export async function POST(request: NextRequest) {
     const role = profile?.role || "viewer";
     const name = profile?.full_name || "Usuario";
 
+    // Fetch allowed sociedades for this user
+    const { data: userSociedades } = await (authSupabase as any)
+      .from("user_sociedades")
+      .select("sociedad_id")
+      .eq("user_id", authUser.id);
+    const allowedSociedadIds: string[] = userSociedades?.map((s: any) => s.sociedad_id) || [];
+
     // Create Supabase client with service-level access for AI queries
-    // RLS still applies based on the anon key
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -222,7 +239,7 @@ export async function POST(request: NextRequest) {
       const response = await client.messages.create({
         model: "claude-haiku-4-5-20251001",
         max_tokens: 4096,
-        system: buildSystemPrompt(name, role),
+        system: buildSystemPrompt(name, role, allowedSociedadIds),
         tools: TOOLS,
         messages: currentMessages,
       });
@@ -268,6 +285,11 @@ export async function POST(request: NextRequest) {
                 }
               }
 
+              // Auto-filter by allowed sociedades
+              if (allowedSociedadIds.length > 0 && TABLES_WITH_SOCIEDAD.has(table)) {
+                query = query.in("sociedad_id", allowedSociedadIds);
+              }
+
               const order = input.order as string | undefined;
               if (order) {
                 const desc = order.startsWith("-");
@@ -291,6 +313,15 @@ export async function POST(request: NextRequest) {
               result = JSON.stringify({ error: `No tenés permisos para escribir en ${table} con rol ${role}` });
             } else {
               const data = input.data as Record<string, unknown>;
+              // Enforce sociedad_id on insert
+              if (allowedSociedadIds.length > 0 && TABLES_WITH_SOCIEDAD.has(table) && !data.sociedad_id) {
+                data.sociedad_id = allowedSociedadIds[0];
+              }
+              if (allowedSociedadIds.length > 0 && TABLES_WITH_SOCIEDAD.has(table) && data.sociedad_id && !allowedSociedadIds.includes(data.sociedad_id as string)) {
+                result = JSON.stringify({ error: "No tenés acceso a esa sociedad" });
+                toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result });
+                continue;
+              }
               const { data: inserted, error } = await supabase.from(table).insert(data).select().single();
               if (error) {
                 result = JSON.stringify({ error: error.message });
@@ -323,6 +354,9 @@ export async function POST(request: NextRequest) {
                 for (const f of filters) {
                   query = query.filter(f.column, f.operator, f.value);
                 }
+              }
+              if (allowedSociedadIds.length > 0 && TABLES_WITH_SOCIEDAD.has(table)) {
+                query = query.in("sociedad_id", allowedSociedadIds);
               }
               const { count, error } = await query;
               if (error) {

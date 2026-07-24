@@ -426,30 +426,13 @@ export default function OrdenesCompraPage() {
           .eq("id", item.id);
         if (itemErr) throw itemErr;
 
-        // Update stock in productos if producto_id exists
+        // Atomic stock increment via RPC
         if (item.producto_id) {
-          // Fetch current stock
-          const { data: prod, error: prodFetchErr } = await (supabase as any)
-            .from("productos")
-            .select("stock")
-            .eq("id", item.producto_id)
-            .single();
-          if (prodFetchErr) {
-            console.error("Error al obtener stock:", prodFetchErr);
-            alert(`Error al obtener stock del producto ${item.codigo}: ${prodFetchErr.message}`);
-            throw prodFetchErr;
-          }
-          if (prod) {
-            const currentStock = Number(prod.stock) || 0;
-            const { error: stockErr } = await (supabase as any)
-              .from("productos")
-              .update({ stock: currentStock + qtyRecibida })
-              .eq("id", item.producto_id);
-            if (stockErr) {
-              console.error("Error al actualizar stock:", stockErr);
-              alert(`Error al actualizar stock del producto ${item.codigo}: ${stockErr.message}`);
-              throw stockErr;
-            }
+          const { error: stockErr } = await supabase.rpc("increment_stock" as any, { producto_id: item.producto_id, cantidad: qtyRecibida });
+          if (stockErr) {
+            console.error("Error al actualizar stock:", stockErr);
+            alert(`Error al actualizar stock del producto ${item.codigo}: ${(stockErr as any).message}`);
+            throw stockErr;
           }
         }
       }
@@ -511,27 +494,12 @@ export default function OrdenesCompraPage() {
           alert(`Error al actualizar item ${item.codigo}: ${itemErr.message}`);
           throw itemErr;
         }
-        // Update stock
+        // Atomic stock increment via RPC
         if (item.producto_id) {
-          const { data: prod, error: prodFetchErr } = await (supabase as any)
-            .from("productos")
-            .select("stock")
-            .eq("id", item.producto_id)
-            .single();
-          if (prodFetchErr) {
-            alert(`Error al obtener stock del producto ${item.codigo}: ${prodFetchErr.message}`);
-            throw prodFetchErr;
-          }
-          if (prod) {
-            const currentStock = Number(prod.stock) || 0;
-            const { error: stockErr } = await (supabase as any)
-              .from("productos")
-              .update({ stock: currentStock + qtyRecibida })
-              .eq("id", item.producto_id);
-            if (stockErr) {
-              alert(`Error al actualizar stock del producto ${item.codigo}: ${stockErr.message}`);
-              throw stockErr;
-            }
+          const { error: stockErr } = await supabase.rpc("increment_stock" as any, { producto_id: item.producto_id, cantidad: qtyRecibida });
+          if (stockErr) {
+            alert(`Error al actualizar stock del producto ${item.codigo}: ${(stockErr as any).message}`);
+            throw stockErr;
           }
         }
       }
