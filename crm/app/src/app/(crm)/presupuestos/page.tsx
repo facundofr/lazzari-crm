@@ -737,7 +737,7 @@ export default function PresupuestosPage() {
     }
     fetchFacturadoIds();
     fetchRemitidoIds();
-  }, [presupuestos]);
+  }, [presupuestos, sociedadActiva?.id]);
 
   useEffect(() => {
     async function fetchVendedores() {

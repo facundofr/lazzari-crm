@@ -780,11 +780,11 @@ export default function FacturacionPage() {
   <div class="fc-center">
     <div>
       <div class="fc-letra">${letraComprobante}</div>
-      <div class="fc-cod">COD. ${String({ FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13 }[f.tipo] || 0).padStart(2, "0")}</div>
+      <div class="fc-cod">COD. ${String({ FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13, FCEA: 201, FCEB: 206, NCEA: 203, NCEB: 208 }[f.tipo] || 0).padStart(2, "0")}</div>
     </div>
   </div>
   <div class="fc-right">
-    <div class="comp-tipo">${f.tipo.startsWith("NC") ? "NOTA DE CRÉDITO" : f.tipo.startsWith("FCE") ? "FACTURA DE CRÉDITO ELECTRÓNICA" : "FACTURA"}</div>
+    <div class="comp-tipo">${f.tipo.startsWith("NCE") ? "NOTA DE CRÉDITO ELECTRÓNICA" : f.tipo.startsWith("NC") ? "NOTA DE CRÉDITO" : f.tipo.startsWith("FCE") ? "FACTURA DE CRÉDITO ELECTRÓNICA" : "FACTURA"}</div>
     <div class="comp-num">N° ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}</div>
     <div class="comp-fecha">Fecha: ${formatDate(f.fecha)}</div>
   </div>
@@ -818,9 +818,9 @@ export default function FacturacionPage() {
     <tr>
       <td>${it.descripcion}</td>
       <td class="right mono">${it.cantidad}</td>
-      <td class="right mono">${formatCurrency(Number(it.precio_unitario))}</td>
+      <td class="right mono">${formatCurrency(Number(it.precio_unitario), f.moneda as "USD" | "ARS")}</td>
       ${isFacturaBPdf ? "" : `<td class="right">${it.iva_porcentaje}%</td>`}
-      <td class="right mono">${formatCurrency(Number(it.subtotal))}</td>
+      <td class="right mono">${formatCurrency(Number(it.subtotal), f.moneda as "USD" | "ARS")}</td>
     </tr>`).join("") : `
     <tr>
       <td colspan="${isFacturaBPdf ? 4 : 5}" style="text-align:center;color:#888;padding:16px">
@@ -834,12 +834,12 @@ export default function FacturacionPage() {
   <div class="totals-inner">
     ${isUSDPdf ? `<div class="total-line" style="color:#888;font-size:10px"><span>Operacion en USD — TC: ${Number(f.tipo_cambio).toLocaleString("es-AR")}</span><span class="mono">USD ${(Number(f.total) / Number(f.tipo_cambio!)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
     ${isFacturaBPdf
-      ? `<div class="total-line"><span>Subtotal</span><span class="mono">${formatCurrency(Number(f.total))}</span></div>
-         <div class="total-line" style="color:#888;font-size:10px"><span>IVA incluido en precio</span><span class="mono">${formatCurrency(Number(f.iva))}</span></div>
-         <div class="total-line final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total))}</span></div>`
-      : `<div class="total-line"><span>Neto gravado</span><span class="mono">${formatCurrency(Number(f.subtotal))}</span></div>
-         <div class="total-line"><span>IVA 21%</span><span class="mono">${formatCurrency(Number(f.iva))}</span></div>
-         <div class="total-line final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total))}</span></div>`}
+      ? `<div class="total-line"><span>Subtotal</span><span class="mono">${formatCurrency(Number(f.total), f.moneda as "USD" | "ARS")}</span></div>
+         <div class="total-line" style="color:#888;font-size:10px"><span>IVA incluido en precio</span><span class="mono">${formatCurrency(Number(f.iva), f.moneda as "USD" | "ARS")}</span></div>
+         <div class="total-line final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total), f.moneda as "USD" | "ARS")}</span></div>`
+      : `<div class="total-line"><span>Neto gravado</span><span class="mono">${formatCurrency(Number(f.subtotal), f.moneda as "USD" | "ARS")}</span></div>
+         <div class="total-line"><span>IVA 21%</span><span class="mono">${formatCurrency(Number(f.iva), f.moneda as "USD" | "ARS")}</span></div>
+         <div class="total-line final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total), f.moneda as "USD" | "ARS")}</span></div>`}
   </div>
 </div>
 
@@ -1254,7 +1254,7 @@ ${f.cae ? `
                       <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">Vto CAE</span><span>{emitResult.cae_vencimiento ? formatDate(emitResult.cae_vencimiento) : "\u2014"}</span></div>
                     </>
                   )}
-                  <div className="flex justify-between border-t border-emerald-200 dark:border-emerald-700 pt-2"><span className="text-emerald-700 dark:text-emerald-400 font-semibold">Total</span><span className="font-mono font-bold">{formatCurrency(emitResult.total)}</span></div>
+                  <div className="flex justify-between border-t border-emerald-200 dark:border-emerald-700 pt-2"><span className="text-emerald-700 dark:text-emerald-400 font-semibold">Total</span><span className="font-mono font-bold">{formatCurrency(emitResult.total, emitData.moneda)}</span></div>
                 </div>
                 <div className="flex justify-center gap-3">
                   <button onClick={() => setEmitOpen(false)} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cerrar</button>
@@ -1597,12 +1597,12 @@ ${f.cae ? `
                   </div>
                   <div className="flex justify-between">
                     <span className="text-zinc-500">Total original</span>
-                    <span className="font-mono">{formatCurrency(Number(ncFactura.total))}</span>
+                    <span className="font-mono">{formatCurrency(Number(ncFactura.total), ncFactura.moneda as "USD" | "ARS")}</span>
                   </div>
                   {Number(ncFactura.total_acreditado) > 0 && (
                     <div className="flex justify-between text-amber-600 dark:text-amber-400 mt-1">
                       <span>Ya acreditado</span>
-                      <span className="font-mono">{formatCurrency(Number(ncFactura.total_acreditado))}</span>
+                      <span className="font-mono">{formatCurrency(Number(ncFactura.total_acreditado), ncFactura.moneda as "USD" | "ARS")}</span>
                     </div>
                   )}
                 </div>
@@ -1699,15 +1699,15 @@ ${f.cae ? `
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4 space-y-2 text-sm">
                   {isFacturaANc ? (
                     <>
-                      <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(ncTotals.neto)}</span></div>
-                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(ncTotals.iva)}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(ncTotals.neto, ncFactura?.moneda as "USD" | "ARS")}</span></div>
+                      <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(ncTotals.iva, ncFactura?.moneda as "USD" | "ARS")}</span></div>
                       <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-700 pt-2 font-semibold text-base">
-                        <span>Total NC</span><span className="font-mono">{formatCurrency(ncTotals.total)}</span>
+                        <span>Total NC</span><span className="font-mono">{formatCurrency(ncTotals.total, ncFactura?.moneda as "USD" | "ARS")}</span>
                       </div>
                     </>
                   ) : (
                     <div className="flex justify-between font-semibold text-base">
-                      <span>Total NC</span><span className="font-mono">{formatCurrency(ncTotals.total)}</span>
+                      <span>Total NC</span><span className="font-mono">{formatCurrency(ncTotals.total, ncFactura?.moneda as "USD" | "ARS")}</span>
                     </div>
                   )}
                 </div>
@@ -1740,7 +1740,7 @@ ${f.cae ? `
                 </div>
                 <h3 className="text-lg font-bold dark:text-white">Nota de Crédito emitida</h3>
                 <p className="text-sm font-mono text-emerald-700 dark:text-emerald-400">{ncResult}</p>
-                <p className="text-xs text-zinc-400">Total acreditado: {formatCurrency(ncTotals.total)}</p>
+                <p className="text-xs text-zinc-400">Total acreditado: {formatCurrency(ncTotals.total, ncFactura?.moneda as "USD" | "ARS")}</p>
                 <button onClick={() => setNcOpen(false)} className="mt-2 px-6 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600">Cerrar</button>
               </div>
             )}

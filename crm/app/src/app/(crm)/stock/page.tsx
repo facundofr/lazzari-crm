@@ -152,7 +152,7 @@ export default function StockPage() {
     } finally {
       setLoading(false);
     }
-  }, [sociedadActiva]);
+  }, [sociedadActiva?.id]);
 
   const fetchProveedores = useCallback(async () => {
     try {
