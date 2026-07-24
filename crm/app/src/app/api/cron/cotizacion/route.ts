@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires" });
   const results: { modalidad: string; ok: boolean; error?: string }[] = [];
 
   let html: string;
