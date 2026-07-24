@@ -34,6 +34,11 @@ export async function updateSession(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const isPublicApi = pathname.startsWith("/api/cron/") || pathname === "/api/cotizacion-bna";
 
+  // Public APIs skip all auth checks
+  if (isPublicApi) {
+    return supabaseResponse;
+  }
+
   // Supabase unreachable — don't treat as "no user"
   if (authError && !user && authError.status !== 401) {
     if (pathname.startsWith("/api/")) {
@@ -42,8 +47,8 @@ export async function updateSession(request: NextRequest) {
     return supabaseResponse;
   }
 
-  // Not logged in and not on login page or public API
-  if (!user && !isLoginPage && !isPublicApi) {
+  // Not logged in and not on login page
+  if (!user && !isLoginPage) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
