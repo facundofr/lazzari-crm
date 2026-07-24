@@ -181,11 +181,13 @@ export async function POST(request: NextRequest) {
     if (!authUser) {
       return Response.json({ error: "No autorizado" }, { status: 401 });
     }
-    const { data: profile } = await authSupabase
+    const { data: profile, error: profileError } = await authSupabase
       .from("profiles")
       .select("role, full_name")
       .eq("id", authUser.id)
       .single();
+
+    if (profileError) console.error("Error fetching profile for AI:", profileError.message);
 
     const role = profile?.role || "viewer";
     const name = profile?.full_name || "Usuario";

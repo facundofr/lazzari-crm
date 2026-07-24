@@ -1117,7 +1117,7 @@ export default function PresupuestosPage() {
       for (const provId of proveedorIds) {
         const provItems = byProveedor[provId];
         const subtotal = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
-        const iva = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje) || 21) / 100), 0);
+        const iva = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
         const isSinProveedor = provId === "__sin_proveedor__";
 
         const { data: ocRow, error: ocErr } = await supabase
@@ -1297,21 +1297,27 @@ export default function PresupuestosPage() {
   async function handleDelete(id: string) {
     if (!confirm("Seguro que queres eliminar este presupuesto?")) return;
     try {
-      const [{ data: facs }, { data: rems }, { data: ocs }] = await Promise.all([
+      const [facRes, remRes, ocRes] = await Promise.all([
         (supabase as any).from("facturas").select("id").eq("presupuesto_id", id).limit(1),
         (supabase as any).from("remitos").select("id").eq("presupuesto_id", id).limit(1),
         supabase.from("ordenes_compra").select("id").eq("presupuesto_origen_id", id).limit(1),
       ]);
+      if (facRes.error || remRes.error || ocRes.error) {
+        alert("Error al verificar registros vinculados. No se eliminó.");
+        return;
+      }
       const linked: string[] = [];
-      if (facs?.length) linked.push("facturas");
-      if (rems?.length) linked.push("remitos");
-      if (ocs?.length) linked.push("ordenes de compra");
+      if (facRes.data?.length) linked.push("facturas");
+      if (remRes.data?.length) linked.push("remitos");
+      if (ocRes.data?.length) linked.push("ordenes de compra");
       if (linked.length > 0) {
         alert(`No se puede eliminar: este presupuesto tiene ${linked.join(", ")} asociados.`);
         return;
       }
-      await supabase.from("presupuesto_items").delete().eq("presupuesto_id", id);
-      await supabase.from("presupuestos").delete().eq("id", id);
+      const { error: delItemsErr } = await supabase.from("presupuesto_items").delete().eq("presupuesto_id", id);
+      if (delItemsErr) throw delItemsErr;
+      const { error: delPrErr } = await supabase.from("presupuestos").delete().eq("id", id);
+      if (delPrErr) throw delPrErr;
       setSelected(null);
       toast.success("Presupuesto eliminado");
       await fetchPresupuestos();

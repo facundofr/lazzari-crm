@@ -27,11 +27,20 @@ export async function updateSession(request: NextRequest) {
 
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser();
 
   const isLoginPage = request.nextUrl.pathname === "/login";
   const pathname = request.nextUrl.pathname;
   const isPublicApi = pathname.startsWith("/api/cron/") || pathname === "/api/cotizacion-bna";
+
+  // Supabase unreachable — don't treat as "no user"
+  if (authError && !user && authError.status !== 401) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json({ error: "Servicio temporalmente no disponible" }, { status: 503 });
+    }
+    return supabaseResponse;
+  }
 
   // Not logged in and not on login page or public API
   if (!user && !isLoginPage && !isPublicApi) {

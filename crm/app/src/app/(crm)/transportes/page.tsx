@@ -144,7 +144,7 @@ export default function TransportesPage() {
         .from("transportistas")
         .select("*")
         .order("nombre");
-      if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
+      if (sociedadActiva?.id) q = q.or(`sociedad_id.eq.${sociedadActiva.id},sociedad_id.is.null`);
       const { data, error } = await q;
       if (!error && data) setTransportistas(data as TransportistaRow[]);
       else setTransportistas([]);

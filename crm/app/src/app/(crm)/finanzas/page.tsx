@@ -1885,7 +1885,7 @@ ${certRetGanHtml}
   }
 
   // ── Derived calculations ──
-  const currentMonth = new Date().toISOString().slice(0, 7);
+  const currentMonth = new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires", year: "numeric", month: "2-digit" }).slice(0, 7);
   const movimientosMes = movimientos.filter((m) => m.fecha?.startsWith(currentMonth));
   const movimientosMesARS = movimientosMes.filter((m) => !m.moneda || m.moneda === "ARS");
   const movimientosMesUSD = movimientosMes.filter((m) => m.moneda === "USD");

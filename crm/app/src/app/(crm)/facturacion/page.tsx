@@ -1447,9 +1447,11 @@ ${f.cae ? `
                       <button onClick={() => openCobroModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
                         <DollarSign className="h-4 w-4" /> Registrar cobro
                       </button>
-                      <button onClick={() => openNcModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-blue-950/30">
-                        <FileText className="h-4 w-4" /> Emitir Nota de Crédito
-                      </button>
+                      {["FA", "FB", "FCEA", "FCEB"].includes(detailFactura.tipo) && (
+                        <button onClick={() => openNcModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-blue-950/30">
+                          <FileText className="h-4 w-4" /> Emitir Nota de Crédito
+                        </button>
+                      )}
                       <button onClick={() => handleAnular(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-red-950/30">
                         <XCircle className="h-4 w-4" /> Anular comprobante
                       </button>
