@@ -214,15 +214,15 @@ export default function ProveedoresPage() {
       }
       const [provRes, listasRes] = await Promise.all([provQuery, listasQuery]);
 
-      if (provRes.data && provRes.data.length > 0) {
-        setProveedores(provRes.data.map((r) => mapSupabaseProveedor(r as Record<string, unknown>)));
-      } else {
+      if (provRes.error) {
         setProveedores(mockProveedores);
-      }
-      if (listasRes.data && listasRes.data.length > 0) {
-        setListas(listasRes.data.map((r) => mapSupabaseLista(r as Record<string, unknown>)));
       } else {
+        setProveedores((provRes.data || []).map((r) => mapSupabaseProveedor(r as Record<string, unknown>)));
+      }
+      if (listasRes.error) {
         setListas(mockListasPrecios);
+      } else {
+        setListas((listasRes.data || []).map((r) => mapSupabaseLista(r as Record<string, unknown>)));
       }
     } catch (err) {
       console.error("Error fetching proveedores:", err);
@@ -481,6 +481,7 @@ export default function ProveedoresPage() {
           precio: item.precio,
           descuento: item.descuento || 0,
           precio_neto: item.precio_neto,
+          ...(sociedadActiva?.id ? { sociedad_id: sociedadActiva.id } : {}),
         }));
 
         const { error: itemsError } = await (supabase as any)

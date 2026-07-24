@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import { createSupabaseServer } from "@/lib/supabase/server";
 
 // Tables the AI can query, grouped by access level
 const TABLE_ACCESS: Record<string, string[]> = {
@@ -164,7 +165,7 @@ Reglas:
 
 export async function POST(request: NextRequest) {
   try {
-    const { messages, userRole, userName } = await request.json();
+    const { messages } = await request.json();
 
     if (!messages || !Array.isArray(messages)) {
       return Response.json({ error: "Se requiere un array de mensajes" }, { status: 400 });
@@ -175,8 +176,19 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "API key no configurada" }, { status: 500 });
     }
 
-    const role = userRole || "viewer";
-    const name = userName || "Usuario";
+    const authSupabase = await createSupabaseServer();
+    const { data: { user: authUser } } = await authSupabase.auth.getUser();
+    if (!authUser) {
+      return Response.json({ error: "No autorizado" }, { status: 401 });
+    }
+    const { data: profile } = await authSupabase
+      .from("profiles")
+      .select("role, full_name")
+      .eq("id", authUser.id)
+      .single();
+
+    const role = profile?.role || "viewer";
+    const name = profile?.full_name || "Usuario";
 
     // Create Supabase client with service-level access for AI queries
     // RLS still applies based on the anon key

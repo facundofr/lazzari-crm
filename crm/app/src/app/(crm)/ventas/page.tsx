@@ -440,10 +440,6 @@ export default function VentasPage() {
         cantidad: it.cantidad,
         precio_unitario: it.precio_unitario,
         iva_porcentaje: emitTipo === "FA" ? it.iva_porcentaje : 21,
-        subtotal: it.cantidad * it.precio_unitario,
-        total: emitTipo === "FA"
-          ? it.cantidad * it.precio_unitario * (1 + it.iva_porcentaje / 100)
-          : it.cantidad * it.precio_unitario,
         orden: idx,
       }));
       const { error: itemsError } = await (supabase.from("factura_items") as any).insert(facturaItems);

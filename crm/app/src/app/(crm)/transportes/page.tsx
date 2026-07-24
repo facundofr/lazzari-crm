@@ -140,15 +140,17 @@ export default function TransportesPage() {
   const fetchTransportistas = useCallback(async () => {
     setCatLoading(true);
     try {
-      const { data, error } = await (supabase as any)
+      let q = (supabase as any)
         .from("transportistas")
         .select("*")
         .order("nombre");
+      if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
+      const { data, error } = await q;
       if (!error && data) setTransportistas(data as TransportistaRow[]);
       else setTransportistas([]);
     } catch { setTransportistas([]); }
     finally { setCatLoading(false); }
-  }, []);
+  }, [sociedadActiva?.id]);
 
   // ── Fetch envíos ──────────────────────────────────────────────────
   const fetchEnvios = useCallback(async () => {
@@ -206,7 +208,7 @@ export default function TransportesPage() {
     if (Object.keys(errs).length > 0) { setCatFormErrors(errs); return; }
     setCatSaving(true);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         nombre: catForm.nombre.trim(),
         razon_social: catForm.razon_social.trim() || null,
         cuit: catForm.cuit.trim() || null,
@@ -218,6 +220,7 @@ export default function TransportesPage() {
         contacto_principal: catForm.contacto_principal.trim() || null,
         observaciones: catForm.observaciones.trim() || null,
       };
+      if (!catEditingId && sociedadActiva?.id) payload.sociedad_id = sociedadActiva.id;
       if (catEditingId) {
         const { error } = await (supabase as any).from("transportistas").update(payload).eq("id", catEditingId);
         if (error) throw error;

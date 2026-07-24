@@ -707,10 +707,12 @@ export default function PresupuestosPage() {
   useEffect(() => {
     async function fetchFacturadoIds() {
       try {
-        const { data } = await supabase
+        let fq = supabase
           .from("facturas")
           .select("presupuesto_id")
           .not("presupuesto_id", "is", null);
+        if (sociedadActiva?.id) fq = fq.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data } = await fq;
         if (data) {
           setFacturadoIds(new Set(data.map((f: any) => f.presupuesto_id).filter(Boolean)));
         }
@@ -720,10 +722,12 @@ export default function PresupuestosPage() {
     }
     async function fetchRemitidoIds() {
       try {
-        const { data } = await supabase
+        let rq = supabase
           .from("remitos")
           .select("presupuesto_id")
           .not("presupuesto_id", "is", null);
+        if (sociedadActiva?.id) rq = rq.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data } = await rq;
         if (data) {
           setRemitidoIds(new Set(data.map((r: any) => r.presupuesto_id).filter(Boolean)));
         }
@@ -1113,7 +1117,7 @@ export default function PresupuestosPage() {
       for (const provId of proveedorIds) {
         const provItems = byProveedor[provId];
         const subtotal = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
-        const iva = subtotal * 0.21;
+        const iva = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje) || 21) / 100), 0);
         const isSinProveedor = provId === "__sin_proveedor__";
 
         const { data: ocRow, error: ocErr } = await supabase
@@ -1293,6 +1297,19 @@ export default function PresupuestosPage() {
   async function handleDelete(id: string) {
     if (!confirm("Seguro que queres eliminar este presupuesto?")) return;
     try {
+      const [{ data: facs }, { data: rems }, { data: ocs }] = await Promise.all([
+        (supabase as any).from("facturas").select("id").eq("presupuesto_id", id).limit(1),
+        (supabase as any).from("remitos").select("id").eq("presupuesto_id", id).limit(1),
+        supabase.from("ordenes_compra").select("id").eq("presupuesto_origen_id", id).limit(1),
+      ]);
+      const linked: string[] = [];
+      if (facs?.length) linked.push("facturas");
+      if (rems?.length) linked.push("remitos");
+      if (ocs?.length) linked.push("ordenes de compra");
+      if (linked.length > 0) {
+        alert(`No se puede eliminar: este presupuesto tiene ${linked.join(", ")} asociados.`);
+        return;
+      }
       await supabase.from("presupuesto_items").delete().eq("presupuesto_id", id);
       await supabase.from("presupuestos").delete().eq("id", id);
       setSelected(null);
@@ -1583,13 +1600,13 @@ export default function PresupuestosPage() {
     `).join("");
 
     const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${pr.numero} - Lazzari</title>
+<html><head><meta charset="utf-8"><title>${pr.numero} - ${sociedadActiva?.razonSocial || "Lazzari"}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; padding: 0; color: #1a1a1a; font-size: 13px; line-height: 1.5; }
   .page { max-width: 800px; margin: 0 auto; padding: 40px 48px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 3px solid #FF4500; }
-  .brand { font-size: 20px; font-weight: 800; color: #FF4500; letter-spacing: -0.5px; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 3px solid ${sociedadActiva?.colorPrimario || "#FF4500"}; }
+  .brand { font-size: 20px; font-weight: 800; color: ${sociedadActiva?.colorPrimario || "#FF4500"}; letter-spacing: -0.5px; }
   .brand-sub { font-size: 10px; color: #999; font-weight: 400; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 2px; }
   .doc-info { text-align: right; }
   .doc-type { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: #888; font-weight: 600; }
@@ -1598,7 +1615,7 @@ export default function PresupuestosPage() {
   .doc-fecha { font-size: 11px; color: #888; margin-top: 6px; }
   .two-col { display: flex; gap: 32px; margin-bottom: 28px; }
   .col { flex: 1; }
-  .section-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px; color: #FF4500; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
+  .section-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px; color: ${sociedadActiva?.colorPrimario || "#FF4500"}; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
   .field { margin-bottom: 6px; }
   .field-label { font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.3px; }
   .field-value { font-size: 13px; font-weight: 500; }
@@ -1620,8 +1637,8 @@ export default function PresupuestosPage() {
 
 <div class="header">
   <div>
-    <div class="brand">LAZZARI</div>
-    <div class="brand-sub">Soluciones Industriales</div>
+    <div class="brand">${(sociedadActiva?.nombre || "LAZZARI").toUpperCase()}</div>
+    <div class="brand-sub">${sociedadActiva?.razonSocial || "Soluciones Industriales"}</div>
   </div>
   <div class="doc-info">
     <div class="doc-type">Presupuesto</div>
@@ -1671,7 +1688,7 @@ export default function PresupuestosPage() {
 ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones</div>${pr.observaciones}</div>` : ""}
 
 <div class="footer">
-  <span>Lazzari Soluciones Industriales</span>
+  <span>${sociedadActiva?.razonSocial || "Lazzari Soluciones Industriales"}</span>
   <span>${pr.numero}${pr.creadoPor ? ` | ${pr.creadoPor}` : ""}</span>
   <span>${formatDate(new Date().toISOString())}</span>
 </div>

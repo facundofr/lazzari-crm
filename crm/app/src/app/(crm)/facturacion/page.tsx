@@ -191,7 +191,7 @@ export default function FacturacionPage() {
       setNcError("Ingresá el número de comprobante"); return;
     }
 
-    const ncTipo = ncFactura.tipo === "FA" || ncFactura.tipo === "FCEA" ? "NCA" : "NCB";
+    const ncTipo = ncFactura.tipo === "FCEA" ? "NCEA" : ncFactura.tipo === "FCEB" ? "NCEB" : ncFactura.tipo === "FA" ? "NCA" : "NCB";
     setNcStep("saving");
     setNcError("");
 
@@ -254,8 +254,7 @@ export default function FacturacionPage() {
 
         if (newNc) {
           const itemRows = ncItems.map((it, idx) => {
-            const neto = isFacturaANc ? it.cantidad * it.precio_unitario : Math.round(it.cantidad * it.precio_unitario / 1.21 * 100) / 100;
-            return { factura_id: newNc.id, descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: it.precio_unitario, iva_porcentaje: isFacturaANc ? it.iva_porcentaje : 21, subtotal: neto, orden: idx };
+            return { factura_id: newNc.id, descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: it.precio_unitario, iva_porcentaje: isFacturaANc ? it.iva_porcentaje : 21, orden: idx };
           });
           await (supabase as any).from("factura_items").insert(itemRows);
         }
@@ -593,6 +592,12 @@ export default function FacturacionPage() {
     if (!cobroModalId || lineasValidas.length === 0) return;
     const factura = facturas.find(f => f.id === cobroModalId);
     if (!factura) return;
+    const totalLineas = lineasValidas.reduce((s, l) => s + Number(l.monto), 0);
+    const saldo = Number(factura.total) - Number(factura.total_acreditado || 0) - cobroPrevios;
+    if (totalLineas > saldo + 0.01) {
+      alert(`El total de cobros ($${totalLineas.toLocaleString()}) supera el saldo pendiente ($${Math.max(0, saldo).toLocaleString()})`);
+      return;
+    }
     setCobroSaving(true);
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id || null;
@@ -675,11 +680,11 @@ export default function FacturacionPage() {
       f.oc_cliente ? `OC Cliente: ${f.oc_cliente}` : null,
       "",
       "DETALLE:",
-      ...detailItems.map((it, i) => `${i + 1}. ${it.descripcion} — ${it.cantidad} x ${formatCurrency(it.precio_unitario)} = ${formatCurrency(it.subtotal)}`),
+      ...detailItems.map((it, i) => `${i + 1}. ${it.descripcion} — ${it.cantidad} x ${formatCurrency(it.precio_unitario, f.moneda as "USD" | "ARS")} = ${formatCurrency(it.subtotal, f.moneda as "USD" | "ARS")}`),
       "",
-      `Subtotal: ${formatCurrency(Number(f.subtotal))}`,
-      `IVA: ${formatCurrency(Number(f.iva))}`,
-      `TOTAL: ${formatCurrency(Number(f.total))}`,
+      `Subtotal: ${formatCurrency(Number(f.subtotal), f.moneda as "USD" | "ARS")}`,
+      `IVA: ${formatCurrency(Number(f.iva), f.moneda as "USD" | "ARS")}`,
+      `TOTAL: ${formatCurrency(Number(f.total), f.moneda as "USD" | "ARS")}`,
       f.moneda === "USD" && f.tipo_cambio ? `Moneda: USD — TC: ${Number(f.tipo_cambio).toLocaleString("es-AR")}` : null,
       f.cae ? `\nCAE: ${f.cae}` : null,
       f.cae_vencimiento ? `Vto CAE: ${formatDate(f.cae_vencimiento)}` : null,
@@ -708,14 +713,14 @@ export default function FacturacionPage() {
 
     const cli = f.clientes;
     const comp = formatComprobante(f.tipo, f.punto_venta, f.numero);
-    const letraComprobante = f.tipo.replace("NC", "").replace("ND", "");
+    const letraComprobante = f.tipo.slice(-1);
     const isFacturaBPdf = f.tipo === "FB" || f.tipo === "NCB";
 
     // Build QR data URL for ARCA verification
     const isUSDPdf = f.moneda === "USD" && f.tipo_cambio;
     const qrData = JSON.stringify({
       ver: 1, fecha: f.fecha, cuit: emisorData.cuitNumero, ptoVta: f.punto_venta,
-      tipoCmp: ({ FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13, FCEA: 201, FCEB: 206 } as Record<string, number>)[f.tipo] || 1,
+      tipoCmp: ({ FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13, FCEA: 201, FCEB: 206, NCEA: 203, NCEB: 208 } as Record<string, number>)[f.tipo] || 1,
       nroCmp: f.numero, importe: Number(f.total), moneda: isUSDPdf ? "DOL" : "PES", ctz: isUSDPdf ? Number(f.tipo_cambio) : 1,
       tipoDocRec: cli?.cuit ? 80 : 99, nroDocRec: cli?.cuit ? Number(cli.cuit.replace(/-/g, "")) : 0,
       tipoCodAut: "E", codAut: Number(f.cae || 0),
@@ -921,7 +926,7 @@ ${f.cae ? `
               },
               { key: "fecha", label: "Fecha", sortable: true, render: (r) => <span className="text-zinc-500">{formatDate(r.fecha)}</span> },
               { key: "total", label: "Total", sortable: true, className: "text-right", render: (r) => (
-                <span className="font-mono font-semibold block text-right">{formatCurrency(Number(r.total))}</span>
+                <span className="font-mono font-semibold block text-right">{formatCurrency(Number(r.total), r.moneda as "USD" | "ARS")}</span>
               )},
               { key: "cae", label: "CAE", render: (r) => r.cae
                 ? <span className="font-mono text-xs text-emerald-600 dark:text-emerald-400">{r.cae.slice(-8)}</span>
@@ -1373,8 +1378,8 @@ ${f.cae ? `
                           <tr key={idx} className="border-t border-zinc-100 dark:border-zinc-800">
                             <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300">{it.descripcion}</td>
                             <td className="px-3 py-2 text-right font-mono text-zinc-600 dark:text-zinc-400">{it.cantidad}</td>
-                            <td className="px-3 py-2 text-right font-mono text-zinc-600 dark:text-zinc-400">{formatCurrency(Number(it.precio_unitario))}</td>
-                            <td className="px-3 py-2 text-right font-mono font-medium text-zinc-700 dark:text-zinc-300">{formatCurrency(Number(it.subtotal))}</td>
+                            <td className="px-3 py-2 text-right font-mono text-zinc-600 dark:text-zinc-400">{formatCurrency(Number(it.precio_unitario), detailFactura.moneda as "USD" | "ARS")}</td>
+                            <td className="px-3 py-2 text-right font-mono font-medium text-zinc-700 dark:text-zinc-300">{formatCurrency(Number(it.subtotal), detailFactura.moneda as "USD" | "ARS")}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1389,15 +1394,15 @@ ${f.cae ? `
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
                   <div className="flex items-center justify-between px-4 py-2.5 text-sm">
                     <span className="text-zinc-500">Neto gravado</span>
-                    <span className="font-mono">{formatCurrency(Number(detailFactura.subtotal))}</span>
+                    <span className="font-mono">{formatCurrency(Number(detailFactura.subtotal), detailFactura.moneda as "USD" | "ARS")}</span>
                   </div>
                   <div className="flex items-center justify-between px-4 py-2.5 text-sm border-t border-zinc-100 dark:border-zinc-800">
                     <span className="text-zinc-500">IVA</span>
-                    <span className="font-mono">{formatCurrency(Number(detailFactura.iva))}</span>
+                    <span className="font-mono">{formatCurrency(Number(detailFactura.iva), detailFactura.moneda as "USD" | "ARS")}</span>
                   </div>
                   <div className="flex items-center justify-between px-4 py-3 text-sm border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 font-semibold">
                     <span className="text-zinc-700 dark:text-zinc-300">Total</span>
-                    <span className="font-mono text-base">{formatCurrency(Number(detailFactura.total))}</span>
+                    <span className="font-mono text-base">{formatCurrency(Number(detailFactura.total), detailFactura.moneda as "USD" | "ARS")}</span>
                   </div>
                   {detailFactura.moneda === "USD" && detailFactura.tipo_cambio && (
                     <div className="flex items-center justify-between px-4 py-2 text-xs border-t border-zinc-100 dark:border-zinc-800 text-zinc-400">
@@ -1420,14 +1425,14 @@ ${f.cae ? `
                           <span className="text-zinc-400 ml-2">{formatDate(nc.fecha)}</span>
                           {nc.cae && <span className="text-emerald-600 dark:text-emerald-400 ml-2">CAE ✓</span>}
                         </div>
-                        <span className="font-mono font-semibold text-amber-700 dark:text-amber-400">{formatCurrency(Number(nc.total))}</span>
+                        <span className="font-mono font-semibold text-amber-700 dark:text-amber-400">{formatCurrency(Number(nc.total), detailFactura.moneda as "USD" | "ARS")}</span>
                       </div>
                     ))}
                   </div>
                   {Number(detailFactura.total_acreditado) > 0 && (
                     <div className="mt-2 flex justify-between text-xs text-amber-700 dark:text-amber-400 font-medium px-1">
                       <span>Total acreditado</span>
-                      <span className="font-mono">{formatCurrency(Number(detailFactura.total_acreditado))}</span>
+                      <span className="font-mono">{formatCurrency(Number(detailFactura.total_acreditado), detailFactura.moneda as "USD" | "ARS")}</span>
                     </div>
                   )}
                 </div>

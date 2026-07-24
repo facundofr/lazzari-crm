@@ -156,17 +156,19 @@ export default function StockPage() {
 
   const fetchProveedores = useCallback(async () => {
     try {
-      const { data, error } = await supabase
+      let q = supabase
         .from("proveedores")
         .select("id, razon_social")
         .order("razon_social");
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data, error } = await q;
       if (!error && data) {
         setProveedoresList(data as ProveedorOption[]);
       }
     } catch {
       // silently ignore
     }
-  }, []);
+  }, [sociedadActiva?.id]);
 
   useEffect(() => { fetchData(); fetchProveedores(); }, [fetchData, fetchProveedores]);
 
@@ -382,6 +384,7 @@ export default function StockPage() {
       await fetchData();
     } catch (err) {
       console.error("Error deleting product:", err);
+      alert("Error al eliminar producto: " + (err as any)?.message);
     } finally {
       setDeleting(false);
     }
@@ -408,6 +411,7 @@ export default function StockPage() {
       await fetchData();
     } catch (err) {
       console.error("Error adjusting stock:", err);
+      alert("Error al ajustar stock: " + (err as any)?.message);
     } finally {
       setSaving(false);
     }

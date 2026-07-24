@@ -125,7 +125,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 }
 
 export default function OrdenesCompraPage() {
-  const { sociedadActiva } = useUser();
+  const { sociedadActiva, profile } = useUser();
   const [filter, setFilter] = useState<OCStatus | "todas">("todas");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -171,6 +171,7 @@ export default function OrdenesCompraPage() {
     proveedor_id: string;
     proveedor_nombre: string;
     moneda: string;
+    iva_porcentaje: number;
     selected: boolean;
   }
   interface ProveedorGroup {
@@ -310,7 +311,7 @@ export default function OrdenesCompraPage() {
       if (formData.presupuesto_origen_id) {
         let itemsQuery = supabase
           .from("presupuesto_items")
-          .select("id, codigo, descripcion, cantidad, precio_costo, unidad, producto_id, proveedor_id")
+          .select("id, codigo, descripcion, cantidad, precio_costo, unidad, producto_id, proveedor_id, iva_porcentaje")
           .eq("presupuesto_id", formData.presupuesto_origen_id);
         // If a proveedor is selected, only take items from that proveedor
         if (formData.proveedor_id) {
@@ -321,7 +322,11 @@ export default function OrdenesCompraPage() {
       }
 
       const itemsSubtotal = prItems.reduce((sum, it) => sum + (Number(it.precio_costo) || 0) * (Number(it.cantidad) || 0), 0);
-      const itemsIva = Math.round(itemsSubtotal * 0.21 * 100) / 100;
+      const itemsIva = prItems.reduce((sum, it) => {
+        const lineSubtotal = (Number(it.precio_costo) || 0) * (Number(it.cantidad) || 0);
+        const ivaPct = Number(it.iva_porcentaje ?? 21) / 100;
+        return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
+      }, 0);
 
       const { data: ocRow, error } = await supabase.from("ordenes_compra").insert({
         proveedor_id: formData.proveedor_id || null,
@@ -335,6 +340,7 @@ export default function OrdenesCompraPage() {
         total: Math.round((itemsSubtotal + itemsIva) * 100) / 100,
         sociedad_id: sociedadActiva?.id || null,
         presupuesto_origen_id: formData.presupuesto_origen_id || null,
+        created_by: profile?.id || null,
       } as any).select("id").single();
       if (error) throw error;
 
@@ -854,7 +860,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
 
       const { data: items } = await supabase
         .from("presupuesto_items")
-        .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id, proveedor_nombre")
+        .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id, proveedor_nombre, iva_porcentaje")
         .in("presupuesto_id", prIds)
         .not("proveedor_id", "is", null) as { data: any[] | null };
 
@@ -894,6 +900,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           proveedor_id: provId,
           proveedor_nombre: (item.proveedor_nombre as string) || "",
           moneda: pr.moneda || "ARS",
+          iva_porcentaje: Number(item.iva_porcentaje ?? 21),
           selected: true,
         });
       }
@@ -901,6 +908,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       setConsolidateGroups(Object.values(groups));
     } catch (err) {
       console.error("Error loading consolidation data:", err);
+      alert("Error al cargar datos de consolidación: " + (err as any)?.message);
       setConsolidateGroups([]);
     } finally {
       setConsolidateLoading(false);
@@ -936,7 +944,11 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         if (selectedItems.length === 0) continue;
 
         const subtotal = selectedItems.reduce((sum, it) => sum + it.precio_costo * it.cantidad, 0);
-        const iva = Math.round(subtotal * 0.21 * 100) / 100;
+        const iva = selectedItems.reduce((sum, it) => {
+          const lineSubtotal = it.precio_costo * it.cantidad;
+          const ivaPct = (it.iva_porcentaje ?? 21) / 100;
+          return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
+        }, 0);
 
         // Get unique PR IDs for observaciones and origin linking
         const prNums = [...new Set(selectedItems.map(it => it.pr_numero))];
@@ -956,6 +968,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             observaciones: obs,
             sociedad_id: sociedadActiva?.id || null,
             presupuesto_origen_id: prIds.length === 1 ? prIds[0] : null,
+            created_by: profile?.id || null,
           } as any)
           .select("id")
           .single();
@@ -1037,6 +1050,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       if (provs) setSinProveedorProvs(provs as unknown as ProveedorOption[]);
     } catch (err) {
       console.error("Error loading items sin proveedor:", err);
+      alert("Error al cargar items sin proveedor: " + (err as any)?.message);
       setSinProveedorItems([]);
     } finally {
       setSinProveedorLoading(false);
@@ -1072,7 +1086,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       }
     } catch (err) {
       console.error("Error asignando proveedores:", err);
-      alert("Error al asignar proveedores");
+      alert("Error al asignar proveedores: " + (err as any)?.message);
     } finally {
       setSinProveedorSaving(false);
     }

@@ -431,10 +431,12 @@ export default function RemitosPage() {
   async function openIAModal() {
     setSelectedPresupuestos(new Set());
     setIaSuccess("");
-    const { data } = await supabase
+    let iaQ = supabase
       .from("presupuestos")
       .select("id, numero, cliente_id, clientes(razon_social), presupuesto_items(id, descripcion, cantidad, unidad)")
       .eq("estado", "aprobado");
+    if (sociedadActiva?.id) iaQ = iaQ.eq("sociedad_id" as any, sociedadActiva.id);
+    const { data } = await iaQ;
     if (data) setPresupuestosIA(data as unknown as PresupuestoIA[]);
     setIaModalOpen(true);
   }

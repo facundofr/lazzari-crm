@@ -60,7 +60,6 @@ interface ClienteRow {
   markup_predeterminado?: number | null;
   email_facturacion?: string | null;
   envio_automatico?: boolean;
-  transporte_definido?: string | null;
   flete?: string | null;
   created_at: string;
   updated_at: string;
@@ -93,7 +92,6 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
     markupPredeterminado: row.markup_predeterminado != null ? Number(row.markup_predeterminado) : null,
     emailFacturacion: row.email_facturacion ?? null,
     envioAutomatico: row.envio_automatico ?? true,
-    transporteDefinido: row.transporte_definido ?? "",
     flete: row.flete ?? "",
     createdAt: row.created_at ?? "",
     updatedAt: row.updated_at ?? "",
@@ -196,7 +194,6 @@ const emptyForm = {
   markup_predeterminado: null as number | null,
   email_facturacion: "",
   envio_automatico: true,
-  transporte_definido: "",
   assigned_to: "" as string | null,
   flete: "",
 };
@@ -1085,7 +1082,6 @@ export default function ClientesPage() {
       markup_predeterminado: (c as any).markupPredeterminado ?? null,
       email_facturacion: c.emailFacturacion ?? "",
       envio_automatico: c.envioAutomatico ?? true,
-      transporte_definido: c.transporteDefinido ?? "",
       assigned_to: (c as any).assignedTo || null,
       flete: (c as any).flete || "",
     });
@@ -1176,7 +1172,7 @@ export default function ClientesPage() {
     setSaving(true);
     setFormError("");
     try {
-      const { transporte_definido, markup_predeterminado, ...formWithout } = form;
+      const { markup_predeterminado, ...formWithout } = form;
       const payload: Record<string, unknown> = {
         ...formWithout,
         markup_predeterminado: markup_predeterminado != null && markup_predeterminado !== (0 as any) ? markup_predeterminado : null,
@@ -1850,7 +1846,6 @@ export default function ClientesPage() {
                       <InfoField label="Saldo CC" value={formatCurrency(selectedCliente.saldoCuentaCorriente)} highlight />
                       {(selectedCliente as any).flete && <InfoField label="Flete" value={(selectedCliente as any).flete} />}
                       {(selectedCliente as any).vendedorNombre && (selectedCliente as any).vendedorNombre !== "—" && <InfoField label="Vendedor asignado" value={(selectedCliente as any).vendedorNombre} />}
-                      <InfoField label="Transporte definido" value={selectedCliente.transporteDefinido || "—"} />
                     </div>
                   </div>
 
@@ -3034,9 +3029,9 @@ export default function ClientesPage() {
               />
               <div className="sm:col-span-2">
                 <Input
-                  label="Transporte definido"
-                  value={form.transporte_definido}
-                  onChange={(e) => setForm({ ...form, transporte_definido: e.target.value })}
+                  label="Flete / Transporte"
+                  value={(form as any).flete || ""}
+                  onChange={(e) => setForm({ ...form, flete: e.target.value } as any)}
                   placeholder="Ej: Andreani, OCA, Via Cargo..."
                 />
               </div>

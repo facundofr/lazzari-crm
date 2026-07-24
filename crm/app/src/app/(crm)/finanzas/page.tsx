@@ -213,14 +213,14 @@ interface OpMedioPago {
   cotizacion: number;
   echeq_id?: string; // if selecting from cartera
 }
-const makeOpMedio = (): OpMedioPago => ({
+const makeOpMedio = (moneda: "ARS" | "USD" = "ARS"): OpMedioPago => ({
   tempId: Math.random().toString(36).slice(2),
   tipo: "transferencia",
   monto: 0,
   fecha: new Date().toISOString().slice(0, 10),
   banco: "",
   numero_cheque: "",
-  moneda: "ARS",
+  moneda,
   cotizacion: 1,
 });
 
@@ -807,6 +807,7 @@ export default function FinanzasPage() {
       };
       if (movForm.cliente_id) insertData.cliente_id = movForm.cliente_id;
       if (movForm.proveedor_id) insertData.proveedor_id = movForm.proveedor_id;
+      if (profile?.id) insertData.created_by = profile.id;
       const { error } = await supabase.from("movimientos").insert(insertData as any);
       if (error) throw error;
       setModalOpen(false);
@@ -864,6 +865,7 @@ export default function FinanzasPage() {
       await fetchData();
     } catch (err) {
       console.error("Error saving gasto:", err);
+      alert("Error al guardar gasto: " + (err as any)?.message);
     } finally {
       setGastoSaving(false);
     }
@@ -1001,7 +1003,7 @@ export default function FinanzasPage() {
   const opRetencionGanancias = opForm.aplica_ganancias ? opMontoBruto * (opForm.retencion_ganancias_pct / 100) : 0;
   const opNetoAPagar = opMontoBruto - opRetencion - opRetencionGanancias;
   const opTotalMedios = opMedios.reduce((s, m) => s + m.monto, 0);
-  const opDiferencia = opNetoAPagar - opTotalMedios - opRetencion - opRetencionGanancias;
+  const opDiferencia = opNetoAPagar - opTotalMedios;
 
   async function handleCreateOP() {
     if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
@@ -1018,7 +1020,9 @@ export default function FinanzasPage() {
     try {
       const provNombre = proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social ?? "";
       // Generate OP number
-      const { data: lastOP } = await (supabase as any).from("ordenes_pago").select("numero").order("created_at", { ascending: false }).limit(1);
+      let qLastOP = (supabase as any).from("ordenes_pago").select("numero").order("created_at", { ascending: false }).limit(1);
+      if (sociedadActiva?.id) qLastOP = qLastOP.eq("sociedad_id", sociedadActiva.id);
+      const { data: lastOP } = await qLastOP;
       let nextNum = 1;
       if (lastOP?.[0]?.numero) {
         const parts = lastOP[0].numero.split("-");
@@ -1043,6 +1047,7 @@ export default function FinanzasPage() {
         notas: opForm.notas,
         estado: "pagada",
       };
+      if (profile?.id) insertData.created_by = profile.id;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
 
       const { data: opData, error } = await (supabase as any).from("ordenes_pago").insert(insertData).select("id").single();
@@ -1086,6 +1091,7 @@ export default function FinanzasPage() {
         proveedor_id: opForm.proveedor_id,
         conciliado: false,
       };
+      if (profile?.id) movData.created_by = profile.id;
       if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
       await supabase.from("movimientos").insert(movData as any);
 
@@ -1618,6 +1624,7 @@ ${certRetGanHtml}
       if (fcForm.fecha_vencimiento) insertData.fecha_vencimiento = fcForm.fecha_vencimiento;
       if (fcForm.cae.trim()) insertData.cae = fcForm.cae.trim();
       if (fcForm.percepciones_detalle.length > 0) insertData.percepciones_detalle = JSON.stringify(fcForm.percepciones_detalle);
+      if (profile?.id) insertData.created_by = profile.id;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
 
       const { data: fcData, error } = await (supabase as any).from("facturas_compra").insert(insertData).select("id").single();
@@ -1667,7 +1674,7 @@ ${certRetGanHtml}
     try {
       await (supabase as any).from("facturas_compra").delete().eq("id", id);
       await fetchData();
-    } catch (err) { console.error("Error eliminando FC:", err); }
+    } catch (err) { console.error("Error eliminando FC:", err); alert("Error al eliminar FC: " + (err as any)?.message); }
   }
 
   function handlePagarFC(id: string) {
@@ -1683,7 +1690,7 @@ ${certRetGanHtml}
     try {
       await (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id);
       await fetchData();
-    } catch (err) { console.error("Error anulando FC:", err); }
+    } catch (err) { console.error("Error anulando FC:", err); alert("Error al anular FC: " + (err as any)?.message); }
   }
 
   async function handleRecibirFC(id: string) {
@@ -1701,7 +1708,7 @@ ${certRetGanHtml}
       await (supabase as any).from("facturas_compra").update({ estado: "recibida" }).eq("id", id);
       alert("FC marcada como recibida — stock actualizado");
       await fetchData();
-    } catch (err) { console.error("Error marcando FC como recibida:", err); }
+    } catch (err) { console.error("Error marcando FC como recibida:", err); alert("Error al marcar FC como recibida: " + (err as any)?.message); }
   }
 
   async function handleCreateArticle() {
@@ -1874,12 +1881,20 @@ ${certRetGanHtml}
   async function handleDeleteEcheq(id: string) {
     if (!confirm("¿Seguro que querés eliminar este echeq?")) return;
     try { const { error } = await (supabase as any).from("echeqs").delete().eq("id", id); if (error) throw error; await fetchData(); }
-    catch (err) { console.error(err); }
+    catch (err) { console.error(err); alert("Error al eliminar echeq: " + (err as any)?.message); }
   }
 
   // ── Derived calculations ──
-  const totalCobros = movimientos.filter((m) => ["cobro", "cheque_recibido", "transferencia"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const totalPagos = movimientos.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const movimientosMes = movimientos.filter((m) => m.fecha?.startsWith(currentMonth));
+  const movimientosMesARS = movimientosMes.filter((m) => !m.moneda || m.moneda === "ARS");
+  const movimientosMesUSD = movimientosMes.filter((m) => m.moneda === "USD");
+  const totalCobrosARS = movimientosMesARS.filter((m) => ["cobro", "cheque_recibido", "transferencia"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const totalPagosARS = movimientosMesARS.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const totalCobrosUSD = movimientosMesUSD.filter((m) => ["cobro", "cheque_recibido", "transferencia"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const totalPagosUSD = movimientosMesUSD.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const totalCobros = totalCobrosARS;
+  const totalPagos = totalPagosARS;
   const sinConciliar = movimientos.filter((m) => !m.conciliado).length;
 
   // ── Apply SmartFilters to movimientos ──
@@ -1960,8 +1975,8 @@ ${certRetGanHtml}
       <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setMovForm(emptyMovForm); setFormError(""); setModalOpen(true); } }} />
       <div className="p-4 sm:p-8 space-y-6">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard title="Cobros del mes" value={formatCurrency(totalCobros)} icon={ArrowDownLeft} iconColor="text-emerald-600" />
-          <StatCard title="Pagos del mes" value={formatCurrency(totalPagos)} icon={ArrowUpRight} iconColor="text-red-500" />
+          <StatCard title="Cobros del mes" value={formatCurrency(totalCobrosARS)} icon={ArrowDownLeft} iconColor="text-emerald-600" changeLabel={totalCobrosUSD > 0 ? `+ ${formatCurrency(totalCobrosUSD, "USD")} USD` : undefined} />
+          <StatCard title="Pagos del mes" value={formatCurrency(totalPagosARS)} icon={ArrowUpRight} iconColor="text-red-500" changeLabel={totalPagosUSD > 0 ? `+ ${formatCurrency(totalPagosUSD, "USD")} USD` : undefined} />
           <StatCard title="Saldo CC clientes" value={formatCurrency(ccClientes.reduce((a, c) => a + c.saldo_cuenta_corriente, 0))} icon={Wallet} iconColor="text-blue-600" />
           <StatCard title="Credito disponible" value={formatCurrency(totalDisponibleCredito)} icon={CreditCard} iconColor="text-emerald-600" />
         </div>
@@ -3298,7 +3313,7 @@ ${certRetGanHtml}
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Medios de pago</label>
-                    <button type="button" onClick={() => setOpMedios([...opMedios, makeOpMedio()])}
+                    <button type="button" onClick={() => setOpMedios([...opMedios, makeOpMedio(opForm.moneda)])}
                       className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium"><Plus className="h-3 w-3" />Agregar medio</button>
                   </div>
                   <div className="space-y-2">
