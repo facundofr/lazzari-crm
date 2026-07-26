@@ -59,7 +59,7 @@ interface EventoRow {
   completado: boolean;
   created_at: string;
   clientes: { razon_social: string } | null;
-  profiles: { full_name: string; email: string } | null;
+  asignado: { full_name: string; email: string } | null;
   creador: { full_name: string; email: string } | null;
 }
 
@@ -81,8 +81,10 @@ const MONTH_NAMES = [
 
 const DAY_NAMES = ["Lun", "Mar", "Mie", "Jue", "Vie", "Sab", "Dom"];
 
+const AR_TZ = "America/Argentina/Buenos_Aires";
+
 function toDateKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return d.toLocaleDateString("en-CA", { timeZone: AR_TZ });
 }
 
 function parseLocalDate(dateStr: string): Date {
@@ -97,8 +99,9 @@ export default function CalendarioPage() {
 
   // Calendar navigation
   const today = new Date();
-  const [currentYear, setCurrentYear] = useState(today.getFullYear());
-  const [currentMonth, setCurrentMonth] = useState(today.getMonth());
+  const todayAR = new Date(today.toLocaleString("en-US", { timeZone: AR_TZ }));
+  const [currentYear, setCurrentYear] = useState(todayAR.getFullYear());
+  const [currentMonth, setCurrentMonth] = useState(todayAR.getMonth());
 
   // Selected day
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -132,7 +135,7 @@ export default function CalendarioPage() {
     try {
       let q = (supabase as any)
         .from("eventos")
-        .select(`*, clientes(razon_social), profiles(full_name, email), creador:profiles!created_by(full_name, email)`)
+        .select(`*, clientes(razon_social), asignado:profiles!user_id(full_name, email), creador:profiles!created_by(full_name, email)`)
         .order("fecha_inicio", { ascending: true });
 
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
@@ -268,13 +271,14 @@ export default function CalendarioPage() {
   }
 
   function goToToday() {
-    setCurrentYear(today.getFullYear());
-    setCurrentMonth(today.getMonth());
+    setCurrentYear(todayAR.getFullYear());
+    setCurrentMonth(todayAR.getMonth());
   }
 
   // ── Create modal ─────────────────────────────────────────────
   async function openCreateModal(presetDate?: string) {
-    const defaultDate = presetDate || new Date().toISOString().slice(0, 16);
+    const nowAR = new Date(new Date().toLocaleString("en-US", { timeZone: AR_TZ }));
+    const defaultDate = presetDate || `${nowAR.getFullYear()}-${String(nowAR.getMonth() + 1).padStart(2, "0")}-${String(nowAR.getDate()).padStart(2, "0")}T${String(nowAR.getHours()).padStart(2, "0")}:${String(nowAR.getMinutes()).padStart(2, "0")}`;
     setCreateForm({
       titulo: "",
       tipo: "visita",
@@ -322,7 +326,7 @@ export default function CalendarioPage() {
       if (assignedTo && assignedTo !== profile?.id) {
         const fechaLabel = createForm.todo_el_dia
           ? createForm.fecha_inicio.split("T")[0]
-          : new Date(createForm.fecha_inicio).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+          : new Date(createForm.fecha_inicio).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: AR_TZ });
         await (supabase as any).from("alertas").insert({
           tipo: "seguimiento",
           title: `Nuevo evento: ${createForm.titulo}`,
@@ -596,8 +600,8 @@ export default function CalendarioPage() {
                         {ev.creador?.full_name && <span className="text-xs text-zinc-400 truncate">· Creado por {ev.creador.full_name.split(" ")[0]}</span>}
                       </div>
                     </div>
-                    {ev.profiles && (
-                      <span className="text-xs text-zinc-400 shrink-0" title="Responsable">{ev.profiles.full_name?.split(" ")[0] || "—"}</span>
+                    {ev.asignado && (
+                      <span className="text-xs text-zinc-400 shrink-0" title="Responsable">{ev.asignado.full_name?.split(" ")[0] || "—"}</span>
                     )}
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleCompletado(ev.id, ev.completado); }}
@@ -664,8 +668,8 @@ export default function CalendarioPage() {
                           <Badge variant={cfg.variant}>{cfg.label}</Badge>
                           {!ev.todo_el_dia && (
                             <span className="text-xs text-zinc-400">
-                              {new Date(ev.fecha_inicio).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}
-                              {ev.fecha_fin && ` - ${new Date(ev.fecha_fin).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" })}`}
+                              {new Date(ev.fecha_inicio).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", timeZone: AR_TZ })}
+                              {ev.fecha_fin && ` - ${new Date(ev.fecha_fin).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", timeZone: AR_TZ })}`}
                             </span>
                           )}
                           {ev.todo_el_dia && (
@@ -793,11 +797,11 @@ export default function CalendarioPage() {
                     </div>
                   </div>
                 )}
-                {detailEvento.profiles && (
+                {detailEvento.asignado && (
                   <div>
                     <span className="text-zinc-400">Asignado a</span>
                     <p className="font-medium dark:text-white">
-                      {detailEvento.profiles.full_name || detailEvento.profiles.email}
+                      {detailEvento.asignado.full_name || detailEvento.asignado.email}
                     </p>
                   </div>
                 )}

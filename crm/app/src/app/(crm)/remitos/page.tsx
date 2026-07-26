@@ -150,6 +150,13 @@ export default function RemitosPage() {
   const [autorizandoAFIP, setAutorizandoAFIP] = useState(false);
   const [afipError, setAfipError] = useState("");
 
+  // Entrega parcial modal
+  const [parcialModalOpen, setParcialModalOpen] = useState(false);
+  const [parcialRemito, setParcialRemito] = useState<RemitoRow | null>(null);
+  const [parcialItems, setParcialItems] = useState<(RemitoDetailItem & { cantidadEntregada: number })[]>([]);
+  const [loadingParcial, setLoadingParcial] = useState(false);
+  const [savingParcial, setSavingParcial] = useState(false);
+
   // SmartFilters state
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
     fecha: { from: "", to: "" },
@@ -252,6 +259,111 @@ export default function RemitosPage() {
     }
   }
 
+  async function openParcialModal(remito: RemitoRow) {
+    setParcialRemito(remito);
+    setParcialModalOpen(true);
+    setLoadingParcial(true);
+    try {
+      const { data: items } = await supabase
+        .from("remito_items")
+        .select("id, descripcion, cantidad, unidad, orden")
+        .eq("remito_id", remito.id)
+        .order("orden", { ascending: true });
+      if (items && items.length > 0) {
+        setParcialItems((items as unknown as RemitoDetailItem[]).map(it => ({
+          ...it,
+          cantidadEntregada: it.cantidad,
+        })));
+      } else {
+        setParcialItems([]);
+      }
+    } catch {
+      setParcialItems([]);
+    } finally {
+      setLoadingParcial(false);
+    }
+  }
+
+  async function handleSaveParcial() {
+    if (!parcialRemito || parcialItems.length === 0) return;
+    setSavingParcial(true);
+    try {
+      const entregados = parcialItems.filter(it => it.cantidadEntregada > 0);
+      const pendientes = parcialItems
+        .filter(it => it.cantidadEntregada < it.cantidad)
+        .map(it => ({ ...it, cantidadRestante: it.cantidad - it.cantidadEntregada }));
+
+      // Update existing remito items with delivered quantities
+      for (const item of entregados) {
+        const { error } = await supabase
+          .from("remito_items")
+          .update({ cantidad: item.cantidadEntregada })
+          .eq("id", item.id);
+        if (error) { alert("Error al actualizar item: " + error.message); return; }
+      }
+
+      // Remove items with 0 delivered
+      const ceroItems = parcialItems.filter(it => it.cantidadEntregada === 0);
+      for (const item of ceroItems) {
+        await supabase.from("remito_items").delete().eq("id", item.id);
+      }
+
+      // Mark current remito as parcial
+      const { error: statusErr } = await supabase.from("remitos").update({ estado: "parcial" }).eq("id", parcialRemito.id);
+      if (statusErr) { alert("Error al actualizar estado: " + statusErr.message); return; }
+
+      // If there are pending quantities, create a new remito for the remainder
+      if (pendientes.length > 0) {
+        const maxNum = remitos.reduce((max, r) => {
+          const parts = r.numero?.split("-");
+          const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
+          return n > max ? n : max;
+        }, 0);
+        const newNumero = `R-0001-${String(maxNum + 1).padStart(8, "0")}`;
+
+        const { data: newRemito, error: newErr } = await (supabase.from("remitos") as any).insert({
+          numero: newNumero,
+          cliente_id: parcialRemito.cliente_id,
+          fecha: new Date().toISOString().split("T")[0],
+          observaciones: `Saldo pendiente de remito ${parcialRemito.numero}`,
+          presupuesto_id: parcialRemito.presupuesto_id || null,
+          estado: "pendiente",
+          sociedad_id: sociedadActiva?.id || null,
+          valor_declarado: null,
+          created_by: profile?.id || null,
+        }).select("id").single();
+
+        if (newErr) {
+          console.error("Error creating remainder remito:", newErr);
+        } else if (newRemito) {
+          const newItems = pendientes.map((it, idx) => ({
+            remito_id: newRemito.id,
+            descripcion: it.descripcion,
+            cantidad: it.cantidadRestante,
+            unidad: it.unidad || "UN",
+            orden: idx,
+          }));
+          const { error: itemsErr } = await (supabase.from("remito_items") as any).insert(newItems);
+          if (itemsErr) console.error("Error inserting remainder items:", itemsErr);
+        }
+      }
+
+      setParcialModalOpen(false);
+      setParcialRemito(null);
+      setParcialItems([]);
+      if (detailRemito?.id === parcialRemito.id) {
+        setDetailRemito({ ...parcialRemito, estado: "parcial" });
+        // Refresh detail items
+        handleRowClick({ ...parcialRemito, estado: "parcial" });
+      }
+      await fetchData();
+    } catch (err) {
+      console.error("Error in entrega parcial:", err);
+    } finally {
+      setSavingParcial(false);
+    }
+  }
+
   async function handleAutorizarAFIP() {
     if (!detailRemito) return;
     setAutorizandoAFIP(true);
@@ -306,7 +418,7 @@ export default function RemitosPage() {
       (() => {
         let prQ = (supabase as any).from("presupuestos").select("id, numero, subtotal, total, cliente_id").in("estado", ["aprobado", "remitido"]);
         if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id", sociedadActiva.id);
-        return prQ;
+        return prQ.order("created_at", { ascending: false });
       })(),
     ]);
     if (clientesRes.data) setClientes(clientesRes.data as { id: string; razon_social: string }[]);
@@ -804,7 +916,7 @@ export default function RemitosPage() {
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     {row.estado === "pendiente" && (
                       <>
-                        <button onClick={() => handleEstadoChange(row.id, "parcial")} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Entrega parcial">
+                        <button onClick={() => openParcialModal(row)} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Entrega parcial">
                           <Package className="h-3.5 w-3.5" />
                         </button>
                         <button onClick={() => handleEstadoChange(row.id, "entregado")} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar entregado">
@@ -873,8 +985,8 @@ export default function RemitosPage() {
             <div className="px-6 py-5 space-y-5">
               {/* Action buttons */}
               <div className="flex flex-wrap gap-2">
-                {detailRemito.estado !== "entregado" && detailRemito.estado === "pendiente" && (
-                  <button onClick={() => { handleEstadoChange(detailRemito.id, "parcial"); setDetailRemito({ ...detailRemito, estado: "parcial" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors">
+                {detailRemito.estado !== "entregado" && (detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
+                  <button onClick={() => openParcialModal(detailRemito)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors">
                     <Package className="h-4 w-4" /> Entrega parcial
                   </button>
                 )}
@@ -1442,6 +1554,114 @@ export default function RemitosPage() {
                   )}
                 </button>
               )}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Entrega Parcial Modal */}
+      {parcialModalOpen && parcialRemito && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <Card className="w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold dark:text-white">Entrega Parcial</h2>
+                <p className="text-sm text-zinc-400">
+                  Remito {parcialRemito.numero} — {parcialRemito.clientes?.razon_social || "—"}
+                </p>
+              </div>
+              <button onClick={() => { setParcialModalOpen(false); setParcialRemito(null); }} className="text-zinc-400 hover:text-zinc-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              Ingresá la cantidad entregada de cada item. Se creará un nuevo remito con las cantidades pendientes.
+            </p>
+
+            {loadingParcial ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-orange-500" />
+              </div>
+            ) : parcialItems.length === 0 ? (
+              <p className="text-sm text-zinc-400 text-center py-6">Este remito no tiene items cargados.</p>
+            ) : (
+              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
+                      <th className="text-left px-3 py-2">Descripcion</th>
+                      <th className="text-right px-3 py-2 w-24">Original</th>
+                      <th className="text-center px-3 py-2 w-32">Entregada</th>
+                      <th className="text-right px-3 py-2 w-24">Pendiente</th>
+                      <th className="text-left px-3 py-2 w-16">Unidad</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parcialItems.map((item) => {
+                      const pendiente = item.cantidad - item.cantidadEntregada;
+                      return (
+                        <tr key={item.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                          <td className="px-3 py-2 dark:text-white">{item.descripcion}</td>
+                          <td className="px-3 py-2 text-right text-zinc-500">{item.cantidad}</td>
+                          <td className="px-2 py-1.5 text-center">
+                            <input
+                              type="number"
+                              min="0"
+                              max={item.cantidad}
+                              step="1"
+                              value={item.cantidadEntregada}
+                              onChange={(e) => {
+                                const val = Math.max(0, Math.min(item.cantidad, Number(e.target.value) || 0));
+                                setParcialItems(prev => prev.map(it => it.id === item.id ? { ...it, cantidadEntregada: val } : it));
+                              }}
+                              className="w-full rounded border border-zinc-200 px-2 py-1 text-sm text-center dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                            />
+                          </td>
+                          <td className={`px-3 py-2 text-right font-medium ${pendiente > 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                            {pendiente}
+                          </td>
+                          <td className="px-3 py-2 text-zinc-500">{item.unidad || "u"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {parcialItems.length > 0 && !loadingParcial && (
+              <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 p-3 text-sm text-blue-700 dark:text-blue-300">
+                {parcialItems.some(it => it.cantidadEntregada < it.cantidad) ? (
+                  <p>Se actualizarán las cantidades del remito actual y se creará un nuevo remito con {parcialItems.filter(it => it.cantidadEntregada < it.cantidad).length} item(s) pendiente(s).</p>
+                ) : (
+                  <p>Todas las cantidades fueron entregadas. El remito se marcará como parcial sin crear saldo pendiente.</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => { setParcialModalOpen(false); setParcialRemito(null); }}
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveParcial}
+                disabled={savingParcial || parcialItems.length === 0}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {savingParcial ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Guardando...
+                  </>
+                ) : (
+                  <>
+                    <Package className="h-4 w-4" /> Confirmar entrega parcial
+                  </>
+                )}
+              </button>
             </div>
           </Card>
         </div>

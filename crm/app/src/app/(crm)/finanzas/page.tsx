@@ -117,6 +117,7 @@ interface GastoManualRow {
   proveedor_nombre?: string;
   categoria: string;
   tipo_gasto: string;
+  medio_pago: string;
   comprobante_url?: string;
   monto: number;
   moneda: "ARS" | "USD";
@@ -239,6 +240,7 @@ const emptyGastoManualForm = {
   proveedor_id: "",
   categoria: "Varios" as string,
   tipo_gasto: "general" as string,
+  medio_pago: "efectivo" as string,
   monto: 0,
   moneda: "ARS" as "ARS" | "USD",
   notas: "",
@@ -373,7 +375,7 @@ export default function FinanzasPage() {
   const [opFCLoading, setOpFCLoading] = useState(false);
   const [retencionConfig, setRetencionConfig] = useState({
     aplica_iva: true, minimo_iva: 130000, tasa_iva_ri: 10.5,
-    aplica_ganancias: true, minimo_ganancias: 400000, tasa_ganancias_ri: 3.5, tasa_ganancias_no_inscripto: 28,
+    aplica_ganancias: true, minimo_ganancias: 400000, tasa_ganancias_ri: 2, tasa_ganancias_no_inscripto: 28,
   });
   const [proveedoresOptions, setProveedoresOptions] = useState<ProveedorOption[]>([]);
   const [chequesRecibidos, setChequesRecibidos] = useState<MovimientoRow[]>([]);
@@ -653,7 +655,7 @@ export default function FinanzasPage() {
               tasa_iva_ri: retCfg.tasa_iva_ri ?? 10.5,
               aplica_ganancias: retCfg.aplica_ganancias ?? true,
               minimo_ganancias: retCfg.minimo_ganancias ?? 400000,
-              tasa_ganancias_ri: retCfg.tasa_ganancias_ri ?? 3.5,
+              tasa_ganancias_ri: retCfg.tasa_ganancias_ri ?? 2,
               tasa_ganancias_no_inscripto: retCfg.tasa_ganancias_no_inscripto ?? 28,
             });
           }
@@ -702,6 +704,7 @@ export default function FinanzasPage() {
               id: r.id, fecha: r.fecha, descripcion: r.descripcion,
               proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? undefined,
               categoria: r.categoria ?? "Varios", tipo_gasto: r.tipo_gasto ?? "general",
+              medio_pago: r.medio_pago ?? "efectivo",
               comprobante_url: r.comprobante_url ?? undefined,
               monto: Number(r.monto),
               moneda: (r.moneda as "ARS" | "USD") ?? "ARS", notas: r.notas ?? "",
@@ -928,7 +931,8 @@ export default function FinanzasPage() {
       try {
         // FC pendientes
         let q = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, total, moneda")
-          .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"]);
+          .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"])
+          .not("cae", "is", null);
         if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
         const { data } = await q;
 
@@ -950,7 +954,8 @@ export default function FinanzasPage() {
         const mesActual = new Date().toISOString().slice(0, 7); // YYYY-MM
         let qMensual = (supabase as any).from("facturas_compra").select("total")
           .eq("proveedor_id", opForm.proveedor_id)
-          .gte("fecha", `${mesActual}-01`);
+          .gte("fecha", `${mesActual}-01`)
+          .not("cae", "is", null);
         if (sociedadActiva?.id) qMensual = qMensual.eq("sociedad_id", sociedadActiva.id);
         const { data: mensualData } = await qMensual;
         const totalMes = (mensualData || []).reduce((s: number, r: any) => s + Number(r.total), 0);
@@ -1528,6 +1533,7 @@ ${certRetGanHtml}
         monto: gmForm.monto,
         moneda: gmForm.moneda,
         notas: gmForm.notas || "",
+        medio_pago: gmForm.medio_pago || "efectivo",
       };
       if (comprobanteUrl) insertData.comprobante_url = comprobanteUrl;
       if (gmForm.proveedor_id) insertData.proveedor_id = gmForm.proveedor_id;
@@ -2289,6 +2295,11 @@ ${certRetGanHtml}
                   { key: "tipo_gasto", label: "Tipo", render: (row) => {
                     const label = TIPO_GASTO_OPTIONS.find(t => t.value === row.tipo_gasto)?.label ?? row.tipo_gasto;
                     return <Badge variant={tipoGastoVariant[row.tipo_gasto] ?? "outline"}>{label}</Badge>;
+                  }},
+                  { key: "medio_pago", label: "Medio de pago", render: (row) => {
+                    const mp = row.medio_pago || "efectivo";
+                    const mpLabels: Record<string, string> = { efectivo: "Efectivo", transferencia: "Transferencia", cheque: "Cheque", debito_automatico: "Debito aut." };
+                    return <Badge variant="outline">{mpLabels[mp] ?? mp}</Badge>;
                   }},
                   { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.monto, row.moneda)}</span> },
                   { key: "moneda", label: "Moneda", render: (row) => <Badge variant="outline">{row.moneda}</Badge> },
@@ -3277,7 +3288,7 @@ ${certRetGanHtml}
                   <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3">
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-semibold text-violet-700 dark:text-violet-300 flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" />Ret. Ganancias</label>
-                      <button type="button" onClick={() => setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? 6 : 0 })}
+                      <button type="button" onClick={() => setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? retencionConfig.tasa_ganancias_ri : 0 })}
                         className={`relative inline-flex h-5 w-9 items-center rounded-full ${opForm.aplica_ganancias ? "bg-violet-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
                         <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${opForm.aplica_ganancias ? "translate-x-4.5" : "translate-x-0.5"}`} />
                       </button>
@@ -4029,6 +4040,17 @@ ${certRetGanHtml}
                     {TIPO_GASTO_OPTIONS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Medio de pago</label>
+                <select value={gmForm.medio_pago} onChange={(e) => setGmForm({ ...gmForm, medio_pago: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="efectivo">Efectivo</option>
+                  <option value="transferencia">Transferencia</option>
+                  <option value="cheque">Cheque</option>
+                  <option value="debito_automatico">Debito automatico</option>
+                </select>
               </div>
 
               <div>

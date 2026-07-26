@@ -1476,7 +1476,7 @@ export default function PresupuestosPage() {
 
   async function handleFacturarFromPR() {
     if (!facturarModal || !sociedadActiva) return;
-    if (facturarMoneda !== facturarModal.moneda && !facturarTipoCambio) {
+    if (!facturarManual && facturarMoneda !== facturarModal.moneda && !facturarTipoCambio) {
       setFacturarError("Ingresa el tipo de cambio para convertir de " + facturarModal.moneda + " a " + facturarMoneda);
       return;
     }
@@ -2310,7 +2310,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 )}
                 {selected.estado === "aprobado" && (
                   <button
-                    onClick={() => { const tc = (selected as any).tipoComprobante; const tipoFC: "FA" | "FB" = tc === "A" ? "FA" : "FB"; setFacturarModal(selected); setFacturarError(""); setFacturarTipo(tipoFC); setFacturarManual(false); setFacturarNumManual(""); setFacturarMoneda(selected.moneda as "ARS" | "USD"); setFacturarTipoCambio(""); setFacturarOCCliente(selected.ocCliente || ""); }}
+                    onClick={() => { const tc = (selected as any).tipoComprobante; const tipoFC: "FA" | "FB" = tc === "A" ? "FA" : "FB"; const isManual = (selected as any).modalidadEmision === "manual"; setFacturarModal(selected); setFacturarError(""); setFacturarTipo(tipoFC); setFacturarManual(isManual); setFacturarNumManual(""); setFacturarMoneda(selected.moneda as "ARS" | "USD"); setFacturarTipoCambio(""); setFacturarOCCliente(selected.ocCliente || ""); }}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-950/30 transition-colors"
                     title="Emitir factura desde este presupuesto"
                   >
@@ -2856,14 +2856,17 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           <Select
             label="Moneda presupuesto"
             value={newPR.moneda}
-            onChange={(e) => setNewPR((p) => {
+            onChange={(e) => {
               const mon = e.target.value as "USD" | "ARS";
-              const items = p.items.map(it => {
-                const costoConv = convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio);
-                return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+              setNewPR((p) => {
+                const items = p.items.map(it => {
+                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio);
+                  return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+                });
+                return { ...p, moneda: mon, items };
               });
-              return { ...p, moneda: mon, items };
-            })}
+              if (mon === "USD") fetchCotizBna("divisas");
+            }}
             options={[{ value: "ARS", label: "ARS — Pesos" }, { value: "USD", label: "USD — Dolares" }]}
           />
           <div>

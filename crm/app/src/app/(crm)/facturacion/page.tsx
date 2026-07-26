@@ -290,6 +290,7 @@ export default function FacturacionPage() {
     { key: "monto", label: "Monto", type: "number-range" },
   ];
   const [filterValues, setFilterValues] = useState<FilterValues>({ fecha: { from: "", to: "" }, tipo: "", estado: "", monto: {} });
+  const [clienteSearch, setClienteSearch] = useState("");
 
   const filteredFacturas = facturas.filter((f) => {
     const fechaFilter = filterValues.fecha as { from?: string; to?: string } | undefined;
@@ -300,6 +301,10 @@ export default function FacturacionPage() {
     const montoFilter = filterValues.monto as { min?: number; max?: number } | undefined;
     if (montoFilter?.min !== undefined && Number(f.total) < montoFilter.min) return false;
     if (montoFilter?.max !== undefined && Number(f.total) > montoFilter.max) return false;
+    if (clienteSearch.trim()) {
+      const nombre = (f.clientes?.razon_social || "").toLowerCase();
+      if (!nombre.includes(clienteSearch.trim().toLowerCase())) return false;
+    }
     return true;
   });
 
@@ -557,7 +562,7 @@ export default function FacturacionPage() {
   // ── Copy & PDF ─────────────────────────────────────────────────
   // Cobro modal
   const [cobroModalId, setCobroModalId] = useState<string | null>(null);
-  type CobroLinea = { tipo: "cobro" | "transferencia" | "efectivo" | "cheque_recibido"; monto: string; descripcion: string };
+  type CobroLinea = { tipo: "cobro" | "transferencia" | "efectivo" | "cheque_recibido" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva"; monto: string; descripcion: string };
   const [cobroLineas, setCobroLineas] = useState<CobroLinea[]>([{ tipo: "transferencia", monto: "", descripcion: "" }]);
   const [cobroFecha, setCobroFecha] = useState(new Date().toISOString().split("T")[0]);
   const [cobroSaving, setCobroSaving] = useState(false);
@@ -895,7 +900,24 @@ ${f.cae ? `
           <StatCard title="CAE vigentes" value={String(caeVigentes)} icon={FileCheck} iconColor="text-blue-600" />
         </div>
 
-        <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
+        <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+          <div className="flex-1 w-full">
+            <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
+          </div>
+          <div className="relative w-full sm:w-64 shrink-0">
+            <input
+              value={clienteSearch}
+              onChange={(e) => setClienteSearch(e.target.value)}
+              placeholder="Buscar por cliente..."
+              className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white placeholder:text-zinc-400"
+            />
+            {clienteSearch && (
+              <button onClick={() => setClienteSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600">
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        </div>
 
         {/* Data table */}
         <Card className="p-0 overflow-hidden">
@@ -1505,6 +1527,9 @@ ${f.cae ? `
                             <option value="transferencia">Transferencia</option>
                             <option value="efectivo">Efectivo</option>
                             <option value="cheque_recibido">Cheque</option>
+                            <option value="retencion_iibb">Ret. IIBB</option>
+                            <option value="retencion_ganancias">Ret. Ganancias</option>
+                            <option value="retencion_iva">Ret. IVA</option>
                             <option value="cobro">Otro</option>
                           </select>
                           <input type="number" step="0.01" placeholder="Monto" value={linea.monto}
@@ -1526,10 +1551,18 @@ ${f.cae ? `
                 </div>
 
                 {/* Totales */}
-                {cobroLineas.length > 1 && totalLineas > 0 && (
-                  <div className="flex justify-between text-sm font-medium px-1">
-                    <span className="text-zinc-500">Total a registrar:</span>
-                    <span className="font-mono dark:text-white">{formatCurrency(totalLineas, f.moneda as "ARS" | "USD")}</span>
+                {totalLineas > 0 && (
+                  <div className="space-y-1 px-1">
+                    <div className="flex justify-between text-sm font-medium">
+                      <span className="text-zinc-500">Total a registrar:</span>
+                      <span className="font-mono dark:text-white">{formatCurrency(totalLineas, f.moneda as "ARS" | "USD")}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-zinc-500">Saldo restante:</span>
+                      <span className={`font-mono font-medium ${saldo - totalLineas <= 0 ? "text-emerald-600" : "text-amber-600"}`}>
+                        {formatCurrency(Math.max(0, saldo - totalLineas), f.moneda as "ARS" | "USD")}
+                      </span>
+                    </div>
                   </div>
                 )}
 

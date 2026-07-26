@@ -313,12 +313,23 @@ export default function OrdenesCompraPage() {
           .from("presupuesto_items")
           .select("id, codigo, descripcion, cantidad, precio_costo, unidad, producto_id, proveedor_id, iva_porcentaje")
           .eq("presupuesto_id", formData.presupuesto_origen_id);
-        // If a proveedor is selected, only take items from that proveedor
+        // If a proveedor is selected, try items from that proveedor first
         if (formData.proveedor_id) {
-          itemsQuery = itemsQuery.eq("proveedor_id" as any, formData.proveedor_id);
+          const { data: provItems } = await itemsQuery.eq("proveedor_id" as any, formData.proveedor_id) as { data: any[] | null };
+          if (provItems && provItems.length > 0) {
+            prItems = provItems;
+          } else {
+            // Fallback: fetch ALL items from the PR (proveedor_id may not be populated)
+            const { data: allItems } = await supabase
+              .from("presupuesto_items")
+              .select("id, codigo, descripcion, cantidad, precio_costo, unidad, producto_id, proveedor_id, iva_porcentaje")
+              .eq("presupuesto_id", formData.presupuesto_origen_id) as { data: any[] | null };
+            prItems = allItems || [];
+          }
+        } else {
+          const { data: fetchedItems } = await itemsQuery as { data: any[] | null };
+          prItems = fetchedItems || [];
         }
-        const { data: fetchedItems } = await itemsQuery as { data: any[] | null };
-        prItems = fetchedItems || [];
       }
 
       const itemsSubtotal = prItems.reduce((sum, it) => sum + (Number(it.precio_costo) || 0) * (Number(it.cantidad) || 0), 0);
