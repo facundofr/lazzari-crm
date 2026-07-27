@@ -369,9 +369,13 @@ export default function RemitosPage() {
     setAutorizandoAFIP(true);
     setAfipError("");
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch("/api/remito", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
         body: JSON.stringify({
           remito_id: detailRemito.id,
           sociedad_id: sociedadActiva?.id || null,
