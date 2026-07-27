@@ -13,7 +13,7 @@ import { mockFacturas } from "@/lib/mock-data";
 import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
-  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, FileText,
+  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, FileText, Search,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 
@@ -904,12 +904,13 @@ ${f.cae ? `
           <div className="flex-1 w-full">
             <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
           </div>
-          <div className="relative w-full sm:w-64 shrink-0">
+          <div className="relative w-full sm:w-72 shrink-0">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
             <input
               value={clienteSearch}
               onChange={(e) => setClienteSearch(e.target.value)}
-              placeholder="Buscar por cliente..."
-              className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white placeholder:text-zinc-400"
+              placeholder="Filtrar por cliente..."
+              className="w-full rounded-lg border border-zinc-200 pl-9 pr-8 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white placeholder:text-zinc-400"
             />
             {clienteSearch && (
               <button onClick={() => setClienteSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600">
@@ -1493,9 +1494,9 @@ ${f.cae ? `
                   {cobroPreviosLoading ? (
                     <p className="text-xs text-zinc-400 mt-0.5 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Calculando saldo...</p>
                   ) : (
-                    <p className="text-xs font-medium mt-0.5" style={{ color: saldo > 0 ? "#f59e0b" : "#10b981" }}>
+                    <p className="text-xs font-medium mt-0.5" style={{ color: (saldo - totalLineas) > 0 ? "#f59e0b" : "#10b981" }}>
                       {cobroPrevios > 0 && `Cobrado: ${formatCurrency(cobroPrevios, f.moneda as "ARS" | "USD")} — `}
-                      Saldo pendiente: {formatCurrency(Math.max(0, saldo), f.moneda as "ARS" | "USD")}
+                      Saldo pendiente: {formatCurrency(Math.max(0, saldo - totalLineas), f.moneda as "ARS" | "USD")}
                     </p>
                   )}
                 </div>

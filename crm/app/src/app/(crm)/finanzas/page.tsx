@@ -931,8 +931,7 @@ export default function FinanzasPage() {
       try {
         // FC pendientes
         let q = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, total, moneda")
-          .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"])
-          .not("cae", "is", null);
+          .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"]);
         if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
         const { data } = await q;
 
@@ -954,8 +953,7 @@ export default function FinanzasPage() {
         const mesActual = new Date().toISOString().slice(0, 7); // YYYY-MM
         let qMensual = (supabase as any).from("facturas_compra").select("total")
           .eq("proveedor_id", opForm.proveedor_id)
-          .gte("fecha", `${mesActual}-01`)
-          .not("cae", "is", null);
+          .gte("fecha", `${mesActual}-01`);
         if (sociedadActiva?.id) qMensual = qMensual.eq("sociedad_id", sociedadActiva.id);
         const { data: mensualData } = await qMensual;
         const totalMes = (mensualData || []).reduce((s: number, r: any) => s + Number(r.total), 0);

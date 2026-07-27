@@ -2752,7 +2752,7 @@ export default function ClientesPage() {
                       error={formFieldErrors.cuit}
                       onBlur={() => {
                         const clean = form.cuit.replace(/\D/g, "");
-                        if ([7, 8, 11].includes(clean.length) && !form.razon_social) handleCuitLookup();
+                        if ([7, 8, 11].includes(clean.length)) handleCuitLookup();
                       }}
                     />
                   </div>

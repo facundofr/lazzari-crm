@@ -118,7 +118,113 @@ export async function POST(req: NextRequest) {
       solicitado_por, // optional string — who requested it
       observaciones,  // optional string — visible on invoice
       nota_interna,   // optional string — internal note
+      manual,         // optional boolean — skip ARCA, use numero_manual
+      numero_manual,  // optional number — invoice number for manual mode
     } = body;
+
+    const authHeader = req.headers.get("authorization");
+    const supabase = getSupabase(authHeader);
+
+    // ── Manual mode: skip ARCA entirely ──
+    if (manual === true) {
+      if (!numero_manual && numero_manual !== 0) {
+        return NextResponse.json({ error: "Número de factura requerido para emisión manual" }, { status: 400 });
+      }
+      if (!tipo || !cliente_id || !items?.length) {
+        return NextResponse.json({ error: "Faltan campos requeridos: tipo, cliente_id, items" }, { status: 400 });
+      }
+
+      const isFacturaA = tipo.endsWith("A");
+      const isUSD = moneda === "USD";
+      const tc = Number(tipo_cambio) || 0;
+
+      // Calculate totals
+      let totalNeto = 0;
+      let totalIva = 0;
+      for (const item of items) {
+        const precioItem = Number(item.precio_unitario);
+        if (isFacturaA) {
+          const neto = Number(item.cantidad) * precioItem;
+          const ivaPct = Number(item.iva_porcentaje ?? 21);
+          totalNeto += neto;
+          totalIva += Math.round(neto * ivaPct / 100 * 100) / 100;
+        } else {
+          const totalItem = Number(item.cantidad) * precioItem;
+          const neto = Math.round(totalItem / 1.21 * 100) / 100;
+          totalNeto += neto;
+          totalIva += Math.round((totalItem - neto) * 100) / 100;
+        }
+      }
+      totalNeto = Math.round(totalNeto * 100) / 100;
+      totalIva = Math.round(totalIva * 100) / 100;
+      const totalFinal = Math.round((totalNeto + totalIva) * 100) / 100;
+
+      const ptoVta = Number(punto_venta) || 0;
+      const fechaHoy = new Date().toISOString().slice(0, 10);
+
+      const { data: factura, error: insertError } = await supabase
+        .from("facturas")
+        .insert({
+          tipo,
+          punto_venta: ptoVta,
+          numero: Number(numero_manual),
+          cliente_id: cliente_id === "consumidor_final" ? null : cliente_id,
+          presupuesto_id: presupuesto_id || null,
+          fecha: fechaHoy,
+          cae: null,
+          cae_vencimiento: null,
+          subtotal: totalNeto,
+          iva: totalIva,
+          total: totalFinal,
+          moneda: isUSD ? "USD" : "ARS",
+          tipo_cambio: isUSD ? tc : null,
+          estado: "emitida",
+          sociedad_id: sociedad_id || ARCA_CONFIGS[0].id,
+          oc_cliente: oc_cliente || null,
+          solicitado_por: solicitado_por || null,
+          observaciones: observaciones || null,
+          nota_interna: nota_interna || null,
+        } as any)
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error("Error guardando factura manual en DB:", insertError);
+        return NextResponse.json({ error: `Error al guardar factura: ${insertError.message}` }, { status: 500 });
+      }
+
+      // Save factura_items
+      const facturaItems = items.map((item: any, idx: number) => ({
+        factura_id: factura.id,
+        descripcion: item.descripcion || "Item",
+        cantidad: Number(item.cantidad),
+        precio_unitario: Number(item.precio_unitario),
+        iva_porcentaje: isFacturaA ? Number(item.iva_porcentaje ?? 21) : 21,
+        orden: idx,
+      }));
+
+      const { error: itemsError } = await supabase
+        .from("factura_items")
+        .insert(facturaItems);
+
+      if (itemsError) {
+        console.error("Error guardando factura_items (manual):", itemsError);
+      }
+
+      return NextResponse.json({
+        success: true,
+        factura: {
+          id: factura.id,
+          numero: Number(numero_manual),
+          cae: null,
+          cae_vencimiento: null,
+          total: totalFinal,
+          comprobante: `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(numero_manual).padStart(8, "0")}`,
+        },
+      });
+    }
+
+    // ── ARCA mode (default) ──
 
     // Resolve ARCA config for the sociedad
     let arcaConfig: ArcaConfig;
@@ -153,9 +259,6 @@ export async function POST(req: NextRequest) {
     if (!cbteTipo) {
       return NextResponse.json({ error: `Tipo de comprobante no valido: ${tipo}` }, { status: 400 });
     }
-
-    const authHeader = req.headers.get("authorization");
-    const supabase = getSupabase(authHeader);
 
     // Determine document type and client data
     let docTipo: number;
@@ -350,7 +453,6 @@ export async function POST(req: NextRequest) {
       cantidad: Number(item.cantidad),
       precio_unitario: Number(item.precio_unitario),
       iva_porcentaje: isFacturaA ? Number(item.iva_porcentaje ?? 21) : 21,
-      subtotal: Math.round(Number(item.cantidad) * Number(item.precio_unitario) * 100) / 100,
       orden: idx,
     }));
 
