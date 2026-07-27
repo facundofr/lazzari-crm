@@ -900,25 +900,21 @@ ${f.cae ? `
           <StatCard title="CAE vigentes" value={String(caeVigentes)} icon={FileCheck} iconColor="text-blue-600" />
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
-          <div className="flex-1 w-full">
-            <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
-          </div>
-          <div className="relative w-full sm:w-72 shrink-0">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-            <input
-              value={clienteSearch}
-              onChange={(e) => setClienteSearch(e.target.value)}
-              placeholder="Filtrar por cliente..."
-              className="w-full rounded-lg border border-zinc-200 pl-9 pr-8 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white placeholder:text-zinc-400"
-            />
-            {clienteSearch && (
-              <button onClick={() => setClienteSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600">
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
+        <div className="relative w-full sm:w-80">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+          <input
+            value={clienteSearch}
+            onChange={(e) => setClienteSearch(e.target.value)}
+            placeholder="Buscar por cliente (razón social)..."
+            className="w-full rounded-lg border border-zinc-200 pl-9 pr-8 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white placeholder:text-zinc-400"
+          />
+          {clienteSearch && (
+            <button onClick={() => setClienteSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600">
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
+        <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
 
         {/* Data table */}
         <Card className="p-0 overflow-hidden">
