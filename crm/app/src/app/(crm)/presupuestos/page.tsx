@@ -823,7 +823,7 @@ export default function PresupuestosPage() {
       toast.warning("Selecciona un vendedor");
       return;
     }
-    if (!esSolicitud && !["A", "B"].includes(newPR.tipo_comprobante)) {
+    if (!esSolicitud && newPR.modalidad_emision !== "manual" && !["A", "B"].includes(newPR.tipo_comprobante)) {
       toast.warning("Selecciona tipo de documento (A o B)");
       return;
     }
