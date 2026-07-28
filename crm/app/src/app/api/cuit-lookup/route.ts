@@ -104,16 +104,34 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
   const tipoPersona = xmlTag(text, "tipoPersona");
   const estadoClave = xmlTag(text, "estadoClave");
 
-  let condicion_iva = "";
-  if (text.includes("<formaJuridica>")) condicion_iva = "RI";
-  const impuestoMatch = text.match(/<idImpuesto>(\d+)<\/idImpuesto>/g);
-  if (impuestoMatch) {
-    const ids = impuestoMatch.map((m) => Number(m.replace(/<\/?idImpuesto>/g, "")));
-    if (ids.includes(30) || ids.includes(32)) condicion_iva = "RI";
-    else if (ids.includes(20)) condicion_iva = "Monotributo";
-    else if (ids.includes(34)) condicion_iva = "Exento";
-    else condicion_iva = "CF";
+  // Parse impuesto blocks considering only ACTIVO estado
+  const activeImpuestos = new Set<number>();
+  let impIdx = 0;
+  while (true) {
+    const start = text.indexOf("<impuesto>", impIdx);
+    if (start === -1) break;
+    const end = text.indexOf("</impuesto>", start);
+    if (end === -1) break;
+    const block = text.slice(start, end + 11);
+    const estado = xmlTag(block, "estado");
+    if (estado === "ACTIVO" || estado === "") {
+      const id = Number(xmlTag(block, "idImpuesto"));
+      if (id) activeImpuestos.add(id);
+    }
+    impIdx = end + 11;
   }
+  // Fallback: if no <impuesto> blocks found, try flat <idImpuesto> tags
+  if (activeImpuestos.size === 0) {
+    const flatMatch = text.match(/<idImpuesto>(\d+)<\/idImpuesto>/g);
+    if (flatMatch) flatMatch.forEach(m => activeImpuestos.add(Number(m.replace(/<\/?idImpuesto>/g, ""))));
+  }
+
+  let condicion_iva = "";
+  if (activeImpuestos.has(20)) condicion_iva = "Monotributo";
+  if (activeImpuestos.has(30) || activeImpuestos.has(32)) condicion_iva = "RI";
+  if (activeImpuestos.has(34) && !activeImpuestos.has(30) && !activeImpuestos.has(32)) condicion_iva = "Exento";
+  if (!condicion_iva && text.includes("<formaJuridica>")) condicion_iva = "RI";
+  if (!condicion_iva && activeImpuestos.size > 0) condicion_iva = "CF";
 
   return {
     razon_social: razonSocial,
