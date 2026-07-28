@@ -154,6 +154,13 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
     localidad: domicilio?.localidad || "",
     provincia: domicilio?.provincia || "",
     cp: domicilio?.cp || "",
+    _debug: {
+      activeImpuestos: Array.from(activeImpuestos),
+      hasMonotributoSection,
+      hasRegimenGeneral,
+      hasFormaJuridica: text.includes("<formaJuridica>"),
+      xmlSnippet: text.replace(/[\s\S]*<personaReturn>/, "<personaReturn>").replace(/<\/personaReturn>[\s\S]*/, "</personaReturn>").slice(0, 2000),
+    },
     tipo_persona: tipoPersona,
     estado_clave: estadoClave,
   };

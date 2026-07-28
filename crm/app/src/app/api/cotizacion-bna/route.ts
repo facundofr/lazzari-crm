@@ -4,49 +4,64 @@ import { createSupabaseServer } from "@/lib/supabase/server";
 /**
  * GET /api/cotizacion-bna?modalidad=divisas|billetes&fecha=YYYY-MM-DD
  *
- * Lógica simplificada:
- *   - Con fecha (o sin fecha para día anterior): busca en DB directamente
- *   - Sin fecha y es HOY: scrape BNA → guarda en DB → retorna
- *   - Fallback: último valor en DB
+ * Fuentes (en orden de prioridad):
+ *   1. Cache en DB (cotizaciones_dolar)
+ *   2. DolarAPI.com (API pública, datos BNA oficiales)
+ *   3. Bluelytics (fallback)
+ *   4. Último valor en DB (stale)
  */
 
 const todayAR = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires" });
 
-const yesterdayHabil = () => {
-  const d = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Buenos_Aires" }));
-  d.setDate(d.getDate() - 1);
-  if (d.getDay() === 0) d.setDate(d.getDate() - 2);
-  if (d.getDay() === 6) d.setDate(d.getDate() - 1);
-  return d.toISOString().split("T")[0];
-};
-
-const parse = (s: string) => {
-  if (s.includes(",")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
-  return parseFloat(s);
-};
-
-function parseBnaHtml(html: string, modalidad: "divisas" | "billetes"): { compra: number; venta: number } | null {
-  const sectionMatch = html.match(new RegExp(`id="${modalidad}"[\\s\\S]*?(?=id="|$)`, "i"));
-  const section = sectionMatch ? sectionMatch[0] : html;
-  const match = section.match(
-    /Dolar\s+U\.S\.A[\s\S]*?<td[^>]*>([\d.,]+)<\/td>\s*<td[^>]*>([\d.,]+)<\/td>/i
-  );
-  if (!match) return null;
-  const compra = parse(match[1]);
-  const venta = parse(match[2]);
-  if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
-  return { compra, venta };
-}
-
-async function scrapeBna(modalidad: "divisas" | "billetes"): Promise<{ compra: number; venta: number } | null> {
+async function fetchDolarApi(): Promise<{ compra: number; venta: number } | null> {
   try {
-    const res = await fetch("https://www.bna.com.ar/Personas", {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; LazzariCRM/1.0)" },
+    const res = await fetch("https://dolarapi.com/v1/dolares/oficial", {
+      signal: AbortSignal.timeout(8000),
       next: { revalidate: 0 },
     });
     if (!res.ok) return null;
-    return parseBnaHtml(await res.text(), modalidad);
+    const data = await res.json();
+    const compra = Number(data.compra);
+    const venta = Number(data.venta);
+    if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
+    return { compra, venta };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBluelytics(): Promise<{ compra: number; venta: number } | null> {
+  try {
+    const res = await fetch("https://api.bluelytics.com.ar/v2/latest", {
+      signal: AbortSignal.timeout(8000),
+      next: { revalidate: 0 },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const compra = Number(data.oficial?.value_buy);
+    const venta = Number(data.oficial?.value_sell);
+    if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
+    return { compra, venta };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBluelyticsHistorical(fecha: string): Promise<{ compra: number; venta: number } | null> {
+  try {
+    const res = await fetch("https://api.bluelytics.com.ar/v2/evolution.json?days=30", {
+      signal: AbortSignal.timeout(8000),
+      next: { revalidate: 0 },
+    });
+    if (!res.ok) return null;
+    const data: Array<{ date: string; source: string; value_sell: number; value_buy: number }> = await res.json();
+    const match = data.find((d) => d.date === fecha && d.source === "Oficial");
+    if (!match) return null;
+    const compra = Number(match.value_buy);
+    const venta = Number(match.value_sell);
+    if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
+    return { compra, venta };
   } catch {
     return null;
   }
@@ -96,46 +111,69 @@ export async function GET(req: NextRequest) {
   const supabase = await createSupabaseServer();
 
   const hoy = todayAR();
-  const isToday = fechaParam === hoy;
-  const targetFecha = fechaParam || yesterdayHabil();
 
-  // ── Fecha específica (no hoy) → solo DB ──
-  if (fechaParam && !isToday) {
+  // -- Fecha específica (no hoy) -> solo DB + Bluelytics histórico --
+  if (fechaParam && fechaParam !== hoy) {
     const cached = await lookupDb(supabase as any, tipoDb, fechaParam);
     if (cached) return buildResponse(cached, modalidad, tipoDb, true);
+
+    // Intentar Bluelytics histórico
+    const hist = await fetchBluelyticsHistorical(fechaParam);
+    if (hist) {
+      await (supabase as any)
+        .from("cotizaciones_dolar")
+        .upsert(
+          { fecha: fechaParam, tipo: tipoDb, valor_compra: hist.compra, valor_venta: hist.venta, fuente: "bluelytics_hist", es_manual: false },
+          { onConflict: "fecha,tipo" }
+        );
+      return buildResponse(
+        { fecha: fechaParam, valor_compra: hist.compra, valor_venta: hist.venta, fuente: "bluelytics_hist", es_manual: false },
+        modalidad, tipoDb, false
+      );
+    }
+
     return NextResponse.json(
       { error: `No hay cotización guardada para ${fechaParam}` },
       { status: 404 }
     );
   }
 
-  // ── Hoy o sin fecha → intentar DB primero ──
+  // -- Hoy (o sin fecha) -> DB cache, luego APIs --
+  const targetFecha = fechaParam || hoy;
   const cached = await lookupDb(supabase as any, tipoDb, targetFecha);
   if (cached) return buildResponse(cached, modalidad, tipoDb, true);
 
-  // ── No hay en DB → scrape BNA (solo para hoy/ayer) ──
-  const scraped = await scrapeBna(modalidad);
-  if (scraped) {
+  // DolarAPI (principal)
+  const dolarApi = await fetchDolarApi();
+  if (dolarApi) {
     await (supabase as any)
       .from("cotizaciones_dolar")
       .upsert(
-        {
-          fecha: targetFecha,
-          tipo: tipoDb,
-          valor_compra: scraped.compra,
-          valor_venta: scraped.venta,
-          fuente: "BNA",
-          es_manual: false,
-        },
+        { fecha: targetFecha, tipo: tipoDb, valor_compra: dolarApi.compra, valor_venta: dolarApi.venta, fuente: "dolarapi", es_manual: false },
         { onConflict: "fecha,tipo" }
       );
     return buildResponse(
-      { fecha: targetFecha, valor_compra: scraped.compra, valor_venta: scraped.venta, fuente: "BNA", es_manual: false },
+      { fecha: targetFecha, valor_compra: dolarApi.compra, valor_venta: dolarApi.venta, fuente: "dolarapi", es_manual: false },
       modalidad, tipoDb, false
     );
   }
 
-  // ── Fallback: último valor en DB ──
+  // Bluelytics (fallback)
+  const bluelytics = await fetchBluelytics();
+  if (bluelytics) {
+    await (supabase as any)
+      .from("cotizaciones_dolar")
+      .upsert(
+        { fecha: targetFecha, tipo: tipoDb, valor_compra: bluelytics.compra, valor_venta: bluelytics.venta, fuente: "bluelytics", es_manual: false },
+        { onConflict: "fecha,tipo" }
+      );
+    return buildResponse(
+      { fecha: targetFecha, valor_compra: bluelytics.compra, valor_venta: bluelytics.venta, fuente: "bluelytics", es_manual: false },
+      modalidad, tipoDb, false
+    );
+  }
+
+  // Fallback: último valor en DB
   const ultimo = await lookupLatest(supabase as any, tipoDb);
   if (ultimo) return buildResponse(ultimo, modalidad, tipoDb, true, true);
 
