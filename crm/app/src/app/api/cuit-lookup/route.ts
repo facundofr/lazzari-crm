@@ -126,12 +126,26 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
     if (flatMatch) flatMatch.forEach(m => activeImpuestos.add(Number(m.replace(/<\/?idImpuesto>/g, ""))));
   }
 
+  // Detect Monotributo from datosMonotributo section (may not have idImpuesto 20)
+  const hasMonotributoSection = text.includes("<datosMonotributo>") || text.includes("<categoriaMonotributo>");
+  // Detect RI from datosRegimenGeneral with active IVA
+  const hasRegimenGeneral = text.includes("<datosRegimenGeneral>");
+
   let condicion_iva = "";
-  if (activeImpuestos.has(20)) condicion_iva = "Monotributo";
-  if (activeImpuestos.has(30) || activeImpuestos.has(32)) condicion_iva = "RI";
-  if (activeImpuestos.has(34) && !activeImpuestos.has(30) && !activeImpuestos.has(32)) condicion_iva = "Exento";
-  if (!condicion_iva && text.includes("<formaJuridica>")) condicion_iva = "RI";
-  if (!condicion_iva && activeImpuestos.size > 0) condicion_iva = "CF";
+  // Priority: RI (active IVA) > Monotributo > Exento > CF
+  if (activeImpuestos.has(30) || activeImpuestos.has(32)) {
+    condicion_iva = "RI";
+  } else if (activeImpuestos.has(20) || hasMonotributoSection) {
+    condicion_iva = "Monotributo";
+  } else if (activeImpuestos.has(34)) {
+    condicion_iva = "Exento";
+  } else if (hasRegimenGeneral) {
+    condicion_iva = "RI";
+  } else if (text.includes("<formaJuridica>")) {
+    condicion_iva = "RI";
+  } else if (activeImpuestos.size > 0) {
+    condicion_iva = "CF";
+  }
 
   return {
     razon_social: razonSocial,
