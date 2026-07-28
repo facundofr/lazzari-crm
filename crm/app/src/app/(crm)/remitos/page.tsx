@@ -1428,12 +1428,22 @@ export default function RemitosPage() {
                 </div>
               )}
 
-              {detailRemito.observaciones && (
-                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
-                  <span className="text-xs text-zinc-400 block mb-1">Observaciones</span>
-                  <p className="text-sm dark:text-zinc-300">{detailRemito.observaciones}</p>
-                </div>
-              )}
+              <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
+                <span className="text-xs text-zinc-400 block mb-1">Observaciones</span>
+                <textarea
+                  value={detailRemito.observaciones || ""}
+                  onChange={(e) => setDetailRemito(prev => prev ? { ...prev, observaciones: e.target.value } : prev)}
+                  onBlur={async (e) => {
+                    const val = e.target.value;
+                    const { error } = await supabase.from("remitos").update({ observaciones: val }).eq("id", detailRemito.id);
+                    if (error) alert("Error al guardar observaciones: " + error.message);
+                    else setRemitos(prev => prev.map(r => r.id === detailRemito.id ? { ...r, observaciones: val } : r));
+                  }}
+                  className="w-full bg-transparent text-sm dark:text-zinc-300 resize-none outline-none focus:ring-1 focus:ring-orange-400 rounded px-1 py-0.5 min-h-[2rem]"
+                  rows={2}
+                  placeholder="Agregar observaciones..."
+                />
+              </div>
 
               {/* Items */}
               <div>
