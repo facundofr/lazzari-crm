@@ -88,6 +88,15 @@ function toDateKey(d: Date): string {
 }
 
 function parseLocalDate(dateStr: string): Date {
+  // Date-only strings ("2026-07-28") and UTC midnight are parsed as UTC midnight,
+  // which in AR (UTC-3) shifts to the previous day. Fix by using local noon.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return new Date(dateStr + "T12:00:00");
+  }
+  // Midnight UTC with timezone marker → same issue
+  if (/T00:00:00(\.0+)?(Z|\+00:?00)/.test(dateStr)) {
+    return new Date(dateStr.split("T")[0] + "T12:00:00");
+  }
   return new Date(dateStr);
 }
 
@@ -305,11 +314,21 @@ export default function CalendarioPage() {
     if (!createForm.titulo || !createForm.fecha_inicio) return;
     setCreating(true);
     try {
+      // For todo_el_dia events, store noon local to avoid UTC midnight → AR previous day issue
+      const fechaInicioStr = createForm.todo_el_dia && !createForm.fecha_inicio.includes("T")
+        ? createForm.fecha_inicio + "T12:00:00"
+        : createForm.fecha_inicio;
+      const fechaFinStr = createForm.fecha_fin
+        ? (createForm.todo_el_dia && !createForm.fecha_fin.includes("T")
+          ? createForm.fecha_fin + "T12:00:00"
+          : createForm.fecha_fin)
+        : null;
+
       const { error } = await (supabase as any).from("eventos").insert({
         titulo: createForm.titulo,
         tipo: createForm.tipo,
-        fecha_inicio: new Date(createForm.fecha_inicio).toISOString(),
-        fecha_fin: createForm.fecha_fin ? new Date(createForm.fecha_fin).toISOString() : null,
+        fecha_inicio: new Date(fechaInicioStr).toISOString(),
+        fecha_fin: fechaFinStr ? new Date(fechaFinStr).toISOString() : null,
         todo_el_dia: createForm.todo_el_dia,
         cliente_id: createForm.cliente_id || null,
         descripcion: createForm.descripcion || null,
@@ -513,7 +532,7 @@ export default function CalendarioPage() {
               return (
                 <button
                   key={idx}
-                  onClick={() => setSelectedDate(cell.dateKey === selectedDate ? null : cell.dateKey)}
+                  onClick={() => { setSelectedDate(cell.dateKey); openCreateModal(cell.dateKey); }}
                   className={`
                     relative min-h-[80px] sm:min-h-[100px] p-1 sm:p-2 border-b border-r border-zinc-100 dark:border-zinc-800 text-left transition-colors
                     ${!cell.isCurrentMonth ? "bg-zinc-50 dark:bg-zinc-950/50" : "bg-white dark:bg-zinc-900"}
@@ -577,9 +596,10 @@ export default function CalendarioPage() {
             <div className="space-y-1.5">
               {upcomingAndOverdue.map((ev) => {
                 const cfg = tipoConfig[ev.tipo] || tipoConfig.otro;
+                const safeFecha = parseLocalDate(ev.fecha_inicio);
                 const dateLabel = ev.isOverdue
-                  ? `Vencido — ${formatDate(ev.fecha_inicio)}`
-                  : formatDate(ev.fecha_inicio);
+                  ? `Vencido — ${formatDate(safeFecha)}`
+                  : formatDate(safeFecha);
                 return (
                   <div
                     key={ev.id}
@@ -622,7 +642,7 @@ export default function CalendarioPage() {
           <Card className="p-4 sm:p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-zinc-900 dark:text-white">
-                {formatDate(selectedDate)} — {selectedDateEvents.length} evento{selectedDateEvents.length !== 1 ? "s" : ""}
+                {formatDate(selectedDate + "T12:00:00")} — {selectedDateEvents.length} evento{selectedDateEvents.length !== 1 ? "s" : ""}
               </h3>
               <div className="flex items-center gap-2">
                 <button
@@ -762,7 +782,7 @@ export default function CalendarioPage() {
                   <span className="text-zinc-400">Fecha inicio</span>
                   <p className="font-medium dark:text-white">
                     {detailEvento.todo_el_dia
-                      ? formatDate(detailEvento.fecha_inicio)
+                      ? formatDate(parseLocalDate(detailEvento.fecha_inicio))
                       : formatDateTime(detailEvento.fecha_inicio)}
                   </p>
                 </div>
@@ -771,7 +791,7 @@ export default function CalendarioPage() {
                     <span className="text-zinc-400">Fecha fin</span>
                     <p className="font-medium dark:text-white">
                       {detailEvento.todo_el_dia
-                        ? formatDate(detailEvento.fecha_fin)
+                        ? formatDate(parseLocalDate(detailEvento.fecha_fin))
                         : formatDateTime(detailEvento.fecha_fin)}
                     </p>
                   </div>
