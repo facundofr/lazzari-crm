@@ -6,13 +6,67 @@ import { createSupabaseServer } from "@/lib/supabase/server";
  *
  * Fuentes (en orden de prioridad):
  *   1. Cache en DB (cotizaciones_dolar)
- *   2. DolarAPI.com (API pública, datos BNA oficiales)
- *   3. Bluelytics (fallback)
+ *   2. BNA Cotizador (endpoint AJAX real — distingue divisas/billetes)
+ *   3. DolarAPI.com / Bluelytics (fallback, sin distinción divisa/billete)
  *   4. Último valor en DB (stale)
  */
 
 const todayAR = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires" });
+
+const toddmmyyyy = (isoDate: string) => {
+  const [y, m, d] = isoDate.split("-");
+  return `${d}/${m}/${y}`;
+};
+
+const parse = (s: string) => {
+  if (s.includes(",")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
+  return parseFloat(s);
+};
+
+/**
+ * Scrape BNA Cotizador — AJAX endpoint que devuelve HTML parcial con tabla.
+ * Billetes: id=billetes, idMoneda=22
+ * Divisas:  id=divisas,  idMoneda=55
+ */
+async function scrapeBna(
+  modalidad: "divisas" | "billetes",
+  fecha: string
+): Promise<{ compra: number; venta: number; fechaBna: string } | null> {
+  const id = modalidad;
+  const idMoneda = modalidad === "billetes" ? "22" : "55";
+  const fechaDdMm = toddmmyyyy(fecha);
+
+  try {
+    const url = `https://www.bna.com.ar/Cotizador/HistoricoPrincipales?id=${id}&fecha=${encodeURIComponent(fechaDdMm)}&idMoneda=${idMoneda}`;
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": "https://www.bna.com.ar/Cotizador/HistoricoPrincipales",
+      },
+      signal: AbortSignal.timeout(10000),
+      next: { revalidate: 0 },
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    // Parse: find rows with "Dolar U.S.A" followed by compra/venta TDs
+    // Pattern: <td>Dolar U.S.A</td> <td class="dest">COMPRA</td> <td class="dest">VENTA</td> <td>FECHA</td>
+    const rowMatch = html.match(
+      /Dolar\s+U\.S\.A<\/td>\s*<td[^>]*>([\d.,]+)<\/td>\s*<td[^>]*>([\d.,]+)<\/td>\s*<td[^>]*>([^<]+)<\/td>/i
+    );
+    if (!rowMatch) return null;
+
+    const compra = parse(rowMatch[1]);
+    const venta = parse(rowMatch[2]);
+    const fechaBna = rowMatch[3].trim();
+    if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
+    return { compra, venta, fechaBna };
+  } catch {
+    return null;
+  }
+}
 
 async function fetchDolarApi(): Promise<{ compra: number; venta: number } | null> {
   try {
@@ -41,25 +95,6 @@ async function fetchBluelytics(): Promise<{ compra: number; venta: number } | nu
     const data = await res.json();
     const compra = Number(data.oficial?.value_buy);
     const venta = Number(data.oficial?.value_sell);
-    if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
-    return { compra, venta };
-  } catch {
-    return null;
-  }
-}
-
-async function fetchBluelyticsHistorical(fecha: string): Promise<{ compra: number; venta: number } | null> {
-  try {
-    const res = await fetch("https://api.bluelytics.com.ar/v2/evolution.json?days=30", {
-      signal: AbortSignal.timeout(8000),
-      next: { revalidate: 0 },
-    });
-    if (!res.ok) return null;
-    const data: Array<{ date: string; source: string; value_sell: number; value_buy: number }> = await res.json();
-    const match = data.find((d) => d.date === fecha && d.source === "Oficial");
-    if (!match) return null;
-    const compra = Number(match.value_buy);
-    const venta = Number(match.value_sell);
     if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
     return { compra, venta };
   } catch {
@@ -104,6 +139,15 @@ function buildResponse(row: any, modalidad: string, tipoDb: string, cached: bool
   });
 }
 
+async function upsertCotiz(supabase: any, fecha: string, tipoDb: string, compra: number, venta: number, fuente: string) {
+  await (supabase as any)
+    .from("cotizaciones_dolar")
+    .upsert(
+      { fecha, tipo: tipoDb, valor_compra: compra, valor_venta: venta, fuente, es_manual: false },
+      { onConflict: "fecha,tipo" }
+    );
+}
+
 export async function GET(req: NextRequest) {
   const modalidad = (req.nextUrl.searchParams.get("modalidad") || "divisas") as "divisas" | "billetes";
   const fechaParam = req.nextUrl.searchParams.get("fecha");
@@ -111,69 +155,37 @@ export async function GET(req: NextRequest) {
   const supabase = await createSupabaseServer();
 
   const hoy = todayAR();
-
-  // -- Fecha específica (no hoy) -> solo DB + Bluelytics histórico --
-  if (fechaParam && fechaParam !== hoy) {
-    const cached = await lookupDb(supabase as any, tipoDb, fechaParam);
-    if (cached) return buildResponse(cached, modalidad, tipoDb, true);
-
-    // Intentar Bluelytics histórico
-    const hist = await fetchBluelyticsHistorical(fechaParam);
-    if (hist) {
-      await (supabase as any)
-        .from("cotizaciones_dolar")
-        .upsert(
-          { fecha: fechaParam, tipo: tipoDb, valor_compra: hist.compra, valor_venta: hist.venta, fuente: "bluelytics_hist", es_manual: false },
-          { onConflict: "fecha,tipo" }
-        );
-      return buildResponse(
-        { fecha: fechaParam, valor_compra: hist.compra, valor_venta: hist.venta, fuente: "bluelytics_hist", es_manual: false },
-        modalidad, tipoDb, false
-      );
-    }
-
-    return NextResponse.json(
-      { error: `No hay cotización guardada para ${fechaParam}` },
-      { status: 404 }
-    );
-  }
-
-  // -- Hoy (o sin fecha) -> DB cache, luego APIs --
   const targetFecha = fechaParam || hoy;
+
+  // -- Siempre buscar en DB primero --
   const cached = await lookupDb(supabase as any, tipoDb, targetFecha);
   if (cached) return buildResponse(cached, modalidad, tipoDb, true);
 
-  // DolarAPI (principal)
-  const dolarApi = await fetchDolarApi();
-  if (dolarApi) {
-    await (supabase as any)
-      .from("cotizaciones_dolar")
-      .upsert(
-        { fecha: targetFecha, tipo: tipoDb, valor_compra: dolarApi.compra, valor_venta: dolarApi.venta, fuente: "dolarapi", es_manual: false },
-        { onConflict: "fecha,tipo" }
-      );
+  // -- BNA Cotizador (distingue divisas vs billetes) --
+  const bna = await scrapeBna(modalidad, targetFecha);
+  if (bna) {
+    await upsertCotiz(supabase as any, targetFecha, tipoDb, bna.compra, bna.venta, "BNA");
     return buildResponse(
-      { fecha: targetFecha, valor_compra: dolarApi.compra, valor_venta: dolarApi.venta, fuente: "dolarapi", es_manual: false },
+      { fecha: targetFecha, valor_compra: bna.compra, valor_venta: bna.venta, fuente: "BNA", es_manual: false },
       modalidad, tipoDb, false
     );
   }
 
-  // Bluelytics (fallback)
-  const bluelytics = await fetchBluelytics();
-  if (bluelytics) {
-    await (supabase as any)
-      .from("cotizaciones_dolar")
-      .upsert(
-        { fecha: targetFecha, tipo: tipoDb, valor_compra: bluelytics.compra, valor_venta: bluelytics.venta, fuente: "bluelytics", es_manual: false },
-        { onConflict: "fecha,tipo" }
+  // -- Fallback: DolarAPI / Bluelytics (solo para fecha actual, no distinguen divisas/billetes) --
+  if (targetFecha === hoy) {
+    let fuente = "dolarapi";
+    let fallback = await fetchDolarApi();
+    if (!fallback) { fallback = await fetchBluelytics(); fuente = "bluelytics"; }
+    if (fallback) {
+      await upsertCotiz(supabase as any, targetFecha, tipoDb, fallback.compra, fallback.venta, fuente);
+      return buildResponse(
+        { fecha: targetFecha, valor_compra: fallback.compra, valor_venta: fallback.venta, fuente, es_manual: false },
+        modalidad, tipoDb, false
       );
-    return buildResponse(
-      { fecha: targetFecha, valor_compra: bluelytics.compra, valor_venta: bluelytics.venta, fuente: "bluelytics", es_manual: false },
-      modalidad, tipoDb, false
-    );
+    }
   }
 
-  // Fallback: último valor en DB
+  // -- Último valor en DB (stale) --
   const ultimo = await lookupLatest(supabase as any, tipoDb);
   if (ultimo) return buildResponse(ultimo, modalidad, tipoDb, true, true);
 
