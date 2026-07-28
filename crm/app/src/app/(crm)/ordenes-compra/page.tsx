@@ -13,7 +13,7 @@ import {
   ShoppingCart, Clock, CheckCircle2, Truck, Loader2,
   X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
-  PackageCheck, MessageSquare,
+  PackageCheck, MessageSquare, Edit3,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
@@ -214,6 +214,11 @@ export default function OrdenesCompraPage() {
   const [savingRecepcion, setSavingRecepcion] = useState<string | null>(null);
   // Reception form: quantities being received in this batch (keyed by item id)
   const [recepcionQtys, setRecepcionQtys] = useState<Record<string, number>>({});
+  // Edit mode
+  const [editMode, setEditMode] = useState(false);
+  const [editItems, setEditItems] = useState<DetailItem[]>([]);
+  const [editOC, setEditOC] = useState<{ fecha_entrega_estimada: string; observaciones: string }>({ fecha_entrega_estimada: "", observaciones: "" });
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // ── Fetch main data ──────────────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -527,6 +532,107 @@ export default function OrdenesCompraPage() {
       alert(err instanceof Error ? err.message : "Error");
     } finally {
       setSavingRecepcion(null);
+    }
+  };
+
+  const startEditMode = () => {
+    if (!detailOC) return;
+    setEditItems(detailItems.map((it) => ({ ...it })));
+    setEditOC({
+      fecha_entrega_estimada: detailOC.fecha_entrega_estimada || "",
+      observaciones: detailOC.observaciones || "",
+    });
+    setEditMode(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!detailOC) return;
+    setSavingEdit(true);
+    try {
+      // 1. Update each item (cantidad, precio_unitario, cantidad_recibida) + adjust stock
+      for (let i = 0; i < editItems.length; i++) {
+        const edited = editItems[i];
+        const original = detailItems[i];
+        if (!original) continue;
+
+        const cantidadChanged = Number(edited.cantidad) !== Number(original.cantidad);
+        const precioChanged = Number(edited.precio_unitario) !== Number(original.precio_unitario);
+        const recibidaChanged = Number(edited.cantidad_recibida) !== Number(original.cantidad_recibida);
+
+        if (cantidadChanged || precioChanged || recibidaChanged) {
+          const updatePayload: any = {};
+          if (cantidadChanged) updatePayload.cantidad = Number(edited.cantidad);
+          if (precioChanged) updatePayload.precio_unitario = Number(edited.precio_unitario);
+          if (recibidaChanged) updatePayload.cantidad_recibida = Number(edited.cantidad_recibida);
+
+          const { error } = await supabase
+            .from("orden_compra_items")
+            .update(updatePayload)
+            .eq("id", edited.id);
+          if (error) throw new Error(`Error al actualizar item ${edited.codigo}: ${error.message}`);
+
+          // Adjust stock if cantidad_recibida changed
+          if (recibidaChanged && edited.producto_id) {
+            const diff = Number(edited.cantidad_recibida) - Number(original.cantidad_recibida);
+            if (diff !== 0) {
+              const { error: stockErr } = await supabase.rpc("increment_stock" as any, {
+                producto_id: edited.producto_id,
+                cantidad: diff,
+              });
+              if (stockErr) throw new Error(`Error al ajustar stock de ${edited.codigo}: ${(stockErr as any).message}`);
+            }
+          }
+        }
+      }
+
+      // 2. Recalculate OC totals (preserve original IVA ratio)
+      const newSubtotal = editItems.reduce((sum, it) => sum + Number(it.cantidad) * Number(it.precio_unitario), 0);
+      const origIvaRate = Number(detailOC.subtotal) > 0 ? Number(detailOC.iva) / Number(detailOC.subtotal) : 0.21;
+      const newIva = newSubtotal * origIvaRate;
+      const newTotal = newSubtotal + newIva;
+
+      // 3. Determine new estado
+      const allReceived = editItems.every((it) => Number(it.cantidad_recibida) >= Number(it.cantidad));
+      const someReceived = editItems.some((it) => Number(it.cantidad_recibida) > 0);
+      let newEstado = detailOC.estado;
+      if (detailOC.estado !== "cancelada") {
+        if (allReceived && editItems.length > 0) newEstado = "recibida";
+        else if (someReceived) newEstado = "recibida_parcial";
+        else if (detailOC.estado === "recibida" || detailOC.estado === "recibida_parcial") newEstado = "confirmada";
+      }
+
+      // 4. Update OC header
+      const { error: ocErr } = await supabase
+        .from("ordenes_compra")
+        .update({
+          subtotal: newSubtotal,
+          iva: newIva,
+          total: newTotal,
+          estado: newEstado,
+          fecha_entrega_estimada: editOC.fecha_entrega_estimada || null,
+          observaciones: editOC.observaciones || "",
+        } as any)
+        .eq("id", detailOC.id);
+      if (ocErr) throw new Error(`Error al actualizar OC: ${ocErr.message}`);
+
+      // 5. Update local state
+      setDetailItems(editItems.map((it) => ({ ...it })));
+      setDetailOC({
+        ...detailOC,
+        subtotal: newSubtotal,
+        iva: newIva,
+        total: newTotal,
+        estado: newEstado,
+        fecha_entrega_estimada: editOC.fecha_entrega_estimada || null,
+        observaciones: editOC.observaciones || "",
+        orden_compra_items: editItems.map((it) => ({ cantidad: Number(it.cantidad), cantidad_recibida: Number(it.cantidad_recibida) })),
+      });
+      setEditMode(false);
+      await fetchData();
+    } catch (err: any) {
+      alert(err.message || "Error al guardar cambios");
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -1739,23 +1845,54 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={handleCopySummary}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
-                  title="Copiar resumen al portapapeles"
-                >
-                  {copiedSummary ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
-                  {copiedSummary ? "Copiado" : "Copiar"}
-                </button>
-                <button
-                  onClick={handleDownloadPDF}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
-                  title="Descargar PDF"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  PDF
-                </button>
-                <button onClick={() => setDetailOC(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                {editMode ? (
+                  <>
+                    <button
+                      onClick={handleSaveEdit}
+                      disabled={savingEdit}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50 transition-colors"
+                    >
+                      {savingEdit ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                      Guardar
+                    </button>
+                    <button
+                      onClick={() => setEditMode(false)}
+                      disabled={savingEdit}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                      Cancelar
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      onClick={startEditMode}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                      title="Editar OC"
+                    >
+                      <Edit3 className="h-3.5 w-3.5" />
+                      Editar
+                    </button>
+                    <button
+                      onClick={handleCopySummary}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                      title="Copiar resumen al portapapeles"
+                    >
+                      {copiedSummary ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
+                      {copiedSummary ? "Copiado" : "Copiar"}
+                    </button>
+                    <button
+                      onClick={handleDownloadPDF}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                      title="Descargar PDF"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      PDF
+                    </button>
+                  </>
+                )}
+                <button onClick={() => { setDetailOC(null); setEditMode(false); }} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
                   <X className="h-5 w-5" />
                 </button>
               </div>
@@ -1892,7 +2029,13 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 </div>
                 <div>
                   <span className="text-zinc-400">Entrega estimada</span>
-                  <p className="font-medium dark:text-white">{detailOC.fecha_entrega_estimada ? formatDate(detailOC.fecha_entrega_estimada) : "\u2014"}</p>
+                  {editMode ? (
+                    <input type="date" value={editOC.fecha_entrega_estimada}
+                      onChange={(e) => setEditOC((prev) => ({ ...prev, fecha_entrega_estimada: e.target.value }))}
+                      className="w-full rounded border border-blue-300 dark:border-blue-600 bg-white dark:bg-zinc-800 px-2 py-1 text-sm dark:text-white mt-0.5" />
+                  ) : (
+                    <p className="font-medium dark:text-white">{detailOC.fecha_entrega_estimada ? formatDate(detailOC.fecha_entrega_estimada) : "\u2014"}</p>
+                  )}
                 </div>
                 <div>
                   <span className="text-zinc-400">Moneda</span>
@@ -1909,7 +2052,18 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               </div>
 
               {/* Observaciones / Comentarios */}
-              {detailOC.observaciones ? (
+              {editMode ? (
+                <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-3">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-400 mb-1.5">
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    Observaciones
+                  </div>
+                  <textarea value={editOC.observaciones}
+                    onChange={(e) => setEditOC((prev) => ({ ...prev, observaciones: e.target.value }))}
+                    rows={3}
+                    className="w-full rounded border border-blue-300 dark:border-blue-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                </div>
+              ) : detailOC.observaciones ? (
                 <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-4 py-3">
                   <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-400 mb-1.5">
                     <MessageSquare className="h-3.5 w-3.5" />
@@ -1994,7 +2148,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                        {detailItems.map((item) => {
+                        {(editMode ? editItems : detailItems).map((item, idx) => {
                           const pct = Number(item.cantidad) > 0
                             ? Math.round((Number(item.cantidad_recibida) / Number(item.cantidad)) * 100)
                             : 0;
@@ -2002,27 +2156,51 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                             <tr key={item.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
                               <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
                               <td className="px-3 py-2 max-w-[200px] truncate" title={item.descripcion}>{item.descripcion}</td>
-                              <td className="px-3 py-2 text-right">{item.cantidad}{item.unidad ? ` ${item.unidad}` : ""}</td>
-                              <td className="px-3 py-2 text-right font-mono">
-                                {formatCurrency(Number(item.precio_unitario), detailOC.moneda as "ARS" | "USD")}
+                              <td className="px-3 py-2 text-right">
+                                {editMode ? (
+                                  <input type="number" step="any" min={0} value={item.cantidad}
+                                    onChange={(e) => setEditItems((prev) => prev.map((it, i) => i === idx ? { ...it, cantidad: Number(e.target.value) || 0 } : it))}
+                                    className="w-16 text-right rounded border border-blue-300 dark:border-blue-600 bg-white dark:bg-zinc-800 px-1 py-0.5 text-sm" />
+                                ) : (
+                                  <>{item.cantidad}{item.unidad ? ` ${item.unidad}` : ""}</>
+                                )}
                               </td>
                               <td className="px-3 py-2 text-right font-mono">
-                                {formatCurrency(Number(item.subtotal), detailOC.moneda as "ARS" | "USD")}
+                                {editMode ? (
+                                  <input type="number" step="any" min={0} value={item.precio_unitario}
+                                    onChange={(e) => setEditItems((prev) => prev.map((it, i) => i === idx ? { ...it, precio_unitario: Number(e.target.value) || 0 } : it))}
+                                    className="w-20 text-right rounded border border-blue-300 dark:border-blue-600 bg-white dark:bg-zinc-800 px-1 py-0.5 text-sm font-mono" />
+                                ) : (
+                                  formatCurrency(Number(item.precio_unitario), detailOC.moneda as "ARS" | "USD")
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right font-mono">
+                                {editMode
+                                  ? formatCurrency(Number(item.cantidad) * Number(item.precio_unitario), detailOC.moneda as "ARS" | "USD")
+                                  : formatCurrency(Number(item.subtotal), detailOC.moneda as "ARS" | "USD")}
                               </td>
                               <td className="px-3 py-2">
-                                <div className="flex items-center gap-2 justify-center">
-                                  <div className="w-20">
-                                    <div className="flex justify-between text-xs mb-0.5">
-                                      <span>{item.cantidad_recibida}/{item.cantidad}</span>
-                                    </div>
-                                    <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800">
-                                      <div
-                                        className={`h-1.5 rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 0 ? "bg-amber-500" : "bg-zinc-300"}`}
-                                        style={{ width: `${pct}%` }}
-                                      />
+                                {editMode ? (
+                                  <div className="flex items-center justify-center">
+                                    <input type="number" step="1" min={0} max={item.cantidad} value={item.cantidad_recibida}
+                                      onChange={(e) => setEditItems((prev) => prev.map((it, i) => i === idx ? { ...it, cantidad_recibida: Math.max(0, Number(e.target.value) || 0) } : it))}
+                                      className="w-16 text-center rounded border border-blue-300 dark:border-blue-600 bg-white dark:bg-zinc-800 px-1 py-0.5 text-sm" />
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2 justify-center">
+                                    <div className="w-20">
+                                      <div className="flex justify-between text-xs mb-0.5">
+                                        <span>{item.cantidad_recibida}/{item.cantidad}</span>
+                                      </div>
+                                      <div className="h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800">
+                                        <div
+                                          className={`h-1.5 rounded-full ${pct === 100 ? "bg-emerald-500" : pct > 0 ? "bg-amber-500" : "bg-zinc-300"}`}
+                                          style={{ width: `${pct}%` }}
+                                        />
+                                      </div>
                                     </div>
                                   </div>
-                                </div>
+                                )}
                               </td>
                             </tr>
                           );
