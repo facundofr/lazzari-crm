@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck } from "lucide-react";
+import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -53,6 +53,8 @@ interface RemitoRow {
   valor_declarado: number | null;
   clientes: { razon_social: string; email?: string; cuit?: string; direccion?: string } | null;
   sucursal_nombre?: string;
+  sucursal_direccion?: string;
+  sucursal_id?: string;
   clienteNombre: string;
   oc_cliente?: string | null;
   remito_items: { id: string }[];
@@ -81,6 +83,16 @@ interface CreateItem {
   descripcion: string;
   cantidad: number;
   unidad: string;
+  sucursal_id?: string;
+}
+
+interface Sucursal {
+  id: string;
+  nombre: string;
+  direccion: string;
+  localidad: string;
+  provincia: string;
+  cp: string;
 }
 
 interface PresupuestoIA {
@@ -157,6 +169,15 @@ export default function RemitosPage() {
   const [loadingParcial, setLoadingParcial] = useState(false);
   const [savingParcial, setSavingParcial] = useState(false);
 
+  // Sucursales for create modal split
+  const [clienteSucursales, setClienteSucursales] = useState<Sucursal[]>([]);
+
+  // Split existing remito modal
+  const [splitModalOpen, setSplitModalOpen] = useState(false);
+  const [splitItems, setSplitItems] = useState<(RemitoDetailItem & { sucursal_id: string })[]>([]);
+  const [splitSucursales, setSplitSucursales] = useState<Sucursal[]>([]);
+  const [splittingSaving, setSplittingSaving] = useState(false);
+
   // SmartFilters state
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
     fecha: { from: "", to: "" },
@@ -207,7 +228,7 @@ export default function RemitosPage() {
 
   const fetchData = useCallback(async () => {
       try {
-        let q = supabase
+        let q = (supabase as any)
           .from("remitos")
           .select(`*, clientes(razon_social, email, cuit, direccion), remito_items(id)`)
           .order("fecha", { ascending: false });
@@ -413,6 +434,7 @@ export default function RemitosPage() {
     });
     setCreateItems([]);
     setCreateError("");
+    setClienteSucursales([]);
 
     let clienteQ = supabase.from("clientes").select("id, razon_social").eq("activo", true).order("razon_social");
     if (sociedadActiva?.id) clienteQ = clienteQ.eq("sociedad_id" as any, sociedadActiva.id);
@@ -449,21 +471,32 @@ export default function RemitosPage() {
       return;
     }
 
-    // Fetch items from presupuesto
+    // Fetch items from presupuesto + PR sucursal
     setLoadingPRItems(true);
     try {
-      const { data: items } = await supabase
-        .from("presupuesto_items")
-        .select("descripcion, cantidad, unidad")
-        .eq("presupuesto_id", prId)
-        .order("orden");
+      const [itemsRes, prHeaderRes] = await Promise.all([
+        supabase.from("presupuesto_items").select("descripcion, cantidad, unidad").eq("presupuesto_id", prId).order("orden"),
+        supabase.from("presupuestos").select("sucursal_id").eq("id", prId).single(),
+      ]);
+      const prSucursalId = (prHeaderRes.data as any)?.sucursal_id || "";
 
+      // Fetch sucursales if client changed via PR and we don't have them
+      const clienteId = pr?.cliente_id || createForm.cliente_id;
+      if (clienteId && clienteSucursales.length === 0) {
+        const { data: sucs } = await (supabase as any).from("cliente_sucursales")
+          .select("id, nombre, direccion, localidad, provincia, cp")
+          .eq("cliente_id", clienteId).eq("activo", true).order("principal", { ascending: false });
+        if (sucs && sucs.length > 0) setClienteSucursales(sucs as Sucursal[]);
+      }
+
+      const items = itemsRes.data;
       if (items && items.length > 0) {
         setCreateItems(items.map((it: any, idx: number) => ({
           tempId: `pr-${idx}`,
           descripcion: it.descripcion || "",
           cantidad: Number(it.cantidad) || 1,
           unidad: it.unidad || "UN",
+          sucursal_id: prSucursalId,
         })));
       } else {
         setCreateItems([]);
@@ -504,34 +537,68 @@ export default function RemitosPage() {
 
     setCreating(true);
     try {
-      const { data: remitoData, error } = await (supabase.from("remitos") as any).insert({
-        numero: createForm.numero,
-        cliente_id: createForm.cliente_id,
-        fecha: createForm.fecha,
-        observaciones: createForm.observaciones,
-        presupuesto_id: createForm.presupuesto_id || null,
-        estado: "pendiente",
-        valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : null,
-        sociedad_id: sociedadActiva?.id || null,
-        created_by: profile?.id || null,
-      }).select("id").single();
+      // Group items by sucursal_id for splitting
+      const hasSucursales = clienteSucursales.length > 0 && validItems.some(it => it.sucursal_id);
+      const groups = new Map<string, CreateItem[]>();
 
-      if (error || !remitoData) {
-        setCreateError("Error al crear remito: " + (error?.message || "sin datos"));
-        return;
+      if (hasSucursales) {
+        for (const item of validItems) {
+          const key = item.sucursal_id || "__none";
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key)!.push(item);
+        }
+      } else {
+        groups.set("__none", validItems);
       }
 
-      // Insert items
-      const remitoItems = validItems.map((it, idx) => ({
-        remito_id: remitoData.id,
-        descripcion: it.descripcion,
-        cantidad: Number(it.cantidad),
-        unidad: it.unidad || "UN",
-        orden: idx,
-      }));
-      const { error: itemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
-      if (itemsErr) {
-        console.error("Error inserting remito items:", itemsErr);
+      // Calculate next number
+      let nextNum = remitos.reduce((max, r) => {
+        const parts = r.numero?.split("-");
+        const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
+        return n > max ? n : max;
+      }, 0) + 1;
+
+      const groupEntries = [...groups.entries()];
+      for (let gi = 0; gi < groupEntries.length; gi++) {
+        const [sucKey, groupItems] = groupEntries[gi];
+        const sucursalId = sucKey === "__none" ? null : sucKey;
+        const sucNombre = sucursalId ? clienteSucursales.find(s => s.id === sucursalId)?.nombre : null;
+        const numero = gi === 0 ? createForm.numero : `R-0001-${String(nextNum).padStart(8, "0")}`;
+
+        const obs = groupEntries.length > 1 && sucNombre
+          ? [createForm.observaciones, `Sucursal: ${sucNombre}`].filter(Boolean).join(" — ")
+          : createForm.observaciones;
+
+        const { data: remitoData, error } = await (supabase.from("remitos") as any).insert({
+          numero,
+          cliente_id: createForm.cliente_id,
+          fecha: createForm.fecha,
+          observaciones: obs,
+          presupuesto_id: createForm.presupuesto_id || null,
+          estado: "pendiente",
+          valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : null,
+          sociedad_id: sociedadActiva?.id || null,
+          sucursal_id: sucursalId,
+          created_by: profile?.id || null,
+        }).select("id").single();
+
+        if (error || !remitoData) {
+          setCreateError("Error al crear remito: " + (error?.message || "sin datos"));
+          return;
+        }
+
+        const remitoItems = groupItems.map((it, idx) => ({
+          remito_id: remitoData.id,
+          descripcion: it.descripcion,
+          cantidad: Number(it.cantidad),
+          unidad: it.unidad || "UN",
+          orden: idx,
+        }));
+        const { error: itemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
+        if (itemsErr) {
+          console.error("Error inserting remito items:", itemsErr);
+        }
+        if (gi > 0) nextNum++;
       }
 
       setCreateModalOpen(false);
@@ -630,6 +697,110 @@ export default function RemitosPage() {
   }
 
 
+  async function openSplitModal() {
+    if (!detailRemito || detailItems.length < 2) return;
+    // Fetch sucursales for this client
+    const { data: sucs } = await (supabase as any).from("cliente_sucursales")
+      .select("id, nombre, direccion, localidad, provincia, cp")
+      .eq("cliente_id", detailRemito.cliente_id)
+      .eq("activo", true)
+      .order("principal", { ascending: false });
+    if (!sucs || sucs.length === 0) {
+      alert("Este cliente no tiene sucursales cargadas. Cargá sucursales desde el módulo de Clientes.");
+      return;
+    }
+    setSplitSucursales(sucs as Sucursal[]);
+    setSplitItems(detailItems.map(it => ({ ...it, sucursal_id: "" })));
+    setSplitModalOpen(true);
+  }
+
+  async function handleSplitSave() {
+    if (!detailRemito || splitItems.length === 0) return;
+
+    // Group by sucursal
+    const groups = new Map<string, typeof splitItems>();
+    for (const item of splitItems) {
+      const key = item.sucursal_id || "__none";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(item);
+    }
+
+    if (groups.size <= 1) {
+      alert("Todos los items están asignados a la misma sucursal. Asigná al menos un item a una sucursal diferente.");
+      return;
+    }
+
+    setSplittingSaving(true);
+    try {
+      const sortedKeys = [...groups.keys()].sort((a, b) => a === "__none" ? -1 : b === "__none" ? 1 : 0);
+      const keepKey = sortedKeys[0];
+      const keepItems = groups.get(keepKey)!;
+
+      // Update original remito: set sucursal_id and delete items that move out
+      const keepSucursalId = keepKey === "__none" ? null : keepKey;
+      await (supabase as any).from("remitos").update({ sucursal_id: keepSucursalId }).eq("id", detailRemito.id);
+
+      // Delete items NOT staying in original
+      const keepIds = new Set(keepItems.map(i => i.id));
+      const removeIds = splitItems.filter(i => !keepIds.has(i.id)).map(i => i.id);
+      if (removeIds.length > 0) {
+        await supabase.from("remito_items").delete().in("id", removeIds);
+      }
+
+      // Calculate next number
+      let nextNum = remitos.reduce((max, r) => {
+        const parts = r.numero?.split("-");
+        const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
+        return n > max ? n : max;
+      }, 0) + 1;
+
+      // Create new remitos for remaining groups
+      const createdRemitos: string[] = [];
+      for (const [key, items] of groups) {
+        if (key === keepKey) continue;
+        const sucursalId = key === "__none" ? null : key;
+        const sucNombre = splitSucursales.find(s => s.id === key)?.nombre || "";
+        const numero = `R-0001-${String(nextNum).padStart(8, "0")}`;
+
+        const { data: newRemito, error: rErr } = await (supabase.from("remitos") as any).insert({
+          numero,
+          cliente_id: detailRemito.cliente_id,
+          fecha: detailRemito.fecha,
+          observaciones: `Dividido de ${detailRemito.numero}${sucNombre ? ` — Suc: ${sucNombre}` : ""}`,
+          presupuesto_id: detailRemito.presupuesto_id || null,
+          estado: "pendiente",
+          sociedad_id: sociedadActiva?.id || null,
+          sucursal_id: sucursalId,
+          valor_declarado: detailRemito.valor_declarado,
+          created_by: profile?.id || null,
+        }).select("id").single();
+
+        if (rErr) { alert("Error al crear remito: " + rErr.message); return; }
+        if (newRemito) {
+          const newItems = items.map((it, i) => ({
+            remito_id: newRemito.id,
+            descripcion: it.descripcion,
+            cantidad: it.cantidad,
+            unidad: it.unidad || "UN",
+            orden: i,
+          }));
+          await (supabase as any).from("remito_items").insert(newItems);
+          createdRemitos.push(numero);
+        }
+        nextNum++;
+      }
+
+      setSplitModalOpen(false);
+      setDetailRemito(null);
+      await fetchData();
+      alert(`Remito dividido. Se crearon ${createdRemitos.length} remito(s) adicional(es): ${createdRemitos.join(", ")}`);
+    } catch (err) {
+      alert("Error al dividir remito: " + (err as Error).message);
+    } finally {
+      setSplittingSaving(false);
+    }
+  }
+
   async function handleRowClick(row: RemitoRow) {
     setDetailRemito(row);
     setDetailLoading(true);
@@ -665,10 +836,16 @@ export default function RemitosPage() {
       setDetailItems((itemsRes.data as unknown as RemitoDetailItem[]) || []);
       if (prRes?.data) {
         setDetailPRNumero((prRes.data as any).numero || null);
-        const sucId = (prRes.data as any).sucursal_id;
-        if (sucId) {
-          const { data: sucData } = await (supabase as any).from("cliente_sucursales").select("nombre").eq("id", sucId).single();
-          if (sucData) setDetailRemito((prev) => prev ? { ...prev, sucursal_nombre: sucData.nombre } : prev);
+      }
+      // Fetch sucursal from remito.sucursal_id (priority) or presupuesto.sucursal_id (legacy)
+      const remitoSucId = (row as any).sucursal_id;
+      const prSucId = prRes?.data ? (prRes.data as any).sucursal_id : null;
+      const sucId = remitoSucId || prSucId;
+      if (sucId) {
+        const { data: sucData } = await (supabase as any).from("cliente_sucursales").select("nombre, direccion, localidad, provincia").eq("id", sucId).single();
+        if (sucData) {
+          const sucLabel = [sucData.nombre, sucData.direccion, sucData.localidad, sucData.provincia].filter(Boolean).join(", ");
+          setDetailRemito((prev) => prev ? { ...prev, sucursal_nombre: sucData.nombre, sucursal_direccion: sucLabel } : prev);
         }
       }
       if (facturasRes?.data) setDetailFacturas((facturasRes.data as any[]) || []);
@@ -694,6 +871,7 @@ export default function RemitosPage() {
       `Cliente: ${detailRemito.clientes?.razon_social || "\u2014"}`,
       `Fecha: ${formatDate(detailRemito.fecha)}`,
       `Estado: ${estadoConfig[detailRemito.estado]?.label || detailRemito.estado}`,
+      detailRemito.sucursal_nombre ? `Sucursal: ${detailRemito.sucursal_nombre}` : "",
       detailRemito.oc_cliente ? `OC Cliente: ${detailRemito.oc_cliente}` : "",
       detailRemito.valor_declarado ? `VALOR DECLARADO: $ ${Number(detailRemito.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "",
       detailRemito.observaciones ? `Obs: ${detailRemito.observaciones}` : "",
@@ -764,8 +942,10 @@ export default function RemitosPage() {
       <div class="fields">
         <div class="field"><label>Razón Social</label><span>${r.clientes?.razon_social || "\u2014"}</span></div>
         ${r.clientes?.cuit ? `<div class="field"><label>CUIT</label><span>${r.clientes.cuit}</span></div>` : ""}
-        ${r.clientes?.direccion ? `<div class="field"><label>Dirección</label><span>${r.clientes.direccion}</span></div>` : ""}
-        ${r.sucursal_nombre ? `<div class="field"><label>Sucursal</label><span>${r.sucursal_nombre}</span></div>` : ""}
+        ${r.sucursal_nombre
+          ? `<div class="field"><label>Sucursal destino</label><span style="color:${socColor};font-weight:600">${r.sucursal_nombre}</span></div>
+             ${r.sucursal_direccion ? `<div class="field"><label>Dirección entrega</label><span>${r.sucursal_direccion}</span></div>` : ""}`
+          : r.clientes?.direccion ? `<div class="field"><label>Dirección</label><span>${r.clientes.direccion}</span></div>` : ""}
         ${r.oc_cliente ? `<div class="field"><label>OC Cliente</label><span style="color:#2563EB;font-weight:600">${r.oc_cliente}</span></div>` : ""}
       </div>
     </div>
@@ -999,6 +1179,11 @@ export default function RemitosPage() {
                     <CheckCircle2 className="h-4 w-4" /> Marcar entregado
                   </button>
                 )}
+                {detailRemito.estado === "pendiente" && detailItems.length >= 2 && (
+                  <button onClick={openSplitModal} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors">
+                    <GitBranch className="h-4 w-4" /> Dividir por sucursal
+                  </button>
+                )}
               </div>
 
               {/* Info */}
@@ -1027,6 +1212,18 @@ export default function RemitosPage() {
                     >
                       <Badge variant="info">{detailPRNumero}</Badge>
                     </button>
+                  </div>
+                )}
+                {detailRemito.sucursal_nombre && (
+                  <div className="col-span-2">
+                    <span className="text-zinc-400">Sucursal destino</span>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <MapPin className="h-3.5 w-3.5 text-violet-500" />
+                      <p className="font-medium text-violet-600 dark:text-violet-400">{detailRemito.sucursal_nombre}</p>
+                    </div>
+                    {detailRemito.sucursal_direccion && (
+                      <p className="text-xs text-zinc-500 mt-0.5">{detailRemito.sucursal_direccion}</p>
+                    )}
                   </div>
                 )}
                 {detailRemito.oc_cliente && (
@@ -1311,10 +1508,15 @@ export default function RemitosPage() {
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente *</label>
                 <select
                   value={createForm.cliente_id}
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     const clienteId = e.target.value;
                     setCreateForm((prev) => ({ ...prev, cliente_id: clienteId, presupuesto_id: "" }));
                     setCreateItems([]);
+                    setClienteSucursales([]);
+                    if (clienteId) {
+                      const { data: sucs } = await (supabase as any).from("cliente_sucursales").select("id, nombre, direccion, localidad, provincia, cp").eq("cliente_id", clienteId).eq("activo", true).order("principal", { ascending: false });
+                      if (sucs && sucs.length > 0) setClienteSucursales(sucs as Sucursal[]);
+                    }
                   }}
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                 >
@@ -1375,6 +1577,7 @@ export default function RemitosPage() {
                           <th className="text-left px-3 py-2">Descripción</th>
                           <th className="text-center px-2 py-2 w-24">Cantidad</th>
                           <th className="text-center px-2 py-2 w-20">Unidad</th>
+                          {clienteSucursales.length > 0 && <th className="text-left px-2 py-2 w-40">Sucursal</th>}
                           <th className="w-10"></th>
                         </tr>
                       </thead>
@@ -1408,6 +1611,18 @@ export default function RemitosPage() {
                                 className="w-full rounded border border-zinc-200 px-2 py-1 text-sm text-center dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                               />
                             </td>
+                            {clienteSucursales.length > 0 && (
+                              <td className="px-2 py-1.5">
+                                <select
+                                  value={item.sucursal_id || ""}
+                                  onChange={(e) => updateCreateItem(item.tempId, "sucursal_id" as any, e.target.value)}
+                                  className="w-full rounded border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                                >
+                                  <option value="">Dir. principal</option>
+                                  {clienteSucursales.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                                </select>
+                              </td>
+                            )}
                             <td className="px-1 py-1.5">
                               <button
                                 type="button"
@@ -1470,7 +1685,14 @@ export default function RemitosPage() {
                 disabled={creating}
                 className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
               >
-                {creating ? "Creando..." : `Crear Remito (${createItems.filter(i => i.descripcion.trim()).length} items)`}
+                {creating ? "Creando..." : (() => {
+                  const validCount = createItems.filter(i => i.descripcion.trim()).length;
+                  if (clienteSucursales.length > 0) {
+                    const sucGroups = new Set(createItems.filter(i => i.descripcion.trim()).map(i => i.sucursal_id || "__none"));
+                    return sucGroups.size > 1 ? `Crear ${sucGroups.size} Remitos (${validCount} items)` : `Crear Remito (${validCount} items)`;
+                  }
+                  return `Crear Remito (${validCount} items)`;
+                })()}
               </button>
             </div>
           </Card>
@@ -1558,6 +1780,115 @@ export default function RemitosPage() {
                   )}
                 </button>
               )}
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Split por Sucursal Modal */}
+      {splitModalOpen && detailRemito && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <Card className="w-full max-w-3xl p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold dark:text-white flex items-center gap-2">
+                  <GitBranch className="h-5 w-5 text-violet-600" />
+                  Dividir Remito por Sucursal
+                </h2>
+                <p className="text-sm text-zinc-400">
+                  {detailRemito.numero} — {detailRemito.clientes?.razon_social || "—"}
+                </p>
+              </div>
+              <button onClick={() => setSplitModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              Asigná cada item a una sucursal. Se creará un remito separado por cada sucursal diferente.
+              El remito original conservará los items de la primera sucursal.
+            </p>
+
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
+                    <th className="text-left px-3 py-2">Descripción</th>
+                    <th className="text-right px-3 py-2 w-24">Cantidad</th>
+                    <th className="text-left px-3 py-2 w-20">Unidad</th>
+                    <th className="text-left px-3 py-2 w-48">Sucursal destino</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {splitItems.map((item) => (
+                    <tr key={item.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                      <td className="px-3 py-2 dark:text-white">{item.descripcion}</td>
+                      <td className="px-3 py-2 text-right font-medium dark:text-white">{item.cantidad}</td>
+                      <td className="px-3 py-2 text-zinc-500">{item.unidad || "u"}</td>
+                      <td className="px-2 py-1.5">
+                        <select
+                          value={item.sucursal_id}
+                          onChange={(e) => setSplitItems(prev => prev.map(it => it.id === item.id ? { ...it, sucursal_id: e.target.value } : it))}
+                          className="w-full rounded border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                        >
+                          <option value="">Dir. principal</option>
+                          {splitSucursales.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Preview of split result */}
+            {(() => {
+              const groups = new Map<string, number>();
+              for (const item of splitItems) {
+                const key = item.sucursal_id || "__none";
+                groups.set(key, (groups.get(key) || 0) + 1);
+              }
+              const entries = [...groups.entries()];
+              return entries.length > 1 ? (
+                <div className="rounded-lg bg-violet-50 dark:bg-violet-950/20 border border-violet-200 dark:border-violet-800 p-3 space-y-1.5">
+                  <p className="text-sm font-medium text-violet-700 dark:text-violet-300">
+                    Se crearán {entries.length} remitos:
+                  </p>
+                  {entries.map(([key, count]) => {
+                    const name = key === "__none" ? "Dir. principal" : splitSucursales.find(s => s.id === key)?.nombre || key;
+                    return (
+                      <div key={key} className="flex items-center gap-2 text-sm text-violet-600 dark:text-violet-400">
+                        <MapPin className="h-3.5 w-3.5" />
+                        <span>{name}: {count} item(s)</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 p-3 text-sm text-amber-700 dark:text-amber-300">
+                  Todos los items están en la misma sucursal. Asigná al menos un item a una sucursal diferente para dividir.
+                </div>
+              );
+            })()}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setSplitModalOpen(false)}
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSplitSave}
+                disabled={splittingSaving || new Set(splitItems.map(i => i.sucursal_id || "__none")).size <= 1}
+                className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {splittingSaving ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" /> Dividiendo...</>
+                ) : (
+                  <><GitBranch className="h-4 w-4" /> Confirmar división</>
+                )}
+              </button>
             </div>
           </Card>
         </div>
