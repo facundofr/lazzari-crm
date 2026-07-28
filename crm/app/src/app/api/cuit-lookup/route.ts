@@ -131,8 +131,10 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
   // Detect RI from datosRegimenGeneral with active IVA
   const hasRegimenGeneral = text.includes("<datosRegimenGeneral>");
 
+  const hasActividad = !!xmlTag(text, "idActividadPrincipal");
+
   let condicion_iva = "";
-  // Priority: RI (active IVA) > Monotributo > Exento > CF
+  // Priority: RI (active IVA) > Monotributo > Exento > Jurídica=RI > Física activa con actividad=Monotributo > CF
   if (activeImpuestos.has(30) || activeImpuestos.has(32)) {
     condicion_iva = "RI";
   } else if (activeImpuestos.has(20) || hasMonotributoSection) {
@@ -143,6 +145,10 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
     condicion_iva = "RI";
   } else if (text.includes("<formaJuridica>")) {
     condicion_iva = "RI";
+  } else if (tipoPersona === "FISICA" && estadoClave === "ACTIVO" && hasActividad && activeImpuestos.size === 0) {
+    // A13 no devuelve impuestos para muchas personas físicas.
+    // Si tiene clave activa y actividad económica registrada, lo más probable es Monotributo.
+    condicion_iva = "Monotributo";
   } else {
     condicion_iva = "CF";
   }
@@ -154,13 +160,6 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
     localidad: domicilio?.localidad || "",
     provincia: domicilio?.provincia || "",
     cp: domicilio?.cp || "",
-    _debug: {
-      activeImpuestos: Array.from(activeImpuestos),
-      hasMonotributoSection,
-      hasRegimenGeneral,
-      hasFormaJuridica: text.includes("<formaJuridica>"),
-      xmlSnippet: text.replace(/[\s\S]*<personaReturn>/, "<personaReturn>").replace(/<\/personaReturn>[\s\S]*/, "</personaReturn>").slice(0, 2000),
-    },
     tipo_persona: tipoPersona,
     estado_clave: estadoClave,
   };
