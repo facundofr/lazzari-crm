@@ -373,10 +373,11 @@ export default function FacturacionPage() {
   // ── Emit handlers ──────────────────────────────────────────────
   const openEmitModal = (prefill?: { cliente_id: string; tipo?: string; items?: EmitItem[]; moneda?: "ARS" | "USD"; tipo_cambio?: number }) => {
     // Solo forzar manual si certOk es explícitamente false (certificado no encontrado)
-    setEmitManual(arcaStatus !== null && arcaStatus.certOk === false);
+    const forceManual = arcaStatus !== null && arcaStatus.certOk === false;
+    setEmitManual(forceManual);
     setCotizBna(null);
     setEmitData({
-      tipo: prefill?.tipo || "FB",
+      tipo: prefill?.tipo || (forceManual ? "X" : "FB"),
       cliente_id: prefill?.cliente_id || "",
       punto_venta: emisorData.ptoVta,
       numero_manual: "",
@@ -403,7 +404,7 @@ export default function FacturacionPage() {
     }));
   };
 
-  const isFacturaA = emitData.tipo === "FA" || emitData.tipo === "NCA" || emitData.tipo === "FCEA" || emitData.tipo === "NCEA";
+  const isFacturaA = emitData.tipo === "FA" || emitData.tipo === "NCA" || emitData.tipo === "NDA" || emitData.tipo === "FCEA" || emitData.tipo === "NCEA";
 
   const isUSD = emitData.moneda === "USD";
   const tc = emitData.tipo_cambio || 0;
@@ -707,7 +708,7 @@ export default function FacturacionPage() {
     const cli = f.clientes;
     const comp = formatComprobante(f.tipo, f.punto_venta, f.numero);
     const letraComprobante = f.tipo.slice(-1);
-    const isFacturaBPdf = f.tipo === "FB" || f.tipo === "NCB";
+    const isFacturaBPdf = f.tipo === "FB" || f.tipo === "NCB" || f.tipo === "X" || f.tipo === "NDB";
 
     // Build QR data URL for ARCA verification
     const isUSDPdf = f.moneda === "USD" && f.tipo_cambio;
@@ -773,11 +774,11 @@ export default function FacturacionPage() {
   <div class="fc-center">
     <div>
       <div class="fc-letra">${letraComprobante}</div>
-      <div class="fc-cod">COD. ${String({ FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13, FCEA: 201, FCEB: 206, NCEA: 203, NCEB: 208 }[f.tipo] || 0).padStart(2, "0")}</div>
+      <div class="fc-cod">COD. ${String({ FA: 1, FB: 6, X: 0, NCA: 3, NCB: 8, NDA: 2, NDB: 7, FCEA: 201, FCEB: 206, NCEA: 203, NCEB: 208 }[f.tipo] || 0).padStart(2, "0")}</div>
     </div>
   </div>
   <div class="fc-right">
-    <div class="comp-tipo">${f.tipo.startsWith("NCE") ? "NOTA DE CRÉDITO ELECTRÓNICA" : f.tipo.startsWith("NC") ? "NOTA DE CRÉDITO" : f.tipo.startsWith("FCE") ? "FACTURA DE CRÉDITO ELECTRÓNICA" : "FACTURA"}</div>
+    <div class="comp-tipo">${f.tipo === "X" ? "FACTURA (INTERNA)" : f.tipo.startsWith("ND") ? "NOTA DE DÉBITO" : f.tipo.startsWith("NCE") ? "NOTA DE CRÉDITO ELECTRÓNICA" : f.tipo.startsWith("NC") ? "NOTA DE CRÉDITO" : f.tipo.startsWith("FCE") ? "FACTURA DE CRÉDITO ELECTRÓNICA" : "FACTURA"}</div>
     <div class="comp-num">N° ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}</div>
     <div class="comp-fecha">Fecha: ${formatDate(f.fecha)}</div>
   </div>
@@ -1048,14 +1049,14 @@ ${f.cae ? `
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
                     <button
-                      onClick={() => setEmitManual(false)}
+                      onClick={() => { setEmitManual(false); setEmitData((p) => ({ ...p, tipo: p.tipo === "X" ? "FA" : p.tipo })); }}
                       disabled={arcaStatus !== null && arcaStatus.certOk === false}
                       className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${!emitManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"} disabled:opacity-40 disabled:cursor-not-allowed`}
                     >
                       <ShieldCheck className="h-3.5 w-3.5" /> Con ARCA
                     </button>
                     <button
-                      onClick={() => setEmitManual(true)}
+                      onClick={() => { setEmitManual(true); setEmitData((p) => ({ ...p, tipo: "X" })); }}
                       className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${emitManual ? "bg-zinc-700 text-white dark:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
                     >
                       <FileCheck className="h-3.5 w-3.5" /> Manual (sin CAE)
@@ -1073,6 +1074,13 @@ ${f.cae ? `
                   <div className="col-span-3">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Tipo *</label>
                     <select value={emitData.tipo} onChange={(e) => setEmitData((p) => ({ ...p, tipo: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                      {emitManual && (
+                        <optgroup label="Manual (sin ARCA)">
+                          <option value="X">Factura X (interna)</option>
+                          <option value="NDA">ND A</option>
+                          <option value="NDB">ND B</option>
+                        </optgroup>
+                      )}
                       <optgroup label="Facturas">
                         <option value="FA">Factura A</option>
                         <option value="FB">Factura B</option>
@@ -1093,7 +1101,7 @@ ${f.cae ? `
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cliente *</label>
                     <select value={emitData.cliente_id} onChange={(e) => setEmitData((p) => ({ ...p, cliente_id: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
                       <option value="">Seleccionar cliente...</option>
-                      {!isFacturaA && <option value="consumidor_final">Consumidor Final</option>}
+                      {(!isFacturaA || emitData.tipo === "X") && <option value="consumidor_final">Consumidor Final</option>}
                       {clientes.map((c) => <option key={c.id} value={c.id}>{c.razon_social} — {c.cuit || "Sin CUIT"}</option>)}
                     </select>
                   </div>
