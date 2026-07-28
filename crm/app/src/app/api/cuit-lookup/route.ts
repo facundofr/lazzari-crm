@@ -143,7 +143,7 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
     condicion_iva = "RI";
   } else if (text.includes("<formaJuridica>")) {
     condicion_iva = "RI";
-  } else if (activeImpuestos.size > 0) {
+  } else {
     condicion_iva = "CF";
   }
 

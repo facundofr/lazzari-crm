@@ -387,12 +387,12 @@ export default function ClientesPage() {
       setForm((prev) => ({
         ...prev,
         cuit: data.cuit || prev.cuit,
-        razon_social: prev.razon_social || data.razon_social || prev.razon_social,
+        razon_social: data.razon_social || prev.razon_social,
         condicion_iva: data.condicion_iva || prev.condicion_iva,
-        direccion: prev.direccion || data.direccion || prev.direccion,
-        localidad: prev.localidad || data.localidad || prev.localidad,
-        provincia: prev.provincia || data.provincia || prev.provincia,
-        cp: prev.cp || data.cp || prev.cp,
+        direccion: data.direccion || prev.direccion,
+        localidad: data.localidad || prev.localidad,
+        provincia: data.provincia || prev.provincia,
+        cp: data.cp || prev.cp,
         type: data.tipo_persona === "JURIDICA" ? "empresa" : data.tipo_persona === "FISICA" ? "persona" : prev.type,
       }));
       setCuitLookupMsg({ type: "success", text: `${data.razon_social} - ${data.condicion_iva === "RI" ? "Resp. Inscripto" : data.condicion_iva === "Monotributo" ? "Monotributo" : data.condicion_iva === "Exento" ? "Exento" : "Cons. Final"}` });
