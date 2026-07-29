@@ -1191,9 +1191,12 @@ export default function FinanzasPage() {
       const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto").eq("orden_pago_id", id);
       if (links && links.length > 0) {
         for (const link of links) {
-          // Sumar todos los pagos de esta FC (incluyendo otras OPs)
-          const { data: allPayments } = await (supabase as any).from("op_facturas_compra").select("monto").eq("factura_compra_id", link.factura_compra_id);
-          const totalPagado = (allPayments || []).reduce((s: number, p: any) => s + Number(p.monto), 0);
+          // Sumar pagos de OPs no-anuladas para esta FC
+          const { data: allPayments } = await (supabase as any).from("op_facturas_compra").select("monto, orden_pago_id").eq("factura_compra_id", link.factura_compra_id);
+          const opIds = [...new Set((allPayments || []).map((p: any) => p.orden_pago_id))];
+          const { data: opsActivas } = await (supabase as any).from("ordenes_pago").select("id").in("id", opIds).neq("estado", "anulada");
+          const activasSet = new Set((opsActivas || []).map((o: any) => o.id));
+          const totalPagado = (allPayments || []).filter((p: any) => activasSet.has(p.orden_pago_id)).reduce((s: number, p: any) => s + Number(p.monto), 0);
           const { data: fc } = await (supabase as any).from("facturas_compra").select("total").eq("id", link.factura_compra_id).single();
           if (fc && Math.abs(totalPagado - Number(fc.total)) < 1) {
             await (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", link.factura_compra_id);
@@ -1994,8 +1997,6 @@ ${certRetGanHtml}
   const saldoInicialUSD = saldosCaja.find(s => s.moneda === "USD")?.monto ?? 0;
   const saldoFinalARS = saldoInicialARS + totalCobrosARS - totalPagosARS;
   const saldoFinalUSD = saldoInicialUSD + totalCobrosUSD - totalPagosUSD;
-  // Ingresos y egresos "otros" (efectivo standalone)
-  const ingresosOtrosARS = movimientosMesARS.filter(m => m.tipo === "efectivo" || (m.tipo === "transferencia" && !["cobro", "cheque_recibido"].includes(m.tipo))).reduce((a, m) => a + m.monto, 0);
   const hasUSD = totalCobrosUSD > 0 || totalPagosUSD > 0 || saldoInicialUSD !== 0;
 
   // ── Apply SmartFilters to movimientos ──
