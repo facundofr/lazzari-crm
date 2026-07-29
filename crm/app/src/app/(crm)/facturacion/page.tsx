@@ -1164,7 +1164,7 @@ ${f.cae ? `
                   </div>
                   {isUSD && (
                     <div className="col-span-8">
-                      <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cotizacion USD/ARS *</label>
+                      <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cotizacion USD/ARS {emitManual ? "" : "*"}</label>
                       <input type="number" step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) }))} placeholder="Ej: 1450.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
                       <div className="mt-1 flex items-center gap-2 flex-wrap">
                         <span className="text-xs text-zinc-400">BNA:</span>
