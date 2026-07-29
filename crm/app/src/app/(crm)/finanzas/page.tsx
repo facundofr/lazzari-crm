@@ -10,7 +10,7 @@ import { formatCurrency } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
 import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
@@ -1842,6 +1842,18 @@ ${certRetGanHtml}
     ? ccProveedores.filter(p => p.razon_social.toLowerCase().includes(ccProveedorSearch.toLowerCase()) || (p.cuit ?? "").includes(ccProveedorSearch))
     : ccProveedores;
 
+  // Mapas CUIT → saldo cruzado para conciliación proveedor/cliente
+  const cuitToSaldoCliente = useMemo(() => {
+    const map: Record<string, number> = {};
+    ccClientes.forEach(c => { if (c.cuit) map[c.cuit] = c.saldo_cuenta_corriente; });
+    return map;
+  }, [ccClientes]);
+  const cuitToSaldoProveedor = useMemo(() => {
+    const map: Record<string, number> = {};
+    ccProveedores.forEach(p => { if (p.cuit) map[p.cuit] = p.saldo_cuenta_corriente; });
+    return map;
+  }, [ccProveedores]);
+
   // ── Mov modal filtered lists ──
   const filteredMovClientes = movClienteSearch.trim()
     ? clientesOptions.filter((c: ClienteOption) => c.razon_social.toLowerCase().includes(movClienteSearch.toLowerCase()))
@@ -2375,9 +2387,20 @@ ${certRetGanHtml}
                   { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
                   { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
                   { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
-                  { key: "saldo_cuenta_corriente", label: "Saldo", className: "text-right", sortable: true, render: (row) => {
+                  { key: "saldo_cuenta_corriente", label: "Nos debe", className: "text-right", sortable: true, render: (row) => {
                     const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
                     return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                  }},
+                  { key: "cuit" as any, label: "Le debemos", className: "text-right", sortable: false, render: (row) => {
+                    const saldoProv = row.cuit ? cuitToSaldoProveedor[row.cuit] : undefined;
+                    if (saldoProv === undefined || saldoProv === 0) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+                    return <span className="font-mono font-semibold text-red-600">{formatCurrency(saldoProv)}</span>;
+                  }},
+                  { key: "id" as any, label: "Neto", className: "text-right", sortable: false, render: (row) => {
+                    const saldoProv = row.cuit ? (cuitToSaldoProveedor[row.cuit] ?? 0) : 0;
+                    if (!row.cuit || !cuitToSaldoProveedor[row.cuit]) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+                    const neto = row.saldo_cuenta_corriente - saldoProv;
+                    return <span className={`font-mono font-bold ${neto >= 0 ? "text-emerald-600" : "text-red-600"}`}>{neto >= 0 ? "+" : ""}{formatCurrency(neto)}</span>;
                   }},
                 ]}
                 data={filteredCcClientes}
@@ -2407,9 +2430,20 @@ ${certRetGanHtml}
                   { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
                   { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
                   { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
-                  { key: "saldo_cuenta_corriente", label: "Deuda", className: "text-right", sortable: true, render: (row) => {
+                  { key: "saldo_cuenta_corriente", label: "Le debemos", className: "text-right", sortable: true, render: (row) => {
                     const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
                     return (<div className="text-right"><span className={`font-mono font-semibold text-red-600`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                  }},
+                  { key: "cuit" as any, label: "Nos debe", className: "text-right", sortable: false, render: (row) => {
+                    const saldoCli = row.cuit ? cuitToSaldoCliente[row.cuit] : undefined;
+                    if (saldoCli === undefined || saldoCli === 0) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+                    return <span className="font-mono font-semibold text-emerald-600">{formatCurrency(saldoCli)}</span>;
+                  }},
+                  { key: "id" as any, label: "Neto", className: "text-right", sortable: false, render: (row) => {
+                    const saldoCli = row.cuit ? (cuitToSaldoCliente[row.cuit] ?? 0) : 0;
+                    if (!row.cuit || !cuitToSaldoCliente[row.cuit]) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+                    const neto = saldoCli - row.saldo_cuenta_corriente;
+                    return <span className={`font-mono font-bold ${neto >= 0 ? "text-emerald-600" : "text-red-600"}`}>{neto >= 0 ? "+" : ""}{formatCurrency(neto)}</span>;
                   }},
                 ]}
                 data={filteredCcProveedores}
