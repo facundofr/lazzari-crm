@@ -177,6 +177,8 @@ export default function RemitosPage() {
   const [splitItems, setSplitItems] = useState<(RemitoDetailItem & { sucursal_id: string })[]>([]);
   const [splitSucursales, setSplitSucursales] = useState<Sucursal[]>([]);
   const [splittingSaving, setSplittingSaving] = useState(false);
+  // Split por cantidad: cada item puede tener múltiples asignaciones de cantidad por sucursal
+  const [splitAssignments, setSplitAssignments] = useState<{ itemId: string; sucursal_id: string; cantidad: number; descripcion: string; unidad: string; maxCantidad: number }[]>([]);
 
   // SmartFilters state
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
@@ -698,7 +700,7 @@ export default function RemitosPage() {
 
 
   async function openSplitModal() {
-    if (!detailRemito || detailItems.length < 2) return;
+    if (!detailRemito) return;
     // Fetch sucursales for this client
     const { data: sucs } = await (supabase as any).from("cliente_sucursales")
       .select("id, nombre, direccion, localidad, provincia, cp")
@@ -711,18 +713,41 @@ export default function RemitosPage() {
     }
     setSplitSucursales(sucs as Sucursal[]);
     setSplitItems(detailItems.map(it => ({ ...it, sucursal_id: "" })));
+    // Crear asignación inicial: toda la cantidad en "Dir. principal"
+    setSplitAssignments(detailItems.map(it => ({
+      itemId: it.id,
+      sucursal_id: "",
+      cantidad: it.cantidad,
+      descripcion: it.descripcion,
+      unidad: it.unidad || "u",
+      maxCantidad: it.cantidad,
+    })));
     setSplitModalOpen(true);
   }
 
   async function handleSplitSave() {
-    if (!detailRemito || splitItems.length === 0) return;
+    if (!detailRemito || splitAssignments.length === 0) return;
+
+    // Validate: total assigned per item must not exceed original
+    const itemTotals = new Map<string, number>();
+    for (const a of splitAssignments) {
+      itemTotals.set(a.itemId, (itemTotals.get(a.itemId) || 0) + a.cantidad);
+    }
+    for (const a of splitAssignments) {
+      if ((itemTotals.get(a.itemId) || 0) > a.maxCantidad) {
+        alert(`La suma de cantidades para "${a.descripcion}" supera el total original (${a.maxCantidad}).`);
+        return;
+      }
+    }
+    // Filter out zero-quantity assignments
+    const validAssignments = splitAssignments.filter(a => a.cantidad > 0);
 
     // Group by sucursal
-    const groups = new Map<string, typeof splitItems>();
-    for (const item of splitItems) {
-      const key = item.sucursal_id || "__none";
+    const groups = new Map<string, typeof validAssignments>();
+    for (const a of validAssignments) {
+      const key = a.sucursal_id || "__none";
       if (!groups.has(key)) groups.set(key, []);
-      groups.get(key)!.push(item);
+      groups.get(key)!.push(a);
     }
 
     if (groups.size <= 1) {
@@ -734,17 +759,23 @@ export default function RemitosPage() {
     try {
       const sortedKeys = [...groups.keys()].sort((a, b) => a === "__none" ? -1 : b === "__none" ? 1 : 0);
       const keepKey = sortedKeys[0];
-      const keepItems = groups.get(keepKey)!;
+      const keepAssignments = groups.get(keepKey)!;
 
-      // Update original remito: set sucursal_id and delete items that move out
+      // Update original remito: set sucursal_id
       const keepSucursalId = keepKey === "__none" ? null : keepKey;
       await (supabase as any).from("remitos").update({ sucursal_id: keepSucursalId }).eq("id", detailRemito.id);
 
-      // Delete items NOT staying in original
-      const keepIds = new Set(keepItems.map(i => i.id));
-      const removeIds = splitItems.filter(i => !keepIds.has(i.id)).map(i => i.id);
-      if (removeIds.length > 0) {
-        await supabase.from("remito_items").delete().in("id", removeIds);
+      // Delete ALL original items and re-insert the ones that stay (with possibly changed quantities)
+      await supabase.from("remito_items").delete().eq("remito_id" as any, detailRemito.id);
+      if (keepAssignments.length > 0) {
+        const keepRows = keepAssignments.map((a, i) => ({
+          remito_id: detailRemito.id,
+          descripcion: a.descripcion,
+          cantidad: a.cantidad,
+          unidad: a.unidad || "UN",
+          orden: i,
+        }));
+        await (supabase as any).from("remito_items").insert(keepRows);
       }
 
       // Calculate next number
@@ -756,7 +787,7 @@ export default function RemitosPage() {
 
       // Create new remitos for remaining groups
       const createdRemitos: string[] = [];
-      for (const [key, items] of groups) {
+      for (const [key, assignments] of groups) {
         if (key === keepKey) continue;
         const sucursalId = key === "__none" ? null : key;
         const sucNombre = splitSucursales.find(s => s.id === key)?.nombre || "";
@@ -777,11 +808,11 @@ export default function RemitosPage() {
 
         if (rErr) { alert("Error al crear remito: " + rErr.message); return; }
         if (newRemito) {
-          const newItems = items.map((it, i) => ({
+          const newItems = assignments.map((a, i) => ({
             remito_id: newRemito.id,
-            descripcion: it.descripcion,
-            cantidad: it.cantidad,
-            unidad: it.unidad || "UN",
+            descripcion: a.descripcion,
+            cantidad: a.cantidad,
+            unidad: a.unidad || "UN",
             orden: i,
           }));
           await (supabase as any).from("remito_items").insert(newItems);
@@ -1180,11 +1211,8 @@ export default function RemitosPage() {
                   </button>
                 )}
                 {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
-                  <button onClick={() => {
-                    if (detailItems.length < 2) { alert("Se necesitan al menos 2 items para dividir"); return; }
-                    openSplitModal();
-                  }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors">
-                    <GitBranch className="h-4 w-4" /> Dividir por sucursal
+                  <button onClick={() => openSplitModal()} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors">
+                    <GitBranch className="h-4 w-4" /> Dividir remito
                   </button>
                 )}
               </div>
@@ -1806,7 +1834,7 @@ export default function RemitosPage() {
               <div>
                 <h2 className="text-lg font-semibold dark:text-white flex items-center gap-2">
                   <GitBranch className="h-5 w-5 text-violet-600" />
-                  Dividir Remito por Sucursal
+                  Dividir Remito
                 </h2>
                 <p className="text-sm text-zinc-400">
                   {detailRemito.numero} — {detailRemito.clientes?.razon_social || "—"}
@@ -1818,68 +1846,115 @@ export default function RemitosPage() {
             </div>
 
             <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              Asigná cada item a una sucursal. Se creará un remito separado por cada sucursal diferente.
-              El remito original conservará los items de la primera sucursal.
+              Asigná cantidades a cada sucursal. Podés dividir un mismo artículo en varias sucursales.
+              Usá <strong>+ Agregar destino</strong> para enviar parte de un artículo a otra sucursal.
             </p>
 
-            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
-                    <th className="text-left px-3 py-2">Descripción</th>
-                    <th className="text-right px-3 py-2 w-24">Cantidad</th>
-                    <th className="text-left px-3 py-2 w-20">Unidad</th>
-                    <th className="text-left px-3 py-2 w-48">Sucursal destino</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {splitItems.map((item) => (
-                    <tr key={item.id} className="border-t border-zinc-100 dark:border-zinc-800">
-                      <td className="px-3 py-2 dark:text-white">{item.descripcion}</td>
-                      <td className="px-3 py-2 text-right font-medium dark:text-white">{item.cantidad}</td>
-                      <td className="px-3 py-2 text-zinc-500">{item.unidad || "u"}</td>
-                      <td className="px-2 py-1.5">
-                        <select
-                          value={item.sucursal_id}
-                          onChange={(e) => setSplitItems(prev => prev.map(it => it.id === item.id ? { ...it, sucursal_id: e.target.value } : it))}
-                          className="w-full rounded border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+            <div className="space-y-3">
+              {detailItems.map((item) => {
+                const itemAssignments = splitAssignments.filter(a => a.itemId === item.id);
+                const totalAsignado = itemAssignments.reduce((s, a) => s + a.cantidad, 0);
+                const excede = totalAsignado > item.cantidad;
+                return (
+                  <div key={item.id} className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="font-medium dark:text-white">{item.descripcion}</span>
+                        <span className="text-zinc-400 text-xs ml-2">({item.unidad || "u"})</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs font-mono ${excede ? "text-red-500 font-bold" : "text-zinc-500"}`}>
+                          {totalAsignado}/{item.cantidad}
+                        </span>
+                        <button
+                          onClick={() => setSplitAssignments(prev => [...prev, {
+                            itemId: item.id,
+                            sucursal_id: splitSucursales[0]?.id || "",
+                            cantidad: Math.max(0, item.cantidad - totalAsignado),
+                            descripcion: item.descripcion,
+                            unidad: item.unidad || "u",
+                            maxCantidad: item.cantidad,
+                          }])}
+                          className="text-xs text-violet-600 hover:text-violet-700 font-medium flex items-center gap-0.5"
                         >
-                          <option value="">Dir. principal</option>
-                          {splitSucursales.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
-                        </select>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                          <Plus className="h-3 w-3" /> Agregar destino
+                        </button>
+                      </div>
+                    </div>
+                    {itemAssignments.map((assignment, aIdx) => {
+                      const globalIdx = splitAssignments.findIndex(a => a === assignment);
+                      return (
+                        <div key={aIdx} className="flex items-center gap-2">
+                          <select
+                            value={assignment.sucursal_id}
+                            onChange={(e) => setSplitAssignments(prev => prev.map((a, i) => i === globalIdx ? { ...a, sucursal_id: e.target.value } : a))}
+                            className="flex-1 rounded border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                          >
+                            <option value="">Dir. principal</option>
+                            {splitSucursales.map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
+                          </select>
+                          <input
+                            type="number"
+                            min={0}
+                            max={item.cantidad}
+                            value={assignment.cantidad}
+                            onChange={(e) => setSplitAssignments(prev => prev.map((a, i) => i === globalIdx ? { ...a, cantidad: Number(e.target.value) } : a))}
+                            className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-sm font-mono text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                          />
+                          {itemAssignments.length > 1 && (
+                            <button
+                              onClick={() => setSplitAssignments(prev => prev.filter((_, i) => i !== globalIdx))}
+                              className="text-zinc-400 hover:text-red-500 p-1"
+                            >
+                              <Minus className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {excede && (
+                      <p className="text-xs text-red-500">La suma ({totalAsignado}) supera el total original ({item.cantidad})</p>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {/* Preview of split result */}
             {(() => {
-              const groups = new Map<string, number>();
-              for (const item of splitItems) {
-                const key = item.sucursal_id || "__none";
-                groups.set(key, (groups.get(key) || 0) + 1);
+              const validA = splitAssignments.filter(a => a.cantidad > 0);
+              const groups = new Map<string, { descripcion: string; cantidad: number; unidad: string }[]>();
+              for (const a of validA) {
+                const key = a.sucursal_id || "__none";
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key)!.push({ descripcion: a.descripcion, cantidad: a.cantidad, unidad: a.unidad });
               }
               const entries = [...groups.entries()];
               return entries.length > 1 ? (
-                <div className="rounded-lg bg-violet-50 dark:bg-violet-950/20 border border-violet-200 dark:border-violet-800 p-3 space-y-1.5">
+                <div className="rounded-lg bg-violet-50 dark:bg-violet-950/20 border border-violet-200 dark:border-violet-800 p-3 space-y-2">
                   <p className="text-sm font-medium text-violet-700 dark:text-violet-300">
                     Se crearán {entries.length} remitos:
                   </p>
-                  {entries.map(([key, count]) => {
+                  {entries.map(([key, items]) => {
                     const name = key === "__none" ? "Dir. principal" : splitSucursales.find(s => s.id === key)?.nombre || key;
                     return (
-                      <div key={key} className="flex items-center gap-2 text-sm text-violet-600 dark:text-violet-400">
-                        <MapPin className="h-3.5 w-3.5" />
-                        <span>{name}: {count} item(s)</span>
+                      <div key={key} className="text-sm text-violet-600 dark:text-violet-400">
+                        <div className="flex items-center gap-1.5 font-medium">
+                          <MapPin className="h-3.5 w-3.5" />
+                          {name}
+                        </div>
+                        <div className="ml-5 text-xs text-zinc-500 dark:text-zinc-400">
+                          {items.map((it, i) => (
+                            <span key={i}>{it.cantidad} {it.unidad} {it.descripcion}{i < items.length - 1 ? " · " : ""}</span>
+                          ))}
+                        </div>
                       </div>
                     );
                   })}
                 </div>
               ) : (
                 <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 p-3 text-sm text-amber-700 dark:text-amber-300">
-                  Todos los items están en la misma sucursal. Asigná al menos un item a una sucursal diferente para dividir.
+                  Asigná items a más de una sucursal para dividir el remito.
                 </div>
               );
             })()}
@@ -1893,7 +1968,7 @@ export default function RemitosPage() {
               </button>
               <button
                 onClick={handleSplitSave}
-                disabled={splittingSaving || new Set(splitItems.map(i => i.sucursal_id || "__none")).size <= 1}
+                disabled={splittingSaving || new Set(splitAssignments.filter(a => a.cantidad > 0).map(a => a.sucursal_id || "__none")).size <= 1}
                 className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50 flex items-center gap-2"
               >
                 {splittingSaving ? (
