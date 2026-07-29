@@ -142,6 +142,7 @@ export default function VentasPage() {
   const [emitItems, setEmitItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number }[]>([]);
   const [emitting, setEmitting] = useState(false);
   const [emitTipoCambio, setEmitTipoCambio] = useState<number>(0);
+  const [emitMoneda, setEmitMoneda] = useState<"ARS" | "USD">("ARS");
   const [emitError, setEmitError] = useState("");
   const [emitSuccess, setEmitSuccess] = useState("");
   const [emitManual, setEmitManual] = useState(false);
@@ -301,6 +302,7 @@ export default function VentasPage() {
     setEmitTipo(defaultTipo as "FA" | "FB");
     setEmitItems(items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]);
     setEmitTipoCambio(p.tipo_cambio || 0);
+    setEmitMoneda(p.moneda as "ARS" | "USD" || "ARS");
     setEmitError("");
     setEmitSuccess("");
     setEmitManual((p as any).modalidad_emision === "manual");
@@ -316,8 +318,14 @@ export default function VentasPage() {
       setEmitError("Completa todos los items con descripcion, cantidad > 0 y precio > 0.");
       return;
     }
-    if (p.moneda === "USD" && (!emitTipoCambio || emitTipoCambio <= 0)) {
-      setEmitError("Ingresa el tipo de cambio USD → ARS para facturar.");
+    const prMoneda = p.moneda || "ARS";
+    const needsConversion = emitMoneda !== prMoneda && emitTipoCambio > 0;
+    if (emitMoneda !== prMoneda && (!emitTipoCambio || emitTipoCambio <= 0)) {
+      setEmitError("Ingresa el tipo de cambio para convertir de " + prMoneda + " a " + emitMoneda);
+      return;
+    }
+    if (emitMoneda === "USD" && (!emitTipoCambio || emitTipoCambio <= 0)) {
+      setEmitError("Ingresa el tipo de cambio USD → ARS para facturar en USD.");
       return;
     }
 
@@ -325,6 +333,10 @@ export default function VentasPage() {
     setEmitError("");
 
     try {
+      const convertPrice = (price: number) => {
+        if (!needsConversion) return price;
+        return prMoneda === "USD" ? Math.round(price * emitTipoCambio * 100) / 100 : Math.round(price / emitTipoCambio * 100) / 100;
+      };
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch("/api/facturacion", {
         method: "POST",
@@ -336,9 +348,9 @@ export default function VentasPage() {
           tipo: emitTipo,
           cliente_id: p.cliente_id,
           punto_venta: pvCrm,
-          moneda: p.moneda || "ARS",
-          tipo_cambio: p.moneda === "USD" ? (emitTipoCambio || p.tipo_cambio || null) : null,
-          items: emitItems,
+          moneda: emitMoneda,
+          tipo_cambio: emitMoneda === "USD" && emitTipoCambio > 0 ? emitTipoCambio : null,
+          items: emitItems.map(it => ({ ...it, precio_unitario: convertPrice(it.precio_unitario) })),
           presupuesto_id: p.id,
           sociedad_id: sociedadActiva?.id || null,
         }),
@@ -367,6 +379,10 @@ export default function VentasPage() {
       setEmitError("Completa todos los items con descripcion, cantidad > 0 y precio > 0.");
       return;
     }
+    if (emitMoneda !== (p.moneda || "ARS") && (!emitTipoCambio || emitTipoCambio <= 0)) {
+      setEmitError("Ingresa el tipo de cambio para convertir de " + (p.moneda || "ARS") + " a " + emitMoneda);
+      return;
+    }
 
     setEmitting(true);
     setEmitError("");
@@ -387,21 +403,26 @@ export default function VentasPage() {
 
       const nextNumero = ((maxRows && maxRows.length > 0 ? maxRows[0].numero : 0) || 0) + 1;
 
-      // Calculate totals
+      // Calculate totals — convert prices if moneda changed
       let subtotal: number;
       let iva: number;
       let total: number;
-      const mon = p.moneda || "ARS";
+      const prMoneda = p.moneda || "ARS";
+      const needsConv = emitMoneda !== prMoneda && emitTipoCambio > 0;
+      const conv = (price: number) => {
+        if (!needsConv) return price;
+        return prMoneda === "USD" ? Math.round(price * emitTipoCambio * 100) / 100 : Math.round(price / emitTipoCambio * 100) / 100;
+      };
 
       if (emitTipo === "FA") {
-        subtotal = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
-        iva = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario * it.iva_porcentaje / 100, 0);
+        subtotal = emitItems.reduce((sum, it) => sum + it.cantidad * conv(it.precio_unitario), 0);
+        iva = emitItems.reduce((sum, it) => sum + it.cantidad * conv(it.precio_unitario) * it.iva_porcentaje / 100, 0);
         total = subtotal + iva;
       } else {
-        total = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
+        total = emitItems.reduce((sum, it) => sum + it.cantidad * conv(it.precio_unitario), 0);
         subtotal = emitItems.reduce((sum, it) => {
           const rate = (it.iva_porcentaje || 21) / 100;
-          return sum + (it.cantidad * it.precio_unitario) / (1 + rate);
+          return sum + (it.cantidad * conv(it.precio_unitario)) / (1 + rate);
         }, 0);
         iva = total - subtotal;
       }
@@ -420,8 +441,8 @@ export default function VentasPage() {
           subtotal,
           iva,
           total,
-          moneda: mon,
-          tipo_cambio: mon === "USD" ? (emitTipoCambio || p.tipo_cambio || null) : null,
+          moneda: emitMoneda,
+          tipo_cambio: emitMoneda === "USD" && emitTipoCambio > 0 ? emitTipoCambio : null,
           estado: "emitida",
           sociedad_id: (p as any).sociedad_id || null,
         })
@@ -438,7 +459,7 @@ export default function VentasPage() {
         factura_id: facturaData.id,
         descripcion: it.descripcion,
         cantidad: it.cantidad,
-        precio_unitario: it.precio_unitario,
+        precio_unitario: conv(it.precio_unitario),
         iva_porcentaje: emitTipo === "FA" ? it.iva_porcentaje : 21,
         orden: idx,
       }));
@@ -1074,13 +1095,26 @@ export default function VentasPage() {
                   </div>
                 </div>
 
-                {/* Moneda / Tipo de cambio */}
-                {emitVenta.presupuesto.moneda === "USD" && (
-                  <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3">
-                    <div className="flex items-center gap-4 flex-wrap">
-                      <div className="text-sm text-amber-700 dark:text-amber-400 font-medium">Factura en USD</div>
-                      <div className="flex items-center gap-2">
-                        <label className="text-xs text-amber-600 dark:text-amber-500">Cotizacion USD/ARS *</label>
+                {/* Moneda de facturación */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Moneda factura</label>
+                    <div className="flex gap-1.5">
+                      {(["ARS", "USD"] as const).map(m => (
+                        <button key={m} onClick={() => setEmitMoneda(m)}
+                          className={`rounded-md border-2 px-4 py-1.5 text-xs font-semibold transition-colors ${emitMoneda === m ? "border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300" : "border-zinc-200 text-zinc-500 hover:border-zinc-300 dark:border-zinc-700 dark:text-zinc-400"}`}>
+                          {m}
+                        </button>
+                      ))}
+                    </div>
+                    {emitMoneda !== (emitVenta.presupuesto.moneda || "ARS") && (
+                      <span className="text-xs text-amber-600 dark:text-amber-400">PR en {emitVenta.presupuesto.moneda} → factura en {emitMoneda}</span>
+                    )}
+                  </div>
+                  {(emitMoneda === "USD" || emitMoneda !== (emitVenta.presupuesto.moneda || "ARS")) && (
+                    <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <label className="text-xs text-amber-600 dark:text-amber-500">Cotizacion USD/ARS {emitManual ? "" : "*"}</label>
                         <input
                           type="number" step="0.01" min={0}
                           value={emitTipoCambio || ""}
@@ -1097,13 +1131,17 @@ export default function VentasPage() {
                         </button>
                         <input type="date" value={cotizFecha} onChange={e => setCotizFecha(e.target.value)} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
                       </div>
+                      {cotizBna && (
+                        <p className="text-xs text-zinc-500 mt-1">BNA {cotizBna.modalidad} venta: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})</p>
+                      )}
+                      {emitMoneda !== (emitVenta.presupuesto.moneda || "ARS") && emitTipoCambio > 0 && (
+                        <p className="text-xs text-blue-600 dark:text-blue-400 mt-1 font-medium">
+                          Los items se convertirán de {emitVenta.presupuesto.moneda} a {emitMoneda} al tipo de cambio {emitTipoCambio.toLocaleString("es-AR")}
+                        </p>
+                      )}
                     </div>
-                    {cotizBna && (
-                      <p className="text-xs text-zinc-500 mt-1">BNA {cotizBna.modalidad} venta: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})</p>
-                    )}
-                    <p className="text-xs text-amber-500 mt-1">ARCA requiere la cotizacion oficial para facturas en USD. Los montos van en dolares.</p>
-                  </div>
-                )}
+                  )}
+                </div>
 
                 {/* Items */}
                 <div>
@@ -1198,7 +1236,12 @@ export default function VentasPage() {
                 {/* Totals */}
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-900 p-3 space-y-1">
                   {(() => {
-                    const mon = emitVenta.presupuesto.moneda as "ARS" | "USD";
+                    const prMon = (emitVenta.presupuesto.moneda || "ARS") as "ARS" | "USD";
+                    const needsConv = emitMoneda !== prMon && emitTipoCambio > 0;
+                    const cv = (p: number) => {
+                      if (!needsConv) return p;
+                      return prMon === "USD" ? Math.round(p * emitTipoCambio * 100) / 100 : Math.round(p / emitTipoCambio * 100) / 100;
+                    };
                     if (emitTipo === "FA") {
                       const neto = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
                       const iva = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario * it.iva_porcentaje / 100, 0);
@@ -1206,25 +1249,39 @@ export default function VentasPage() {
                         <>
                           <div className="flex justify-between text-sm">
                             <span className="text-zinc-500">Neto</span>
-                            <span>{formatCurrency(neto, mon)}</span>
+                            <span>{formatCurrency(neto, prMon)}</span>
                           </div>
                           <div className="flex justify-between text-sm">
                             <span className="text-zinc-500">IVA</span>
-                            <span>{formatCurrency(iva, mon)}</span>
+                            <span>{formatCurrency(iva, prMon)}</span>
                           </div>
                           <div className="flex justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1">
                             <span>Total</span>
-                            <span>{formatCurrency(neto + iva, mon)}</span>
+                            <span>{formatCurrency(neto + iva, prMon)}</span>
                           </div>
+                          {needsConv && (
+                            <div className="flex justify-between text-sm font-bold text-blue-600 dark:text-blue-400 border-t border-zinc-200 dark:border-zinc-700 pt-1">
+                              <span>Total factura ({emitMoneda})</span>
+                              <span>{formatCurrency(cv(neto) + cv(iva), emitMoneda)}</span>
+                            </div>
+                          )}
                         </>
                       );
                     } else {
                       const total = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
                       return (
-                        <div className="flex justify-between text-sm font-bold">
-                          <span>Total (IVA incluido)</span>
-                          <span>{formatCurrency(total, mon)}</span>
-                        </div>
+                        <>
+                          <div className="flex justify-between text-sm font-bold">
+                            <span>Total (IVA incluido)</span>
+                            <span>{formatCurrency(total, prMon)}</span>
+                          </div>
+                          {needsConv && (
+                            <div className="flex justify-between text-sm font-bold text-blue-600 dark:text-blue-400 border-t border-zinc-200 dark:border-zinc-700 pt-1">
+                              <span>Total factura ({emitMoneda})</span>
+                              <span>{formatCurrency(cv(total), emitMoneda)}</span>
+                            </div>
+                          )}
+                        </>
                       );
                     }
                   })()}
