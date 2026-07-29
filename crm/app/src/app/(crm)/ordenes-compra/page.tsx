@@ -1844,7 +1844,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   </p>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 {editMode ? (
                   <>
                     <button
@@ -1868,7 +1868,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <>
                     <button
                       onClick={startEditMode}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 transition-colors"
                       title="Editar OC"
                     >
                       <Edit3 className="h-3.5 w-3.5" />
@@ -1876,19 +1876,17 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     </button>
                     <button
                       onClick={handleCopySummary}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
-                      title="Copiar resumen al portapapeles"
+                      className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
+                      title="Copiar resumen"
                     >
-                      {copiedSummary ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
-                      {copiedSummary ? "Copiado" : "Copiar"}
+                      {copiedSummary ? <Check className="h-4 w-4 text-emerald-500" /> : <ClipboardCopy className="h-4 w-4" />}
                     </button>
                     <button
                       onClick={handleDownloadPDF}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+                      className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
                       title="Descargar PDF"
                     >
-                      <Download className="h-3.5 w-3.5" />
-                      PDF
+                      <Download className="h-4 w-4" />
                     </button>
                   </>
                 )}
