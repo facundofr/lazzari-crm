@@ -1894,21 +1894,20 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             .filter((pr) => pr.estado === "solicitud" || pr.estado === "pendiente" || pr.estado === "postergado" || pr.estado === "vencido")
             .map((pr) => {
               const fechaRef = pr.enviadoAt || pr.fecha;
-              const vencDate = new Date(pr.vencimiento + "T23:59:59");
-              const diffMs = vencDate.getTime() - today.getTime();
-              const diasRestantes = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-              const vencido = diasRestantes < 0;
+              const refDate = new Date(fechaRef + (fechaRef.includes("T") ? "" : "T12:00:00"));
+              const diffMs = today.getTime() - refDate.getTime();
+              const diasSinRespuesta = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
               let urgencia: "verde" | "amarillo" | "naranja" | "rojo";
-              if (vencido || diasRestantes < 0) urgencia = "rojo";
-              else if (diasRestantes <= 3) urgencia = "naranja";
-              else if (diasRestantes <= 7) urgencia = "amarillo";
+              if (diasSinRespuesta >= 7) urgencia = "rojo";
+              else if (diasSinRespuesta >= 5) urgencia = "naranja";
+              else if (diasSinRespuesta >= 3) urgencia = "amarillo";
               else urgencia = "verde";
-              return { ...pr, diasRestantes, vencido, urgencia, fechaRef };
+              return { ...pr, diasSinRespuesta, urgencia, fechaRef };
             })
             .sort((a, b) => {
               const urgOrder = { rojo: 0, naranja: 1, amarillo: 2, verde: 3 };
               if (urgOrder[a.urgencia] !== urgOrder[b.urgencia]) return urgOrder[a.urgencia] - urgOrder[b.urgencia];
-              return a.diasRestantes - b.diasRestantes;
+              return b.diasSinRespuesta - a.diasSinRespuesta;
             });
 
           const urgenciaColors = {
@@ -1918,7 +1917,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
             rojo: { border: "border-red-400", bg: "bg-red-50 dark:bg-red-950/20", badge: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300", dot: "bg-red-500" },
           };
 
-          const urgenciaLabels = { verde: "8+ dias", amarillo: "4-7 dias", naranja: "1-3 dias", rojo: "Vencido" };
+          const urgenciaLabels = { verde: "1-2 días", amarillo: "3-4 días", naranja: "5-6 días", rojo: "7+ días" };
 
           const countByUrgencia = { verde: 0, amarillo: 0, naranja: 0, rojo: 0 };
           trackingPRs.forEach((pr) => { countByUrgencia[pr.urgencia]++; });
@@ -1969,21 +1968,21 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                               <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mt-1">{pr.clienteNombre}</p>
                             </div>
                             <div className={`flex flex-col items-center rounded-lg px-3 py-1.5 ${colors.badge}`}>
-                              <span className="text-xl font-bold leading-none">{pr.vencido ? "EXP" : pr.diasRestantes}</span>
-                              <span className="text-[10px] font-medium uppercase mt-0.5">{pr.vencido ? "vencido" : "dias"}</span>
+                              <span className="text-xl font-bold leading-none">{pr.diasSinRespuesta}</span>
+                              <span className="text-[10px] font-medium uppercase mt-0.5">{pr.diasSinRespuesta === 1 ? "día" : "días"}</span>
                             </div>
                           </div>
 
                           {/* Info */}
                           <div className="grid grid-cols-2 gap-2 text-xs">
                             <div>
-                              <span className="text-zinc-400">Fecha</span>
+                              <span className="text-zinc-400">Enviado</span>
                               <p className="font-medium text-zinc-600 dark:text-zinc-300">{formatDate(pr.fechaRef)}</p>
                             </div>
                             <div>
-                              <span className="text-zinc-400">Vence</span>
-                              <p className={`font-medium ${pr.vencido ? "text-red-600 dark:text-red-400 font-semibold" : pr.diasRestantes <= 7 ? "text-orange-600 dark:text-orange-400 font-semibold" : "text-zinc-600 dark:text-zinc-300"}`}>
-                                {formatDate(pr.vencimiento)}
+                              <span className="text-zinc-400">Sin respuesta</span>
+                              <p className={`font-medium ${pr.diasSinRespuesta >= 7 ? "text-red-600 dark:text-red-400 font-semibold" : pr.diasSinRespuesta >= 5 ? "text-orange-600 dark:text-orange-400 font-semibold" : "text-zinc-600 dark:text-zinc-300"}`}>
+                                {pr.diasSinRespuesta} {pr.diasSinRespuesta === 1 ? "día" : "días"}
                               </p>
                             </div>
                             <div>
