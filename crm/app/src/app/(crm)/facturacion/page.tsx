@@ -13,7 +13,7 @@ import { mockFacturas } from "@/lib/mock-data";
 import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
-  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, FileText, Search,
+  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, FileText, Search, Scissors,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 
@@ -591,6 +591,30 @@ export default function FacturacionPage() {
     } finally {
       setCobroPreviosLoading(false);
     }
+  }
+
+  function handleSepararImpuestos() {
+    const f = facturas.find(ff => ff.id === cobroModalId);
+    if (!f) return;
+    const saldo = Number(f.total) - Number(f.total_acreditado || 0) - cobroPrevios;
+    const ivaFactura = Number(f.iva || 0);
+    const netoFactura = Number(f.subtotal || 0);
+    // Proporción del saldo respecto al total (por si hay cobros previos parciales)
+    const ratio = Number(f.total) > 0 ? Math.min(1, saldo / Number(f.total)) : 1;
+    const ivaProporcional = Math.round(ivaFactura * ratio * 100) / 100;
+    const netoProporcional = Math.round(netoFactura * ratio * 100) / 100;
+    // Crear líneas: neto como transferencia + retenciones vacías para que el usuario complete
+    const lineas: CobroLinea[] = [
+      { tipo: "transferencia", monto: String(Math.max(0, Math.round(saldo * 100) / 100)), descripcion: "" },
+    ];
+    if (ivaProporcional > 0) {
+      lineas.push({ tipo: "retencion_iva", monto: "", descripcion: `IVA factura: ${formatCurrency(ivaProporcional, f.moneda as "ARS" | "USD")}` });
+    }
+    if (netoProporcional > 0) {
+      lineas.push({ tipo: "retencion_ganancias", monto: "", descripcion: `Neto factura: ${formatCurrency(netoProporcional, f.moneda as "ARS" | "USD")}` });
+      lineas.push({ tipo: "retencion_iibb", monto: "", descripcion: `Neto factura: ${formatCurrency(netoProporcional, f.moneda as "ARS" | "USD")}` });
+    }
+    setCobroLineas(lineas);
   }
 
   async function handleRegistrarCobro() {
@@ -1494,6 +1518,7 @@ ${f.cae ? `
                   <h3 className="font-semibold dark:text-white">Registrar cobro</h3>
                   <p className="text-xs text-zinc-400 mt-0.5">
                     {formatComprobante(f.tipo, f.punto_venta, f.numero)} — Total: {formatCurrency(Number(f.total), f.moneda as "ARS" | "USD")}
+                    {Number(f.iva) > 0 && <span className="ml-1 text-zinc-400">(Neto: {formatCurrency(Number(f.subtotal), f.moneda as "ARS" | "USD")} + IVA: {formatCurrency(Number(f.iva), f.moneda as "ARS" | "USD")})</span>}
                   </p>
                   {cobroPreviosLoading ? (
                     <p className="text-xs text-zinc-400 mt-0.5 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Calculando saldo...</p>
@@ -1518,10 +1543,18 @@ ${f.cae ? `
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Medios de pago</label>
-                    <button onClick={() => setCobroLineas(prev => [...prev, { tipo: "transferencia", monto: "", descripcion: "" }])}
-                      className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
-                      <Plus className="h-3 w-3" /> Agregar medio
-                    </button>
+                    <div className="flex items-center gap-3">
+                      {Number(f.iva) > 0 && cobroLineas.length === 1 && (
+                        <button onClick={handleSepararImpuestos}
+                          className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium">
+                          <Scissors className="h-3 w-3" /> Separar impuestos
+                        </button>
+                      )}
+                      <button onClick={() => setCobroLineas(prev => [...prev, { tipo: "transferencia", monto: "", descripcion: "" }])}
+                        className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
+                        <Plus className="h-3 w-3" /> Agregar medio
+                      </button>
+                    </div>
                   </div>
                   <div className="space-y-3">
                     {cobroLineas.map((linea, idx) => (
@@ -1538,7 +1571,20 @@ ${f.cae ? `
                             <option value="cobro">Otro</option>
                           </select>
                           <input type="number" step="0.01" placeholder="Monto" value={linea.monto}
-                            onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, monto: e.target.value } : l))}
+                            onChange={(e) => {
+                              const newVal = e.target.value;
+                              setCobroLineas(prev => {
+                                const updated = prev.map((l, i) => i === idx ? { ...l, monto: newVal } : l);
+                                // Auto-ajustar transferencia/efectivo si se modificó una retención
+                                const isRetencion = updated[idx]?.tipo.startsWith("retencion_");
+                                const firstPayIdx = updated.findIndex(l => l.tipo === "transferencia" || l.tipo === "efectivo");
+                                if (isRetencion && firstPayIdx >= 0 && firstPayIdx !== idx) {
+                                  const totalRet = updated.reduce((s, l, i) => i !== firstPayIdx ? s + Number(l.monto || 0) : s, 0);
+                                  updated[firstPayIdx] = { ...updated[firstPayIdx], monto: String(Math.max(0, Math.round((saldo - totalRet) * 100) / 100)) };
+                                }
+                                return updated;
+                              });
+                            }}
                             className="w-32 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-sm font-mono dark:text-white" />
                           {cobroLineas.length > 1 && (
                             <button onClick={() => setCobroLineas(prev => prev.filter((_, i) => i !== idx))}
