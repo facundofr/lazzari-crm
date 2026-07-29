@@ -1179,8 +1179,11 @@ export default function RemitosPage() {
                     <CheckCircle2 className="h-4 w-4" /> Marcar entregado
                   </button>
                 )}
-                {detailRemito.estado === "pendiente" && detailItems.length >= 2 && (
-                  <button onClick={openSplitModal} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors">
+                {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
+                  <button onClick={() => {
+                    if (detailItems.length < 2) { alert("Se necesitan al menos 2 items para dividir"); return; }
+                    openSplitModal();
+                  }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors">
                     <GitBranch className="h-4 w-4" /> Dividir por sucursal
                   </button>
                 )}
