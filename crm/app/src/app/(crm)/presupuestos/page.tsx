@@ -35,7 +35,7 @@ function NumInput({ value, onChange, className, ...props }: { value: number | st
       onFocus={() => { focused.current = true; }}
       onBlur={() => { focused.current = false; const n = Number(raw) || 0; setRaw(n === 0 ? "" : String(n)); onChange(n); }}
       onChange={(e) => {
-        const v = e.target.value;
+        const v = e.target.value.replace(",", ".");
         if (v === "" || v === "." || /^\d*\.?\d*$/.test(v)) {
           setRaw(v);
           const n = Number(v);
@@ -1502,7 +1502,7 @@ export default function PresupuestosPage() {
 
   async function handleFacturarFromPR() {
     if (!facturarModal || !sociedadActiva) return;
-    if (!facturarManual && facturarMoneda !== facturarModal.moneda && !facturarTipoCambio) {
+    if (facturarMoneda !== facturarModal.moneda && !facturarTipoCambio) {
       setFacturarError("Ingresa el tipo de cambio para convertir de " + facturarModal.moneda + " a " + facturarMoneda);
       return;
     }
@@ -1516,16 +1516,25 @@ export default function PresupuestosPage() {
       }
       const ptoVta = sociedadActiva.nombre === "Grupo LA" ? 10 : 15;
       const { data: { session } } = await supabase.auth.getSession();
+      // Convert prices when PR moneda differs from factura moneda
+      const tc = facturarTipoCambio ? Number(facturarTipoCambio) : 0;
+      const needsConversion = facturarMoneda !== facturarModal.moneda && tc > 0;
+      const convertPrice = (price: number) => {
+        if (!needsConversion) return price;
+        // USD→ARS: multiply; ARS→USD: divide
+        return facturarModal.moneda === "USD" ? Math.round(price * tc * 100) / 100 : Math.round(price / tc * 100) / 100;
+      };
+
       const body: Record<string, unknown> = {
         tipo: facturarTipo,
         cliente_id: facturarModal.clienteId,
         punto_venta: ptoVta,
         moneda: facturarMoneda,
-        tipo_cambio: facturarTipoCambio ? Number(facturarTipoCambio) : null,
+        tipo_cambio: facturarMoneda === "USD" && tc > 0 ? tc : null,
         items: items.map((it: any) => ({
           descripcion: it.descripcion,
           cantidad: it.cantidad,
-          precio_unitario: it.precioVenta ?? it.precio_venta ?? 0,
+          precio_unitario: convertPrice(it.precioVenta ?? it.precio_venta ?? 0),
           iva_porcentaje: it.ivaPorcentaje ?? it.iva_porcentaje ?? 21,
         })),
         sociedad_id: sociedadActiva.id,
@@ -3548,7 +3557,20 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 text-sm space-y-1">
                 <div className="flex justify-between"><span className="text-zinc-500">Cliente</span><span className="font-medium">{facturarModal.clienteNombre}</span></div>
                 <div className="flex justify-between"><span className="text-zinc-500">Items</span><span className="font-medium">{facturarModal.items.length}</span></div>
-                <div className="flex justify-between"><span className="text-zinc-500">Total</span><span className="font-mono font-bold">{formatCurrency(facturarModal.total, facturarModal.moneda)}</span></div>
+                <div className="flex justify-between"><span className="text-zinc-500">Total PR</span><span className="font-mono font-bold">{formatCurrency(facturarModal.total, facturarModal.moneda)}</span></div>
+                {facturarMoneda !== facturarModal.moneda && facturarTipoCambio && Number(facturarTipoCambio) > 0 && (
+                  <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-700 pt-1">
+                    <span className="text-zinc-500 font-medium">Total factura</span>
+                    <span className="font-mono font-bold text-blue-600 dark:text-blue-400">
+                      {formatCurrency(
+                        facturarModal.moneda === "USD"
+                          ? Math.round(facturarModal.total * Number(facturarTipoCambio) * 100) / 100
+                          : Math.round(facturarModal.total / Number(facturarTipoCambio) * 100) / 100,
+                        facturarMoneda
+                      )}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Moneda de facturación */}
