@@ -4,9 +4,11 @@ import { createClient } from "@supabase/supabase-js";
 /**
  * GET /api/cron/presupuestos-vencimiento
  *
- * Cron diario — revisa presupuestos activos y genera alertas de seguimiento:
- *   - A los 10 dias de creado: alerta "seguimiento" para consultar al cliente
- *   - A los 20 dias de creado: alerta urgente "seguimiento"
+ * Cron diario — revisa presupuestos activos y genera alertas de seguimiento
+ * basadas en dias sin respuesta desde la fecha de envio/creacion:
+ *   - 3 dias sin respuesta: alerta suave
+ *   - 5 dias sin respuesta: alerta de atencion
+ *   - 7 dias sin respuesta: alerta urgente
  *   - Al superar fecha de vencimiento: marca estado = "vencido" + alerta "vencimiento_pr"
  *
  * Protegido por CRON_SECRET en produccion.
@@ -27,8 +29,9 @@ function getSupabase() {
 
 // Tipos de alerta de seguimiento por dias transcurridos
 const SEGUIMIENTO_DIAS = [
-  { dias: 10, tag: "seguimiento_10d", title: "Seguimiento PR", urgencia: "normal" },
-  { dias: 20, tag: "seguimiento_20d", title: "Seguimiento urgente PR", urgencia: "urgente" },
+  { dias: 3, tag: "seguimiento_3d", title: "Seguimiento PR", urgencia: "normal" },
+  { dias: 5, tag: "seguimiento_5d", title: "Seguimiento PR", urgencia: "normal" },
+  { dias: 7, tag: "seguimiento_7d", title: "Seguimiento urgente PR", urgencia: "urgente" },
 ] as const;
 
 export async function GET(req: NextRequest) {
@@ -104,8 +107,8 @@ export async function GET(req: NextRequest) {
           const dedupKey = `${seg.title}|${pr.id}`;
           if (!alertaSet.has(dedupKey)) {
             const desc = seg.urgencia === "urgente"
-              ? `Hace ${diasDesdeCreacion} dias que se creo. Consultar al cliente antes de que venza.`
-              : `Pasaron ${diasDesdeCreacion} dias desde la creacion. Consultar al cliente.`;
+              ? `${diasDesdeCreacion} dias sin respuesta. Consultar al cliente con urgencia.`
+              : `${diasDesdeCreacion} dias sin respuesta. Hacer seguimiento con el cliente.`;
 
             alertasAInsertar.push({
               tipo: "seguimiento",
