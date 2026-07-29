@@ -1119,6 +1119,27 @@ export default function FinanzasPage() {
     try {
       const { error } = await (supabase as any).from("ordenes_pago").update({ estado: "anulada" }).eq("id", id);
       if (error) throw error;
+
+      // Revertir FCs vinculadas a pendiente si quedaron como pagadas
+      const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id").eq("orden_pago_id", id);
+      if (links && links.length > 0) {
+        for (const link of links) {
+          // Recalcular: sumar pagos de OPs no-anuladas para esta FC
+          const { data: allPayments } = await (supabase as any)
+            .from("op_facturas_compra").select("monto, orden_pago_id")
+            .eq("factura_compra_id", link.factura_compra_id);
+          // Excluir pagos de OPs anuladas
+          const { data: anuladas } = await (supabase as any)
+            .from("ordenes_pago").select("id").in("id", (allPayments || []).map((p: any) => p.orden_pago_id)).eq("estado", "anulada");
+          const anuladasSet = new Set((anuladas || []).map((a: any) => a.id));
+          const totalVigente = (allPayments || []).filter((p: any) => !anuladasSet.has(p.orden_pago_id)).reduce((s: number, p: any) => s + Number(p.monto), 0);
+          const { data: fc } = await (supabase as any).from("facturas_compra").select("total, estado").eq("id", link.factura_compra_id).single();
+          if (fc && fc.estado === "pagada" && totalVigente < Number(fc.total) - 1) {
+            await (supabase as any).from("facturas_compra").update({ estado: "pendiente" }).eq("id", link.factura_compra_id);
+          }
+        }
+      }
+
       await fetchData();
     } catch (err) { alert("Error anulando OP: " + (err instanceof Error ? err.message : String(err))); }
   }
@@ -1127,6 +1148,21 @@ export default function FinanzasPage() {
     try {
       const { error } = await (supabase as any).from("ordenes_pago").update({ estado: "pagada" }).eq("id", id);
       if (error) throw error;
+
+      // Marcar FCs vinculadas como pagadas si el monto cubre el saldo
+      const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto").eq("orden_pago_id", id);
+      if (links && links.length > 0) {
+        for (const link of links) {
+          // Sumar todos los pagos de esta FC (incluyendo otras OPs)
+          const { data: allPayments } = await (supabase as any).from("op_facturas_compra").select("monto").eq("factura_compra_id", link.factura_compra_id);
+          const totalPagado = (allPayments || []).reduce((s: number, p: any) => s + Number(p.monto), 0);
+          const { data: fc } = await (supabase as any).from("facturas_compra").select("total").eq("id", link.factura_compra_id).single();
+          if (fc && Math.abs(totalPagado - Number(fc.total)) < 1) {
+            await (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", link.factura_compra_id);
+          }
+        }
+      }
+
       await fetchData();
     } catch (err) { alert("Error marcando OP como pagada: " + (err instanceof Error ? err.message : String(err))); }
   }
