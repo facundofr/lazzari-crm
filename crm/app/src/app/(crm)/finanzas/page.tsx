@@ -352,6 +352,11 @@ export default function FinanzasPage() {
   const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>([]);
   const [objetivos, setObjetivos] = useState<Objetivo[]>([]);
 
+  // Saldos de caja
+  const [saldosCaja, setSaldosCaja] = useState<{ id?: string; moneda: string; monto: number }[]>([]);
+  const [editingSaldo, setEditingSaldo] = useState<string | null>(null); // moneda being edited
+  const [editingSaldoVal, setEditingSaldoVal] = useState("");
+
   // Gastos fijos modal
   const [gastoModalOpen, setGastoModalOpen] = useState(false);
   const [editingGasto, setEditingGasto] = useState<GastoFijo | null>(null);
@@ -491,8 +496,13 @@ export default function FinanzasPage() {
         let qObj = (supabase as any).from("objetivos").select("*, profiles:usuario_id(full_name)").order("periodo_inicio", { ascending: false });
         if (sociedadActiva?.id) qObj = qObj.eq("sociedad_id", sociedadActiva.id);
 
-        const [movRes, ccCliRes, ccProvRes, extRes, lcRes, gfRes, objRes] = await Promise.all([
-          qMov, qCcCli, qCcProv, qExt, qLc, qGf, qObj,
+        // Saldos de caja del mes actual
+        const mesActual = new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires", year: "numeric", month: "2-digit" }).slice(0, 7);
+        let qSaldos = (supabase as any).from("saldos_caja").select("id, moneda, monto").eq("mes", mesActual);
+        if (sociedadActiva?.id) qSaldos = qSaldos.eq("sociedad_id", sociedadActiva.id);
+
+        const [movRes, ccCliRes, ccProvRes, extRes, lcRes, gfRes, objRes, saldosRes] = await Promise.all([
+          qMov, qCcCli, qCcProv, qExt, qLc, qGf, qObj, qSaldos,
         ]);
 
         // Use Supabase data if available, otherwise fall back to mock data mapped to snake_case
@@ -635,6 +645,10 @@ export default function FinanzasPage() {
             usuarioId: o.usuario_id, usuarioNombre: o.profiles?.full_name ?? null,
             activo: o.activo, notas: o.notas ?? "", createdAt: o.created_at,
           })));
+        }
+
+        if (saldosRes.data) {
+          setSaldosCaja(saldosRes.data.map((s: any) => ({ id: s.id, moneda: s.moneda, monto: Number(s.monto) })));
         }
 
         // Fetch proveedores list for OP/gastos selectors
@@ -823,6 +837,30 @@ export default function FinanzasPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSaveSaldoCaja(moneda: string) {
+    const monto = Number(editingSaldoVal);
+    if (isNaN(monto)) { setEditingSaldo(null); return; }
+    const mesActual = new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires", year: "numeric", month: "2-digit" }).slice(0, 7);
+    try {
+      const userId = (await supabase.auth.getUser()).data.user?.id || null;
+      const { error } = await (supabase as any).from("saldos_caja").upsert({
+        sociedad_id: sociedadActiva?.id,
+        mes: mesActual,
+        moneda,
+        monto,
+        updated_by: userId,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "sociedad_id,mes,moneda" });
+      if (error) throw error;
+      setSaldosCaja(prev => {
+        const exists = prev.find(s => s.moneda === moneda);
+        if (exists) return prev.map(s => s.moneda === moneda ? { ...s, monto } : s);
+        return [...prev, { moneda, monto }];
+      });
+    } catch (err) { alert("Error al guardar saldo: " + (err instanceof Error ? err.message : String(err))); }
+    setEditingSaldo(null);
   }
 
   async function handleConciliar(id: string) {
@@ -1951,6 +1989,15 @@ ${certRetGanHtml}
   const totalPagos = totalPagosARS;
   const sinConciliar = movimientos.filter((m) => !m.conciliado).length;
 
+  // Caja: saldo inicial + ingresos - egresos = saldo final
+  const saldoInicialARS = saldosCaja.find(s => s.moneda === "ARS")?.monto ?? 0;
+  const saldoInicialUSD = saldosCaja.find(s => s.moneda === "USD")?.monto ?? 0;
+  const saldoFinalARS = saldoInicialARS + totalCobrosARS - totalPagosARS;
+  const saldoFinalUSD = saldoInicialUSD + totalCobrosUSD - totalPagosUSD;
+  // Ingresos y egresos "otros" (efectivo standalone)
+  const ingresosOtrosARS = movimientosMesARS.filter(m => m.tipo === "efectivo" || (m.tipo === "transferencia" && !["cobro", "cheque_recibido"].includes(m.tipo))).reduce((a, m) => a + m.monto, 0);
+  const hasUSD = totalCobrosUSD > 0 || totalPagosUSD > 0 || saldoInicialUSD !== 0;
+
   // ── Apply SmartFilters to movimientos ──
   const filteredMovimientos = movimientos.filter((m) => {
     // Date range filter
@@ -2028,11 +2075,80 @@ ${certRetGanHtml}
     <>
       <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setMovForm(emptyMovForm); setFormError(""); setModalOpen(true); } }} />
       <div className="p-4 sm:p-8 space-y-6">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard title="Cobros del mes" value={formatCurrency(totalCobrosARS)} icon={ArrowDownLeft} iconColor="text-emerald-600" changeLabel={totalCobrosUSD > 0 ? `+ ${formatCurrency(totalCobrosUSD, "USD")} USD` : undefined} />
-          <StatCard title="Pagos del mes" value={formatCurrency(totalPagosARS)} icon={ArrowUpRight} iconColor="text-red-500" changeLabel={totalPagosUSD > 0 ? `+ ${formatCurrency(totalPagosUSD, "USD")} USD` : undefined} />
+        {/* ── Resumen de Caja ── */}
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-2">
+              <Landmark className="h-4 w-4 text-orange-500" />
+              Caja del mes — {new Date().toLocaleDateString("es-AR", { month: "long", year: "numeric", timeZone: "America/Buenos_Aires" })}
+            </h3>
+            <span className="text-xs text-zinc-400">Click en saldo inicial para editar</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200 dark:border-zinc-700">
+                  <th className="text-left py-2 px-3 text-xs font-medium text-zinc-500">Concepto</th>
+                  <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500">ARS</th>
+                  {hasUSD && <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500">USD</th>}
+                </tr>
+              </thead>
+              <tbody>
+                <tr className="border-b border-zinc-100 dark:border-zinc-800">
+                  <td className="py-2 px-3 text-zinc-600 dark:text-zinc-400">Saldo inicial</td>
+                  <td className="py-2 px-3 text-right">
+                    {editingSaldo === "ARS" ? (
+                      <input type="number" autoFocus value={editingSaldoVal} onChange={e => setEditingSaldoVal(e.target.value)}
+                        onBlur={() => handleSaveSaldoCaja("ARS")} onKeyDown={e => e.key === "Enter" && handleSaveSaldoCaja("ARS")}
+                        className="w-32 ml-auto rounded border border-orange-300 bg-orange-50 dark:bg-zinc-800 px-2 py-0.5 text-sm font-mono text-right dark:text-white" />
+                    ) : (
+                      <button onClick={() => { setEditingSaldo("ARS"); setEditingSaldoVal(String(saldoInicialARS)); }}
+                        className="font-mono font-medium text-zinc-700 dark:text-zinc-300 hover:text-orange-600 hover:underline cursor-pointer transition-colors"
+                        title="Editar saldo inicial ARS">
+                        {formatCurrency(saldoInicialARS)}
+                      </button>
+                    )}
+                  </td>
+                  {hasUSD && (
+                    <td className="py-2 px-3 text-right">
+                      {editingSaldo === "USD" ? (
+                        <input type="number" autoFocus value={editingSaldoVal} onChange={e => setEditingSaldoVal(e.target.value)}
+                          onBlur={() => handleSaveSaldoCaja("USD")} onKeyDown={e => e.key === "Enter" && handleSaveSaldoCaja("USD")}
+                          className="w-32 ml-auto rounded border border-orange-300 bg-orange-50 dark:bg-zinc-800 px-2 py-0.5 text-sm font-mono text-right dark:text-white" />
+                      ) : (
+                        <button onClick={() => { setEditingSaldo("USD"); setEditingSaldoVal(String(saldoInicialUSD)); }}
+                          className="font-mono font-medium text-zinc-700 dark:text-zinc-300 hover:text-orange-600 hover:underline cursor-pointer transition-colors"
+                          title="Editar saldo inicial USD">
+                          {formatCurrency(saldoInicialUSD, "USD")}
+                        </button>
+                      )}
+                    </td>
+                  )}
+                </tr>
+                <tr className="border-b border-zinc-100 dark:border-zinc-800">
+                  <td className="py-2 px-3 text-emerald-600 flex items-center gap-1"><ArrowDownLeft className="h-3.5 w-3.5" /> Ingresos</td>
+                  <td className="py-2 px-3 text-right font-mono text-emerald-600">+{formatCurrency(totalCobrosARS)}</td>
+                  {hasUSD && <td className="py-2 px-3 text-right font-mono text-emerald-600">+{formatCurrency(totalCobrosUSD, "USD")}</td>}
+                </tr>
+                <tr className="border-b border-zinc-100 dark:border-zinc-800">
+                  <td className="py-2 px-3 text-red-600 flex items-center gap-1"><ArrowUpRight className="h-3.5 w-3.5" /> Egresos</td>
+                  <td className="py-2 px-3 text-right font-mono text-red-600">-{formatCurrency(totalPagosARS)}</td>
+                  {hasUSD && <td className="py-2 px-3 text-right font-mono text-red-600">-{formatCurrency(totalPagosUSD, "USD")}</td>}
+                </tr>
+                <tr className="border-t-2 border-zinc-300 dark:border-zinc-600">
+                  <td className="py-2 px-3 font-semibold text-zinc-800 dark:text-zinc-200">Saldo actual</td>
+                  <td className={`py-2 px-3 text-right font-mono font-bold text-base ${saldoFinalARS >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(saldoFinalARS)}</td>
+                  {hasUSD && <td className={`py-2 px-3 text-right font-mono font-bold text-base ${saldoFinalUSD >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(saldoFinalUSD, "USD")}</td>}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <StatCard title="Saldo CC clientes" value={formatCurrency(ccClientes.reduce((a, c) => a + c.saldo_cuenta_corriente, 0))} icon={Wallet} iconColor="text-blue-600" />
           <StatCard title="Credito disponible" value={formatCurrency(totalDisponibleCredito)} icon={CreditCard} iconColor="text-emerald-600" />
+          <StatCard title="Sin conciliar" value={`${sinConciliar} movimientos`} icon={Clock} iconColor="text-amber-500" />
         </div>
 
         {/* ── Balance Debe / Haber ── */}
