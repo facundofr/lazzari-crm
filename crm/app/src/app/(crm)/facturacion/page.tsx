@@ -19,6 +19,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 
 const estadoConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" }> = {
   emitida: { label: "Emitida", variant: "info" },
+  parcial: { label: "Cobro parcial", variant: "warning" },
   pagada: { label: "Pagada", variant: "success" },
   anulada: { label: "Anulada", variant: "danger" },
   vencida: { label: "Vencida", variant: "warning" },
@@ -284,7 +285,7 @@ export default function FacturacionPage() {
       { value: "NCA", label: "NC A" }, { value: "NCB", label: "NC B" },
     ]},
     { key: "estado", label: "Estado", type: "select", options: [
-      { value: "emitida", label: "Emitida" }, { value: "pagada", label: "Pagada" },
+      { value: "emitida", label: "Emitida" }, { value: "parcial", label: "Cobro parcial" }, { value: "pagada", label: "Pagada" },
       { value: "anulada", label: "Anulada" }, { value: "vencida", label: "Vencida" },
     ]},
     { key: "monto", label: "Monto", type: "number-range" },
@@ -648,7 +649,7 @@ export default function FacturacionPage() {
       setCobroModalId(null);
       await fetchData();
       if (detailFactura?.id === cobroModalId) {
-        setDetailFactura(prev => prev ? { ...prev, estado: rpcResult?.pagada ? "pagada" : prev.estado } : null);
+        setDetailFactura(prev => prev ? { ...prev, estado: rpcResult?.pagada ? "pagada" : "parcial" } : null);
       }
     } catch (err: any) {
       alert("Error al registrar cobro: " + (err.message || JSON.stringify(err)));
@@ -894,7 +895,7 @@ ${f.cae ? `
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear && f.estado !== "anulada";
   });
   const facturadoMes = facturasEsteMes.reduce((a, f) => a + Number(f.total), 0);
-  const pendientesCobro = facturas.filter(f => f.estado === "emitida").reduce((a, f) => a + Number(f.total), 0);
+  const pendientesCobro = facturas.filter(f => f.estado === "emitida" || f.estado === "parcial").reduce((a, f) => a + Number(f.total), 0);
   const facturasVencidas = facturas.filter(f => f.estado === "vencida").length;
   const caeVigentes = facturas.filter(f => f.cae && f.estado !== "anulada").length;
 
@@ -971,7 +972,7 @@ ${f.cae ? `
               )},
               { key: "acciones", label: "", render: (r) => (
                 <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                  {r.estado === "emitida" && (
+                  {(r.estado === "emitida" || r.estado === "parcial") && (
                     <button onClick={() => handleMarcarPagada(r.id)} className="px-2 py-1 rounded text-xs font-medium border border-green-200 text-green-600 hover:bg-green-50 dark:border-green-800 dark:text-green-400 dark:hover:bg-green-950/30 transition-colors">
                       Marcar pagada
                     </button>
@@ -1481,7 +1482,7 @@ ${f.cae ? `
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Acciones</h4>
                 <div className="space-y-2">
-                  {detailFactura.estado === "emitida" && (
+                  {(detailFactura.estado === "emitida" || detailFactura.estado === "parcial") && (
                     <>
                       <button onClick={() => openCobroModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
                         <DollarSign className="h-4 w-4" /> Registrar cobro
