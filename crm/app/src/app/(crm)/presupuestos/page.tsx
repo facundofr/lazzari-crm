@@ -260,6 +260,21 @@ export default function PresupuestosPage() {
   // IDs de presupuestos que tienen factura/remito asociado
   const [facturadoIds, setFacturadoIds] = useState<Set<string>>(new Set());
   const [remitidoIds, setRemitidoIds] = useState<Set<string>>(new Set());
+  // "parcial" = tiene remito pero faltan cantidades, "total" = todo remitido
+  const [remitidoStatus, setRemitidoStatus] = useState<Record<string, "parcial" | "total">>({});
+
+  // Remitar modal state
+  interface RemitarItem {
+    descripcion: string;
+    cantidad_total: number;
+    cantidad_remitida: number;
+    cantidad_pendiente: number;
+    cantidad_a_remitar: number;
+    unidad: string;
+    orden: number;
+  }
+  const [remitarModal, setRemitarModal] = useState<{ pr: Presupuesto; items: RemitarItem[] } | null>(null);
+  const [remitarLoading, setRemitarLoading] = useState(false);
 
   // Detail panel
   const [selected, setSelected] = useState<Presupuesto | null>(null);
@@ -748,15 +763,55 @@ export default function PresupuestosPage() {
     }
     async function fetchRemitidoIds() {
       try {
-        let rq = supabase
+        let rq = (supabase as any)
           .from("remitos")
-          .select("presupuesto_id")
+          .select("id, presupuesto_id")
           .not("presupuesto_id", "is", null);
-        if (sociedadActiva?.id) rq = rq.eq("sociedad_id" as any, sociedadActiva.id);
-        const { data } = await rq;
-        if (data) {
-          setRemitidoIds(new Set(data.map((r: any) => r.presupuesto_id).filter(Boolean)));
+        if (sociedadActiva?.id) rq = rq.eq("sociedad_id", sociedadActiva.id);
+        const { data: remitos } = await rq;
+        if (!remitos || remitos.length === 0) {
+          setRemitidoIds(new Set());
+          setRemitidoStatus({});
+          return;
         }
+        const prIds = [...new Set(remitos.map((r: any) => r.presupuesto_id).filter(Boolean))] as string[];
+        setRemitidoIds(new Set(prIds));
+
+        // Calculate partial vs total for each PR
+        const remitoIds = remitos.map((r: any) => r.id);
+        const { data: rItems } = await (supabase as any).from("remito_items").select("remito_id, descripcion, cantidad, orden").in("remito_id", remitoIds);
+        // Build map: presupuesto_id → remito_ids
+        const prRemitoMap: Record<string, string[]> = {};
+        for (const r of remitos as any[]) {
+          if (!r.presupuesto_id) continue;
+          if (!prRemitoMap[r.presupuesto_id]) prRemitoMap[r.presupuesto_id] = [];
+          prRemitoMap[r.presupuesto_id].push(r.id);
+        }
+        // Fetch PR items for these PRs
+        const { data: prItems } = await supabase.from("presupuesto_items").select("presupuesto_id, descripcion, cantidad, orden").in("presupuesto_id", prIds);
+        if (!prItems || !rItems) {
+          setRemitidoStatus({});
+          return;
+        }
+        const statusMap: Record<string, "parcial" | "total"> = {};
+        for (const prId of prIds) {
+          const myPrItems = (prItems as any[]).filter(i => i.presupuesto_id === prId);
+          const myRemitoIds = prRemitoMap[prId] || [];
+          const myRItems = (rItems as any[]).filter(i => myRemitoIds.includes(i.remito_id));
+          // Sum remitido by descripcion+orden
+          const remitidoMap: Record<string, number> = {};
+          for (const ri of myRItems) {
+            const key = `${ri.descripcion}__${ri.orden}`;
+            remitidoMap[key] = (remitidoMap[key] || 0) + Number(ri.cantidad);
+          }
+          let allDone = true;
+          for (const pi of myPrItems) {
+            const key = `${pi.descripcion}__${pi.orden}`;
+            if ((remitidoMap[key] || 0) < Number(pi.cantidad)) { allDone = false; break; }
+          }
+          statusMap[prId] = allDone ? "total" : "parcial";
+        }
+        setRemitidoStatus(statusMap);
       } catch {
         // ignore
       }
@@ -1413,27 +1468,87 @@ export default function PresupuestosPage() {
     }
   }
 
-  async function handleRemitar(pr: Presupuesto) {
-    if (!confirm(`¿Generar remito desde ${pr.numero}?`)) return;
+  async function openRemitarModal(pr: Presupuesto) {
     try {
-      // Fetch items
-      const { data: items, error: itemsQueryErr } = await supabase
+      // Fetch PR items
+      const { data: prItems, error: itemsErr } = await supabase
         .from("presupuesto_items")
         .select("descripcion, cantidad, unidad, orden")
         .eq("presupuesto_id", pr.id)
         .order("orden");
 
-      if (itemsQueryErr) {
-        console.error("Error fetching presupuesto items:", itemsQueryErr);
-        toast.error("Error al obtener items del presupuesto");
-        return;
-      }
-
-      if (!items || items.length === 0) {
+      if (itemsErr || !prItems || prItems.length === 0) {
         toast.warning("El presupuesto no tiene items para remitar");
         return;
       }
 
+      // Fetch existing remitos for this PR
+      const { data: existingRemitos } = await (supabase as any)
+        .from("remitos")
+        .select("id")
+        .eq("presupuesto_id", pr.id);
+
+      let remitidoMap: Record<string, number> = {};
+      if (existingRemitos && existingRemitos.length > 0) {
+        const rIds = existingRemitos.map((r: any) => r.id);
+        const { data: rItems } = await (supabase as any)
+          .from("remito_items")
+          .select("descripcion, cantidad, orden")
+          .in("remito_id", rIds);
+        if (rItems) {
+          for (const ri of rItems as any[]) {
+            const key = `${ri.descripcion}__${ri.orden}`;
+            remitidoMap[key] = (remitidoMap[key] || 0) + Number(ri.cantidad);
+          }
+        }
+      }
+
+      const modalItems: RemitarItem[] = (prItems as any[]).map((it, idx) => {
+        const key = `${it.descripcion}__${it.orden ?? idx}`;
+        const yaRemitido = remitidoMap[key] || 0;
+        const pendiente = Math.max(0, Number(it.cantidad) - yaRemitido);
+        return {
+          descripcion: it.descripcion,
+          cantidad_total: Number(it.cantidad),
+          cantidad_remitida: yaRemitido,
+          cantidad_pendiente: pendiente,
+          cantidad_a_remitar: pendiente,
+          unidad: it.unidad || "UN",
+          orden: it.orden ?? idx,
+        };
+      });
+
+      const totalPendiente = modalItems.reduce((s, i) => s + i.cantidad_pendiente, 0);
+      if (totalPendiente <= 0) {
+        toast.info("Todas las cantidades de este presupuesto ya fueron remitidas");
+        return;
+      }
+
+      setRemitarModal({ pr, items: modalItems });
+    } catch (err) {
+      console.error("Error opening remitar modal:", err);
+      toast.error("Error al preparar remito");
+    }
+  }
+
+  async function handleRemitarConfirm() {
+    if (!remitarModal || !sociedadActiva) return;
+    const { pr, items } = remitarModal;
+    const itemsToRemit = items.filter(i => i.cantidad_a_remitar > 0);
+    if (itemsToRemit.length === 0) {
+      toast.warning("Ingresá al menos una cantidad para remitar");
+      return;
+    }
+    // Validate no item exceeds pending
+    for (const it of itemsToRemit) {
+      if (it.cantidad_a_remitar > it.cantidad_pendiente) {
+        toast.error(`"${it.descripcion}" excede la cantidad pendiente (${it.cantidad_pendiente})`);
+        return;
+      }
+    }
+
+    setRemitarLoading(true);
+    try {
       // Fetch presupuesto total for valor_declarado
       const { data: prHeader } = await supabase
         .from("presupuestos")
@@ -1465,7 +1580,7 @@ export default function PresupuestosPage() {
           observaciones: `Generado desde presupuesto ${pr.numero}`,
           presupuesto_id: pr.id,
           estado: "pendiente",
-          sociedad_id: sociedadActiva?.id || null,
+          sociedad_id: sociedadActiva.id,
           created_by: profile?.id || null,
           oc_cliente: pr.ocCliente || null,
           valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
@@ -1474,34 +1589,42 @@ export default function PresupuestosPage() {
         .single();
 
       if (remitoErr || !remitoData) {
-        console.error("Error creating remito:", remitoErr);
         toast.error("Error al crear remito: " + (remitoErr?.message || "sin datos"));
         return;
       }
 
-      const remitoItems = items.map((it: any, idx: number) => ({
+      const remitoItems = itemsToRemit.map((it) => ({
         remito_id: remitoData.id,
         descripcion: it.descripcion,
-        cantidad: it.cantidad,
-        unidad: it.unidad || "UN",
-        orden: it.orden ?? idx,
+        cantidad: it.cantidad_a_remitar,
+        unidad: it.unidad,
+        orden: it.orden,
       }));
       const { error: remitoItemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
       if (remitoItemsErr) {
-        console.error("Error inserting remito items:", remitoItemsErr);
-        toast.error("Remito creado pero hubo un error al insertar los items: " + remitoItemsErr.message);
+        toast.error("Remito creado pero error en items: " + remitoItemsErr.message);
         return;
       }
 
-      // Block PR — mark as remitido so it can't be remitted again
-      await supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", pr.id);
-      setRemitidoIds((prev) => new Set([...prev, pr.id]));
+      // Check if ALL quantities are now fully remitted
+      const allFullyRemitted = items.every(i => {
+        const willBeRemitted = i.cantidad_remitida + i.cantidad_a_remitar;
+        return willBeRemitted >= i.cantidad_total;
+      });
 
-      toast.success(`Remito ${numero} creado con ${remitoItems.length} items`);
+      if (allFullyRemitted) {
+        await supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", pr.id);
+      }
+
+      setRemitidoIds((prev) => new Set([...prev, pr.id]));
+      setRemitarModal(null);
+      toast.success(`Remito ${numero} creado con ${itemsToRemit.length} items`);
       await fetchPresupuestos();
     } catch (err) {
       console.error("Error creating remito:", err);
       toast.error("Error al crear remito");
+    } finally {
+      setRemitarLoading(false);
     }
   }
 
@@ -2186,12 +2309,13 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 key: "tracking" as any, label: "Seguimiento", sortable: false,
                 render: (row) => {
                   if (row.estado !== "aprobado") return <span className="text-zinc-300 text-xs">—</span>;
+                  const rStatus = remitidoStatus[row.id];
                   const entregado = remitidoIds.has(row.id);
                   const facturado = facturadoIds.has(row.id);
                   return (
                     <div className="flex items-center gap-1">
-                      <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold ${entregado ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"}`} title={entregado ? "Tiene remito" : "Sin remito"}>
-                        <Truck className="h-3 w-3" />{entregado ? "E" : "—"}
+                      <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold ${rStatus === "total" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : rStatus === "parcial" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"}`} title={rStatus === "total" ? "Totalmente remitido" : rStatus === "parcial" ? "Remito parcial" : "Sin remito"}>
+                        <Truck className="h-3 w-3" />{rStatus === "total" ? "E" : rStatus === "parcial" ? "P" : "—"}
                       </span>
                       <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold ${facturado ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"}`} title={facturado ? "Tiene factura" : "Sin factura"}>
                         <FileText className="h-3 w-3" />{facturado ? "F" : "—"}
@@ -2337,14 +2461,14 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                     Editar
                   </button>
                 )}
-                {selected.estado === "aprobado" && !remitidoIds.has(selected.id) && (
+                {(selected.estado === "aprobado" || selected.estado === "remitido") && remitidoStatus[selected.id] !== "total" && (
                   <button
-                    onClick={() => handleRemitar(selected)}
+                    onClick={() => openRemitarModal(selected)}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950/30 transition-colors"
                     title="Generar remito"
                   >
                     <Truck className="h-3.5 w-3.5" />
-                    Remitar
+                    {remitidoStatus[selected.id] === "parcial" ? "Remitar pendiente" : "Remitar"}
                   </button>
                 )}
                 {selected.estado === "aprobado" && (
@@ -3631,6 +3755,78 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                 className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                 {facturarEmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Receipt className="h-4 w-4" />}
                 {facturarEmitting ? "Emitiendo..." : "Emitir factura"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ==================== REMITAR MODAL ==================== */}
+      {remitarModal && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setRemitarModal(null)} />
+          <div className="fixed inset-x-4 top-[10%] z-50 mx-auto max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-zinc-900 flex flex-col max-h-[80vh]">
+            <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
+              <h3 className="text-base font-bold text-zinc-900 dark:text-white">Remitar — {remitarModal.pr.numero}</h3>
+              <button onClick={() => setRemitarModal(null)} className="rounded p-1 text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="p-5 space-y-3 overflow-y-auto flex-1">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">Ingresá las cantidades a incluir en este remito. Los items con cantidad 0 no se incluyen.</p>
+              <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {remitarModal.items.map((item, idx) => (
+                  <div key={idx} className="py-3 first:pt-0 last:pb-0">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-zinc-900 dark:text-white truncate">{item.descripcion}</p>
+                        <div className="flex items-center gap-3 mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                          <span>Total: {item.cantidad_total} {item.unidad}</span>
+                          {item.cantidad_remitida > 0 && (
+                            <span className="text-amber-600 dark:text-amber-400">Ya remitido: {item.cantidad_remitida}</span>
+                          )}
+                          <span className="text-emerald-600 dark:text-emerald-400 font-medium">Pendiente: {item.cantidad_pendiente}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <input
+                          type="number"
+                          min={0}
+                          max={item.cantidad_pendiente}
+                          step="any"
+                          value={item.cantidad_a_remitar || ""}
+                          onChange={(e) => {
+                            const val = Math.max(0, Math.min(Number(e.target.value), item.cantidad_pendiente));
+                            setRemitarModal(prev => {
+                              if (!prev) return prev;
+                              const newItems = [...prev.items];
+                              newItems[idx] = { ...newItems[idx], cantidad_a_remitar: val };
+                              return { ...prev, items: newItems };
+                            });
+                          }}
+                          className="w-20 rounded-lg border border-zinc-200 px-2 py-1.5 text-sm text-right font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                        />
+                        <span className="text-xs text-zinc-400 w-6">{item.unidad}</span>
+                      </div>
+                    </div>
+                    {item.cantidad_a_remitar > item.cantidad_pendiente && (
+                      <p className="text-xs text-red-500 mt-1">Excede la cantidad pendiente</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 text-sm">
+                <span className="text-zinc-600 dark:text-zinc-300 font-medium">Items a incluir</span>
+                <span className="font-bold text-zinc-900 dark:text-white">{remitarModal.items.filter(i => i.cantidad_a_remitar > 0).length} de {remitarModal.items.length}</span>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
+              <button onClick={() => setRemitarModal(null)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
+              <button
+                onClick={handleRemitarConfirm}
+                disabled={remitarLoading || remitarModal.items.every(i => i.cantidad_a_remitar <= 0)}
+                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {remitarLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Truck className="h-4 w-4" />}
+                Generar remito
               </button>
             </div>
           </div>
