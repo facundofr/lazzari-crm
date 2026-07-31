@@ -368,7 +368,12 @@ export default function ProveedoresPage() {
       setSelectedProv(null);
       await fetchData();
     } catch (err: unknown) {
-      setFormError(err instanceof Error ? err.message : "Error al guardar");
+      const msg = err instanceof Error
+        ? err.message
+        : typeof err === "object" && err !== null && "message" in err
+          ? String((err as { message: string }).message)
+          : "Error al guardar";
+      setFormError(msg);
     } finally {
       setSaving(false);
     }
@@ -438,7 +443,8 @@ export default function ProveedoresPage() {
       setAiNewProvOpen(false);
       setAiNewProvForm({ razon_social: "", cuit: "", rubro: "" });
     } catch (err) {
-      alert("Error creando proveedor: " + (err instanceof Error ? err.message : String(err)));
+      const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? String((err as { message: string }).message) : String(err);
+      alert("Error creando proveedor: " + msg);
     } finally {
       setAiNewProvSaving(false);
     }
@@ -495,7 +501,7 @@ export default function ProveedoresPage() {
       setAiModalOpen(false);
       await fetchData();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Error al guardar";
+      const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? String((err as { message: string }).message) : "Error al guardar";
       toast.error(msg);
     } finally {
       setAiSaving(false);

@@ -945,7 +945,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
 
       const { data: items } = await supabase
         .from("presupuesto_items")
-        .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id, proveedor_nombre, iva_porcentaje")
+        .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id, proveedor_nombre, iva_porcentaje, costo_moneda")
         .in("presupuesto_id", prIds)
         .not("proveedor_id", "is", null) as { data: any[] | null };
 
@@ -963,11 +963,12 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
         const pr = prMap.get(item.presupuesto_id);
         if (!pr || !item.proveedor_id) continue;
         const provId = item.proveedor_id as string;
+        const itemCostoMoneda = (item.costo_moneda as string) || "ARS";
         if (!groups[provId]) {
           groups[provId] = {
             id: provId,
             nombre: (item.proveedor_nombre as string) || "Sin nombre",
-            moneda: pr.moneda || "ARS",
+            moneda: itemCostoMoneda,
             items: [],
             expanded: true,
           };
@@ -984,7 +985,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           unidad: item.unidad || "UN",
           proveedor_id: provId,
           proveedor_nombre: (item.proveedor_nombre as string) || "",
-          moneda: pr.moneda || "ARS",
+          moneda: itemCostoMoneda,
           iva_porcentaje: Number(item.iva_porcentaje ?? 21),
           selected: true,
         });
@@ -1105,7 +1106,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
       const prIds = prs.map((p: any) => p.id);
       const { data: items } = await supabase
         .from("presupuesto_items")
-        .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id")
+        .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id, costo_moneda")
         .in("presupuesto_id", prIds) as { data: any[] | null };
 
       const sinProv = (items || []).filter((it: any) => !it.proveedor_id);
@@ -1123,7 +1124,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           cantidad: it.cantidad,
           precio_costo: it.precio_costo || 0,
           unidad: it.unidad || "UN",
-          moneda: pr?.moneda || "USD",
+          moneda: (it.costo_moneda as string) || "ARS",
           proveedor_id: "",
         };
       }));

@@ -922,6 +922,7 @@ export default function PresupuestosPage() {
         proveedor_id: it.proveedor_id || null,
         lista_item_id: it.lista_item_id || null,
         proveedor_nombre: it.proveedor_nombre || null,
+        costo_moneda: it.costo_moneda || "ARS",
       }));
 
       if (editingPRId) {
@@ -1102,13 +1103,12 @@ export default function PresupuestosPage() {
         .eq("presupuesto_id", prId);
       if (itemsErr || !items || items.length === 0) return;
 
-      // Get presupuesto header for moneda, numero, and sociedad_id
+      // Get presupuesto header for numero and sociedad_id
       const { data: prHeader } = await (supabase as any)
         .from("presupuestos")
-        .select("moneda, numero, sociedad_id")
+        .select("numero, sociedad_id")
         .eq("id", prId)
         .single();
-      const moneda = prHeader?.moneda ?? "USD";
       const prNumero = prHeader?.numero ?? "";
       const sociedadId = prHeader?.sociedad_id ?? sociedadActiva?.id ?? null;
 
@@ -1146,6 +1146,11 @@ export default function PresupuestosPage() {
         const iva = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
         const isSinProveedor = provId === "__sin_proveedor__";
 
+        // Determine OC moneda from items' costo_moneda (cost currency), NOT from PR sale moneda
+        // If items have mixed cost currencies, default to ARS
+        const costoMonedas = new Set(provItems.map((it: any) => it.costo_moneda || "ARS"));
+        const ocMoneda = costoMonedas.size === 1 ? [...costoMonedas][0] : "ARS";
+
         const { data: ocRow, error: ocErr } = await supabase
           .from("ordenes_compra")
           .insert({
@@ -1153,7 +1158,7 @@ export default function PresupuestosPage() {
             presupuesto_origen_id: prId,
             sociedad_id: sociedadId,
             fecha: today,
-            moneda,
+            moneda: ocMoneda,
             estado: "borrador",
             subtotal,
             iva,
