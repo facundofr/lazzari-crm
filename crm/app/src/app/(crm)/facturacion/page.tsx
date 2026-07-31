@@ -564,7 +564,7 @@ export default function FacturacionPage() {
   // ── Copy & PDF ─────────────────────────────────────────────────
   // Cobro modal
   const [cobroModalId, setCobroModalId] = useState<string | null>(null);
-  type CobroLinea = { tipo: "cobro" | "transferencia" | "efectivo" | "cheque_recibido" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva"; monto: string; descripcion: string };
+  type CobroLinea = { tipo: "cobro" | "transferencia" | "efectivo" | "cheque_recibido" | "echeq" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva"; monto: string; descripcion: string; cheque_numero?: string; cheque_banco?: string; cheque_fecha?: string; cheque_id_digital?: string };
   const [cobroLineas, setCobroLineas] = useState<CobroLinea[]>([{ tipo: "transferencia", monto: "", descripcion: "" }]);
   const [cobroFecha, setCobroFecha] = useState(new Date().toISOString().split("T")[0]);
   const [cobroSaving, setCobroSaving] = useState(false);
@@ -632,11 +632,15 @@ export default function FacturacionPage() {
     setCobroSaving(true);
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id || null;
-      const lineasPayload = lineasValidas.map(l => ({
-        tipo: l.tipo,
-        monto: Number(l.monto),
-        descripcion: l.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}`,
-      }));
+      const lineasPayload = lineasValidas.map(l => {
+        let desc = l.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}`;
+        // Append cheque details to description
+        if ((l.tipo === "cheque_recibido" || l.tipo === "echeq") && (l.cheque_numero || l.cheque_banco)) {
+          const parts = [l.cheque_banco, l.cheque_numero ? `N° ${l.cheque_numero}` : null, l.cheque_fecha, l.cheque_id_digital ? `ID: ${l.cheque_id_digital}` : null].filter(Boolean);
+          desc = (l.descripcion ? l.descripcion + " — " : "") + parts.join(" · ");
+        }
+        return { tipo: l.tipo === "echeq" ? "cheque_recibido" : l.tipo, monto: Number(l.monto), descripcion: desc };
+      });
       const { data: rpcResult, error: rpcErr } = await (supabase as any).rpc("registrar_cobro", {
         p_factura_id: cobroModalId,
         p_lineas: lineasPayload,
@@ -1566,6 +1570,7 @@ ${f.cae ? `
                             <option value="transferencia">Transferencia</option>
                             <option value="efectivo">Efectivo</option>
                             <option value="cheque_recibido">Cheque</option>
+                            <option value="echeq">Echeq</option>
                             <option value="retencion_iibb">Ret. IIBB</option>
                             <option value="retencion_ganancias">Ret. Ganancias</option>
                             <option value="retencion_iva">Ret. IVA</option>
@@ -1578,7 +1583,7 @@ ${f.cae ? `
                                 const updated = prev.map((l, i) => i === idx ? { ...l, monto: newVal } : l);
                                 // Auto-ajustar transferencia/efectivo si se modificó una retención
                                 const isRetencion = updated[idx]?.tipo.startsWith("retencion_");
-                                const firstPayIdx = updated.findIndex(l => l.tipo === "transferencia" || l.tipo === "efectivo");
+                                const firstPayIdx = updated.findIndex(l => l.tipo === "transferencia" || l.tipo === "efectivo" || l.tipo === "cheque_recibido" || l.tipo === "echeq");
                                 if (isRetencion && firstPayIdx >= 0 && firstPayIdx !== idx) {
                                   const totalRet = updated.reduce((s, l, i) => i !== firstPayIdx ? s + Number(l.monto || 0) : s, 0);
                                   updated[firstPayIdx] = { ...updated[firstPayIdx], monto: String(Math.max(0, Math.round((saldo - totalRet) * 100) / 100)) };
@@ -1597,6 +1602,36 @@ ${f.cae ? `
                         <input type="text" placeholder="Descripcion (opcional)" value={linea.descripcion}
                           onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, descripcion: e.target.value } : l))}
                           className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-xs dark:text-white" />
+                        {(linea.tipo === "cheque_recibido" || linea.tipo === "echeq") && (
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[10px] text-zinc-400">N° Cheque</label>
+                              <input type="text" placeholder="00000000" value={linea.cheque_numero || ""}
+                                onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, cheque_numero: e.target.value } : l))}
+                                className="w-full rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2 py-1 text-xs font-mono dark:text-white" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-zinc-400">Banco</label>
+                              <input type="text" placeholder="Ej: Credicoop" value={linea.cheque_banco || ""}
+                                onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, cheque_banco: e.target.value } : l))}
+                                className="w-full rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2 py-1 text-xs dark:text-white" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-zinc-400">Fecha cheque</label>
+                              <input type="date" value={linea.cheque_fecha || ""}
+                                onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, cheque_fecha: e.target.value } : l))}
+                                className="w-full rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2 py-1 text-xs dark:text-white" />
+                            </div>
+                            {linea.tipo === "echeq" && (
+                              <div>
+                                <label className="text-[10px] text-zinc-400">ID Echeq</label>
+                                <input type="text" placeholder="ID digital" value={linea.cheque_id_digital || ""}
+                                  onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, cheque_id_digital: e.target.value } : l))}
+                                  className="w-full rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2 py-1 text-xs font-mono dark:text-white" />
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
