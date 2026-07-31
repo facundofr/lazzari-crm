@@ -13,7 +13,7 @@ import {
   ShoppingCart, Clock, CheckCircle2, Truck, Loader2,
   X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
-  PackageCheck, MessageSquare, Edit3,
+  PackageCheck, MessageSquare, Edit3, Plus, Minus,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
@@ -549,21 +549,50 @@ export default function OrdenesCompraPage() {
     if (!detailOC) return;
     setSavingEdit(true);
     try {
-      // 1. Update each item (cantidad, precio_unitario, cantidad_recibida) + adjust stock
-      for (let i = 0; i < editItems.length; i++) {
-        const edited = editItems[i];
-        const original = detailItems[i];
+      // 1. Delete removed items
+      const editIds = new Set(editItems.map(it => it.id));
+      const deletedItems = detailItems.filter(it => !editIds.has(it.id));
+      for (const del of deletedItems) {
+        await supabase.from("orden_compra_items").delete().eq("id", del.id);
+      }
+
+      // 2. Insert new items (id starts with "new_")
+      const newItems = editItems.filter(it => String(it.id).startsWith("new_"));
+      if (newItems.length > 0) {
+        const insertRows = newItems.map((it, idx) => ({
+          orden_id: detailOC.id,
+          codigo: it.codigo || "",
+          descripcion: it.descripcion || "",
+          cantidad: Number(it.cantidad) || 0,
+          cantidad_recibida: 0,
+          unidad: it.unidad || "u",
+          precio_unitario: Number(it.precio_unitario) || 0,
+          producto_id: it.producto_id || null,
+          orden: detailItems.length + idx,
+        }));
+        const { error: insErr } = await supabase.from("orden_compra_items").insert(insertRows as any);
+        if (insErr) throw new Error(`Error al insertar items: ${insErr.message}`);
+      }
+
+      // 3. Update existing items (cantidad, precio_unitario, cantidad_recibida, codigo, descripcion) + adjust stock
+      for (const edited of editItems) {
+        if (String(edited.id).startsWith("new_")) continue;
+        const original = detailItems.find(it => it.id === edited.id);
         if (!original) continue;
 
         const cantidadChanged = Number(edited.cantidad) !== Number(original.cantidad);
         const precioChanged = Number(edited.precio_unitario) !== Number(original.precio_unitario);
         const recibidaChanged = Number(edited.cantidad_recibida) !== Number(original.cantidad_recibida);
+        const codigoChanged = edited.codigo !== original.codigo;
+        const descChanged = edited.descripcion !== original.descripcion;
 
-        if (cantidadChanged || precioChanged || recibidaChanged) {
+        if (cantidadChanged || precioChanged || recibidaChanged || codigoChanged || descChanged) {
           const updatePayload: any = {};
           if (cantidadChanged) updatePayload.cantidad = Number(edited.cantidad);
           if (precioChanged) updatePayload.precio_unitario = Number(edited.precio_unitario);
           if (recibidaChanged) updatePayload.cantidad_recibida = Number(edited.cantidad_recibida);
+          if (codigoChanged) updatePayload.codigo = edited.codigo;
+          if (descChanged) updatePayload.descripcion = edited.descripcion;
 
           const { error } = await supabase
             .from("orden_compra_items")
@@ -615,8 +644,8 @@ export default function OrdenesCompraPage() {
         .eq("id", detailOC.id);
       if (ocErr) throw new Error(`Error al actualizar OC: ${ocErr.message}`);
 
-      // 5. Update local state
-      setDetailItems(editItems.map((it) => ({ ...it })));
+      // 5. Refresh items from DB (new items need real IDs)
+      await fetchDetailItems(detailOC.id);
       setDetailOC({
         ...detailOC,
         subtotal: newSubtotal,
@@ -2119,20 +2148,28 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
               {/* ── Items table ─────────────────────────────────────── */}
               <div>
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold">Items ({detailItems.length})</h3>
-                  {detailItems.length > 0 && (
-                    <CopyButton
-                      text={detailItems.map((it, i) => `${i + 1}. ${it.codigo} - ${it.descripcion} x${it.cantidad}`).join("\n")}
-                      label="Copiar items"
-                    />
-                  )}
+                  <h3 className="text-sm font-semibold">Items ({(editMode ? editItems : detailItems).length})</h3>
+                  <div className="flex items-center gap-2">
+                    {editMode && (
+                      <button onClick={() => setEditItems(prev => [...prev, { id: `new_${Date.now()}`, codigo: "", descripcion: "", cantidad: 1, cantidad_recibida: 0, unidad: "u", precio_unitario: 0, subtotal: 0, producto_id: null }])}
+                        className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
+                        <Plus className="h-3 w-3" /> Agregar item
+                      </button>
+                    )}
+                    {detailItems.length > 0 && !editMode && (
+                      <CopyButton
+                        text={detailItems.map((it, i) => `${i + 1}. ${it.codigo} - ${it.descripcion} x${it.cantidad}`).join("\n")}
+                        label="Copiar items"
+                      />
+                    )}
+                  </div>
                 </div>
                 {detailLoading ? (
                   <div className="flex items-center justify-center py-8">
                     <Loader2 className="h-5 w-5 animate-spin text-orange-500" />
                   </div>
-                ) : detailItems.length === 0 ? (
-                  <p className="text-sm text-zinc-400 py-4 text-center">Sin items</p>
+                ) : (editMode ? editItems : detailItems).length === 0 && !editMode ? (
+                  <p className="text-sm text-zinc-400 py-4 text-center">Sin items — editá la OC para agregar</p>
                 ) : (
                   <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
                     <table className="w-full text-sm">
@@ -2144,6 +2181,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                           <th className="px-3 py-2 text-right">P. Unit.</th>
                           <th className="px-3 py-2 text-right">Subtotal</th>
                           <th className="px-3 py-2 text-center">Recibido</th>
+                          {editMode && <th className="px-3 py-2 w-8"></th>}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -2153,8 +2191,20 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                             : 0;
                           return (
                             <tr key={item.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-                              <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
-                              <td className="px-3 py-2 max-w-[200px] truncate" title={item.descripcion}>{item.descripcion}</td>
+                              <td className="px-3 py-2 font-mono text-xs">
+                                {editMode ? (
+                                  <input type="text" value={item.codigo}
+                                    onChange={(e) => setEditItems((prev) => prev.map((it, i) => i === idx ? { ...it, codigo: e.target.value } : it))}
+                                    placeholder="Codigo" className="w-20 rounded border border-blue-300 dark:border-blue-600 bg-white dark:bg-zinc-800 px-1 py-0.5 text-xs font-mono" />
+                                ) : item.codigo}
+                              </td>
+                              <td className="px-3 py-2 max-w-[200px] truncate" title={item.descripcion}>
+                                {editMode ? (
+                                  <input type="text" value={item.descripcion}
+                                    onChange={(e) => setEditItems((prev) => prev.map((it, i) => i === idx ? { ...it, descripcion: e.target.value } : it))}
+                                    placeholder="Descripcion" className="w-full rounded border border-blue-300 dark:border-blue-600 bg-white dark:bg-zinc-800 px-1 py-0.5 text-sm" />
+                                ) : item.descripcion}
+                              </td>
                               <td className="px-3 py-2 text-right">
                                 {editMode ? (
                                   <input type="number" step="any" min={0} value={item.cantidad}
@@ -2201,6 +2251,14 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                                   </div>
                                 )}
                               </td>
+                              {editMode && (
+                                <td className="px-1 py-2">
+                                  <button onClick={() => setEditItems(prev => prev.filter((_, i) => i !== idx))}
+                                    className="p-1 rounded text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30">
+                                    <Minus className="h-3.5 w-3.5" />
+                                  </button>
+                                </td>
+                              )}
                             </tr>
                           );
                         })}
