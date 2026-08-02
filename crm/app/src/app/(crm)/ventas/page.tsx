@@ -138,7 +138,7 @@ export default function VentasPage() {
   // Emit modal state
   const [emitModalOpen, setEmitModalOpen] = useState(false);
   const [emitVenta, setEmitVenta] = useState<Venta | null>(null);
-  const [emitTipo, setEmitTipo] = useState<"FA" | "FB">("FB");
+  const [emitTipo, setEmitTipo] = useState<"FA" | "FB" | "FCEA" | "FCEB">("FB");
   const [emitItems, setEmitItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number }[]>([]);
   const [emitting, setEmitting] = useState(false);
   const [emitTipoCambio, setEmitTipoCambio] = useState<number>(0);
@@ -299,7 +299,7 @@ export default function VentasPage() {
     }));
 
     setEmitVenta(venta);
-    setEmitTipo(defaultTipo as "FA" | "FB");
+    setEmitTipo(defaultTipo as "FA" | "FB" | "FCEA" | "FCEB");
     setEmitItems(items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]);
     setEmitTipoCambio(p.tipo_cambio || 0);
     setEmitMoneda(p.moneda as "ARS" | "USD" || "ARS");
@@ -414,7 +414,7 @@ export default function VentasPage() {
         return prMoneda === "USD" ? Math.round(price * emitTipoCambio * 100) / 100 : Math.round(price / emitTipoCambio * 100) / 100;
       };
 
-      if (emitTipo === "FA") {
+      if (emitTipo === "FA" || emitTipo === "FCEA") {
         subtotal = emitItems.reduce((sum, it) => sum + it.cantidad * conv(it.precio_unitario), 0);
         iva = emitItems.reduce((sum, it) => sum + it.cantidad * conv(it.precio_unitario) * it.iva_porcentaje / 100, 0);
         total = subtotal + iva;
@@ -460,7 +460,7 @@ export default function VentasPage() {
         descripcion: it.descripcion,
         cantidad: it.cantidad,
         precio_unitario: conv(it.precio_unitario),
-        iva_porcentaje: emitTipo === "FA" ? it.iva_porcentaje : 21,
+        iva_porcentaje: (emitTipo === "FA" || emitTipo === "FCEA") ? it.iva_porcentaje : 21,
         orden: idx,
       }));
       const { error: itemsError } = await (supabase.from("factura_items") as any).insert(facturaItems);
@@ -1064,13 +1064,17 @@ export default function VentasPage() {
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo de comprobante</label>
                   <select
                     value={emitTipo}
-                    onChange={e => setEmitTipo(e.target.value as "FA" | "FB")}
+                    onChange={e => setEmitTipo(e.target.value as "FA" | "FB" | "FCEA" | "FCEB")}
                     className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   >
                     {emitVenta.presupuesto.clientes?.condicion_iva === "RI" && (
                       <option value="FA">Factura A (discrimina IVA)</option>
                     )}
                     <option value="FB">Factura B (precio final)</option>
+                    {emitVenta.presupuesto.clientes?.condicion_iva === "RI" && (
+                      <option value="FCEA">FCE A — Crédito Electrónica (MiPyMEs)</option>
+                    )}
+                    <option value="FCEB">FCE B — Crédito Electrónica (MiPyMEs)</option>
                   </select>
                 </div>
 
@@ -1185,7 +1189,7 @@ export default function VentasPage() {
                           />
                         </div>
                         <div className="col-span-2">
-                          {idx === 0 && <span className="text-xs text-zinc-400">{emitTipo === "FA" ? "Neto" : "Precio"}</span>}
+                          {idx === 0 && <span className="text-xs text-zinc-400">{(emitTipo === "FA" || emitTipo === "FCEA") ? "Neto" : "Precio"}</span>}
                           <input
                             type="number"
                             min="0"
@@ -1199,7 +1203,7 @@ export default function VentasPage() {
                             className="w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                           />
                         </div>
-                        {emitTipo === "FA" && (
+                        {(emitTipo === "FA" || emitTipo === "FCEA") && (
                           <div className="col-span-2">
                             {idx === 0 && <span className="text-xs text-zinc-400">IVA %</span>}
                             <select
@@ -1218,7 +1222,7 @@ export default function VentasPage() {
                             </select>
                           </div>
                         )}
-                        <div className={emitTipo === "FA" ? "col-span-1" : "col-span-3 flex items-end justify-end"}>
+                        <div className={(emitTipo === "FA" || emitTipo === "FCEA") ? "col-span-1" : "col-span-3 flex items-end justify-end"}>
                           {emitItems.length > 1 && (
                             <button
                               onClick={() => setEmitItems(emitItems.filter((_, i) => i !== idx))}
@@ -1242,7 +1246,7 @@ export default function VentasPage() {
                       if (!needsConv) return p;
                       return prMon === "USD" ? Math.round(p * emitTipoCambio * 100) / 100 : Math.round(p / emitTipoCambio * 100) / 100;
                     };
-                    if (emitTipo === "FA") {
+                    if (emitTipo === "FA" || emitTipo === "FCEA") {
                       const neto = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
                       const iva = emitItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario * it.iva_porcentaje / 100, 0);
                       return (

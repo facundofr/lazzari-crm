@@ -44,7 +44,9 @@ interface FacturaRow {
   oc_cliente?: string | null;
   factura_origen_id?: string | null;
   total_acreditado?: number | null;
+  modalidad_emision?: string | null;
   clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string } | null;
+  _clienteNombre?: string;
 }
 
 type NcItem = { descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number };
@@ -324,7 +326,7 @@ export default function FacturacionPage() {
       const { data, error } = await query;
 
       if (!error && data) {
-        setFacturas(data as unknown as FacturaRow[]);
+        setFacturas((data as unknown as FacturaRow[]).map(f => ({ ...f, _clienteNombre: f.clientes?.razon_social || "" })));
       } else if (error) {
         setFacturas(mockFacturas.map((f) => ({
           id: f.id, tipo: f.tipo, punto_venta: f.puntoVenta, numero: f.numero,
@@ -333,6 +335,7 @@ export default function FacturacionPage() {
           moneda: "ARS", tipo_cambio: null,
           presupuesto_id: null,
           clientes: { razon_social: f.clienteNombre, cuit: "" },
+          _clienteNombre: f.clienteNombre,
         })));
       }
     } catch {
@@ -343,6 +346,7 @@ export default function FacturacionPage() {
         moneda: "ARS", tipo_cambio: null,
         presupuesto_id: null,
         clientes: { razon_social: f.clienteNombre, cuit: "" },
+        _clienteNombre: f.clienteNombre,
       })));
     } finally {
       setLoading(false);
@@ -552,14 +556,6 @@ export default function FacturacionPage() {
     } catch (err) { console.error("Error anulando:", err); }
   }
 
-  async function handleMarcarPagada(id: string) {
-    try {
-      const { error } = await supabase.from("facturas").update({ estado: "pagada" } as any).eq("id", id);
-      if (error) { alert(error.message); return; }
-      await fetchData();
-      if (detailFactura?.id === id) setDetailFactura((p) => p ? { ...p, estado: "pagada" } : null);
-    } catch (err) { console.error("Error:", err); }
-  }
 
   // ── Copy & PDF ─────────────────────────────────────────────────
   // Cobro modal
@@ -956,7 +952,7 @@ ${f.cae ? `
                   <span className="font-mono text-xs font-bold">{formatComprobante(r.tipo, r.punto_venta, r.numero)}</span>
                 </div>
               )},
-              { key: "clientes", label: "Cliente", sortable: true, render: (r) => <span className="font-medium">{r.clientes?.razon_social || "\u2014"}</span> },
+              { key: "clientes", label: "Cliente", sortable: true, sortKey: "_clienteNombre", render: (r) => <span className="font-medium">{r.clientes?.razon_social || "\u2014"}</span> },
               { key: "oc_cliente", label: "OC Cliente", render: (r) => r.oc_cliente
                 ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{r.oc_cliente}</span>
                 : <span className="text-zinc-300">{"\u2014"}</span>
@@ -973,15 +969,6 @@ ${f.cae ? `
                 <Badge variant={estadoConfig[r.estado]?.variant || "info"}>
                   {estadoConfig[r.estado]?.label || r.estado}
                 </Badge>
-              )},
-              { key: "acciones", label: "", render: (r) => (
-                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                  {(r.estado === "emitida" || r.estado === "parcial") && (
-                    <button onClick={() => handleMarcarPagada(r.id)} className="px-2 py-1 rounded text-xs font-medium border border-green-200 text-green-600 hover:bg-green-50 dark:border-green-800 dark:text-green-400 dark:hover:bg-green-950/30 transition-colors">
-                      Marcar pagada
-                    </button>
-                  )}
-                </div>
               )},
             ]}
             data={filteredFacturas}
@@ -1353,15 +1340,6 @@ ${f.cae ? `
                 <button onClick={() => handlePrintFactura(detailFactura)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
                   <Download className="h-3.5 w-3.5" /> PDF
                 </button>
-                {(detailFactura.tipo === "FA" || detailFactura.tipo === "FB" || detailFactura.tipo === "FCEA" || detailFactura.tipo === "FCEB") && detailFactura.estado !== "anulada" && (
-                  <button
-                    onClick={() => openNcModal(detailFactura)}
-                    className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/30 transition-colors"
-                    title="Emitir Nota de Crédito"
-                  >
-                    <XCircle className="h-3.5 w-3.5" /> NC
-                  </button>
-                )}
                 <button onClick={() => setDetailFactura(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
                   <X className="h-5 w-5" />
                 </button>
@@ -1496,9 +1474,11 @@ ${f.cae ? `
                           <FileText className="h-4 w-4" /> Emitir Nota de Crédito
                         </button>
                       )}
-                      <button onClick={() => handleAnular(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-red-950/30">
-                        <XCircle className="h-4 w-4" /> Anular comprobante
-                      </button>
+                      {!detailFactura.cae && (
+                        <button onClick={() => handleAnular(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-red-950/30">
+                          <XCircle className="h-4 w-4" /> Anular comprobante
+                        </button>
+                      )}
                     </>
                   )}
                 </div>

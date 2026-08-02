@@ -422,16 +422,17 @@ export default function ClientesPage() {
     fetchVendedores();
   }, []);
 
-  // Fetch transportistas catalog on mount
+  // Fetch transportistas catalog
   useEffect(() => {
+    if (!sociedadActiva?.id) return;
     async function fetchTransportistas() {
       try {
-        const { data } = await (supabase as any).from("transportistas").select("id, nombre").eq("activo", true).order("nombre");
+        const { data } = await (supabase as any).from("transportistas").select("id, nombre").eq("activo", true).or(`sociedad_id.eq.${sociedadActiva?.id},sociedad_id.is.null`).order("nombre");
         if (data) setTransportistas(data as { id: string; nombre: string }[]);
       } catch { /* ignore */ }
     }
     fetchTransportistas();
-  }, []);
+  }, [sociedadActiva?.id]);
 
   async function doRelevProdSearch(term: string) {
     setRelevProdSearch(term);
@@ -1311,8 +1312,22 @@ export default function ClientesPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("¿Seguro que queres eliminar este cliente? Esta accion no se puede deshacer.")) return;
     try {
+      // Check for associated documents before deleting
+      const [{ count: presCount }, { count: factCount }, { count: remCount }] = await Promise.all([
+        supabase.from("presupuestos").select("id", { count: "exact", head: true }).eq("cliente_id", id),
+        supabase.from("facturas").select("id", { count: "exact", head: true }).eq("cliente_id", id),
+        (supabase as any).from("remitos").select("id", { count: "exact", head: true }).eq("cliente_id", id),
+      ]);
+      const docs: string[] = [];
+      if ((presCount ?? 0) > 0) docs.push(`${presCount} presupuesto${presCount !== 1 ? "s" : ""}`);
+      if ((factCount ?? 0) > 0) docs.push(`${factCount} factura${factCount !== 1 ? "s" : ""}`);
+      if ((remCount ?? 0) > 0) docs.push(`${remCount} remito${remCount !== 1 ? "s" : ""}`);
+      if (docs.length > 0) {
+        alert(`No se puede eliminar este cliente porque tiene documentos asociados: ${docs.join(", ")}.`);
+        return;
+      }
+      if (!confirm("¿Seguro que queres eliminar este cliente? Esta accion no se puede deshacer.")) return;
       const { error } = await supabase.from("clientes").delete().eq("id", id);
       if (error) throw error;
       setSelectedCliente(null);
@@ -3027,13 +3042,16 @@ export default function ClientesPage() {
                 value={form.cp}
                 onChange={(e) => setForm({ ...form, cp: e.target.value })}
               />
-              <div className="sm:col-span-2">
-                <Input
-                  label="Flete / Transporte"
+              <div className="sm:col-span-2 space-y-1.5">
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Flete / Transporte</label>
+                <select
                   value={(form as any).flete || ""}
                   onChange={(e) => setForm({ ...form, flete: e.target.value } as any)}
-                  placeholder="Ej: Andreani, OCA, Via Cargo..."
-                />
+                  className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                >
+                  <option value="">Sin transporte definido</option>
+                  {transportistas.map((t) => <option key={t.id} value={t.nombre}>{t.nombre}</option>)}
+                </select>
               </div>
             </div>
           </div>
@@ -3093,12 +3111,6 @@ export default function ClientesPage() {
                   {vendedores.map((v) => <option key={v.id} value={v.id}>{v.full_name}</option>)}
                 </select>
               </div>
-              <Input
-                label="Flete"
-                value={(form as any).flete || ""}
-                onChange={(e) => setForm({ ...form, flete: e.target.value } as any)}
-                placeholder="Ej: Andreani, correo propio, etc."
-              />
             </div>
           </div>
 

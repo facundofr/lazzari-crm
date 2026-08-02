@@ -24,12 +24,13 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   efectivo: { label: "Efectivo", variant: "outline", icon: Wallet },
 };
 
-type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "cheques" | "extractos" | "lineas_credito" | "vencimientos" | "gastos_fijos" | "objetivos";
+type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos";
 
 // ── Echeq types ──
 interface EcheqRow {
   id: string;
   numero: string;
+  tipo_cheque: "echeq" | "fisico";
   banco_emisor: string | null;
   cuit_emisor: string | null;
   monto: number;
@@ -66,6 +67,7 @@ const echeqEstadoConfig: Record<string, { label: string; variant: "info" | "outl
 };
 
 const emptyEcheqForm = {
+  tipo_cheque: "echeq" as "echeq" | "fisico",
   numero: "",
   banco_emisor: "",
   cuit_emisor: "",
@@ -117,6 +119,7 @@ interface GastoManualRow {
   proveedor_nombre?: string;
   categoria: string;
   tipo_gasto: string;
+  tipo_recurrencia?: "fijo" | "eventual";
   medio_pago: string;
   comprobante_url?: string;
   monto: number;
@@ -228,11 +231,12 @@ const makeOpMedio = (moneda: "ARS" | "USD" = "ARS"): OpMedioPago => ({
 const emptyOPForm = {
   proveedor_id: "",
   moneda: "ARS" as "ARS" | "USD",
-  retencion_pct: 0,
   aplica_ganancias: false,
   retencion_ganancias_pct: 0,
   notas: "",
   fecha: new Date().toISOString().slice(0, 10),
+  monto_manual: 0,
+  usar_monto_manual: false,
 };
 
 const emptyGastoManualForm = {
@@ -240,6 +244,7 @@ const emptyGastoManualForm = {
   proveedor_id: "",
   categoria: "Varios" as string,
   tipo_gasto: "general" as string,
+  tipo_recurrencia: "eventual" as "fijo" | "eventual",
   medio_pago: "efectivo" as string,
   monto: 0,
   moneda: "ARS" as "ARS" | "USD",
@@ -398,6 +403,11 @@ export default function FinanzasPage() {
   const [gmFile, setGmFile] = useState<File | null>(null);
   const [gmUploading, setGmUploading] = useState(false);
 
+  // Custom gasto categories from configuracion
+  const [gastoCategorias, setGastoCategorias] = useState<string[]>([...GASTO_CATEGORIAS]);
+  const [newCategoriaInput, setNewCategoriaInput] = useState("");
+  const [showCategoriaManager, setShowCategoriaManager] = useState(false);
+
   // Facturas compra state
   const [facturasCompra, setFacturasCompra] = useState<FacturaCompraRow[]>([]);
   const [fcModalOpen, setFcModalOpen] = useState(false);
@@ -410,6 +420,8 @@ export default function FinanzasPage() {
   const [fcFile, setFcFile] = useState<File | null>(null);
   const [fcUploading, setFcUploading] = useState(false);
   const [selectedFC, setSelectedFC] = useState<FacturaCompraRow | null>(null);
+  const [fcSearchQuery, setFcSearchQuery] = useState("");
+  const [fcEstadoFilter, setFcEstadoFilter] = useState<"todos" | "pendiente" | "pagada" | "recibida" | "anulada">("todos");
   const [newArticleOpen, setNewArticleOpen] = useState(false);
   const [newArticle, setNewArticle] = useState({ codigo: "", descripcion: "", categoria: "", unidad: "UN", precio: 0 });
   const [newArticleSaving, setNewArticleSaving] = useState(false);
@@ -439,6 +451,38 @@ export default function FinanzasPage() {
   // Balance projection
   interface BalanceBand { banda: string; moneda: string; total: number }
   const [balanceData, setBalanceData] = useState<{ cobrar: BalanceBand[]; pagar: BalanceBand[]; echeqs: BalanceBand[] } | null>(null);
+
+  // ── CC Detail (Estado de cuenta) ──
+  interface CCFacturaRow { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; vencimiento: string | null; total: number; total_acreditado: number; moneda: string; estado: string }
+  interface CCMovRow { id: string; tipo: string; monto: number; moneda: string; descripcion: string; fecha: string; referencia: string | null }
+  interface CCFCRow { id: string; numero_factura: string; fecha: string; fecha_vencimiento: string | null; total: number; estado: string; moneda: string }
+  const [ccDetailCliente, setCcDetailCliente] = useState<CCRow | null>(null);
+  const [ccDetailFacturas, setCcDetailFacturas] = useState<CCFacturaRow[]>([]);
+  const [ccDetailMovimientos, setCcDetailMovimientos] = useState<CCMovRow[]>([]);
+  const [ccDetailLoading, setCcDetailLoading] = useState(false);
+  const [ccDetailProveedor, setCcDetailProveedor] = useState<CCRow | null>(null);
+  const [ccDetailFCProv, setCcDetailFCProv] = useState<CCFCRow[]>([]);
+  const [ccDetailMovProv, setCcDetailMovProv] = useState<CCMovRow[]>([]);
+  const [ccDetailProvLoading, setCcDetailProvLoading] = useState(false);
+
+  // ── Cobro Multiple modal ──
+  interface CobroMultiFC { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; total: number; total_acreditado: number; moneda: string; saldo: number; selected: boolean; monto_a_cobrar: number }
+  const [cobroMultiOpen, setCobroMultiOpen] = useState(false);
+  const [cobroMultiFCs, setCobroMultiFCs] = useState<CobroMultiFC[]>([]);
+  const [cobroMultiMonto, setCobroMultiMonto] = useState(0);
+  const [cobroMultiMedio, setCobroMultiMedio] = useState<"transferencia" | "efectivo" | "cheque_recibido" | "deposito">("transferencia");
+  const [cobroMultiFecha, setCobroMultiFecha] = useState(new Date().toISOString().slice(0, 10));
+  const [cobroMultiDesc, setCobroMultiDesc] = useState("");
+  const [cobroMultiSaving, setCobroMultiSaving] = useState(false);
+
+  // ── Manual movement modal (conciliacion) ──
+  const [manualMovOpen, setManualMovOpen] = useState(false);
+  const [manualMovTarget, setManualMovTarget] = useState<"cliente" | "proveedor">("cliente");
+  const [manualMovTargetId, setManualMovTargetId] = useState("");
+  const [manualMovTargetName, setManualMovTargetName] = useState("");
+  const [manualMovForm, setManualMovForm] = useState({ monto: 0, descripcion: "", fecha: new Date().toISOString().slice(0, 10), tipo_mov: "credito" as "credito" | "debito", moneda: "ARS" as "ARS" | "USD" });
+  const [manualMovSaving, setManualMovSaving] = useState(false);
+  const [manualMovError, setManualMovError] = useState("");
 
   // ── SmartFilters for Movimientos tab ──
   const movFilterConfigs: FilterConfig[] = [
@@ -675,6 +719,17 @@ export default function FinanzasPage() {
           }
         } catch { /* use defaults */ }
 
+        // Fetch custom gasto categories from configuracion
+        try {
+          if (sociedadActiva?.id) {
+            const { data: catCfg } = await (supabase as any).from("configuracion").select("value").eq("key", "gasto_categorias").eq("sociedad_id", sociedadActiva.id).single();
+            if (catCfg?.value) {
+              const parsed = typeof catCfg.value === "string" ? JSON.parse(catCfg.value) : catCfg.value;
+              if (Array.isArray(parsed) && parsed.length > 0) setGastoCategorias(parsed);
+            }
+          }
+        } catch { /* use defaults */ }
+
         // Fetch cheques recibidos no conciliados (for cruce)
         try {
           let qCheq = supabase.from("movimientos").select("*").eq("tipo", "cheque_recibido").eq("conciliado", false).order("fecha", { ascending: false });
@@ -717,7 +772,7 @@ export default function FinanzasPage() {
             setGastosManuales(gmData.map((r: any) => ({
               id: r.id, fecha: r.fecha, descripcion: r.descripcion,
               proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? undefined,
-              categoria: r.categoria ?? "Varios", tipo_gasto: r.tipo_gasto ?? "general",
+              categoria: r.categoria ?? "Varios", tipo_gasto: r.tipo_gasto ?? "general", tipo_recurrencia: r.tipo_recurrencia ?? "eventual",
               medio_pago: r.medio_pago ?? "efectivo",
               comprobante_url: r.comprobante_url ?? undefined,
               monto: Number(r.monto),
@@ -766,7 +821,7 @@ export default function FinanzasPage() {
           let qEcheq = (supabase as any).from("echeqs").select("*").order("fecha_pago", { ascending: true });
           if (sociedadActiva?.id) qEcheq = qEcheq.eq("sociedad_id", sociedadActiva.id);
           const { data: echeqData } = await qEcheq;
-          if (echeqData) setEcheqs(echeqData as EcheqRow[]);
+          if (echeqData) setEcheqs(echeqData.map((e: any) => ({ ...e, tipo_cheque: e.tipo_cheque || "echeq" })) as EcheqRow[]);
         } catch { /* table may not exist yet */ }
 
         // Fetch balance projection
@@ -1001,17 +1056,14 @@ export default function FinanzasPage() {
     })();
   }, [opForm.proveedor_id, opModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 2. Cuando tenemos condición y monto → auto-calcular retenciones basado en total mensual
-  const opMontoBruto = opFCPendientes.filter(f => f.selected).reduce((s, f) => s + f.monto_a_pagar, 0);
+  // 2. Cuando tenemos condición y monto → auto-calcular retención ganancias basado en total mensual
+  const opMontoBrutoFC = opFCPendientes.filter(f => f.selected).reduce((s, f) => s + f.monto_a_pagar, 0);
+  const opMontoBruto = opForm.usar_monto_manual && opForm.monto_manual > 0 ? opForm.monto_manual : opMontoBrutoFC;
   useEffect(() => {
     if (opProvCondicion === null || opMontoBruto <= 0) return;
-    let retencion_pct = 0;
     let aplica_ganancias = false;
     let retencion_ganancias_pct = 0;
     if (opProvCondicion === "RI") {
-      if (retencionConfig.aplica_iva && opMontoBruto >= retencionConfig.minimo_iva) {
-        retencion_pct = retencionConfig.tasa_iva_ri;
-      }
       // Ganancias: se aplica cuando el acumulado mensual supera el mínimo
       const acumuladoMensual = opMonthlyTotal + opMontoBruto;
       if (retencionConfig.aplica_ganancias && acumuladoMensual >= retencionConfig.minimo_ganancias) {
@@ -1019,7 +1071,7 @@ export default function FinanzasPage() {
         retencion_ganancias_pct = retencionConfig.tasa_ganancias_ri;
       }
     }
-    setOpForm(prev => ({ ...prev, retencion_pct, aplica_ganancias, retencion_ganancias_pct }));
+    setOpForm(prev => ({ ...prev, aplica_ganancias, retencion_ganancias_pct }));
   }, [opProvCondicion, opMontoBruto, retencionConfig, opMonthlyTotal]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── OP handlers ──
@@ -1040,16 +1092,15 @@ export default function FinanzasPage() {
     setOpModalOpen(true);
   }
 
-  const opRetencion = opMontoBruto * (opForm.retencion_pct / 100);
   const opRetencionGanancias = opForm.aplica_ganancias ? opMontoBruto * (opForm.retencion_ganancias_pct / 100) : 0;
-  const opNetoAPagar = opMontoBruto - opRetencion - opRetencionGanancias;
+  const opNetoAPagar = opMontoBruto - opRetencionGanancias;
   const opTotalMedios = opMedios.reduce((s, m) => s + m.monto, 0);
   const opDiferencia = opNetoAPagar - opTotalMedios;
 
   async function handleCreateOP() {
     if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
     const selectedFCs = opFCPendientes.filter(f => f.selected);
-    if (selectedFCs.length === 0) { setOpError("Selecciona al menos una factura"); return; }
+    if (selectedFCs.length === 0 && !opForm.usar_monto_manual) { setOpError("Selecciona al menos una factura o ingresa un monto manual"); return; }
     if (opMontoBruto <= 0) { setOpError("El monto a pagar debe ser mayor a 0"); return; }
     // Validate medios de pago total = neto a pagar
     const totalMediosVal = opMedios.reduce((s, m) => s + m.monto, 0);
@@ -1077,8 +1128,8 @@ export default function FinanzasPage() {
         fecha: opForm.fecha,
         proveedor_id: opForm.proveedor_id,
         monto_bruto: opMontoBruto,
-        retencion_porcentaje: opForm.retencion_pct,
-        retencion_monto: opRetencion,
+        retencion_porcentaje: 0,
+        retencion_monto: 0,
         retencion_ganancias_pct: opForm.aplica_ganancias ? opForm.retencion_ganancias_pct : 0,
         retencion_ganancias_monto: opRetencionGanancias,
         neto_a_pagar: opNetoAPagar,
@@ -1107,7 +1158,7 @@ export default function FinanzasPage() {
       setOpFile(null);
 
       // Link FCs + update saldo
-      if (opData?.id) {
+      if (opData?.id && selectedFCs.length > 0) {
         const links = selectedFCs.map(fc => ({
           orden_pago_id: opData.id,
           factura_compra_id: fc.id,
@@ -1310,9 +1361,8 @@ export default function FinanzasPage() {
 
     const totalCheques = cheques.reduce((s, m) => s + Number(m.monto), 0);
     const totalDepositos = depositos.reduce((s, m) => s + Number(m.monto), 0);
-    const totalRetIVA = op.monto_retencion || 0;
     const totalRetGan = op.retencion_ganancias_monto || 0;
-    const totalRetenciones = totalRetIVA + totalRetGan;
+    const totalRetenciones = totalRetGan;
     const totalGeneral = totalCheques + totalDepositos + totalRetenciones;
 
     // ── Build FCs table ──
@@ -1366,7 +1416,6 @@ export default function FinanzasPage() {
 
     // ── Retenciones table ──
     const retencionesItems: {fecha: string; desc: string; monto: number}[] = [];
-    if (totalRetIVA > 0) retencionesItems.push({ fecha: op.fecha, desc: `Retenci\u00F3n IVA (${op.retencion_pct}%)`, monto: totalRetIVA });
     if (totalRetGan > 0) retencionesItems.push({ fecha: op.fecha, desc: `Retenci\u00F3n Ganancias (${op.retencion_ganancias_pct}%)`, monto: totalRetGan });
 
     const retencionesHtml = retencionesItems.length > 0 ? `
@@ -1416,7 +1465,7 @@ export default function FinanzasPage() {
           <div class="cert-section-title">C - Datos de la retenci\u00F3n</div>
           <table class="cert-data">
             <tr><td class="cert-label">R\u00E9gimen:</td><td>78 - Anexo II, inc. f) Enajenaci\u00F3n de bienes muebles y bienes de cambio</td></tr>
-            <tr><td class="cert-label">Importe sujeto a retenci\u00F3n:</td><td>${formatCurrency(op.monto_bruto - totalRetIVA, op.moneda)}</td></tr>
+            <tr><td class="cert-label">Importe sujeto a retenci\u00F3n:</td><td>${formatCurrency(op.monto_bruto, op.moneda)}</td></tr>
             <tr><td class="cert-label">Importe retenido:</td><td style="font-weight:700">${formatCurrency(totalRetGan, op.moneda)}</td></tr>
             <tr><td class="cert-label">Documentos que originan la retenci\u00F3n:</td><td>${op.numero || "\u2014"} (${formatCurrency(totalGeneral, op.moneda)})</td></tr>
           </table>
@@ -1605,6 +1654,7 @@ ${certRetGanHtml}
         descripcion: gmForm.descripcion,
         categoria: gmForm.categoria,
         tipo_gasto: gmForm.tipo_gasto,
+        tipo_recurrencia: gmForm.tipo_recurrencia,
         monto: gmForm.monto,
         moneda: gmForm.moneda,
         notas: gmForm.notas || "",
@@ -1895,6 +1945,87 @@ ${certRetGanHtml}
     return map;
   }, [ccProveedores]);
 
+  // ── CC Detail fetch ──
+  async function fetchCCDetailCliente(cliente: CCRow) {
+    setCcDetailCliente(cliente); setCcDetailLoading(true); setCcDetailFacturas([]); setCcDetailMovimientos([]);
+    try {
+      let qF = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, vencimiento, total, total_acreditado, moneda, estado").eq("cliente_id", cliente.id).in("estado", ["emitida", "pagada", "parcial"]).order("fecha", { ascending: false });
+      if (sociedadActiva?.id) qF = qF.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: fData } = await qF;
+      if (fData) setCcDetailFacturas(fData.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.vencimiento, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", estado: f.estado })));
+      let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, referencia").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
+      if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: mData } = await qM;
+      if (mData) setCcDetailMovimientos(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, referencia: m.referencia ?? null })));
+    } catch (err) { console.error("CC detail err:", err); } finally { setCcDetailLoading(false); }
+  }
+  async function fetchCCDetailProveedor(prov: CCRow) {
+    setCcDetailProveedor(prov); setCcDetailProvLoading(true); setCcDetailFCProv([]); setCcDetailMovProv([]);
+    try {
+      let qFC = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, fecha_vencimiento, total, estado, moneda").eq("proveedor_id", prov.id).in("estado", ["pendiente", "pagada", "recibida"]).order("fecha", { ascending: false });
+      if (sociedadActiva?.id) qFC = qFC.eq("sociedad_id", sociedadActiva.id);
+      const { data: fcData } = await qFC;
+      if (fcData) setCcDetailFCProv(fcData.map((f: any) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento, total: Number(f.total), estado: f.estado, moneda: f.moneda ?? "ARS" })));
+      let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, referencia").eq("proveedor_id" as any, prov.id).order("fecha", { ascending: false });
+      if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: mData } = await qM;
+      if (mData) setCcDetailMovProv(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, referencia: m.referencia ?? null })));
+    } catch (err) { console.error("CC prov detail err:", err); } finally { setCcDetailProvLoading(false); }
+  }
+  async function openCobroMultiple() {
+    if (!ccDetailCliente) return;
+    setCobroMultiOpen(true); setCobroMultiMonto(0); setCobroMultiDesc(""); setCobroMultiFecha(new Date().toISOString().slice(0, 10)); setCobroMultiMedio("transferencia");
+    try {
+      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, total, total_acreditado, moneda, estado").eq("cliente_id", ccDetailCliente.id).in("estado", ["emitida", "parcial"]).order("fecha", { ascending: true });
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data } = await q;
+      if (data) { setCobroMultiFCs(data.map((f: any) => { const saldo = Number(f.total) - Number(f.total_acreditado || 0); return { id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", saldo, selected: false, monto_a_cobrar: 0 }; }).filter((f: CobroMultiFC) => f.saldo > 0.01)); }
+    } catch { /* noop */ }
+  }
+  function distribuirCobroMultiple(monto: number) {
+    setCobroMultiMonto(monto); let restante = monto;
+    setCobroMultiFCs(prev => prev.map(fc => { if (!fc.selected) return { ...fc, monto_a_cobrar: 0 }; const aplicar = Math.min(restante, fc.saldo); restante = Math.max(0, restante - aplicar); return { ...fc, monto_a_cobrar: Math.round(aplicar * 100) / 100 }; }));
+  }
+  async function handleCobroMultiple() {
+    if (!ccDetailCliente) return;
+    const fcsACobrar = cobroMultiFCs.filter(fc => fc.selected && fc.monto_a_cobrar > 0);
+    if (fcsACobrar.length === 0) { alert("Seleccione al menos una factura"); return; }
+    setCobroMultiSaving(true);
+    try {
+      const userId = (await supabase.auth.getUser()).data.user?.id || null;
+      for (const fc of fcsACobrar) {
+        const desc = cobroMultiDesc || `Cobro multiple - ${fc.tipo}${String(fc.punto_venta).padStart(5, "0")}-${String(fc.numero).padStart(8, "0")}`;
+        const { error: rpcErr } = await (supabase as any).rpc("registrar_cobro", { p_factura_id: fc.id, p_lineas: [{ tipo: cobroMultiMedio, monto: fc.monto_a_cobrar, descripcion: desc }], p_fecha: cobroMultiFecha, p_sociedad_id: sociedadActiva?.id || null, p_created_by: userId });
+        if (rpcErr) throw rpcErr;
+      }
+      setCobroMultiOpen(false); await fetchData(); if (ccDetailCliente) await fetchCCDetailCliente(ccDetailCliente);
+    } catch (err: any) { alert("Error al registrar cobro multiple: " + (err.message || JSON.stringify(err))); } finally { setCobroMultiSaving(false); }
+  }
+  async function handleManualMov() {
+    if (!manualMovTargetId || manualMovForm.monto <= 0 || !manualMovForm.descripcion.trim()) { setManualMovError("Completar monto, descripcion y seleccionar entidad"); return; }
+    setManualMovSaving(true); setManualMovError("");
+    try {
+      const userId = (await supabase.auth.getUser()).data.user?.id || null;
+      const movData: Record<string, unknown> = { tipo: manualMovForm.tipo_mov === "credito" ? "cobro" : "pago", descripcion: `[Ajuste manual] ${manualMovForm.descripcion}`, monto: manualMovForm.monto, moneda: manualMovForm.moneda, fecha: manualMovForm.fecha, conciliado: false, referencia: "ajuste_manual" };
+      if (manualMovTarget === "cliente") (movData as any).cliente_id = manualMovTargetId; else (movData as any).proveedor_id = manualMovTargetId;
+      if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
+      if (userId) (movData as any).created_by = userId;
+      const { error } = await supabase.from("movimientos").insert(movData as any);
+      if (error) throw error;
+      setManualMovOpen(false); await fetchData();
+      if (manualMovTarget === "cliente" && ccDetailCliente) await fetchCCDetailCliente(ccDetailCliente);
+      if (manualMovTarget === "proveedor" && ccDetailProveedor) await fetchCCDetailProveedor(ccDetailProveedor);
+    } catch (err: any) { setManualMovError(err.message || "Error al crear movimiento"); } finally { setManualMovSaving(false); }
+  }
+  function openManualMovForCliente(cli: CCRow) {
+    setManualMovTarget("cliente"); setManualMovTargetId(cli.id); setManualMovTargetName(cli.razon_social);
+    setManualMovForm({ monto: 0, descripcion: "", fecha: new Date().toISOString().slice(0, 10), tipo_mov: "credito", moneda: "ARS" }); setManualMovError(""); setManualMovOpen(true);
+  }
+  function openManualMovForProveedor(prov: CCRow) {
+    setManualMovTarget("proveedor"); setManualMovTargetId(prov.id); setManualMovTargetName(prov.razon_social);
+    setManualMovForm({ monto: 0, descripcion: "", fecha: new Date().toISOString().slice(0, 10), tipo_mov: "credito", moneda: "ARS" }); setManualMovError(""); setManualMovOpen(true);
+  }
+
   // ── Mov modal filtered lists ──
   const filteredMovClientes = movClienteSearch.trim()
     ? clientesOptions.filter((c: ClienteOption) => c.razon_social.toLowerCase().includes(movClienteSearch.toLowerCase()))
@@ -1921,7 +2052,8 @@ ${certRetGanHtml}
     setEcheqSaving(true); setEcheqError("");
     try {
       const row: Record<string, unknown> = {
-        numero: echeqForm.numero.trim(), banco_emisor: echeqForm.banco_emisor || null,
+        tipo_cheque: echeqForm.tipo_cheque, numero: echeqForm.numero.trim(),
+        banco_emisor: echeqForm.banco_emisor || null,
         cuit_emisor: echeqForm.cuit_emisor || null, monto: echeqForm.monto,
         moneda: echeqForm.moneda, fecha_emision: echeqForm.fecha_emision || null,
         fecha_pago: echeqForm.fecha_pago, estado: "en_cartera",
@@ -1939,7 +2071,7 @@ ${certRetGanHtml}
       if (error) throw error;
       setEcheqModalOpen(false); setEcheqForm(emptyEcheqForm); setEcheqClienteSearch("");
       await fetchData();
-    } catch (err) { setEcheqError("Error al crear echeq"); console.error(err); }
+    } catch (err) { setEcheqError("Error al crear cheque"); console.error(err); }
     finally { setEcheqSaving(false); }
   }
 
@@ -1974,9 +2106,9 @@ ${certRetGanHtml}
   }
 
   async function handleDeleteEcheq(id: string) {
-    if (!confirm("¿Seguro que querés eliminar este echeq?")) return;
+    if (!confirm("¿Seguro que querés eliminar este cheque?")) return;
     try { const { error } = await (supabase as any).from("echeqs").delete().eq("id", id); if (error) throw error; await fetchData(); }
-    catch (err) { console.error(err); alert("Error al eliminar echeq: " + (err as any)?.message); }
+    catch (err) { console.error(err); alert("Error al eliminar cheque: " + (err as any)?.message); }
   }
 
   // ── Derived calculations ──
@@ -2050,12 +2182,11 @@ ${certRetGanHtml}
     { id: "facturas_compra", label: "Fact. Compra" },
     { id: "ordenes_pago", label: "OP" },
     { id: "gastos_manuales", label: "Gastos" },
-    { id: "echeqs", label: "Echeqs" },
+    { id: "echeqs", label: "Cheques" },
     { id: "cc_clientes", label: "CC Clientes" },
     { id: "cc_proveedores", label: "CC Prov." },
     { id: "extractos", label: "Extractos" },
     { id: "lineas_credito", label: "Crédito" },
-    { id: "vencimientos", label: "Vencimientos" },
     { id: "gastos_fijos", label: "G. Fijos" },
     { id: "objetivos", label: "Objetivos" },
   ];
@@ -2213,7 +2344,7 @@ ${certRetGanHtml}
         <div className="w-full overflow-x-auto pb-1">
           <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-max">
             {tabs.map((t) => (
-              <button key={t.id} onClick={() => setTab(t.id)}
+              <button key={t.id} onClick={() => { setTab(t.id); setCcDetailCliente(null); setCcDetailProveedor(null); }}
                 className={`rounded-md px-3 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
                   tab === t.id ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                 }`}>
@@ -2268,17 +2399,51 @@ ${certRetGanHtml}
         )}
 
         {/* ── Facturas de Compra ── */}
-        {tab === "facturas_compra" && (
+        {tab === "facturas_compra" && (() => {
+          const filteredFC = facturasCompra.filter(f => {
+            if (fcEstadoFilter !== "todos" && f.estado !== fcEstadoFilter) return false;
+            if (fcSearchQuery.trim()) {
+              const q = fcSearchQuery.toLowerCase();
+              if (!f.proveedor_nombre.toLowerCase().includes(q) && !f.numero_factura.toLowerCase().includes(q)) return false;
+            }
+            return true;
+          });
+          return (
           <>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <p className="text-sm text-zinc-500">
                 Total pendiente: <span className="font-bold font-mono text-zinc-900 dark:text-white">
                   {formatCurrency(facturasCompra.filter(f => f.estado === "pendiente").reduce((s, f) => s + f.total, 0))}
                 </span>
               </p>
-              <button onClick={openFCModal} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
-                <Plus className="h-4 w-4" /> Nueva factura de compra
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => { setTab("ordenes_pago"); openOPModal(); }} className="flex items-center gap-1.5 rounded-lg border border-orange-500 px-3 py-2 text-sm font-medium text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors">
+                  <FileText className="h-4 w-4" /> Nueva OP
+                </button>
+                <button onClick={openFCModal} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
+                  <Plus className="h-4 w-4" /> Nueva factura de compra
+                </button>
+              </div>
+            </div>
+            {/* Search & filters */}
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+                <input value={fcSearchQuery} onChange={(e) => setFcSearchQuery(e.target.value)}
+                  placeholder="Buscar por proveedor o nro. factura..."
+                  className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <select value={fcEstadoFilter} onChange={(e) => setFcEstadoFilter(e.target.value as any)}
+                className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                <option value="todos">Todos los estados</option>
+                <option value="pendiente">Pendiente</option>
+                <option value="pagada">Pagada</option>
+                <option value="recibida">Recibida</option>
+                <option value="anulada">Anulada</option>
+              </select>
+              {(fcSearchQuery || fcEstadoFilter !== "todos") && (
+                <span className="text-xs text-zinc-500">{filteredFC.length} de {facturasCompra.length}</span>
+              )}
             </div>
             <Card className="p-0 overflow-hidden">
               <DataTable<FacturaCompraRow>
@@ -2335,12 +2500,13 @@ ${certRetGanHtml}
                     </div>
                   )},
                 ]}
-                data={facturasCompra}
+                data={filteredFC}
                 emptyMessage="No hay facturas de compra cargadas"
               />
             </Card>
           </>
-        )}
+          );
+        })()}
 
         {/* ── Ordenes de Pago ── */}
         {tab === "ordenes_pago" && (
@@ -2362,20 +2528,16 @@ ${certRetGanHtml}
                   { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
                   { key: "proveedor_nombre", label: "Proveedor", sortable: true, render: (row) => <span className="font-medium">{row.proveedor_nombre}</span> },
                   { key: "monto_bruto", label: "Monto bruto", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.monto_bruto, row.moneda)}</span> },
-                  { key: "monto_retencion", label: "Retenciones", className: "text-right", sortable: true, render: (row) => {
-                    const totalRet = row.monto_retencion + row.retencion_ganancias_monto;
+                  { key: "monto_retencion", label: "Ret. Gan.", className: "text-right", sortable: true, render: (row) => {
                     return (
                       <div className="text-right">
-                        {totalRet > 0 ? (
+                        {row.retencion_ganancias_monto > 0 ? (
                           <>
-                            <span className="font-mono text-amber-600">{formatCurrency(totalRet, row.moneda)}</span>
+                            <span className="font-mono text-violet-600">{formatCurrency(row.retencion_ganancias_monto, row.moneda)}</span>
                             <div className="flex items-center justify-end gap-1 mt-0.5">
-                              {row.retencion_pct > 0 && <span className="text-[10px] text-zinc-400">Ret {row.retencion_pct}%</span>}
-                              {row.retencion_ganancias_monto > 0 && (
-                                <span className="inline-flex items-center gap-0.5 text-[10px] text-violet-500 font-medium">
-                                  <ShieldCheck className="h-2.5 w-2.5" />Gan {row.retencion_ganancias_pct}%
-                                </span>
-                              )}
+                              <span className="inline-flex items-center gap-0.5 text-[10px] text-violet-500 font-medium">
+                                <ShieldCheck className="h-2.5 w-2.5" />Gan {row.retencion_ganancias_pct}%
+                              </span>
                             </div>
                           </>
                         ) : (
@@ -2459,6 +2621,11 @@ ${certRetGanHtml}
                     const label = TIPO_GASTO_OPTIONS.find(t => t.value === row.tipo_gasto)?.label ?? row.tipo_gasto;
                     return <Badge variant={tipoGastoVariant[row.tipo_gasto] ?? "outline"}>{label}</Badge>;
                   }},
+                  { key: "tipo_recurrencia" as any, label: "Recurrencia", render: (row) => (
+                    <Badge variant={row.tipo_recurrencia === "fijo" ? "purple" : "outline"}>
+                      {row.tipo_recurrencia === "fijo" ? "Fijo" : "Eventual"}
+                    </Badge>
+                  )},
                   { key: "medio_pago", label: "Medio de pago", render: (row) => {
                     const mp = row.medio_pago || "efectivo";
                     const mpLabels: Record<string, string> = { efectivo: "Efectivo", transferencia: "Transferencia", cheque: "Cheque", debito_automatico: "Debito aut." };
@@ -2487,85 +2654,190 @@ ${certRetGanHtml}
         {/* ── CC Clientes ── */}
         {tab === "cc_clientes" && (
           <>
-            <div className="mb-4 flex items-center gap-2">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-                <input value={ccClienteSearch} onChange={(e) => setCcClienteSearch(e.target.value)}
-                  placeholder="Buscar por nombre o CUIT..."
-                  className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              {ccClienteSearch && <span className="text-xs text-zinc-500">{filteredCcClientes.length} de {ccClientes.length}</span>}
-            </div>
-            <Card className="p-0 overflow-hidden">
-              <DataTable<CCRow>
-                columns={[
-                  { key: "razon_social", label: "Cliente", sortable: true, render: (row) => <span className="font-medium">{row.razon_social}</span> },
-                  { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
-                  { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
-                  { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
-                  { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
-                  { key: "saldo_cuenta_corriente", label: "Nos debe", className: "text-right", sortable: true, render: (row) => {
-                    const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
-                    return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
-                  }},
-                  { key: "cuit" as any, label: "Le debemos", className: "text-right", sortable: false, render: (row) => {
-                    const saldoProv = row.cuit ? cuitToSaldoProveedor[row.cuit] : undefined;
-                    if (saldoProv === undefined || saldoProv === 0) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
-                    return <span className="font-mono font-semibold text-red-600">{formatCurrency(saldoProv)}</span>;
-                  }},
-                  { key: "id" as any, label: "Neto", className: "text-right", sortable: false, render: (row) => {
-                    const saldoProv = row.cuit ? (cuitToSaldoProveedor[row.cuit] ?? 0) : 0;
-                    if (!row.cuit || !cuitToSaldoProveedor[row.cuit]) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
-                    const neto = row.saldo_cuenta_corriente - saldoProv;
-                    return <span className={`font-mono font-bold ${neto >= 0 ? "text-emerald-600" : "text-red-600"}`}>{neto >= 0 ? "+" : ""}{formatCurrency(neto)}</span>;
-                  }},
-                ]}
-                data={filteredCcClientes}
-              />
-            </Card>
+            {!ccDetailCliente ? (
+              <>
+                <div className="mb-4 flex items-center gap-2">
+                  <div className="relative flex-1 max-w-sm">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+                    <input value={ccClienteSearch} onChange={(e) => setCcClienteSearch(e.target.value)}
+                      placeholder="Buscar por nombre o CUIT..."
+                      className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  </div>
+                  {ccClienteSearch && <span className="text-xs text-zinc-500">{filteredCcClientes.length} de {ccClientes.length}</span>}
+                </div>
+                <Card className="p-0 overflow-hidden">
+                  <DataTable<CCRow>
+                    columns={[
+                      { key: "razon_social", label: "Cliente", sortable: true, render: (row) => <span className="font-medium">{row.razon_social}</span> },
+                      { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
+                      { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
+                      { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
+                      { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
+                      { key: "saldo_cuenta_corriente", label: "Nos debe", className: "text-right", sortable: true, render: (row) => {
+                        const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
+                        return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                      }},
+                      { key: "cuit" as any, label: "Le debemos", className: "text-right", sortable: false, render: (row) => {
+                        const saldoProv = row.cuit ? cuitToSaldoProveedor[row.cuit] : undefined;
+                        if (saldoProv === undefined || saldoProv === 0) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+                        return <span className="font-mono font-semibold text-red-600">{formatCurrency(saldoProv)}</span>;
+                      }},
+                      { key: "id" as any, label: "Neto", className: "text-right", sortable: false, render: (row) => {
+                        const saldoProv = row.cuit ? (cuitToSaldoProveedor[row.cuit] ?? 0) : 0;
+                        if (!row.cuit || !cuitToSaldoProveedor[row.cuit]) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+                        const neto = row.saldo_cuenta_corriente - saldoProv;
+                        return <span className={`font-mono font-bold ${neto >= 0 ? "text-emerald-600" : "text-red-600"}`}>{neto >= 0 ? "+" : ""}{formatCurrency(neto)}</span>;
+                      }},
+                    ]}
+                    data={filteredCcClientes}
+                    onRowClick={(row) => fetchCCDetailCliente(row)}
+                  />
+                </Card>
+              </>
+            ) : (
+              <>
+                {/* Detail view for a single client */}
+                <div className="mb-4 flex items-center gap-3">
+                  <button onClick={() => setCcDetailCliente(null)} className="flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">
+                    <X className="h-4 w-4" /> Volver
+                  </button>
+                  <h2 className="text-lg font-semibold">{ccDetailCliente.razon_social}</h2>
+                  {ccDetailCliente.cuit && <span className="font-mono text-xs text-zinc-500">CUIT: {ccDetailCliente.cuit}</span>}
+                  <span className="ml-auto font-mono text-lg font-bold text-red-600">Deuda: {formatCurrency(ccDetailCliente.saldo_cuenta_corriente)}</span>
+                </div>
+                <div className="flex gap-2 mb-4">
+                  <button onClick={openCobroMultiple} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+                    <DollarSign className="h-4 w-4" /> Realizar cobro
+                  </button>
+                  <button onClick={() => openManualMovForCliente(ccDetailCliente)} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                    <Plus className="h-4 w-4" /> Movimiento manual
+                  </button>
+                </div>
+
+                {ccDetailLoading ? (
+                  <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /><span className="ml-2 text-sm text-zinc-500">Cargando estado de cuenta...</span></div>
+                ) : (
+                  <>
+                    <h3 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400 mb-2">Facturas ({ccDetailFacturas.length})</h3>
+                    <Card className="p-0 overflow-hidden mb-4">
+                      <DataTable<CCFacturaRow>
+                        columns={[
+                          { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-sm">{formatDate(row.fecha)}</span> },
+                          { key: "vencimiento" as any, label: "Vencimiento", render: (row) => <span className={`text-sm ${row.vencimiento && row.vencimiento < new Date().toISOString().slice(0, 10) && row.estado !== "pagada" ? "text-red-600 font-semibold" : ""}`}>{row.vencimiento ? formatDate(row.vencimiento) : "—"}</span> },
+                          { key: "numero", label: "Comprobante", sortable: true, render: (row) => <span className="font-mono text-xs">{row.tipo}{String(row.punto_venta).padStart(5, "0")}-{String(row.numero).padStart(8, "0")}</span> },
+                          { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.total, row.moneda as "ARS" | "USD")}</span> },
+                          { key: "total_acreditado" as any, label: "Saldo", className: "text-right", render: (row) => { const saldo = row.total - row.total_acreditado; return <span className={`font-mono font-semibold block text-right ${saldo > 0 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(saldo, row.moneda as "ARS" | "USD")}</span>; }},
+                          { key: "estado", label: "Estado", render: (row) => { const cfg: Record<string, { label: string; variant: "success" | "warning" | "danger" | "outline" }> = { pagada: { label: "Pagada", variant: "success" }, parcial: { label: "Parcial", variant: "warning" }, emitida: { label: "Pendiente", variant: "danger" } }; const c = cfg[row.estado] || { label: row.estado, variant: "outline" as const }; return <Badge variant={c.variant}>{c.label}</Badge>; }},
+                        ]}
+                        data={ccDetailFacturas}
+                        emptyMessage="Sin facturas registradas"
+                      />
+                    </Card>
+
+                    <h3 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400 mb-2">Movimientos ({ccDetailMovimientos.length})</h3>
+                    <Card className="p-0 overflow-hidden">
+                      <DataTable<CCMovRow>
+                        columns={[
+                          { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-sm">{formatDate(row.fecha)}</span> },
+                          { key: "tipo", label: "Tipo", render: (row) => { const tc = tipoConfig[row.tipo] || { label: row.tipo, variant: "outline" as const, icon: Wallet }; return <Badge variant={tc.variant}>{tc.label}</Badge>; }},
+                          { key: "descripcion", label: "Descripcion", render: (row) => <span className="text-sm text-zinc-600 dark:text-zinc-400 max-w-xs truncate block">{row.descripcion}</span> },
+                          { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className={`font-mono font-semibold block text-right ${row.tipo === "cobro" || row.tipo === "cheque_recibido" ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(row.monto, row.moneda as "ARS" | "USD")}</span> },
+                          { key: "referencia", label: "Ref.", render: (row) => row.referencia ? <span className="text-xs text-zinc-400">{row.referencia}</span> : <span className="text-xs text-zinc-300">—</span> },
+                        ]}
+                        data={ccDetailMovimientos}
+                        emptyMessage="Sin movimientos registrados"
+                      />
+                    </Card>
+                  </>
+                )}
+              </>
+            )}
           </>
         )}
 
         {/* ── CC Proveedores ── */}
         {tab === "cc_proveedores" && (
           <>
-            <div className="mb-4 flex items-center gap-2">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-                <input value={ccProveedorSearch} onChange={(e) => setCcProveedorSearch(e.target.value)}
-                  placeholder="Buscar por nombre o CUIT..."
-                  className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+            {!ccDetailProveedor ? (<>
+              <div className="mb-4 flex items-center gap-2">
+                <div className="relative flex-1 max-w-sm">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+                  <input value={ccProveedorSearch} onChange={(e) => setCcProveedorSearch(e.target.value)} placeholder="Buscar por nombre o CUIT..." className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+                {ccProveedorSearch && <span className="text-xs text-zinc-500">{filteredCcProveedores.length} de {ccProveedores.length}</span>}
               </div>
-              {ccProveedorSearch && <span className="text-xs text-zinc-500">{filteredCcProveedores.length} de {ccProveedores.length}</span>}
-            </div>
-            <Card className="p-0 overflow-hidden">
-              <DataTable<CCRow>
-                columns={[
-                  { key: "razon_social", label: "Proveedor", sortable: true, render: (row) => <span className="font-medium">{row.razon_social}</span> },
-                  { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
-                  { key: "rubro", label: "Rubro", render: (row) => <Badge variant="info">{(row.rubro ?? "").split(" ")[0]}</Badge> },
-                  { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
-                  { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
-                  { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
-                  { key: "saldo_cuenta_corriente", label: "Le debemos", className: "text-right", sortable: true, render: (row) => {
-                    const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
-                    return (<div className="text-right"><span className={`font-mono font-semibold text-red-600`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
-                  }},
-                  { key: "cuit" as any, label: "Nos debe", className: "text-right", sortable: false, render: (row) => {
-                    const saldoCli = row.cuit ? cuitToSaldoCliente[row.cuit] : undefined;
-                    if (saldoCli === undefined || saldoCli === 0) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
-                    return <span className="font-mono font-semibold text-emerald-600">{formatCurrency(saldoCli)}</span>;
-                  }},
-                  { key: "id" as any, label: "Neto", className: "text-right", sortable: false, render: (row) => {
-                    const saldoCli = row.cuit ? (cuitToSaldoCliente[row.cuit] ?? 0) : 0;
-                    if (!row.cuit || !cuitToSaldoCliente[row.cuit]) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
-                    const neto = saldoCli - row.saldo_cuenta_corriente;
-                    return <span className={`font-mono font-bold ${neto >= 0 ? "text-emerald-600" : "text-red-600"}`}>{neto >= 0 ? "+" : ""}{formatCurrency(neto)}</span>;
-                  }},
-                ]}
-                data={filteredCcProveedores}
-              />
-            </Card>
+              <Card className="p-0 overflow-hidden">
+                <DataTable<CCRow>
+                  columns={[
+                    { key: "razon_social", label: "Proveedor", sortable: true, render: (row) => <span className="font-medium">{row.razon_social}</span> },
+                    { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
+                    { key: "rubro", label: "Rubro", render: (row) => <Badge variant="info">{(row.rubro ?? "").split(" ")[0]}</Badge> },
+                    { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
+                    { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
+                    { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
+                    { key: "saldo_cuenta_corriente", label: "Le debemos", className: "text-right", sortable: true, render: (row) => {
+                      const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
+                      return (<div className="text-right"><span className={`font-mono font-semibold text-red-600`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                    }},
+                    { key: "cuit" as any, label: "Nos debe", className: "text-right", sortable: false, render: (row) => {
+                      const saldoCli = row.cuit ? cuitToSaldoCliente[row.cuit] : undefined;
+                      if (saldoCli === undefined || saldoCli === 0) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+                      return <span className="font-mono font-semibold text-emerald-600">{formatCurrency(saldoCli)}</span>;
+                    }},
+                    { key: "id" as any, label: "Neto", className: "text-right", sortable: false, render: (row) => {
+                      const saldoCli = row.cuit ? (cuitToSaldoCliente[row.cuit] ?? 0) : 0;
+                      if (!row.cuit || !cuitToSaldoCliente[row.cuit]) return <span className="text-xs text-zinc-300 dark:text-zinc-600">—</span>;
+                      const neto = saldoCli - row.saldo_cuenta_corriente;
+                      return <span className={`font-mono font-bold ${neto >= 0 ? "text-emerald-600" : "text-red-600"}`}>{neto >= 0 ? "+" : ""}{formatCurrency(neto)}</span>;
+                    }},
+                  ]}
+                  data={filteredCcProveedores}
+                  onRowClick={(row) => fetchCCDetailProveedor(row)}
+                />
+              </Card>
+            </>) : (<>
+              <div className="mb-4 flex items-center gap-3">
+                <button onClick={() => setCcDetailProveedor(null)} className="flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"><X className="h-4 w-4" /> Volver</button>
+                <h2 className="text-lg font-semibold">{ccDetailProveedor.razon_social}</h2>
+                {ccDetailProveedor.cuit && <span className="font-mono text-xs text-zinc-500">CUIT: {ccDetailProveedor.cuit}</span>}
+                <span className="ml-auto font-mono text-lg font-bold text-red-600">Deuda: {formatCurrency(ccDetailProveedor.saldo_cuenta_corriente)}</span>
+              </div>
+              <div className="flex gap-2 mb-4">
+                <button onClick={() => openManualMovForProveedor(ccDetailProveedor)} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"><Plus className="h-4 w-4" /> Movimiento manual</button>
+              </div>
+              {ccDetailProvLoading ? (
+                <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /><span className="ml-2 text-sm text-zinc-500">Cargando estado de cuenta...</span></div>
+              ) : (<>
+                <h3 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400 mb-2">Facturas de compra ({ccDetailFCProv.length})</h3>
+                <Card className="p-0 overflow-hidden mb-4">
+                  <DataTable<CCFCRow>
+                    columns={[
+                      { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-sm">{formatDate(row.fecha)}</span> },
+                      { key: "fecha_vencimiento" as any, label: "Vencimiento", render: (row) => <span className={`text-sm ${row.fecha_vencimiento && row.fecha_vencimiento < new Date().toISOString().slice(0, 10) && row.estado !== "pagada" ? "text-red-600 font-semibold" : ""}`}>{row.fecha_vencimiento ? formatDate(row.fecha_vencimiento) : "—"}</span> },
+                      { key: "numero_factura", label: "N. Factura", sortable: true, render: (row) => <span className="font-mono text-xs">{row.numero_factura}</span> },
+                      { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.total, row.moneda as "ARS" | "USD")}</span> },
+                      { key: "estado", label: "Estado", render: (row) => { const cfg: Record<string, { label: string; variant: "success" | "warning" | "danger" | "outline" }> = { pagada: { label: "Pagada", variant: "success" }, pendiente: { label: "Pendiente", variant: "danger" }, recibida: { label: "Recibida", variant: "warning" } }; const c = cfg[row.estado] || { label: row.estado, variant: "outline" as const }; return <Badge variant={c.variant}>{c.label}</Badge>; }},
+                    ]}
+                    data={ccDetailFCProv}
+                    emptyMessage="Sin facturas de compra"
+                  />
+                </Card>
+                <h3 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400 mb-2">Movimientos ({ccDetailMovProv.length})</h3>
+                <Card className="p-0 overflow-hidden">
+                  <DataTable<CCMovRow>
+                    columns={[
+                      { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-sm">{formatDate(row.fecha)}</span> },
+                      { key: "tipo", label: "Tipo", render: (row) => { const tc = tipoConfig[row.tipo] || { label: row.tipo, variant: "outline" as const, icon: Wallet }; return <Badge variant={tc.variant}>{tc.label}</Badge>; }},
+                      { key: "descripcion", label: "Descripcion", render: (row) => <span className="text-sm text-zinc-600 dark:text-zinc-400 max-w-xs truncate block">{row.descripcion}</span> },
+                      { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className={`font-mono font-semibold block text-right ${row.tipo === "pago" ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(row.monto, row.moneda as "ARS" | "USD")}</span> },
+                      { key: "referencia", label: "Ref.", render: (row) => row.referencia ? <span className="text-xs text-zinc-400">{row.referencia}</span> : <span className="text-xs text-zinc-300">—</span> },
+                    ]}
+                    data={ccDetailMovProv}
+                    emptyMessage="Sin movimientos registrados"
+                  />
+                </Card>
+              </>)}
+            </>)}
           </>
         )}
 
@@ -2588,12 +2860,17 @@ ${certRetGanHtml}
               </div>
               <button onClick={() => { setEcheqForm(emptyEcheqForm); setEcheqError(""); setEcheqClienteSearch(""); setEcheqModalOpen(true); }}
                 className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">
-                <Plus className="h-4 w-4" /> Registrar echeq
+                <Plus className="h-4 w-4" /> Registrar cheque
               </button>
             </div>
             <Card className="p-0 overflow-hidden">
               <DataTable<EcheqRow>
                 columns={[
+                  { key: "tipo_cheque" as any, label: "Tipo", sortable: true, render: (row) => (
+                    <Badge variant={row.tipo_cheque === "echeq" ? "info" : "outline"}>
+                      {row.tipo_cheque === "echeq" ? "E-Cheq" : "Físico"}
+                    </Badge>
+                  )},
                   { key: "numero", label: "Número", sortable: true, render: (row) => <span className="font-mono font-medium">{row.numero}</span> },
                   { key: "banco_emisor", label: "Banco", sortable: true, render: (row) => <span className="text-zinc-500">{row.banco_emisor || "—"}</span> },
                   { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.monto, row.moneda)}</span> },
@@ -2619,7 +2896,7 @@ ${certRetGanHtml}
                   )},
                 ]}
                 data={filteredEcheqs}
-                emptyMessage="No hay echeqs registrados"
+                emptyMessage="No hay cheques registrados"
               />
             </Card>
           </>
@@ -2631,11 +2908,25 @@ ${certRetGanHtml}
             <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setEcheqModalOpen(false)} />
             <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-bold dark:text-white">Registrar Echeq</h2>
+                <h2 className="text-lg font-bold dark:text-white">Registrar Cheque</h2>
                 <button onClick={() => setEcheqModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
               </div>
               {echeqError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{echeqError}</div>}
               <div className="space-y-4">
+                {/* Tipo de cheque */}
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Tipo de cheque</label>
+                  <div className="flex gap-2 mt-1">
+                    <button type="button" onClick={() => setEcheqForm({ ...echeqForm, tipo_cheque: "echeq" })}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${echeqForm.tipo_cheque === "echeq" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                      E-Cheq (electrónico)
+                    </button>
+                    <button type="button" onClick={() => setEcheqForm({ ...echeqForm, tipo_cheque: "fisico" })}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${echeqForm.tipo_cheque === "fisico" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                      Cheque físico
+                    </button>
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs font-medium text-zinc-500">Número *</label>
@@ -2720,8 +3011,8 @@ ${certRetGanHtml}
           <>
             <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setEcheqActionModal(null)} />
             <div className="fixed inset-4 z-50 m-auto h-fit max-h-[70vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
-              <h2 className="text-lg font-bold mb-4 dark:text-white">{echeqActionModal === "endosar" ? "Endosar echeq" : "Depositar echeq"}</h2>
-              <p className="text-sm text-zinc-500 mb-4">Echeq #{selectedEcheq.numero} — {formatCurrency(selectedEcheq.monto, selectedEcheq.moneda)}</p>
+              <h2 className="text-lg font-bold mb-4 dark:text-white">{echeqActionModal === "endosar" ? "Endosar cheque" : "Depositar cheque"}</h2>
+              <p className="text-sm text-zinc-500 mb-4">Cheque #{selectedEcheq.numero} — {formatCurrency(selectedEcheq.monto, selectedEcheq.moneda)}</p>
               <div className="space-y-4">
                 {echeqActionModal === "endosar" && (
                   <div>
@@ -2759,27 +3050,6 @@ ${certRetGanHtml}
               </div>
             </div>
           </>
-        )}
-
-        {/* ── E-Cheques (legacy mock) ── */}
-        {tab === "cheques" && (
-          <Card>
-            <CardHeader><CardTitle>E-Cheques</CardTitle></CardHeader>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
-                <p className="text-xs font-medium text-zinc-500 mb-3">Cheques recibidos</p>
-                {movimientos.filter((m) => m.tipo === "cheque_recibido").map((m) => (
-                  <div key={m.id} className="flex items-center justify-between rounded-lg bg-blue-50 p-3 mb-2"><div><p className="text-sm font-medium">{m.descripcion}</p><p className="text-xs text-zinc-400">{m.fecha}</p></div><span className="font-mono font-semibold text-blue-600">{formatCurrency(m.monto)}</span></div>
-                ))}
-              </div>
-              <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
-                <p className="text-xs font-medium text-zinc-500 mb-3">Cheques emitidos</p>
-                {movimientos.filter((m) => m.tipo === "cheque_emitido").map((m) => (
-                  <div key={m.id} className="flex items-center justify-between rounded-lg bg-amber-50 p-3 mb-2"><div><p className="text-sm font-medium">{m.descripcion}</p><p className="text-xs text-zinc-400">{m.fecha}</p></div><span className="font-mono font-semibold text-amber-600">{formatCurrency(m.monto)}</span></div>
-                ))}
-              </div>
-            </div>
-          </Card>
         )}
 
         {/* ── Extractos bancarios ── */}
@@ -2879,8 +3149,8 @@ ${certRetGanHtml}
           </>
         )}
 
-        {/* ── Vencimientos ── */}
-        {tab === "vencimientos" && (() => {
+        {/* Vencimientos tab removed — functionality accessible from FC tab */}
+        {false && (() => {
           const today = new Date();
           today.setHours(0, 0, 0, 0);
           const endOfWeek = new Date(today);
@@ -3452,24 +3722,9 @@ ${certRetGanHtml}
                 </div>
               )}
 
-              {/* ── Retenciones ── */}
+              {/* ── Retención Ganancias ── */}
               {opMontoBruto > 0 && (
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <label className="text-xs font-medium text-zinc-500">Ret. IVA (%)</label>
-                      {opForm.retencion_pct > 0 && <span className="text-xs bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400 px-1.5 py-0.5 rounded font-medium">Auto</span>}
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <input type="number" step="0.5" value={opForm.retencion_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_pct: Number(e.target.value) })}
-                        className="w-20 rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                      <span className="text-xs text-zinc-400">%</span>
-                      {[2, 3, 6].map(pct => (
-                        <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, retencion_pct: pct })}
-                          className={`rounded px-1.5 py-0.5 text-xs font-medium ${opForm.retencion_pct === pct ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>{pct}%</button>
-                      ))}
-                    </div>
-                  </div>
+                <div>
                   <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3">
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-semibold text-violet-700 dark:text-violet-300 flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" />Ret. Ganancias</label>
@@ -3493,11 +3748,31 @@ ${certRetGanHtml}
                 </div>
               )}
 
+              {/* ── Monto manual override ── */}
+              {opForm.proveedor_id && (
+                <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-300">Monto manual (sin facturas)</label>
+                    <button type="button" onClick={() => setOpForm({ ...opForm, usar_monto_manual: !opForm.usar_monto_manual, monto_manual: 0 })}
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full ${opForm.usar_monto_manual ? "bg-orange-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
+                      <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${opForm.usar_monto_manual ? "translate-x-4.5" : "translate-x-0.5"}`} />
+                    </button>
+                  </div>
+                  {opForm.usar_monto_manual && (
+                    <div className="flex items-center gap-2 mt-2">
+                      <input type="number" value={opForm.monto_manual || ""} onChange={(e) => setOpForm({ ...opForm, monto_manual: Number(e.target.value) })}
+                        placeholder="Monto a pagar" className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      <span className="text-xs text-zinc-400 whitespace-nowrap">{opForm.moneda}</span>
+                    </div>
+                  )}
+                  <p className="text-xs text-zinc-400 mt-1">Activar para ingresar un monto libre sin vincular facturas</p>
+                </div>
+              )}
+
               {/* ── Resumen ── */}
               {opMontoBruto > 0 && (
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1">
-                  <div className="flex justify-between text-sm"><span className="text-zinc-500">Documentos</span><span className="font-mono">{formatCurrency(opMontoBruto, opForm.moneda)}</span></div>
-                  {opRetencion > 0 && <div className="flex justify-between text-sm"><span className="text-zinc-500">Ret. IVA ({opForm.retencion_pct}%)</span><span className="font-mono text-amber-600">- {formatCurrency(opRetencion, opForm.moneda)}</span></div>}
+                  <div className="flex justify-between text-sm"><span className="text-zinc-500">{opForm.usar_monto_manual ? "Monto" : "Documentos"}</span><span className="font-mono">{formatCurrency(opMontoBruto, opForm.moneda)}</span></div>
                   {opRetencionGanancias > 0 && <div className="flex justify-between text-sm"><span className="text-zinc-500 flex items-center gap-1"><ShieldCheck className="h-3 w-3 text-violet-500" />Ret. Ganancias ({opForm.retencion_ganancias_pct}%)</span><span className="font-mono text-violet-600">- {formatCurrency(opRetencionGanancias, opForm.moneda)}</span></div>}
                   <div className="flex justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1.5">
                     <span className="text-zinc-700 dark:text-white">Neto a pagar</span>
@@ -3593,7 +3868,7 @@ ${certRetGanHtml}
             </div>
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
               <button onClick={() => setOpModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
-              <button onClick={handleCreateOP} disabled={opSaving || !opForm.proveedor_id || opMontoBruto <= 0}
+              <button onClick={handleCreateOP} disabled={opSaving || !opForm.proveedor_id || (opMontoBruto <= 0)}
                 className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {opSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                 Crear Orden de Pago
@@ -4032,12 +4307,6 @@ ${certRetGanHtml}
                     <span className="text-zinc-500">Monto bruto</span>
                     <span className="font-mono font-semibold dark:text-white">{formatCurrency(selectedOP.monto_bruto, selectedOP.moneda)}</span>
                   </div>
-                  {selectedOP.monto_retencion > 0 && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-500">Retención ({selectedOP.retencion_pct}%)</span>
-                      <span className="font-mono text-amber-600">- {formatCurrency(selectedOP.monto_retencion, selectedOP.moneda)}</span>
-                    </div>
-                  )}
                   {selectedOP.retencion_ganancias_monto > 0 && (
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-zinc-500 flex items-center gap-1">
@@ -4047,10 +4316,10 @@ ${certRetGanHtml}
                       <span className="font-mono text-violet-600">- {formatCurrency(selectedOP.retencion_ganancias_monto, selectedOP.moneda)}</span>
                     </div>
                   )}
-                  {(selectedOP.monto_retencion > 0 || selectedOP.retencion_ganancias_monto > 0) && (
+                  {selectedOP.retencion_ganancias_monto > 0 && (
                     <div className="flex items-center justify-between text-sm border-t border-zinc-100 dark:border-zinc-700 pt-2">
                       <span className="text-zinc-500">Total retenciones</span>
-                      <span className="font-mono text-amber-600 font-medium">- {formatCurrency(selectedOP.monto_retencion + selectedOP.retencion_ganancias_monto, selectedOP.moneda)}</span>
+                      <span className="font-mono text-amber-600 font-medium">- {formatCurrency(selectedOP.retencion_ganancias_monto, selectedOP.moneda)}</span>
                     </div>
                   )}
                   <div className="flex items-center justify-between text-base font-bold border-t border-zinc-200 dark:border-zinc-700 pt-2">
@@ -4077,7 +4346,7 @@ ${certRetGanHtml}
               </div>
 
               {/* Certificado de retención */}
-              {(selectedOP.retencion_ganancias_monto > 0 || selectedOP.monto_retencion > 0) && (
+              {selectedOP.retencion_ganancias_monto > 0 && (
                 <div className="rounded-lg border border-violet-200 dark:border-violet-800 overflow-hidden">
                   <div className="bg-violet-50 dark:bg-violet-950/30 px-4 py-2">
                     <p className="text-xs font-semibold text-violet-600 dark:text-violet-400 uppercase tracking-wide flex items-center gap-1.5">
@@ -4212,11 +4481,54 @@ ${certRetGanHtml}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-medium text-zinc-500">Categoría</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-zinc-500">Categoría</label>
+                    <button type="button" onClick={() => setShowCategoriaManager(!showCategoriaManager)} className="text-[10px] text-orange-500 hover:text-orange-600 font-medium">
+                      {showCategoriaManager ? "Cerrar" : "Gestionar"}
+                    </button>
+                  </div>
                   <select value={gmForm.categoria} onChange={(e) => setGmForm({ ...gmForm, categoria: e.target.value })}
                     className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                    {GASTO_CATEGORIAS.map(c => <option key={c} value={c}>{c}</option>)}
+                    {gastoCategorias.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
+                  {showCategoriaManager && (
+                    <div className="mt-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2 space-y-2">
+                      <div className="flex items-center gap-1">
+                        <input value={newCategoriaInput} onChange={(e) => setNewCategoriaInput(e.target.value)}
+                          placeholder="Nueva categoría" className="flex-1 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && newCategoriaInput.trim()) {
+                              const updated = [...gastoCategorias, newCategoriaInput.trim()];
+                              setGastoCategorias(updated);
+                              setNewCategoriaInput("");
+                              // Save to configuracion
+                              (supabase as any).from("configuracion").upsert({ key: "gasto_categorias", value: JSON.stringify(updated), sociedad_id: sociedadActiva?.id }, { onConflict: "key,sociedad_id" });
+                            }
+                          }} />
+                        <button type="button" onClick={() => {
+                          if (!newCategoriaInput.trim()) return;
+                          const updated = [...gastoCategorias, newCategoriaInput.trim()];
+                          setGastoCategorias(updated);
+                          setNewCategoriaInput("");
+                          (supabase as any).from("configuracion").upsert({ key: "gasto_categorias", value: JSON.stringify(updated), sociedad_id: sociedadActiva?.id }, { onConflict: "key,sociedad_id" });
+                        }} className="rounded bg-orange-500 px-2 py-1 text-xs text-white hover:bg-orange-600"><Plus className="h-3 w-3" /></button>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {gastoCategorias.map(c => (
+                          <span key={c} className="inline-flex items-center gap-1 rounded-full bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-xs text-zinc-600 dark:text-zinc-300">
+                            {c}
+                            <button type="button" onClick={() => {
+                              const updated = gastoCategorias.filter(x => x !== c);
+                              if (updated.length === 0) return;
+                              setGastoCategorias(updated);
+                              if (gmForm.categoria === c) setGmForm({ ...gmForm, categoria: updated[0] });
+                              (supabase as any).from("configuracion").upsert({ key: "gasto_categorias", value: JSON.stringify(updated), sociedad_id: sociedadActiva?.id }, { onConflict: "key,sociedad_id" });
+                            }} className="text-zinc-400 hover:text-red-500"><X className="h-2.5 w-2.5" /></button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-medium text-zinc-500">Tipo de gasto</label>
@@ -4224,6 +4536,21 @@ ${certRetGanHtml}
                     className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                     {TIPO_GASTO_OPTIONS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
+                </div>
+              </div>
+
+              {/* Fijo / Eventual */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Recurrencia</label>
+                <div className="flex gap-2 mt-1">
+                  <button type="button" onClick={() => setGmForm({ ...gmForm, tipo_recurrencia: "eventual" })}
+                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${gmForm.tipo_recurrencia === "eventual" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                    Eventual
+                  </button>
+                  <button type="button" onClick={() => setGmForm({ ...gmForm, tipo_recurrencia: "fijo" })}
+                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${gmForm.tipo_recurrencia === "fijo" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                    Fijo (mensual)
+                  </button>
                 </div>
               </div>
 
@@ -4280,6 +4607,151 @@ ${certRetGanHtml}
                 className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {gmSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                 Crear gasto
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Cobro Multiple Modal ── */}
+      {cobroMultiOpen && ccDetailCliente && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setCobroMultiOpen(false)} />
+          <div className="fixed inset-y-0 right-0 z-50 w-full max-w-2xl bg-white shadow-xl dark:bg-zinc-900 overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-lg font-semibold">Cobro multiple — {ccDetailCliente.razon_social}</h2>
+                <button onClick={() => setCobroMultiOpen(false)} className="text-zinc-400 hover:text-zinc-600"><X className="h-5 w-5" /></button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Monto total</label>
+                  <input type="number" value={cobroMultiMonto || ""} onChange={(e) => distribuirCobroMultiple(Number(e.target.value))}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0.00" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Medio de pago</label>
+                  <select value={cobroMultiMedio} onChange={(e) => setCobroMultiMedio(e.target.value as any)}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    <option value="transferencia">Transferencia</option>
+                    <option value="efectivo">Efectivo</option>
+                    <option value="cheque_recibido">Cheque</option>
+                    <option value="deposito">Deposito</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Fecha</label>
+                  <input type="date" value={cobroMultiFecha} onChange={(e) => setCobroMultiFecha(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
+              </div>
+              <div className="mb-4">
+                <label className="text-xs font-medium text-zinc-500">Descripcion (opcional)</label>
+                <input value={cobroMultiDesc} onChange={(e) => setCobroMultiDesc(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Descripcion del cobro..." />
+              </div>
+
+              <h3 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400 mb-2">Facturas pendientes</h3>
+              <div className="border rounded-lg dark:border-zinc-700 overflow-hidden mb-4">
+                <table className="w-full text-sm">
+                  <thead className="bg-zinc-50 dark:bg-zinc-800">
+                    <tr>
+                      <th className="px-3 py-2 text-left w-8"><input type="checkbox" checked={cobroMultiFCs.length > 0 && cobroMultiFCs.every(f => f.selected)} onChange={(e) => { const sel = e.target.checked; setCobroMultiFCs(prev => prev.map(f => ({ ...f, selected: sel }))); if (sel && cobroMultiMonto > 0) distribuirCobroMultiple(cobroMultiMonto); }} /></th>
+                      <th className="px-3 py-2 text-left">Comprobante</th>
+                      <th className="px-3 py-2 text-left">Fecha</th>
+                      <th className="px-3 py-2 text-right">Total</th>
+                      <th className="px-3 py-2 text-right">Saldo</th>
+                      <th className="px-3 py-2 text-right">A cobrar</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cobroMultiFCs.map((fc, idx) => (
+                      <tr key={fc.id} className={`border-t dark:border-zinc-700 ${fc.selected ? "bg-emerald-50 dark:bg-emerald-900/20" : ""}`}>
+                        <td className="px-3 py-2"><input type="checkbox" checked={fc.selected} onChange={(e) => { const newFCs = [...cobroMultiFCs]; newFCs[idx] = { ...newFCs[idx], selected: e.target.checked }; setCobroMultiFCs(newFCs); if (cobroMultiMonto > 0) { let restante = cobroMultiMonto; setCobroMultiFCs(newFCs.map(f => { if (!f.selected) return { ...f, monto_a_cobrar: 0 }; const aplicar = Math.min(restante, f.saldo); restante = Math.max(0, restante - aplicar); return { ...f, monto_a_cobrar: Math.round(aplicar * 100) / 100 }; })); } }} /></td>
+                        <td className="px-3 py-2 font-mono text-xs">{fc.tipo}{String(fc.punto_venta).padStart(5, "0")}-{String(fc.numero).padStart(8, "0")}</td>
+                        <td className="px-3 py-2">{formatDate(fc.fecha)}</td>
+                        <td className="px-3 py-2 text-right font-mono">{formatCurrency(fc.total, fc.moneda as "ARS" | "USD")}</td>
+                        <td className="px-3 py-2 text-right font-mono text-red-600">{formatCurrency(fc.saldo, fc.moneda as "ARS" | "USD")}</td>
+                        <td className="px-3 py-2 text-right font-mono font-semibold text-emerald-600">{fc.monto_a_cobrar > 0 ? formatCurrency(fc.monto_a_cobrar, fc.moneda as "ARS" | "USD") : "—"}</td>
+                      </tr>
+                    ))}
+                    {cobroMultiFCs.length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-zinc-400">No hay facturas pendientes</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex items-center justify-between border-t pt-4 dark:border-zinc-700">
+                <div className="text-sm text-zinc-500">
+                  Total a cobrar: <span className="font-mono font-bold text-emerald-600">{formatCurrency(cobroMultiFCs.filter(f => f.selected).reduce((s, f) => s + f.monto_a_cobrar, 0))}</span>
+                  {" "}({cobroMultiFCs.filter(f => f.selected && f.monto_a_cobrar > 0).length} facturas)
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={() => setCobroMultiOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
+                  <button onClick={handleCobroMultiple} disabled={cobroMultiSaving || cobroMultiFCs.filter(f => f.selected && f.monto_a_cobrar > 0).length === 0}
+                    className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+                    {cobroMultiSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Registrar cobro
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── Manual Movement Modal ── */}
+      {manualMovOpen && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setManualMovOpen(false)} />
+          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Movimiento manual</h2>
+              <button onClick={() => setManualMovOpen(false)} className="text-zinc-400 hover:text-zinc-600"><X className="h-5 w-5" /></button>
+            </div>
+            <p className="text-sm text-zinc-500 mb-4">{manualMovTarget === "cliente" ? "Cliente" : "Proveedor"}: <span className="font-medium text-zinc-800 dark:text-zinc-200">{manualMovTargetName}</span></p>
+            {manualMovError && <p className="mb-3 text-sm text-red-500">{manualMovError}</p>}
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Tipo</label>
+                <select value={manualMovForm.tipo_mov} onChange={(e) => setManualMovForm({ ...manualMovForm, tipo_mov: e.target.value as "credito" | "debito" })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="credito">Credito (a favor del {manualMovTarget === "cliente" ? "cliente" : "proveedor"})</option>
+                  <option value="debito">Debito (cargo al {manualMovTarget === "cliente" ? "cliente" : "proveedor"})</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Monto</label>
+                  <input type="number" value={manualMovForm.monto || ""} onChange={(e) => setManualMovForm({ ...manualMovForm, monto: Number(e.target.value) })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0.00" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Moneda</label>
+                  <select value={manualMovForm.moneda} onChange={(e) => setManualMovForm({ ...manualMovForm, moneda: e.target.value as "ARS" | "USD" })}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    <option value="ARS">ARS</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Fecha</label>
+                <input type="date" value={manualMovForm.fecha} onChange={(e) => setManualMovForm({ ...manualMovForm, fecha: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Descripcion</label>
+                <input value={manualMovForm.descripcion} onChange={(e) => setManualMovForm({ ...manualMovForm, descripcion: e.target.value })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Ajuste de saldo, nota de credito..." />
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+              <button onClick={() => setManualMovOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
+              <button onClick={handleManualMov} disabled={manualMovSaving || manualMovForm.monto <= 0 || !manualMovForm.descripcion.trim()}
+                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                {manualMovSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                Registrar movimiento
               </button>
             </div>
           </div>
