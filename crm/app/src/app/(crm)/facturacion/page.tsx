@@ -381,8 +381,9 @@ export default function FacturacionPage() {
     const forceManual = arcaStatus !== null && arcaStatus.certOk === false;
     setEmitManual(forceManual);
     setCotizBna(null);
+    const tipoInicial = prefill?.tipo || (forceManual ? "X" : "FB");
     setEmitData({
-      tipo: prefill?.tipo || (forceManual ? "X" : "FB"),
+      tipo: tipoInicial,
       cliente_id: prefill?.cliente_id || "",
       punto_venta: emisorData.ptoVta,
       numero_manual: "",
@@ -398,6 +399,15 @@ export default function FacturacionPage() {
     const q = supabase.from("clientes").select("id, razon_social, cuit, condicion_iva").eq("activo", true).order("razon_social");
     (sociedadActiva?.id ? q.eq("sociedad_id" as any, sociedadActiva.id) : q)
       .then(({ data }) => { if (data) setClientes(data as ClienteOption[]); });
+    // Auto-fill next correlative number
+    (async () => {
+      try {
+        const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, tipoInicial).eq("punto_venta" as any, emisorData.ptoVta).order("numero", { ascending: false }).limit(1);
+        if (last && last.length > 0) {
+          setEmitData(prev => ({ ...prev, numero_manual: String(Number(last[0].numero) + 1) }));
+        }
+      } catch { /* ignore */ }
+    })();
   };
 
   const addItem = () => setEmitData((p) => ({ ...p, items: [...p.items, { descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] }));
@@ -1089,7 +1099,21 @@ ${f.cae ? `
                 <div className="grid grid-cols-12 gap-4">
                   <div className="col-span-3">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Tipo *</label>
-                    <select value={emitData.tipo} onChange={(e) => setEmitData((p) => ({ ...p, tipo: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                    <select value={emitData.tipo} onChange={(e) => {
+                      const newTipo = e.target.value;
+                      setEmitData((p) => ({ ...p, tipo: newTipo }));
+                      // Auto-update correlative number for new tipo
+                      (async () => {
+                        try {
+                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, newTipo).eq("punto_venta" as any, emitData.punto_venta).order("numero", { ascending: false }).limit(1);
+                          if (last && last.length > 0) {
+                            setEmitData(prev => ({ ...prev, numero_manual: String(Number(last[0].numero) + 1) }));
+                          } else {
+                            setEmitData(prev => ({ ...prev, numero_manual: "1" }));
+                          }
+                        } catch { /* ignore */ }
+                      })();
+                    }} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
                       {emitManual && (
                         <optgroup label="Manual (sin ARCA)">
                           <option value="X">Factura X (interna)</option>
