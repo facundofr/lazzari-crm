@@ -18,6 +18,7 @@ import {
   BarChart3, ShoppingBag, CalendarDays, TrendingUp, Cake,
   User, FileText, CreditCard, StickyNote, Clock, Receipt, Truck, Wallet,
   ChevronDown, ChevronRight, Package, ExternalLink, Copy, AlertCircle,
+  Minimize2, Maximize2, Square,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
@@ -293,6 +294,7 @@ export default function ClientesPage() {
   // Detail
   const [selectedCliente, setSelectedCliente] = useState<ClienteExt | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("datos");
+  const [panelWidth, setPanelWidth] = useState<"normal" | "wide" | "full">("normal");
 
   // Timeline / Activity
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
@@ -1731,7 +1733,7 @@ export default function ClientesPage() {
       {selectedCliente && (
         <>
           <div className="fixed inset-0 z-40 bg-black/20 animate-fade-in" onClick={() => setSelectedCliente(null)} />
-          <div className="fixed right-0 top-0 z-50 h-full w-full max-w-xl overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right">
+          <div className={`fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right transition-[max-width] duration-200 ${panelWidth === "full" ? "max-w-4xl" : panelWidth === "wide" ? "max-w-2xl" : "max-w-xl"}`}>
             {/* Panel header with avatar */}
             <div className="sticky top-0 z-10 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-700">
               <div className="flex items-center gap-4 p-4 sm:p-6">
@@ -1743,6 +1745,11 @@ export default function ClientesPage() {
                   <p className="text-sm text-zinc-500">{selectedCliente.cuit ? (selectedCliente.cuit.replace(/\D/g, "").length <= 8 ? `DNI ${selectedCliente.cuit}` : selectedCliente.cuit) : "Sin CUIT/DNI"}</p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden mr-1">
+                    <button onClick={() => setPanelWidth("normal")} className={`p-1.5 transition-colors ${panelWidth === "normal" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Normal"><Minimize2 className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => setPanelWidth("wide")} className={`p-1.5 transition-colors ${panelWidth === "wide" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Ancho"><Maximize2 className="h-3.5 w-3.5" /></button>
+                    <button onClick={() => setPanelWidth("full")} className={`p-1.5 transition-colors ${panelWidth === "full" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Completo"><Square className="h-3.5 w-3.5" /></button>
+                  </div>
                   <button onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors" title="Editar">
                     <Pencil className="h-4 w-4" />
                   </button>

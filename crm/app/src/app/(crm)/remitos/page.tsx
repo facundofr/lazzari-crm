@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin } from "lucide-react";
+import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Minimize2, Maximize2, Square } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -129,6 +129,7 @@ export default function RemitosPage() {
   // Detail panel
   const [detailRemito, setDetailRemito] = useState<RemitoRow | null>(null);
   const [detailItems, setDetailItems] = useState<RemitoDetailItem[]>([]);
+  const [panelWidth, setPanelWidth] = useState<"normal" | "wide" | "full">("normal");
   const [detailLoading, setDetailLoading] = useState(false);
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [detailPRNumero, setDetailPRNumero] = useState<string | null>(null);
@@ -1109,7 +1110,7 @@ export default function RemitosPage() {
       {detailRemito && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-black/30" onClick={() => setDetailRemito(null)} />
-          <div className="relative w-full max-w-xl bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto">
+          <div className={`relative w-full bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto transition-[max-width] duration-200 ${panelWidth === "full" ? "max-w-4xl" : panelWidth === "wide" ? "max-w-2xl" : "max-w-xl"}`}>
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
               <div>
                 <div className="flex items-center gap-3">
@@ -1130,6 +1131,11 @@ export default function RemitosPage() {
                 <button onClick={handleDownloadPDF} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Descargar PDF">
                   <Download className="h-3.5 w-3.5" /> PDF
                 </button>
+                <div className="flex items-center border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
+                  <button onClick={() => setPanelWidth("normal")} className={`p-1.5 transition-colors ${panelWidth === "normal" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Normal"><Minimize2 className="h-3.5 w-3.5" /></button>
+                  <button onClick={() => setPanelWidth("wide")} className={`p-1.5 transition-colors ${panelWidth === "wide" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Ancho"><Maximize2 className="h-3.5 w-3.5" /></button>
+                  <button onClick={() => setPanelWidth("full")} className={`p-1.5 transition-colors ${panelWidth === "full" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Completo"><Square className="h-3.5 w-3.5" /></button>
+                </div>
                 <button onClick={() => setDetailRemito(null)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
                   <X className="h-5 w-5" />
                 </button>

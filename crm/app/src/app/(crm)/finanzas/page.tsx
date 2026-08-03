@@ -9,7 +9,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { formatCurrency } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -146,6 +146,7 @@ interface FacturaCompraRow {
   estado: "pendiente" | "pagada" | "anulada" | "recibida";
   tipo: "mercaderia" | "solo_iva";
   notas: string;
+  costo_real?: number;
   created_at: string;
   archivo_url?: string;
   archivo_nombre?: string;
@@ -172,6 +173,7 @@ const emptyFCForm = {
   cae: "",
   notas: "",
   solo_iva: false,
+  costo_real: 0,
 };
 
 interface FCItem {
@@ -432,6 +434,10 @@ export default function FinanzasPage() {
   const [fcProdSearch, setFcProdSearch] = useState("");
   const [fcProdFocused, setFcProdFocused] = useState(false);
   const [fcProductos, setFcProductos] = useState<{ id: string; codigo: string; nombre: string; precio_costo: number; unidad: string; stock: number }[]>([]);
+
+  // FC PDF parsing state
+  const [fcPdfParsing, setFcPdfParsing] = useState(false);
+  const [fcPdfFile, setFcPdfFile] = useState<File | null>(null);
 
   // Echeqs state
   const [echeqs, setEcheqs] = useState<EcheqRow[]>([]);
@@ -801,6 +807,7 @@ export default function FinanzasPage() {
               estado: r.estado ?? "pendiente", notas: r.notas ?? "",
               tipo: (r.tipo as "mercaderia" | "solo_iva") ?? (r.solo_iva ? "solo_iva" : "mercaderia"),
               created_at: r.created_at,
+              costo_real: Number(r.costo_real ?? 0),
               archivo_url: r.archivo_url ?? undefined,
               archivo_nombre: r.archivo_nombre ?? undefined,
               solo_iva: r.solo_iva ?? false,
@@ -1770,6 +1777,60 @@ ${certRetGanHtml}
     }
   }
 
+  async function handleParseFCPdf(file: File) {
+    setFcPdfParsing(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/parse-factura-compra", { method: "POST", body: formData });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "Error al procesar PDF");
+      const d = json.data;
+      // Auto-fill form fields
+      const updates: Partial<typeof fcForm> = {};
+      if (d.numero_factura) updates.numero_factura = d.numero_factura;
+      if (d.fecha) updates.fecha = d.fecha;
+      if (d.fecha_vencimiento) updates.fecha_vencimiento = d.fecha_vencimiento;
+      if (d.subtotal) updates.subtotal = Number(d.subtotal);
+      if (d.iva_porcentaje) updates.iva_porcentaje = Number(d.iva_porcentaje);
+      if (d.percepciones) updates.percepciones = Number(d.percepciones);
+      if (d.moneda) updates.moneda = d.moneda as "ARS" | "USD";
+      if (d.cae) updates.cae = d.cae;
+      if (d.notas) updates.notas = d.notas;
+      setFcForm(prev => ({ ...prev, ...updates }));
+      // Try to match proveedor by CUIT
+      if (d.proveedor?.cuit) {
+        const cuitClean = d.proveedor.cuit.replace(/\D/g, "");
+        const match = proveedoresOptions.find(p => p.cuit?.replace(/\D/g, "") === cuitClean);
+        if (match) {
+          setFcForm(prev => ({ ...prev, ...updates, proveedor_id: match.id }));
+          setFcProvSearch(match.razon_social);
+        }
+      }
+      // Auto-fill items if present
+      if (d.items && Array.isArray(d.items) && d.items.length > 0) {
+        const parsedItems: FCItem[] = d.items.map((it: { descripcion?: string; cantidad?: number; precio_unitario?: number; iva_porcentaje?: number; unidad?: string }, idx: number) => ({
+          tempId: `pdf-${Date.now()}-${idx}`,
+          producto_id: "",
+          codigo: "",
+          descripcion: it.descripcion || "",
+          cantidad: Number(it.cantidad) || 1,
+          precio_unitario: Number(it.precio_unitario) || 0,
+          unidad: it.unidad || "UN",
+          iva_porcentaje: Number(it.iva_porcentaje) || 21,
+        }));
+        setFcItems(parsedItems);
+      }
+      // Also set the uploaded PDF as attachment
+      setFcFile(file);
+      alert("Datos importados del PDF — verifica que sean correctos");
+    } catch (err) {
+      alert("Error al importar PDF: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setFcPdfParsing(false);
+    }
+  }
+
   async function handleCreateFC() {
     if (!fcForm.proveedor_id) { setFcError("Seleccioná un proveedor"); return; }
     if (!fcForm.numero_factura.trim()) { setFcError("El número de factura es obligatorio"); return; }
@@ -1797,6 +1858,7 @@ ${certRetGanHtml}
       if (fcForm.fecha_vencimiento) insertData.fecha_vencimiento = fcForm.fecha_vencimiento;
       if (fcForm.cae.trim()) insertData.cae = fcForm.cae.trim();
       if (fcForm.percepciones_detalle.length > 0) insertData.percepciones_detalle = JSON.stringify(fcForm.percepciones_detalle);
+      if (fcForm.costo_real > 0) insertData.costo_real = fcForm.costo_real;
       if (profile?.id) insertData.created_by = profile.id;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
 
@@ -1832,6 +1894,23 @@ ${certRetGanHtml}
           await (supabase as any).from("facturas_compra").update({ archivo_url: urlData.publicUrl, archivo_nombre: fcFile.name }).eq("id", fcData.id);
         }
         setFcUploading(false);
+      }
+
+      // Create gasto_manual for solo_iva with costo_real
+      if (fcForm.tipo_fc === "solo_iva" && fcForm.costo_real > 0 && fcData?.id) {
+        await (supabase as any).from("gastos_manuales").insert({
+          descripcion: `Compra credito fiscal IVA — FC ${fcForm.numero_factura.trim()}`,
+          categoria: "Impuestos",
+          monto: fcForm.costo_real,
+          moneda: fcForm.moneda,
+          fecha: fcForm.fecha,
+          proveedor_id: fcForm.proveedor_id,
+          sociedad_id: sociedadActiva?.id || null,
+          created_by: profile?.id || null,
+          tipo_recurrencia: "eventual",
+          tipo_gasto: "Compra IVA",
+          medio_pago: "efectivo",
+        });
       }
 
       setFcModalOpen(false);
@@ -2490,6 +2569,9 @@ ${certRetGanHtml}
                       <span className="font-medium">{row.proveedor_nombre}</span>
                       {row.oc_numero && <p className="text-xs text-zinc-400">OC: {row.oc_numero}</p>}
                       {row.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : <Badge variant="info">Mercadería</Badge>}
+                      {row.tipo === "solo_iva" && (row.costo_real ?? 0) > 0 && (
+                        <p className="text-xs text-blue-500 mt-0.5">Costo real: {formatCurrency(row.costo_real!, row.moneda)}</p>
+                      )}
                     </div>
                   )},
                   { key: "subtotal", label: "Subtotal", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.subtotal, row.moneda)}</span> },
@@ -3936,6 +4018,15 @@ ${certRetGanHtml}
               </div>
               <button onClick={() => setFcModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
             </div>
+            {/* Import from PDF */}
+            <div className="mb-4">
+              <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-blue-300 bg-blue-50/50 dark:border-blue-700 dark:bg-blue-950/20 px-3 py-2.5 text-sm text-blue-600 dark:text-blue-400 hover:border-blue-400 hover:bg-blue-50 transition-colors">
+                {fcPdfParsing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {fcPdfParsing ? "Procesando PDF con IA..." : "Importar desde PDF"}
+                <input type="file" accept=".pdf,image/png,image/jpeg,image/webp" className="hidden" disabled={fcPdfParsing}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleParseFCPdf(f); e.target.value = ""; }} />
+              </label>
+            </div>
             {fcError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{fcError}</div>}
             <div className="space-y-4">
               {/* Tipo de factura selector */}
@@ -4152,6 +4243,23 @@ ${certRetGanHtml}
                     <span className="text-zinc-700 dark:text-white">Total</span>
                     <span className="font-mono text-red-600">{formatCurrency(fcTotal, fcForm.moneda)}</span>
                   </div>
+                </div>
+              )}
+
+              {/* Costo real para solo_iva */}
+              {fcForm.tipo_fc === "solo_iva" && (
+                <div className="rounded-lg border border-blue-200 bg-blue-50/50 dark:border-blue-800 dark:bg-blue-950/20 p-3 space-y-2">
+                  <label className="text-xs font-semibold text-blue-700 dark:text-blue-300">Costo real pagado</label>
+                  <p className="text-xs text-blue-600/70 dark:text-blue-400/70">Indica cuanto pagaste realmente por esta factura de IVA</p>
+                  <input type="number" value={fcForm.costo_real || ""} onChange={(e) => setFcForm({ ...fcForm, costo_real: Number(e.target.value) })}
+                    placeholder="Monto pagado" className="w-full rounded-lg border border-blue-200 px-3 py-2 text-sm font-mono dark:border-blue-700 dark:bg-zinc-800 dark:text-white" />
+                  {fcForm.costo_real > 0 && fcTotal > 0 && (
+                    <p className="text-xs text-blue-600 dark:text-blue-400">
+                      Factura: <span className="font-mono font-medium">{formatCurrency(fcTotal, fcForm.moneda)}</span>
+                      {" — "}Pagaste: <span className="font-mono font-medium">{formatCurrency(fcForm.costo_real, fcForm.moneda)}</span>
+                      {" — "}Ahorro: <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">{((1 - fcForm.costo_real / fcTotal) * 100).toFixed(1)}%</span>
+                    </p>
+                  )}
                 </div>
               )}
 
