@@ -35,6 +35,8 @@ interface VentaPresupuesto {
   moneda: string;
   tipo_cambio: number | null;
   vendedor_id: string | null;
+  oc_cliente: string | null;
+  observaciones: string | null;
   vendedor_profile: { full_name: string; avatar_url: string | null } | null;
   clientes: { razon_social: string; cuit: string; condicion_iva: string } | null;
   presupuesto_items: {
@@ -189,7 +191,7 @@ export default function VentasPage() {
       let presupuestosQuery = supabase
         .from("presupuestos")
         .select(`
-          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id, modalidad_emision,
+          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id, modalidad_emision, oc_cliente, observaciones,
           vendedor_profile:vendedor_id(full_name, avatar_url),
           clientes(razon_social, cuit, condicion_iva),
           presupuesto_items(descripcion, cantidad, precio_venta, iva_porcentaje, total)
@@ -1076,6 +1078,24 @@ export default function VentasPage() {
                     </p>
                   </div>
                 </div>
+
+                {/* Info adicional del PR */}
+                {(emitVenta.presupuesto.oc_cliente || emitVenta.presupuesto.observaciones) && (
+                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1">
+                    {emitVenta.presupuesto.oc_cliente && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="text-zinc-500 font-medium">OC cliente:</span>
+                        <span className="font-mono font-bold dark:text-white">{emitVenta.presupuesto.oc_cliente}</span>
+                      </div>
+                    )}
+                    {emitVenta.presupuesto.observaciones && (
+                      <div className="text-sm">
+                        <span className="text-zinc-500 font-medium">Observaciones PR:</span>
+                        <p className="text-zinc-700 dark:text-zinc-300 mt-0.5">{emitVenta.presupuesto.observaciones}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Tipo */}
                 <div>
