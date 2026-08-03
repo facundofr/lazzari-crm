@@ -150,6 +150,8 @@ interface FacturaCompraRow {
   created_at: string;
   archivo_url?: string;
   archivo_nombre?: string;
+  solo_iva?: boolean;
+  op_vinculada?: { id: string; numero: string; estado: string; fecha: string } | null;
 }
 
 interface OCOption {
@@ -424,6 +426,7 @@ export default function FinanzasPage() {
   const [fcFile, setFcFile] = useState<File | null>(null);
   const [fcUploading, setFcUploading] = useState(false);
   const [selectedFC, setSelectedFC] = useState<FacturaCompraRow | null>(null);
+  const [selectedFCItems, setSelectedFCItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; unidad: string; iva_porcentaje: number }[]>([]);
   const [fcSearchQuery, setFcSearchQuery] = useState("");
   const [fcEstadoFilter, setFcEstadoFilter] = useState<"todos" | "pendiente" | "pagada" | "recibida" | "anulada">("todos");
   const [newArticleOpen, setNewArticleOpen] = useState(false);
@@ -792,7 +795,7 @@ export default function FinanzasPage() {
 
         // Fetch facturas de compra
         try {
-          let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero)").order("fecha", { ascending: false });
+          let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero), op_facturas_compra(orden_pago_id, monto, ordenes_pago(id, numero, estado, fecha))").order("fecha", { ascending: false });
           if (sociedadActiva?.id) qFc = qFc.eq("sociedad_id", sociedadActiva.id);
           const { data: fcData } = await qFc;
           if (fcData) {
@@ -811,6 +814,9 @@ export default function FinanzasPage() {
               archivo_url: r.archivo_url ?? undefined,
               archivo_nombre: r.archivo_nombre ?? undefined,
               solo_iva: r.solo_iva ?? false,
+              op_vinculada: r.op_facturas_compra?.length > 0 && r.op_facturas_compra[0]?.ordenes_pago
+                ? { id: r.op_facturas_compra[0].ordenes_pago.id, numero: r.op_facturas_compra[0].ordenes_pago.numero, estado: r.op_facturas_compra[0].ordenes_pago.estado, fecha: r.op_facturas_compra[0].ordenes_pago.fecha }
+                : null,
             })));
           } else {
             setFacturasCompra([]);
@@ -870,6 +876,17 @@ export default function FinanzasPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Fetch FC items when detail panel opens
+  useEffect(() => {
+    if (!selectedFC?.id) { setSelectedFCItems([]); return; }
+    (async () => {
+      try {
+        const { data } = await (supabase as any).from("facturas_compra_items").select("descripcion, cantidad, precio_unitario, unidad, iva_porcentaje").eq("factura_compra_id", selectedFC.id);
+        setSelectedFCItems(data ?? []);
+      } catch { setSelectedFCItems([]); }
+    })();
+  }, [selectedFC?.id]);
 
   async function handleCreateMov() {
     if (!movForm.descripcion.trim()) { setFormError("La descripcion es obligatoria"); return; }
@@ -2563,6 +2580,7 @@ ${certRetGanHtml}
               <DataTable<FacturaCompraRow>
                 columns={[
                   { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
+                  { key: "fecha_vencimiento", label: "Vencimiento", sortable: true, render: (row) => row.fecha_vencimiento ? <span className="text-zinc-500 text-xs">{formatDate(row.fecha_vencimiento)}</span> : <span className="text-zinc-300">—</span> },
                   { key: "numero_factura", label: "Nro. Factura", sortable: true, render: (row) => <span className="font-mono font-medium">{row.numero_factura}</span> },
                   { key: "proveedor_nombre", label: "Proveedor", sortable: true, render: (row) => (
                     <div>
@@ -2574,20 +2592,29 @@ ${certRetGanHtml}
                       )}
                     </div>
                   )},
-                  { key: "subtotal", label: "Subtotal", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.subtotal, row.moneda)}</span> },
-                  { key: "iva", label: "IVA", className: "text-right", render: (row) => (
-                    <div className="text-right">
-                      <span className="font-mono text-zinc-500">{formatCurrency(row.iva, row.moneda)}</span>
-                      <span className="text-xs text-zinc-400 ml-1">({row.iva_porcentaje}%)</span>
-                    </div>
-                  )},
-                  { key: "percepciones", label: "Perc.", className: "text-right", render: (row) => row.percepciones > 0 ? <span className="font-mono text-zinc-500 block text-right">{formatCurrency(row.percepciones, row.moneda)}</span> : <span className="text-zinc-300 block text-right">—</span> },
                   { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.total, row.moneda)}</span> },
-                  { key: "fecha_vencimiento", label: "Vto.", sortable: true, render: (row) => row.fecha_vencimiento ? <span className="text-zinc-500 text-xs">{formatDate(row.fecha_vencimiento)}</span> : <span className="text-zinc-300">—</span> },
                   { key: "estado", label: "Estado", sortable: true, render: (row) => (
                     <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : row.estado === "recibida" ? "info" : "warning"}>
                       {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : row.estado === "recibida" ? "Recibida" : "Pendiente"}
                     </Badge>
+                  )},
+                  { key: "op_vinculada" as any, label: "OP", sortable: false, render: (row) => (
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {row.op_vinculada ? (
+                        <button onClick={() => { setTab("ordenes_pago"); setTimeout(() => { const op = ordenesPago.find(o => o.id === row.op_vinculada!.id); if (op) setSelectedOP(op); }, 100); }}
+                          className="flex items-center gap-1 text-xs" title="Ver orden de pago">
+                          <Badge variant={row.op_vinculada.estado === "pagada" ? "success" : row.op_vinculada.estado === "anulada" ? "danger" : "warning"}>
+                            {row.op_vinculada.numero || "OP"}
+                          </Badge>
+                        </button>
+                      ) : (row.estado === "pendiente" || row.estado === "recibida") ? (
+                        <button onClick={() => handlePagarFC(row.id)} className="rounded px-2 py-1 text-xs text-orange-600 border border-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20 font-medium" title="Crear orden de pago">
+                          + OP
+                        </button>
+                      ) : (
+                        <span className="text-zinc-300 text-xs">—</span>
+                      )}
+                    </div>
                   )},
                   { key: "actions", label: "", sortable: false, render: (row) => (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -2597,19 +2624,14 @@ ${certRetGanHtml}
                         </a>
                       )}
                       {row.estado === "pendiente" && (
-                        <button onClick={() => handleRecibirFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Marcar como recibida (actualiza stock)">
+                        <button onClick={() => handleRecibirFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Marcar como recibida">
                           <Package className="h-3.5 w-3.5" />
                         </button>
                       )}
                       {(row.estado === "pendiente" || row.estado === "recibida") && (
-                        <>
-                          <button onClick={() => handlePagarFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Pagar — Crear orden de pago">
-                            <DollarSign className="h-3.5 w-3.5" />
-                          </button>
-                          <button onClick={() => handleAnularFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Anular">
-                            <Ban className="h-3.5 w-3.5" />
-                          </button>
-                        </>
+                        <button onClick={() => handleAnularFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Anular">
+                          <Ban className="h-3.5 w-3.5" />
+                        </button>
                       )}
                       <button onClick={() => handleDeleteFC(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar">
                         <Trash2 className="h-3.5 w-3.5" />
@@ -2618,6 +2640,7 @@ ${certRetGanHtml}
                   )},
                 ]}
                 data={filteredFC}
+                onRowClick={(row) => setSelectedFC(row)}
                 emptyMessage="No hay facturas de compra cargadas"
               />
             </Card>
@@ -4424,6 +4447,170 @@ ${certRetGanHtml}
                 {fcSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                 Crear factura
               </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ── FC Detail Panel ── */}
+      {selectedFC && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setSelectedFC(null)} />
+          <div className="fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700">
+            <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
+              <div className="flex items-center gap-2">
+                <Receipt className="h-5 w-5 text-orange-500" />
+                <h2 className="text-lg font-bold dark:text-white">FC Compra</h2>
+                <span className="font-mono text-sm text-zinc-500">{selectedFC.numero_factura}</span>
+                <Badge variant={selectedFC.estado === "pagada" ? "success" : selectedFC.estado === "anulada" ? "danger" : selectedFC.estado === "recibida" ? "info" : "warning"}>
+                  {selectedFC.estado === "pagada" ? "Pagada" : selectedFC.estado === "anulada" ? "Anulada" : selectedFC.estado === "recibida" ? "Recibida" : "Pendiente"}
+                </Badge>
+              </div>
+              <button onClick={() => setSelectedFC(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="p-6 space-y-6">
+              {/* Info general */}
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-xs font-medium text-zinc-500">Proveedor</p>
+                  <p className="font-semibold dark:text-white">{selectedFC.proveedor_nombre}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-zinc-500">Fecha</p>
+                  <p className="font-medium dark:text-white">{formatDate(selectedFC.fecha)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-zinc-500">Vencimiento</p>
+                  <p className="font-medium dark:text-white">{selectedFC.fecha_vencimiento ? formatDate(selectedFC.fecha_vencimiento) : "—"}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-zinc-500">Tipo</p>
+                  {selectedFC.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : <Badge variant="info">Mercadería</Badge>}
+                </div>
+                {selectedFC.oc_numero && (
+                  <div>
+                    <p className="text-xs font-medium text-zinc-500">OC vinculada</p>
+                    <p className="font-mono text-sm dark:text-white">{selectedFC.oc_numero}</p>
+                  </div>
+                )}
+                <div>
+                  <p className="text-xs font-medium text-zinc-500">Moneda</p>
+                  <p className="font-medium dark:text-white">{selectedFC.moneda}</p>
+                </div>
+              </div>
+
+              {/* Desglose de importes */}
+              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
+                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Desglose de importes</p>
+                </div>
+                <div className="p-4 space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-zinc-500">Subtotal</span>
+                    <span className="font-mono dark:text-white">{formatCurrency(selectedFC.subtotal, selectedFC.moneda)}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-zinc-500">IVA ({selectedFC.iva_porcentaje}%)</span>
+                    <span className="font-mono dark:text-white">{formatCurrency(selectedFC.iva, selectedFC.moneda)}</span>
+                  </div>
+                  {selectedFC.percepciones > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-zinc-500">Percepciones</span>
+                      <span className="font-mono dark:text-white">{formatCurrency(selectedFC.percepciones, selectedFC.moneda)}</span>
+                    </div>
+                  )}
+                  {selectedFC.tipo === "solo_iva" && (selectedFC.costo_real ?? 0) > 0 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-zinc-500">Costo real</span>
+                      <span className="font-mono text-blue-600">{formatCurrency(selectedFC.costo_real!, selectedFC.moneda)}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between text-sm border-t border-zinc-200 dark:border-zinc-700 pt-2">
+                    <span className="font-semibold text-zinc-700 dark:text-white">Total</span>
+                    <span className="font-mono font-bold text-red-600">{formatCurrency(selectedFC.total, selectedFC.moneda)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Items */}
+              {selectedFCItems.length > 0 && (
+                <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Items ({selectedFCItems.length})</p>
+                  </div>
+                  <div className="divide-y divide-zinc-100 dark:divide-zinc-700">
+                    {selectedFCItems.map((it, idx) => (
+                      <div key={idx} className="px-4 py-2 text-sm flex items-center justify-between">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium dark:text-white truncate">{it.descripcion}</p>
+                          <p className="text-xs text-zinc-400">{it.cantidad} {it.unidad} x {formatCurrency(it.precio_unitario, selectedFC.moneda)} — IVA {it.iva_porcentaje ?? 21}%</p>
+                        </div>
+                        <span className="font-mono text-sm ml-2 dark:text-white">{formatCurrency(it.cantidad * it.precio_unitario, selectedFC.moneda)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* OP vinculada */}
+              {selectedFC.op_vinculada && (
+                <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
+                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Orden de pago vinculada</p>
+                  </div>
+                  <div className="p-4 flex items-center justify-between">
+                    <div>
+                      <span className="font-mono font-medium dark:text-white">{selectedFC.op_vinculada.numero}</span>
+                      <span className="ml-2">
+                        <Badge variant={selectedFC.op_vinculada.estado === "pagada" ? "success" : selectedFC.op_vinculada.estado === "anulada" ? "danger" : "warning"}>
+                          {selectedFC.op_vinculada.estado === "pagada" ? "Pagada" : selectedFC.op_vinculada.estado === "anulada" ? "Anulada" : "Pendiente"}
+                        </Badge>
+                      </span>
+                    </div>
+                    <button onClick={() => { setSelectedFC(null); setTab("ordenes_pago"); setTimeout(() => { const op = ordenesPago.find(o => o.id === selectedFC.op_vinculada!.id); if (op) setSelectedOP(op); }, 100); }}
+                      className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Ver OP">
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Notas */}
+              {selectedFC.notas && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-500">Notas</p>
+                  <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">{selectedFC.notas}</p>
+                </div>
+              )}
+
+              {/* Archivo adjunto */}
+              {selectedFC.archivo_url && (
+                <a href={selectedFC.archivo_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 text-sm text-orange-500 hover:text-orange-600">
+                  <Paperclip className="h-4 w-4" /> {selectedFC.archivo_nombre || "Ver archivo adjunto"}
+                </a>
+              )}
+
+              {/* Acciones */}
+              <div className="flex flex-wrap gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
+                {(selectedFC.estado === "pendiente" || selectedFC.estado === "recibida") && !selectedFC.op_vinculada && (
+                  <button onClick={() => { setSelectedFC(null); handlePagarFC(selectedFC.id); }}
+                    className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
+                    <DollarSign className="h-4 w-4" /> Crear OP
+                  </button>
+                )}
+                {selectedFC.estado === "pendiente" && (
+                  <button onClick={() => { handleRecibirFC(selectedFC.id); setSelectedFC(null); }}
+                    className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                    <Package className="h-4 w-4" /> Recibir
+                  </button>
+                )}
+                {(selectedFC.estado === "pendiente" || selectedFC.estado === "recibida") && (
+                  <button onClick={() => { handleAnularFC(selectedFC.id); setSelectedFC(null); }}
+                    className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+                    <Ban className="h-4 w-4" /> Anular
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </>
