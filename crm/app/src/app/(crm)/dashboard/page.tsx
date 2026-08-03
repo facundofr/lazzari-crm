@@ -11,7 +11,7 @@ import {
   ArrowRight, Clock, AlertTriangle, Package,
   Loader2, Users, Target,
 } from "lucide-react";
-import { formatCurrency, formatDateTime } from "@/lib/utils";
+import { formatCurrency, formatDateTime, todayAR } from "@/lib/utils";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
@@ -350,7 +350,7 @@ export default function DashboardPage() {
   const faltaCubrir = Math.max(totalGastosFijos - facturadoMes, 0);
 
   // Objetivos relevantes: admin ve todos, vendedor ve los suyos o globales
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayAR();
   const objetivosActivos = objetivos.filter((o) =>
     o.activo && o.periodoInicio <= today && o.periodoFin >= today &&
     (isAdmin || !o.usuarioId || o.usuarioId === profile?.id)

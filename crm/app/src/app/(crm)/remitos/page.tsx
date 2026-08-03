@@ -9,7 +9,7 @@ import { mockRemitos } from "@/lib/mock-data";
 import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
 import { generateRemitoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -114,7 +114,7 @@ export default function RemitosPage() {
   const [createForm, setCreateForm] = useState({
     numero: "",
     cliente_id: "",
-    fecha: new Date().toISOString().split("T")[0],
+    fecha: todayAR(),
     observaciones: "",
     presupuesto_id: "",
     valor_declarado: "",
@@ -143,7 +143,7 @@ export default function RemitosPage() {
     transportista: "",
     destino: "",
     origen: "",
-    fecha: new Date().toISOString().split("T")[0],
+    fecha: todayAR(),
     costo: "",
     moneda: "ARS" as "ARS" | "USD",
     bultos: "",
@@ -349,7 +349,7 @@ export default function RemitosPage() {
         const { data: newRemito, error: newErr } = await (supabase.from("remitos") as any).insert({
           numero: newNumero,
           cliente_id: parcialRemito.cliente_id,
-          fecha: new Date().toISOString().split("T")[0],
+          fecha: todayAR(),
           observaciones: `Saldo pendiente de remito ${parcialRemito.numero}`,
           presupuesto_id: parcialRemito.presupuesto_id || null,
           estado: "pendiente",
@@ -431,7 +431,7 @@ export default function RemitosPage() {
     setCreateForm({
       numero: autoNumero,
       cliente_id: "",
-      fecha: new Date().toISOString().split("T")[0],
+      fecha: todayAR(),
       observaciones: "",
       presupuesto_id: "",
       valor_declarado: "",
@@ -662,7 +662,7 @@ export default function RemitosPage() {
         const { data: remitoData, error: rErr } = await (supabase.from("remitos") as any).insert({
           numero,
           cliente_id: p.cliente_id,
-          fecha: new Date().toISOString().split("T")[0],
+          fecha: todayAR(),
           observaciones: `Generado desde presupuesto ${p.numero}`,
           presupuesto_id: p.id,
           estado: "pendiente",
@@ -1255,7 +1255,7 @@ export default function RemitosPage() {
                       onClick={async () => {
                         setTransporteForm({
                           transportista_id: "", transportista: "", destino: "", origen: "",
-                          fecha: new Date().toISOString().split("T")[0],
+                          fecha: todayAR(),
                           costo: "", moneda: "ARS", bultos: "", tipo_vehiculo: "", notas: "",
                         });
                         setCreateTransporteOpen(true);

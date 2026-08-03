@@ -33,6 +33,16 @@ export function formatDateTime(date: Date | string) {
   }).format(new Date(date));
 }
 
+/** Returns today's date as YYYY-MM-DD in Argentina timezone */
+export function todayAR() {
+  const d = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    timeZone: "America/Argentina/Buenos_Aires",
+  }).format(d);
+  return parts; // en-CA format is YYYY-MM-DD
+}
+
 export function getInitials(name: string) {
   return name
     .split(" ")

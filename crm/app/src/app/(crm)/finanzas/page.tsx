@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, todayAR } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
 import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles } from "lucide-react";
@@ -3545,7 +3545,7 @@ ${certRetGanHtml}
           <>
             <div className="space-y-4">
               {objetivos.map((obj) => {
-                const isActive = obj.activo && obj.periodoInicio <= new Date().toISOString().split("T")[0] && obj.periodoFin >= new Date().toISOString().split("T")[0];
+                const isActive = obj.activo && obj.periodoInicio <= todayAR() && obj.periodoFin >= todayAR();
                 return (
                   <Card key={obj.id} className={!isActive ? "opacity-50" : ""}>
                     <div className="flex items-center justify-between mb-3">

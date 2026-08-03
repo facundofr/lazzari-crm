@@ -3,7 +3,7 @@
 import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency, formatDate, getInitials } from "@/lib/utils";
+import { formatCurrency, formatDate, getInitials, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import Link from "next/link";
@@ -453,7 +453,7 @@ export default function VentasPage() {
           numero: nextNumero,
           cliente_id: p.cliente_id,
           presupuesto_id: p.id,
-          fecha: new Date().toISOString().split("T")[0],
+          fecha: todayAR(),
           cae: null,
           cae_vencimiento: null,
           subtotal,
@@ -505,7 +505,7 @@ export default function VentasPage() {
         .insert({
           cliente_id: p.cliente_id,
           presupuesto_id: p.id,
-          fecha: new Date().toISOString().split("T")[0],
+          fecha: todayAR(),
           observaciones: `Desde presupuesto ${p.numero}`,
           estado: "pendiente",
           oc_cliente: (p as any).oc_cliente || null,

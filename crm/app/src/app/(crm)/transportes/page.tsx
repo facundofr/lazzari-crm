@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { useToast } from "@/components/ui/toast";
 
@@ -111,7 +111,7 @@ export default function TransportesPage() {
     origen: "",
     cliente_id: "",
     remito_id: "",
-    fecha: new Date().toISOString().split("T")[0],
+    fecha: todayAR(),
     costo: "",
     moneda: "ARS" as "ARS" | "USD",
     bultos: "",
@@ -252,7 +252,7 @@ export default function TransportesPage() {
     setEnvioForm({
       transportista_id: "", transportista_nombre: "",
       destino: "", origen: "", cliente_id: "", remito_id: "",
-      fecha: new Date().toISOString().split("T")[0],
+      fecha: todayAR(),
       costo: "", moneda: "ARS", bultos: "", descripcion_carga: "", tipo_vehiculo: "", notas: "",
     });
 

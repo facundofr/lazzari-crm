@@ -8,7 +8,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { Modal } from "@/components/ui/modal";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { mockClients, mockPresupuestos, mockFacturas } from "@/lib/mock-data";
 import type { Client } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
@@ -511,7 +511,7 @@ export default function ClientesPage() {
         if (error) throw error;
         toast.success("Relevamiento actualizado");
       } else {
-        const { error } = await (supabase as any).from("fichas_relevamiento").insert({ ...payload, fecha: new Date().toISOString().split("T")[0], tipo: "relevamiento" });
+        const { error } = await (supabase as any).from("fichas_relevamiento").insert({ ...payload, fecha: todayAR(), tipo: "relevamiento" });
         if (error) throw error;
         toast.success("Relevamiento guardado");
       }

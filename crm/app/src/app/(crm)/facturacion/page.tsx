@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { StatCard } from "@/components/ui/stat-card";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { generateFacturaPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -234,7 +234,7 @@ export default function FacturacionPage() {
         setNcResult(data.factura.comprobante + (data.factura.cae ? ` — CAE: ${data.factura.cae}` : ""));
       } else {
         // Manual sin ARCA
-        const today = new Date().toISOString().split("T")[0];
+        const today = todayAR();
         const { data: newNc, error: ncErr } = await (supabase as any)
           .from("facturas")
           .insert({
@@ -504,7 +504,7 @@ export default function FacturacionPage() {
 
     try {
       const cliente = clientes.find(c => c.id === emitData.cliente_id);
-      const today = new Date().toISOString().split("T")[0];
+      const today = todayAR();
 
       // Insert factura directly without ARCA
       const { data: newFactura, error: facturaErr } = await (supabase as any)
@@ -577,7 +577,7 @@ export default function FacturacionPage() {
   const [cobroModalId, setCobroModalId] = useState<string | null>(null);
   type CobroLinea = { tipo: "cobro" | "transferencia" | "efectivo" | "cheque_recibido" | "echeq" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva"; monto: string; descripcion: string; cheque_numero?: string; cheque_banco?: string; cheque_fecha?: string; cheque_id_digital?: string };
   const [cobroLineas, setCobroLineas] = useState<CobroLinea[]>([{ tipo: "transferencia", monto: "", descripcion: "" }]);
-  const [cobroFecha, setCobroFecha] = useState(new Date().toISOString().split("T")[0]);
+  const [cobroFecha, setCobroFecha] = useState(todayAR());
   const [cobroSaving, setCobroSaving] = useState(false);
   const [cobroPrevios, setCobroPrevios] = useState<number>(0);
   const [cobroPreviosLoading, setCobroPreviosLoading] = useState(false);
@@ -590,7 +590,7 @@ export default function FacturacionPage() {
   async function openCobroModal(factura: FacturaRow) {
     setCobroPreviosLoading(true);
     setCobroPrevios(0);
-    setCobroFecha(new Date().toISOString().split("T")[0]);
+    setCobroFecha(todayAR());
     setCobroModalId(factura.id);
     try {
       const previos = await fetchCobrosPrevios(factura.id);

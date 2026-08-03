@@ -7,7 +7,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { Modal } from "@/components/ui/modal";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { generatePresupuestoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 import { mockPresupuestos } from "@/lib/mock-data";
 import type { Presupuesto, PRStatus } from "@/lib/types";
@@ -1019,7 +1019,7 @@ export default function PresupuestosPage() {
         toast.success("Presupuesto actualizado");
       } else {
         // ── CREATE new PR ──
-        const today = new Date().toISOString().split("T")[0];
+        const today = todayAR();
 
         const { data: newRow, error } = await supabase
           .from("presupuestos")
@@ -1196,7 +1196,7 @@ export default function PresupuestosPage() {
       }
 
       let ocsCreated = 0;
-      const today = new Date().toISOString().split("T")[0];
+      const today = todayAR();
 
       // Only generate OCs for items that HAVE a proveedor assigned
       for (const provId of conProveedorIds) {
@@ -1253,13 +1253,55 @@ export default function PresupuestosPage() {
         ocsCreated++;
       }
 
+      // Also generate OC for items WITHOUT proveedor (so user can assign later)
+      const sinProvItems = byProveedor["__sin_proveedor__"] || [];
+      if (sinProvItems.length > 0) {
+        const subtotalSP = sinProvItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
+        const ivaSP = sinProvItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
+        const costoMonedasSP = new Set(sinProvItems.map((it: any) => it.costo_moneda || "ARS"));
+        const ocMonedaSP = costoMonedasSP.size === 1 ? [...costoMonedasSP][0] : "ARS";
+
+        const { data: ocRow, error: ocErr } = await supabase
+          .from("ordenes_compra")
+          .insert({
+            proveedor_id: null,
+            presupuesto_origen_id: prId,
+            sociedad_id: sociedadId,
+            fecha: todayAR(),
+            moneda: ocMonedaSP,
+            estado: "borrador",
+            subtotal: subtotalSP,
+            iva: ivaSP,
+            total: subtotalSP + ivaSP,
+            observaciones: `Generada desde ${prNumero} — asignar proveedor`,
+            created_by: profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
+          } as any)
+          .select()
+          .single();
+
+        if (!ocErr && ocRow) {
+          for (const it of sinProvItems) {
+            await supabase.from("orden_compra_items").insert({
+              orden_compra_id: ocRow.id,
+              descripcion: it.descripcion,
+              cantidad: Number(it.cantidad),
+              precio_unitario: Number(it.precio_costo),
+              unidad: it.unidad || "u",
+              codigo: it.codigo || null,
+              iva_porcentaje: Number(it.iva_porcentaje ?? 21),
+            } as any);
+          }
+          ocsCreated++;
+        }
+      }
+
       if (ocsCreated > 0) {
         toast.success(`Se generaron ${ocsCreated} orden(es) de compra automáticamente`);
       }
 
       // Notify about items without proveedor that were skipped
-      if (sinProveedorCount > 0) {
-        toast.warning(`${sinProveedorCount} item(s) sin proveedor asignado — asigná proveedores desde Compras > "Items sin proveedor"`);
+      if (sinProveedorCount > 0 && sinProvItems.length > 0) {
+        toast.info(`${sinProveedorCount} item(s) sin proveedor — OC creada en borrador para asignar proveedor`);
       }
     } catch (err) {
       console.error("Error generating OCs:", err);
@@ -1566,18 +1608,23 @@ export default function PresupuestosPage() {
         .single();
       const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
 
-      // Get next remito number
-      const { data: lastRemito } = await supabase
+      // Get next remito number — parse max numeric suffix across ALL formats
+      const { data: allRemitos } = await supabase
         .from("remitos")
         .select("numero")
         .order("created_at", { ascending: false })
-        .limit(1);
-      let nextNum = 1;
-      if (lastRemito && lastRemito.length > 0) {
-        const parts = lastRemito[0].numero?.split("-");
-        const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
-        if (n > 0) nextNum = n + 1;
+        .limit(100);
+      let maxNum = 0;
+      if (allRemitos) {
+        for (const r of allRemitos) {
+          const parts = r.numero?.split("-");
+          if (parts) {
+            const lastPart = parseInt(parts[parts.length - 1]);
+            if (!isNaN(lastPart) && lastPart > maxNum) maxNum = lastPart;
+          }
+        }
       }
+      const nextNum = maxNum + 1;
       const numero = `R-0001-${String(nextNum).padStart(8, "0")}`;
 
       const { data: remitoData, error: remitoErr } = await (supabase as any)
@@ -1585,7 +1632,7 @@ export default function PresupuestosPage() {
         .insert({
           numero,
           cliente_id: pr.clienteId,
-          fecha: new Date().toISOString().split("T")[0],
+          fecha: todayAR(),
           observaciones: `Generado desde presupuesto ${pr.numero}`,
           presupuesto_id: pr.id,
           estado: "pendiente",
@@ -2859,7 +2906,7 @@ export default function PresupuestosPage() {
               <input type="date" value={cotizFecha} onChange={e => setCotizFecha(e.target.value)} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
               {cotizBna && (
                 <span className="text-xs text-zinc-400">
-                  → Venta {cotizBna.modalidad}: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})
+                  → Venta {cotizBna.modalidad}: {formatCurrency(cotizBna.valor_venta, "ARS")} ({cotizBna.fecha})
                 </span>
               )}
             </div>

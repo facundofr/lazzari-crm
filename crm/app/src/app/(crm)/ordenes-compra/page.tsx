@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { generateOrdenCompraPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 import { supabase } from "@/lib/supabase/client";
 import { mockOrdenesCompra } from "@/lib/mock-data";
@@ -978,7 +978,7 @@ export default function OrdenesCompraPage() {
   const handleCreateConsolidatedOCs = async () => {
     setConsolidateCreating(true);
     try {
-      const today = new Date().toISOString().split("T")[0];
+      const today = todayAR();
       let created = 0;
 
       for (const group of consolidateGroups) {
@@ -1215,7 +1215,7 @@ export default function OrdenesCompraPage() {
 
         {/* Late delivery warning */}
         {(() => {
-          const today = new Date().toISOString().split("T")[0];
+          const today = todayAR();
           const late = ordenes.filter(oc =>
             oc.fecha_entrega_estimada &&
             oc.fecha_entrega_estimada < today &&
@@ -1354,7 +1354,7 @@ export default function OrdenesCompraPage() {
                 render: (row) => {
                   const totalQty = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
                   const recibido = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad_recibida), 0);
-                  const today = new Date().toISOString().split("T")[0];
+                  const today = todayAR();
                   const isLate = row.fecha_entrega_estimada && row.fecha_entrega_estimada < today && row.estado !== "recibida" && row.estado !== "cancelada";
 
                   // Determine traffic-light color
@@ -1792,7 +1792,7 @@ export default function OrdenesCompraPage() {
                   {(() => {
                     const totalQty = detailOC.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
                     const recibido = detailOC.orden_compra_items.reduce((a, i) => a + Number(i.cantidad_recibida), 0);
-                    const today = new Date().toISOString().split("T")[0];
+                    const today = todayAR();
                     const isLate = detailOC.fecha_entrega_estimada && detailOC.fecha_entrega_estimada < today && detailOC.estado !== "recibida" && detailOC.estado !== "cancelada";
                     let dotColor = "bg-red-500";
                     if (detailOC.estado === "recibida" || (totalQty > 0 && recibido >= totalQty)) dotColor = "bg-emerald-500";
