@@ -182,6 +182,7 @@ interface FCItem {
   cantidad: number;
   precio_unitario: number;
   unidad: string;
+  iva_porcentaje: number;
 }
 
 const GASTO_CATEGORIAS = ["Transporte", "Servicios", "Materiales", "Varios", "Comisiones", "Impuestos"] as const;
@@ -396,6 +397,7 @@ export default function FinanzasPage() {
   // Gastos manuales state
   const [gastosManuales, setGastosManuales] = useState<GastoManualRow[]>([]);
   const [gmModalOpen, setGmModalOpen] = useState(false);
+  const [gmEditingId, setGmEditingId] = useState<string | null>(null);
   const [gmForm, setGmForm] = useState(emptyGastoManualForm);
   const [gmSaving, setGmSaving] = useState(false);
   const [gmError, setGmError] = useState("");
@@ -1624,8 +1626,29 @@ ${certRetGanHtml}
   // ── Gastos manuales handlers ──
   function openGMModal() {
     setGmForm(emptyGastoManualForm);
+    setGmEditingId(null);
     setGmError("");
     setGmProvSearch("");
+    setGmFile(null);
+    setGmModalOpen(true);
+  }
+
+  function openGMEdit(gm: GastoManualRow) {
+    setGmEditingId(gm.id);
+    setGmForm({
+      descripcion: gm.descripcion,
+      proveedor_id: gm.proveedor_id || "",
+      categoria: gm.categoria,
+      tipo_gasto: gm.tipo_gasto,
+      tipo_recurrencia: gm.tipo_recurrencia || "eventual",
+      medio_pago: gm.medio_pago,
+      monto: gm.monto,
+      moneda: gm.moneda as "ARS" | "USD",
+      notas: gm.notas,
+      fecha: gm.fecha,
+    });
+    setGmError("");
+    setGmProvSearch(gm.proveedor_nombre || "");
     setGmFile(null);
     setGmModalOpen(true);
   }
@@ -1649,7 +1672,7 @@ ${certRetGanHtml}
         comprobanteUrl = urlData.publicUrl;
       }
 
-      const insertData: Record<string, unknown> = {
+      const payload: Record<string, unknown> = {
         fecha: gmForm.fecha,
         descripcion: gmForm.descripcion,
         categoria: gmForm.categoria,
@@ -1659,32 +1682,39 @@ ${certRetGanHtml}
         moneda: gmForm.moneda,
         notas: gmForm.notas || "",
         medio_pago: gmForm.medio_pago || "efectivo",
+        proveedor_id: gmForm.proveedor_id || null,
       };
-      if (comprobanteUrl) insertData.comprobante_url = comprobanteUrl;
-      if (gmForm.proveedor_id) insertData.proveedor_id = gmForm.proveedor_id;
-      if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
-      if (profile?.id) insertData.created_by = profile.id;
+      if (comprobanteUrl) payload.comprobante_url = comprobanteUrl;
 
-      const { error } = await (supabase as any).from("gastos_manuales").insert(insertData);
-      if (error) throw error;
+      if (gmEditingId) {
+        // Update existing gasto
+        const { error } = await (supabase as any).from("gastos_manuales").update(payload).eq("id", gmEditingId);
+        if (error) throw error;
+      } else {
+        // Insert new gasto
+        if (sociedadActiva?.id) payload.sociedad_id = sociedadActiva.id;
+        if (profile?.id) payload.created_by = profile.id;
+        const { error } = await (supabase as any).from("gastos_manuales").insert(payload);
+        if (error) throw error;
 
-      // Also create a movimiento (non-fatal — gasto already saved)
-      try {
-        const provNombre = gmForm.proveedor_id ? proveedoresOptions.find(p => p.id === gmForm.proveedor_id)?.razon_social : null;
-        const movData: Record<string, unknown> = {
-          tipo: "pago",
-          descripcion: `Gasto — ${gmForm.categoria} — ${gmForm.descripcion}${provNombre ? ` (${provNombre})` : ""}`,
-          monto: gmForm.monto,
-          moneda: gmForm.moneda,
-          fecha: gmForm.fecha,
-          conciliado: false,
-        };
-        if (gmForm.proveedor_id) (movData as any).proveedor_id = gmForm.proveedor_id;
-        if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
-        if (profile?.id) (movData as any).created_by = profile.id;
-        await supabase.from("movimientos").insert(movData as any);
-      } catch (movErr) {
-        console.warn("Gasto creado pero error al registrar movimiento:", movErr);
+        // Also create a movimiento for new gastos (non-fatal — gasto already saved)
+        try {
+          const provNombre = gmForm.proveedor_id ? proveedoresOptions.find(p => p.id === gmForm.proveedor_id)?.razon_social : null;
+          const movData: Record<string, unknown> = {
+            tipo: "pago",
+            descripcion: `Gasto — ${gmForm.categoria} — ${gmForm.descripcion}${provNombre ? ` (${provNombre})` : ""}`,
+            monto: gmForm.monto,
+            moneda: gmForm.moneda,
+            fecha: gmForm.fecha,
+            conciliado: false,
+          };
+          if (gmForm.proveedor_id) (movData as any).proveedor_id = gmForm.proveedor_id;
+          if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
+          if (profile?.id) (movData as any).created_by = profile.id;
+          await supabase.from("movimientos").insert(movData as any);
+        } catch (movErr) {
+          console.warn("Gasto creado pero error al registrar movimiento:", movErr);
+        }
       }
 
       setGmModalOpen(false);
@@ -1725,8 +1755,20 @@ ${certRetGanHtml}
     }
   }
 
-  const fcIva = fcForm.subtotal * (fcForm.iva_porcentaje / 100);
+  // Compute IVA: if items exist with per-item IVA, compute from items; otherwise use header rate
+  const fcIva = fcItems.length > 0
+    ? fcItems.reduce((sum, it) => sum + (it.cantidad * it.precio_unitario) * ((it.iva_porcentaje ?? 21) / 100), 0)
+    : fcForm.subtotal * (fcForm.iva_porcentaje / 100);
   const fcTotal = fcForm.subtotal + fcIva + fcForm.percepciones;
+  // Group items by IVA rate for display
+  const fcIvaByRate: Record<number, number> = {};
+  if (fcItems.length > 0) {
+    for (const it of fcItems) {
+      const lineSubtotal = it.cantidad * it.precio_unitario;
+      const lineIva = lineSubtotal * ((it.iva_porcentaje ?? 21) / 100);
+      fcIvaByRate[it.iva_porcentaje ?? 21] = (fcIvaByRate[it.iva_porcentaje ?? 21] || 0) + lineIva;
+    }
+  }
 
   async function handleCreateFC() {
     if (!fcForm.proveedor_id) { setFcError("Seleccioná un proveedor"); return; }
@@ -1771,6 +1813,7 @@ ${certRetGanHtml}
           cantidad: it.cantidad,
           precio_unitario: it.precio_unitario,
           unidad: it.unidad,
+          iva_porcentaje: it.iva_porcentaje,
           sociedad_id: sociedadActiva?.id || null,
         }));
         await (supabase as any).from("facturas_compra_items").insert(itemsToInsert);
@@ -1803,9 +1846,10 @@ ${certRetGanHtml}
   async function handleDeleteFC(id: string) {
     if (!confirm("¿Seguro que querés eliminar esta factura de compra?")) return;
     try {
-      await (supabase as any).from("facturas_compra").delete().eq("id", id);
+      const { error } = await (supabase as any).from("facturas_compra").delete().eq("id", id);
+      if (error) throw error;
       await fetchData();
-    } catch (err) { console.error("Error eliminando FC:", err); alert("Error al eliminar FC: " + (err as any)?.message); }
+    } catch (err) { console.error("Error eliminando FC:", err); alert("Error al eliminar FC: " + (err instanceof Error ? err.message : String(err))); }
   }
 
   function handlePagarFC(id: string) {
@@ -1819,27 +1863,18 @@ ${certRetGanHtml}
   async function handleAnularFC(id: string) {
     if (!confirm("¿Seguro que querés anular esta factura?")) return;
     try {
-      await (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id);
+      const { error } = await (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id);
+      if (error) throw error;
       await fetchData();
-    } catch (err) { console.error("Error anulando FC:", err); alert("Error al anular FC: " + (err as any)?.message); }
+    } catch (err) { console.error("Error anulando FC:", err); alert("Error al anular FC: " + (err instanceof Error ? err.message : String(err))); }
   }
 
   async function handleRecibirFC(id: string) {
     try {
-      // Fetch items for this FC
-      const { data: items } = await (supabase as any).from("facturas_compra_items").select("producto_id, cantidad").eq("factura_compra_id", id);
-      if (items && items.length > 0) {
-        for (const it of items.filter((i: any) => i.producto_id)) {
-          // Atomic stock increment via RPC
-          const { error: stockErr } = await supabase.rpc("increment_stock" as any, { producto_id: it.producto_id, cantidad: it.cantidad });
-          if (stockErr) {
-            console.error("Error al actualizar stock:", stockErr);
-            throw stockErr;
-          }
-        }
-      }
-      await (supabase as any).from("facturas_compra").update({ estado: "recibida" }).eq("id", id);
-      alert("FC marcada como recibida — stock actualizado");
+      // FC de compra NO mueve stock — stock solo lo mueven las OC y las ventas
+      const { error: updErr } = await (supabase as any).from("facturas_compra").update({ estado: "recibida" }).eq("id", id);
+      if (updErr) throw updErr;
+      alert("FC marcada como recibida");
       await fetchData();
     } catch (err) { console.error("Error marcando FC como recibida:", err); alert("Error al marcar FC como recibida: " + (err as any)?.message); }
   }
@@ -2599,8 +2634,13 @@ ${certRetGanHtml}
             <div className="flex items-center justify-between">
               <p className="text-sm text-zinc-500">
                 Total gastos: <span className="font-bold font-mono text-zinc-900 dark:text-white">
-                  {formatCurrency(gastosManuales.reduce((s, g) => s + g.monto, 0))}
+                  {formatCurrency(gastosManuales.filter(g => g.moneda !== "USD").reduce((s, g) => s + g.monto, 0))}
                 </span>
+                {gastosManuales.some(g => g.moneda === "USD") && (
+                  <span className="font-bold font-mono text-zinc-900 dark:text-white ml-2">
+                    | {formatCurrency(gastosManuales.filter(g => g.moneda === "USD").reduce((s, g) => s + g.monto, 0), "USD")}
+                  </span>
+                )}
               </p>
               <button onClick={openGMModal} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
                 <Plus className="h-4 w-4" /> Nuevo gasto
@@ -2638,6 +2678,9 @@ ${certRetGanHtml}
                   ) : <span className="text-zinc-300 text-xs">—</span> },
                   { key: "actions", label: "", sortable: false, render: (row) => (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <button onClick={() => openGMEdit(row)} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-500" title="Editar">
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
                       <button onClick={() => handleDeleteGM(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar">
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -2803,6 +2846,9 @@ ${certRetGanHtml}
                 <span className="ml-auto font-mono text-lg font-bold text-red-600">Deuda: {formatCurrency(ccDetailProveedor.saldo_cuenta_corriente)}</span>
               </div>
               <div className="flex gap-2 mb-4">
+                <button onClick={() => { openOPModal(ccDetailProveedor.id); setCcDetailProveedor(null); setTab("ordenes_pago"); }} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">
+                  <DollarSign className="h-4 w-4" /> Crear OP
+                </button>
                 <button onClick={() => openManualMovForProveedor(ccDetailProveedor)} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"><Plus className="h-4 w-4" /> Movimiento manual</button>
               </div>
               {ccDetailProvLoading ? (
@@ -3992,7 +4038,7 @@ ${certRetGanHtml}
               {/* IVA % + Percepciones */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs font-medium text-zinc-500">% IVA</label>
+                  <label className="text-xs font-medium text-zinc-500">% IVA {fcItems.length > 0 ? <span className="text-zinc-400">(por defecto)</span> : ""}</label>
                   <div className="flex items-center gap-2 mt-1">
                     <input type="number" step="0.5" value={fcForm.iva_porcentaje || ""} onChange={(e) => setFcForm({ ...fcForm, iva_porcentaje: Number(e.target.value) })}
                       className="w-20 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
@@ -4006,6 +4052,9 @@ ${certRetGanHtml}
                       ))}
                     </div>
                   </div>
+                  {fcItems.length > 0 && new Set(fcItems.map(it => it.iva_porcentaje)).size > 1 && (
+                    <p className="text-xs text-blue-500 mt-1">IVA se calcula por item (tasas mixtas detectadas)</p>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-medium text-zinc-500">Percepciones (total)</label>
@@ -4068,10 +4117,31 @@ ${certRetGanHtml}
                     <span className="text-zinc-500">Subtotal</span>
                     <span className="font-mono">{formatCurrency(fcForm.subtotal, fcForm.moneda)}</span>
                   </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-500">IVA ({fcForm.iva_porcentaje}%)</span>
-                    <span className="font-mono text-zinc-600">{formatCurrency(fcIva, fcForm.moneda)}</span>
-                  </div>
+                  {/* Per-rate IVA breakdown when items have mixed rates */}
+                  {fcItems.length > 0 && Object.keys(fcIvaByRate).length > 1 ? (
+                    <>
+                      {Object.entries(fcIvaByRate).sort(([a], [b]) => Number(a) - Number(b)).map(([rate, amount]) => {
+                        const rateSubtotal = fcItems.filter(it => (it.iva_porcentaje ?? 21) === Number(rate)).reduce((s, it) => s + it.cantidad * it.precio_unitario, 0);
+                        return (
+                          <div key={rate} className="flex items-center justify-between text-sm">
+                            <span className="text-zinc-500">
+                              IVA {rate}% <span className="text-zinc-400 text-xs">(s/ {formatCurrency(rateSubtotal, fcForm.moneda)})</span>
+                            </span>
+                            <span className="font-mono text-zinc-600">{formatCurrency(amount, fcForm.moneda)}</span>
+                          </div>
+                        );
+                      })}
+                      <div className="flex items-center justify-between text-sm border-t border-zinc-100 dark:border-zinc-700 pt-1">
+                        <span className="text-zinc-500 font-medium">IVA total</span>
+                        <span className="font-mono text-zinc-600 font-medium">{formatCurrency(fcIva, fcForm.moneda)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-zinc-500">IVA ({fcItems.length > 0 && Object.keys(fcIvaByRate).length === 1 ? Object.keys(fcIvaByRate)[0] : fcForm.iva_porcentaje}%)</span>
+                      <span className="font-mono text-zinc-600">{formatCurrency(fcIva, fcForm.moneda)}</span>
+                    </div>
+                  )}
                   {fcForm.percepciones > 0 && (
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-zinc-500">Percepciones</span>
@@ -4091,7 +4161,7 @@ ${certRetGanHtml}
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-xs font-medium text-zinc-500">Items recibidos (para stock)</label>
                     <button type="button"
-                      onClick={() => setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: "", codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, unidad: "UN" }])}
+                      onClick={() => setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: "", codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, unidad: "UN", iva_porcentaje: fcForm.iva_porcentaje || 21 }])}
                       className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium">
                       <Plus className="h-3.5 w-3.5" /> Agregar item
                     </button>
@@ -4111,7 +4181,7 @@ ${certRetGanHtml}
                         <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
                           {matches.map((p) => (
                             <button key={p.id} type="button" onClick={() => {
-                              setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: p.id, codigo: p.codigo, descripcion: p.nombre, cantidad: 1, precio_unitario: Number(p.precio_costo), unidad: p.unidad || "UN" }]);
+                              setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: p.id, codigo: p.codigo, descripcion: p.nombre, cantidad: 1, precio_unitario: Number(p.precio_costo), unidad: p.unidad || "UN", iva_porcentaje: fcForm.iva_porcentaje || 21 }]);
                               setFcProdSearch("");
                             }} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex items-center justify-between">
                               <span><span className="font-mono text-zinc-400 mr-2">{p.codigo}</span>{p.nombre}</span>
@@ -4127,11 +4197,18 @@ ${certRetGanHtml}
                       {fcItems.map((it, idx) => (
                         <div key={it.tempId} className="grid grid-cols-12 gap-1.5 items-center rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-2">
                           <input value={it.descripcion} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], descripcion: e.target.value }; setFcItems(n); }}
-                            placeholder="Descripción *" className="col-span-5 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                            placeholder="Descripción *" className="col-span-4 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
                           <input type="number" value={it.cantidad || ""} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], cantidad: Number(e.target.value) }; setFcItems(n); }}
                             placeholder="Cant." className="col-span-2 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
                           <input type="number" value={it.precio_unitario || ""} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], precio_unitario: Number(e.target.value) }; setFcItems(n); }}
-                            placeholder="$ unit." className="col-span-3 rounded border border-zinc-200 px-2 py-1 text-xs font-mono dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                            placeholder="$ unit." className="col-span-2 rounded border border-zinc-200 px-2 py-1 text-xs font-mono dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                          <select value={it.iva_porcentaje ?? 21} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], iva_porcentaje: Number(e.target.value) }; setFcItems(n); }}
+                            className="col-span-2 rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white">
+                            <option value={21}>21%</option>
+                            <option value={10.5}>10.5%</option>
+                            <option value={27}>27%</option>
+                            <option value={0}>0%</option>
+                          </select>
                           <span className="col-span-1 text-xs text-zinc-400 text-center">{it.unidad}</span>
                           <button type="button" onClick={() => setFcItems(fcItems.filter((_, i) => i !== idx))} className="col-span-1 text-zinc-400 hover:text-red-500 flex justify-center"><X className="h-3.5 w-3.5" /></button>
                         </div>
@@ -4429,7 +4506,7 @@ ${certRetGanHtml}
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <Receipt className="h-5 w-5 text-orange-500" />
-                <h2 className="text-lg font-bold dark:text-white">Nuevo gasto manual</h2>
+                <h2 className="text-lg font-bold dark:text-white">{gmEditingId ? "Editar gasto" : "Nuevo gasto manual"}</h2>
               </div>
               <button onClick={() => setGmModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
             </div>
@@ -4502,7 +4579,7 @@ ${certRetGanHtml}
                               setGastoCategorias(updated);
                               setNewCategoriaInput("");
                               // Save to configuracion
-                              (supabase as any).from("configuracion").upsert({ key: "gasto_categorias", value: JSON.stringify(updated), sociedad_id: sociedadActiva?.id }, { onConflict: "key,sociedad_id" });
+                              (supabase as any).from("configuracion").upsert({ key: "gasto_categorias", value: JSON.stringify(updated), sociedad_id: sociedadActiva?.id }, { onConflict: "sociedad_id,key" }).then(({ error: upsErr }: any) => { if (upsErr) console.error("Error guardando categorías:", upsErr); });
                             }
                           }} />
                         <button type="button" onClick={() => {
@@ -4510,7 +4587,7 @@ ${certRetGanHtml}
                           const updated = [...gastoCategorias, newCategoriaInput.trim()];
                           setGastoCategorias(updated);
                           setNewCategoriaInput("");
-                          (supabase as any).from("configuracion").upsert({ key: "gasto_categorias", value: JSON.stringify(updated), sociedad_id: sociedadActiva?.id }, { onConflict: "key,sociedad_id" });
+                          (supabase as any).from("configuracion").upsert({ key: "gasto_categorias", value: JSON.stringify(updated), sociedad_id: sociedadActiva?.id }, { onConflict: "sociedad_id,key" }).then(({ error: upsErr }: any) => { if (upsErr) console.error("Error guardando categorías:", upsErr); });
                         }} className="rounded bg-orange-500 px-2 py-1 text-xs text-white hover:bg-orange-600"><Plus className="h-3 w-3" /></button>
                       </div>
                       <div className="flex flex-wrap gap-1">
@@ -4522,7 +4599,7 @@ ${certRetGanHtml}
                               if (updated.length === 0) return;
                               setGastoCategorias(updated);
                               if (gmForm.categoria === c) setGmForm({ ...gmForm, categoria: updated[0] });
-                              (supabase as any).from("configuracion").upsert({ key: "gasto_categorias", value: JSON.stringify(updated), sociedad_id: sociedadActiva?.id }, { onConflict: "key,sociedad_id" });
+                              (supabase as any).from("configuracion").upsert({ key: "gasto_categorias", value: JSON.stringify(updated), sociedad_id: sociedadActiva?.id }, { onConflict: "sociedad_id,key" }).then(({ error: upsErr }: any) => { if (upsErr) console.error("Error guardando categorías:", upsErr); });
                             }} className="text-zinc-400 hover:text-red-500"><X className="h-2.5 w-2.5" /></button>
                           </span>
                         ))}
@@ -4606,7 +4683,7 @@ ${certRetGanHtml}
               <button onClick={handleCreateGM} disabled={gmSaving || !gmForm.descripcion.trim() || gmForm.monto <= 0}
                 className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {gmSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                Crear gasto
+                {gmEditingId ? "Guardar cambios" : "Crear gasto"}
               </button>
             </div>
           </div>

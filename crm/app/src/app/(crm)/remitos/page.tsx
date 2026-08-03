@@ -10,6 +10,7 @@ import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Che
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { generateRemitoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -923,98 +924,36 @@ export default function RemitosPage() {
   }
 
   function handleDownloadPDF() {
-    if (!detailRemito) return;
+    if (!detailRemito || !sociedadActiva) return;
     const r = detailRemito;
-    const items = detailItems;
-
-    // Determine sociedad info
-    const isGrupoLA = sociedadActiva?.id === "fee94607-747a-4e87-ba24-aff9032f7a56";
-    const socNombre = isGrupoLA ? "Grupo LA S.A.S." : "Lazzari Soluciones Industriales";
-    const socCuit = isGrupoLA ? "30-71939604-2" : "20-37930912-8";
-    const socColor = isGrupoLA ? "#2563EB" : "#FF4500";
-
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Remito ${r.numero}</title>
-    <style>
-      body{font-family:Arial,sans-serif;margin:40px;color:#333;font-size:13px}
-      .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid ${socColor};padding-bottom:16px;margin-bottom:24px}
-      .logo{font-size:22px;font-weight:bold;color:${socColor}}
-      .logo span{font-size:11px;color:#666;font-weight:normal;display:block;margin-top:2px}
-      .doc-info{text-align:right}
-      .doc-info h2{margin:0;font-size:20px;color:${socColor}}
-      .doc-info p{margin:2px 0;font-size:12px;color:#555}
-      .section{margin-bottom:20px}
-      .section h3{font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:#888;border-bottom:1px solid #e5e5e5;padding-bottom:4px;margin-bottom:10px}
-      .fields{display:flex;flex-wrap:wrap;gap:16px}
-      .field label{font-size:10px;color:#999;display:block;text-transform:uppercase;letter-spacing:0.3px}
-      .field span{font-size:13px;font-weight:500}
-      table{width:100%;border-collapse:collapse;margin-top:8px}
-      th{background:#f5f5f5;text-align:left;padding:10px 12px;font-size:11px;border-bottom:2px solid #ddd;text-transform:uppercase;letter-spacing:0.3px;color:#666}
-      td{padding:10px 12px;font-size:12px;border-bottom:1px solid #eee}
-      tr:last-child td{border-bottom:none}
-      .valor-declarado{background:#fff3e0;border:2px solid #ff9800;border-radius:6px;padding:14px 16px;margin-top:20px;font-size:15px;font-weight:bold;color:#e65100}
-      .obs{background:#f9f9f9;padding:12px 16px;border-radius:6px;font-size:12px;color:#555;margin-top:16px;border:1px solid #eee}
-      .footer{margin-top:50px;display:flex;justify-content:space-between;padding-top:20px}
-      .signature{border-top:1px solid #333;width:200px;text-align:center;padding-top:6px;font-size:11px;color:#666}
-      .no-items{text-align:center;color:#999;padding:24px;font-style:italic}
-      @media print{body{margin:20px}}
-    </style></head><body>
-    <div class="header">
-      <div class="logo">${socNombre}<span>CUIT: ${socCuit}</span></div>
-      <div class="doc-info">
-        <h2>REMITO</h2>
-        <p><strong>${r.numero}</strong></p>
-        <p>Fecha: ${formatDate(r.fecha)}</p>
-        ${r.cae ? `<p>CAE: ${r.cae}</p>` : ""}
-      </div>
-    </div>
-
-    <div class="section">
-      <h3>Cliente</h3>
-      <div class="fields">
-        <div class="field"><label>Razón Social</label><span>${r.clientes?.razon_social || "\u2014"}</span></div>
-        ${r.clientes?.cuit ? `<div class="field"><label>CUIT</label><span>${r.clientes.cuit}</span></div>` : ""}
-        ${r.sucursal_nombre
-          ? `<div class="field"><label>Sucursal destino</label><span style="color:${socColor};font-weight:600">${r.sucursal_nombre}</span></div>
-             ${r.sucursal_direccion ? `<div class="field"><label>Dirección entrega</label><span>${r.sucursal_direccion}</span></div>` : ""}`
-          : r.clientes?.direccion ? `<div class="field"><label>Dirección</label><span>${r.clientes.direccion}</span></div>` : ""}
-        ${r.oc_cliente ? `<div class="field"><label>OC Cliente</label><span style="color:#2563EB;font-weight:600">${r.oc_cliente}</span></div>` : ""}
-      </div>
-    </div>
-
-    <div class="section">
-      <h3>Items</h3>
-      ${items.length > 0 ? `
-      <table>
-        <thead><tr><th style="width:40px">#</th><th>Descripción</th><th style="width:100px;text-align:right">Cantidad</th><th style="width:80px">Unidad</th></tr></thead>
-        <tbody>${items.map((it, i) => `<tr><td>${i + 1}</td><td>${it.descripcion}</td><td style="text-align:right;font-weight:500">${it.cantidad}</td><td>${it.unidad || "u"}</td></tr>`).join("")}</tbody>
-      </table>` : `<p class="no-items">Sin items</p>`}
-    </div>
-
-    ${detailTransportes.length > 0 ? `
-    <div class="section">
-      <h3>Transporte</h3>
-      <div class="fields">
-      ${detailTransportes.map(t => `
-        <div class="field"><label>Transportista</label><span>${t.transportista}</span></div>
-        ${t.destino ? `<div class="field"><label>Destino</label><span>${t.destino}</span></div>` : ""}
-        ${t.costo ? `<div class="field"><label>Costo flete</label><span>${formatCurrency(Number(t.costo), (t.moneda || "ARS") as "USD" | "ARS")}</span></div>` : ""}
-      `).join("")}
-      </div>
-    </div>` : ""}
-
-    ${r.valor_declarado ? `<div class="valor-declarado">VALOR DECLARADO: $ ${Number(r.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div>` : ""}
-    ${r.observaciones ? `<div class="obs"><strong>Observaciones:</strong> ${r.observaciones}</div>` : ""}
-
-    <div class="footer">
-      <div class="signature">Firma Emisor</div>
-      <div class="signature">Firma Receptor</div>
-    </div>
-    </body></html>`;
-    const blob = new Blob([html], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    const w = window.open(url, "_blank");
-    if (w) { setTimeout(() => { w.print(); }, 500); }
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    const soc = getSociedadPDF(sociedadActiva);
+    const html = generateRemitoPDF({
+      numero: r.numero,
+      fecha: r.fecha,
+      cae: r.cae,
+      oc_cliente: r.oc_cliente,
+      valor_declarado: r.valor_declarado,
+      observaciones: r.observaciones,
+      cliente: r.clientes ? {
+        razon_social: r.clientes.razon_social,
+        cuit: r.clientes.cuit,
+        direccion: r.clientes.direccion,
+      } : null,
+      sucursal_nombre: r.sucursal_nombre,
+      sucursal_direccion: r.sucursal_direccion,
+      items: detailItems.map(it => ({
+        descripcion: it.descripcion,
+        cantidad: it.cantidad,
+        unidad: it.unidad,
+      })),
+      transportes: detailTransportes.map(t => ({
+        transportista: t.transportista,
+        destino: t.destino,
+        costo: t.costo,
+        moneda: t.moneda,
+      })),
+    }, soc);
+    openPDFWindow(html);
   }
 
   async function handleCreateTransporteFromRemito() {

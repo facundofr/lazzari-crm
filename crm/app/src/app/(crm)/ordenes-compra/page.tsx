@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { generateOrdenCompraPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 import { supabase } from "@/lib/supabase/client";
 import { mockOrdenesCompra } from "@/lib/mock-data";
 import type { OCStatus } from "@/lib/types";
@@ -71,6 +72,7 @@ interface DetailItem {
   precio_unitario: number;
   subtotal: number;
   producto_id: string | null;
+  iva_porcentaje: number;
 }
 
 interface ProveedorOption {
@@ -274,11 +276,11 @@ export default function OrdenesCompraPage() {
     try {
       const { data, error } = await supabase
         .from("orden_compra_items")
-        .select("id, codigo, descripcion, cantidad, cantidad_recibida, unidad, precio_unitario, subtotal, producto_id" as any)
+        .select("id, codigo, descripcion, cantidad, cantidad_recibida, unidad, precio_unitario, subtotal, producto_id, iva_porcentaje" as any)
         .eq("orden_id", ocId)
         .order("orden", { ascending: true });
       if (!error && data) {
-        setDetailItems(data as unknown as DetailItem[]);
+        setDetailItems((data as any[]).map((it: any) => ({ ...it, iva_porcentaje: Number(it.iva_porcentaje ?? 21) })) as DetailItem[]);
       } else {
         setDetailItems([]);
       }
@@ -371,6 +373,7 @@ export default function OrdenesCompraPage() {
           unidad: it.unidad || "u",
           precio_unitario: Number(it.precio_costo) || 0,
           producto_id: it.producto_id || null,
+          iva_porcentaje: Number(it.iva_porcentaje ?? 21),
           orden: idx,
         }));
         const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
@@ -568,6 +571,7 @@ export default function OrdenesCompraPage() {
           unidad: it.unidad || "u",
           precio_unitario: Number(it.precio_unitario) || 0,
           producto_id: it.producto_id || null,
+          iva_porcentaje: Number(it.iva_porcentaje) || 21,
           orden: detailItems.length + idx,
         }));
         const { error: insErr } = await supabase.from("orden_compra_items").insert(insertRows as any);
@@ -614,10 +618,13 @@ export default function OrdenesCompraPage() {
         }
       }
 
-      // 2. Recalculate OC totals (preserve original IVA ratio)
+      // 2. Recalculate OC totals using per-item IVA rates
       const newSubtotal = editItems.reduce((sum, it) => sum + Number(it.cantidad) * Number(it.precio_unitario), 0);
-      const origIvaRate = Number(detailOC.subtotal) > 0 ? Number(detailOC.iva) / Number(detailOC.subtotal) : 0.21;
-      const newIva = newSubtotal * origIvaRate;
+      const newIva = editItems.reduce((sum, it) => {
+        const lineSubtotal = Number(it.cantidad) * Number(it.precio_unitario);
+        const ivaPct = (Number(it.iva_porcentaje) || 21) / 100;
+        return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
+      }, 0);
       const newTotal = newSubtotal + newIva;
 
       // 3. Determine new estado
@@ -698,128 +705,46 @@ export default function OrdenesCompraPage() {
   };
 
   const handleDownloadPDF = () => {
-    if (!detailOC) return;
+    if (!detailOC || !sociedadActiva) return;
     const oc = detailOC;
     const prov = oc.proveedores;
     const estadoLabel = (statusConfig[oc.estado] || { label: oc.estado }).label;
     const mon = oc.moneda as "ARS" | "USD";
+    const soc = getSociedadPDF(sociedadActiva);
 
-    const itemRows = detailItems.map((it, i) => `
-      <tr>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:center">${i + 1}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;font-family:monospace;font-size:11px">${it.codigo}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7">${it.descripcion}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right">${it.cantidad}${it.unidad ? ` ${it.unidad}` : ""}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace">${formatCurrency(Number(it.precio_unitario), mon)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #e4e4e7;text-align:right;font-family:monospace;font-weight:600">${formatCurrency(Number(it.subtotal), mon)}</td>
-      </tr>
-    `).join("");
-
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${oc.numero} - Lazzari</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; padding: 0; color: #1a1a1a; font-size: 13px; line-height: 1.5; }
-  .page { max-width: 800px; margin: 0 auto; padding: 40px 48px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 3px solid #FF4500; }
-  .brand { font-size: 20px; font-weight: 800; color: #FF4500; letter-spacing: -0.5px; }
-  .brand-sub { font-size: 10px; color: #999; font-weight: 400; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 2px; }
-  .doc-info { text-align: right; }
-  .doc-type { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: #888; font-weight: 600; }
-  .doc-num { font-size: 20px; font-weight: 700; font-family: 'SF Mono', 'Consolas', monospace; margin: 4px 0; }
-  .doc-estado { display: inline-block; padding: 2px 12px; border-radius: 12px; font-size: 10px; font-weight: 600; background: #f0f0f0; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
-  .doc-fecha { font-size: 11px; color: #888; margin-top: 6px; }
-  .two-col { display: flex; gap: 32px; margin-bottom: 28px; }
-  .col { flex: 1; }
-  .section-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px; color: #FF4500; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
-  .field { margin-bottom: 6px; }
-  .field-label { font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.3px; }
-  .field-value { font-size: 13px; font-weight: 500; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
-  thead th { background: #f8f8f8; padding: 10px 12px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #888; font-weight: 600; border-bottom: 2px solid #eee; }
-  tbody td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; font-size: 12px; }
-  tbody tr:last-child td { border-bottom: 2px solid #eee; }
-  .mono { font-family: 'SF Mono', 'Consolas', monospace; font-size: 11px; }
-  .right { text-align: right; }
-  .center { text-align: center; }
-  .totals-box { display: flex; justify-content: flex-end; margin-top: 12px; }
-  .totals-inner { width: 280px; }
-  .total-line { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12px; color: #666; }
-  .total-line .mono { color: #1a1a1a; }
-  .total-final { display: flex; justify-content: space-between; padding: 10px 0; margin-top: 6px; border-top: 2px solid #1a1a1a; font-size: 16px; font-weight: 700; }
-  .obs-box { background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 14px 16px; margin-top: 20px; font-size: 12px; color: #555; }
-  .obs-title { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; margin-bottom: 6px; }
-  .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #eee; display: flex; justify-content: space-between; font-size: 9px; color: #bbb; }
-  @media print { .page { padding: 24px 32px; } }
-</style></head><body>
-<div class="page">
-
-<div class="header">
-  <div>
-    <div class="brand">LAZZARI</div>
-    <div class="brand-sub">Soluciones Industriales</div>
-  </div>
-  <div class="doc-info">
-    <div class="doc-type">Orden de Compra</div>
-    <div class="doc-num">${oc.numero}</div>
-    <div class="doc-estado">${estadoLabel}</div>
-    <div class="doc-fecha">${formatDate(oc.fecha)}${oc.fecha_entrega_estimada ? ` &bull; Entrega: ${formatDate(oc.fecha_entrega_estimada)}` : ""}</div>
-  </div>
-</div>
-
-<div class="two-col">
-  <div class="col">
-    <div class="section-label">Proveedor</div>
-    <div class="field"><div class="field-value" style="font-size:15px;font-weight:700">${prov?.razon_social || "\u2014"}</div></div>
-    ${prov?.cuit ? `<div class="field"><div class="field-label">CUIT</div><div class="field-value">${prov.cuit}</div></div>` : ""}
-    ${prov?.condicion_iva ? `<div class="field"><div class="field-label">Cond. IVA</div><div class="field-value">${prov.condicion_iva}</div></div>` : ""}
-  </div>
-  <div class="col">
-    <div class="section-label">Contacto</div>
-    ${prov?.email ? `<div class="field"><div class="field-label">Email</div><div class="field-value">${prov.email}</div></div>` : ""}
-    ${prov?.telefono ? `<div class="field"><div class="field-label">Telefono</div><div class="field-value">${prov.telefono}</div></div>` : ""}
-    ${prov?.direccion ? `<div class="field"><div class="field-label">Direccion</div><div class="field-value">${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? `, ${prov.provincia}` : ""}</div></div>` : ""}
-    ${prov?.forma_pago ? `<div class="field"><div class="field-label">Forma de pago</div><div class="field-value">${prov.forma_pago}</div></div>` : ""}
-  </div>
-</div>
-
-<div class="section-label" style="margin-bottom:12px">Detalle</div>
-<table>
-  <thead><tr>
-    <th class="center" style="width:36px">#</th>
-    <th style="width:100px">Codigo</th>
-    <th>Descripcion</th>
-    <th class="right" style="width:80px">Cant.</th>
-    <th class="right" style="width:110px">P. Unitario</th>
-    <th class="right" style="width:110px">Subtotal</th>
-  </tr></thead>
-  <tbody>${itemRows}</tbody>
-</table>
-
-<div class="totals-box">
-  <div class="totals-inner">
-    <div class="total-line"><span>Subtotal</span><span class="mono">${formatCurrency(Number(oc.subtotal), mon)}</span></div>
-    <div class="total-line"><span>IVA</span><span class="mono">${formatCurrency(Number(oc.iva), mon)}</span></div>
-    <div class="total-final"><span>TOTAL (${mon})</span><span class="mono">${formatCurrency(Number(oc.total), mon)}</span></div>
-  </div>
-</div>
-
-${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones</div>${oc.observaciones}</div>` : ""}
-
-<div class="footer">
-  <span>Lazzari Soluciones Industriales</span>
-  <span>${oc.numero}${oc.presupuesto_origen ? ` | PR: ${(oc.presupuesto_origen as { numero: string }).numero}` : ""}</span>
-  <span>${formatDate(new Date().toISOString())}</span>
-</div>
-
-</div></body></html>`;
-
-    const win = window.open("", "_blank");
-    if (win) {
-      win.document.write(html);
-      win.document.close();
-      setTimeout(() => win.print(), 500);
-    }
+    const html = generateOrdenCompraPDF({
+      numero: oc.numero,
+      fecha: oc.fecha,
+      fecha_entrega_estimada: oc.fecha_entrega_estimada,
+      estado: oc.estado,
+      estadoLabel,
+      moneda: mon,
+      subtotal: Number(oc.subtotal),
+      iva: Number(oc.iva),
+      total: Number(oc.total),
+      observaciones: oc.observaciones,
+      presupuesto_origen: oc.presupuesto_origen ? { numero: (oc.presupuesto_origen as { numero: string }).numero } : null,
+      proveedor: prov ? {
+        razon_social: prov.razon_social,
+        cuit: prov.cuit,
+        condicion_iva: prov.condicion_iva,
+        direccion: prov.direccion,
+        localidad: prov.localidad,
+        provincia: prov.provincia,
+        email: prov.email,
+        telefono: prov.telefono,
+        forma_pago: prov.forma_pago,
+      } : null,
+      items: detailItems.map(it => ({
+        codigo: it.codigo,
+        descripcion: it.descripcion,
+        cantidad: it.cantidad,
+        unidad: it.unidad,
+        precio_unitario: Number(it.precio_unitario),
+        subtotal: Number(it.subtotal),
+      })),
+    }, soc);
+    openPDFWindow(html);
   };
 
   const [copiedSummary, setCopiedSummary] = useState(false);
@@ -1099,6 +1024,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
           cantidad_recibida: 0,
           unidad: it.unidad,
           precio_unitario: it.precio_costo,
+          iva_porcentaje: it.iva_porcentaje ?? 21,
           orden: idx,
         }));
 
@@ -2151,7 +2077,7 @@ ${oc.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <h3 className="text-sm font-semibold">Items ({(editMode ? editItems : detailItems).length})</h3>
                   <div className="flex items-center gap-2">
                     {editMode && (
-                      <button onClick={() => setEditItems(prev => [...prev, { id: `new_${Date.now()}`, codigo: "", descripcion: "", cantidad: 1, cantidad_recibida: 0, unidad: "u", precio_unitario: 0, subtotal: 0, producto_id: null }])}
+                      <button onClick={() => setEditItems(prev => [...prev, { id: `new_${Date.now()}`, codigo: "", descripcion: "", cantidad: 1, cantidad_recibida: 0, unidad: "u", precio_unitario: 0, subtotal: 0, producto_id: null, iva_porcentaje: 21 }])}
                         className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
                         <Plus className="h-3 w-3" /> Agregar item
                       </button>

@@ -7,6 +7,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { generateFacturaPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { mockFacturas } from "@/lib/mock-data";
@@ -157,7 +158,8 @@ export default function FacturacionPage() {
       return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + neto + iva };
     } else {
       const total = it.cantidad * it.precio_unitario;
-      const neto = Math.round(total / 1.21 * 100) / 100;
+      const ivaPct = it.iva_porcentaje ?? 21;
+      const neto = Math.round(total / (1 + ivaPct / 100) * 100) / 100;
       const iva = Math.round((total - neto) * 100) / 100;
       return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + total };
     }
@@ -431,7 +433,8 @@ export default function FacturacionPage() {
       return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + neto + iva };
     } else {
       const total = it.cantidad * it.precio_unitario;
-      const neto = Math.round(total / 1.21 * 100) / 100;
+      const ivaPct = it.iva_porcentaje ?? 21;
+      const neto = Math.round(total / (1 + ivaPct / 100) * 100) / 100;
       const iva = Math.round((total - neto) * 100) / 100;
       return { neto: acc.neto + neto, iva: acc.iva + iva, total: acc.total + total };
     }
@@ -731,6 +734,7 @@ export default function FacturacionPage() {
   }
 
   async function handlePrintFactura(f: FacturaRow) {
+    if (!sociedadActiva) return;
     // Ensure items are loaded before generating PDF
     let pdfItems = detailItems;
     if (pdfItems.length === 0) {
@@ -740,160 +744,40 @@ export default function FacturacionPage() {
       pdfItems = (data || []).map(d => ({ ...d, subtotal: d.subtotal ?? 0 }));
     }
 
+    const soc = getSociedadPDF(sociedadActiva);
     const cli = f.clientes;
-    const comp = formatComprobante(f.tipo, f.punto_venta, f.numero);
-    const letraComprobante = f.tipo.slice(-1);
-    const isFacturaBPdf = f.tipo === "FB" || f.tipo === "NCB" || f.tipo === "X" || f.tipo === "NDB";
-
-    // Build QR data URL for ARCA verification
-    const isUSDPdf = f.moneda === "USD" && f.tipo_cambio;
-    const qrData = JSON.stringify({
-      ver: 1, fecha: f.fecha, cuit: emisorData.cuitNumero, ptoVta: f.punto_venta,
-      tipoCmp: ({ FA: 1, FB: 6, FC: 11, NCA: 3, NCB: 8, NCC: 13, FCEA: 201, FCEB: 206, NCEA: 203, NCEB: 208 } as Record<string, number>)[f.tipo] || 1,
-      nroCmp: f.numero, importe: Number(f.total), moneda: isUSDPdf ? "DOL" : "PES", ctz: isUSDPdf ? Number(f.tipo_cambio) : 1,
-      tipoDocRec: cli?.cuit ? 80 : 99, nroDocRec: cli?.cuit ? Number(cli.cuit.replace(/-/g, "")) : 0,
-      tipoCodAut: "E", codAut: Number(f.cae || 0),
-    });
-    const qrBase64 = btoa(qrData);
-    const qrUrl = `https://www.afip.gob.ar/fe/qr/?p=${qrBase64}`;
-
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${comp}</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Segoe UI', system-ui, sans-serif; padding: 0; color: #1a1a1a; font-size: 12px; line-height: 1.4; }
-  .page { max-width: 800px; margin: 0 auto; padding: 32px 40px; }
-  .fc-header { display: flex; border: 2px solid #1a1a1a; margin-bottom: 20px; }
-  .fc-left, .fc-right { flex: 1; padding: 16px; }
-  .fc-center { width: 60px; display: flex; align-items: flex-start; justify-content: center; padding-top: 12px; border-left: 2px solid #1a1a1a; border-right: 2px solid #1a1a1a; }
-  .fc-letra { font-size: 28px; font-weight: 900; }
-  .fc-cod { font-size: 8px; color: #666; text-align: center; margin-top: 2px; }
-  .emisor-name { font-size: 16px; font-weight: 700; }
-  .emisor-detail { font-size: 10px; color: #555; margin-top: 4px; }
-  .comp-tipo { font-size: 14px; font-weight: 700; text-align: right; }
-  .comp-num { font-size: 16px; font-weight: 700; font-family: monospace; text-align: right; margin-top: 4px; }
-  .comp-fecha { font-size: 11px; color: #555; text-align: right; margin-top: 6px; }
-  .two-col { display: flex; gap: 24px; margin-bottom: 16px; padding: 12px; border: 1px solid #ddd; border-radius: 4px; }
-  .col { flex: 1; }
-  .field-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: #888; font-weight: 600; }
-  .field-value { font-size: 12px; font-weight: 500; margin-bottom: 4px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-  thead th { background: #f5f5f5; padding: 8px 10px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: #666; font-weight: 600; border-bottom: 2px solid #ddd; }
-  tbody td { padding: 8px 10px; border-bottom: 1px solid #eee; font-size: 11px; }
-  .mono { font-family: 'Consolas', monospace; }
-  .right { text-align: right; }
-  .totals { display: flex; justify-content: flex-end; }
-  .totals-inner { width: 260px; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; }
-  .total-line { display: flex; justify-content: space-between; padding: 6px 12px; font-size: 11px; }
-  .total-line.final { background: #f5f5f5; font-weight: 700; font-size: 14px; border-top: 2px solid #1a1a1a; padding: 10px 12px; }
-  .cae-section { margin-top: 20px; padding: 12px; border: 1px solid #ddd; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
-  .cae-info { }
-  .cae-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: #888; font-weight: 600; }
-  .cae-value { font-size: 14px; font-weight: 700; font-family: monospace; margin-top: 2px; }
-  .cae-vto { font-size: 10px; color: #666; margin-top: 2px; }
-  .qr-box { text-align: center; }
-  .qr-box img { width: 100px; height: 100px; }
-  .qr-text { font-size: 8px; color: #888; margin-top: 2px; }
-  .footer { margin-top: 24px; text-align: center; font-size: 9px; color: #bbb; border-top: 1px solid #eee; padding-top: 8px; }
-  @media print { .page { padding: 16px 24px; } }
-</style></head><body>
-<div class="page">
-
-<div class="fc-header">
-  <div class="fc-left">
-    <div class="emisor-name">${emisorData.razonSocial}</div>
-    <div class="emisor-detail">CUIT: ${emisorData.cuit}</div>
-    <div class="emisor-detail">${emisorData.condicionIva}</div>
-    ${emisorData.domicilio ? `<div class="emisor-detail">${emisorData.domicilio}</div>` : ""}
-  </div>
-  <div class="fc-center">
-    <div>
-      <div class="fc-letra">${letraComprobante}</div>
-      <div class="fc-cod">COD. ${String({ FA: 1, FB: 6, X: 0, NCA: 3, NCB: 8, NDA: 2, NDB: 7, FCEA: 201, FCEB: 206, NCEA: 203, NCEB: 208 }[f.tipo] || 0).padStart(2, "0")}</div>
-    </div>
-  </div>
-  <div class="fc-right">
-    <div class="comp-tipo">${f.tipo === "X" ? "FACTURA (INTERNA)" : f.tipo.startsWith("ND") ? "NOTA DE DÉBITO" : f.tipo.startsWith("NCE") ? "NOTA DE CRÉDITO ELECTRÓNICA" : f.tipo.startsWith("NC") ? "NOTA DE CRÉDITO" : f.tipo.startsWith("FCE") ? "FACTURA DE CRÉDITO ELECTRÓNICA" : "FACTURA"}</div>
-    <div class="comp-num">N° ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}</div>
-    <div class="comp-fecha">Fecha: ${formatDate(f.fecha)}</div>
-  </div>
-</div>
-
-<div class="two-col">
-  <div class="col">
-    <div class="field-label">Cliente</div>
-    <div class="field-value" style="font-size:14px;font-weight:700">${cli?.razon_social || "\u2014"}</div>
-    ${cli?.cuit ? `<div class="field-label">CUIT</div><div class="field-value">${cli.cuit}</div>` : ""}
-    ${cli?.condicion_iva ? `<div class="field-label">Cond. IVA</div><div class="field-value">${cli.condicion_iva}</div>` : ""}
-  </div>
-  <div class="col">
-    ${cli?.direccion ? `<div class="field-label">Domicilio</div><div class="field-value">${cli.direccion}${cli.localidad ? `, ${cli.localidad}` : ""}${cli.provincia ? `, ${cli.provincia}` : ""}</div>` : ""}
-    ${cli?.email ? `<div class="field-label">Email</div><div class="field-value">${cli.email}</div>` : ""}
-    ${cli?.telefono ? `<div class="field-label">Telefono</div><div class="field-value">${cli.telefono}</div>` : ""}
-    ${f.oc_cliente ? `<div class="field-label" style="margin-top:8px">OC Cliente</div><div class="field-value" style="color:#2563EB;font-weight:700;font-size:13px">${f.oc_cliente}</div>` : ""}
-  </div>
-</div>
-
-<table>
-  <thead><tr>
-    <th style="width:50%">Descripcion</th>
-    <th class="right">Cantidad</th>
-    <th class="right">P. Unitario</th>
-    ${isFacturaBPdf ? "" : `<th class="right">IVA %</th>`}
-    <th class="right">Subtotal</th>
-  </tr></thead>
-  <tbody>
-    ${pdfItems.length > 0 ? pdfItems.map(it => `
-    <tr>
-      <td>${it.descripcion}</td>
-      <td class="right mono">${it.cantidad}</td>
-      <td class="right mono">${formatCurrency(Number(it.precio_unitario), f.moneda as "USD" | "ARS")}</td>
-      ${isFacturaBPdf ? "" : `<td class="right">${it.iva_porcentaje}%</td>`}
-      <td class="right mono">${formatCurrency(Number(it.subtotal), f.moneda as "USD" | "ARS")}</td>
-    </tr>`).join("") : `
-    <tr>
-      <td colspan="${isFacturaBPdf ? 4 : 5}" style="text-align:center;color:#888;padding:16px">
-        Items detallados no disponibles
-      </td>
-    </tr>`}
-  </tbody>
-</table>
-
-<div class="totals">
-  <div class="totals-inner">
-    ${isUSDPdf ? `<div class="total-line" style="color:#888;font-size:10px"><span>Operacion en USD — TC: ${Number(f.tipo_cambio).toLocaleString("es-AR")}</span><span class="mono">USD ${(Number(f.total) / Number(f.tipo_cambio!)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
-    ${isFacturaBPdf
-      ? `<div class="total-line"><span>Subtotal</span><span class="mono">${formatCurrency(Number(f.total), f.moneda as "USD" | "ARS")}</span></div>
-         <div class="total-line" style="color:#888;font-size:10px"><span>IVA incluido en precio</span><span class="mono">${formatCurrency(Number(f.iva), f.moneda as "USD" | "ARS")}</span></div>
-         <div class="total-line final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total), f.moneda as "USD" | "ARS")}</span></div>`
-      : `<div class="total-line"><span>Neto gravado</span><span class="mono">${formatCurrency(Number(f.subtotal), f.moneda as "USD" | "ARS")}</span></div>
-         <div class="total-line"><span>IVA 21%</span><span class="mono">${formatCurrency(Number(f.iva), f.moneda as "USD" | "ARS")}</span></div>
-         <div class="total-line final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total), f.moneda as "USD" | "ARS")}</span></div>`}
-  </div>
-</div>
-
-${f.cae ? `
-<div class="cae-section">
-  <div class="cae-info">
-    <div class="cae-label">CAE</div>
-    <div class="cae-value">${f.cae}</div>
-    ${f.cae_vencimiento ? `<div class="cae-vto">Vencimiento: ${formatDate(f.cae_vencimiento)}</div>` : ""}
-  </div>
-  <div class="qr-box">
-    <img src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(qrUrl)}" alt="QR ARCA" />
-    <div class="qr-text">Verificar en ARCA</div>
-  </div>
-</div>
-` : ""}
-
-<div class="footer">
-  ${comp} &mdash; ${emisorData.razonSocial} &mdash; CUIT ${emisorData.cuit}
-</div>
-
-</div></body></html>`;
-
-    const w = window.open("", "_blank");
-    if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
+    const html = generateFacturaPDF({
+      tipo: f.tipo,
+      punto_venta: f.punto_venta,
+      numero: f.numero,
+      fecha: f.fecha,
+      moneda: f.moneda as "ARS" | "USD",
+      tipo_cambio: f.tipo_cambio,
+      subtotal: Number(f.subtotal),
+      iva: Number(f.iva),
+      total: Number(f.total),
+      cae: f.cae,
+      cae_vencimiento: f.cae_vencimiento,
+      oc_cliente: f.oc_cliente,
+      cliente: cli ? {
+        razon_social: cli.razon_social,
+        cuit: cli.cuit,
+        condicion_iva: cli.condicion_iva,
+        direccion: cli.direccion,
+        localidad: cli.localidad,
+        provincia: cli.provincia,
+        email: cli.email,
+        telefono: cli.telefono,
+      } : null,
+      items: pdfItems.map(it => ({
+        descripcion: it.descripcion,
+        cantidad: it.cantidad,
+        precio_unitario: Number(it.precio_unitario),
+        iva_porcentaje: it.iva_porcentaje,
+        subtotal: Number(it.subtotal),
+      })),
+    }, emisorData, soc);
+    openPDFWindow(html);
   }
 
   // ── KPIs ───────────────────────────────────────────────────────
@@ -1105,7 +989,9 @@ ${f.cae ? `
                       // Auto-update correlative number for new tipo
                       (async () => {
                         try {
-                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, newTipo).eq("punto_venta" as any, emitData.punto_venta).order("numero", { ascending: false }).limit(1);
+                          let qN = supabase.from("facturas").select("numero").eq("tipo" as any, newTipo).eq("punto_venta" as any, emitData.punto_venta);
+                          if (sociedadActiva?.id) qN = qN.eq("sociedad_id" as any, sociedadActiva.id);
+                          const { data: last } = await qN.order("numero", { ascending: false }).limit(1);
                           if (last && last.length > 0) {
                             setEmitData(prev => ({ ...prev, numero_manual: String(Number(last[0].numero) + 1) }));
                           } else {

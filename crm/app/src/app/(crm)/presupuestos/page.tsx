@@ -8,6 +8,7 @@ import { Modal } from "@/components/ui/modal";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { generatePresupuestoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 import { mockPresupuestos } from "@/lib/mock-data";
 import type { Presupuesto, PRStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
@@ -402,6 +403,7 @@ export default function PresupuestosPage() {
   }
 
   const [clientes, setClientes] = useState<{id: string; razon_social: string; markup_predeterminado?: number | null; condicion_iva?: string | null}[]>([]);
+  const [proveedoresOptions, setProveedoresOptions] = useState<{id: string; razon_social: string}[]>([]);
   const [newPR, setNewPR] = useState({
     cliente_id: "",
     vendedor_id: "",
@@ -839,7 +841,16 @@ export default function PresupuestosPage() {
         if (data) setClientes(data as {id: string; razon_social: string; markup_predeterminado?: number | null; condicion_iva?: string | null}[]);
       } catch { /* ignore */ }
     }
+    async function fetchProveedoresForPR() {
+      try {
+        let q = supabase.from("proveedores").select("id, razon_social").eq("activo", true).order("razon_social");
+        if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data } = await q;
+        if (data) setProveedoresOptions(data as unknown as {id: string; razon_social: string}[]);
+      } catch { /* ignore */ }
+    }
     fetchClientes();
+    fetchProveedoresForPR();
   }, [showNewPR, sociedadActiva]);
 
   function updateNewPRItem(index: number, field: keyof NewPRItem | "costo_moneda", value: string | number) {
@@ -1173,8 +1184,11 @@ export default function PresupuestosPage() {
         byProveedor[provId].push(item);
       }
 
-      const proveedorIds = Object.keys(byProveedor);
-      if (proveedorIds.length === 0) {
+      // Separate items with and without proveedor
+      const sinProveedorCount = (byProveedor["__sin_proveedor__"] || []).length;
+      const conProveedorIds = Object.keys(byProveedor).filter(k => k !== "__sin_proveedor__");
+
+      if (conProveedorIds.length === 0 && sinProveedorCount === 0) {
         toast.info("PR aprobado. No se generaron OC (sin items).");
         return;
       }
@@ -1182,11 +1196,11 @@ export default function PresupuestosPage() {
       let ocsCreated = 0;
       const today = new Date().toISOString().split("T")[0];
 
-      for (const provId of proveedorIds) {
+      // Only generate OCs for items that HAVE a proveedor assigned
+      for (const provId of conProveedorIds) {
         const provItems = byProveedor[provId];
         const subtotal = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
         const iva = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
-        const isSinProveedor = provId === "__sin_proveedor__";
 
         // Determine OC moneda from items' costo_moneda (cost currency), NOT from PR sale moneda
         // If items have mixed cost currencies, default to ARS
@@ -1196,7 +1210,7 @@ export default function PresupuestosPage() {
         const { data: ocRow, error: ocErr } = await supabase
           .from("ordenes_compra")
           .insert({
-            proveedor_id: isSinProveedor ? null : provId,
+            proveedor_id: provId,
             presupuesto_origen_id: prId,
             sociedad_id: sociedadId,
             fecha: today,
@@ -1205,9 +1219,7 @@ export default function PresupuestosPage() {
             subtotal,
             iva,
             total: subtotal + iva,
-            observaciones: isSinProveedor
-              ? `Generada desde ${prNumero} — SIN PROVEEDOR ASIGNADO`
-              : `Generada automáticamente desde ${prNumero}`,
+            observaciones: `Generada automáticamente desde ${prNumero}`,
             created_by: profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
           } as any)
           .select()
@@ -1227,10 +1239,11 @@ export default function PresupuestosPage() {
           cantidad: Number(it.cantidad) || 1,
           unidad: it.unidad || "u",
           precio_unitario: Number(it.precio_costo) || 0,
+          iva_porcentaje: Number(it.iva_porcentaje ?? 21),
           orden: idx + 1,
           cantidad_recibida: 0,
         }));
-        const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems);
+        const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
         if (itemsErr) {
           console.error("Error inserting OC items:", JSON.stringify(itemsErr));
           toast.error(`OC ${ocRow.numero ?? ""} creada pero falló la carga de items: ${itemsErr.message}`);
@@ -1240,6 +1253,11 @@ export default function PresupuestosPage() {
 
       if (ocsCreated > 0) {
         toast.success(`Se generaron ${ocsCreated} orden(es) de compra automáticamente`);
+      }
+
+      // Notify about items without proveedor that were skipped
+      if (sinProveedorCount > 0) {
+        toast.warning(`${sinProveedorCount} item(s) sin proveedor asignado — asigná proveedores desde Compras > "Items sin proveedor"`);
       }
     } catch (err) {
       console.error("Error generating OCs:", err);
@@ -1664,122 +1682,40 @@ export default function PresupuestosPage() {
 
   function handlePrint(pr: Presupuesto) {
     const p = pr as any;
-    const mon = pr.moneda;
+    if (!sociedadActiva) return;
+    const soc = getSociedadPDF(sociedadActiva);
     const estadoLabel = (statusConfig[pr.estado] || { label: pr.estado }).label;
-
-    const itemRows = pr.items.map((it, i) => `
-      <tr>
-        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;text-align:center;font-size:12px">${i + 1}</td>
-        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-family:'SF Mono','Consolas',monospace;font-size:11px">${it.codigo}</td>
-        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:12px">${it.descripcion}</td>
-        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;text-align:right;font-size:12px">${it.cantidad} ${it.unidad}</td>
-        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;text-align:right;font-family:'SF Mono','Consolas',monospace;font-size:11px">${formatCurrency(it.precioVenta, mon)}</td>
-        <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;text-align:right;font-family:'SF Mono','Consolas',monospace;font-size:11px;font-weight:600">${formatCurrency(it.total, mon)}</td>
-      </tr>
-    `).join("");
-
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${pr.numero} - ${sociedadActiva?.razonSocial || "Lazzari"}</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; padding: 0; color: #1a1a1a; font-size: 13px; line-height: 1.5; }
-  .page { max-width: 800px; margin: 0 auto; padding: 40px 48px; }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 3px solid ${sociedadActiva?.colorPrimario || "#FF4500"}; }
-  .brand { font-size: 20px; font-weight: 800; color: ${sociedadActiva?.colorPrimario || "#FF4500"}; letter-spacing: -0.5px; }
-  .brand-sub { font-size: 10px; color: #999; font-weight: 400; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 2px; }
-  .doc-info { text-align: right; }
-  .doc-type { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: #888; font-weight: 600; }
-  .doc-num { font-size: 20px; font-weight: 700; font-family: 'SF Mono', 'Consolas', monospace; margin: 4px 0; }
-  .doc-estado { display: inline-block; padding: 2px 12px; border-radius: 12px; font-size: 10px; font-weight: 600; background: #f0f0f0; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
-  .doc-fecha { font-size: 11px; color: #888; margin-top: 6px; }
-  .two-col { display: flex; gap: 32px; margin-bottom: 28px; }
-  .col { flex: 1; }
-  .section-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px; color: ${sociedadActiva?.colorPrimario || "#FF4500"}; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #eee; }
-  .field { margin-bottom: 6px; }
-  .field-label { font-size: 10px; color: #999; text-transform: uppercase; letter-spacing: 0.3px; }
-  .field-value { font-size: 13px; font-weight: 500; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
-  thead th { background: #f8f8f8; padding: 10px 12px; text-align: left; font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #888; font-weight: 600; border-bottom: 2px solid #eee; }
-  tbody tr:last-child td { border-bottom: 2px solid #eee !important; }
-  .totals-box { display: flex; justify-content: flex-end; margin-top: 12px; }
-  .totals-inner { width: 280px; }
-  .total-line { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12px; color: #666; }
-  .total-line span:last-child { font-family: 'SF Mono', 'Consolas', monospace; font-size: 11px; color: #1a1a1a; }
-  .total-final { display: flex; justify-content: space-between; padding: 10px 0; margin-top: 6px; border-top: 2px solid #1a1a1a; font-size: 16px; font-weight: 700; }
-  .total-final span:last-child { font-family: 'SF Mono', 'Consolas', monospace; }
-  .obs-box { background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 14px 16px; margin-top: 20px; font-size: 12px; color: #555; }
-  .obs-title { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 600; margin-bottom: 6px; }
-  .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #eee; display: flex; justify-content: space-between; font-size: 9px; color: #bbb; }
-  @media print { .page { padding: 24px 32px; } }
-</style></head><body>
-<div class="page">
-
-<div class="header">
-  <div>
-    <div class="brand">${(sociedadActiva?.nombre || "LAZZARI").toUpperCase()}</div>
-    <div class="brand-sub">${sociedadActiva?.razonSocial || "Soluciones Industriales"}</div>
-  </div>
-  <div class="doc-info">
-    <div class="doc-type">Presupuesto</div>
-    <div class="doc-num">${pr.numero}</div>
-    <div class="doc-estado">${estadoLabel}</div>
-    <div class="doc-fecha">${formatDate(pr.fecha)} &bull; Vence: ${formatDate(pr.vencimiento)}</div>
-  </div>
-</div>
-
-<div class="two-col">
-  <div class="col">
-    <div class="section-label">Cliente</div>
-    <div class="field"><div class="field-value" style="font-size:15px;font-weight:700">${pr.clienteNombre}</div></div>
-    ${p.clienteCuit ? `<div class="field"><div class="field-label">CUIT</div><div class="field-value">${p.clienteCuit}</div></div>` : ""}
-    ${p.clienteCondicionIva ? `<div class="field"><div class="field-label">Cond. IVA</div><div class="field-value">${p.clienteCondicionIva}</div></div>` : ""}
-  </div>
-  <div class="col">
-    <div class="section-label">Contacto</div>
-    ${p.clienteEmail ? `<div class="field"><div class="field-label">Email</div><div class="field-value">${p.clienteEmail}</div></div>` : ""}
-    ${p.clienteTelefono ? `<div class="field"><div class="field-label">Telefono</div><div class="field-value">${p.clienteTelefono}</div></div>` : ""}
-    ${p.clienteDireccion ? `<div class="field"><div class="field-label">Direccion</div><div class="field-value">${p.clienteDireccion}${p.clienteLocalidad ? `, ${p.clienteLocalidad}` : ""}${p.clienteProvincia ? `, ${p.clienteProvincia}` : ""}</div></div>` : ""}
-    ${p.vendedorNombre ? `<div class="field"><div class="field-label">Vendedor</div><div class="field-value">${p.vendedorNombre}</div></div>` : ""}
-  </div>
-</div>
-
-<div class="section-label" style="margin-bottom:12px">Detalle</div>
-<table>
-  <thead><tr>
-    <th style="text-align:center;width:36px">#</th>
-    <th style="width:100px">Codigo</th>
-    <th>Descripcion</th>
-    <th style="text-align:right;width:80px">Cant.</th>
-    <th style="text-align:right;width:110px">P. Venta</th>
-    <th style="text-align:right;width:110px">Total</th>
-  </tr></thead>
-  <tbody>${itemRows}</tbody>
-</table>
-
-<div class="totals-box">
-  <div class="totals-inner">
-    <div class="total-line"><span>Subtotal</span><span>${formatCurrency(pr.subtotal, mon)}</span></div>
-    <div class="total-line"><span>IVA</span><span>${formatCurrency(pr.iva, mon)}</span></div>
-    <div class="total-final"><span>TOTAL (${mon})</span><span>${formatCurrency(pr.total, mon)}</span></div>
-  </div>
-</div>
-
-${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones</div>${pr.observaciones}</div>` : ""}
-
-<div class="footer">
-  <span>${sociedadActiva?.razonSocial || "Lazzari Soluciones Industriales"}</span>
-  <span>${pr.numero}${pr.creadoPor ? ` | ${pr.creadoPor}` : ""}</span>
-  <span>${formatDate(new Date().toISOString())}</span>
-</div>
-
-</div></body></html>`;
-
-    const w = window.open("", "_blank");
-    if (w) {
-      w.document.write(html);
-      w.document.close();
-      setTimeout(() => w.print(), 500);
-    }
+    const html = generatePresupuestoPDF({
+      numero: pr.numero,
+      fecha: pr.fecha,
+      vencimiento: pr.vencimiento,
+      estado: pr.estado,
+      estadoLabel,
+      moneda: pr.moneda,
+      subtotal: pr.subtotal,
+      iva: pr.iva,
+      total: pr.total,
+      observaciones: pr.observaciones,
+      creadoPor: pr.creadoPor,
+      clienteNombre: pr.clienteNombre,
+      clienteCuit: p.clienteCuit,
+      clienteCondicionIva: p.clienteCondicionIva,
+      clienteEmail: p.clienteEmail,
+      clienteTelefono: p.clienteTelefono,
+      clienteDireccion: p.clienteDireccion,
+      clienteLocalidad: p.clienteLocalidad,
+      clienteProvincia: p.clienteProvincia,
+      vendedorNombre: p.vendedorNombre,
+      items: pr.items.map(it => ({
+        codigo: it.codigo,
+        descripcion: it.descripcion,
+        cantidad: it.cantidad,
+        unidad: it.unidad,
+        precioVenta: it.precioVenta,
+        total: it.total,
+      })),
+    }, soc);
+    openPDFWindow(html);
   }
 
   if (loading) {
@@ -3076,7 +3012,7 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                   <th className="w-7"></th>
                   <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-20">Codigo</th>
                   <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500">Descripcion</th>
-                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-28">Proveedor</th>
+                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-36">Proveedor</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-16">Cant.</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-36">P. Costo</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">Markup%</th>
@@ -3146,9 +3082,25 @@ ${pr.observaciones ? `<div class="obs-box"><div class="obs-title">Observaciones<
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                       </td>
                       <td className="px-2 py-1.5">
-                        <span className="text-xs text-zinc-500 dark:text-zinc-400 truncate block max-w-[120px]" title={item.proveedor_nombre}>
-                          {item.proveedor_nombre || "—"}
-                        </span>
+                        <select
+                          value={item.proveedor_id || ""}
+                          onChange={(e) => {
+                            const provId = e.target.value;
+                            const provNombre = proveedoresOptions.find(p => p.id === provId)?.razon_social || "";
+                            setNewPR((prev) => {
+                              const items = [...prev.items];
+                              items[idx] = { ...items[idx], proveedor_id: provId, proveedor_nombre: provNombre };
+                              return { ...prev, items };
+                            });
+                          }}
+                          className="w-full rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100"
+                          title={item.proveedor_nombre || "Sin proveedor"}
+                        >
+                          <option value="">—</option>
+                          {proveedoresOptions.map(p => (
+                            <option key={p.id} value={p.id}>{p.razon_social}</option>
+                          ))}
+                        </select>
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="relative">

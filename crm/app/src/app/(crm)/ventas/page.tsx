@@ -56,6 +56,7 @@ interface VentaFactura {
   subtotal: number;
   iva: number;
   total: number;
+  moneda: string;
   estado: string;
   presupuesto_id: string | null;
 }
@@ -209,7 +210,7 @@ export default function VentasPage() {
       const [facturasRes, remitosRes] = await Promise.all([
         pIds.length > 0
           ? (() => {
-              let q = supabase.from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, subtotal, iva, total, estado, presupuesto_id").in("presupuesto_id", pIds);
+              let q = (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, subtotal, iva, total, moneda, estado, presupuesto_id").in("presupuesto_id", pIds);
               if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
               return q;
             })()
@@ -533,15 +534,7 @@ export default function VentasPage() {
     await fetchData();
   }
 
-  async function handleMarcarPagada(facturaId: string) {
-    if (!confirm("¿Marcar esta factura como pagada?")) return;
-    const { error } = await supabase.from("facturas").update({ estado: "pagada" } as any).eq("id", facturaId);
-    if (error) {
-      alert("Error al marcar como pagada: " + error.message);
-      return;
-    }
-    await fetchData();
-  }
+  // Cobro se registra desde la pagina de facturacion (con movimientos transaccionales via registrar_cobro RPC)
 
   // ── Render ─────────────────────────────────────────────────────
 
@@ -922,7 +915,7 @@ export default function VentasPage() {
                             )}
                             <div className="flex justify-between">
                               <span className="text-zinc-500">Total</span>
-                              <span className="font-bold">{formatCurrency(facturaActiva.total)}</span>
+                              <span className="font-bold">{formatCurrency(facturaActiva.total, (facturaActiva.moneda || "ARS") as "ARS" | "USD")}</span>
                             </div>
                             <div className="flex justify-between">
                               <span className="text-zinc-500">Estado</span>
@@ -978,13 +971,13 @@ export default function VentasPage() {
                         return (
                           <div className="space-y-3">
                             <p className="text-sm text-zinc-500">Factura emitida, pendiente de cobro</p>
-                            <button
-                              onClick={() => handleMarcarPagada(facturaActiva.id)}
-                              className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                            <Link
+                              href="/facturacion"
+                              className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 w-fit"
                             >
                               <DollarSign className="h-4 w-4" />
-                              Registrar cobro
-                            </button>
+                              Registrar cobro en Facturación
+                            </Link>
                           </div>
                         );
                       }
