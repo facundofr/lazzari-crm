@@ -151,6 +151,7 @@ interface FacturaCompraRow {
   archivo_url?: string;
   archivo_nombre?: string;
   solo_iva?: boolean;
+  cae?: string;
   op_vinculada?: { id: string; numero: string; estado: string; fecha: string } | null;
 }
 
@@ -397,6 +398,9 @@ export default function FinanzasPage() {
   const [proveedorSearch, setProveedorSearch] = useState("");
   const [selectedOP, setSelectedOP] = useState<OrdenPagoRow | null>(null);
   const [uploadingCert, setUploadingCert] = useState(false);
+  const [editingOP, setEditingOP] = useState(false);
+  const [editOPForm, setEditOPForm] = useState<{ fecha: string; moneda: "ARS" | "USD"; notas: string }>({ fecha: "", moneda: "ARS", notas: "" });
+  const [savingOP, setSavingOP] = useState(false);
 
   // Gastos manuales state
   const [gastosManuales, setGastosManuales] = useState<GastoManualRow[]>([]);
@@ -427,6 +431,9 @@ export default function FinanzasPage() {
   const [fcUploading, setFcUploading] = useState(false);
   const [selectedFC, setSelectedFC] = useState<FacturaCompraRow | null>(null);
   const [selectedFCItems, setSelectedFCItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; unidad: string; iva_porcentaje: number }[]>([]);
+  const [editingFC, setEditingFC] = useState(false);
+  const [editFCForm, setEditFCForm] = useState<{ numero_factura: string; fecha: string; fecha_vencimiento: string; subtotal: number; iva: number; percepciones: number; moneda: "ARS" | "USD"; notas: string; cae: string }>({ numero_factura: "", fecha: "", fecha_vencimiento: "", subtotal: 0, iva: 0, percepciones: 0, moneda: "ARS", notas: "", cae: "" });
+  const [savingFC, setSavingFC] = useState(false);
   const [fcSearchQuery, setFcSearchQuery] = useState("");
   const [fcEstadoFilter, setFcEstadoFilter] = useState<"todos" | "pendiente" | "pagada" | "recibida" | "anulada">("todos");
   const [newArticleOpen, setNewArticleOpen] = useState(false);
@@ -814,6 +821,7 @@ export default function FinanzasPage() {
               archivo_url: r.archivo_url ?? undefined,
               archivo_nombre: r.archivo_nombre ?? undefined,
               solo_iva: r.solo_iva ?? false,
+              cae: r.cae ?? undefined,
               op_vinculada: r.op_facturas_compra?.length > 0 && r.op_facturas_compra[0]?.ordenes_pago
                 ? { id: r.op_facturas_compra[0].ordenes_pago.id, numero: r.op_facturas_compra[0].ordenes_pago.numero, estado: r.op_facturas_compra[0].ordenes_pago.estado, fecha: r.op_facturas_compra[0].ordenes_pago.fecha }
                 : null,
@@ -1975,6 +1983,81 @@ ${certRetGanHtml}
     } catch (err) { console.error("Error marcando FC como recibida:", err); alert("Error al marcar FC como recibida: " + (err as any)?.message); }
   }
 
+  function startEditFC(fc: FacturaCompraRow) {
+    setEditFCForm({
+      numero_factura: fc.numero_factura,
+      fecha: fc.fecha,
+      fecha_vencimiento: fc.fecha_vencimiento ?? "",
+      subtotal: fc.subtotal,
+      iva: fc.iva,
+      percepciones: fc.percepciones,
+      moneda: fc.moneda,
+      notas: fc.notas,
+      cae: fc.cae ?? "",
+    });
+    setEditingFC(true);
+  }
+
+  async function handleSaveFC() {
+    if (!selectedFC) return;
+    setSavingFC(true);
+    try {
+      const updateData: Record<string, any> = {
+        numero_factura: editFCForm.numero_factura.trim(),
+        fecha: editFCForm.fecha,
+        fecha_vencimiento: editFCForm.fecha_vencimiento || null,
+        subtotal: Number(editFCForm.subtotal),
+        iva: Number(editFCForm.iva),
+        percepciones: Number(editFCForm.percepciones),
+        total: Number(editFCForm.subtotal) + Number(editFCForm.iva) + Number(editFCForm.percepciones),
+        moneda: editFCForm.moneda,
+        notas: editFCForm.notas,
+        cae: editFCForm.cae.trim() || null,
+      };
+      const { error } = await (supabase as any).from("facturas_compra").update(updateData).eq("id", selectedFC.id);
+      if (error) throw error;
+      setEditingFC(false);
+      setSelectedFC(null);
+      await fetchData();
+    } catch (err) {
+      console.error("Error guardando FC:", err);
+      alert("Error al guardar FC: " + (err as any)?.message);
+    } finally {
+      setSavingFC(false);
+    }
+  }
+
+  function startEditOP(op: OrdenPagoRow) {
+    setEditOPForm({
+      fecha: op.fecha,
+      moneda: op.moneda,
+      notas: op.notas,
+    });
+    setEditingOP(true);
+  }
+
+  async function handleSaveOP() {
+    if (!selectedOP) return;
+    setSavingOP(true);
+    try {
+      const updateData: Record<string, any> = {
+        fecha: editOPForm.fecha,
+        moneda: editOPForm.moneda,
+        notas: editOPForm.notas,
+      };
+      const { error } = await (supabase as any).from("ordenes_pago").update(updateData).eq("id", selectedOP.id);
+      if (error) throw error;
+      setEditingOP(false);
+      setSelectedOP(null);
+      await fetchData();
+    } catch (err) {
+      console.error("Error guardando OP:", err);
+      alert("Error al guardar OP: " + (err as any)?.message);
+    } finally {
+      setSavingOP(false);
+    }
+  }
+
   async function handleCreateArticle() {
     if (!newArticle.codigo.trim() || !newArticle.descripcion.trim()) return;
     if (!fcForm.proveedor_id) return;
@@ -2311,14 +2394,14 @@ ${certRetGanHtml}
   const tabs: { id: FinanzasTab; label: string }[] = [
     { id: "movimientos", label: "Movimientos" },
     { id: "facturas_compra", label: "Fact. Compra" },
-    { id: "ordenes_pago", label: "OP" },
+    // { id: "ordenes_pago", label: "OP" },  // OCULTO: OP se accede desde FC compra
     { id: "gastos_manuales", label: "Gastos" },
     { id: "echeqs", label: "Cheques" },
     { id: "cc_clientes", label: "CC Clientes" },
     { id: "cc_proveedores", label: "CC Prov." },
     { id: "extractos", label: "Extractos" },
     { id: "lineas_credito", label: "Crédito" },
-    { id: "gastos_fijos", label: "G. Fijos" },
+    // { id: "gastos_fijos", label: "G. Fijos" },  // OCULTO: funcionalidad en revisión
     { id: "objetivos", label: "Objetivos" },
   ];
 
@@ -4455,20 +4538,103 @@ ${certRetGanHtml}
       {/* ── FC Detail Panel ── */}
       {selectedFC && (
         <>
-          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setSelectedFC(null)} />
+          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => { setSelectedFC(null); setEditingFC(false); }} />
           <div className="fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700">
             <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
               <div className="flex items-center gap-2">
                 <Receipt className="h-5 w-5 text-orange-500" />
                 <h2 className="text-lg font-bold dark:text-white">FC Compra</h2>
-                <span className="font-mono text-sm text-zinc-500">{selectedFC.numero_factura}</span>
+                {!editingFC && <span className="font-mono text-sm text-zinc-500">{selectedFC.numero_factura}</span>}
                 <Badge variant={selectedFC.estado === "pagada" ? "success" : selectedFC.estado === "anulada" ? "danger" : selectedFC.estado === "recibida" ? "info" : "warning"}>
                   {selectedFC.estado === "pagada" ? "Pagada" : selectedFC.estado === "anulada" ? "Anulada" : selectedFC.estado === "recibida" ? "Recibida" : "Pendiente"}
                 </Badge>
               </div>
-              <button onClick={() => setSelectedFC(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              <div className="flex items-center gap-1">
+                {!editingFC && selectedFC.estado !== "anulada" && (
+                  <button onClick={() => startEditFC(selectedFC)} className="rounded-lg p-2 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-900/20" title="Editar">
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                )}
+                <button onClick={() => { setSelectedFC(null); setEditingFC(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              </div>
             </div>
             <div className="p-6 space-y-6">
+              {editingFC ? (
+                <>
+                  {/* Edit mode */}
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">N.° Factura</label>
+                      <input value={editFCForm.numero_factura} onChange={e => setEditFCForm({ ...editFCForm, numero_factura: e.target.value })}
+                        className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-zinc-500">Fecha</label>
+                        <input type="date" value={editFCForm.fecha} onChange={e => setEditFCForm({ ...editFCForm, fecha: e.target.value })}
+                          className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-zinc-500">Vencimiento</label>
+                        <input type="date" value={editFCForm.fecha_vencimiento} onChange={e => setEditFCForm({ ...editFCForm, fecha_vencimiento: e.target.value })}
+                          className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-zinc-500">Subtotal</label>
+                        <input type="number" step="0.01" value={editFCForm.subtotal} onChange={e => setEditFCForm({ ...editFCForm, subtotal: Number(e.target.value) })}
+                          className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-zinc-500">IVA</label>
+                        <input type="number" step="0.01" value={editFCForm.iva} onChange={e => setEditFCForm({ ...editFCForm, iva: Number(e.target.value) })}
+                          className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-zinc-500">Percepciones</label>
+                        <input type="number" step="0.01" value={editFCForm.percepciones} onChange={e => setEditFCForm({ ...editFCForm, percepciones: Number(e.target.value) })}
+                          className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-zinc-500">Moneda</label>
+                        <select value={editFCForm.moneda} onChange={e => setEditFCForm({ ...editFCForm, moneda: e.target.value as "ARS" | "USD" })}
+                          className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                          <option value="ARS">ARS</option>
+                          <option value="USD">USD</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Total calculado</label>
+                      <p className="mt-1 font-mono text-sm font-bold text-red-600">{formatCurrency(Number(editFCForm.subtotal) + Number(editFCForm.iva) + Number(editFCForm.percepciones), editFCForm.moneda)}</p>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">CAE</label>
+                      <input value={editFCForm.cae} onChange={e => setEditFCForm({ ...editFCForm, cae: e.target.value })}
+                        className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" placeholder="Número de CAE" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Notas</label>
+                      <textarea value={editFCForm.notas} onChange={e => setEditFCForm({ ...editFCForm, notas: e.target.value })} rows={3}
+                        className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                    </div>
+                  </div>
+                  <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
+                    <button onClick={handleSaveFC} disabled={savingFC}
+                      className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors">
+                      {savingFC ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Guardar
+                    </button>
+                    <button onClick={() => setEditingFC(false)}
+                      className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                      Cancelar
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
               {/* Info general */}
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
@@ -4575,6 +4741,14 @@ ${certRetGanHtml}
                 </div>
               )}
 
+              {/* CAE */}
+              {selectedFC.cae && (
+                <div>
+                  <p className="text-xs font-medium text-zinc-500">CAE</p>
+                  <p className="text-sm font-mono text-zinc-600 dark:text-zinc-400 mt-1">{selectedFC.cae}</p>
+                </div>
+              )}
+
               {/* Notas */}
               {selectedFC.notas && (
                 <div>
@@ -4611,6 +4785,8 @@ ${certRetGanHtml}
                   </button>
                 )}
               </div>
+                </>
+              )}
             </div>
           </div>
         </>
@@ -4619,7 +4795,7 @@ ${certRetGanHtml}
       {/* ── OP Detail Panel ── */}
       {selectedOP && (
         <>
-          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setSelectedOP(null)} />
+          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => { setSelectedOP(null); setEditingOP(false); }} />
           <div className="fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700">
             <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
               <div className="flex items-center gap-2">
@@ -4630,10 +4806,59 @@ ${certRetGanHtml}
                   {selectedOP.estado === "pagada" ? "Pagada" : selectedOP.estado === "anulada" ? "Anulada" : "Pendiente"}
                 </Badge>
               </div>
-              <button onClick={() => setSelectedOP(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              <div className="flex items-center gap-1">
+                {!editingOP && selectedOP.estado !== "anulada" && (
+                  <button onClick={() => startEditOP(selectedOP)} className="rounded-lg p-2 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-900/20" title="Editar">
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                )}
+                <button onClick={() => { setSelectedOP(null); setEditingOP(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              </div>
             </div>
 
             <div className="p-6 space-y-6">
+              {editingOP ? (
+                <>
+                  {/* Edit mode */}
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Proveedor</label>
+                      <p className="mt-1 font-semibold text-sm dark:text-white">{selectedOP.proveedor_nombre}</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs font-medium text-zinc-500">Fecha</label>
+                        <input type="date" value={editOPForm.fecha} onChange={e => setEditOPForm({ ...editOPForm, fecha: e.target.value })}
+                          className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                      </div>
+                      <div>
+                        <label className="text-xs font-medium text-zinc-500">Moneda</label>
+                        <select value={editOPForm.moneda} onChange={e => setEditOPForm({ ...editOPForm, moneda: e.target.value as "ARS" | "USD" })}
+                          className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                          <option value="ARS">ARS</option>
+                          <option value="USD">USD</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Notas</label>
+                      <textarea value={editOPForm.notas} onChange={e => setEditOPForm({ ...editOPForm, notas: e.target.value })} rows={3}
+                        className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                    </div>
+                  </div>
+                  <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
+                    <button onClick={handleSaveOP} disabled={savingOP}
+                      className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors">
+                      {savingOP ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Guardar
+                    </button>
+                    <button onClick={() => setEditingOP(false)}
+                      className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                      Cancelar
+                    </button>
+                  </div>
+                </>
+              ) : (
+              <>
               {/* Info general */}
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-3 text-sm">
@@ -4790,6 +5015,8 @@ ${certRetGanHtml}
                   </>
                 )}
               </div>
+              </>
+              )}
             </div>
           </div>
         </>
