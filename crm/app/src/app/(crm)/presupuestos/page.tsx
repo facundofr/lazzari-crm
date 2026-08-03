@@ -2660,6 +2660,7 @@ export default function PresupuestosPage() {
         title={editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
         description={editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="xl"
+        allowFullscreen
         footer={
           <>
             <button

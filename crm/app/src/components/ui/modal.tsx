@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
-import { X } from "lucide-react";
+import { useEffect, useCallback, useState } from "react";
+import { X, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ModalProps {
@@ -12,6 +12,7 @@ interface ModalProps {
   children: React.ReactNode;
   footer?: React.ReactNode;
   size?: "sm" | "md" | "lg" | "xl";
+  allowFullscreen?: boolean;
 }
 
 const sizeClasses = {
@@ -21,7 +22,8 @@ const sizeClasses = {
   xl: "max-w-4xl",
 };
 
-export function Modal({ open, onClose, title, description, children, footer, size = "md" }: ModalProps) {
+export function Modal({ open, onClose, title, description, children, footer, size = "md", allowFullscreen = false }: ModalProps) {
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const handleEscape = useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") onClose();
   }, [onClose]);
@@ -36,6 +38,10 @@ export function Modal({ open, onClose, title, description, children, footer, siz
     };
   }, [open, handleEscape]);
 
+  useEffect(() => {
+    if (!open) setIsFullscreen(false);
+  }, [open]);
+
   if (!open) return null;
 
   return (
@@ -45,8 +51,8 @@ export function Modal({ open, onClose, title, description, children, footer, siz
 
       {/* Dialog */}
       <div className={cn(
-        "relative w-full mx-4 rounded-2xl bg-white shadow-2xl dark:bg-zinc-900 animate-scale-in",
-        sizeClasses[size]
+        "relative w-full rounded-2xl bg-white shadow-2xl dark:bg-zinc-900 animate-scale-in transition-all duration-200",
+        isFullscreen ? "mx-4 my-4 max-w-none h-[calc(100vh-2rem)]" : cn("mx-4", sizeClasses[size])
       )}>
         {/* Header */}
         <div className="flex items-start justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
@@ -54,16 +60,27 @@ export function Modal({ open, onClose, title, description, children, footer, siz
             <h2 className="text-lg font-bold text-zinc-900 dark:text-white">{title}</h2>
             {description && <p className="mt-0.5 text-sm text-zinc-500">{description}</p>}
           </div>
-          <button
-            onClick={onClose}
-            className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 transition-colors dark:hover:bg-zinc-800"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            {allowFullscreen && (
+              <button
+                onClick={() => setIsFullscreen(!isFullscreen)}
+                className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 transition-colors dark:hover:bg-zinc-800"
+                title={isFullscreen ? "Reducir" : "Pantalla completa"}
+              >
+                <Maximize2 className="h-4 w-4" />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 transition-colors dark:hover:bg-zinc-800"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}
-        <div className="max-h-[65vh] overflow-y-auto px-6 py-5">
+        <div className={cn("overflow-y-auto px-6 py-5", isFullscreen ? "h-[calc(100%-8rem)]" : "max-h-[65vh]")}>
           {children}
         </div>
 
