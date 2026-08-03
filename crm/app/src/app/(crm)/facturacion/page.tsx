@@ -673,6 +673,93 @@ export default function FacturacionPage() {
     }
   }
 
+  // ── Cobro masivo modal ────────────────────────────────────────
+  interface CobroMasivoFC { id: string; numero: number; tipo: string; punto_venta: number; fecha: string; total: number; total_acreditado: number; moneda: string; saldo: number; selected: boolean; monto_a_cobrar: number }
+  const [cmOpen, setCmOpen] = useState(false);
+  const [cmClientes, setCmClientes] = useState<ClienteOption[]>([]);
+  const [cmClienteId, setCmClienteId] = useState("");
+  const [cmClienteSearch, setCmClienteSearch] = useState("");
+  const [cmFCs, setCmFCs] = useState<CobroMasivoFC[]>([]);
+  const [cmMonto, setCmMonto] = useState(0);
+  const [cmMedio, setCmMedio] = useState<"transferencia" | "efectivo" | "cheque_recibido" | "deposito">("transferencia");
+  const [cmFecha, setCmFecha] = useState(todayAR());
+  const [cmDesc, setCmDesc] = useState("");
+  const [cmSaving, setCmSaving] = useState(false);
+  const [cmLoadingFCs, setCmLoadingFCs] = useState(false);
+
+  async function openCobroMasivo() {
+    setCmOpen(true);
+    setCmClienteId("");
+    setCmClienteSearch("");
+    setCmFCs([]);
+    setCmMonto(0);
+    setCmDesc("");
+    setCmFecha(todayAR());
+    setCmMedio("transferencia");
+    // Fetch clientes
+    const q = supabase.from("clientes").select("id, razon_social, cuit, condicion_iva").eq("activo", true).order("razon_social");
+    const { data } = await (sociedadActiva?.id ? q.eq("sociedad_id" as any, sociedadActiva.id) : q);
+    if (data) setCmClientes(data as ClienteOption[]);
+  }
+
+  async function cmSelectCliente(clienteId: string) {
+    setCmClienteId(clienteId);
+    setCmFCs([]);
+    setCmMonto(0);
+    if (!clienteId) return;
+    setCmLoadingFCs(true);
+    try {
+      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, total, total_acreditado, moneda, estado").eq("cliente_id", clienteId).in("estado", ["emitida", "parcial"]).order("fecha", { ascending: true });
+      if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
+      const { data } = await q;
+      if (data) {
+        setCmFCs(data.map((f: any) => {
+          const saldo = Number(f.total) - Number(f.total_acreditado || 0);
+          return { id: f.id, numero: f.numero ?? 0, tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", saldo, selected: false, monto_a_cobrar: 0 };
+        }).filter((f: CobroMasivoFC) => f.saldo > 0.01));
+      }
+    } catch { /* noop */ } finally { setCmLoadingFCs(false); }
+  }
+
+  function cmDistribuir(monto: number) {
+    setCmMonto(monto);
+    let restante = monto;
+    setCmFCs(prev => prev.map(fc => {
+      if (!fc.selected) return { ...fc, monto_a_cobrar: 0 };
+      const aplicar = Math.min(restante, fc.saldo);
+      restante = Math.max(0, restante - aplicar);
+      return { ...fc, monto_a_cobrar: Math.round(aplicar * 100) / 100 };
+    }));
+  }
+
+  async function handleCobroMasivo() {
+    const fcsACobrar = cmFCs.filter(fc => fc.selected && fc.monto_a_cobrar > 0);
+    if (fcsACobrar.length === 0) { alert("Seleccioná al menos una factura"); return; }
+    setCmSaving(true);
+    try {
+      const userId = (await supabase.auth.getUser()).data.user?.id || null;
+      for (const fc of fcsACobrar) {
+        const desc = cmDesc || `Cobro masivo — ${formatComprobante(fc.tipo, fc.punto_venta, fc.numero)}`;
+        const { error: rpcErr } = await (supabase as any).rpc("registrar_cobro", {
+          p_factura_id: fc.id,
+          p_lineas: [{ tipo: cmMedio, monto: fc.monto_a_cobrar, descripcion: desc }],
+          p_fecha: cmFecha,
+          p_sociedad_id: sociedadActiva?.id || null,
+          p_created_by: userId,
+        });
+        if (rpcErr) throw rpcErr;
+      }
+      setCmOpen(false);
+      await fetchData();
+    } catch (err: any) {
+      alert("Error al registrar cobro masivo: " + (err.message || JSON.stringify(err)));
+    } finally { setCmSaving(false); }
+  }
+
+  const cmFilteredClientes = cmClienteSearch.trim()
+    ? cmClientes.filter(c => c.razon_social.toLowerCase().includes(cmClienteSearch.toLowerCase()) || (c.cuit || "").includes(cmClienteSearch))
+    : cmClientes;
+
   const [copied, setCopied] = useState(false);
   function handleCopy(f: FacturaRow) {
     const lines = [
@@ -813,6 +900,12 @@ export default function FacturacionPage() {
         subtitle="Comprobantes electronicos ARCA"
         action={{ label: "Emitir factura", onClick: openEmitModal }}
       />
+      {/* Secondary action: Cobro masivo */}
+      <div className="px-6 lg:px-8 pt-4 -mb-2 flex justify-end">
+        <button onClick={openCobroMasivo} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition-colors">
+          <DollarSign className="h-4 w-4" /> Cobro masivo
+        </button>
+      </div>
       <div className="p-6 lg:p-8 space-y-6">
         {/* KPIs */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -1581,6 +1674,140 @@ export default function FacturacionPage() {
           </div>
         );
       })()}
+
+      {/* ── NC Modal ─────────────────────────────────────────────── */}
+      {/* ── Cobro Masivo Modal ────────────────────────────────────── */}
+      {cmOpen && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setCmOpen(false)} />
+          <div className="fixed inset-y-0 right-0 z-50 w-full max-w-2xl bg-white shadow-xl dark:bg-zinc-900 overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-lg font-semibold dark:text-white">Cobro masivo</h2>
+                <button onClick={() => setCmOpen(false)} className="text-zinc-400 hover:text-zinc-600"><X className="h-5 w-5" /></button>
+              </div>
+
+              {/* Selector de cliente */}
+              <div className="mb-4">
+                <label className="text-xs font-medium text-zinc-500 mb-1 block">Cliente</label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+                  <input
+                    value={cmClienteId ? cmClientes.find(c => c.id === cmClienteId)?.razon_social || "" : cmClienteSearch}
+                    onChange={(e) => { setCmClienteSearch(e.target.value); if (cmClienteId) { setCmClienteId(""); setCmFCs([]); setCmMonto(0); } }}
+                    placeholder="Buscar cliente por nombre o CUIT..."
+                    className="w-full rounded-lg border border-zinc-200 pl-9 pr-8 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                  />
+                  {cmClienteId && (
+                    <button onClick={() => { setCmClienteId(""); setCmFCs([]); setCmMonto(0); setCmClienteSearch(""); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600">
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                {!cmClienteId && cmClienteSearch.trim() && cmFilteredClientes.length > 0 && (
+                  <div className="mt-1 border rounded-lg dark:border-zinc-700 max-h-40 overflow-y-auto bg-white dark:bg-zinc-800 shadow-lg">
+                    {cmFilteredClientes.slice(0, 10).map(c => (
+                      <button key={c.id} onClick={() => { setCmClienteSearch(""); cmSelectCliente(c.id); }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex justify-between">
+                        <span>{c.razon_social}</span>
+                        <span className="text-xs text-zinc-400">{c.cuit}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {cmClienteId && (
+                <>
+                  <div className="grid grid-cols-3 gap-4 mb-4">
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Monto total</label>
+                      <input type="number" value={cmMonto || ""} onChange={(e) => cmDistribuir(Number(e.target.value))}
+                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0.00" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Medio de pago</label>
+                      <select value={cmMedio} onChange={(e) => setCmMedio(e.target.value as any)}
+                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                        <option value="transferencia">Transferencia</option>
+                        <option value="efectivo">Efectivo</option>
+                        <option value="cheque_recibido">Cheque</option>
+                        <option value="deposito">Depósito</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Fecha</label>
+                      <input type="date" value={cmFecha} onChange={(e) => setCmFecha(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    </div>
+                  </div>
+                  <div className="mb-4">
+                    <label className="text-xs font-medium text-zinc-500">Descripción (opcional)</label>
+                    <input value={cmDesc} onChange={(e) => setCmDesc(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Descripción del cobro..." />
+                  </div>
+
+                  <h3 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400 mb-2">Facturas pendientes</h3>
+                  {cmLoadingFCs ? (
+                    <div className="flex justify-center py-8"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /></div>
+                  ) : (
+                    <div className="border rounded-lg dark:border-zinc-700 overflow-hidden mb-4">
+                      <table className="w-full text-sm">
+                        <thead className="bg-zinc-50 dark:bg-zinc-800">
+                          <tr>
+                            <th className="px-3 py-2 text-left w-8">
+                              <input type="checkbox" checked={cmFCs.length > 0 && cmFCs.every(f => f.selected)}
+                                onChange={(e) => { const sel = e.target.checked; setCmFCs(prev => prev.map(f => ({ ...f, selected: sel }))); if (sel && cmMonto > 0) cmDistribuir(cmMonto); }} />
+                            </th>
+                            <th className="px-3 py-2 text-left">Comprobante</th>
+                            <th className="px-3 py-2 text-left">Fecha</th>
+                            <th className="px-3 py-2 text-right">Total</th>
+                            <th className="px-3 py-2 text-right">Saldo</th>
+                            <th className="px-3 py-2 text-right">A cobrar</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cmFCs.map((fc, idx) => (
+                            <tr key={fc.id} className={`border-t dark:border-zinc-700 ${fc.selected ? "bg-emerald-50 dark:bg-emerald-900/20" : ""}`}>
+                              <td className="px-3 py-2">
+                                <input type="checkbox" checked={fc.selected} onChange={(e) => {
+                                  const newFCs = [...cmFCs]; newFCs[idx] = { ...newFCs[idx], selected: e.target.checked }; setCmFCs(newFCs);
+                                  if (cmMonto > 0) { let restante = cmMonto; setCmFCs(newFCs.map(f => { if (!f.selected) return { ...f, monto_a_cobrar: 0 }; const aplicar = Math.min(restante, f.saldo); restante = Math.max(0, restante - aplicar); return { ...f, monto_a_cobrar: Math.round(aplicar * 100) / 100 }; })); }
+                                }} />
+                              </td>
+                              <td className="px-3 py-2 font-mono text-xs">{formatComprobante(fc.tipo, fc.punto_venta, fc.numero)}</td>
+                              <td className="px-3 py-2">{formatDate(fc.fecha)}</td>
+                              <td className="px-3 py-2 text-right font-mono">{formatCurrency(fc.total, fc.moneda as "ARS" | "USD")}</td>
+                              <td className="px-3 py-2 text-right font-mono text-red-600">{formatCurrency(fc.saldo, fc.moneda as "ARS" | "USD")}</td>
+                              <td className="px-3 py-2 text-right font-mono font-semibold text-emerald-600">{fc.monto_a_cobrar > 0 ? formatCurrency(fc.monto_a_cobrar, fc.moneda as "ARS" | "USD") : "—"}</td>
+                            </tr>
+                          ))}
+                          {cmFCs.length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-zinc-400">No hay facturas pendientes</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between border-t pt-4 dark:border-zinc-700">
+                    <div className="text-sm text-zinc-500">
+                      Total a cobrar: <span className="font-mono font-bold text-emerald-600">{formatCurrency(cmFCs.filter(f => f.selected).reduce((s, f) => s + f.monto_a_cobrar, 0))}</span>
+                      {" "}({cmFCs.filter(f => f.selected && f.monto_a_cobrar > 0).length} facturas)
+                    </div>
+                    <div className="flex gap-3">
+                      <button onClick={() => setCmOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
+                      <button onClick={handleCobroMasivo} disabled={cmSaving || cmFCs.filter(f => f.selected && f.monto_a_cobrar > 0).length === 0}
+                        className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
+                        {cmSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                        Registrar cobro
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       {/* ── NC Modal ─────────────────────────────────────────────── */}
       {ncOpen && ncFactura && (

@@ -134,10 +134,11 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
   const hasActividad = !!xmlTag(text, "idActividadPrincipal");
 
   let condicion_iva = "";
-  // Priority: RI (active IVA) > Monotributo > Exento > Jurídica=RI > Física activa con actividad=Monotributo > CF
-  if (activeImpuestos.has(30) || activeImpuestos.has(32)) {
+  // Priority: RI (active IVA/Ganancias) > Monotributo > Exento > Jurídica=RI > Física activa con actividad=Monotributo > CF
+  // Impuesto 20 = IVA (→ RI), 30 = Ganancias PJ, 32 = IIBB, 34 = Exento
+  if (activeImpuestos.has(30) || activeImpuestos.has(32) || activeImpuestos.has(20)) {
     condicion_iva = "RI";
-  } else if (activeImpuestos.has(20) || hasMonotributoSection) {
+  } else if (hasMonotributoSection) {
     condicion_iva = "Monotributo";
   } else if (activeImpuestos.has(34)) {
     condicion_iva = "Exento";

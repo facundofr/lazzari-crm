@@ -4135,14 +4135,13 @@ ${certRetGanHtml}
             </div>
             {fcError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{fcError}</div>}
             <div className="space-y-4">
-              {/* Tipo de factura selector — OCULTO: solo se usa solo_iva desde facturación.
-                 Para reactivar mercadería, descomentar este bloque.
+              {/* Tipo de factura selector — ninguno mueve stock (stock se mueve desde PR→OC→Recepción) */}
               <div className="grid grid-cols-2 gap-3">
                 <button type="button" onClick={() => setFcForm({ ...fcForm, tipo_fc: "mercaderia", solo_iva: false })}
                   className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-colors ${fcForm.tipo_fc === "mercaderia" ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
                   <ShoppingCart className={`h-5 w-5 ${fcForm.tipo_fc === "mercaderia" ? "text-orange-500" : "text-zinc-400"}`} />
                   <span className={`text-sm font-semibold ${fcForm.tipo_fc === "mercaderia" ? "text-orange-700 dark:text-orange-300" : "text-zinc-600 dark:text-zinc-300"}`}>Compra de mercadería</span>
-                  <span className="text-xs text-zinc-400 text-center">Entra al stock</span>
+                  <span className="text-xs text-zinc-400 text-center">Solo libro IVA, sin stock</span>
                 </button>
                 <button type="button" onClick={() => setFcForm({ ...fcForm, tipo_fc: "solo_iva", solo_iva: true })}
                   className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-colors ${fcForm.tipo_fc === "solo_iva" ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
@@ -4151,7 +4150,6 @@ ${certRetGanHtml}
                   <span className="text-xs text-zinc-400 text-center">Solo libro IVA, sin stock</span>
                 </button>
               </div>
-              */}
 
               {/* Proveedor selector with search */}
               <div>
