@@ -2436,15 +2436,11 @@ export default function PresupuestosPage() {
                         <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">Markup</th>
                         <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">P. Venta</th>
                         <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Total</th>
-                        <th className="px-3 py-2 text-center text-xs font-semibold text-zinc-500" title="Entregado">E</th>
-                        <th className="px-3 py-2 text-center text-xs font-semibold text-zinc-500" title="Facturado">F</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                       {selected.items.map((item) => {
                         const belowCost = item.precioVenta < item.precioCosto;
-                        const entregado = (item as any).entregado ?? false;
-                        const facturado = (item as any).facturado ?? false;
                         return (
                         <tr key={item.id} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
@@ -2459,32 +2455,6 @@ export default function PresupuestosPage() {
                             </span>
                           </td>
                           <td className="px-3 py-2 text-right font-mono font-semibold">{formatCurrency(item.total)}</td>
-                          <td className="px-3 py-2 text-center">
-                            <input
-                              type="checkbox"
-                              checked={entregado}
-                              onChange={async (e) => {
-                                const val = e.target.checked;
-                                await supabase.from("presupuesto_items").update({ entregado: val } as any).eq("id", item.id);
-                                setSelected({ ...selected, items: selected.items.map(it => it.id === item.id ? { ...it, entregado: val } as any : it) });
-                              }}
-                              className="h-4 w-4 accent-emerald-500 cursor-pointer"
-                              title="Entregado"
-                            />
-                          </td>
-                          <td className="px-3 py-2 text-center">
-                            <input
-                              type="checkbox"
-                              checked={facturado}
-                              onChange={async (e) => {
-                                const val = e.target.checked;
-                                await supabase.from("presupuesto_items").update({ facturado: val } as any).eq("id", item.id);
-                                setSelected({ ...selected, items: selected.items.map(it => it.id === item.id ? { ...it, facturado: val } as any : it) });
-                              }}
-                              className="h-4 w-4 accent-blue-500 cursor-pointer"
-                              title="Facturado"
-                            />
-                          </td>
                         </tr>
                         );
                       })}
