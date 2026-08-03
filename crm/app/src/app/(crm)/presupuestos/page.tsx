@@ -1280,17 +1280,18 @@ export default function PresupuestosPage() {
           .single();
 
         if (!ocErr && ocRow) {
-          for (const it of sinProvItems) {
-            await supabase.from("orden_compra_items").insert({
-              orden_compra_id: ocRow.id,
-              descripcion: it.descripcion,
-              cantidad: Number(it.cantidad),
-              precio_unitario: Number(it.precio_costo),
-              unidad: it.unidad || "u",
-              codigo: it.codigo || null,
-              iva_porcentaje: Number(it.iva_porcentaje ?? 21),
-            } as any);
-          }
+          const ocItemsSP = sinProvItems.map((it: any, idx: number) => ({
+            orden_id: ocRow.id,
+            codigo: it.codigo || "",
+            descripcion: it.descripcion || "Sin descripción",
+            cantidad: Number(it.cantidad) || 1,
+            unidad: it.unidad || "u",
+            precio_unitario: Number(it.precio_costo) || 0,
+            iva_porcentaje: Number(it.iva_porcentaje ?? 21),
+            orden: idx + 1,
+            cantidad_recibida: 0,
+          }));
+          await supabase.from("orden_compra_items").insert(ocItemsSP as any);
           ocsCreated++;
         }
       }
