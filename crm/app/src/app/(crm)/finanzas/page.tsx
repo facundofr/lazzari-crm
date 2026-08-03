@@ -159,7 +159,7 @@ interface OCOption {
 }
 
 const emptyFCForm = {
-  tipo_fc: "mercaderia" as "mercaderia" | "solo_iva",
+  tipo_fc: "solo_iva" as "mercaderia" | "solo_iva",
   numero_factura: "",
   proveedor_id: "",
   orden_compra_id: "",
@@ -4029,7 +4029,8 @@ ${certRetGanHtml}
             </div>
             {fcError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{fcError}</div>}
             <div className="space-y-4">
-              {/* Tipo de factura selector */}
+              {/* Tipo de factura selector — OCULTO: solo se usa solo_iva desde facturación.
+                 Para reactivar mercadería, descomentar este bloque.
               <div className="grid grid-cols-2 gap-3">
                 <button type="button" onClick={() => setFcForm({ ...fcForm, tipo_fc: "mercaderia", solo_iva: false })}
                   className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-colors ${fcForm.tipo_fc === "mercaderia" ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
@@ -4044,6 +4045,7 @@ ${certRetGanHtml}
                   <span className="text-xs text-zinc-400 text-center">Solo libro IVA, sin stock</span>
                 </button>
               </div>
+              */}
 
               {/* Proveedor selector with search */}
               <div>
