@@ -2153,26 +2153,7 @@ export default function PresupuestosPage() {
                   );
                 },
               },
-              {
-                key: "tracking" as any, label: "Seguimiento", sortable: false,
-                render: (row) => {
-                  if (row.estado !== "aprobado") return <span className="text-zinc-300 text-xs">—</span>;
-                  const rStatus = remitidoStatus[row.id];
-                  const entregado = remitidoIds.has(row.id);
-                  const facturado = facturadoIds.has(row.id);
-                  return (
-                    <div className="flex items-center gap-1">
-                      <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold ${rStatus === "total" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : rStatus === "parcial" ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"}`} title={rStatus === "total" ? "Totalmente remitido" : rStatus === "parcial" ? "Remito parcial" : "Sin remito"}>
-                        <Truck className="h-3 w-3" />{rStatus === "total" ? "E" : rStatus === "parcial" ? "P" : "—"}
-                      </span>
-                      <span className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold ${facturado ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"}`} title={facturado ? "Tiene factura" : "Sin factura"}>
-                        <FileText className="h-3 w-3" />{facturado ? "F" : "—"}
-                      </span>
-                    </div>
-                  );
-                },
-              },
-              {
+                {
                 key: "actions", label: "", sortable: false,
                 render: (row) => (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
