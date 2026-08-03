@@ -147,6 +147,9 @@ export default function VentasPage() {
   const [emitError, setEmitError] = useState("");
   const [emitSuccess, setEmitSuccess] = useState("");
   const [emitManual, setEmitManual] = useState(false);
+  const [emitNextNum, setEmitNextNum] = useState<number | null>(null);
+  const [emitCondVenta, setEmitCondVenta] = useState("Contado");
+  const [emitObservaciones, setEmitObservaciones] = useState("");
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
   const [cotizFecha, setCotizFecha] = useState("");
@@ -285,6 +288,15 @@ export default function VentasPage() {
     return filteredVentas.find(v => v.presupuesto.id === selectedVentaId) || null;
   }, [filteredVentas, selectedVentaId]);
 
+  async function fetchNextNum(tipo: string) {
+    try {
+      let q = supabase.from("facturas").select("numero").eq("tipo" as any, tipo).eq("punto_venta" as any, pvCrm);
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data } = await q.order("numero", { ascending: false }).limit(1);
+      setEmitNextNum(((data && data.length > 0 ? (data[0] as any).numero : 0) || 0) + 1);
+    } catch { setEmitNextNum(null); }
+  }
+
   // ── Actions ────────────────────────────────────────────────────
 
   function openEmitModal(venta: Venta) {
@@ -307,8 +319,11 @@ export default function VentasPage() {
     setEmitError("");
     setEmitSuccess("");
     setEmitManual((p as any).modalidad_emision === "manual");
+    setEmitCondVenta("Contado");
+    setEmitObservaciones("");
     setCotizBna(null);
     setEmitModalOpen(true);
+    fetchNextNum(defaultTipo);
   }
 
   async function handleEmitFactura() {
@@ -354,6 +369,8 @@ export default function VentasPage() {
           items: emitItems.map(it => ({ ...it, precio_unitario: convertPrice(it.precio_unitario) })),
           presupuesto_id: p.id,
           sociedad_id: sociedadActiva?.id || null,
+          condicion_venta: emitCondVenta || null,
+          observaciones: emitObservaciones || null,
         }),
       });
 
@@ -445,6 +462,8 @@ export default function VentasPage() {
           moneda: emitMoneda,
           tipo_cambio: emitMoneda === "USD" && emitTipoCambio > 0 ? emitTipoCambio : null,
           estado: "emitida",
+          condicion_venta: emitCondVenta || null,
+          observaciones: emitObservaciones || null,
           sociedad_id: (p as any).sociedad_id || null,
         })
         .select("id")
@@ -1038,7 +1057,7 @@ export default function VentasPage() {
             ) : (
               <>
                 {/* Info */}
-                <div className="grid grid-cols-2 gap-4 text-sm">
+                <div className="grid grid-cols-3 gap-4 text-sm">
                   <div>
                     <span className="text-zinc-500">Cliente</span>
                     <p className="font-medium dark:text-white">{emitVenta.presupuesto.clientes?.razon_social}</p>
@@ -1050,6 +1069,12 @@ export default function VentasPage() {
                     <span className="text-zinc-500">Punto de venta</span>
                     <p className="font-mono font-bold dark:text-white">{String(pvCrm).padStart(4, "0")}</p>
                   </div>
+                  <div>
+                    <span className="text-zinc-500">Nro. comprobante</span>
+                    <p className="font-mono font-bold text-orange-600 dark:text-orange-400">
+                      {emitNextNum != null ? `${String(pvCrm).padStart(4, "0")}-${String(emitNextNum).padStart(8, "0")}` : "…"}
+                    </p>
+                  </div>
                 </div>
 
                 {/* Tipo */}
@@ -1057,7 +1082,7 @@ export default function VentasPage() {
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo de comprobante</label>
                   <select
                     value={emitTipo}
-                    onChange={e => setEmitTipo(e.target.value as "FA" | "FB" | "FCEA" | "FCEB")}
+                    onChange={e => { const t = e.target.value as "FA" | "FB" | "FCEA" | "FCEB"; setEmitTipo(t); fetchNextNum(t); }}
                     className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   >
                     {emitVenta.presupuesto.clientes?.condicion_iva === "RI" && (
@@ -1227,6 +1252,37 @@ export default function VentasPage() {
                         </div>
                       </div>
                     ))}
+                  </div>
+                </div>
+
+                {/* Condición de venta + Observaciones */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Condición de venta</label>
+                    <select
+                      value={emitCondVenta}
+                      onChange={e => setEmitCondVenta(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                    >
+                      <option value="Contado">Contado</option>
+                      <option value="Cuenta corriente">Cuenta corriente</option>
+                      <option value="30 días">30 días</option>
+                      <option value="60 días">60 días</option>
+                      <option value="90 días">90 días</option>
+                      <option value="Cheque 30 días">Cheque 30 días</option>
+                      <option value="Cheque 60 días">Cheque 60 días</option>
+                      <option value="Cheque 90 días">Cheque 90 días</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Observaciones</label>
+                    <input
+                      type="text"
+                      value={emitObservaciones}
+                      onChange={e => setEmitObservaciones(e.target.value)}
+                      placeholder="Notas para la factura..."
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                    />
                   </div>
                 </div>
 

@@ -17,7 +17,7 @@ import {
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
   Printer, Sparkles, Download, ClipboardCopy, Check, Mail, GripVertical,
   Phone, CalendarClock, Inbox, Paperclip, Upload, Truck, Receipt,
-  Minimize2, Maximize2, Square,
+  Maximize2,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -280,7 +280,7 @@ export default function PresupuestosPage() {
 
   // Detail panel
   const [selected, setSelected] = useState<Presupuesto | null>(null);
-  const [panelWidth, setPanelWidth] = useState<"normal" | "wide" | "full">("normal");
+  const [panelFullscreen, setPanelFullscreen] = useState(false);
 
   // Vendedor & operador filter
   const [vendedorFilter, setVendedorFilter] = useState<string>("");
@@ -1412,6 +1412,7 @@ export default function PresupuestosPage() {
       const { error: delPrErr } = await supabase.from("presupuestos").delete().eq("id", id);
       if (delPrErr) throw delPrErr;
       setSelected(null);
+      setPanelFullscreen(false);
       toast.success("Presupuesto eliminado");
       await fetchPresupuestos();
     } catch (err) {
@@ -1468,6 +1469,7 @@ export default function PresupuestosPage() {
       setEditingPRId(pr.id);
       setClientSearch("");
       setSelected(null);
+      setPanelFullscreen(false);
       setShowNewPR(true);
     } catch (err) {
       console.error("Error loading PR for edit:", err);
@@ -2227,11 +2229,16 @@ export default function PresupuestosPage() {
       {/* ==================== DETAIL SIDE PANEL ==================== */}
       {selected && (
         <>
-          <div
-            className="fixed inset-0 z-40 bg-black/20 transition-opacity"
-            onClick={() => setSelected(null)}
-          />
-          <div className={`fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right transition-[max-width] duration-200 ${panelWidth === "full" ? "max-w-5xl" : panelWidth === "wide" ? "max-w-3xl" : "max-w-2xl"}`}>
+          {panelFullscreen && (
+            <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setPanelFullscreen(false)} />
+          )}
+          {!panelFullscreen && (
+            <div className="fixed inset-0 z-40 bg-black/20 transition-opacity" onClick={() => { setSelected(null); setPanelFullscreen(false); }} />
+          )}
+          <div className={panelFullscreen
+            ? "fixed inset-4 z-50 overflow-y-auto bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl animate-slide-in-right"
+            : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-2xl"
+          }>
             {/* Panel header */}
             <div className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-200 bg-white/95 backdrop-blur-sm px-4 sm:px-6 py-4 dark:border-zinc-700 dark:bg-zinc-900/95">
               <div>
@@ -2308,12 +2315,10 @@ export default function PresupuestosPage() {
                     <Trash2 className="h-4 w-4" />
                   </button>
                 )}
-                <div className="flex items-center border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
-                  <button onClick={() => setPanelWidth("normal")} className={`p-1.5 transition-colors ${panelWidth === "normal" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Normal"><Minimize2 className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => setPanelWidth("wide")} className={`p-1.5 transition-colors ${panelWidth === "wide" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Ancho"><Maximize2 className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => setPanelWidth("full")} className={`p-1.5 transition-colors ${panelWidth === "full" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Completo"><Square className="h-3.5 w-3.5" /></button>
-                </div>
-                <button onClick={() => setSelected(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800">
+                <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
+                  <Maximize2 className="h-4 w-4" />
+                </button>
+                <button onClick={() => { setSelected(null); setPanelFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800">
                   <X className="h-5 w-5" />
                 </button>
               </div>

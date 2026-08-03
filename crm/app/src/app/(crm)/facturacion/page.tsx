@@ -15,7 +15,7 @@ import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
   ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, FileText, Search, Scissors,
-  Minimize2, Maximize2, Square,
+  Maximize2,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 
@@ -98,7 +98,7 @@ export default function FacturacionPage() {
   const [loading, setLoading] = useState(true);
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
   const [detailItems, setDetailItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number; subtotal: number }[]>([]);
-  const [panelWidth, setPanelWidth] = useState<"normal" | "wide" | "full">("normal");
+  const [panelFullscreen, setPanelFullscreen] = useState(false);
 
   // ARCA status
   const [arcaStatus, setArcaStatus] = useState<{ connected: boolean; certOk?: boolean; error?: string; afipError?: string; production?: boolean; ptoVta?: number } | null>(null);
@@ -567,7 +567,7 @@ export default function FacturacionPage() {
       const { error } = await supabase.from("facturas").update({ estado: "anulada" } as any).eq("id", id);
       if (error) { alert(error.message); return; }
       await fetchData();
-      if (detailFactura?.id === id) setDetailFactura(null);
+      if (detailFactura?.id === id) { setDetailFactura(null); setPanelFullscreen(false); }
     } catch (err) { console.error("Error anulando:", err); }
   }
 
@@ -1226,9 +1226,17 @@ export default function FacturacionPage() {
 
       {/* ── Detail Side Panel ─────────────────────────────────────────── */}
       {detailFactura && (
-        <div className="fixed inset-0 z-50 flex justify-end">
-          <div className="absolute inset-0 bg-black/30" onClick={() => setDetailFactura(null)} />
-          <div className={`relative w-full bg-white dark:bg-zinc-900 shadow-2xl overflow-y-auto transition-[max-width] duration-200 ${panelWidth === "full" ? "max-w-4xl" : panelWidth === "wide" ? "max-w-2xl" : "max-w-lg"}`}>
+        <>
+          {panelFullscreen && (
+            <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setPanelFullscreen(false)} />
+          )}
+          {!panelFullscreen && (
+            <div className="fixed inset-0 z-40 bg-black/30" onClick={() => { setDetailFactura(null); setPanelFullscreen(false); }} />
+          )}
+          <div className={panelFullscreen
+            ? "fixed inset-4 z-50 overflow-y-auto bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl animate-slide-in-right"
+            : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-lg"
+          }>
             <div className="sticky top-0 z-10 flex items-center justify-between bg-white px-6 py-4 border-b border-zinc-200 dark:bg-zinc-900 dark:border-zinc-700">
               <div>
                 <h2 className="font-mono text-lg font-bold dark:text-white">
@@ -1252,12 +1260,10 @@ export default function FacturacionPage() {
                 <button onClick={() => handlePrintFactura(detailFactura)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
                   <Download className="h-3.5 w-3.5" /> PDF
                 </button>
-                <div className="flex items-center border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
-                  <button onClick={() => setPanelWidth("normal")} className={`p-1.5 transition-colors ${panelWidth === "normal" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Normal"><Minimize2 className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => setPanelWidth("wide")} className={`p-1.5 transition-colors ${panelWidth === "wide" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Ancho"><Maximize2 className="h-3.5 w-3.5" /></button>
-                  <button onClick={() => setPanelWidth("full")} className={`p-1.5 transition-colors ${panelWidth === "full" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Completo"><Square className="h-3.5 w-3.5" /></button>
-                </div>
-                <button onClick={() => setDetailFactura(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
+                  <Maximize2 className="h-4 w-4" />
+                </button>
+                <button onClick={() => { setDetailFactura(null); setPanelFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
                   <X className="h-5 w-5" />
                 </button>
               </div>
@@ -1402,7 +1408,7 @@ export default function FacturacionPage() {
               </div>
             </div>
           </div>
-        </div>
+        </>
       )}
 
       {/* ── Cobro Modal ──────────────────────────────────────────── */}

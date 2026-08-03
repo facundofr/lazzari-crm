@@ -18,7 +18,7 @@ import {
   BarChart3, ShoppingBag, CalendarDays, TrendingUp, Cake,
   User, FileText, CreditCard, StickyNote, Clock, Receipt, Truck, Wallet,
   ChevronDown, ChevronRight, Package, ExternalLink, Copy, AlertCircle,
-  Minimize2, Maximize2, Square,
+  Maximize2,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
@@ -294,7 +294,7 @@ export default function ClientesPage() {
   // Detail
   const [selectedCliente, setSelectedCliente] = useState<ClienteExt | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("datos");
-  const [panelWidth, setPanelWidth] = useState<"normal" | "wide" | "full">("normal");
+  const [panelFullscreen, setPanelFullscreen] = useState(false);
 
   // Timeline / Activity
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
@@ -1333,6 +1333,7 @@ export default function ClientesPage() {
       const { error } = await supabase.from("clientes").delete().eq("id", id);
       if (error) throw error;
       setSelectedCliente(null);
+      setPanelFullscreen(false);
       toast.success("Cliente eliminado");
       await fetchClientes();
     } catch (err) {
@@ -1732,8 +1733,16 @@ export default function ClientesPage() {
       {/* ===================== DETAIL SIDE PANEL ===================== */}
       {selectedCliente && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/20 animate-fade-in" onClick={() => setSelectedCliente(null)} />
-          <div className={`fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right transition-[max-width] duration-200 ${panelWidth === "full" ? "max-w-4xl" : panelWidth === "wide" ? "max-w-2xl" : "max-w-xl"}`}>
+          {panelFullscreen && (
+            <div className="fixed inset-0 z-40 bg-black/40" onClick={() => setPanelFullscreen(false)} />
+          )}
+          {!panelFullscreen && (
+            <div className="fixed inset-0 z-40 bg-black/20 animate-fade-in" onClick={() => { setSelectedCliente(null); setPanelFullscreen(false); }} />
+          )}
+          <div className={panelFullscreen
+            ? "fixed inset-4 z-50 overflow-y-auto bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl animate-slide-in-right"
+            : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-xl"
+          }>
             {/* Panel header with avatar */}
             <div className="sticky top-0 z-10 bg-white dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-700">
               <div className="flex items-center gap-4 p-4 sm:p-6">
@@ -1745,18 +1754,16 @@ export default function ClientesPage() {
                   <p className="text-sm text-zinc-500">{selectedCliente.cuit ? (selectedCliente.cuit.replace(/\D/g, "").length <= 8 ? `DNI ${selectedCliente.cuit}` : selectedCliente.cuit) : "Sin CUIT/DNI"}</p>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  <div className="flex items-center border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden mr-1">
-                    <button onClick={() => setPanelWidth("normal")} className={`p-1.5 transition-colors ${panelWidth === "normal" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Normal"><Minimize2 className="h-3.5 w-3.5" /></button>
-                    <button onClick={() => setPanelWidth("wide")} className={`p-1.5 transition-colors ${panelWidth === "wide" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Ancho"><Maximize2 className="h-3.5 w-3.5" /></button>
-                    <button onClick={() => setPanelWidth("full")} className={`p-1.5 transition-colors ${panelWidth === "full" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/30 dark:text-orange-400" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`} title="Completo"><Square className="h-3.5 w-3.5" /></button>
-                  </div>
-                  <button onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors" title="Editar">
+                  <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
+                    <Maximize2 className="h-4 w-4" />
+                  </button>
+                  <button onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); setPanelFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors" title="Editar">
                     <Pencil className="h-4 w-4" />
                   </button>
                   <button onClick={() => handleDelete(selectedCliente.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 transition-colors" title="Eliminar">
                     <Trash2 className="h-4 w-4" />
                   </button>
-                  <button onClick={() => setSelectedCliente(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors" title="Cerrar">
+                  <button onClick={() => { setSelectedCliente(null); setPanelFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors" title="Cerrar">
                     <X className="h-4 w-4" />
                   </button>
                 </div>
@@ -1835,7 +1842,7 @@ export default function ClientesPage() {
                             )}
                           </p>
                           <button
-                            onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); }}
+                            onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); setPanelFullscreen(false); }}
                             className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors"
                             title="Editar email facturacion"
                           >
