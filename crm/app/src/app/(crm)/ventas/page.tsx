@@ -125,10 +125,11 @@ const STEP_ICONS = [FileText, Truck, Receipt, DollarSign];
 export default function VentasPage() {
   const { profile, role, sociedadActiva } = useUser();
 
-  const pvCrm = useMemo(() => {
-    if (sociedadActiva?.nombre === "Grupo LA") return 10;
-    return 15;
+  const pvOpciones = useMemo(() => {
+    if (sociedadActiva?.nombre === "Grupo LA") return [10];
+    return [15, 16];
   }, [sociedadActiva]);
+  const [pvCrm, setPvCrm] = useState(() => pvOpciones[0]);
 
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [loading, setLoading] = useState(true);
@@ -184,6 +185,8 @@ export default function VentasPage() {
       setFilterVendedor(profile.id);
     }
   }, [role, profile?.id]);
+
+  useEffect(() => { setPvCrm(pvOpciones[0]); }, [pvOpciones]);
 
   const fetchData = useCallback(async () => {
     try {
@@ -290,9 +293,9 @@ export default function VentasPage() {
     return filteredVentas.find(v => v.presupuesto.id === selectedVentaId) || null;
   }, [filteredVentas, selectedVentaId]);
 
-  async function fetchNextNum(tipo: string) {
+  async function fetchNextNum(tipo: string, pv?: number) {
     try {
-      let q = supabase.from("facturas").select("numero").eq("tipo" as any, tipo).eq("punto_venta" as any, pvCrm);
+      let q = supabase.from("facturas").select("numero").eq("tipo" as any, tipo).eq("punto_venta" as any, pv ?? pvCrm);
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       const { data } = await q.order("numero", { ascending: false }).limit(1);
       setEmitNextNum(((data && data.length > 0 ? (data[0] as any).numero : 0) || 0) + 1);
@@ -1069,7 +1072,19 @@ export default function VentasPage() {
                   </div>
                   <div>
                     <span className="text-zinc-500">Punto de venta</span>
-                    <p className="font-mono font-bold dark:text-white">{String(pvCrm).padStart(4, "0")}</p>
+                    {pvOpciones.length > 1 ? (
+                      <select
+                        value={pvCrm}
+                        onChange={(e) => { const newPv = Number(e.target.value); setPvCrm(newPv); fetchNextNum(emitTipo, newPv); }}
+                        className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2 py-1 text-sm font-mono font-bold dark:text-white"
+                      >
+                        {pvOpciones.map((pv) => (
+                          <option key={pv} value={pv}>{String(pv).padStart(4, "0")}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <p className="font-mono font-bold dark:text-white">{String(pvCrm).padStart(4, "0")}</p>
+                    )}
                   </div>
                   <div>
                     <span className="text-zinc-500">Nro. comprobante</span>
