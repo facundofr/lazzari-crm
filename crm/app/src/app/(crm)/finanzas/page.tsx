@@ -24,6 +24,11 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   cheque_recibido: { label: "Cheque recibido", variant: "info", icon: CreditCard },
   transferencia: { label: "Transferencia", variant: "outline", icon: Landmark },
   efectivo: { label: "Efectivo", variant: "outline", icon: Wallet },
+  ajuste: { label: "Ajuste", variant: "outline", icon: Wallet },
+  retencion_iva: { label: "Ret. IVA", variant: "warning", icon: Wallet },
+  retencion_ganancias: { label: "Ret. Ganancias", variant: "warning", icon: Wallet },
+  retencion_iibb: { label: "Ret. IIBB", variant: "warning", icon: Wallet },
+  retencion_suss: { label: "Ret. SUSS", variant: "warning", icon: Wallet },
 };
 
 type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion";
@@ -246,6 +251,7 @@ const emptyOPForm = {
   fecha: new Date().toISOString().slice(0, 10),
   monto_manual: 0,
   usar_monto_manual: false,
+  iva_manual_pct: 21 as number,
 };
 
 const emptyGastoManualForm = {
@@ -387,14 +393,16 @@ export default function FinanzasPage() {
   const [opProvCondicion, setOpProvCondicion] = useState<string | null>(null);
   const [opCondicionLoading, setOpCondicionLoading] = useState(false);
   // FC pendientes del proveedor para vincular a la OP
-  interface OpFCPendiente { id: string; numero: string; fecha: string; total: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number }
+  interface OpFCPendiente { id: string; numero: string; fecha: string; total: number; subtotal: number; iva: number; percepciones: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number }
   const [opFCPendientes, setOpFCPendientes] = useState<OpFCPendiente[]>([]);
   const [opMedios, setOpMedios] = useState<OpMedioPago[]>([makeOpMedio()]);
-  const [opMonthlyTotal, setOpMonthlyTotal] = useState(0);
+  const [opMonthlyBase, setOpMonthlyBase] = useState(0); // Acumulado mensual de bases sin IVA (de OPs previas)
+  const [opMonthlyRetenido, setOpMonthlyRetenido] = useState(0); // Retenciones ya practicadas en el mes
   const [opFCLoading, setOpFCLoading] = useState(false);
   const [retencionConfig, setRetencionConfig] = useState({
     aplica_iva: true, minimo_iva: 130000, tasa_iva_ri: 10.5,
     aplica_ganancias: true, minimo_ganancias: 400000, tasa_ganancias_ri: 2, tasa_ganancias_no_inscripto: 28,
+    minimo_retencion_ganancias: 15000,
   });
   const [proveedoresOptions, setProveedoresOptions] = useState<ProveedorOption[]>([]);
   const [chequesRecibidos, setChequesRecibidos] = useState<MovimientoRow[]>([]);
@@ -736,6 +744,7 @@ export default function FinanzasPage() {
               minimo_ganancias: retCfg.minimo_ganancias ?? 400000,
               tasa_ganancias_ri: retCfg.tasa_ganancias_ri ?? 2,
               tasa_ganancias_no_inscripto: retCfg.tasa_ganancias_no_inscripto ?? 28,
+              minimo_retencion_ganancias: retCfg.minimo_retencion_ganancias ?? 15000,
             });
           }
         } catch { /* use defaults */ }
@@ -1062,8 +1071,8 @@ export default function FinanzasPage() {
     setOpFCLoading(true);
     (async () => {
       try {
-        // FC pendientes
-        let q = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, total, moneda")
+        // FC pendientes (incluir subtotal/iva/percepciones para base sin IVA — Art. 23 RG 830)
+        let q = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, subtotal, iva, percepciones, total, moneda")
           .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"]);
         if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
         const { data } = await q;
@@ -1079,41 +1088,61 @@ export default function FinanzasPage() {
         setOpFCPendientes((data || []).map((fc: any) => {
           const pagado = pagadoPorFC[fc.id] || 0;
           const saldo = Math.max(0, Number(fc.total) - pagado);
-          return { id: fc.id, numero: fc.numero_factura || "S/N", fecha: fc.fecha, total: Number(fc.total), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: false, monto_a_pagar: saldo };
+          return { id: fc.id, numero: fc.numero_factura || "S/N", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: false, monto_a_pagar: saldo };
         }).filter((fc: any) => fc.saldo_pendiente > 0));
 
-        // Total mensual facturado por este proveedor (para cálculo ganancias)
+        // Acumulado mensual de PAGOS (OPs) a este proveedor — Art. 26 RG 830
+        // Se acumulan las bases sin IVA de OPs previas + retenciones ya practicadas
         const mesActual = new Date().toISOString().slice(0, 7); // YYYY-MM
-        let qMensual = (supabase as any).from("facturas_compra").select("total")
+        let qMensualOP = (supabase as any).from("ordenes_pago").select("base_retencion_ganancias, retencion_ganancias_monto")
           .eq("proveedor_id", opForm.proveedor_id)
           .gte("fecha", `${mesActual}-01`);
-        if (sociedadActiva?.id) qMensual = qMensual.eq("sociedad_id", sociedadActiva.id);
-        const { data: mensualData } = await qMensual;
-        const totalMes = (mensualData || []).reduce((s: number, r: any) => s + Number(r.total), 0);
-        setOpMonthlyTotal(totalMes);
+        if (sociedadActiva?.id) qMensualOP = qMensualOP.eq("sociedad_id", sociedadActiva.id);
+        const { data: mensualOPData } = await qMensualOP;
+        const basesMes = (mensualOPData || []).reduce((s: number, r: any) => s + Number(r.base_retencion_ganancias || 0), 0);
+        const retenidoMes = (mensualOPData || []).reduce((s: number, r: any) => s + Number(r.retencion_ganancias_monto || 0), 0);
+        setOpMonthlyBase(basesMes);
+        setOpMonthlyRetenido(retenidoMes);
       } catch { setOpFCPendientes([]); }
       finally { setOpFCLoading(false); }
     })();
   }, [opForm.proveedor_id, opModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 2. Cuando tenemos condición y monto → auto-calcular retención ganancias basado en total mensual
+  // 2. Base sin IVA de esta OP (Art. 23 RG 830: IVA se excluye de la base de retención)
   const opMontoBrutoFC = opFCPendientes.filter(f => f.selected).reduce((s, f) => s + f.monto_a_pagar, 0);
   const opMontoBruto = opForm.usar_monto_manual && opForm.monto_manual > 0 ? opForm.monto_manual : opMontoBrutoFC;
+
+  // Base sin IVA: para cada FC, la proporción sin IVA del monto a pagar
+  const opBaseSinIVA = (() => {
+    if (opForm.usar_monto_manual && opForm.monto_manual > 0) {
+      // Monto manual: descontar IVA estimado (el usuario puede ajustar el % manualmente)
+      const ivaPct = opForm.iva_manual_pct ?? 21;
+      return Math.round(opForm.monto_manual / (1 + ivaPct / 100) * 100) / 100;
+    }
+    return opFCPendientes.filter(f => f.selected).reduce((s, f) => {
+      if (f.total <= 0) return s;
+      // Proporción sin IVA: (subtotal + percepciones) / total × monto_a_pagar
+      const ratioSinIVA = (f.subtotal + f.percepciones) / f.total;
+      return s + Math.round(f.monto_a_pagar * ratioSinIVA * 100) / 100;
+    }, 0);
+  })();
+
+  // 3. Auto-calcular retención ganancias según RG 830
   useEffect(() => {
-    if (opProvCondicion === null || opMontoBruto <= 0) return;
+    if (opProvCondicion === null || opBaseSinIVA <= 0) return;
     let aplica_ganancias = false;
     let retencion_ganancias_pct = 0;
-    // Ganancias: solo RI. Se retiene sobre el excedente del mínimo mensual.
-    // Si el mínimo ya se superó en OPs anteriores del mes, se retiene sobre el total de esta OP.
+    // RG 830: solo RI son sujetos de retención. Monotributo/Exento/CF = no retener.
     if (opProvCondicion === "RI" && retencionConfig.aplica_ganancias) {
-      const acumuladoMensual = opMonthlyTotal + opMontoBruto;
+      // Art. 26: acumular bases sin IVA del mes + esta OP
+      const acumuladoMensual = opMonthlyBase + opBaseSinIVA;
       if (acumuladoMensual >= retencionConfig.minimo_ganancias) {
         aplica_ganancias = true;
         retencion_ganancias_pct = retencionConfig.tasa_ganancias_ri;
       }
     }
     setOpForm(prev => ({ ...prev, aplica_ganancias, retencion_ganancias_pct }));
-  }, [opProvCondicion, opMontoBruto, retencionConfig, opMonthlyTotal]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── OP handlers ──
   function openOPModal(preloadProveedorId?: string) {
@@ -1129,19 +1158,39 @@ export default function FinanzasPage() {
     }
     setOpFCPendientes([]);
     setOpMedios([makeOpMedio()]);
-    setOpMonthlyTotal(0);
+    setOpMonthlyBase(0);
+    setOpMonthlyRetenido(0);
     setOpModalOpen(true);
   }
 
-  // Base imponible ganancias: si el mínimo ya se superó antes, retener sobre toda la OP.
-  // Si esta OP es la que cruza el mínimo, retener solo sobre el excedente.
+  // Base imponible ganancias (Art. 26 RG 830):
+  // 1. Acumular bases sin IVA del mes (OPs previas + esta)
+  // 2. Restar mínimo no sujeto a retención
+  // 3. Aplicar alícuota
+  // 4. Restar retenciones ya practicadas en el mes
+  // 5. Verificar monto mínimo de retención (Art. 29)
   const opBaseGanancias = (() => {
     if (!opForm.aplica_ganancias) return 0;
     const minimo = retencionConfig.minimo_ganancias;
-    if (opMonthlyTotal >= minimo) return opMontoBruto; // ya superó antes → retener todo
-    return (opMonthlyTotal + opMontoBruto) - minimo; // esta OP cruza → solo excedente
+    if (opMonthlyBase >= minimo) return opBaseSinIVA; // ya superó antes → retener sobre toda la base sin IVA de esta OP
+    return (opMonthlyBase + opBaseSinIVA) - minimo; // esta OP cruza → solo excedente
   })();
-  const opRetencionGanancias = opBaseGanancias * (opForm.retencion_ganancias_pct / 100);
+
+  // Retención bruta sobre acumulado, menos retenciones ya practicadas (Art. 26)
+  const opRetencionGananciaBruta = (() => {
+    if (!opForm.aplica_ganancias || opBaseGanancias <= 0) return 0;
+    const minimo = retencionConfig.minimo_ganancias;
+    // Calcular retención sobre el acumulado total del mes
+    const baseAcumulada = Math.max(0, (opMonthlyBase + opBaseSinIVA) - minimo);
+    const retencionAcumulada = baseAcumulada * (opForm.retencion_ganancias_pct / 100);
+    // Restar lo ya retenido en OPs previas del mes
+    return Math.max(0, retencionAcumulada - opMonthlyRetenido);
+  })();
+
+  // Art. 29: si la retención es menor al mínimo, no retener
+  const opRetencionGanancias = opRetencionGananciaBruta < retencionConfig.minimo_retencion_ganancias
+    ? 0
+    : Math.round(opRetencionGananciaBruta * 100) / 100;
   const opNetoAPagar = opMontoBruto - opRetencionGanancias;
   const opTotalMedios = opMedios.reduce((s, m) => s + m.monto, 0);
   const opDiferencia = opNetoAPagar - opTotalMedios;
@@ -1177,6 +1226,7 @@ export default function FinanzasPage() {
         fecha: opForm.fecha,
         proveedor_id: opForm.proveedor_id,
         monto_bruto: opMontoBruto,
+        base_retencion_ganancias: opBaseSinIVA, // Base sin IVA para acumulado mensual futuro
         retencion_porcentaje: 0,
         retencion_monto: 0,
         retencion_ganancias_pct: opForm.aplica_ganancias ? opForm.retencion_ganancias_pct : 0,
@@ -3968,10 +4018,11 @@ ${certRetGanHtml}
                       <span className="font-mono font-bold text-orange-600">{formatCurrency(opMontoBruto, opForm.moneda)}</span>
                     </div>
                   )}
-                  {opMonthlyTotal > 0 && opProvCondicion === "RI" && (
+                  {opMonthlyBase > 0 && opProvCondicion === "RI" && (
                     <p className="text-xs text-violet-600 dark:text-violet-400 mt-1">
-                      Acumulado mes proveedor: {formatCurrency(opMonthlyTotal)} — Con esta OP: {formatCurrency(opMonthlyTotal + opMontoBruto)}
-                      {(opMonthlyTotal + opMontoBruto) >= retencionConfig.minimo_ganancias && " → Aplica retención ganancias"}
+                      Acumulado mes (base sin IVA): {formatCurrency(opMonthlyBase, opForm.moneda)} — Con esta OP: {formatCurrency(opMonthlyBase + opBaseSinIVA, opForm.moneda)}
+                      {(opMonthlyBase + opBaseSinIVA) >= retencionConfig.minimo_ganancias && " → Aplica retención"}
+                      {opMonthlyRetenido > 0 && ` (ya retenido: ${formatCurrency(opMonthlyRetenido, opForm.moneda)})`}
                     </p>
                   )}
                 </div>
@@ -4014,10 +4065,21 @@ ${certRetGanHtml}
                     </button>
                   </div>
                   {opForm.usar_monto_manual && (
-                    <div className="flex items-center gap-2 mt-2">
-                      <input type="number" value={opForm.monto_manual || ""} onChange={(e) => setOpForm({ ...opForm, monto_manual: Number(e.target.value) })}
-                        placeholder="Monto a pagar" className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                      <span className="text-xs text-zinc-400 whitespace-nowrap">{opForm.moneda}</span>
+                    <div className="space-y-2 mt-2">
+                      <div className="flex items-center gap-2">
+                        <input type="number" value={opForm.monto_manual || ""} onChange={(e) => setOpForm({ ...opForm, monto_manual: Number(e.target.value) })}
+                          placeholder="Monto total a pagar" className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                        <span className="text-xs text-zinc-400 whitespace-nowrap">{opForm.moneda}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-zinc-500 whitespace-nowrap">IVA incluido:</label>
+                        {[21, 10.5, 0].map(pct => (
+                          <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, iva_manual_pct: pct })}
+                            className={`rounded px-2 py-0.5 text-xs font-medium ${opForm.iva_manual_pct === pct ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                            {pct}%
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
                   <p className="text-xs text-zinc-400 mt-1">Activar para ingresar un monto libre sin vincular facturas</p>
@@ -4028,6 +4090,12 @@ ${certRetGanHtml}
               {opMontoBruto > 0 && (
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1">
                   <div className="flex justify-between text-sm"><span className="text-zinc-500">{opForm.usar_monto_manual ? "Monto" : "Documentos"}</span><span className="font-mono">{formatCurrency(opMontoBruto, opForm.moneda)}</span></div>
+                  {opBaseSinIVA > 0 && opBaseSinIVA !== opMontoBruto && (
+                    <div className="flex justify-between text-sm text-zinc-400">
+                      <span>Base sin IVA (Art. 23 RG 830)</span>
+                      <span className="font-mono">{formatCurrency(opBaseSinIVA, opForm.moneda)}</span>
+                    </div>
+                  )}
                   {opRetencionGanancias > 0 && (
                     <div className="flex justify-between text-sm">
                       <span className="text-zinc-500 flex items-center gap-1">
@@ -4035,6 +4103,12 @@ ${certRetGanHtml}
                         Ret. Ganancias ({opForm.retencion_ganancias_pct}% s/ {formatCurrency(opBaseGanancias, opForm.moneda)})
                       </span>
                       <span className="font-mono text-violet-600">- {formatCurrency(opRetencionGanancias, opForm.moneda)}</span>
+                    </div>
+                  )}
+                  {opRetencionGananciaBruta > 0 && opRetencionGanancias === 0 && (
+                    <div className="flex justify-between text-xs text-amber-500">
+                      <span>Ret. Ganancias no aplicada (menor a {formatCurrency(retencionConfig.minimo_retencion_ganancias, opForm.moneda)} — Art. 29 RG 830)</span>
+                      <span className="font-mono">{formatCurrency(opRetencionGananciaBruta, opForm.moneda)}</span>
                     </div>
                   )}
                   <div className="flex justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1.5">

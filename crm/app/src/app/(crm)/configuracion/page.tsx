@@ -122,6 +122,7 @@ export default function ConfiguracionPage() {
     minimo_ganancias: 400000,
     tasa_ganancias_ri: 3.5,
     tasa_ganancias_no_inscripto: 28,
+    minimo_retencion_ganancias: 15000,
   });
   const [retencionCfgSaving, setRetencionCfgSaving] = useState(false);
   const [retencionCfgSaved, setRetencionCfgSaved] = useState(false);
@@ -312,6 +313,7 @@ export default function ConfiguracionPage() {
             minimo_ganancias: data.minimo_ganancias ?? 400000,
             tasa_ganancias_ri: data.tasa_ganancias_ri ?? 3.5,
             tasa_ganancias_no_inscripto: data.tasa_ganancias_no_inscripto ?? 28,
+            minimo_retencion_ganancias: data.minimo_retencion_ganancias ?? 15000,
           });
         } catch { /* use defaults */ }
       })();
@@ -1101,16 +1103,25 @@ export default function ConfiguracionPage() {
                       className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     />
                   </div>
-                  <div className="col-span-2">
-                    <label className="text-xs font-medium text-zinc-500">Tasa no inscripto / no categorizado (%)</label>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Tasa no inscripto (%)</label>
                     <input
                       type="number"
                       step="0.5"
                       value={retencionCfg.tasa_ganancias_no_inscripto}
                       onChange={(e) => setRetencionCfg(prev => ({ ...prev, tasa_ganancias_no_inscripto: Number(e.target.value) }))}
-                      className="mt-1 w-40 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     />
-                    <p className="text-xs text-zinc-400 mt-1">Se aplica cuando AFIP no puede determinar la condición del proveedor</p>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Mínimo de retención (Art. 29)</label>
+                    <input
+                      type="number"
+                      value={retencionCfg.minimo_retencion_ganancias}
+                      onChange={(e) => setRetencionCfg(prev => ({ ...prev, minimo_retencion_ganancias: Number(e.target.value) }))}
+                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    />
+                    <p className="text-xs text-zinc-400 mt-1">Si la retención calculada es menor a este monto, no se retiene</p>
                   </div>
                 </div>
               )}
