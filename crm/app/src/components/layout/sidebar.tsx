@@ -44,7 +44,6 @@ const navigation = [
   // ── Entrega & facturacion ──
   { name: "Remitos", href: "/remitos", icon: Truck, module: "remitos" },
   { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
-  { name: "Facturación", href: "/facturacion", icon: Receipt, module: "facturacion" },
   // ── Admin ──
   { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },
   { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes" },
