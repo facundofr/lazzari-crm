@@ -683,7 +683,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   const [cmClienteSearch, setCmClienteSearch] = useState("");
   const [cmFCs, setCmFCs] = useState<CobroMasivoFC[]>([]);
   const [cmMonto, setCmMonto] = useState(0);
-  const [cmMedio, setCmMedio] = useState<"transferencia" | "efectivo" | "cheque_recibido" | "deposito">("transferencia");
+  const [cmMedio, setCmMedio] = useState<"transferencia" | "efectivo" | "cheque_recibido">("transferencia");
   const [cmFecha, setCmFecha] = useState(todayAR());
   const [cmDesc, setCmDesc] = useState("");
   const [cmSaving, setCmSaving] = useState(false);
@@ -1756,7 +1756,6 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                         <option value="transferencia">Transferencia</option>
                         <option value="efectivo">Efectivo</option>
                         <option value="cheque_recibido">Cheque</option>
-                        <option value="deposito">Depósito</option>
                       </select>
                     </div>
                     <div>

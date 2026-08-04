@@ -88,6 +88,7 @@ interface ProveedorOption {
   id: string;
   razon_social: string;
   cuit?: string | null;
+  condicion_iva?: string | null;
 }
 
 interface OrdenPagoRow {
@@ -717,7 +718,7 @@ export default function FinanzasPage() {
 
         // Fetch proveedores list for OP/gastos selectors
         try {
-          let qProv = supabase.from("proveedores").select("id, razon_social, cuit").order("razon_social");
+          let qProv = supabase.from("proveedores").select("id, razon_social, cuit, condicion_iva").order("razon_social");
           if (sociedadActiva?.id) qProv = qProv.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: provData } = await qProv;
           if (provData) setProveedoresOptions(provData as ProveedorOption[]);
@@ -1041,8 +1042,11 @@ export default function FinanzasPage() {
     if (!opModalOpen) return;
     if (!opForm.proveedor_id) { setOpProvCondicion(null); setOpFCPendientes([]); return; }
     const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
-    // CUIT lookup (solo si tiene CUIT)
-    if (prov?.cuit) {
+    // Usar condicion_iva de la DB directamente (fuente de verdad)
+    if (prov?.condicion_iva) {
+      setOpProvCondicion(prov.condicion_iva);
+    } else if (prov?.cuit) {
+      // Fallback: CUIT lookup solo si la DB no tiene condicion_iva
       const cuit = prov.cuit.replace(/-/g, "");
       setOpCondicionLoading(true);
       setOpProvCondicion(null);
@@ -1099,10 +1103,11 @@ export default function FinanzasPage() {
     if (opProvCondicion === null || opMontoBruto <= 0) return;
     let aplica_ganancias = false;
     let retencion_ganancias_pct = 0;
-    if (opProvCondicion === "RI") {
-      // Ganancias: se aplica cuando el acumulado mensual supera el mínimo
+    // Ganancias: solo RI. Se retiene sobre el excedente del mínimo mensual.
+    // Si el mínimo ya se superó en OPs anteriores del mes, se retiene sobre el total de esta OP.
+    if (opProvCondicion === "RI" && retencionConfig.aplica_ganancias) {
       const acumuladoMensual = opMonthlyTotal + opMontoBruto;
-      if (retencionConfig.aplica_ganancias && acumuladoMensual >= retencionConfig.minimo_ganancias) {
+      if (acumuladoMensual >= retencionConfig.minimo_ganancias) {
         aplica_ganancias = true;
         retencion_ganancias_pct = retencionConfig.tasa_ganancias_ri;
       }
@@ -1128,7 +1133,15 @@ export default function FinanzasPage() {
     setOpModalOpen(true);
   }
 
-  const opRetencionGanancias = opForm.aplica_ganancias ? opMontoBruto * (opForm.retencion_ganancias_pct / 100) : 0;
+  // Base imponible ganancias: si el mínimo ya se superó antes, retener sobre toda la OP.
+  // Si esta OP es la que cruza el mínimo, retener solo sobre el excedente.
+  const opBaseGanancias = (() => {
+    if (!opForm.aplica_ganancias) return 0;
+    const minimo = retencionConfig.minimo_ganancias;
+    if (opMonthlyTotal >= minimo) return opMontoBruto; // ya superó antes → retener todo
+    return (opMonthlyTotal + opMontoBruto) - minimo; // esta OP cruza → solo excedente
+  })();
+  const opRetencionGanancias = opBaseGanancias * (opForm.retencion_ganancias_pct / 100);
   const opNetoAPagar = opMontoBruto - opRetencionGanancias;
   const opTotalMedios = opMedios.reduce((s, m) => s + m.monto, 0);
   const opDiferencia = opNetoAPagar - opTotalMedios;
@@ -1963,7 +1976,6 @@ ${certRetGanHtml}
     if (!fc) return;
     // Open OP modal pre-loaded with this FC's proveedor
     openOPModal(fc.proveedor_id || "");
-    setOpModalOpen(true);
   }
 
   async function handleAnularFC(id: string) {
@@ -4016,7 +4028,15 @@ ${certRetGanHtml}
               {opMontoBruto > 0 && (
                 <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1">
                   <div className="flex justify-between text-sm"><span className="text-zinc-500">{opForm.usar_monto_manual ? "Monto" : "Documentos"}</span><span className="font-mono">{formatCurrency(opMontoBruto, opForm.moneda)}</span></div>
-                  {opRetencionGanancias > 0 && <div className="flex justify-between text-sm"><span className="text-zinc-500 flex items-center gap-1"><ShieldCheck className="h-3 w-3 text-violet-500" />Ret. Ganancias ({opForm.retencion_ganancias_pct}%)</span><span className="font-mono text-violet-600">- {formatCurrency(opRetencionGanancias, opForm.moneda)}</span></div>}
+                  {opRetencionGanancias > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-zinc-500 flex items-center gap-1">
+                        <ShieldCheck className="h-3 w-3 text-violet-500" />
+                        Ret. Ganancias ({opForm.retencion_ganancias_pct}% s/ {formatCurrency(opBaseGanancias, opForm.moneda)})
+                      </span>
+                      <span className="font-mono text-violet-600">- {formatCurrency(opRetencionGanancias, opForm.moneda)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1.5">
                     <span className="text-zinc-700 dark:text-white">Neto a pagar</span>
                     <span className="font-mono text-emerald-600 text-base">{formatCurrency(opNetoAPagar, opForm.moneda)}</span>
@@ -4774,7 +4794,7 @@ ${certRetGanHtml}
               {/* Acciones */}
               <div className="flex flex-wrap gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
                 {(selectedFC.estado === "pendiente" || selectedFC.estado === "recibida") && !selectedFC.op_vinculada && (
-                  <button onClick={() => { setSelectedFC(null); handlePagarFC(selectedFC.id); }}
+                  <button onClick={() => handlePagarFC(selectedFC.id)}
                     className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
                     <DollarSign className="h-4 w-4" /> Crear OP
                   </button>
