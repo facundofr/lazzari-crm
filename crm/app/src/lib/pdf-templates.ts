@@ -22,13 +22,13 @@ interface SociedadPDF {
 
 const SOCIEDAD_EXTRA: Record<string, Partial<SociedadPDF>> = {
   "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021": {
-    domicilio: "Ruta 9 Km 286, Carcarañá, Santa Fe",
+    domicilio: "Pueyrredón 653, Pergamino, Buenos Aires",
     telefono: "(0341) 15-522-8833",
     email: "info@lazzari.com.ar",
     inicioActividades: "01/2018",
   },
   "fee94607-747a-4e87-ba24-aff9032f7a56": {
-    domicilio: "Ruta 9 Km 286, Carcarañá, Santa Fe",
+    domicilio: "Pueyrredón 653, Pergamino, Buenos Aires",
     telefono: "(0341) 15-522-8833",
     email: "info@grupola.com.ar",
     inicioActividades: "01/2020",

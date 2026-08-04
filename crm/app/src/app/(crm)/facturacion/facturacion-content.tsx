@@ -83,6 +83,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
         condicionIva: "Responsable Inscripto",
         domicilio: "",
         ptoVta: 10,
+        ptoVtaOpciones: [10],
       };
     }
     return {
@@ -92,6 +93,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
       condicionIva: "Responsable Inscripto",
       domicilio: "",
       ptoVta: 15,
+      ptoVtaOpciones: [15, 16],
     };
   }, [sociedadActiva]);
   const [facturas, setFacturas] = useState<FacturaRow[]>([]);
@@ -1135,6 +1137,23 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">PV</label>
                     {emitManual ? (
                       <input type="number" min={1} value={emitData.punto_venta} onChange={(e) => setEmitData((p) => ({ ...p, punto_venta: Number(e.target.value) }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                    ) : emisorData.ptoVtaOpciones && emisorData.ptoVtaOpciones.length > 1 ? (
+                      <select
+                        value={emitData.punto_venta}
+                        onChange={async (e) => {
+                          const newPv = Number(e.target.value);
+                          setEmitData((p) => ({ ...p, punto_venta: newPv }));
+                          // Fetch next number for this PV
+                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, emitData.tipo).eq("punto_venta" as any, newPv).order("numero", { ascending: false }).limit(1);
+                          const nextNum = last && last.length > 0 ? (last[0] as any).numero + 1 : 1;
+                          setEmitData((p) => ({ ...p, punto_venta: newPv, numero_manual: String(nextNum) }));
+                        }}
+                        className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white"
+                      >
+                        {emisorData.ptoVtaOpciones.map((pv) => (
+                          <option key={pv} value={pv}>{String(pv).padStart(4, "0")}</option>
+                        ))}
+                      </select>
                     ) : (
                       <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 text-sm font-mono text-zinc-500 dark:text-zinc-400">
                         {String(emitData.punto_venta).padStart(4, "0")}

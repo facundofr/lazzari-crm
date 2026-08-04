@@ -30,6 +30,7 @@ interface ArcaConfig {
   id: string;
   cuit: number;
   ptoVta: number;
+  ptoVtaPermitidos: number[];
   certFile: string;
   keyFile: string;
   certB64Env: string;
@@ -37,8 +38,8 @@ interface ArcaConfig {
 }
 
 const ARCA_CONFIGS: ArcaConfig[] = [
-  { id: "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021", cuit: 20379309128, ptoVta: 15, certFile: "lazzari.crt", keyFile: "lazzari.key", certB64Env: "ARCA_CERT_B64", keyB64Env: "ARCA_KEY_B64" },
-  { id: "fee94607-747a-4e87-ba24-aff9032f7a56", cuit: 30719396042, ptoVta: 10, certFile: "GrupoLa-crm.crt", keyFile: "grupoLA.key", certB64Env: "ARCA_GRUPOLA_CERT_B64", keyB64Env: "ARCA_GRUPOLA_KEY_B64" },
+  { id: "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021", cuit: 20379309128, ptoVta: 15, ptoVtaPermitidos: [15, 16], certFile: "lazzari.crt", keyFile: "lazzari.key", certB64Env: "ARCA_CERT_B64", keyB64Env: "ARCA_KEY_B64" },
+  { id: "fee94607-747a-4e87-ba24-aff9032f7a56", cuit: 30719396042, ptoVta: 10, ptoVtaPermitidos: [10], certFile: "GrupoLa-crm.crt", keyFile: "grupoLA.key", certB64Env: "ARCA_GRUPOLA_CERT_B64", keyB64Env: "ARCA_GRUPOLA_KEY_B64" },
 ];
 
 const DEFAULT_ARCA_CONFIG = ARCA_CONFIGS[0]; // Lazzari
@@ -250,10 +251,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Validate punto_venta matches the sociedad's configured PV
-    if (Number(punto_venta) !== arcaConfig.ptoVta) {
+    // Validate punto_venta is allowed for this sociedad
+    if (!arcaConfig.ptoVtaPermitidos.includes(Number(punto_venta))) {
       return NextResponse.json({
-        error: `Punto de venta ${punto_venta} no coincide con el configurado para esta sociedad (${arcaConfig.ptoVta})`,
+        error: `Punto de venta ${punto_venta} no está permitido para esta sociedad (permitidos: ${arcaConfig.ptoVtaPermitidos.join(", ")})`,
       }, { status: 400 });
     }
 
