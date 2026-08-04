@@ -1781,7 +1781,13 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                           <tr>
                             <th className="px-3 py-2 text-left w-8">
                               <input type="checkbox" checked={cmFCs.length > 0 && cmFCs.every(f => f.selected)}
-                                onChange={(e) => { const sel = e.target.checked; setCmFCs(prev => prev.map(f => ({ ...f, selected: sel }))); if (sel && cmMonto > 0) cmDistribuir(cmMonto); }} />
+                                onChange={(e) => {
+                                  const sel = e.target.checked;
+                                  const newFCs = cmFCs.map(f => ({ ...f, selected: sel, monto_a_cobrar: sel ? f.saldo : 0 }));
+                                  const totalSel = sel ? newFCs.reduce((s, f) => s + f.saldo, 0) : 0;
+                                  setCmMonto(Math.round(totalSel * 100) / 100);
+                                  setCmFCs(newFCs);
+                                }} />
                             </th>
                             <th className="px-3 py-2 text-left">Comprobante</th>
                             <th className="px-3 py-2 text-left">Fecha</th>
@@ -1795,8 +1801,18 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                             <tr key={fc.id} className={`border-t dark:border-zinc-700 ${fc.selected ? "bg-emerald-50 dark:bg-emerald-900/20" : ""}`}>
                               <td className="px-3 py-2">
                                 <input type="checkbox" checked={fc.selected} onChange={(e) => {
-                                  const newFCs = [...cmFCs]; newFCs[idx] = { ...newFCs[idx], selected: e.target.checked }; setCmFCs(newFCs);
-                                  if (cmMonto > 0) { let restante = cmMonto; setCmFCs(newFCs.map(f => { if (!f.selected) return { ...f, monto_a_cobrar: 0 }; const aplicar = Math.min(restante, f.saldo); restante = Math.max(0, restante - aplicar); return { ...f, monto_a_cobrar: Math.round(aplicar * 100) / 100 }; })); }
+                                  const newFCs = [...cmFCs]; newFCs[idx] = { ...newFCs[idx], selected: e.target.checked };
+                                  // Auto-calculate monto from selected saldos and distribute
+                                  const totalSel = newFCs.filter(f => f.selected).reduce((s, f) => s + f.saldo, 0);
+                                  const rounded = Math.round(totalSel * 100) / 100;
+                                  setCmMonto(rounded);
+                                  let restante = rounded;
+                                  setCmFCs(newFCs.map(f => {
+                                    if (!f.selected) return { ...f, monto_a_cobrar: 0 };
+                                    const aplicar = Math.min(restante, f.saldo);
+                                    restante = Math.max(0, restante - aplicar);
+                                    return { ...f, monto_a_cobrar: Math.round(aplicar * 100) / 100 };
+                                  }));
                                 }} />
                               </td>
                               <td className="px-3 py-2 font-mono text-xs">{formatComprobante(fc.tipo, fc.punto_venta, fc.numero)}</td>
