@@ -881,24 +881,8 @@ export default function OrdenesCompraPage() {
         return;
       }
 
-      // Get existing OCs to know which PR items already have OC
-      let existingOCsQuery = supabase
-        .from("ordenes_compra")
-        .select("presupuesto_origen_id")
-        .not("presupuesto_origen_id", "is", null)
-        .not("estado", "eq", "cancelada");
-      if (sociedadActiva?.id) existingOCsQuery = existingOCsQuery.eq("sociedad_id" as any, sociedadActiva.id);
-      const { data: existingOCs } = await existingOCsQuery;
-      const ocPRIds = new Set((existingOCs || []).map((oc: any) => oc.presupuesto_origen_id));
-
-      // Get items for PRs that don't have OC yet
-      const prIds = prs.filter(p => !ocPRIds.has(p.id)).map(p => p.id);
-      if (prIds.length === 0) {
-        setConsolidateGroups([]);
-        setConsolidateLoading(false);
-        return;
-      }
-
+      // Get all presupuesto items with proveedor
+      const prIds = prs.map(p => p.id);
       const { data: items } = await supabase
         .from("presupuesto_items")
         .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id, proveedor_nombre, iva_porcentaje, costo_moneda")
@@ -911,11 +895,35 @@ export default function OrdenesCompraPage() {
         return;
       }
 
+      // Get existing non-cancelled OCs with presupuesto_origen_id to know which PR+proveedor combos already have OC
+      let existingOCsQuery = supabase
+        .from("ordenes_compra")
+        .select("presupuesto_origen_id, proveedor_id")
+        .not("presupuesto_origen_id", "is", null)
+        .not("estado", "eq", "cancelada");
+      if (sociedadActiva?.id) existingOCsQuery = existingOCsQuery.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: existingOCs } = await existingOCsQuery;
+      // Build a set of "presupuesto_id|proveedor_id" keys that already have an OC
+      const ocCoveredKeys = new Set(
+        (existingOCs || []).map((oc: any) => `${oc.presupuesto_origen_id}|${oc.proveedor_id}`)
+      );
+
+      // Filter out items that already have an OC for their presupuesto+proveedor combo
+      const pendingItems = items.filter(
+        (item: any) => !ocCoveredKeys.has(`${item.presupuesto_id}|${item.proveedor_id}`)
+      );
+
+      if (pendingItems.length === 0) {
+        setConsolidateGroups([]);
+        setConsolidateLoading(false);
+        return;
+      }
+
       // Build proveedor groups
       const prMap = new Map(prs.map(p => [p.id, p]));
       const groups: Record<string, ProveedorGroup> = {};
 
-      for (const item of items) {
+      for (const item of pendingItems) {
         const pr = prMap.get(item.presupuesto_id);
         if (!pr || !item.proveedor_id) continue;
         const provId = item.proveedor_id as string;

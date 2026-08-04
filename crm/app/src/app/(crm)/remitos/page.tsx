@@ -58,6 +58,7 @@ interface RemitoRow {
   sucursal_id?: string;
   clienteNombre: string;
   oc_cliente?: string | null;
+  presupuesto_numero?: string | null;
   remito_items: { id: string }[];
 }
 
@@ -117,7 +118,7 @@ export default function RemitosPage() {
     fecha: todayAR(),
     observaciones: "",
     presupuesto_id: "",
-    valor_declarado: "",
+    valor_declarado: "0",
   });
   const [createItems, setCreateItems] = useState<CreateItem[]>([]);
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
@@ -135,6 +136,7 @@ export default function RemitosPage() {
   const [detailPRNumero, setDetailPRNumero] = useState<string | null>(null);
   const [detailFacturas, setDetailFacturas] = useState<{ id: string; numero: string; tipo: string; total: number; estado: string }[]>([]);
   const [detailTransportes, setDetailTransportes] = useState<TransporteLinked[]>([]);
+  const [detailOC, setDetailOC] = useState<{ id: string; numero: string } | null>(null);
 
   // Create transporte from remito
   const [createTransporteOpen, setCreateTransporteOpen] = useState(false);
@@ -234,7 +236,7 @@ export default function RemitosPage() {
       try {
         let q = (supabase as any)
           .from("remitos")
-          .select(`*, clientes(razon_social, email, cuit, direccion), remito_items(id)`)
+          .select(`*, clientes(razon_social, email, cuit, direccion), presupuestos(numero), remito_items(id)`)
           .order("fecha", { ascending: false });
 
         if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
@@ -242,7 +244,7 @@ export default function RemitosPage() {
         const { data, error } = await q;
 
         if (!error && data) {
-          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "" })) as RemitoRow[]);
+          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "", presupuesto_numero: r.presupuestos?.numero || null })) as RemitoRow[]);
         } else if (error) {
           setRemitos(mockRemitos.map((r) => ({
             id: r.id, numero: r.numero, cliente_id: r.clienteId,
@@ -434,7 +436,7 @@ export default function RemitosPage() {
       fecha: todayAR(),
       observaciones: "",
       presupuesto_id: "",
-      valor_declarado: "",
+      valor_declarado: "0",
     });
     setCreateItems([]);
     setCreateError("");
@@ -465,7 +467,7 @@ export default function RemitosPage() {
       ...prev,
       presupuesto_id: prId,
       cliente_id: pr?.cliente_id || prev.cliente_id,
-      valor_declarado: prev.valor_declarado === "" || presupuestosAprobados.some((p) => (p.total || p.subtotal) && String(p.total || p.subtotal) === prev.valor_declarado)
+      valor_declarado: prev.valor_declarado === "" || prev.valor_declarado === "0" || presupuestosAprobados.some((p) => (p.total || p.subtotal) && String(p.total || p.subtotal) === prev.valor_declarado)
         ? autoValor
         : prev.valor_declarado,
     }));
@@ -841,6 +843,7 @@ export default function RemitosPage() {
     setDetailPRNumero(null);
     setDetailFacturas([]);
     setDetailTransportes([]);
+    setDetailOC(null);
     setCreateTransporteOpen(false);
     try {
       const itemsPromise = supabase
@@ -859,17 +862,24 @@ export default function RemitosPage() {
         .from("transportes")
         .select("id, transportista, estado, fecha, destino, costo, moneda")
         .eq("remito_id", row.id);
+      const ocPromise = row.presupuesto_id
+        ? (supabase as any).from("ordenes_compra").select("id, numero").eq("presupuesto_origen_id", row.presupuesto_id).limit(1)
+        : null;
 
-      const [itemsRes, prRes, facturasRes, transportesRes] = await Promise.all([
+      const [itemsRes, prRes, facturasRes, transportesRes, ocRes] = await Promise.all([
         itemsPromise,
         prPromise,
         facturasPromise,
         transportesPromise,
+        ocPromise,
       ]);
 
       setDetailItems((itemsRes.data as unknown as RemitoDetailItem[]) || []);
       if (prRes?.data) {
         setDetailPRNumero((prRes.data as any).numero || null);
+      }
+      if (ocRes?.data && ocRes.data.length > 0) {
+        setDetailOC({ id: ocRes.data[0].id, numero: ocRes.data[0].numero });
       }
       // Fetch sucursal from remito.sucursal_id (priority) or presupuesto.sucursal_id (legacy)
       const remitoSucId = (row as any).sucursal_id;
@@ -1058,7 +1068,7 @@ export default function RemitosPage() {
                 </span>
               ) },
               { key: "oc_cliente", label: "OC Cliente", sortable: false, render: (row) => row.oc_cliente ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{row.oc_cliente}</span> : <span className="text-zinc-400">{"\u2014"}</span> },
-              { key: "presupuesto_id", label: "PR Origen", sortable: false, render: (row) => row.presupuesto_id ? <Badge variant="info">Vinculado</Badge> : <span className="text-zinc-400">{"\u2014"}</span> },
+              { key: "presupuesto_id", label: "PR Origen", sortable: false, render: (row) => row.presupuesto_id ? <Badge variant="info">{row.presupuesto_numero || "Vinculado"}</Badge> : <span className="text-zinc-400">{"\u2014"}</span> },
               {
                 key: "estado", label: "Estado", sortable: true,
                 render: (row) => {
@@ -1194,6 +1204,18 @@ export default function RemitosPage() {
                       title="Ir a presupuestos"
                     >
                       <Badge variant="info">{detailPRNumero}</Badge>
+                    </button>
+                  </div>
+                )}
+                {detailOC && (
+                  <div>
+                    <span className="text-zinc-400">OC vinculada</span>
+                    <button
+                      onClick={() => window.open(`/ordenes-compra`, "_self")}
+                      className="flex items-center gap-1 mt-0.5"
+                      title="Ir a órdenes de compra"
+                    >
+                      <Badge variant="purple">{detailOC.numero}</Badge>
                     </button>
                   </div>
                 )}
@@ -1645,11 +1667,6 @@ export default function RemitosPage() {
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   placeholder="Ingrese el valor declarado..."
                 />
-                {!createForm.valor_declarado && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                    Sin valor declarado el transportista no puede completar el remito.
-                  </p>
-                )}
               </div>
 
               <div>
