@@ -138,6 +138,10 @@ export default function RemitosPage() {
   const [detailTransportes, setDetailTransportes] = useState<TransporteLinked[]>([]);
   const [detailOC, setDetailOC] = useState<{ id: string; numero: string } | null>(null);
 
+  // PDF valor declarado modal
+  const [pdfModalOpen, setPdfModalOpen] = useState(false);
+  const [pdfValorDeclarado, setPdfValorDeclarado] = useState("0");
+
   // Create transporte from remito
   const [createTransporteOpen, setCreateTransporteOpen] = useState(false);
   const [transporteForm, setTransporteForm] = useState({
@@ -935,7 +939,13 @@ export default function RemitosPage() {
     window.open(`mailto:${encodeURIComponent(emailTo)}?subject=${subject}&body=${body}`, "_blank");
   }
 
-  function handleDownloadPDF() {
+  function openPdfModal() {
+    if (!detailRemito) return;
+    setPdfValorDeclarado(String(detailRemito.valor_declarado ?? 0));
+    setPdfModalOpen(true);
+  }
+
+  function handleDownloadPDF(overrideValorDeclarado?: number) {
     if (!detailRemito || !sociedadActiva) return;
     const r = detailRemito;
     const soc = getSociedadPDF(sociedadActiva);
@@ -944,7 +954,7 @@ export default function RemitosPage() {
       fecha: r.fecha,
       cae: r.cae,
       oc_cliente: r.oc_cliente,
-      valor_declarado: r.valor_declarado,
+      valor_declarado: overrideValorDeclarado ?? r.valor_declarado,
       observaciones: r.observaciones,
       cliente: r.clientes ? {
         razon_social: r.clientes.razon_social,
@@ -1147,7 +1157,7 @@ export default function RemitosPage() {
                   {copiedSummary ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
                   {copiedSummary ? "Copiado" : "Copiar"}
                 </button>
-                <button onClick={handleDownloadPDF} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Descargar PDF">
+                <button onClick={openPdfModal} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Descargar PDF">
                   <Download className="h-3.5 w-3.5" /> PDF
                 </button>
                 <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
@@ -1162,19 +1172,24 @@ export default function RemitosPage() {
             <div className="px-6 py-5 space-y-5">
               {/* Action buttons */}
               <div className="flex flex-wrap gap-2">
-                {detailRemito.estado !== "entregado" && (detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
+                {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
                   <button onClick={() => openParcialModal(detailRemito)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors">
                     <Package className="h-4 w-4" /> Entrega parcial
-                  </button>
-                )}
-                {detailRemito.estado !== "entregado" && (detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
-                  <button onClick={() => { handleEstadoChange(detailRemito.id, "entregado"); setDetailRemito({ ...detailRemito, estado: "entregado" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition-colors">
-                    <CheckCircle2 className="h-4 w-4" /> Marcar entregado
                   </button>
                 )}
                 {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
                   <button onClick={() => openSplitModal()} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-500 text-white hover:bg-violet-600 transition-colors">
                     <GitBranch className="h-4 w-4" /> Dividir remito
+                  </button>
+                )}
+                {(detailRemito.estado === "pendiente" || detailRemito.estado === "parcial") && (
+                  <button onClick={() => { handleEstadoChange(detailRemito.id, "entregado"); setDetailRemito({ ...detailRemito, estado: "entregado" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition-colors">
+                    <CheckCircle2 className="h-4 w-4" /> Marcar entregado
+                  </button>
+                )}
+                {detailRemito.estado === "entregado" && (
+                  <button onClick={() => { handleEstadoChange(detailRemito.id, "pendiente"); setDetailRemito({ ...detailRemito, estado: "pendiente" }); }} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-amber-500 text-white hover:bg-amber-600 transition-colors">
+                    <Package className="h-4 w-4" /> Desmarcar entregado
                   </button>
                 )}
               </div>
@@ -2057,6 +2072,41 @@ export default function RemitosPage() {
             </div>
           </Card>
         </div>
+      )}
+      {/* PDF valor declarado modal */}
+      {pdfModalOpen && (
+        <>
+          <div className="fixed inset-0 z-[60] bg-black/40" onClick={() => setPdfModalOpen(false)} />
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900 space-y-4">
+              <h3 className="text-lg font-semibold dark:text-white">Valor declarado para PDF</h3>
+              <p className="text-sm text-zinc-500">Podés ajustar el valor declarado antes de generar el PDF.</p>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Valor declarado ($)</label>
+                <input
+                  type="number"
+                  value={pdfValorDeclarado}
+                  onChange={(e) => setPdfValorDeclarado(e.target.value)}
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setPdfModalOpen(false)} className="px-4 py-2 text-sm rounded-lg border border-zinc-300 dark:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => {
+                    setPdfModalOpen(false);
+                    handleDownloadPDF(Number(pdfValorDeclarado) || 0);
+                  }}
+                  className="px-4 py-2 text-sm rounded-lg bg-orange-500 text-white font-medium hover:bg-orange-600 transition-colors"
+                >
+                  Generar PDF
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </>
   );
