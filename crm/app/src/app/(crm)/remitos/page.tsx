@@ -68,6 +68,7 @@ interface RemitoDetailItem {
   cantidad: number;
   unidad: string | null;
   orden: number;
+  presupuesto_item_id?: string | null;
 }
 
 interface TransporteLinked {
@@ -86,6 +87,8 @@ interface CreateItem {
   cantidad: number;
   unidad: string;
   sucursal_id?: string;
+  presupuesto_item_id?: string | null;
+  orden?: number;
 }
 
 interface Sucursal {
@@ -102,7 +105,7 @@ interface PresupuestoIA {
   numero: string;
   cliente_id: string;
   clientes: { razon_social: string } | null;
-  presupuesto_items: { id: string; descripcion: string; cantidad: number; unidad: string }[];
+  presupuesto_items: { id: string; descripcion: string; cantidad: number; unidad: string; orden?: number }[];
 }
 
 export default function RemitosPage() {
@@ -186,7 +189,7 @@ export default function RemitosPage() {
   const [splitSucursales, setSplitSucursales] = useState<Sucursal[]>([]);
   const [splittingSaving, setSplittingSaving] = useState(false);
   // Split por cantidad: cada item puede tener múltiples asignaciones de cantidad por sucursal
-  const [splitAssignments, setSplitAssignments] = useState<{ itemId: string; sucursal_id: string; cantidad: number; descripcion: string; unidad: string; maxCantidad: number }[]>([]);
+  const [splitAssignments, setSplitAssignments] = useState<{ itemId: string; sucursal_id: string; cantidad: number; descripcion: string; unidad: string; maxCantidad: number; orden: number; presupuesto_item_id?: string | null }[]>([]);
 
   // SmartFilters state
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
@@ -295,9 +298,9 @@ export default function RemitosPage() {
     setParcialModalOpen(true);
     setLoadingParcial(true);
     try {
-      const { data: items } = await supabase
+      const { data: items } = await (supabase as any)
         .from("remito_items")
-        .select("id, descripcion, cantidad, unidad, orden")
+        .select("id, descripcion, cantidad, unidad, orden, presupuesto_item_id")
         .eq("remito_id", remito.id)
         .order("orden", { ascending: true });
       if (items && items.length > 0) {
@@ -367,12 +370,13 @@ export default function RemitosPage() {
         if (newErr) {
           console.error("Error creating remainder remito:", newErr);
         } else if (newRemito) {
-          const newItems = pendientes.map((it, idx) => ({
+          const newItems = pendientes.map((it) => ({
             remito_id: newRemito.id,
             descripcion: it.descripcion,
             cantidad: it.cantidadRestante,
             unidad: it.unidad || "UN",
-            orden: idx,
+            orden: it.orden,
+            presupuesto_item_id: it.presupuesto_item_id || null,
           }));
           const { error: itemsErr } = await (supabase.from("remito_items") as any).insert(newItems);
           if (itemsErr) console.error("Error inserting remainder items:", itemsErr);
@@ -485,7 +489,7 @@ export default function RemitosPage() {
     setLoadingPRItems(true);
     try {
       const [itemsRes, prHeaderRes] = await Promise.all([
-        supabase.from("presupuesto_items").select("descripcion, cantidad, unidad").eq("presupuesto_id", prId).order("orden"),
+        supabase.from("presupuesto_items").select("id, descripcion, cantidad, unidad, orden").eq("presupuesto_id", prId).order("orden"),
         supabase.from("presupuestos").select("sucursal_id").eq("id", prId).single(),
       ]);
       const prSucursalId = (prHeaderRes.data as any)?.sucursal_id || "";
@@ -507,6 +511,8 @@ export default function RemitosPage() {
           cantidad: Number(it.cantidad) || 1,
           unidad: it.unidad || "UN",
           sucursal_id: prSucursalId,
+          presupuesto_item_id: it.id || null,
+          orden: it.orden ?? idx,
         })));
       } else {
         setCreateItems([]);
@@ -602,7 +608,8 @@ export default function RemitosPage() {
           descripcion: it.descripcion,
           cantidad: Number(it.cantidad),
           unidad: it.unidad || "UN",
-          orden: idx,
+          orden: it.orden ?? idx,
+          presupuesto_item_id: it.presupuesto_item_id || null,
         }));
         const { error: itemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
         if (itemsErr) {
@@ -626,7 +633,7 @@ export default function RemitosPage() {
     setIaSuccess("");
     let iaQ = supabase
       .from("presupuestos")
-      .select("id, numero, cliente_id, clientes(razon_social), presupuesto_items(id, descripcion, cantidad, unidad)")
+      .select("id, numero, cliente_id, clientes(razon_social), presupuesto_items(id, descripcion, cantidad, unidad, orden)")
       .eq("estado", "aprobado");
     if (sociedadActiva?.id) iaQ = iaQ.eq("sociedad_id" as any, sociedadActiva.id);
     const { data } = await iaQ;
@@ -688,7 +695,8 @@ export default function RemitosPage() {
             descripcion: item.descripcion,
             cantidad: item.cantidad,
             unidad: item.unidad || "UN",
-            orden: idx,
+            orden: item.orden ?? idx,
+            presupuesto_item_id: item.id || null,
           }));
           const { error: itemsErr } = await (supabase.from("remito_items") as any).insert(items);
           if (itemsErr) console.error("Error inserting remito items for PR", p.numero, itemsErr);
@@ -729,6 +737,8 @@ export default function RemitosPage() {
       descripcion: it.descripcion,
       unidad: it.unidad || "u",
       maxCantidad: it.cantidad,
+      orden: it.orden,
+      presupuesto_item_id: it.presupuesto_item_id || null,
     })));
     setSplitModalOpen(true);
   }
@@ -776,12 +786,13 @@ export default function RemitosPage() {
       // Delete ALL original items and re-insert the ones that stay (with possibly changed quantities)
       await supabase.from("remito_items").delete().eq("remito_id" as any, detailRemito.id);
       if (keepAssignments.length > 0) {
-        const keepRows = keepAssignments.map((a, i) => ({
+        const keepRows = keepAssignments.map((a) => ({
           remito_id: detailRemito.id,
           descripcion: a.descripcion,
           cantidad: a.cantidad,
           unidad: a.unidad || "UN",
-          orden: i,
+          orden: a.orden,
+          presupuesto_item_id: a.presupuesto_item_id || null,
         }));
         await (supabase as any).from("remito_items").insert(keepRows);
       }
@@ -812,16 +823,18 @@ export default function RemitosPage() {
           sucursal_id: sucursalId,
           valor_declarado: detailRemito.valor_declarado,
           created_by: profile?.id || null,
+          remito_origen_id: detailRemito.id,
         }).select("id").single();
 
         if (rErr) { alert("Error al crear remito: " + rErr.message); return; }
         if (newRemito) {
-          const newItems = assignments.map((a, i) => ({
+          const newItems = assignments.map((a) => ({
             remito_id: newRemito.id,
             descripcion: a.descripcion,
             cantidad: a.cantidad,
             unidad: a.unidad || "UN",
-            orden: i,
+            orden: a.orden,
+            presupuesto_item_id: a.presupuesto_item_id || null,
           }));
           await (supabase as any).from("remito_items").insert(newItems);
           createdRemitos.push(numero);
@@ -850,9 +863,9 @@ export default function RemitosPage() {
     setDetailOC(null);
     setCreateTransporteOpen(false);
     try {
-      const itemsPromise = supabase
+      const itemsPromise = (supabase as any)
         .from("remito_items")
-        .select("id, descripcion, cantidad, unidad, orden")
+        .select("id, descripcion, cantidad, unidad, orden, presupuesto_item_id")
         .eq("remito_id", row.id)
         .order("orden", { ascending: true });
 
@@ -1858,6 +1871,8 @@ export default function RemitosPage() {
                             descripcion: item.descripcion,
                             unidad: item.unidad || "u",
                             maxCantidad: item.cantidad,
+                            orden: item.orden,
+                            presupuesto_item_id: item.presupuesto_item_id || null,
                           }])}
                           className="text-xs text-violet-600 hover:text-violet-700 font-medium flex items-center gap-0.5"
                         >

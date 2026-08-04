@@ -267,6 +267,7 @@ export default function PresupuestosPage() {
 
   // Remitar modal state
   interface RemitarItem {
+    presupuesto_item_id: string;
     descripcion: string;
     cantidad_total: number;
     cantidad_remitida: number;
@@ -770,7 +771,7 @@ export default function PresupuestosPage() {
 
         // Calculate partial vs total for each PR
         const remitoIds = remitos.map((r: any) => r.id);
-        const { data: rItems } = await (supabase as any).from("remito_items").select("remito_id, descripcion, cantidad, orden").in("remito_id", remitoIds);
+        const { data: rItems } = await (supabase as any).from("remito_items").select("remito_id, descripcion, cantidad, orden, presupuesto_item_id").in("remito_id", remitoIds);
         // Build map: presupuesto_id → remito_ids
         const prRemitoMap: Record<string, string[]> = {};
         for (const r of remitos as any[]) {
@@ -779,7 +780,7 @@ export default function PresupuestosPage() {
           prRemitoMap[r.presupuesto_id].push(r.id);
         }
         // Fetch PR items for these PRs
-        const { data: prItems } = await supabase.from("presupuesto_items").select("presupuesto_id, descripcion, cantidad, orden").in("presupuesto_id", prIds);
+        const { data: prItems } = await supabase.from("presupuesto_items").select("id, presupuesto_id, descripcion, cantidad, orden").in("presupuesto_id", prIds);
         if (!prItems || !rItems) {
           setRemitidoStatus({});
           return;
@@ -789,16 +790,21 @@ export default function PresupuestosPage() {
           const myPrItems = (prItems as any[]).filter(i => i.presupuesto_id === prId);
           const myRemitoIds = prRemitoMap[prId] || [];
           const myRItems = (rItems as any[]).filter(i => myRemitoIds.includes(i.remito_id));
-          // Sum remitido by descripcion+orden
-          const remitidoMap: Record<string, number> = {};
+          // Sum remitido by presupuesto_item_id (preferred) or descripcion+orden (fallback)
+          const remitidoByPiId: Record<string, number> = {};
+          const remitidoByKey: Record<string, number> = {};
           for (const ri of myRItems) {
-            const key = `${ri.descripcion}__${ri.orden}`;
-            remitidoMap[key] = (remitidoMap[key] || 0) + Number(ri.cantidad);
+            if (ri.presupuesto_item_id) {
+              remitidoByPiId[ri.presupuesto_item_id] = (remitidoByPiId[ri.presupuesto_item_id] || 0) + Number(ri.cantidad);
+            } else {
+              const key = `${ri.descripcion}__${ri.orden}`;
+              remitidoByKey[key] = (remitidoByKey[key] || 0) + Number(ri.cantidad);
+            }
           }
           let allDone = true;
           for (const pi of myPrItems) {
-            const key = `${pi.descripcion}__${pi.orden}`;
-            if ((remitidoMap[key] || 0) < Number(pi.cantidad)) { allDone = false; break; }
+            const remitido = remitidoByPiId[pi.id] || remitidoByKey[`${pi.descripcion}__${pi.orden}`] || 0;
+            if (remitido < Number(pi.cantidad)) { allDone = false; break; }
           }
           statusMap[prId] = allDone ? "total" : "parcial";
         }
@@ -1525,7 +1531,7 @@ export default function PresupuestosPage() {
       // Fetch PR items
       const { data: prItems, error: itemsErr } = await supabase
         .from("presupuesto_items")
-        .select("descripcion, cantidad, unidad, orden")
+        .select("id, descripcion, cantidad, unidad, orden")
         .eq("presupuesto_id", pr.id)
         .order("orden");
 
@@ -1540,26 +1546,33 @@ export default function PresupuestosPage() {
         .select("id")
         .eq("presupuesto_id", pr.id);
 
-      let remitidoMap: Record<string, number> = {};
+      // Build map: presupuesto_item_id → total already remitido
+      let remitidoByPiId: Record<string, number> = {};
+      let remitidoByKey: Record<string, number> = {};
       if (existingRemitos && existingRemitos.length > 0) {
         const rIds = existingRemitos.map((r: any) => r.id);
         const { data: rItems } = await (supabase as any)
           .from("remito_items")
-          .select("descripcion, cantidad, orden")
+          .select("descripcion, cantidad, orden, presupuesto_item_id")
           .in("remito_id", rIds);
         if (rItems) {
           for (const ri of rItems as any[]) {
-            const key = `${ri.descripcion}__${ri.orden}`;
-            remitidoMap[key] = (remitidoMap[key] || 0) + Number(ri.cantidad);
+            if (ri.presupuesto_item_id) {
+              remitidoByPiId[ri.presupuesto_item_id] = (remitidoByPiId[ri.presupuesto_item_id] || 0) + Number(ri.cantidad);
+            } else {
+              const key = `${ri.descripcion}__${ri.orden}`;
+              remitidoByKey[key] = (remitidoByKey[key] || 0) + Number(ri.cantidad);
+            }
           }
         }
       }
 
       const modalItems: RemitarItem[] = (prItems as any[]).map((it, idx) => {
-        const key = `${it.descripcion}__${it.orden ?? idx}`;
-        const yaRemitido = remitidoMap[key] || 0;
+        // Prefer presupuesto_item_id match, fallback to descripcion+orden
+        const yaRemitido = remitidoByPiId[it.id] || remitidoByKey[`${it.descripcion}__${it.orden ?? idx}`] || 0;
         const pendiente = Math.max(0, Number(it.cantidad) - yaRemitido);
         return {
+          presupuesto_item_id: it.id,
           descripcion: it.descripcion,
           cantidad_total: Number(it.cantidad),
           cantidad_remitida: yaRemitido,
@@ -1656,6 +1669,7 @@ export default function PresupuestosPage() {
         cantidad: it.cantidad_a_remitar,
         unidad: it.unidad,
         orden: it.orden,
+        presupuesto_item_id: it.presupuesto_item_id || null,
       }));
       const { error: remitoItemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
       if (remitoItemsErr) {
