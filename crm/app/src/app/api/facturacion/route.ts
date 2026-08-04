@@ -119,6 +119,7 @@ export async function POST(req: NextRequest) {
       solicitado_por, // optional string — who requested it
       observaciones,  // optional string — visible on invoice
       condicion_venta, // optional string — payment terms
+      fecha_vencimiento, // optional date string — invoice due date
       nota_interna,   // optional string — internal note
       manual,         // optional boolean — skip ARCA, use numero_manual
       numero_manual,  // optional number — invoice number for manual mode
@@ -186,6 +187,7 @@ export async function POST(req: NextRequest) {
           solicitado_por: solicitado_por || null,
           observaciones: observaciones || null,
           condicion_venta: condicion_venta || null,
+          fecha_vencimiento: fecha_vencimiento || null,
           nota_interna: nota_interna || null,
         } as any)
         .select()
@@ -432,6 +434,7 @@ export async function POST(req: NextRequest) {
         solicitado_por: solicitado_por || null,
         observaciones: observaciones || null,
         condicion_venta: condicion_venta || null,
+        fecha_vencimiento: fecha_vencimiento || null,
         nota_interna: nota_interna || null,
       } as any)
       .select()

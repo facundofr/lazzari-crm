@@ -44,6 +44,8 @@ interface FacturaRow {
   estado: string;
   presupuesto_id: string | null;
   oc_cliente?: string | null;
+  condicion_venta?: string | null;
+  fecha_vencimiento?: string | null;
   factura_origen_id?: string | null;
   total_acreditado?: number | null;
   modalidad_emision?: string | null;
@@ -138,6 +140,8 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     numero_manual: "",
     moneda: "ARS" as "ARS" | "USD",
     tipo_cambio: 0,
+    condicion_venta: "Cta. Cte.",
+    fecha_vencimiento: "",
     items: [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] as EmitItem[],
   });
 
@@ -395,6 +399,8 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
       numero_manual: "",
       moneda: prefill?.moneda || "ARS",
       tipo_cambio: prefill?.tipo_cambio || 0,
+      condicion_venta: "Cta. Cte.",
+      fecha_vencimiento: "",
       items: prefill?.items || [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],
     });
     setEmitStep("form");
@@ -470,6 +476,8 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           punto_venta: emitData.punto_venta,
           moneda: emitData.moneda,
           tipo_cambio: isUSD ? tc : null,
+          condicion_venta: emitData.condicion_venta || null,
+          fecha_vencimiento: emitData.fecha_vencimiento || null,
           items: emitData.items,
           sociedad_id: sociedadActiva?.id,
         }),
@@ -517,6 +525,8 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           numero: numManual,
           cliente_id: emitData.cliente_id === "consumidor_final" ? null : emitData.cliente_id,
           fecha: today,
+          fecha_vencimiento: emitData.fecha_vencimiento || null,
+          condicion_venta: emitData.condicion_venta || null,
           cae: null,
           cae_vencimiento: null,
           subtotal: emitTotals.neto,
@@ -842,6 +852,8 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
       punto_venta: f.punto_venta,
       numero: f.numero,
       fecha: f.fecha,
+      fecha_vencimiento: f.fecha_vencimiento,
+      condicion_venta: f.condicion_venta,
       moneda: f.moneda as "ARS" | "USD",
       tipo_cambio: f.tipo_cambio,
       subtotal: Number(f.subtotal),
@@ -1201,6 +1213,25 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* Condicion de venta + Fecha vencimiento */}
+                <div className="grid grid-cols-12 gap-4">
+                  <div className="col-span-6">
+                    <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Condición de venta</label>
+                    <select value={emitData.condicion_venta} onChange={(e) => setEmitData((p) => ({ ...p, condicion_venta: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                      <option value="Contado">Contado</option>
+                      <option value="Cta. Cte.">Cta. Cte.</option>
+                      <option value="15 días">15 días</option>
+                      <option value="30 días">30 días</option>
+                      <option value="60 días">60 días</option>
+                      <option value="90 días">90 días</option>
+                    </select>
+                  </div>
+                  <div className="col-span-6">
+                    <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha vencimiento</label>
+                    <input type="date" value={emitData.fecha_vencimiento} onChange={(e) => setEmitData((p) => ({ ...p, fecha_vencimiento: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                  </div>
                 </div>
 
                 {/* Items */}

@@ -17,21 +17,30 @@ interface SociedadPDF {
   domicilio: string;
   telefono: string;
   email: string;
+  web: string;
   inicioActividades: string;
+  ingresosBrutos: string;
+  jurisdiccion: string;
 }
 
 const SOCIEDAD_EXTRA: Record<string, Partial<SociedadPDF>> = {
   "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021": {
     domicilio: "Pueyrredón 653, Pergamino, Buenos Aires",
-    telefono: "(0341) 15-522-8833",
-    email: "info@lazzari.com.ar",
-    inicioActividades: "01/2018",
+    telefono: "2477 628958",
+    email: "administracion@lazzari.com.ar",
+    web: "http://www.lazzari.com.ar",
+    inicioActividades: "01-09-2017",
+    ingresosBrutos: "20379309128",
+    jurisdiccion: "Buenos Aires",
   },
   "fee94607-747a-4e87-ba24-aff9032f7a56": {
     domicilio: "Pueyrredón 653, Pergamino, Buenos Aires",
-    telefono: "(0341) 15-522-8833",
-    email: "info@grupola.com.ar",
-    inicioActividades: "01/2020",
+    telefono: "2477 628958",
+    email: "administracion@grupola.com.ar",
+    web: "",
+    inicioActividades: "01-01-2020",
+    ingresosBrutos: "30719396042",
+    jurisdiccion: "Buenos Aires",
   },
 };
 
@@ -53,7 +62,10 @@ export function getSociedadPDF(sociedad: {
     domicilio: extra.domicilio || "",
     telefono: extra.telefono || "",
     email: extra.email || "",
+    web: extra.web || "",
     inicioActividades: extra.inicioActividades || "",
+    ingresosBrutos: extra.ingresosBrutos || "",
+    jurisdiccion: extra.jurisdiccion || "",
   };
 }
 
@@ -304,6 +316,8 @@ interface FacturaData {
   punto_venta: number;
   numero: number;
   fecha: string;
+  fecha_vencimiento?: string | null;
+  condicion_venta?: string | null;
   moneda: "ARS" | "USD";
   tipo_cambio?: number | null;
   subtotal: number;
@@ -398,10 +412,10 @@ export function generateFacturaPDF(
 <div class="fc-header">
   <div class="fc-left">
     <div class="emisor-name">${emisor.razonSocial}</div>
-    <div class="emisor-detail">CUIT: ${emisor.cuit}</div>
-    <div class="emisor-detail">${emisor.condicionIva}</div>
     ${emisor.domicilio ? `<div class="emisor-detail">${emisor.domicilio}</div>` : ""}
-    ${soc.telefono ? `<div class="emisor-detail">Tel: ${soc.telefono}</div>` : ""}
+    ${soc.email ? `<div class="emisor-detail">${soc.email}</div>` : ""}
+    ${soc.web ? `<div class="emisor-detail">${soc.web}</div>` : ""}
+    ${soc.telefono ? `<div class="emisor-detail">Teléfonos: ${soc.telefono}</div>` : ""}
   </div>
   <div class="fc-center">
     <div class="fc-letra">${letraComprobante}</div>
@@ -409,26 +423,31 @@ export function generateFacturaPDF(
   </div>
   <div class="fc-right">
     <div class="comp-tipo">${tipoLabel}</div>
+    <div class="comp-sub">Original</div>
     <div class="comp-num">N° ${compNum}</div>
-    <div class="comp-fecha">Fecha de emisión: ${formatDate(f.fecha)}</div>
+    <div class="comp-fecha">Fecha: ${formatDate(f.fecha)}</div>
+    <div class="comp-fecha">C.U.I.T.: ${emisor.cuit}</div>
+    ${soc.ingresosBrutos ? `<div class="comp-fecha">Ingresos brutos N°: ${soc.ingresosBrutos}</div>` : ""}
+    ${soc.inicioActividades ? `<div class="comp-fecha">Inicio de actividad: ${soc.inicioActividades}</div>` : ""}
   </div>
 </div>
 
 <div class="info-grid">
   <div class="info-box">
     <div class="info-box-title">Datos del receptor</div>
-    <div class="info-row"><div class="info-value-lg">${cli?.razon_social || "\u2014"}</div></div>
-    ${cli?.cuit ? `<div class="info-row"><div class="info-label">CUIT</div><div class="info-value">${cli.cuit}</div></div>` : ""}
-    ${cli?.condicion_iva ? `<div class="info-row"><div class="info-label">Cond. IVA</div><div class="info-value">${cli.condicion_iva}</div></div>` : ""}
-    ${cli?.direccion ? `<div class="info-row"><div class="info-label">Domicilio</div><div class="info-value">${cli.direccion}${cli.localidad ? `, ${cli.localidad}` : ""}${cli.provincia ? ` (${cli.provincia})` : ""}</div></div>` : ""}
+    <div class="info-row"><div class="info-label">SR/ES</div><div class="info-value-lg">${cli?.razon_social || "\u2014"}${cli?.cuit ? ` <b>C.U.I.T.:</b> ${cli.cuit}` : ""}${cli?.condicion_iva ? ` - ${cli.condicion_iva === "RI" ? "Responsable inscripto" : cli.condicion_iva}` : ""}</div></div>
+    ${cli?.direccion ? `<div class="info-row"><div class="info-label">Dirección</div><div class="info-value">${cli.direccion}${cli.localidad ? `, ${cli.localidad}` : ""}${cli.provincia ? `, ${cli.provincia}` : ""}</div></div>` : ""}
+    ${cli?.email ? `<div class="info-row"><div class="info-label">Email</div><div class="info-value">${cli.email}</div></div>` : ""}
+    ${cli?.telefono ? `<div class="info-row"><div class="info-label">Teléfono</div><div class="info-value">${cli.telefono}</div></div>` : ""}
   </div>
   <div class="info-box">
     <div class="info-box-title">Datos del comprobante</div>
-    <div class="info-row"><div class="info-label">Moneda</div><div class="info-value">${mon === "USD" ? "Dólares estadounidenses" : "Pesos argentinos"}</div></div>
+    ${f.condicion_venta ? `<div class="info-row"><div class="info-label">Condición de venta</div><div class="info-value">${f.condicion_venta}</div></div>` : ""}
+    ${soc.jurisdiccion ? `<div class="info-row"><div class="info-label">Jurisdicción</div><div class="info-value">${soc.jurisdiccion}</div></div>` : ""}
+    ${f.fecha_vencimiento ? `<div class="info-row"><div class="info-label">Vencimiento</div><div class="info-value">${formatDate(f.fecha_vencimiento)}</div></div>` : ""}
+    <div class="info-row"><div class="info-label">Moneda</div><div class="info-value">${mon === "USD" ? "DOLARES ESTADOUNIDENSES" : "PESOS ARGENTINOS"}</div></div>
     ${isUSD ? `<div class="info-row"><div class="info-label">Tipo de cambio</div><div class="info-value">$ ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2 })}</div></div>` : ""}
-    ${cli?.email ? `<div class="info-row"><div class="info-label">Email</div><div class="info-value">${cli.email}</div></div>` : ""}
-    ${cli?.telefono ? `<div class="info-row"><div class="info-label">Teléfono</div><div class="info-value">${cli.telefono}</div></div>` : ""}
-    ${f.oc_cliente ? `<div class="info-row"><div class="info-label">OC Cliente</div><div class="info-value" style="color:${c};font-weight:700;font-size:12px">${f.oc_cliente}</div></div>` : ""}
+    ${f.oc_cliente ? `<div class="info-row"><div class="info-label">OC Cliente</div><div class="info-value" style="color:${c};font-weight:700">${f.oc_cliente}</div></div>` : ""}
   </div>
 </div>
 

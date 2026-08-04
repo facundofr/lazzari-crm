@@ -152,6 +152,7 @@ export default function VentasPage() {
   const [emitManual, setEmitManual] = useState(false);
   const [emitNextNum, setEmitNextNum] = useState<number | null>(null);
   const [emitCondVenta, setEmitCondVenta] = useState("Contado");
+  const [emitFechaVenc, setEmitFechaVenc] = useState("");
   const [emitObservaciones, setEmitObservaciones] = useState("");
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
@@ -375,6 +376,7 @@ export default function VentasPage() {
           presupuesto_id: p.id,
           sociedad_id: sociedadActiva?.id || null,
           condicion_venta: emitCondVenta || null,
+          fecha_vencimiento: emitFechaVenc || null,
           observaciones: emitObservaciones || null,
         }),
       });
@@ -468,6 +470,7 @@ export default function VentasPage() {
           tipo_cambio: emitMoneda === "USD" && emitTipoCambio > 0 ? emitTipoCambio : null,
           estado: "emitida",
           condicion_venta: emitCondVenta || null,
+          fecha_vencimiento: emitFechaVenc || null,
           observaciones: emitObservaciones || null,
           sociedad_id: (p as any).sociedad_id || null,
         })
@@ -1290,8 +1293,8 @@ export default function VentasPage() {
                   </div>
                 </div>
 
-                {/* Condición de venta + Observaciones */}
-                <div className="grid grid-cols-2 gap-4">
+                {/* Condición de venta + Fecha vencimiento */}
+                <div className="grid grid-cols-3 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Condición de venta</label>
                     <select
@@ -1300,7 +1303,8 @@ export default function VentasPage() {
                       className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                     >
                       <option value="Contado">Contado</option>
-                      <option value="Cuenta corriente">Cuenta corriente</option>
+                      <option value="Cta. Cte.">Cta. Cte.</option>
+                      <option value="15 días">15 días</option>
                       <option value="30 días">30 días</option>
                       <option value="60 días">60 días</option>
                       <option value="90 días">90 días</option>
@@ -1308,6 +1312,15 @@ export default function VentasPage() {
                       <option value="Cheque 60 días">Cheque 60 días</option>
                       <option value="Cheque 90 días">Cheque 90 días</option>
                     </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha vencimiento</label>
+                    <input
+                      type="date"
+                      value={emitFechaVenc}
+                      onChange={e => setEmitFechaVenc(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                    />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Observaciones</label>
