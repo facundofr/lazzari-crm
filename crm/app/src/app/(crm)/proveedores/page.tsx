@@ -198,7 +198,11 @@ export default function ProveedoresPage() {
         localidad: data.localidad || prev.localidad,
         provincia: data.provincia || prev.provincia,
       }));
-      toast.success("Datos cargados desde AFIP");
+      if (!data.condicion_iva) {
+        toast.warning("ARCA no pudo determinar la condicion IVA. Verificalo manualmente.");
+      } else {
+        toast.success(`Datos cargados desde AFIP — ${data.condicion_iva === "RI" ? "Resp. Inscripto" : data.condicion_iva}`);
+      }
     } catch { toast.error("Error al consultar CUIT"); }
     finally { setCuitLoading(false); }
   }

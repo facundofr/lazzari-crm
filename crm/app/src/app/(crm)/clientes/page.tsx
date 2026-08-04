@@ -397,7 +397,13 @@ export default function ClientesPage() {
         cp: data.cp || prev.cp,
         type: data.tipo_persona === "JURIDICA" ? "empresa" : data.tipo_persona === "FISICA" ? "persona" : prev.type,
       }));
-      setCuitLookupMsg({ type: "success", text: `${data.razon_social} - ${data.condicion_iva === "RI" ? "Resp. Inscripto" : data.condicion_iva === "Monotributo" ? "Monotributo" : data.condicion_iva === "Exento" ? "Exento" : "Cons. Final"}` });
+      if (!data.condicion_iva) {
+        setCuitLookupMsg({ type: "error", text: `${data.razon_social} — ARCA no pudo determinar la condicion IVA. Verificalo manualmente y seleccionalo abajo.` });
+      } else {
+        const label = data.condicion_iva === "RI" ? "Resp. Inscripto" : data.condicion_iva === "Monotributo" ? "Monotributo" : data.condicion_iva === "Exento" ? "Exento" : "Cons. Final";
+        const servicio = data.condicion_iva_servicio === "A5" ? " (verificado con ARCA A5)" : "";
+        setCuitLookupMsg({ type: "success", text: `${data.razon_social} - ${label}${servicio}` });
+      }
     } catch {
       setCuitLookupMsg({ type: "error", text: "Error de conexion al consultar AFIP" });
     } finally {

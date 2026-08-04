@@ -4,7 +4,8 @@ import * as path from "path";
 
 /**
  * GET /api/cuit-lookup?cuit=XXXXXXXXXXX
- * Consulta el padron de AFIP via ws_sr_padron_a13 (autenticado con cert ARCA).
+ * Consulta el padron de AFIP via ws_sr_padron_a5 (preferido, más completo)
+ * con fallback a ws_sr_padron_a13 si el cert no tiene acceso a A5.
  * Lazzari y GrupoLA se intentan en paralelo (Promise.any) para máxima velocidad.
  */
 
@@ -65,6 +66,129 @@ function parseDomicilioFiscal(xml: string) {
   };
 }
 
+/** Extrae impuestos activos del XML de respuesta */
+function parseActiveImpuestos(text: string): Set<number> {
+  const activeImpuestos = new Set<number>();
+  let impIdx = 0;
+  while (true) {
+    const start = text.indexOf("<impuesto>", impIdx);
+    if (start === -1) break;
+    const end = text.indexOf("</impuesto>", start);
+    if (end === -1) break;
+    const block = text.slice(start, end + 11);
+    const estado = xmlTag(block, "estado");
+    if (estado === "ACTIVO" || estado === "") {
+      const id = Number(xmlTag(block, "idImpuesto"));
+      if (id) activeImpuestos.add(id);
+    }
+    impIdx = end + 11;
+  }
+  // Fallback: if no <impuesto> blocks found, try flat <idImpuesto> tags
+  if (activeImpuestos.size === 0) {
+    const flatMatch = text.match(/<idImpuesto>(\d+)<\/idImpuesto>/g);
+    if (flatMatch) flatMatch.forEach(m => activeImpuestos.add(Number(m.replace(/<\/?idImpuesto>/g, ""))));
+  }
+  return activeImpuestos;
+}
+
+/** Determina condicion_iva a partir del XML de respuesta AFIP */
+function determinarCondicionIVA(text: string, activeImpuestos: Set<number>): { condicion_iva: string; fuente: string } {
+  const hasMonotributoSection = text.includes("<datosMonotributo>") || text.includes("<categoriaMonotributo>");
+  const hasRegimenGeneral = text.includes("<datosRegimenGeneral>");
+  const tipoPersona = xmlTag(text, "tipoPersona");
+  const estadoClave = xmlTag(text, "estadoClave");
+  const hasActividad = !!xmlTag(text, "idActividadPrincipal");
+
+  // Impuesto 20 = IVA, 30 = Ganancias PJ, 32 = IIBB, 34 = Exento
+  // Priority: IVA activo (→ RI) > Monotributo explícito > Exento > Regimen General > Jurídica
+
+  if (activeImpuestos.has(20)) {
+    return { condicion_iva: "RI", fuente: "IVA activo (imp. 20)" };
+  }
+  if (activeImpuestos.has(30) || activeImpuestos.has(32)) {
+    return { condicion_iva: "RI", fuente: `Ganancias/IIBB activo (imp. ${activeImpuestos.has(30) ? 30 : 32})` };
+  }
+  if (hasMonotributoSection) {
+    return { condicion_iva: "Monotributo", fuente: "datosMonotributo presente" };
+  }
+  if (activeImpuestos.has(34)) {
+    return { condicion_iva: "Exento", fuente: "Exento activo (imp. 34)" };
+  }
+  if (hasRegimenGeneral) {
+    return { condicion_iva: "RI", fuente: "datosRegimenGeneral presente" };
+  }
+  if (text.includes("<formaJuridica>")) {
+    return { condicion_iva: "RI", fuente: "Persona jurídica" };
+  }
+
+  // Caso ambiguo: no hay datos claros
+  if (tipoPersona === "FISICA" && estadoClave === "ACTIVO" && hasActividad && activeImpuestos.size === 0) {
+    return { condicion_iva: "", fuente: "INDETERMINADO — persona física activa sin impuestos declarados" };
+  }
+
+  return { condicion_iva: "CF", fuente: "Sin datos fiscales" };
+}
+
+/** Parsea la respuesta SOAP del padron (funciona para A5 y A13) */
+function parsePadronResponse(text: string, serviceName: string) {
+  const razonSocial =
+    xmlTag(text, "razonSocial") ||
+    [xmlTag(text, "apellido"), xmlTag(text, "nombre")].filter(Boolean).join(" ");
+
+  if (!razonSocial) throw new Error("Persona no encontrada en respuesta");
+
+  const domicilio = parseDomicilioFiscal(text);
+  const tipoPersona = xmlTag(text, "tipoPersona");
+  const estadoClave = xmlTag(text, "estadoClave");
+  const activeImpuestos = parseActiveImpuestos(text);
+  const { condicion_iva, fuente } = determinarCondicionIVA(text, activeImpuestos);
+
+  return {
+    razon_social: razonSocial,
+    condicion_iva,
+    condicion_iva_fuente: fuente,
+    condicion_iva_servicio: serviceName,
+    direccion: domicilio?.direccion || "",
+    localidad: domicilio?.localidad || "",
+    provincia: domicilio?.provincia || "",
+    cp: domicilio?.cp || "",
+    tipo_persona: tipoPersona,
+    estado_clave: estadoClave,
+  };
+}
+
+async function soapPadronA5(auth: any, targetCuit: string): Promise<any> {
+  const envelope = `<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body>
+    <ser:getPersona xmlns:ser="http://a5.soap.ws.server.puc.sr/">
+      <token>${auth.Token}</token>
+      <sign>${auth.Sign}</sign>
+      <cuitRepresentada>${auth.Cuit}</cuitRepresentada>
+      <idPersona>${targetCuit}</idPersona>
+    </ser:getPersona>
+  </soap:Body>
+</soap:Envelope>`;
+
+  const res = await fetch(
+    "https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5",
+    {
+      method: "POST",
+      headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "" },
+      body: envelope,
+      signal: AbortSignal.timeout(10000),
+    }
+  );
+
+  const text = await res.text();
+  if (!res.ok || text.includes("<soap:Fault>") || text.includes("<faultcode>")) {
+    const fault = text.match(/<faultstring>([^<]+)<\/faultstring>/)?.[1] || text.slice(0, 200);
+    throw new Error(`PadronA5 SOAP error: ${fault}`);
+  }
+
+  return parsePadronResponse(text, "A5");
+}
+
 async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
   const envelope = `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
@@ -94,76 +218,7 @@ async function soapPadronA13(auth: any, targetCuit: string): Promise<any> {
     throw new Error(`PadronA13 SOAP error: ${fault}`);
   }
 
-  const razonSocial =
-    xmlTag(text, "razonSocial") ||
-    [xmlTag(text, "apellido"), xmlTag(text, "nombre")].filter(Boolean).join(" ");
-
-  if (!razonSocial) throw new Error("Persona no encontrada en respuesta");
-
-  const domicilio = parseDomicilioFiscal(text);
-  const tipoPersona = xmlTag(text, "tipoPersona");
-  const estadoClave = xmlTag(text, "estadoClave");
-
-  // Parse impuesto blocks considering only ACTIVO estado
-  const activeImpuestos = new Set<number>();
-  let impIdx = 0;
-  while (true) {
-    const start = text.indexOf("<impuesto>", impIdx);
-    if (start === -1) break;
-    const end = text.indexOf("</impuesto>", start);
-    if (end === -1) break;
-    const block = text.slice(start, end + 11);
-    const estado = xmlTag(block, "estado");
-    if (estado === "ACTIVO" || estado === "") {
-      const id = Number(xmlTag(block, "idImpuesto"));
-      if (id) activeImpuestos.add(id);
-    }
-    impIdx = end + 11;
-  }
-  // Fallback: if no <impuesto> blocks found, try flat <idImpuesto> tags
-  if (activeImpuestos.size === 0) {
-    const flatMatch = text.match(/<idImpuesto>(\d+)<\/idImpuesto>/g);
-    if (flatMatch) flatMatch.forEach(m => activeImpuestos.add(Number(m.replace(/<\/?idImpuesto>/g, ""))));
-  }
-
-  // Detect Monotributo from datosMonotributo section (may not have idImpuesto 20)
-  const hasMonotributoSection = text.includes("<datosMonotributo>") || text.includes("<categoriaMonotributo>");
-  // Detect RI from datosRegimenGeneral with active IVA
-  const hasRegimenGeneral = text.includes("<datosRegimenGeneral>");
-
-  const hasActividad = !!xmlTag(text, "idActividadPrincipal");
-
-  let condicion_iva = "";
-  // Priority: RI (active IVA/Ganancias) > Monotributo > Exento > Jurídica=RI > Física activa con actividad=Monotributo > CF
-  // Impuesto 20 = IVA (→ RI), 30 = Ganancias PJ, 32 = IIBB, 34 = Exento
-  if (activeImpuestos.has(30) || activeImpuestos.has(32) || activeImpuestos.has(20)) {
-    condicion_iva = "RI";
-  } else if (hasMonotributoSection) {
-    condicion_iva = "Monotributo";
-  } else if (activeImpuestos.has(34)) {
-    condicion_iva = "Exento";
-  } else if (hasRegimenGeneral) {
-    condicion_iva = "RI";
-  } else if (text.includes("<formaJuridica>")) {
-    condicion_iva = "RI";
-  } else if (tipoPersona === "FISICA" && estadoClave === "ACTIVO" && hasActividad && activeImpuestos.size === 0) {
-    // A13 no devuelve impuestos para muchas personas físicas.
-    // Si tiene clave activa y actividad económica registrada, lo más probable es Monotributo.
-    condicion_iva = "Monotributo";
-  } else {
-    condicion_iva = "CF";
-  }
-
-  return {
-    razon_social: razonSocial,
-    condicion_iva,
-    direccion: domicilio?.direccion || "",
-    localidad: domicilio?.localidad || "",
-    provincia: domicilio?.provincia || "",
-    cp: domicilio?.cp || "",
-    tipo_persona: tipoPersona,
-    estado_clave: estadoClave,
-  };
+  return parsePadronResponse(text, "A13");
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -205,12 +260,16 @@ async function tryArcaPadron(cuit: string, label: string, arcaCuit: number, cert
   const production = process.env.ARCA_PRODUCTION !== "false";
   const arca = new Arca({ cuit: arcaCuit, cert: creds.cert, key: creds.key, production });
 
-  const auth = await withTimeout(
-    arca.getAuth("ws_sr_padron_a13"),
-    12000,
-    `${label} WSAA`
-  );
-  return await soapPadronA13(auth, cuit);
+  // Intentar A5 primero (más completo, devuelve todos los impuestos)
+  try {
+    const authA5 = await withTimeout(arca.getAuth("ws_sr_padron_a5"), 12000, `${label} WSAA-A5`);
+    return await soapPadronA5(authA5, cuit);
+  } catch {
+    // A5 no disponible (cert sin acceso), fallback a A13
+  }
+
+  const authA13 = await withTimeout(arca.getAuth("ws_sr_padron_a13"), 12000, `${label} WSAA-A13`);
+  return await soapPadronA13(authA13, cuit);
 }
 
 /** Calcula dígito verificador de CUIT */
