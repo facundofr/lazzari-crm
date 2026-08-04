@@ -1286,14 +1286,19 @@ export default function RemitosPage() {
                     {afipError && <p className="text-xs text-red-500 mt-1">{afipError}</p>}
                   </div>
                 )}
-                {detailRemito.valor_declarado != null && detailRemito.valor_declarado > 0 && (
-                  <div>
-                    <span className="text-zinc-400">Valor declarado</span>
-                    <p className="font-mono font-medium text-emerald-600 dark:text-emerald-400">
-                      $ {Number(detailRemito.valor_declarado).toLocaleString("es-AR", { minimumFractionDigits: 2 })}
-                    </p>
-                  </div>
-                )}
+                <div>
+                  <span className="text-zinc-400">Valor declarado ($)</span>
+                  <input
+                    type="number"
+                    value={detailRemito.valor_declarado ?? 0}
+                    onChange={(e) => setDetailRemito({ ...detailRemito, valor_declarado: Number(e.target.value) })}
+                    onBlur={async (e) => {
+                      const val = Number(e.target.value) || 0;
+                      await (supabase as any).from("remitos").update({ valor_declarado: val }).eq("id", detailRemito.id);
+                    }}
+                    className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-mono font-medium text-emerald-600 dark:border-zinc-600 dark:bg-zinc-800 dark:text-emerald-400"
+                  />
+                </div>
               </div>
 
               {/* Linked transportes */}
