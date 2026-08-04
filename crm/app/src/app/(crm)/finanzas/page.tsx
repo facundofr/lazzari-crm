@@ -10,10 +10,12 @@ import { formatCurrency, todayAR } from "@/lib/utils";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
 import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles } from "lucide-react";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
+
+const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
 const tipoConfig: Record<string, { label: string; variant: "success" | "danger" | "warning" | "info" | "outline"; icon: typeof ArrowDownLeft }> = {
   cobro: { label: "Cobro", variant: "success", icon: ArrowDownLeft },
@@ -24,7 +26,7 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   efectivo: { label: "Efectivo", variant: "outline", icon: Wallet },
 };
 
-type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos";
+type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion";
 
 // ── Echeq types ──
 interface EcheqRow {
@@ -2403,6 +2405,7 @@ ${certRetGanHtml}
     { id: "lineas_credito", label: "Crédito" },
     // { id: "gastos_fijos", label: "G. Fijos" },  // OCULTO: funcionalidad en revisión
     { id: "objetivos", label: "Objetivos" },
+    { id: "facturacion", label: "Facturación" },
   ];
 
   if (loading) {
@@ -3680,6 +3683,12 @@ ${certRetGanHtml}
               )}
             </div>
           </>
+        )}
+        {/* ── Facturación (embedded) ── */}
+        {tab === "facturacion" && (
+          <Suspense fallback={<div className="flex items-center justify-center py-24"><Loader2 className="h-8 w-8 animate-spin text-zinc-400" /></div>}>
+            <FacturacionEmbed embedded />
+          </Suspense>
         )}
       </div>
 
