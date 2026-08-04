@@ -491,7 +491,7 @@ export default function FinanzasPage() {
   const [cobroMultiOpen, setCobroMultiOpen] = useState(false);
   const [cobroMultiFCs, setCobroMultiFCs] = useState<CobroMultiFC[]>([]);
   const [cobroMultiMonto, setCobroMultiMonto] = useState(0);
-  const [cobroMultiMedio, setCobroMultiMedio] = useState<"transferencia" | "efectivo" | "cheque_recibido" | "deposito">("transferencia");
+  const [cobroMultiMedio, setCobroMultiMedio] = useState<"transferencia" | "efectivo" | "cheque_recibido">("transferencia");
   const [cobroMultiFecha, setCobroMultiFecha] = useState(new Date().toISOString().slice(0, 10));
   const [cobroMultiDesc, setCobroMultiDesc] = useState("");
   const [cobroMultiSaving, setCobroMultiSaving] = useState(false);
@@ -5265,7 +5265,6 @@ ${certRetGanHtml}
                     <option value="transferencia">Transferencia</option>
                     <option value="efectivo">Efectivo</option>
                     <option value="cheque_recibido">Cheque</option>
-                    <option value="deposito">Deposito</option>
                   </select>
                 </div>
                 <div>
