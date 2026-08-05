@@ -15,8 +15,9 @@ import {
   X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
   PackageCheck, MessageSquare, Edit3, Plus, Minus,
-  Maximize2,
+  Maximize2, Upload,
 } from "lucide-react";
+import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
@@ -144,6 +145,9 @@ export default function OrdenesCompraPage() {
     { key: "moneda", label: "Moneda", type: "select", options: [{ value: "USD", label: "USD" }, { value: "ARS", label: "ARS" }] },
     { key: "monto", label: "Monto total", type: "number-range" },
   ];
+
+  // Cargar factura modal
+  const [cargarFCOpen, setCargarFCOpen] = useState(false);
 
   // Create modal
   const [createOpen, setCreateOpen] = useState(false);
@@ -1193,6 +1197,13 @@ export default function OrdenesCompraPage() {
 
       {/* Secondary action bar */}
       <div className="px-4 sm:px-8 pt-2 flex justify-end gap-3">
+        <button
+          onClick={() => setCargarFCOpen(true)}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+        >
+          <Upload className="h-4 w-4" />
+          Cargar factura
+        </button>
         <button
           onClick={openSinProveedorModal}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
@@ -2326,6 +2337,26 @@ export default function OrdenesCompraPage() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Modal cargar factura de compra */}
+      {cargarFCOpen && (
+        <CargarFacturaOC
+          sociedadId={sociedadActiva?.id || ""}
+          profileId={profile?.id || null}
+          ordenes={ordenes.filter(o => !["borrador", "cancelada"].includes(o.estado)).map(o => ({
+            id: o.id,
+            numero: o.numero,
+            proveedor_id: o.proveedor_id,
+            proveedor_nombre: o.proveedores?.razon_social || "Sin proveedor",
+            total: o.total,
+            moneda: o.moneda,
+            estado: (statusConfig[o.estado] || { label: o.estado }).label,
+            fecha: o.fecha,
+          }))}
+          onClose={() => setCargarFCOpen(false)}
+          onSuccess={() => { setCargarFCOpen(false); fetchData(); }}
+        />
       )}
     </>
   );

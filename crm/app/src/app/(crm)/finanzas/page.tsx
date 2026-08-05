@@ -151,7 +151,7 @@ interface FacturaCompraRow {
   percepciones: number;
   total: number;
   moneda: "ARS" | "USD";
-  estado: "pendiente" | "pagada" | "anulada" | "recibida";
+  estado: "pendiente" | "pagada" | "anulada" | "recibida" | "pendiente_aprobacion";
   tipo: "mercaderia" | "solo_iva";
   notas: string;
   costo_real?: number;
@@ -161,6 +161,7 @@ interface FacturaCompraRow {
   solo_iva?: boolean;
   cae?: string;
   op_vinculada?: { id: string; numero: string; estado: string; fecha: string } | null;
+  ocs_vinculadas?: { numero: string }[];
 }
 
 interface OCOption {
@@ -446,7 +447,7 @@ export default function FinanzasPage() {
   const [editFCForm, setEditFCForm] = useState<{ numero_factura: string; fecha: string; fecha_vencimiento: string; subtotal: number; iva: number; percepciones: number; moneda: "ARS" | "USD"; notas: string; cae: string }>({ numero_factura: "", fecha: "", fecha_vencimiento: "", subtotal: 0, iva: 0, percepciones: 0, moneda: "ARS", notas: "", cae: "" });
   const [savingFC, setSavingFC] = useState(false);
   const [fcSearchQuery, setFcSearchQuery] = useState("");
-  const [fcEstadoFilter, setFcEstadoFilter] = useState<"todos" | "pendiente" | "pagada" | "recibida" | "anulada">("todos");
+  const [fcEstadoFilter, setFcEstadoFilter] = useState<"todos" | "pendiente_aprobacion" | "pendiente" | "pagada" | "recibida" | "anulada">("todos");
   const [newArticleOpen, setNewArticleOpen] = useState(false);
   const [newArticle, setNewArticle] = useState({ codigo: "", descripcion: "", categoria: "", unidad: "UN", precio: 0 });
   const [newArticleSaving, setNewArticleSaving] = useState(false);
@@ -810,7 +811,7 @@ export default function FinanzasPage() {
 
         // Fetch facturas de compra
         try {
-          let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero), op_facturas_compra(orden_pago_id, monto, ordenes_pago(id, numero, estado, fecha))").order("fecha", { ascending: false });
+          let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero), op_facturas_compra(orden_pago_id, monto, ordenes_pago(id, numero, estado, fecha)), factura_compra_ocs(orden_compra_id, ordenes_compra(numero))").order("fecha", { ascending: false });
           if (sociedadActiva?.id) qFc = qFc.eq("sociedad_id", sociedadActiva.id);
           const { data: fcData } = await qFc;
           if (fcData) {
@@ -833,6 +834,7 @@ export default function FinanzasPage() {
               op_vinculada: r.op_facturas_compra?.length > 0 && r.op_facturas_compra[0]?.ordenes_pago
                 ? { id: r.op_facturas_compra[0].ordenes_pago.id, numero: r.op_facturas_compra[0].ordenes_pago.numero, estado: r.op_facturas_compra[0].ordenes_pago.estado, fecha: r.op_facturas_compra[0].ordenes_pago.fecha }
                 : null,
+              ocs_vinculadas: (r.factura_compra_ocs || []).map((link: any) => ({ numero: link.ordenes_compra?.numero || "—" })).filter((o: any) => o.numero !== "—"),
             })));
           } else {
             setFacturasCompra([]);
@@ -2675,6 +2677,7 @@ ${certRetGanHtml}
 
         {/* ── Facturas de Compra ── */}
         {tab === "facturas_compra" && (() => {
+          const fcsPendientesAprobacion = facturasCompra.filter(f => f.estado === "pendiente_aprobacion");
           const filteredFC = facturasCompra.filter(f => {
             if (fcEstadoFilter !== "todos" && f.estado !== fcEstadoFilter) return false;
             if (fcSearchQuery.trim()) {
@@ -2685,6 +2688,24 @@ ${certRetGanHtml}
           });
           return (
           <>
+            {/* Banner aprobacion */}
+            {fcsPendientesAprobacion.length > 0 && (
+              <div className="flex items-center justify-between p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                  <span className="text-sm font-medium text-amber-800 dark:text-amber-300">
+                    Tenes {fcsPendientesAprobacion.length} factura{fcsPendientesAprobacion.length > 1 ? "s" : ""} pendiente{fcsPendientesAprobacion.length > 1 ? "s" : ""} de aprobacion
+                  </span>
+                  <span className="text-xs text-amber-600 dark:text-amber-400 font-mono">
+                    ({formatCurrency(fcsPendientesAprobacion.reduce((s, f) => s + f.total, 0))})
+                  </span>
+                </div>
+                <button onClick={() => setFcEstadoFilter("pendiente_aprobacion")}
+                  className="text-xs font-semibold text-amber-700 dark:text-amber-300 hover:underline">
+                  Ver pendientes
+                </button>
+              </div>
+            )}
             <div className="flex items-center justify-between flex-wrap gap-2">
               <p className="text-sm text-zinc-500">
                 Total pendiente: <span className="font-bold font-mono text-zinc-900 dark:text-white">
@@ -2711,6 +2732,7 @@ ${certRetGanHtml}
               <select value={fcEstadoFilter} onChange={(e) => setFcEstadoFilter(e.target.value as any)}
                 className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                 <option value="todos">Todos los estados</option>
+                <option value="pendiente_aprobacion">Pend. aprobacion</option>
                 <option value="pendiente">Pendiente</option>
                 <option value="pagada">Pagada</option>
                 <option value="recibida">Recibida</option>
@@ -2730,6 +2752,9 @@ ${certRetGanHtml}
                     <div>
                       <span className="font-medium">{row.proveedor_nombre}</span>
                       {row.oc_numero && <p className="text-xs text-zinc-400">OC: {row.oc_numero}</p>}
+                      {row.ocs_vinculadas && row.ocs_vinculadas.length > 0 && !row.oc_numero && (
+                        <p className="text-xs text-zinc-400">OC: {row.ocs_vinculadas.map(o => o.numero).join(", ")}</p>
+                      )}
                       {row.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : <Badge variant="info">Mercadería</Badge>}
                       {row.tipo === "solo_iva" && (row.costo_real ?? 0) > 0 && (
                         <p className="text-xs text-blue-500 mt-0.5">Costo real: {formatCurrency(row.costo_real!, row.moneda)}</p>
@@ -2738,8 +2763,8 @@ ${certRetGanHtml}
                   )},
                   { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.total, row.moneda)}</span> },
                   { key: "estado", label: "Estado", sortable: true, render: (row) => (
-                    <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : row.estado === "recibida" ? "info" : "warning"}>
-                      {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : row.estado === "recibida" ? "Recibida" : "Pendiente"}
+                    <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : row.estado === "recibida" ? "info" : row.estado === "pendiente_aprobacion" ? "orange" : "warning"}>
+                      {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : row.estado === "recibida" ? "Recibida" : row.estado === "pendiente_aprobacion" ? "Por aprobar" : "Pendiente"}
                     </Badge>
                   )},
                   { key: "op_vinculada" as any, label: "OP", sortable: false, render: (row) => (
@@ -4869,13 +4894,25 @@ ${certRetGanHtml}
                     <DollarSign className="h-4 w-4" /> Crear OP
                   </button>
                 )}
+                {selectedFC.estado === "pendiente_aprobacion" && (
+                  <button onClick={async () => {
+                    const { error } = await (supabase as any).from("facturas_compra").update({ estado: "pendiente" }).eq("id", selectedFC.id);
+                    if (error) { alert("Error al aprobar: " + error.message); return; }
+                    alert("Factura aprobada");
+                    setSelectedFC(null);
+                    fetchData();
+                  }}
+                    className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
+                    <CheckCircle2 className="h-4 w-4" /> Aprobar
+                  </button>
+                )}
                 {selectedFC.estado === "pendiente" && (
                   <button onClick={() => { handleRecibirFC(selectedFC.id); setSelectedFC(null); }}
                     className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
                     <Package className="h-4 w-4" /> Recibir
                   </button>
                 )}
-                {(selectedFC.estado === "pendiente" || selectedFC.estado === "recibida") && (
+                {(selectedFC.estado === "pendiente" || selectedFC.estado === "recibida" || selectedFC.estado === "pendiente_aprobacion") && (
                   <button onClick={() => { handleAnularFC(selectedFC.id); setSelectedFC(null); }}
                     className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
                     <Ban className="h-4 w-4" /> Anular
