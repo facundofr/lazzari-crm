@@ -716,10 +716,16 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
       let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, estado").eq("cliente_id", clienteId).in("estado", ["emitida", "parcial"]).order("fecha", { ascending: true });
       if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
       const { data } = await q;
-      if (data) {
+      if (data && data.length > 0) {
+        // Query existing movimientos to get real saldo (not just total - total_acreditado)
+        const ids = data.map((f: any) => f.id);
+        const { data: movs } = await (supabase as any).from("movimientos").select("factura_id, monto").in("factura_id", ids);
+        const cobradoMap: Record<string, number> = {};
+        (movs || []).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
         setCmFCs(data.map((f: any) => {
-          const saldo = Number(f.total) - Number(f.total_acreditado || 0);
-          return { id: f.id, numero: f.numero ?? 0, tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", saldo, selected: false };
+          const cobrado = cobradoMap[f.id] || 0;
+          const saldo = Number(f.total) - Number(f.total_acreditado || 0) - cobrado;
+          return { id: f.id, numero: f.numero ?? 0, tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", saldo: Math.max(0, saldo), selected: false };
         }).filter((f: CobroMasivoFC) => f.saldo > 0.01));
       }
     } catch { /* noop */ } finally { setCmLoadingFCs(false); }
