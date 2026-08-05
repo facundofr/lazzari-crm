@@ -2276,8 +2276,9 @@ ${certRetGanHtml}
         const { error: rpcErr } = await (supabase as any).rpc("registrar_cobro", { p_factura_id: fc.id, p_lineas: [{ tipo: cobroMultiMedio, monto: fc.monto_a_cobrar, descripcion: desc }], p_fecha: cobroMultiFecha, p_sociedad_id: sociedadActiva?.id || null, p_created_by: userId });
         if (rpcErr) throw rpcErr;
       }
+      alert(`Cobro registrado correctamente (${fcsACobrar.length} factura${fcsACobrar.length > 1 ? "s" : ""})`);
       setCobroMultiOpen(false); await fetchData(); if (ccDetailCliente) await fetchCCDetailCliente(ccDetailCliente);
-    } catch (err: any) { alert("Error al registrar cobro multiple: " + (err.message || JSON.stringify(err))); } finally { setCobroMultiSaving(false); }
+    } catch (err: any) { alert("Error al registrar cobro masivo: " + (err.message || JSON.stringify(err))); } finally { setCobroMultiSaving(false); }
   }
   async function handleManualMov() {
     if (!manualMovTargetId || manualMovForm.monto <= 0 || !manualMovForm.descripcion.trim()) { setManualMovError("Completar monto, descripcion y seleccionar entidad"); return; }

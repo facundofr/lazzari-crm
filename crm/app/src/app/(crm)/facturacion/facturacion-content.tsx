@@ -761,6 +761,8 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
         });
         if (rpcErr) throw rpcErr;
       }
+      const cantFCs = fcsACobrar.length;
+      alert(`Cobro registrado correctamente (${cantFCs} factura${cantFCs > 1 ? "s" : ""})`);
       setCmOpen(false);
       await fetchData();
     } catch (err: any) {
