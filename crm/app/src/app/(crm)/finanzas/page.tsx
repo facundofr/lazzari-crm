@@ -2465,7 +2465,7 @@ ${certRetGanHtml}
     { id: "lineas_credito", label: "Crédito" },
     // { id: "gastos_fijos", label: "G. Fijos" },  // OCULTO: funcionalidad en revisión
     { id: "objetivos", label: "Objetivos" },
-    { id: "facturacion", label: "Facturación" },
+    { id: "facturacion", label: "Fact. Ventas" },
   ];
 
   if (loading) {
