@@ -6,14 +6,14 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
-import { formatCurrency, todayAR } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
+import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
 import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
-import { formatDate } from "@/lib/utils";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -495,14 +495,10 @@ export default function FinanzasPage() {
   const [ccDetailProvLoading, setCcDetailProvLoading] = useState(false);
 
   // ── Cobro Multiple modal ──
-  interface CobroMultiFC { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; total: number; total_acreditado: number; moneda: string; saldo: number; selected: boolean; monto_a_cobrar: number }
+  interface CobroMultiFC { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; subtotal: number; iva: number; total: number; total_acreditado: number; moneda: string; saldo: number; selected: boolean }
   const [cobroMultiOpen, setCobroMultiOpen] = useState(false);
   const [cobroMultiFCs, setCobroMultiFCs] = useState<CobroMultiFC[]>([]);
-  const [cobroMultiMonto, setCobroMultiMonto] = useState(0);
-  const [cobroMultiMedio, setCobroMultiMedio] = useState<"transferencia" | "efectivo" | "cheque_recibido">("transferencia");
-  const [cobroMultiFecha, setCobroMultiFecha] = useState(new Date().toISOString().slice(0, 10));
-  const [cobroMultiDesc, setCobroMultiDesc] = useState("");
-  const [cobroMultiSaving, setCobroMultiSaving] = useState(false);
+  const [cobroMultiLiqOpen, setCobroMultiLiqOpen] = useState(false);
 
   // ── Manual movement modal (conciliacion) ──
   const [manualMovOpen, setManualMovOpen] = useState(false);
@@ -2252,33 +2248,26 @@ ${certRetGanHtml}
   }
   async function openCobroMultiple() {
     if (!ccDetailCliente) return;
-    setCobroMultiOpen(true); setCobroMultiMonto(0); setCobroMultiDesc(""); setCobroMultiFecha(new Date().toISOString().slice(0, 10)); setCobroMultiMedio("transferencia");
+    setCobroMultiOpen(true); setCobroMultiLiqOpen(false);
     try {
-      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, total, total_acreditado, moneda, estado").eq("cliente_id", ccDetailCliente.id).in("estado", ["emitida", "parcial"]).order("fecha", { ascending: true });
+      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, estado").eq("cliente_id", ccDetailCliente.id).in("estado", ["emitida", "parcial"]).order("fecha", { ascending: true });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       const { data } = await q;
-      if (data) { setCobroMultiFCs(data.map((f: any) => { const saldo = Number(f.total) - Number(f.total_acreditado || 0); return { id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", saldo, selected: false, monto_a_cobrar: 0 }; }).filter((f: CobroMultiFC) => f.saldo > 0.01)); }
+      if (data) { setCobroMultiFCs(data.map((f: any) => { const saldo = Number(f.total) - Number(f.total_acreditado || 0); return { id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", saldo, selected: false }; }).filter((f: CobroMultiFC) => f.saldo > 0.01)); }
     } catch { /* noop */ }
   }
-  function distribuirCobroMultiple(monto: number) {
-    setCobroMultiMonto(monto); let restante = monto;
-    setCobroMultiFCs(prev => prev.map(fc => { if (!fc.selected) return { ...fc, monto_a_cobrar: 0 }; const aplicar = Math.min(restante, fc.saldo); restante = Math.max(0, restante - aplicar); return { ...fc, monto_a_cobrar: Math.round(aplicar * 100) / 100 }; }));
+  function cobroMultiOpenLiquidacion() {
+    const selected = cobroMultiFCs.filter(f => f.selected);
+    if (selected.length === 0) { alert("Seleccioná al menos una factura"); return; }
+    setCobroMultiLiqOpen(true);
   }
-  async function handleCobroMultiple() {
-    if (!ccDetailCliente) return;
-    const fcsACobrar = cobroMultiFCs.filter(fc => fc.selected && fc.monto_a_cobrar > 0);
-    if (fcsACobrar.length === 0) { alert("Seleccione al menos una factura"); return; }
-    setCobroMultiSaving(true);
-    try {
-      const userId = (await supabase.auth.getUser()).data.user?.id || null;
-      for (const fc of fcsACobrar) {
-        const desc = cobroMultiDesc || `Cobro multiple - ${fc.tipo}${String(fc.punto_venta).padStart(5, "0")}-${String(fc.numero).padStart(8, "0")}`;
-        const { error: rpcErr } = await (supabase as any).rpc("registrar_cobro", { p_factura_id: fc.id, p_lineas: [{ tipo: cobroMultiMedio, monto: fc.monto_a_cobrar, descripcion: desc }], p_fecha: cobroMultiFecha, p_sociedad_id: sociedadActiva?.id || null, p_created_by: userId });
-        if (rpcErr) throw rpcErr;
-      }
-      alert(`Cobro registrado correctamente (${fcsACobrar.length} factura${fcsACobrar.length > 1 ? "s" : ""})`);
-      setCobroMultiOpen(false); await fetchData(); if (ccDetailCliente) await fetchCCDetailCliente(ccDetailCliente);
-    } catch (err: any) { alert("Error al registrar cobro masivo: " + (err.message || JSON.stringify(err))); } finally { setCobroMultiSaving(false); }
+  function cobroMultiGetLiqFacturas(): LiquidacionFactura[] {
+    return cobroMultiFCs.filter(f => f.selected).map(f => ({
+      id: f.id,
+      numero: `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`,
+      fecha: f.fecha, subtotal: f.subtotal, iva: f.iva, total: f.total,
+      total_acreditado: f.total_acreditado, saldo: f.saldo, moneda: f.moneda,
+    }));
   }
   async function handleManualMov() {
     if (!manualMovTargetId || manualMovForm.monto <= 0 || !manualMovForm.descripcion.trim()) { setManualMovError("Completar monto, descripcion y seleccionar entidad"); return; }
@@ -5316,90 +5305,72 @@ ${certRetGanHtml}
         </>
       )}
 
-      {/* ── Cobro Multiple Modal ── */}
-      {cobroMultiOpen && ccDetailCliente && (
+      {/* ── Cobro Multiple Modal — Paso 1: selección ── */}
+      {cobroMultiOpen && ccDetailCliente && !cobroMultiLiqOpen && (
         <>
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setCobroMultiOpen(false)} />
           <div className="fixed inset-y-0 right-0 z-50 w-full max-w-2xl bg-white shadow-xl dark:bg-zinc-900 overflow-y-auto">
             <div className="p-6">
               <div className="flex items-center justify-between mb-6">
-                <h2 className="text-lg font-semibold">Cobro multiple — {ccDetailCliente.razon_social}</h2>
+                <h2 className="text-lg font-semibold">Cobro masivo — {ccDetailCliente.razon_social}</h2>
                 <button onClick={() => setCobroMultiOpen(false)} className="text-zinc-400 hover:text-zinc-600"><X className="h-5 w-5" /></button>
               </div>
 
-              <div className="grid grid-cols-3 gap-4 mb-4">
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Monto total</label>
-                  <input type="number" value={cobroMultiMonto || ""} onChange={(e) => distribuirCobroMultiple(Number(e.target.value))}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0.00" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Medio de pago</label>
-                  <select value={cobroMultiMedio} onChange={(e) => setCobroMultiMedio(e.target.value as any)}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                    <option value="transferencia">Transferencia</option>
-                    <option value="efectivo">Efectivo</option>
-                    <option value="cheque_recibido">Cheque</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Fecha</label>
-                  <input type="date" value={cobroMultiFecha} onChange={(e) => setCobroMultiFecha(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                </div>
-              </div>
-              <div className="mb-4">
-                <label className="text-xs font-medium text-zinc-500">Descripcion (opcional)</label>
-                <input value={cobroMultiDesc} onChange={(e) => setCobroMultiDesc(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Descripcion del cobro..." />
-              </div>
-
-              <h3 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400 mb-2">Facturas pendientes</h3>
+              <h3 className="text-sm font-semibold text-zinc-600 dark:text-zinc-400 mb-2">Seleccioná las facturas a cobrar</h3>
               <div className="border rounded-lg dark:border-zinc-700 overflow-hidden mb-4">
                 <table className="w-full text-sm">
                   <thead className="bg-zinc-50 dark:bg-zinc-800">
                     <tr>
-                      <th className="px-3 py-2 text-left w-8"><input type="checkbox" checked={cobroMultiFCs.length > 0 && cobroMultiFCs.every(f => f.selected)} onChange={(e) => { const sel = e.target.checked; setCobroMultiFCs(prev => prev.map(f => ({ ...f, selected: sel }))); if (sel && cobroMultiMonto > 0) distribuirCobroMultiple(cobroMultiMonto); }} /></th>
+                      <th className="px-3 py-2 text-left w-8"><input type="checkbox" checked={cobroMultiFCs.length > 0 && cobroMultiFCs.every(f => f.selected)} onChange={(e) => setCobroMultiFCs(prev => prev.map(f => ({ ...f, selected: e.target.checked })))} /></th>
                       <th className="px-3 py-2 text-left">Comprobante</th>
                       <th className="px-3 py-2 text-left">Fecha</th>
                       <th className="px-3 py-2 text-right">Total</th>
-                      <th className="px-3 py-2 text-right">Saldo</th>
-                      <th className="px-3 py-2 text-right">A cobrar</th>
+                      <th className="px-3 py-2 text-right">Saldo pend.</th>
                     </tr>
                   </thead>
                   <tbody>
                     {cobroMultiFCs.map((fc, idx) => (
                       <tr key={fc.id} className={`border-t dark:border-zinc-700 ${fc.selected ? "bg-emerald-50 dark:bg-emerald-900/20" : ""}`}>
-                        <td className="px-3 py-2"><input type="checkbox" checked={fc.selected} onChange={(e) => { const newFCs = [...cobroMultiFCs]; newFCs[idx] = { ...newFCs[idx], selected: e.target.checked }; setCobroMultiFCs(newFCs); if (cobroMultiMonto > 0) { let restante = cobroMultiMonto; setCobroMultiFCs(newFCs.map(f => { if (!f.selected) return { ...f, monto_a_cobrar: 0 }; const aplicar = Math.min(restante, f.saldo); restante = Math.max(0, restante - aplicar); return { ...f, monto_a_cobrar: Math.round(aplicar * 100) / 100 }; })); } }} /></td>
-                        <td className="px-3 py-2 font-mono text-xs">{fc.tipo}{String(fc.punto_venta).padStart(5, "0")}-{String(fc.numero).padStart(8, "0")}</td>
+                        <td className="px-3 py-2"><input type="checkbox" checked={fc.selected} onChange={(e) => { const newFCs = [...cobroMultiFCs]; newFCs[idx] = { ...newFCs[idx], selected: e.target.checked }; setCobroMultiFCs(newFCs); }} /></td>
+                        <td className="px-3 py-2 font-mono text-xs">{fc.tipo} {String(fc.punto_venta).padStart(4, "0")}-{String(fc.numero).padStart(8, "0")}</td>
                         <td className="px-3 py-2">{formatDate(fc.fecha)}</td>
                         <td className="px-3 py-2 text-right font-mono">{formatCurrency(fc.total, fc.moneda as "ARS" | "USD")}</td>
-                        <td className="px-3 py-2 text-right font-mono text-red-600">{formatCurrency(fc.saldo, fc.moneda as "ARS" | "USD")}</td>
-                        <td className="px-3 py-2 text-right font-mono font-semibold text-emerald-600">{fc.monto_a_cobrar > 0 ? formatCurrency(fc.monto_a_cobrar, fc.moneda as "ARS" | "USD") : "—"}</td>
+                        <td className="px-3 py-2 text-right font-mono text-red-600 font-semibold">{formatCurrency(fc.saldo, fc.moneda as "ARS" | "USD")}</td>
                       </tr>
                     ))}
-                    {cobroMultiFCs.length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-zinc-400">No hay facturas pendientes</td></tr>}
+                    {cobroMultiFCs.length === 0 && <tr><td colSpan={5} className="px-3 py-8 text-center text-zinc-400">No hay facturas pendientes</td></tr>}
                   </tbody>
                 </table>
               </div>
 
               <div className="flex items-center justify-between border-t pt-4 dark:border-zinc-700">
                 <div className="text-sm text-zinc-500">
-                  Total a cobrar: <span className="font-mono font-bold text-emerald-600">{formatCurrency(cobroMultiFCs.filter(f => f.selected).reduce((s, f) => s + f.monto_a_cobrar, 0))}</span>
-                  {" "}({cobroMultiFCs.filter(f => f.selected && f.monto_a_cobrar > 0).length} facturas)
+                  {cobroMultiFCs.filter(f => f.selected).length} factura{cobroMultiFCs.filter(f => f.selected).length !== 1 ? "s" : ""} seleccionada{cobroMultiFCs.filter(f => f.selected).length !== 1 ? "s" : ""}
+                  {" — "}Saldo: <span className="font-mono font-bold text-emerald-600">{formatCurrency(cobroMultiFCs.filter(f => f.selected).reduce((s, f) => s + f.saldo, 0))}</span>
                 </div>
                 <div className="flex gap-3">
                   <button onClick={() => setCobroMultiOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
-                  <button onClick={handleCobroMultiple} disabled={cobroMultiSaving || cobroMultiFCs.filter(f => f.selected && f.monto_a_cobrar > 0).length === 0}
+                  <button onClick={cobroMultiOpenLiquidacion} disabled={cobroMultiFCs.filter(f => f.selected).length === 0}
                     className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50">
-                    {cobroMultiSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                    Registrar cobro
+                    Continuar a liquidación
                   </button>
                 </div>
               </div>
             </div>
           </div>
         </>
+      )}
+      {/* ── Cobro Multiple — Paso 2: Liquidación ── */}
+      {cobroMultiLiqOpen && ccDetailCliente && (
+        <CobroMasivoLiquidacion
+          facturas={cobroMultiGetLiqFacturas()}
+          clienteNombre={ccDetailCliente.razon_social}
+          sociedadId={sociedadActiva?.id || ""}
+          profileId={profile?.id || null}
+          moneda={(cobroMultiFCs.find(f => f.selected)?.moneda as "ARS" | "USD") || "ARS"}
+          onClose={() => setCobroMultiLiqOpen(false)}
+          onSuccess={async () => { setCobroMultiLiqOpen(false); setCobroMultiOpen(false); await fetchData(); if (ccDetailCliente) await fetchCCDetailCliente(ccDetailCliente); }}
+        />
       )}
 
       {/* ── Manual Movement Modal ── */}
