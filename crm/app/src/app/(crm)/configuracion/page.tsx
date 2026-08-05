@@ -119,7 +119,7 @@ export default function ConfiguracionPage() {
     minimo_iva: 130000,
     tasa_iva_ri: 10.5,
     aplica_ganancias: true,
-    minimo_ganancias: 400000,
+    minimo_ganancias: 224000,
     tasa_ganancias_ri: 3.5,
     tasa_ganancias_no_inscripto: 28,
     minimo_retencion_ganancias: 15000,

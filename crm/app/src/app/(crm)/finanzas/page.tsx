@@ -401,7 +401,7 @@ export default function FinanzasPage() {
   const [opFCLoading, setOpFCLoading] = useState(false);
   const [retencionConfig, setRetencionConfig] = useState({
     aplica_iva: true, minimo_iva: 130000, tasa_iva_ri: 10.5,
-    aplica_ganancias: true, minimo_ganancias: 400000, tasa_ganancias_ri: 2, tasa_ganancias_no_inscripto: 28,
+    aplica_ganancias: true, minimo_ganancias: 224000, tasa_ganancias_ri: 2, tasa_ganancias_no_inscripto: 28,
     minimo_retencion_ganancias: 15000,
   });
   const [proveedoresOptions, setProveedoresOptions] = useState<ProveedorOption[]>([]);
