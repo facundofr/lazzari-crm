@@ -24,6 +24,7 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   cheque_recibido: { label: "Cheque recibido", variant: "info", icon: CreditCard },
   transferencia: { label: "Transferencia", variant: "outline", icon: Landmark },
   efectivo: { label: "Efectivo", variant: "outline", icon: Wallet },
+  deposito: { label: "Deposito", variant: "outline", icon: Landmark },
   ajuste: { label: "Ajuste", variant: "outline", icon: Wallet },
   retencion_iva: { label: "Ret. IVA", variant: "warning", icon: Wallet },
   retencion_ganancias: { label: "Ret. Ganancias", variant: "warning", icon: Wallet },
@@ -524,6 +525,12 @@ export default function FinanzasPage() {
         { value: "cheque_recibido", label: "Cheque recibido" },
         { value: "transferencia", label: "Transferencia" },
         { value: "efectivo", label: "Efectivo" },
+        { value: "deposito", label: "Deposito" },
+        { value: "retencion_iva", label: "Ret. IVA" },
+        { value: "retencion_ganancias", label: "Ret. Ganancias" },
+        { value: "retencion_iibb", label: "Ret. IIBB" },
+        { value: "retencion_suss", label: "Ret. SUSS" },
+        { value: "ajuste", label: "Ajuste" },
       ],
     },
     {
@@ -2643,17 +2650,25 @@ ${certRetGanHtml}
             <DataTable<MovimientoRow>
               columns={[
                 { key: "tipo", label: "Tipo", sortable: true, render: (row) => { const cfg = tipoConfig[row.tipo] || { label: row.tipo, variant: "outline" as const, icon: Wallet }; const Icon = cfg.icon; return (<div className="flex items-center gap-2"><Icon className="h-4 w-4 text-zinc-400" /><Badge variant={cfg.variant}>{cfg.label}</Badge></div>); }},
-                { key: "descripcion", label: "Descripcion", sortable: true, render: (row) => (
-                  <div>
-                    <span className="font-medium">{row.descripcion}</span>
-                    {row.clientes?.razon_social && <p className="text-xs text-zinc-400">{row.clientes.razon_social}</p>}
-                    {row.proveedores?.razon_social && <p className="text-xs text-zinc-400">{row.proveedores.razon_social}</p>}
-                  </div>
-                )},
+                { key: "descripcion", label: "Descripcion", sortable: true, render: (row) => {
+                  const parts = (row.descripcion || "").split(" — ");
+                  const main = parts[0] || "";
+                  const detail = parts.slice(1).join(" — ");
+                  return (
+                    <div className="max-w-xs">
+                      <span className="font-medium text-sm">{main}</span>
+                      {detail && <p className="text-xs text-zinc-500 mt-0.5">{detail}</p>}
+                      {row.clientes?.razon_social && <p className="text-xs text-zinc-400">{row.clientes.razon_social}</p>}
+                      {row.proveedores?.razon_social && <p className="text-xs text-zinc-400">{row.proveedores.razon_social}</p>}
+                      {row.factura_id && <p className="text-xs text-blue-500">FC vinculada</p>}
+                    </div>
+                  );
+                }},
                 { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
                 { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => {
-                  const isIngreso = ["cobro", "cheque_recibido", "transferencia"].includes(row.tipo);
-                  return <span className={`font-mono font-semibold block text-right ${isIngreso ? "text-emerald-600" : "text-red-600"}`}>{isIngreso ? "+" : "-"}{formatCurrency(row.monto)}</span>;
+                  const isIngreso = ["cobro", "cheque_recibido", "transferencia", "efectivo", "deposito", "retencion_iva", "retencion_ganancias", "retencion_iibb", "retencion_suss"].includes(row.tipo) && !!row.cliente_id;
+                  const isEgreso = ["pago", "cheque_emitido"].includes(row.tipo) || (!!row.proveedor_id && !row.cliente_id);
+                  return <span className={`font-mono font-semibold block text-right ${isIngreso ? "text-emerald-600" : isEgreso ? "text-red-600" : "text-zinc-700 dark:text-zinc-300"}`}>{isIngreso ? "+" : isEgreso ? "-" : ""}{formatCurrency(row.monto, row.moneda as "ARS" | "USD")}</span>;
                 }},
                 { key: "conciliado", label: "Conciliado", sortable: true, render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Si" : "Pendiente"}</Badge> },
                 { key: "actions", label: "", sortable: false, render: (row) => (

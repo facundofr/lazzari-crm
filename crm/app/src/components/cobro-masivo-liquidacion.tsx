@@ -181,6 +181,7 @@ export default function CobroMasivoLiquidacion({
             p_fecha: fechaPago,
             p_sociedad_id: sociedadId,
             p_created_by: profileId,
+            p_conciliado: true,
           });
           if (rpcErr) throw new Error(`Error en ${fc.numero}: ${rpcErr.message}`);
         }
