@@ -361,6 +361,31 @@ export default function FinanzasPage() {
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // Movimiento detail panel
+  const [selectedMov, setSelectedMov] = useState<MovimientoRow | null>(null);
+  const [relatedMovs, setRelatedMovs] = useState<MovimientoRow[]>([]);
+  const [relatedFactura, setRelatedFactura] = useState<{ tipo: string; punto_venta: number; numero: number; total: number; estado: string; moneda: string } | null>(null);
+
+  async function openMovDetail(mov: MovimientoRow) {
+    setSelectedMov(mov);
+    setRelatedMovs([]);
+    setRelatedFactura(null);
+    if (mov.factura_id) {
+      // Fetch all movimientos for this factura (to see the full cobro)
+      const { data: rels } = await supabase.from("movimientos")
+        .select("*, clientes(razon_social), proveedores(razon_social)")
+        .eq("factura_id" as any, mov.factura_id)
+        .order("created_at", { ascending: true });
+      if (rels) setRelatedMovs(rels as MovimientoRow[]);
+      // Fetch factura info
+      const { data: fc } = await supabase.from("facturas")
+        .select("tipo, punto_venta, numero, total, estado, moneda")
+        .eq("id", mov.factura_id)
+        .single();
+      if (fc) setRelatedFactura(fc as any);
+    }
+  }
+
   // Data state — initialised with mock data as fallback
   const [movimientos, setMovimientos] = useState<MovimientoRow[]>([]);
   const [ccClientes, setCcClientes] = useState<CCRow[]>([]);
@@ -2685,8 +2710,113 @@ ${certRetGanHtml}
                 )},
               ]}
               data={filteredMovimientos}
+              onRowClick={(row) => openMovDetail(row)}
             />
           </Card>
+          </>
+        )}
+
+        {/* ── Movimiento Detail Panel ── */}
+        {selectedMov && (
+          <>
+            <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setSelectedMov(null)} />
+            <div className="fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700">
+              <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
+                <div className="flex items-center gap-2">
+                  <Wallet className="h-5 w-5 text-orange-500" />
+                  <h2 className="text-lg font-bold dark:text-white">Detalle movimiento</h2>
+                  {(() => { const tc = tipoConfig[selectedMov.tipo] || { label: selectedMov.tipo, variant: "outline" as const }; return <Badge variant={tc.variant}>{tc.label}</Badge>; })()}
+                </div>
+                <button onClick={() => setSelectedMov(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="p-6 space-y-5">
+                {/* Info principal */}
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-xs text-zinc-400 uppercase">Monto</p>
+                    <p className="font-mono text-lg font-bold">{formatCurrency(selectedMov.monto, (selectedMov.moneda || "ARS") as "ARS" | "USD")}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-400 uppercase">Fecha</p>
+                    <p className="font-medium">{formatDate(selectedMov.fecha)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-400 uppercase">Estado</p>
+                    <Badge variant={selectedMov.conciliado ? "success" : "warning"}>
+                      {selectedMov.conciliado ? "Conciliado" : "Pendiente"}
+                    </Badge>
+                  </div>
+                  <div>
+                    <p className="text-xs text-zinc-400 uppercase">Entidad</p>
+                    <p className="font-medium">{selectedMov.clientes?.razon_social || selectedMov.proveedores?.razon_social || "—"}</p>
+                  </div>
+                </div>
+
+                {/* Descripcion completa */}
+                <div>
+                  <p className="text-xs text-zinc-400 uppercase mb-1">Descripcion</p>
+                  <p className="text-sm bg-zinc-50 dark:bg-zinc-800 rounded-lg p-3 whitespace-pre-wrap">{selectedMov.descripcion}</p>
+                </div>
+
+                {/* Factura vinculada */}
+                {relatedFactura && (
+                  <div>
+                    <p className="text-xs text-zinc-400 uppercase mb-1">Factura vinculada</p>
+                    <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-sm">
+                      <FileText className="h-4 w-4 text-blue-500" />
+                      <span className="font-mono font-medium">
+                        {relatedFactura.tipo} {String(relatedFactura.punto_venta).padStart(4, "0")}-{String(relatedFactura.numero).padStart(8, "0")}
+                      </span>
+                      <span className="font-mono">{formatCurrency(relatedFactura.total, (relatedFactura.moneda || "ARS") as "ARS" | "USD")}</span>
+                      <Badge variant={relatedFactura.estado === "pagada" ? "success" : relatedFactura.estado === "parcial" ? "warning" : "info"}>
+                        {relatedFactura.estado}
+                      </Badge>
+                    </div>
+                  </div>
+                )}
+
+                {/* Movimientos relacionados (cobro masivo) */}
+                {relatedMovs.length > 1 && (
+                  <div>
+                    <p className="text-xs text-zinc-400 uppercase mb-2">
+                      Movimientos del cobro ({relatedMovs.length} lineas)
+                    </p>
+                    <div className="space-y-1">
+                      {relatedMovs.map(rm => {
+                        const tc = tipoConfig[rm.tipo] || { label: rm.tipo, variant: "outline" as const };
+                        const isCurrent = rm.id === selectedMov.id;
+                        return (
+                          <div key={rm.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${isCurrent ? "bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800" : "bg-zinc-50 dark:bg-zinc-800/50"}`}>
+                            <Badge variant={tc.variant}>{tc.label}</Badge>
+                            <span className="flex-1 text-xs text-zinc-500 truncate">{rm.descripcion?.split(" — ")[1] || ""}</span>
+                            <span className="font-mono font-medium">{formatCurrency(rm.monto, (rm.moneda || "ARS") as "ARS" | "USD")}</span>
+                          </div>
+                        );
+                      })}
+                      <div className="flex justify-end pt-1 border-t border-zinc-200 dark:border-zinc-700">
+                        <span className="text-sm font-bold">Total: <span className="font-mono">{formatCurrency(relatedMovs.reduce((s, m) => s + m.monto, 0), (selectedMov.moneda || "ARS") as "ARS" | "USD")}</span></span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
+                  {!selectedMov.conciliado && (
+                    <button onClick={async () => { await handleConciliar(selectedMov.id); setSelectedMov({ ...selectedMov, conciliado: true }); }}
+                      className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
+                      <CheckCircle2 className="h-4 w-4" /> Conciliar
+                    </button>
+                  )}
+                  <button onClick={() => { handleDeleteMov(selectedMov.id); setSelectedMov(null); }}
+                    className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+                    <Trash2 className="h-4 w-4" /> Eliminar
+                  </button>
+                </div>
+              </div>
+            </div>
           </>
         )}
 
