@@ -2456,6 +2456,7 @@ ${certRetGanHtml}
   const tabs: { id: FinanzasTab; label: string }[] = [
     { id: "movimientos", label: "Movimientos" },
     { id: "facturas_compra", label: "Fact. Compra" },
+    { id: "facturacion", label: "Fact. Ventas" },
     // { id: "ordenes_pago", label: "OP" },  // OCULTO: OP se accede desde FC compra
     { id: "gastos_manuales", label: "Gastos" },
     { id: "echeqs", label: "Cheques" },
@@ -2465,7 +2466,6 @@ ${certRetGanHtml}
     { id: "lineas_credito", label: "Crédito" },
     // { id: "gastos_fijos", label: "G. Fijos" },  // OCULTO: funcionalidad en revisión
     { id: "objetivos", label: "Objetivos" },
-    { id: "facturacion", label: "Fact. Ventas" },
   ];
 
   if (loading) {
