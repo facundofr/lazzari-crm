@@ -4920,10 +4920,12 @@ ${certRetGanHtml}
                   <p className="text-xs font-medium text-zinc-500">Tipo</p>
                   {selectedFC.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : <Badge variant="info">Mercadería</Badge>}
                 </div>
-                {selectedFC.oc_numero && (
+                {(selectedFC.oc_numero || (selectedFC.ocs_vinculadas && selectedFC.ocs_vinculadas.length > 0)) && (
                   <div>
-                    <p className="text-xs font-medium text-zinc-500">OC vinculada</p>
-                    <p className="font-mono text-sm dark:text-white">{selectedFC.oc_numero}</p>
+                    <p className="text-xs font-medium text-zinc-500">OC vinculada{selectedFC.ocs_vinculadas && selectedFC.ocs_vinculadas.length > 1 ? "s" : ""}</p>
+                    <p className="font-mono text-sm dark:text-white">
+                      {selectedFC.oc_numero || (selectedFC.ocs_vinculadas || []).map(o => o.numero).join(", ")}
+                    </p>
                   </div>
                 )}
                 <div>
