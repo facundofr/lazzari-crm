@@ -83,12 +83,11 @@ function baseStyles(color: string) {
     .header-bar { background: ${color}; height: 6px; border-radius: 3px 3px 0 0; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 0 14px; border-bottom: 2px solid #e0e0e0; margin-bottom: 18px; }
     .header-left {}
-    .company-name { font-size: 20px; font-weight: 700; color: ${color}; letter-spacing: -0.3px; }
-    .company-sub { font-size: 10px; color: #666; margin-top: 2px; }
+    .company-sub { font-size: 11px; color: #444; margin-top: 3px; font-weight: 600; }
     .company-detail { font-size: 9px; color: #888; margin-top: 1px; }
     .header-right { text-align: right; }
-    .doc-title { font-size: 11px; text-transform: uppercase; letter-spacing: 2px; color: #666; font-weight: 700; }
-    .doc-number { font-size: 22px; font-weight: 700; font-family: 'Courier New', Courier, monospace; color: #222; margin: 3px 0; }
+    .doc-title { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: #666; font-weight: 700; }
+    .doc-number { font-size: 15px; font-weight: 700; font-family: 'Courier New', Courier, monospace; color: #222; margin: 3px 0; }
     .doc-badge { display: inline-block; padding: 2px 14px; border-radius: 10px; font-size: 9px; font-weight: 700; background: #f0f0f0; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
     .doc-date { font-size: 10px; color: #888; margin-top: 5px; }
 
@@ -120,8 +119,8 @@ function baseStyles(color: string) {
     .totals-box { width: 260px; }
     .total-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 11px; color: #555; }
     .total-row .mono { color: #222; }
-    .total-row-final { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; margin-top: 4px; border-top: 2px solid #222; font-size: 15px; font-weight: 700; color: #222; }
-    .total-row-final .mono { font-size: 14px; }
+    .total-row-final { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; margin-top: 4px; border-top: 2px solid #222; font-size: 12px; font-weight: 700; color: #222; }
+    .total-row-final .mono { font-size: 12px; }
 
     /* Observations */
     .obs-block { background: #f9f9f9; border: 1px solid #e8e8e8; border-radius: 6px; padding: 12px 14px; margin-top: 18px; }
@@ -180,7 +179,7 @@ function facturaStyles(color: string) {
     /* CAE section */
     .cae-section { margin-top: 20px; padding: 14px 16px; border: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
     .cae-label { font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #888; font-weight: 700; }
-    .cae-value { font-size: 15px; font-weight: 700; font-family: 'Courier New', Courier, monospace; margin-top: 2px; color: #222; }
+    .cae-value { font-size: 11px; font-weight: 700; font-family: 'Courier New', Courier, monospace; margin-top: 2px; color: #222; }
     .cae-vto { font-size: 9px; color: #888; margin-top: 3px; }
     .qr-box { text-align: center; }
     .qr-box img { width: 100px; height: 100px; }
@@ -250,12 +249,11 @@ export function generatePresupuestoPDF(
 <div class="header-bar"></div>
 <div class="header">
   <div class="header-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:40px;margin-bottom:4px" />
-    <div class="company-name">${soc.nombre.toUpperCase()}</div>
+    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:44px;margin-bottom:4px" />
     <div class="company-sub">${soc.razonSocial}</div>
     <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
     ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-    ${soc.telefono || soc.email ? `<div class="company-detail">${[soc.telefono, soc.email].filter(Boolean).join(" | ")}</div>` : ""}
+    <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
   </div>
   <div class="header-right">
     <div class="doc-title">Presupuesto</div>
@@ -445,11 +443,9 @@ export function generateFacturaPDF(
   </div>
 </div>
 <div class="emisor-block">
-  <div class="emisor-name">${soc.nombre.toUpperCase()}</div>
+  <div class="emisor-name" style="font-size:12px">${soc.razonSocial}</div>
   ${emisor.domicilio ? `<div class="emisor-detail">${emisor.domicilio}</div>` : ""}
-  ${soc.email ? `<div class="emisor-detail">${soc.email}</div>` : ""}
-  ${soc.web ? `<div class="emisor-detail">${soc.web}</div>` : ""}
-  ${soc.telefono ? `<div class="emisor-detail">Teléfonos: ${soc.telefono}</div>` : ""}
+  <div class="emisor-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
 </div>
 
 <div class="fc-data">
@@ -581,12 +577,11 @@ export function generateRemitoPDF(
 <div class="header-bar"></div>
 <div class="header">
   <div class="header-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:40px;margin-bottom:4px" />
-    <div class="company-name">${soc.nombre.toUpperCase()}</div>
+    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:44px;margin-bottom:4px" />
     <div class="company-sub">${soc.razonSocial}</div>
     <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
     ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-    ${soc.telefono || soc.email ? `<div class="company-detail">${[soc.telefono, soc.email].filter(Boolean).join(" | ")}</div>` : ""}
+    <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
   </div>
   <div class="header-right">
     <div class="doc-title">Remito</div>
@@ -709,12 +704,11 @@ export function generateOrdenCompraPDF(
 <div class="header-bar"></div>
 <div class="header">
   <div class="header-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:40px;margin-bottom:4px" />
-    <div class="company-name">${soc.nombre.toUpperCase()}</div>
+    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:44px;margin-bottom:4px" />
     <div class="company-sub">${soc.razonSocial}</div>
     <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
     ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-    ${soc.telefono || soc.email ? `<div class="company-detail">${[soc.telefono, soc.email].filter(Boolean).join(" | ")}</div>` : ""}
+    <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
   </div>
   <div class="header-right">
     <div class="doc-title">Orden de Compra</div>
