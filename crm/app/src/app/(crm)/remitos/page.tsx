@@ -128,6 +128,7 @@ export default function RemitosPage() {
   const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; subtotal: number | null; total: number | null; cliente_id: string | null }[]>([]);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+  const [valorDeclaradoSugerido, setValorDeclaradoSugerido] = useState("");
   const [loadingPRItems, setLoadingPRItems] = useState(false);
 
   // Detail panel
@@ -448,6 +449,7 @@ export default function RemitosPage() {
     });
     setCreateItems([]);
     setCreateError("");
+    setValorDeclaradoSugerido("");
     setClienteSucursales([]);
 
     let clienteQ = supabase.from("clientes").select("id, razon_social").eq("activo", true).order("razon_social");
@@ -470,14 +472,13 @@ export default function RemitosPage() {
   async function handlePRSelect(prId: string) {
     const pr = presupuestosAprobados.find((p) => p.id === prId);
     const autoValor = pr?.total ? String(pr.total) : pr?.subtotal ? String(pr.subtotal) : "";
+    setValorDeclaradoSugerido(autoValor);
 
     setCreateForm((prev) => ({
       ...prev,
       presupuesto_id: prId,
       cliente_id: pr?.cliente_id || prev.cliente_id,
-      valor_declarado: prev.valor_declarado === "" || prev.valor_declarado === "0" || presupuestosAprobados.some((p) => (p.total || p.subtotal) && String(p.total || p.subtotal) === prev.valor_declarado)
-        ? autoValor
-        : prev.valor_declarado,
+      valor_declarado: "",
     }));
 
     if (!prId) {
@@ -592,7 +593,7 @@ export default function RemitosPage() {
           observaciones: obs,
           presupuesto_id: createForm.presupuesto_id || null,
           estado: "pendiente",
-          valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : null,
+          valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : (valorDeclaradoSugerido ? Number(valorDeclaradoSugerido) : null),
           sociedad_id: sociedadActiva?.id || null,
           sucursal_id: sucursalId,
           created_by: profile?.id || null,
@@ -1296,7 +1297,7 @@ export default function RemitosPage() {
                       const val = Number(e.target.value) || 0;
                       await (supabase as any).from("remitos").update({ valor_declarado: val }).eq("id", detailRemito.id);
                     }}
-                    className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-mono font-medium text-emerald-600 dark:border-zinc-600 dark:bg-zinc-800 dark:text-emerald-400"
+                    className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-mono font-medium text-zinc-600 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
                   />
                 </div>
               </div>
@@ -1698,7 +1699,7 @@ export default function RemitosPage() {
                   value={createForm.valor_declarado}
                   onChange={(e) => setCreateForm({ ...createForm, valor_declarado: e.target.value })}
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  placeholder="Ingrese el valor declarado..."
+                  placeholder={valorDeclaradoSugerido ? `Sugerido: $${Number(valorDeclaradoSugerido).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "Ingrese el valor declarado..."}
                 />
               </div>
 
