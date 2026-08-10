@@ -2257,7 +2257,7 @@ ${certRetGanHtml}
   async function fetchCCDetailCliente(cliente: CCRow) {
     setCcDetailCliente(cliente); setCcDetailLoading(true); setCcDetailFacturas([]); setCcDetailMovimientos([]);
     try {
-      let qF = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, vencimiento, total, total_acreditado, moneda, estado").eq("cliente_id", cliente.id).in("estado", ["emitida", "pagada", "parcial"]).order("fecha", { ascending: false });
+      let qF = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado").eq("cliente_id", cliente.id).in("estado", ["emitida", "pagada", "parcial"]).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qF = qF.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: fData } = await qF;
       // Fetch cobrado per factura from movimientos
@@ -2267,7 +2267,7 @@ ${certRetGanHtml}
         const { data: cobros } = await (supabase as any).from("movimientos").select("factura_id, monto").in("factura_id", fIds);
         if (cobros) (cobros as any[]).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
       }
-      if (fData) setCcDetailFacturas(fData.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.vencimiento, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: f.estado })));
+      if (fData) setCcDetailFacturas(fData.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.fecha_vencimiento ?? null, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: f.estado })));
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, referencia, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData } = await qM;
