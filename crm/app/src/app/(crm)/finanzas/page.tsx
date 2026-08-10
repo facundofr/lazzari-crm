@@ -510,7 +510,7 @@ export default function FinanzasPage() {
 
   // ── CC Detail (Estado de cuenta) ──
   interface CCFacturaRow { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; vencimiento: string | null; total: number; total_acreditado: number; moneda: string; estado: string }
-  interface CCMovRow { id: string; tipo: string; monto: number; moneda: string; descripcion: string; fecha: string; referencia: string | null }
+  interface CCMovRow { id: string; tipo: string; monto: number; moneda: string; descripcion: string; fecha: string; referencia: string | null; factura_id: string | null; conciliado: boolean; cliente_id?: string | null; proveedor_id?: string | null; clientes?: { razon_social: string } | null; proveedores?: { razon_social: string } | null }
   interface CCFCRow { id: string; numero_factura: string; fecha: string; fecha_vencimiento: string | null; total: number; estado: string; moneda: string }
   const [ccDetailCliente, setCcDetailCliente] = useState<CCRow | null>(null);
   const [ccDetailFacturas, setCcDetailFacturas] = useState<CCFacturaRow[]>([]);
@@ -2261,10 +2261,10 @@ ${certRetGanHtml}
       if (sociedadActiva?.id) qF = qF.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: fData } = await qF;
       if (fData) setCcDetailFacturas(fData.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.vencimiento, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", estado: f.estado })));
-      let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, referencia").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
+      let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, referencia, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData } = await qM;
-      if (mData) setCcDetailMovimientos(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, referencia: m.referencia ?? null })));
+      if (mData) setCcDetailMovimientos(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, referencia: m.referencia ?? null, factura_id: m.factura_id ?? null, conciliado: !!m.conciliado, cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
     } catch (err) { console.error("CC detail err:", err); } finally { setCcDetailLoading(false); }
   }
   async function fetchCCDetailProveedor(prov: CCRow) {
@@ -2274,10 +2274,10 @@ ${certRetGanHtml}
       if (sociedadActiva?.id) qFC = qFC.eq("sociedad_id", sociedadActiva.id);
       const { data: fcData } = await qFC;
       if (fcData) setCcDetailFCProv(fcData.map((f: any) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento, total: Number(f.total), estado: f.estado, moneda: f.moneda ?? "ARS" })));
-      let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, referencia").eq("proveedor_id" as any, prov.id).order("fecha", { ascending: false });
+      let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, referencia, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("proveedor_id" as any, prov.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData } = await qM;
-      if (mData) setCcDetailMovProv(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, referencia: m.referencia ?? null })));
+      if (mData) setCcDetailMovProv(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, referencia: m.referencia ?? null, factura_id: m.factura_id ?? null, conciliado: !!m.conciliado, cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
     } catch (err) { console.error("CC prov detail err:", err); } finally { setCcDetailProvLoading(false); }
   }
   async function openCobroMultiple() {
@@ -2487,8 +2487,8 @@ ${certRetGanHtml}
 
   const tabs: { id: FinanzasTab; label: string }[] = [
     { id: "movimientos", label: "Movimientos" },
-    { id: "facturas_compra", label: "Fact. Compra" },
     { id: "facturacion", label: "Fact. Ventas" },
+    { id: "facturas_compra", label: "Fact. Compra" },
     // { id: "ordenes_pago", label: "OP" },  // OCULTO: OP se accede desde FC compra
     { id: "gastos_manuales", label: "Gastos" },
     { id: "echeqs", label: "Cheques" },
@@ -3203,10 +3203,11 @@ ${certRetGanHtml}
                           { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-sm">{formatDate(row.fecha)}</span> },
                           { key: "tipo", label: "Tipo", render: (row) => { const tc = tipoConfig[row.tipo] || { label: row.tipo, variant: "outline" as const, icon: Wallet }; return <Badge variant={tc.variant}>{tc.label}</Badge>; }},
                           { key: "descripcion", label: "Descripcion", render: (row) => <span className="text-sm text-zinc-600 dark:text-zinc-400 max-w-xs truncate block">{row.descripcion}</span> },
-                          { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className={`font-mono font-semibold block text-right ${row.tipo === "cobro" || row.tipo === "cheque_recibido" ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(row.monto, row.moneda as "ARS" | "USD")}</span> },
-                          { key: "referencia", label: "Ref.", render: (row) => row.referencia ? <span className="text-xs text-zinc-400">{row.referencia}</span> : <span className="text-xs text-zinc-300">—</span> },
+                          { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className={`font-mono font-semibold block text-right text-emerald-600`}>{formatCurrency(row.monto, row.moneda as "ARS" | "USD")}</span> },
+                          { key: "conciliado" as any, label: "Estado", render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Conciliado" : "Pendiente"}</Badge> },
                         ]}
                         data={ccDetailMovimientos}
+                        onRowClick={(row) => openMovDetail(row as any)}
                         emptyMessage="Sin movimientos registrados"
                       />
                     </Card>
@@ -3294,10 +3295,11 @@ ${certRetGanHtml}
                       { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-sm">{formatDate(row.fecha)}</span> },
                       { key: "tipo", label: "Tipo", render: (row) => { const tc = tipoConfig[row.tipo] || { label: row.tipo, variant: "outline" as const, icon: Wallet }; return <Badge variant={tc.variant}>{tc.label}</Badge>; }},
                       { key: "descripcion", label: "Descripcion", render: (row) => <span className="text-sm text-zinc-600 dark:text-zinc-400 max-w-xs truncate block">{row.descripcion}</span> },
-                      { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className={`font-mono font-semibold block text-right ${row.tipo === "pago" ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(row.monto, row.moneda as "ARS" | "USD")}</span> },
-                      { key: "referencia", label: "Ref.", render: (row) => row.referencia ? <span className="text-xs text-zinc-400">{row.referencia}</span> : <span className="text-xs text-zinc-300">—</span> },
+                      { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right text-red-600">{formatCurrency(row.monto, row.moneda as "ARS" | "USD")}</span> },
+                      { key: "conciliado" as any, label: "Estado", render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Conciliado" : "Pendiente"}</Badge> },
                     ]}
                     data={ccDetailMovProv}
+                    onRowClick={(row) => openMovDetail(row as any)}
                     emptyMessage="Sin movimientos registrados"
                   />
                 </Card>
