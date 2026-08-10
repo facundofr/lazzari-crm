@@ -509,7 +509,7 @@ export default function FinanzasPage() {
   const [balanceData, setBalanceData] = useState<{ cobrar: BalanceBand[]; pagar: BalanceBand[]; echeqs: BalanceBand[] } | null>(null);
 
   // ── CC Detail (Estado de cuenta) ──
-  interface CCFacturaRow { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; vencimiento: string | null; total: number; total_acreditado: number; moneda: string; estado: string }
+  interface CCFacturaRow { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; vencimiento: string | null; total: number; total_acreditado: number; cobrado: number; moneda: string; estado: string }
   interface CCMovRow { id: string; tipo: string; monto: number; moneda: string; descripcion: string; fecha: string; referencia: string | null; factura_id: string | null; conciliado: boolean; cliente_id?: string | null; proveedor_id?: string | null; clientes?: { razon_social: string } | null; proveedores?: { razon_social: string } | null }
   interface CCFCRow { id: string; numero_factura: string; fecha: string; fecha_vencimiento: string | null; total: number; estado: string; moneda: string }
   const [ccDetailCliente, setCcDetailCliente] = useState<CCRow | null>(null);
@@ -2260,7 +2260,14 @@ ${certRetGanHtml}
       let qF = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, vencimiento, total, total_acreditado, moneda, estado").eq("cliente_id", cliente.id).in("estado", ["emitida", "pagada", "parcial"]).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qF = qF.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: fData } = await qF;
-      if (fData) setCcDetailFacturas(fData.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.vencimiento, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", estado: f.estado })));
+      // Fetch cobrado per factura from movimientos
+      let cobradoMap: Record<string, number> = {};
+      if (fData && fData.length > 0) {
+        const fIds = fData.map((f: any) => f.id);
+        const { data: cobros } = await (supabase as any).from("movimientos").select("factura_id, monto").in("factura_id", fIds);
+        if (cobros) (cobros as any[]).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
+      }
+      if (fData) setCcDetailFacturas(fData.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.vencimiento, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: f.estado })));
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, referencia, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData } = await qM;
@@ -3188,7 +3195,7 @@ ${certRetGanHtml}
                           { key: "vencimiento" as any, label: "Vencimiento", render: (row) => <span className={`text-sm ${row.vencimiento && row.vencimiento < new Date().toISOString().slice(0, 10) && row.estado !== "pagada" ? "text-red-600 font-semibold" : ""}`}>{row.vencimiento ? formatDate(row.vencimiento) : "—"}</span> },
                           { key: "numero", label: "Comprobante", sortable: true, render: (row) => <span className="font-mono text-xs">{row.tipo}{String(row.punto_venta).padStart(5, "0")}-{String(row.numero).padStart(8, "0")}</span> },
                           { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.total, row.moneda as "ARS" | "USD")}</span> },
-                          { key: "total_acreditado" as any, label: "Saldo", className: "text-right", render: (row) => { const saldo = row.total - row.total_acreditado; return <span className={`font-mono font-semibold block text-right ${saldo > 0 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(saldo, row.moneda as "ARS" | "USD")}</span>; }},
+                          { key: "total_acreditado" as any, label: "Saldo", className: "text-right", render: (row) => { const saldo = Math.max(0, row.total - row.total_acreditado - row.cobrado); return <span className={`font-mono font-semibold block text-right ${saldo > 0.01 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(saldo, row.moneda as "ARS" | "USD")}</span>; }},
                           { key: "estado", label: "Estado", render: (row) => { const cfg: Record<string, { label: string; variant: "success" | "warning" | "danger" | "outline" }> = { pagada: { label: "Pagada", variant: "success" }, parcial: { label: "Parcial", variant: "warning" }, emitida: { label: "Pendiente", variant: "danger" } }; const c = cfg[row.estado] || { label: row.estado, variant: "outline" as const }; return <Badge variant={c.variant}>{c.label}</Badge>; }},
                         ]}
                         data={ccDetailFacturas}
