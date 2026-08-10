@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { X, Plus, Trash2, AlertCircle } from "lucide-react";
+import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 
@@ -393,8 +393,15 @@ export default function CobroMasivoLiquidacion({
               {totalRetenciones > 0 && (
                 <div className="flex justify-between text-zinc-500"><span>(-) Retenciones / percepciones</span><span className="font-mono">{fc(totalRetenciones, m)}</span></div>
               )}
-              <div className="flex justify-between font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1">
-                <span>Total esperado a cobrar</span><span className="font-mono">{fc(totalEsperado, m)}</span>
+              <div className="flex justify-between items-center font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1">
+                <span>Total esperado a cobrar</span>
+                <span className="flex items-center gap-1.5">
+                  <button type="button" title="Copiar monto" onClick={() => { navigator.clipboard.writeText(totalEsperado.toFixed(2)); }}
+                    className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600"><Copy size={13} /></button>
+                  <button type="button" title="Completar en medio de pago" onClick={() => { if (medios.length > 0) { const remaining = r2(totalEsperado - medios.slice(1).reduce((s, m2) => s + num(m2.monto), 0)); updateMedio(medios[0]._id, "monto", String(Math.max(0, remaining))); } }}
+                    className="p-1 rounded hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-400 hover:text-orange-600"><ArrowDown size={13} /></button>
+                  <span className="font-mono">{fc(totalEsperado, m)}</span>
+                </span>
               </div>
               <div className="flex justify-between"><span>Total recibido (medios)</span><span className="font-mono">{fc(totalMedios, m)}</span></div>
               <div className={`flex justify-between font-bold text-base pt-1 border-t border-zinc-300 dark:border-zinc-600 ${
