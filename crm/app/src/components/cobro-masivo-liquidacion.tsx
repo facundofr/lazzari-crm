@@ -408,7 +408,13 @@ export default function CobroMasivoLiquidacion({
                 Math.abs(diferencia) < 0.01 ? "text-green-600" : "text-red-600"
               }`}>
                 <span>Diferencia</span>
-                <span className="font-mono">{fc(diferencia, m)}</span>
+                <span className="flex items-center gap-1.5">
+                  <button type="button" title="Copiar pendiente" onClick={() => { navigator.clipboard.writeText(Math.abs(diferencia).toFixed(2)); }}
+                    className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600"><Copy size={13} /></button>
+                  <button type="button" title="Completar en medio de pago" onClick={() => { if (medios.length > 0 && diferencia > 0.01) { const remaining = r2(totalEsperado - medios.slice(1).reduce((s, m2) => s + num(m2.monto), 0)); updateMedio(medios[0]._id, "monto", String(Math.max(0, remaining))); } }}
+                    className="p-1 rounded hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-400 hover:text-orange-600"><ArrowDown size={13} /></button>
+                  <span className="font-mono">{fc(diferencia, m)}</span>
+                </span>
               </div>
             </div>
           </section>
