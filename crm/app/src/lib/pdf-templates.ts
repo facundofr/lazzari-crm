@@ -154,7 +154,7 @@ function facturaStyles(color: string) {
     /* Header box — three columns: logo | letra | comprobante */
     .fc-header { display: flex; border: 2px solid #222; margin-bottom: 0; position: relative; }
     .fc-left { flex: 1; padding: 14px 16px; display: flex; align-items: center; justify-content: center; }
-    .fc-left img { max-height: 64px; }
+    .fc-left img { max-height: 80px; }
     .fc-right { flex: 1; padding: 12px 16px; }
     .fc-center { width: 60px; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 6px; border-left: 2px solid #222; border-right: 2px solid #222; }
     .fc-letra-box { background: #222; color: #fff; font-size: 32px; font-weight: 900; line-height: 1; padding: 4px 10px; text-align: center; }
@@ -249,7 +249,7 @@ export function generatePresupuestoPDF(
 <div class="header-bar"></div>
 <div class="header">
   <div class="header-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:44px;margin-bottom:4px" />
+    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
     <div class="company-sub">${soc.razonSocial}</div>
     <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
     ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
@@ -443,9 +443,11 @@ export function generateFacturaPDF(
   </div>
 </div>
 <div class="emisor-block">
-  <div class="emisor-name" style="font-size:12px">${soc.razonSocial}</div>
-  ${emisor.domicilio ? `<div class="emisor-detail">${emisor.domicilio}</div>` : ""}
-  <div class="emisor-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
+  <div class="emisor-name" style="font-size:14px;text-transform:uppercase">${soc.nombre}</div>
+  ${soc.domicilio ? `<div class="emisor-detail" style="font-size:10px;font-weight:600;color:#333">${soc.domicilio.split(",")[0].toUpperCase()}</div>` : ""}
+  ${soc.email ? `<div class="emisor-detail" style="font-size:10px">${soc.email}</div>` : ""}
+  ${soc.web ? `<div class="emisor-detail" style="font-size:10px">${soc.web}</div>` : ""}
+  ${soc.telefono ? `<div class="emisor-detail" style="font-size:10px">Teléfonos: ${soc.telefono}</div>` : ""}
 </div>
 
 <div class="fc-data">
@@ -577,7 +579,7 @@ export function generateRemitoPDF(
 <div class="header-bar"></div>
 <div class="header">
   <div class="header-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:44px;margin-bottom:4px" />
+    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
     <div class="company-sub">${soc.razonSocial}</div>
     <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
     ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
@@ -704,7 +706,7 @@ export function generateOrdenCompraPDF(
 <div class="header-bar"></div>
 <div class="header">
   <div class="header-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:44px;margin-bottom:4px" />
+    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
     <div class="company-sub">${soc.razonSocial}</div>
     <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
     ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
