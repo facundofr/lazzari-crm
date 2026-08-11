@@ -1854,6 +1854,8 @@ ${certRetGanHtml}
       }
 
       setGmModalOpen(false);
+      setGmForm(emptyGastoManualForm);
+      setGmEditingId(null);
       await fetchData();
     } catch (err: unknown) {
       setGmError(err instanceof Error ? err.message : "Error al crear el gasto");
@@ -4382,7 +4384,7 @@ ${certRetGanHtml}
                               setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, echeq_id: e.target.value || undefined, monto: sel ? sel.monto : x.monto, banco: sel?.banco_emisor || x.banco, numero_cheque: sel?.numero || x.numero_cheque } : x));
                             }} className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                               <option value="">Manual</option>
-                              {enCartera.map(e => <option key={e.id} value={e.id}>{e.numero} — {formatCurrency(e.monto)}</option>)}
+                              {enCartera.map(e => <option key={e.id} value={e.id}>{e.numero} — {formatCurrency(e.monto, (e.moneda as "ARS" | "USD") || "ARS")}</option>)}
                             </select>
                           ) : null;
                         })()}
@@ -5338,20 +5340,20 @@ ${certRetGanHtml}
               {/* Acciones */}
               <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
                 {selectedOP.estado === "pendiente" && (
-                  <>
                     <button
                       onClick={() => { handlePagarOP(selectedOP.id); setSelectedOP(null); }}
                       className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-600 transition-colors"
                     >
                       <CheckCircle2 className="h-4 w-4" /> Marcar pagada
                     </button>
+                )}
+                {selectedOP.estado !== "anulada" && (
                     <button
                       onClick={() => { handleAnularOP(selectedOP.id); setSelectedOP(null); }}
                       className="flex items-center justify-center gap-2 rounded-lg border border-red-200 dark:border-red-800 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
                     >
                       <Ban className="h-4 w-4" /> Anular
                     </button>
-                  </>
                 )}
               </div>
               </>
