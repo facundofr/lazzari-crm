@@ -2268,6 +2268,9 @@ ${certRetGanHtml}
   async function fetchCCDetailCliente(cliente: CCRow) {
     setCcDetailCliente(cliente); setCcDetailLoading(true); setCcDetailFacturas([]); setCcDetailMovimientos([]);
     try {
+      // Refresh saldo from view
+      const { data: freshSaldo } = await (supabase as any).from("v_cuenta_corriente_clientes").select("saldo").eq("id", cliente.id).maybeSingle();
+      if (freshSaldo) setCcDetailCliente(prev => prev ? { ...prev, saldo_cuenta_corriente: freshSaldo.saldo ?? prev.saldo_cuenta_corriente } : prev);
       let qF = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado").eq("cliente_id", cliente.id).in("estado", ["emitida", "pagada", "parcial"]).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qF = qF.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: fData } = await qF;
@@ -2288,6 +2291,9 @@ ${certRetGanHtml}
   async function fetchCCDetailProveedor(prov: CCRow) {
     setCcDetailProveedor(prov); setCcDetailProvLoading(true); setCcDetailFCProv([]); setCcDetailMovProv([]);
     try {
+      // Refresh saldo from view
+      const { data: freshSaldo } = await (supabase as any).from("v_cuenta_corriente_proveedores").select("saldo").eq("id", prov.id).maybeSingle();
+      if (freshSaldo) setCcDetailProveedor(prev => prev ? { ...prev, saldo_cuenta_corriente: freshSaldo.saldo ?? prev.saldo_cuenta_corriente } : prev);
       let qFC = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, fecha_vencimiento, total, estado, moneda").eq("proveedor_id", prov.id).in("estado", ["pendiente", "pagada", "recibida"]).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qFC = qFC.eq("sociedad_id", sociedadActiva.id);
       const { data: fcData } = await qFC;
