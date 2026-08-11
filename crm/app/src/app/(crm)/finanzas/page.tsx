@@ -474,6 +474,7 @@ export default function FinanzasPage() {
   const [savingFC, setSavingFC] = useState(false);
   const [fcSearchQuery, setFcSearchQuery] = useState("");
   const [fcEstadoFilter, setFcEstadoFilter] = useState<"todos" | "pendiente_aprobacion" | "pendiente" | "pagada" | "recibida" | "anulada">("todos");
+  const [fcTipoFilter, setFcTipoFilter] = useState("");
   const [newArticleOpen, setNewArticleOpen] = useState(false);
   const [newArticle, setNewArticle] = useState({ codigo: "", descripcion: "", categoria: "", unidad: "UN", precio: 0 });
   const [newArticleSaving, setNewArticleSaving] = useState(false);
@@ -2372,21 +2373,48 @@ ${certRetGanHtml}
 
   function exportCCCliente() {
     if (!ccDetailCliente) return;
-    const lines: string[] = [`Estado de cuenta — ${ccDetailCliente.razon_social} (CUIT: ${ccDetailCliente.cuit || "—"})`, `Deuda: ${ccDetailCliente.saldo_cuenta_corriente}`, "", "FACTURAS", "Fecha,Vencimiento,Numero,Total,Acreditado,Cobrado,Saldo,Moneda,Estado"];
-    ccDetailFacturas.forEach(f => { const saldo = Math.max(0, f.total - f.total_acreditado - f.cobrado); lines.push(`${f.fecha},${f.vencimiento || ""},${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")},${f.total},${f.total_acreditado},${f.cobrado},${saldo},${f.moneda},${f.estado}`); });
-    lines.push("", "MOVIMIENTOS", "Fecha,Tipo,Descripcion,Monto,Moneda,Estado");
-    ccDetailMovimientos.forEach(m => { lines.push(`${m.fecha},${m.tipo},"${m.descripcion}",${m.monto},${m.moneda},${m.conciliado ? "Conciliado" : "Pendiente"}`); });
+    // Build combined entries sorted by date: facturas (DEBE) + movimientos (HABER)
+    const entries: { fecha: string; documento: string; moneda: string; debe: number; haber: number }[] = [];
+    ccDetailFacturas.forEach(f => {
+      const doc = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
+      entries.push({ fecha: f.fecha, documento: doc, moneda: f.moneda, debe: f.total, haber: 0 });
+    });
+    ccDetailMovimientos.forEach(m => {
+      entries.push({ fecha: m.fecha, documento: m.descripcion, moneda: m.moneda, debe: 0, haber: m.monto });
+    });
+    entries.sort((a, b) => a.fecha.localeCompare(b.fecha));
+    let saldoAcum = 0;
+    const lines: string[] = ["Fecha,Cliente,Documento,Moneda,Debe,Haber,Saldo"];
+    entries.forEach(e => { saldoAcum += e.debe - e.haber; lines.push(`${e.fecha},"${ccDetailCliente!.razon_social}","${e.documento}",${e.moneda},${e.debe || ""},${e.haber || ""},${saldoAcum.toFixed(2)}`); });
     const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `CC_${ccDetailCliente.razon_social.replace(/[^a-zA-Z0-9]/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
   }
 
+  function exportFCCompraCSV(data: FacturaCompraRow[]) {
+    const lines: string[] = ["Fecha,Vencimiento,Proveedor,Documento,Moneda,Importe,Deuda"];
+    data.forEach(f => {
+      const deuda = (f.estado === "pagada" || f.estado === "anulada") ? 0 : f.total;
+      lines.push(`${f.fecha},${f.fecha_vencimiento || ""},"${f.proveedor_nombre}","${f.numero_factura}",${f.moneda},${f.total.toFixed(2)},${deuda.toFixed(2)}`);
+    });
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `Facturas_Compra_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+  }
+
   function exportCCProveedor() {
     if (!ccDetailProveedor) return;
-    const lines: string[] = [`Estado de cuenta — ${ccDetailProveedor.razon_social} (CUIT: ${ccDetailProveedor.cuit || "—"})`, `Deuda: ${ccDetailProveedor.saldo_cuenta_corriente}`, "", "FACTURAS DE COMPRA", "Fecha,Vencimiento,Numero,Total,Pagado,Saldo,Moneda,Estado"];
-    ccDetailFCProv.forEach(f => { const saldo = Math.max(0, f.total - f.pagado); lines.push(`${f.fecha},${f.fecha_vencimiento || ""},${f.numero_factura},${f.total},${f.pagado},${saldo},${f.moneda},${f.estado}`); });
-    lines.push("", "MOVIMIENTOS", "Fecha,Tipo,Descripcion,Monto,Moneda,Estado");
-    ccDetailMovProv.forEach(m => { lines.push(`${m.fecha},${m.tipo},"${m.descripcion}",${m.monto},${m.moneda},${m.conciliado ? "Conciliado" : "Pendiente"}`); });
+    const entries: { fecha: string; documento: string; moneda: string; debe: number; haber: number }[] = [];
+    ccDetailFCProv.forEach(f => {
+      entries.push({ fecha: f.fecha, documento: f.numero_factura, moneda: f.moneda, debe: f.total, haber: 0 });
+    });
+    ccDetailMovProv.forEach(m => {
+      entries.push({ fecha: m.fecha, documento: m.descripcion, moneda: m.moneda, debe: 0, haber: m.monto });
+    });
+    entries.sort((a, b) => a.fecha.localeCompare(b.fecha));
+    let saldoAcum = 0;
+    const lines: string[] = ["Fecha,Proveedor,Documento,Moneda,Debe,Haber,Saldo"];
+    entries.forEach(e => { saldoAcum += e.debe - e.haber; lines.push(`${e.fecha},"${ccDetailProveedor!.razon_social}","${e.documento}",${e.moneda},${e.debe || ""},${e.haber || ""},${saldoAcum.toFixed(2)}`); });
     const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `CC_${ccDetailProveedor.razon_social.replace(/[^a-zA-Z0-9]/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
@@ -2883,6 +2911,10 @@ ${certRetGanHtml}
           const fcsPendientesAprobacion = facturasCompra.filter(f => f.estado === "pendiente_aprobacion");
           const filteredFC = facturasCompra.filter(f => {
             if (fcEstadoFilter !== "todos" && f.estado !== fcEstadoFilter) return false;
+            if (fcTipoFilter) {
+              const tipoDoc = f.numero_factura.split(" ")[0] || "";
+              if (tipoDoc !== fcTipoFilter) return false;
+            }
             if (fcSearchQuery.trim()) {
               const q = fcSearchQuery.toLowerCase();
               if (!f.proveedor_nombre.toLowerCase().includes(q) && !f.numero_factura.toLowerCase().includes(q)) return false;
@@ -2916,6 +2948,9 @@ ${certRetGanHtml}
                 </span>
               </p>
               <div className="flex items-center gap-2">
+                <button onClick={() => exportFCCompraCSV(filteredFC)} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors">
+                  <Download className="h-4 w-4" /> Exportar CSV
+                </button>
                 <button onClick={() => { setTab("ordenes_pago"); openOPModal(); }} className="flex items-center gap-1.5 rounded-lg border border-orange-500 px-3 py-2 text-sm font-medium text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors">
                   <FileText className="h-4 w-4" /> Nueva OP
                 </button>
@@ -2941,7 +2976,19 @@ ${certRetGanHtml}
                 <option value="recibida">Recibida</option>
                 <option value="anulada">Anulada</option>
               </select>
-              {(fcSearchQuery || fcEstadoFilter !== "todos") && (
+              <select value={fcTipoFilter} onChange={(e) => setFcTipoFilter(e.target.value)}
+                className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                <option value="">Todos los tipos</option>
+                <option value="FA">FA</option>
+                <option value="FB">FB</option>
+                <option value="FCEA">FCEA</option>
+                <option value="FCEB">FCEB</option>
+                <option value="NCA">NCA</option>
+                <option value="NCB">NCB</option>
+                <option value="NCEA">NCEA</option>
+                <option value="NCEB">NCEB</option>
+              </select>
+              {(fcSearchQuery || fcEstadoFilter !== "todos" || fcTipoFilter) && (
                 <span className="text-xs text-zinc-500">{filteredFC.length} de {facturasCompra.length}</span>
               )}
             </div>
@@ -5620,6 +5667,7 @@ ${certRetGanHtml}
       {cobroMultiLiqOpen && ccDetailCliente && (
         <CobroMasivoLiquidacion
           facturas={cobroMultiGetLiqFacturas()}
+          clienteId={ccDetailCliente.id}
           clienteNombre={ccDetailCliente.razon_social}
           sociedadId={sociedadActiva?.id || ""}
           profileId={profile?.id || null}

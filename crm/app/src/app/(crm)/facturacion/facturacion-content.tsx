@@ -295,7 +295,10 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     { key: "fecha", label: "Fecha", type: "date-range" },
     { key: "tipo", label: "Tipo", type: "select", options: [
       { value: "FA", label: "Factura A" }, { value: "FB", label: "Factura B" },
+      { value: "FCEA", label: "FCE A" }, { value: "FCEB", label: "FCE B" },
       { value: "NCA", label: "NC A" }, { value: "NCB", label: "NC B" },
+      { value: "NCEA", label: "NCE A" }, { value: "NCEB", label: "NCE B" },
+      { value: "NDA", label: "ND A" }, { value: "NDB", label: "ND B" },
     ]},
     { key: "estado", label: "Estado", type: "select", options: [
       { value: "emitida", label: "Emitida" }, { value: "parcial", label: "Cobro parcial" }, { value: "pagada", label: "Pagada" },
@@ -879,6 +882,22 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   const facturasVencidas = facturas.filter(f => f.estado === "vencida").length;
   const caeVigentes = facturas.filter(f => f.cae && f.estado !== "anulada").length;
 
+  function exportFacturasCSV() {
+    const csvLines: string[] = ["Fecha,Vencimiento,Cliente,Documento,Moneda,Importe,Deuda"];
+    filteredFacturas.forEach((f: any) => {
+      const doc = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
+      const deuda = (f.estado === "pagada" || f.estado === "anulada") ? 0 : Number(f.total) - (f.total_acreditado || 0);
+      csvLines.push(`${f.fecha},${f.fecha_vencimiento || ""},"${(f.clientes?.razon_social || "").replace(/"/g, '""')}","${doc}",${f.moneda},${Number(f.total).toFixed(2)},${deuda.toFixed(2)}`);
+    });
+    const blob = new Blob([csvLines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `facturas-ventas-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   if (loading) {
     return (
       <>
@@ -906,6 +925,9 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
         )}
         <button onClick={openCobroMasivo} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition-colors">
           <DollarSign className="h-4 w-4" /> Cobro masivo
+        </button>
+        <button onClick={exportFacturasCSV} className="flex items-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+          <Download className="h-4 w-4" /> Exportar CSV
         </button>
       </div>
       <div className="p-6 lg:p-8 space-y-6">
@@ -1819,6 +1841,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
       {cmLiquidacionOpen && (
         <CobroMasivoLiquidacion
           facturas={cmGetLiquidacionFacturas()}
+          clienteId={cmClienteId}
           clienteNombre={cmClientes.find(c => c.id === cmClienteId)?.razon_social || ""}
           sociedadId={sociedadActiva?.id || ""}
           profileId={profile?.id || null}

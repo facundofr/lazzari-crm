@@ -38,6 +38,7 @@ interface RetencionLinea {
 
 interface Props {
   facturas: LiquidacionFactura[];
+  clienteId: string;
   clienteNombre: string;
   sociedadId: string;
   profileId: string | null;
@@ -92,7 +93,7 @@ function buildDesc(prefix: string, ref: string, obs: string, opRef: string): str
 
 // ── Component ────────────────────────────────────────────
 export default function CobroMasivoLiquidacion({
-  facturas, clienteNombre, sociedadId, profileId, moneda, onClose, onSuccess,
+  facturas, clienteId, clienteNombre, sociedadId, profileId, moneda, onClose, onSuccess,
 }: Props) {
   const [opReferencia, setOpReferencia] = useState("");
   const [medios, setMedios] = useState<MedioPago[]>([newMedio()]);
@@ -130,64 +131,56 @@ export default function CobroMasivoLiquidacion({
     setError("");
 
     try {
-      // Build all lineas
-      const allLineas = [
-        ...medios.filter(m => num(m.monto) > 0).map(m => ({
-          tipo: m.tipo,
-          monto: num(m.monto),
-          descripcion: buildDesc(
-            `Cobro masivo${clienteNombre ? ` — ${clienteNombre}` : ""}`,
-            m.referencia, m.observaciones, opReferencia
-          ),
-        })),
-        ...retenciones.filter(r => num(r.monto) > 0).map(r => {
-          const label = RETENCION_TIPOS.find(t => t.value === r.tipo)?.label || r.tipo;
-          return {
-            tipo: mapTipoDB(r.tipo),
-            monto: num(r.monto),
-            descripcion: buildDesc(
-              label,
-              r.certificado ? `Cert: ${r.certificado}` : "",
-              [r.organismo, r.observaciones].filter(Boolean).join(" | "),
-              opReferencia
-            ),
-          };
-        }),
-      ];
-
-      if (allLineas.length === 0) throw new Error("No hay líneas de pago");
-
-      // Distribute across facturas proportionally
-      const distributed: number[] = new Array(allLineas.length).fill(0);
       const fechaPago = medios[0]?.fecha || todayStr();
 
-      for (let i = 0; i < facturas.length; i++) {
-        const fc = facturas[i];
-        const isLast = i === facturas.length - 1;
-        const proportion = totalSaldo > 0 ? fc.saldo / totalSaldo : 0;
+      // Build medios array (one movimiento per medio)
+      const mediosPayload = medios.filter(m => num(m.monto) > 0).map(m => ({
+        tipo: m.tipo,
+        monto: num(m.monto),
+        descripcion: buildDesc(
+          `Cobro${clienteNombre ? ` — ${clienteNombre}` : ""}`,
+          m.referencia, m.observaciones, opReferencia
+        ),
+      }));
 
-        const facturaLineas = allLineas.map((l, li) => {
-          const amount = isLast
-            ? r2(l.monto - distributed[li])
-            : r2(l.monto * proportion);
-          distributed[li] += amount;
-          return { ...l, monto: amount };
-        }).filter(l => l.monto > 0.001);
+      // Build retenciones array (one movimiento per retención)
+      const retencionesPayload = retenciones.filter(r => num(r.monto) > 0).map(r => {
+        const label = RETENCION_TIPOS.find(t => t.value === r.tipo)?.label || r.tipo;
+        return {
+          tipo: mapTipoDB(r.tipo),
+          monto: num(r.monto),
+          descripcion: buildDesc(
+            label,
+            r.certificado ? `Cert: ${r.certificado}` : "",
+            [r.organismo, r.observaciones].filter(Boolean).join(" | "),
+            opReferencia
+          ),
+        };
+      });
 
-        if (facturaLineas.length > 0) {
-          const { error: rpcErr } = await (supabase as any).rpc("registrar_cobro", {
-            p_factura_id: fc.id,
-            p_lineas: facturaLineas,
-            p_fecha: fechaPago,
-            p_sociedad_id: sociedadId,
-            p_created_by: profileId,
-            p_conciliado: true,
-          });
-          if (rpcErr) throw new Error(`Error en ${fc.numero}: ${rpcErr.message}`);
-        }
-      }
+      if (mediosPayload.length === 0) throw new Error("No hay medios de pago");
 
-      alert(`Cobro registrado correctamente (${facturas.length} factura${facturas.length > 1 ? "s" : ""})`);
+      // Build facturas array
+      const facturasPayload = facturas.map(f => ({
+        id: f.id,
+        numero: f.numero,
+        saldo: f.saldo,
+      }));
+
+      // Single consolidated RPC call
+      const { data, error: rpcErr } = await (supabase as any).rpc("registrar_cobro_masivo", {
+        p_cliente_id: clienteId,
+        p_facturas: facturasPayload,
+        p_medios: mediosPayload,
+        p_retenciones: retencionesPayload,
+        p_fecha: fechaPago,
+        p_sociedad_id: sociedadId,
+        p_created_by: profileId,
+      });
+      if (rpcErr) throw new Error(rpcErr.message);
+
+      const movCount = data?.movimientos_count || mediosPayload.length + retencionesPayload.length;
+      alert(`Cobro registrado: ${movCount} movimiento${movCount > 1 ? "s" : ""} para ${facturas.length} factura${facturas.length > 1 ? "s" : ""}`);
       onSuccess();
     } catch (err: any) {
       setError(err.message || "Error al registrar el cobro");
