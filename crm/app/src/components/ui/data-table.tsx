@@ -98,7 +98,7 @@ export function DataTable<T extends { id: string }>({
                   key={col.key}
                   onClick={() => handleSort(col)}
                   className={cn(
-                    "px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400",
+                    "px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 whitespace-nowrap",
                     col.sortable !== false && "cursor-pointer select-none hover:text-zinc-700 dark:hover:text-zinc-200",
                     col.className
                   )}

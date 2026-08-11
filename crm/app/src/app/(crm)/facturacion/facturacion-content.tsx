@@ -936,7 +936,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   const caeVigentes = facturas.filter(f => f.cae && f.estado !== "anulada").length;
 
   function exportFacturasCSV() {
-    const csvLines: string[] = ["Fecha;Vencimiento;Cliente;Documento;Moneda;Importe;Saldo"];
+    const csvLines: string[] = ["F.Venta;F.Pago;Cliente;Documento;Moneda;Importe;Saldo"];
     filteredFacturas.forEach((f: any) => {
       const doc = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
       const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : Number(f.total) - (f.total_acreditado || 0);
@@ -1048,8 +1048,8 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                 ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{r.oc_cliente}</span>
                 : <span className="text-zinc-300">{"\u2014"}</span>
               },
-              { key: "fecha", label: "Fecha", sortable: true, render: (r) => <span className="text-zinc-500">{formatDate(r.fecha)}</span> },
-              { key: "_fechaVencCalc" as any, label: "Pago", sortable: true, render: (r) => {
+              { key: "fecha", label: "F.Venta", sortable: true, render: (r) => <span className="text-zinc-500">{formatDate(r.fecha)}</span> },
+              { key: "_fechaVencCalc" as any, label: "F.Pago", sortable: true, render: (r) => {
                 const fv = r._fechaVencCalc;
                 if (editingFechaPago === r.id) return (
                   <div onClick={e => e.stopPropagation()}>
@@ -1092,7 +1092,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
               )},
               { key: "_mail" as any, label: "", sortable: false, className: "w-10", render: (r: FacturaRow) => (
                 <div onClick={(e) => { e.stopPropagation(); handleEmailFactura(r); }} className="flex justify-center cursor-pointer" title="Enviar por email">
-                  <Mail className="h-4 w-4 text-zinc-300 hover:text-orange-500 transition-colors" />
+                  <Mail className="h-4 w-4 text-zinc-700 dark:text-zinc-300 hover:text-orange-500 transition-colors" />
                 </div>
               )},
             ]}
