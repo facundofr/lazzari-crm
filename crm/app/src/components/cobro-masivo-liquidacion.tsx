@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown } from "lucide-react";
+import { useState, useMemo, useEffect } from "react";
+import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown, RefreshCw } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 
@@ -101,6 +101,29 @@ export default function CobroMasivoLiquidacion({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  // ── Tipo de cambio (solo para facturas USD) ──
+  const isUSD = moneda === "USD";
+  const [cotizacion, setCotizacion] = useState("");
+  const [cotizModalidad, setCotizModalidad] = useState<"divisas" | "billetes">("divisas");
+  const [fetchingCotiz, setFetchingCotiz] = useState(false);
+
+  async function fetchCotizBNA(modalidad: "divisas" | "billetes") {
+    setFetchingCotiz(true);
+    try {
+      const res = await fetch(`/api/cotizacion-bna?modalidad=${modalidad}`);
+      if (res.ok) {
+        const data = await res.json();
+        setCotizacion(String(data.valor_venta));
+        setCotizModalidad(modalidad);
+      }
+    } catch { /* ignore */ } finally { setFetchingCotiz(false); }
+  }
+
+  // Auto-fetch cotización on mount if USD
+  useEffect(() => { if (isUSD) fetchCotizBNA("divisas"); }, [isUSD]);
+
+  const cotizNum = num(cotizacion);
+
   // ── Computed totals ──
   const totalNeto = useMemo(() => facturas.reduce((s, f) => s + (f.subtotal || 0), 0), [facturas]);
   const totalIva = useMemo(() => facturas.reduce((s, f) => s + (f.iva || 0), 0), [facturas]);
@@ -108,9 +131,11 @@ export default function CobroMasivoLiquidacion({
   const totalSaldo = useMemo(() => facturas.reduce((s, f) => s + f.saldo, 0), [facturas]);
   const totalMedios = useMemo(() => medios.reduce((s, m) => s + num(m.monto), 0), [medios]);
   const totalRetenciones = useMemo(() => retenciones.reduce((s, r) => s + num(r.monto), 0), [retenciones]);
-  const totalEsperado = r2(totalSaldo - totalRetenciones);
+  // Retenciones siempre en la moneda de cobro (ARS si USD, moneda original si ARS)
+  const totalSaldoARS = isUSD && cotizNum > 0 ? r2(totalSaldo * cotizNum) : totalSaldo;
+  const totalEsperado = r2(totalSaldoARS - totalRetenciones);
   const diferencia = r2(totalMedios - totalEsperado);
-  const canConfirm = Math.abs(diferencia) < 0.01 && totalMedios > 0 && !saving;
+  const canConfirm = Math.abs(diferencia) < 0.01 && totalMedios > 0 && !saving && (!isUSD || cotizNum > 0);
 
   // ── Medio handlers ──
   const addMedio = () => setMedios(p => [...p, newMedio()]);
@@ -133,12 +158,14 @@ export default function CobroMasivoLiquidacion({
     try {
       const fechaPago = medios[0]?.fecha || todayStr();
 
+      const cotizSuffix = isUSD && cotizNum > 0 ? ` | TC: ${cotizNum.toFixed(2)} (${cotizModalidad})` : "";
+
       // Build medios array (one movimiento per medio)
       const mediosPayload = medios.filter(m => num(m.monto) > 0).map(m => ({
         tipo: m.tipo,
         monto: num(m.monto),
         descripcion: buildDesc(
-          `Cobro${clienteNombre ? ` — ${clienteNombre}` : ""}`,
+          `Cobro${clienteNombre ? ` — ${clienteNombre}` : ""}${cotizSuffix}`,
           m.referencia, m.observaciones, opReferencia
         ),
       }));
@@ -263,6 +290,41 @@ export default function CobroMasivoLiquidacion({
             />
           </section>
 
+          {/* ── 2b. Tipo de cambio (solo USD) ── */}
+          {isUSD && (
+            <section>
+              <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-3">
+                Tipo de cambio <span className="text-zinc-400 font-normal">(facturas en USD → cobro en ARS)</span>
+              </h3>
+              <div className="flex items-end gap-3 flex-wrap">
+                <div>
+                  <label className="block text-[10px] uppercase text-zinc-400 mb-1">Modalidad BNA</label>
+                  <div className="flex gap-1">
+                    <button type="button" onClick={() => fetchCotizBNA("divisas")} disabled={fetchingCotiz}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${cotizModalidad === "divisas" && cotizNum > 0 ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400"}`}>
+                      {fetchingCotiz && cotizModalidad === "divisas" ? <RefreshCw size={12} className="animate-spin" /> : "Divisas"}
+                    </button>
+                    <button type="button" onClick={() => fetchCotizBNA("billetes")} disabled={fetchingCotiz}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${cotizModalidad === "billetes" && cotizNum > 0 ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400"}`}>
+                      {fetchingCotiz && cotizModalidad === "billetes" ? <RefreshCw size={12} className="animate-spin" /> : "Billetes"}
+                    </button>
+                  </div>
+                </div>
+                <div className="w-40">
+                  <label className="block text-[10px] uppercase text-zinc-400 mb-1">Cotización ($/US$)</label>
+                  <input type="number" step="0.01" min="0" placeholder="Ej: 1250.00"
+                    value={cotizacion} onChange={e => setCotizacion(e.target.value)}
+                    className="w-full px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
+                </div>
+                {cotizNum > 0 && (
+                  <div className="text-sm text-zinc-600 dark:text-zinc-400">
+                    {fc(totalSaldo, "USD")} × {cotizNum.toFixed(2)} = <span className="font-bold text-zinc-900 dark:text-white">{fc(totalSaldoARS, "ARS")}</span>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* ── 3. Medios de pago ── */}
           <section>
             <div className="flex items-center justify-between mb-3">
@@ -314,7 +376,7 @@ export default function CobroMasivoLiquidacion({
               ))}
             </div>
             <div className="mt-2 text-right text-sm font-bold">
-              Total medios: <span className="font-mono text-orange-600">{fc(totalMedios, m)}</span>
+              Total medios: <span className="font-mono text-orange-600">{fc(totalMedios, isUSD ? "ARS" : m)}</span>
             </div>
           </section>
 
@@ -372,7 +434,7 @@ export default function CobroMasivoLiquidacion({
                   </div>
                 ))}
                 <div className="mt-2 text-right text-sm font-bold">
-                  Total retenciones/percepciones: <span className="font-mono text-orange-600">{fc(totalRetenciones, m)}</span>
+                  Total retenciones/percepciones: <span className="font-mono text-orange-600">{fc(totalRetenciones, isUSD ? "ARS" : m)}</span>
                 </div>
               </div>
             )}
@@ -381,10 +443,13 @@ export default function CobroMasivoLiquidacion({
           {/* ── 5. Resumen final ── */}
           <section className="border-t border-zinc-200 dark:border-zinc-700 pt-4">
             <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-3">Resumen</h3>
-            <div className="max-w-sm ml-auto space-y-1 text-sm">
+            <div className="max-w-md ml-auto space-y-1 text-sm">
               <div className="flex justify-between"><span>Total facturas (saldo)</span><span className="font-mono">{fc(totalSaldo, m)}</span></div>
+              {isUSD && cotizNum > 0 && (
+                <div className="flex justify-between text-zinc-500"><span>Conversión a ARS (× {cotizNum.toFixed(2)})</span><span className="font-mono">{fc(totalSaldoARS, "ARS")}</span></div>
+              )}
               {totalRetenciones > 0 && (
-                <div className="flex justify-between text-zinc-500"><span>(-) Retenciones / percepciones</span><span className="font-mono">{fc(totalRetenciones, m)}</span></div>
+                <div className="flex justify-between text-zinc-500"><span>(-) Retenciones / percepciones</span><span className="font-mono">{fc(totalRetenciones, isUSD ? "ARS" : m)}</span></div>
               )}
               <div className="flex justify-between items-center font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1">
                 <span>Total esperado a cobrar</span>
@@ -393,10 +458,10 @@ export default function CobroMasivoLiquidacion({
                     className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600"><Copy size={13} /></button>
                   <button type="button" title="Completar en medio de pago" onClick={() => { if (medios.length > 0) { const remaining = r2(totalEsperado - medios.slice(1).reduce((s, m2) => s + num(m2.monto), 0)); updateMedio(medios[0]._id, "monto", String(Math.max(0, remaining))); } }}
                     className="p-1 rounded hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-400 hover:text-orange-600"><ArrowDown size={13} /></button>
-                  <span className="font-mono">{fc(totalEsperado, m)}</span>
+                  <span className="font-mono">{fc(totalEsperado, isUSD ? "ARS" : m)}</span>
                 </span>
               </div>
-              <div className="flex justify-between"><span>Total recibido (medios)</span><span className="font-mono">{fc(totalMedios, m)}</span></div>
+              <div className="flex justify-between"><span>Total recibido (medios)</span><span className="font-mono">{fc(totalMedios, isUSD ? "ARS" : m)}</span></div>
               <div className={`flex justify-between font-bold text-base pt-1 border-t border-zinc-300 dark:border-zinc-600 ${
                 Math.abs(diferencia) < 0.01 ? "text-green-600" : "text-red-600"
               }`}>
@@ -406,7 +471,7 @@ export default function CobroMasivoLiquidacion({
                     className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600"><Copy size={13} /></button>
                   <button type="button" title="Completar en medio de pago" onClick={() => { if (medios.length > 0 && diferencia > 0.01) { const remaining = r2(totalEsperado - medios.slice(1).reduce((s, m2) => s + num(m2.monto), 0)); updateMedio(medios[0]._id, "monto", String(Math.max(0, remaining))); } }}
                     className="p-1 rounded hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-400 hover:text-orange-600"><ArrowDown size={13} /></button>
-                  <span className="font-mono">{fc(diferencia, m)}</span>
+                  <span className="font-mono">{fc(diferencia, isUSD ? "ARS" : m)}</span>
                 </span>
               </div>
             </div>
