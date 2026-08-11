@@ -104,6 +104,26 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
   const [detailItems, setDetailItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number; subtotal: number }[]>([]);
   const [panelFullscreen, setPanelFullscreen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  }
+  function toggleSelectAll() {
+    if (selectedIds.size === filteredFacturas.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(filteredFacturas.map(f => f.id)));
+  }
+  async function handleBulkEstado(nuevoEstado: string) {
+    if (selectedIds.size === 0) return;
+    const label = nuevoEstado === "emitida" ? "Emitida" : nuevoEstado === "pagada" ? "Pagada" : nuevoEstado === "anulada" ? "Anulada" : nuevoEstado === "vencida" ? "Vencida" : nuevoEstado;
+    if (!confirm(`¿Cambiar ${selectedIds.size} factura${selectedIds.size > 1 ? "s" : ""} a "${label}"?`)) return;
+    try {
+      const { error } = await supabase.from("facturas").update({ estado: nuevoEstado } as any).in("id", Array.from(selectedIds));
+      if (error) { alert(error.message); return; }
+      setSelectedIds(new Set());
+      await fetchData();
+    } catch (err) { alert("Error: " + (err as Error).message); }
+  }
 
   // ARCA status
   const [arcaStatus, setArcaStatus] = useState<{ connected: boolean; certOk?: boolean; error?: string; afipError?: string; production?: boolean; ptoVta?: number } | null>(null);
@@ -966,10 +986,30 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           )}
         </div>
 
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-3 p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-lg">
+            <span className="text-sm font-medium text-orange-800 dark:text-orange-300">
+              {selectedIds.size} seleccionada{selectedIds.size > 1 ? "s" : ""}
+            </span>
+            <span className="text-zinc-300 dark:text-zinc-600">|</span>
+            <span className="text-xs text-zinc-500">Cambiar estado a:</span>
+            <button onClick={() => handleBulkEstado("emitida")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-blue-950/30 transition-colors">Emitida</button>
+            <button onClick={() => handleBulkEstado("pagada")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-emerald-950/30 transition-colors">Pagada</button>
+            <button onClick={() => handleBulkEstado("anulada")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-red-50 hover:border-red-300 hover:text-red-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-red-950/30 transition-colors">Anulada</button>
+            <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">Deseleccionar</button>
+          </div>
+        )}
+
         {/* Data table */}
         <Card className="p-0 overflow-hidden">
           <DataTable<FacturaRow>
             columns={[
+              { key: "select" as any, label: "", sortable: false, render: (r: FacturaRow) => (
+                <div onClick={(e) => e.stopPropagation()}>
+                  <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelect(r.id)}
+                    className="h-4 w-4 rounded border-zinc-300 text-orange-500 focus:ring-orange-500 cursor-pointer" />
+                </div>
+              )},
               { key: "numero", label: "Comprobante", sortable: true, render: (r) => (
                 <div className="flex items-center gap-2">
                   <Receipt className="h-4 w-4 text-zinc-400" />

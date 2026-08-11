@@ -475,6 +475,7 @@ export default function FinanzasPage() {
   const [fcSearchQuery, setFcSearchQuery] = useState("");
   const [fcEstadoFilter, setFcEstadoFilter] = useState<"todos" | "pendiente_aprobacion" | "pendiente" | "pagada" | "recibida" | "anulada">("todos");
   const [fcTipoFilter, setFcTipoFilter] = useState("");
+  const [fcSelectedIds, setFcSelectedIds] = useState<Set<string>>(new Set());
   const [newArticleOpen, setNewArticleOpen] = useState(false);
   const [newArticle, setNewArticle] = useState({ codigo: "", descripcion: "", categoria: "", unidad: "UN", precio: 0 });
   const [newArticleSaving, setNewArticleSaving] = useState(false);
@@ -2397,6 +2398,21 @@ ${certRetGanHtml}
     const a = document.createElement("a"); a.href = url; a.download = `CC_${ccDetailCliente.razon_social.replace(/[^a-zA-Z0-9]/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
   }
 
+  function fcToggleSelect(id: string) {
+    setFcSelectedIds(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  }
+  async function handleBulkEstadoFC(nuevoEstado: string) {
+    if (fcSelectedIds.size === 0) return;
+    const label = nuevoEstado === "pendiente" ? "Pendiente" : nuevoEstado === "pagada" ? "Pagada" : nuevoEstado === "anulada" ? "Anulada" : nuevoEstado === "recibida" ? "Recibida" : nuevoEstado;
+    if (!confirm(`¿Cambiar ${fcSelectedIds.size} factura${fcSelectedIds.size > 1 ? "s" : ""} de compra a "${label}"?`)) return;
+    try {
+      const { error } = await (supabase as any).from("facturas_compra").update({ estado: nuevoEstado }).in("id", Array.from(fcSelectedIds));
+      if (error) { alert(error.message); return; }
+      setFcSelectedIds(new Set());
+      await fetchData();
+    } catch (err) { alert("Error: " + (err as Error).message); }
+  }
+
   function exportFCCompraCSV(data: FacturaCompraRow[]) {
     const lines: string[] = ["Fecha,Vencimiento,Proveedor,Documento,Moneda,Importe,Deuda"];
     data.forEach(f => {
@@ -2998,9 +3014,29 @@ ${certRetGanHtml}
                 <span className="text-xs text-zinc-500">{filteredFC.length} de {facturasCompra.length}</span>
               )}
             </div>
+            {fcSelectedIds.size > 0 && (
+              <div className="flex items-center gap-3 p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-lg">
+                <span className="text-sm font-medium text-orange-800 dark:text-orange-300">
+                  {fcSelectedIds.size} seleccionada{fcSelectedIds.size > 1 ? "s" : ""}
+                </span>
+                <span className="text-zinc-300 dark:text-zinc-600">|</span>
+                <span className="text-xs text-zinc-500">Cambiar estado a:</span>
+                <button onClick={() => handleBulkEstadoFC("pendiente")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-amber-950/30 transition-colors">Pendiente</button>
+                <button onClick={() => handleBulkEstadoFC("recibida")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-blue-950/30 transition-colors">Recibida</button>
+                <button onClick={() => handleBulkEstadoFC("pagada")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-emerald-950/30 transition-colors">Pagada</button>
+                <button onClick={() => handleBulkEstadoFC("anulada")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-red-50 hover:border-red-300 hover:text-red-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-red-950/30 transition-colors">Anulada</button>
+                <button onClick={() => setFcSelectedIds(new Set())} className="ml-auto text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">Deseleccionar</button>
+              </div>
+            )}
             <Card className="p-0 overflow-hidden">
               <DataTable<FacturaCompraRow>
                 columns={[
+                  { key: "select" as any, label: "", sortable: false, render: (row: FacturaCompraRow) => (
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={fcSelectedIds.has(row.id)} onChange={() => fcToggleSelect(row.id)}
+                        className="h-4 w-4 rounded border-zinc-300 text-orange-500 focus:ring-orange-500 cursor-pointer" />
+                    </div>
+                  )},
                   { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
                   { key: "fecha_vencimiento", label: "Vencimiento", sortable: true, render: (row) => row.fecha_vencimiento ? <span className="text-zinc-500 text-xs">{formatDate(row.fecha_vencimiento)}</span> : <span className="text-zinc-300">—</span> },
                   { key: "numero_factura", label: "Nro. Factura", sortable: true, render: (row) => <span className="font-mono font-medium">{row.numero_factura}</span> },
