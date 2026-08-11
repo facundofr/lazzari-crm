@@ -511,7 +511,7 @@ export default function FinanzasPage() {
   // ── CC Detail (Estado de cuenta) ──
   interface CCFacturaRow { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; vencimiento: string | null; total: number; total_acreditado: number; cobrado: number; moneda: string; estado: string }
   interface CCMovRow { id: string; tipo: string; monto: number; moneda: string; descripcion: string; fecha: string; referencia: string | null; factura_id: string | null; conciliado: boolean; cliente_id?: string | null; proveedor_id?: string | null; clientes?: { razon_social: string } | null; proveedores?: { razon_social: string } | null }
-  interface CCFCRow { id: string; numero_factura: string; fecha: string; fecha_vencimiento: string | null; total: number; estado: string; moneda: string }
+  interface CCFCRow { id: string; numero_factura: string; fecha: string; fecha_vencimiento: string | null; total: number; pagado: number; estado: string; moneda: string }
   const [ccDetailCliente, setCcDetailCliente] = useState<CCRow | null>(null);
   const [ccDetailFacturas, setCcDetailFacturas] = useState<CCFacturaRow[]>([]);
   const [ccDetailMovimientos, setCcDetailMovimientos] = useState<CCMovRow[]>([]);
@@ -1339,18 +1339,23 @@ export default function FinanzasPage() {
   async function handleAnularOP(id: string) {
     if (!confirm("¿Seguro que queres anular esta orden de pago?")) return;
     try {
+      // Get OP details for movimiento cleanup
+      const { data: opRow } = await (supabase as any).from("ordenes_pago").select("numero, proveedor_id").eq("id", id).single();
       const { error } = await (supabase as any).from("ordenes_pago").update({ estado: "anulada" }).eq("id", id);
       if (error) throw error;
+
+      // Delete movimientos created by this OP (match by description prefix + proveedor)
+      if (opRow?.numero && opRow?.proveedor_id) {
+        await supabase.from("movimientos").delete().like("descripcion" as any, `${opRow.numero} — %`).eq("proveedor_id" as any, opRow.proveedor_id);
+      }
 
       // Revertir FCs vinculadas a pendiente si quedaron como pagadas
       const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id").eq("orden_pago_id", id);
       if (links && links.length > 0) {
         for (const link of links) {
-          // Recalcular: sumar pagos de OPs no-anuladas para esta FC
           const { data: allPayments } = await (supabase as any)
             .from("op_facturas_compra").select("monto, orden_pago_id")
             .eq("factura_compra_id", link.factura_compra_id);
-          // Excluir pagos de OPs anuladas
           const { data: anuladas } = await (supabase as any)
             .from("ordenes_pago").select("id").in("id", (allPayments || []).map((p: any) => p.orden_pago_id)).eq("estado", "anulada");
           const anuladasSet = new Set((anuladas || []).map((a: any) => a.id));
@@ -2284,7 +2289,19 @@ ${certRetGanHtml}
       let qFC = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, fecha_vencimiento, total, estado, moneda").eq("proveedor_id", prov.id).in("estado", ["pendiente", "pagada", "recibida"]).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qFC = qFC.eq("sociedad_id", sociedadActiva.id);
       const { data: fcData } = await qFC;
-      if (fcData) setCcDetailFCProv(fcData.map((f: any) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento, total: Number(f.total), estado: f.estado, moneda: f.moneda ?? "ARS" })));
+      // Calculate paid per FC from op_facturas_compra (only non-anulada OPs)
+      let pagadoMap: Record<string, number> = {};
+      if (fcData && fcData.length > 0) {
+        const fcIds = fcData.map((f: any) => f.id);
+        const { data: opLinks } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto, orden_pago_id").in("factura_compra_id", fcIds);
+        if (opLinks && opLinks.length > 0) {
+          const opIds = [...new Set((opLinks as any[]).map((l: any) => l.orden_pago_id))];
+          const { data: opsActivas } = await (supabase as any).from("ordenes_pago").select("id").in("id", opIds).neq("estado", "anulada");
+          const activasSet = new Set((opsActivas || []).map((o: any) => o.id));
+          (opLinks as any[]).forEach((l: any) => { if (activasSet.has(l.orden_pago_id)) pagadoMap[l.factura_compra_id] = (pagadoMap[l.factura_compra_id] || 0) + Number(l.monto); });
+        }
+      }
+      if (fcData) setCcDetailFCProv(fcData.map((f: any) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento, total: Number(f.total), pagado: pagadoMap[f.id] || 0, estado: f.estado, moneda: f.moneda ?? "ARS" })));
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("proveedor_id" as any, prov.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData } = await qM;
@@ -2343,6 +2360,28 @@ ${certRetGanHtml}
   function openManualMovForProveedor(prov: CCRow) {
     setManualMovTarget("proveedor"); setManualMovTargetId(prov.id); setManualMovTargetName(prov.razon_social);
     setManualMovForm({ monto: 0, descripcion: "", fecha: new Date().toISOString().slice(0, 10), tipo_mov: "credito", moneda: "ARS" }); setManualMovError(""); setManualMovOpen(true);
+  }
+
+  function exportCCCliente() {
+    if (!ccDetailCliente) return;
+    const lines: string[] = [`Estado de cuenta — ${ccDetailCliente.razon_social} (CUIT: ${ccDetailCliente.cuit || "—"})`, `Deuda: ${ccDetailCliente.saldo_cuenta_corriente}`, "", "FACTURAS", "Fecha,Vencimiento,Numero,Total,Acreditado,Cobrado,Saldo,Moneda,Estado"];
+    ccDetailFacturas.forEach(f => { const saldo = Math.max(0, f.total - f.total_acreditado - f.cobrado); lines.push(`${f.fecha},${f.vencimiento || ""},${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")},${f.total},${f.total_acreditado},${f.cobrado},${saldo},${f.moneda},${f.estado}`); });
+    lines.push("", "MOVIMIENTOS", "Fecha,Tipo,Descripcion,Monto,Moneda,Estado");
+    ccDetailMovimientos.forEach(m => { lines.push(`${m.fecha},${m.tipo},"${m.descripcion}",${m.monto},${m.moneda},${m.conciliado ? "Conciliado" : "Pendiente"}`); });
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `CC_${ccDetailCliente.razon_social.replace(/[^a-zA-Z0-9]/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+  }
+
+  function exportCCProveedor() {
+    if (!ccDetailProveedor) return;
+    const lines: string[] = [`Estado de cuenta — ${ccDetailProveedor.razon_social} (CUIT: ${ccDetailProveedor.cuit || "—"})`, `Deuda: ${ccDetailProveedor.saldo_cuenta_corriente}`, "", "FACTURAS DE COMPRA", "Fecha,Vencimiento,Numero,Total,Pagado,Saldo,Moneda,Estado"];
+    ccDetailFCProv.forEach(f => { const saldo = Math.max(0, f.total - f.pagado); lines.push(`${f.fecha},${f.fecha_vencimiento || ""},${f.numero_factura},${f.total},${f.pagado},${saldo},${f.moneda},${f.estado}`); });
+    lines.push("", "MOVIMIENTOS", "Fecha,Tipo,Descripcion,Monto,Moneda,Estado");
+    ccDetailMovProv.forEach(m => { lines.push(`${m.fecha},${m.tipo},"${m.descripcion}",${m.monto},${m.moneda},${m.conciliado ? "Conciliado" : "Pendiente"}`); });
+    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `CC_${ccDetailProveedor.razon_social.replace(/[^a-zA-Z0-9]/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
   }
 
   // ── Mov modal filtered lists ──
@@ -3185,6 +3224,9 @@ ${certRetGanHtml}
                   <button onClick={() => openManualMovForCliente(ccDetailCliente)} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800">
                     <Plus className="h-4 w-4" /> Movimiento manual
                   </button>
+                  <button onClick={exportCCCliente} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                    <Download className="h-4 w-4" /> Exportar CSV
+                  </button>
                 </div>
 
                 {ccDetailLoading ? (
@@ -3281,6 +3323,7 @@ ${certRetGanHtml}
                   <DollarSign className="h-4 w-4" /> Crear OP
                 </button>
                 <button onClick={() => openManualMovForProveedor(ccDetailProveedor)} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"><Plus className="h-4 w-4" /> Movimiento manual</button>
+                <button onClick={exportCCProveedor} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"><Download className="h-4 w-4" /> Exportar CSV</button>
               </div>
               {ccDetailProvLoading ? (
                 <div className="flex items-center justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /><span className="ml-2 text-sm text-zinc-500">Cargando estado de cuenta...</span></div>
@@ -3293,6 +3336,8 @@ ${certRetGanHtml}
                       { key: "fecha_vencimiento" as any, label: "Vencimiento", render: (row) => <span className={`text-sm ${row.fecha_vencimiento && row.fecha_vencimiento < new Date().toISOString().slice(0, 10) && row.estado !== "pagada" ? "text-red-600 font-semibold" : ""}`}>{row.fecha_vencimiento ? formatDate(row.fecha_vencimiento) : "—"}</span> },
                       { key: "numero_factura", label: "N. Factura", sortable: true, render: (row) => <span className="font-mono text-xs">{row.numero_factura}</span> },
                       { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.total, row.moneda as "ARS" | "USD")}</span> },
+                      { key: "pagado" as any, label: "Pagado", className: "text-right", render: (row) => <span className="font-mono block text-right text-emerald-600">{row.pagado > 0 ? formatCurrency(row.pagado, row.moneda as "ARS" | "USD") : "—"}</span> },
+                      { key: "id" as any, label: "Saldo", className: "text-right", render: (row) => { const saldo = Math.max(0, row.total - row.pagado); return <span className={`font-mono font-semibold block text-right ${saldo > 0.01 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(saldo, row.moneda as "ARS" | "USD")}</span>; }},
                       { key: "estado", label: "Estado", render: (row) => { const cfg: Record<string, { label: string; variant: "success" | "warning" | "danger" | "outline" }> = { pagada: { label: "Pagada", variant: "success" }, pendiente: { label: "Pendiente", variant: "danger" }, recibida: { label: "Recibida", variant: "warning" } }; const c = cfg[row.estado] || { label: row.estado, variant: "outline" as const }; return <Badge variant={c.variant}>{c.label}</Badge>; }},
                     ]}
                     data={ccDetailFCProv}
