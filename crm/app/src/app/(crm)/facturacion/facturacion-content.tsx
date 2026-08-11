@@ -617,6 +617,16 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   const [cobroSaving, setCobroSaving] = useState(false);
   const [cobroPrevios, setCobroPrevios] = useState<number>(0);
   const [cobroPreviosLoading, setCobroPreviosLoading] = useState(false);
+  const [cobroCotiz, setCobroCotiz] = useState("");
+  const [cobroCotizModalidad, setCobroCotizModalidad] = useState<"divisas" | "billetes">("divisas");
+  const [cobroCotizFetching, setCobroCotizFetching] = useState(false);
+  async function fetchCobroCotizBNA(modalidad: "divisas" | "billetes") {
+    setCobroCotizFetching(true);
+    try {
+      const res = await fetch(`/api/cotizacion-bna?modalidad=${modalidad}`);
+      if (res.ok) { const d = await res.json(); setCobroCotiz(String(d.valor_venta)); setCobroCotizModalidad(modalidad); }
+    } catch { /* ignore */ } finally { setCobroCotizFetching(false); }
+  }
 
   async function fetchCobrosPrevios(facturaId: string): Promise<number> {
     const { data: movs } = await (supabase as any).from("movimientos").select("monto").eq("factura_id", facturaId);
@@ -628,6 +638,8 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     setCobroPrevios(0);
     setCobroFecha(todayAR());
     setCobroModalId(factura.id);
+    setCobroCotiz("");
+    if (factura.moneda === "USD") fetchCobroCotizBNA("divisas");
     try {
       const previos = await fetchCobrosPrevios(factura.id);
       setCobroPrevios(previos);
@@ -672,15 +684,18 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     if (!factura) return;
     const totalLineas = lineasValidas.reduce((s, l) => s + Number(l.monto), 0);
     const saldo = Number(factura.total) - Number(factura.total_acreditado || 0) - cobroPrevios;
-    if (totalLineas > saldo + 0.01) {
-      alert(`El total de cobros ($${totalLineas.toLocaleString()}) supera el saldo pendiente ($${Math.max(0, saldo).toLocaleString()})`);
+    const cotizNum = parseFloat(cobroCotiz) || 0;
+    const saldoComp = factura.moneda === "USD" && cotizNum > 0 ? saldo * cotizNum : saldo;
+    if (totalLineas > saldoComp + 0.01) {
+      alert(`El total de cobros ($${totalLineas.toLocaleString()}) supera el saldo pendiente ($${Math.max(0, saldoComp).toLocaleString()})`);
       return;
     }
     setCobroSaving(true);
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id || null;
+      const cotizSuffix = factura.moneda === "USD" && cotizNum > 0 ? ` | TC: ${cotizNum.toFixed(2)} (${cobroCotizModalidad})` : "";
       const lineasPayload = lineasValidas.map(l => {
-        let desc = l.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}`;
+        let desc = l.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}${cotizSuffix}`;
         // Append cheque details to description
         if ((l.tipo === "cheque_recibido" || l.tipo === "echeq") && (l.cheque_numero || l.cheque_banco)) {
           const parts = [l.cheque_banco, l.cheque_numero ? `N° ${l.cheque_numero}` : null, l.cheque_fecha, l.cheque_id_digital ? `ID: ${l.cheque_id_digital}` : null].filter(Boolean);
@@ -1666,10 +1681,43 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                     className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
                 </div>
 
+                {/* Tipo de cambio (USD) */}
+                {f.moneda === "USD" && (() => {
+                  const cotizNum = parseFloat(cobroCotiz) || 0;
+                  return (
+                    <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 p-3 space-y-2">
+                      <label className="block text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Tipo de cambio (USD → ARS)</label>
+                      <div className="flex items-end gap-3 flex-wrap">
+                        <div className="flex gap-1">
+                          <button type="button" onClick={() => fetchCobroCotizBNA("divisas")} disabled={cobroCotizFetching}
+                            className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors ${cobroCotizModalidad === "divisas" && cotizNum > 0 ? "bg-orange-500 text-white" : "bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-300 dark:border-zinc-600"}`}>
+                            Divisas
+                          </button>
+                          <button type="button" onClick={() => fetchCobroCotizBNA("billetes")} disabled={cobroCotizFetching}
+                            className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors ${cobroCotizModalidad === "billetes" && cotizNum > 0 ? "bg-orange-500 text-white" : "bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-300 dark:border-zinc-600"}`}>
+                            Billetes
+                          </button>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Cotización</label>
+                          <input type="number" step="0.01" min="0" placeholder="Ej: 1250" value={cobroCotiz}
+                            onChange={e => setCobroCotiz(e.target.value)}
+                            className="w-32 px-2 py-1 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono dark:text-white" />
+                        </div>
+                        {cotizNum > 0 && (
+                          <span className="text-xs text-zinc-600 dark:text-zinc-400">
+                            Saldo: {formatCurrency(saldo, "USD")} × {cotizNum.toFixed(2)} = <span className="font-bold text-zinc-900 dark:text-white">{formatCurrency(saldo * cotizNum, "ARS")}</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Lineas de pago */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Medios de pago</label>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Medios de pago {f.moneda === "USD" && parseFloat(cobroCotiz) > 0 && <span className="text-xs text-zinc-400 font-normal">(en ARS)</span>}</label>
                     <div className="flex items-center gap-3">
                       {Number(f.iva) > 0 && cobroLineas.length === 1 && (
                         <button onClick={handleSepararImpuestos}
@@ -1760,33 +1808,45 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                 </div>
 
                 {/* Totales */}
-                {totalLineas > 0 && (
+                {totalLineas > 0 && (() => {
+                  const cotizNum = parseFloat(cobroCotiz) || 0;
+                  const isUSDConv = f.moneda === "USD" && cotizNum > 0;
+                  const saldoDisplay = isUSDConv ? saldo * cotizNum : saldo;
+                  const monDisplay = isUSDConv ? "ARS" as const : f.moneda as "ARS" | "USD";
+                  return (
                   <div className="space-y-1 px-1">
                     <div className="flex justify-between text-sm font-medium">
                       <span className="text-zinc-500">Total a registrar:</span>
-                      <span className="font-mono dark:text-white">{formatCurrency(totalLineas, f.moneda as "ARS" | "USD")}</span>
+                      <span className="font-mono dark:text-white">{formatCurrency(totalLineas, monDisplay)}</span>
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-zinc-500">Saldo restante:</span>
-                      <span className={`font-mono font-medium ${saldo - totalLineas <= 0 ? "text-emerald-600" : "text-amber-600"}`}>
-                        {formatCurrency(Math.max(0, saldo - totalLineas), f.moneda as "ARS" | "USD")}
+                      <span className={`font-mono font-medium ${saldoDisplay - totalLineas <= 0 ? "text-emerald-600" : "text-amber-600"}`}>
+                        {formatCurrency(Math.max(0, saldoDisplay - totalLineas), monDisplay)}
                       </span>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
 
-                {totalLineas >= saldo && saldo > 0 && (
-                  <div className="flex items-center gap-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 px-3 py-2">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
-                    <p className="text-xs text-emerald-700 dark:text-emerald-300">Cubre el saldo completo — la factura se marcara como pagada</p>
-                  </div>
-                )}
-                {totalLineas > saldo && saldo > 0 && (
-                  <div className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-2">
-                    <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-                    <p className="text-xs text-amber-700 dark:text-amber-300">El monto excede el saldo pendiente por {formatCurrency(totalLineas - saldo, f.moneda as "ARS" | "USD")}</p>
-                  </div>
-                )}
+                {(() => {
+                  const cotizNum = parseFloat(cobroCotiz) || 0;
+                  const saldoComp = f.moneda === "USD" && cotizNum > 0 ? saldo * cotizNum : saldo;
+                  const monDisp = (f.moneda === "USD" && cotizNum > 0 ? "ARS" : f.moneda) as "ARS" | "USD";
+                  if (totalLineas > saldoComp && saldoComp > 0) return (
+                    <div className="flex items-center gap-2 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-2">
+                      <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                      <p className="text-xs text-amber-700 dark:text-amber-300">El monto excede el saldo pendiente por {formatCurrency(totalLineas - saldoComp, monDisp)}</p>
+                    </div>
+                  );
+                  if (totalLineas >= saldoComp && saldoComp > 0) return (
+                    <div className="flex items-center gap-2 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 px-3 py-2">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                      <p className="text-xs text-emerald-700 dark:text-emerald-300">Cubre el saldo completo — la factura se marcara como pagada</p>
+                    </div>
+                  );
+                  return null;
+                })()}
               </div>
               <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
                 <button onClick={() => setCobroModalId(null)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
