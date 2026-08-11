@@ -20,8 +20,9 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 
-const estadoConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" }> = {
+const estadoConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" | "orange" }> = {
   emitida: { label: "Emitida", variant: "info" },
+  pendiente: { label: "Pendiente", variant: "orange" },
   parcial: { label: "Cobro parcial", variant: "warning" },
   pagada: { label: "Pagada", variant: "success" },
   anulada: { label: "Anulada", variant: "danger" },
@@ -53,6 +54,7 @@ interface FacturaRow {
   recibida_cliente?: boolean;
   clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string; dias_cuenta_corriente?: number | null } | null;
   _clienteNombre?: string;
+  _fechaVencCalc?: string;
 }
 
 type NcItem = { descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number };
@@ -301,7 +303,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   }
 
   // Filters — multi-select estado (like presupuestos)
-  const fvAllEstados = ["emitida", "parcial", "pagada", "vencida", "anulada"] as const;
+  const fvAllEstados = ["emitida", "pendiente", "parcial", "pagada", "vencida", "anulada"] as const;
   const [fvSelectedEstados, setFvSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [fvTipoFilter, setFvTipoFilter] = useState("");
   const [clienteSearch, setClienteSearch] = useState("");
@@ -349,7 +351,12 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
       const { data, error } = await query;
 
       if (!error && data) {
-        setFacturas((data as unknown as FacturaRow[]).map(f => ({ ...f, _clienteNombre: f.clientes?.razon_social || "" })));
+        setFacturas((data as unknown as FacturaRow[]).map(f => {
+          const fv = f.fecha_vencimiento || (f.clientes?.dias_cuenta_corriente && f.fecha
+            ? new Date(new Date(f.fecha).getTime() + ((f.clientes.dias_cuenta_corriente as number) * 86400000)).toISOString().slice(0, 10)
+            : null);
+          return { ...f, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "" };
+        }));
       } else if (error) {
         setFacturas(mockFacturas.map((f) => ({
           id: f.id, tipo: f.tipo, punto_venta: f.puntoVenta, numero: f.numero,
@@ -1006,7 +1013,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
             className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${fvIsAll ? "bg-orange-500 text-white shadow-sm" : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"}`}>
             {fvIsAll && <Check className="h-3.5 w-3.5" />} Todos <span className={`rounded-full px-1.5 py-0.5 text-xs ${fvIsAll ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"}`}>{facturas.length}</span>
           </button>
-          {([["emitida", "Emitida"], ["parcial", "Parcial"], ["pagada", "Pagada"], ["vencida", "Vencida"], ["anulada", "Anulada"]] as const).map(([key, label]) => {
+          {([["emitida", "Emitida"], ["pendiente", "Pendiente"], ["parcial", "Parcial"], ["pagada", "Pagada"], ["vencida", "Vencida"], ["anulada", "Anulada"]] as const).map(([key, label]) => {
             const active = !fvIsAll && fvSelectedEstados.has(key);
             return (
               <button key={key} onClick={() => fvToggleEstado(key)}
@@ -1039,10 +1046,8 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                 : <span className="text-zinc-300">{"\u2014"}</span>
               },
               { key: "fecha", label: "Fecha", sortable: true, render: (r) => <span className="text-zinc-500">{formatDate(r.fecha)}</span> },
-              { key: "fecha_vencimiento" as any, label: "Vencimiento", sortable: true, render: (r) => {
-                const fv = r.fecha_vencimiento || (r.clientes?.dias_cuenta_corriente && r.fecha
-                  ? new Date(new Date(r.fecha).getTime() + (r.clientes.dias_cuenta_corriente * 86400000)).toISOString().slice(0, 10)
-                  : null);
+              { key: "_fechaVencCalc" as any, label: "Vencimiento", sortable: true, render: (r) => {
+                const fv = r._fechaVencCalc;
                 if (!fv) return <span className="text-zinc-300">—</span>;
                 const vencido = new Date(fv) < new Date(todayAR()) && r.estado !== "pagada" && r.estado !== "anulada";
                 return <span className={vencido ? "text-red-500 font-medium" : "text-zinc-500"}>{formatDate(fv)}</span>;
