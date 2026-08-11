@@ -50,7 +50,8 @@ interface FacturaRow {
   factura_origen_id?: string | null;
   total_acreditado?: number | null;
   modalidad_emision?: string | null;
-  clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string } | null;
+  recibida_cliente?: boolean;
+  clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string; dias_cuenta_corriente?: number | null } | null;
   _clienteNombre?: string;
 }
 
@@ -104,25 +105,14 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
   const [detailItems, setDetailItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number; subtotal: number }[]>([]);
   const [panelFullscreen, setPanelFullscreen] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-
-  function toggleSelect(id: string) {
-    setSelectedIds(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
-  }
-  function toggleSelectAll() {
-    if (selectedIds.size === filteredFacturas.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(filteredFacturas.map(f => f.id)));
-  }
-  async function handleBulkEstado(nuevoEstado: string) {
-    if (selectedIds.size === 0) return;
-    const label = nuevoEstado === "emitida" ? "Emitida" : nuevoEstado === "pagada" ? "Pagada" : nuevoEstado === "anulada" ? "Anulada" : nuevoEstado === "vencida" ? "Vencida" : nuevoEstado;
-    if (!confirm(`¿Cambiar ${selectedIds.size} factura${selectedIds.size > 1 ? "s" : ""} a "${label}"?`)) return;
-    try {
-      const { error } = await supabase.from("facturas").update({ estado: nuevoEstado } as any).in("id", Array.from(selectedIds));
-      if (error) { alert(error.message); return; }
-      setSelectedIds(new Set());
-      await fetchData();
-    } catch (err) { alert("Error: " + (err as Error).message); }
+  async function toggleRecibidaCliente(id: string, current: boolean) {
+    const newVal = !current;
+    setFacturas(prev => prev.map(f => f.id === id ? { ...f, recibida_cliente: newVal } : f));
+    const { error } = await supabase.from("facturas").update({ recibida_cliente: newVal } as any).eq("id", id);
+    if (error) {
+      setFacturas(prev => prev.map(f => f.id === id ? { ...f, recibida_cliente: current } : f));
+      alert("Error: " + error.message);
+    }
   }
 
   // ARCA status
@@ -349,7 +339,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     try {
       let query = supabase
         .from("facturas")
-        .select(`*, clientes(razon_social, cuit, condicion_iva, email, telefono, direccion, localidad, provincia)`)
+        .select(`*, clientes(razon_social, cuit, condicion_iva, email, telefono, direccion, localidad, provincia, dias_cuenta_corriente)`)
         .order("created_at", { ascending: false });
 
       if (sociedadActiva?.id) {
@@ -1012,27 +1002,14 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           })}
         </div>
 
-        {selectedIds.size > 0 && (
-          <div className="flex items-center gap-3 p-3 bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 rounded-lg">
-            <span className="text-sm font-medium text-orange-800 dark:text-orange-300">
-              {selectedIds.size} seleccionada{selectedIds.size > 1 ? "s" : ""}
-            </span>
-            <span className="text-zinc-300 dark:text-zinc-600">|</span>
-            <span className="text-xs text-zinc-500">Cambiar estado a:</span>
-            <button onClick={() => handleBulkEstado("emitida")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-blue-950/30 transition-colors">Emitida</button>
-            <button onClick={() => handleBulkEstado("pagada")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-emerald-950/30 transition-colors">Pagada</button>
-            <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">Deseleccionar</button>
-          </div>
-        )}
-
         {/* Data table */}
         <Card className="p-0 overflow-hidden">
           <DataTable<FacturaRow>
             columns={[
-              { key: "select" as any, label: "", sortable: false, render: (r: FacturaRow) => (
-                <div onClick={(e) => e.stopPropagation()}>
-                  <input type="checkbox" checked={selectedIds.has(r.id)} onChange={() => toggleSelect(r.id)}
-                    className="h-4 w-4 rounded border-zinc-300 text-orange-500 focus:ring-orange-500 cursor-pointer" />
+              { key: "recibida_cliente" as any, label: "", sortable: false, className: "w-10", render: (r: FacturaRow) => (
+                <div onClick={(e) => e.stopPropagation()} title={r.recibida_cliente ? "Cliente confirmó recepción" : "Marcar como recibida por cliente"}>
+                  <input type="checkbox" checked={!!r.recibida_cliente} onChange={() => toggleRecibidaCliente(r.id, !!r.recibida_cliente)}
+                    className="h-4 w-4 rounded border-zinc-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer" />
                 </div>
               )},
               { key: "numero", label: "Comprobante", sortable: true, render: (r) => (
@@ -1047,6 +1024,14 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                 : <span className="text-zinc-300">{"\u2014"}</span>
               },
               { key: "fecha", label: "Fecha", sortable: true, render: (r) => <span className="text-zinc-500">{formatDate(r.fecha)}</span> },
+              { key: "fecha_vencimiento" as any, label: "Vencimiento", sortable: true, render: (r) => {
+                const fv = r.fecha_vencimiento || (r.clientes?.dias_cuenta_corriente && r.fecha
+                  ? new Date(new Date(r.fecha).getTime() + (r.clientes.dias_cuenta_corriente * 86400000)).toISOString().slice(0, 10)
+                  : null);
+                if (!fv) return <span className="text-zinc-300">—</span>;
+                const vencido = new Date(fv) < new Date(todayAR()) && r.estado !== "pagada" && r.estado !== "anulada";
+                return <span className={vencido ? "text-red-500 font-medium" : "text-zinc-500"}>{formatDate(fv)}</span>;
+              }},
               { key: "total", label: "Total", sortable: true, className: "text-right", render: (r) => (
                 <span className="font-mono font-semibold block text-right">{formatCurrency(Number(r.total), r.moneda as "USD" | "ARS")}</span>
               )},
