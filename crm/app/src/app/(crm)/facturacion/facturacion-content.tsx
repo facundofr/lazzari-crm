@@ -1037,12 +1037,6 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
         <Card className="p-0 overflow-hidden">
           <DataTable<FacturaRow>
             columns={[
-              { key: "recibida_cliente" as any, label: "", sortable: false, className: "w-10", render: (r: FacturaRow) => (
-                <div onClick={(e) => e.stopPropagation()} title={r.recibida_cliente ? "Cliente confirmó recepción" : "Marcar como recibida por cliente"}>
-                  <input type="checkbox" checked={!!r.recibida_cliente} onChange={() => toggleRecibidaCliente(r.id, !!r.recibida_cliente)}
-                    className="h-4 w-4 rounded border-zinc-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer" />
-                </div>
-              )},
               { key: "numero", label: "Comprobante", sortable: true, render: (r) => (
                 <div className="flex items-center gap-2">
                   <Receipt className="h-4 w-4 text-zinc-400" />
@@ -1050,12 +1044,12 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                 </div>
               )},
               { key: "clientes", label: "Cliente", sortable: true, sortKey: "_clienteNombre", render: (r) => <span className="font-medium">{r.clientes?.razon_social || "\u2014"}</span> },
-              { key: "oc_cliente", label: "OC Cliente", render: (r) => r.oc_cliente
+              { key: "oc_cliente", label: "OC", render: (r) => r.oc_cliente
                 ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{r.oc_cliente}</span>
                 : <span className="text-zinc-300">{"\u2014"}</span>
               },
               { key: "fecha", label: "Fecha", sortable: true, render: (r) => <span className="text-zinc-500">{formatDate(r.fecha)}</span> },
-              { key: "_fechaVencCalc" as any, label: "Fecha de pago", sortable: true, render: (r) => {
+              { key: "_fechaVencCalc" as any, label: "Pago", sortable: true, render: (r) => {
                 const fv = r._fechaVencCalc;
                 if (editingFechaPago === r.id) return (
                   <div onClick={e => e.stopPropagation()}>
@@ -1089,6 +1083,17 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                 <Badge variant={estadoConfig[r.estado]?.variant || "info"}>
                   {estadoConfig[r.estado]?.label || r.estado}
                 </Badge>
+              )},
+              { key: "recibida_cliente" as any, label: "Recib.", sortable: false, className: "w-12 text-center", render: (r: FacturaRow) => (
+                <div onClick={(e) => e.stopPropagation()} className="flex justify-center" title={r.recibida_cliente ? "Cliente confirmó recepción" : "Marcar como recibida por cliente"}>
+                  <input type="checkbox" checked={!!r.recibida_cliente} onChange={() => toggleRecibidaCliente(r.id, !!r.recibida_cliente)}
+                    className="h-4 w-4 rounded border-zinc-300 text-emerald-500 focus:ring-emerald-500 cursor-pointer" />
+                </div>
+              )},
+              { key: "_mail" as any, label: "", sortable: false, className: "w-10", render: (r: FacturaRow) => (
+                <div onClick={(e) => { e.stopPropagation(); handleEmailFactura(r); }} className="flex justify-center cursor-pointer" title="Enviar por email">
+                  <Mail className="h-4 w-4 text-zinc-300 hover:text-orange-500 transition-colors" />
+                </div>
               )},
             ]}
             data={filteredFacturas}
