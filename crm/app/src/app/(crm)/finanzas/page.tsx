@@ -2426,12 +2426,12 @@ ${certRetGanHtml}
   }
 
   function exportFCCompraCSV(data: FacturaCompraRow[]) {
-    const lines: string[] = ["Fecha,Vencimiento,Proveedor,Documento,Moneda,Importe,Deuda"];
+    const lines: string[] = ["Fecha;Vencimiento;Proveedor;Documento;Moneda;Importe;Saldo"];
     data.forEach(f => {
-      const deuda = (f.estado === "pagada" || f.estado === "anulada") ? 0 : f.total;
-      lines.push(`${f.fecha},${f.fecha_vencimiento || ""},"${f.proveedor_nombre}","${f.numero_factura}",${f.moneda},${f.total.toFixed(2)},${deuda.toFixed(2)}`);
+      const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : f.total;
+      lines.push(`${f.fecha};${f.fecha_vencimiento || ""};"${f.proveedor_nombre}";"${f.numero_factura}";${f.moneda};"${formatCurrency(f.total, f.moneda as "ARS"|"USD")}";"${formatCurrency(saldo, f.moneda as "ARS"|"USD")}"`);
     });
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `Facturas_Compra_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
   }

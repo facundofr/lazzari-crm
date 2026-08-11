@@ -936,13 +936,13 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   const caeVigentes = facturas.filter(f => f.cae && f.estado !== "anulada").length;
 
   function exportFacturasCSV() {
-    const csvLines: string[] = ["Fecha,Vencimiento,Cliente,Documento,Moneda,Importe,Deuda"];
+    const csvLines: string[] = ["Fecha;Vencimiento;Cliente;Documento;Moneda;Importe;Saldo"];
     filteredFacturas.forEach((f: any) => {
       const doc = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
-      const deuda = (f.estado === "pagada" || f.estado === "anulada") ? 0 : Number(f.total) - (f.total_acreditado || 0);
-      csvLines.push(`${f.fecha},${f.fecha_vencimiento || ""},"${(f.clientes?.razon_social || "").replace(/"/g, '""')}","${doc}",${f.moneda},${Number(f.total).toFixed(2)},${deuda.toFixed(2)}`);
+      const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : Number(f.total) - (f.total_acreditado || 0);
+      csvLines.push(`${f.fecha};${f._fechaVencCalc || ""};"${(f.clientes?.razon_social || "").replace(/"/g, '""')}";"${doc}";${f.moneda};"${formatCurrency(Number(f.total), f.moneda as "ARS"|"USD")}";"${formatCurrency(saldo, f.moneda as "ARS"|"USD")}"`);
     });
-    const blob = new Blob([csvLines.join("\n")], { type: "text/csv" });
+    const blob = new Blob(["\uFEFF" + csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
