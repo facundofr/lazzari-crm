@@ -567,6 +567,17 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     } catch (err) { console.error("Error anulando:", err); }
   }
 
+  async function handleRevertirAnulacion(id: string) {
+    if (!confirm("¿Revertir la anulación y volver a estado Emitida?")) return;
+    try {
+      const { error } = await supabase.from("facturas").update({ estado: "emitida" } as any).eq("id", id);
+      if (error) { alert(error.message); return; }
+      await fetchData();
+      if (detailFactura?.id === id) setDetailFactura(prev => prev ? { ...prev, estado: "emitida" } : null);
+      alert("Factura revertida a Emitida");
+    } catch (err) { alert("Error al revertir: " + (err as Error).message); }
+  }
+
 
   // ── Copy & PDF ─────────────────────────────────────────────────
   // Cobro modal
@@ -1556,6 +1567,11 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                         </button>
                       )}
                     </>
+                  )}
+                  {detailFactura.estado === "anulada" && !detailFactura.cae && (
+                    <button onClick={() => handleRevertirAnulacion(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
+                      <CheckCircle2 className="h-4 w-4" /> Revertir anulación
+                    </button>
                   )}
                 </div>
               </div>
