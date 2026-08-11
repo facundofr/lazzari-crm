@@ -1977,16 +1977,17 @@ ${certRetGanHtml}
   }
 
   async function handleCreateFC() {
-    if (!fcForm.proveedor_id) { setFcError("Seleccioná un proveedor"); return; }
+    if (!fcForm.proveedor_id) { setFcError("Seleccioná un proveedor o elegí 'Cargar sin proveedor'"); return; }
     if (!fcForm.numero_factura.trim()) { setFcError("El número de factura es obligatorio"); return; }
     if (fcForm.subtotal <= 0) { setFcError("El subtotal debe ser mayor a 0"); return; }
     const isMercaderia = fcForm.tipo_fc === "mercaderia";
     setFcSaving(true);
     setFcError("");
     try {
+      const provId = fcForm.proveedor_id === "sin_proveedor" ? null : fcForm.proveedor_id;
       const insertData: Record<string, unknown> = {
         numero_factura: fcForm.numero_factura.trim(),
-        proveedor_id: fcForm.proveedor_id,
+        proveedor_id: provId,
         fecha: fcForm.fecha,
         subtotal: fcForm.subtotal,
         iva_porcentaje: fcForm.iva_porcentaje,
@@ -2238,8 +2239,8 @@ ${certRetGanHtml}
     ? proveedoresOptions.filter(p => p.razon_social.toLowerCase().includes(fcProvSearch.toLowerCase()))
     : proveedoresOptions.slice(0, 20);
 
-  // OCs filtered by selected proveedor (for optional linking)
-  const filteredOCsForFC = fcForm.proveedor_id
+  // OCs filtered by selected proveedor (for optional linking). Sin proveedor → show all
+  const filteredOCsForFC = fcForm.proveedor_id && fcForm.proveedor_id !== "sin_proveedor"
     ? ocOptions.filter(oc => oc.proveedor_id === fcForm.proveedor_id)
     : ocOptions;
 
@@ -4632,18 +4633,36 @@ ${certRetGanHtml}
                   </div>
                   {fcForm.proveedor_id && (
                     <div className="mt-1 flex items-center gap-1">
-                      <Badge variant="success">{proveedoresOptions.find(p => p.id === fcForm.proveedor_id)?.razon_social}</Badge>
+                      {fcForm.proveedor_id === "sin_proveedor"
+                        ? <Badge variant="warning">Sin proveedor</Badge>
+                        : <Badge variant="success">{proveedoresOptions.find(p => p.id === fcForm.proveedor_id)?.razon_social}</Badge>
+                      }
                       <button onClick={() => { setFcForm({ ...fcForm, proveedor_id: "", orden_compra_id: "" }); setFcProvSearch(""); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
                     </div>
                   )}
-                  {!fcForm.proveedor_id && (fcProvFocused || fcProvSearch.trim()) && filteredProveedoresFC.length > 0 && (
-                    <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                  {!fcForm.proveedor_id && (fcProvFocused || fcProvSearch.trim()) && (
+                    <div className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
                       {filteredProveedoresFC.slice(0, 8).map(p => (
                         <button key={p.id} onClick={() => { setFcForm({ ...fcForm, proveedor_id: p.id, orden_compra_id: "" }); setFcProvSearch(p.razon_social); }}
                           className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white">
                           {p.razon_social}
                         </button>
                       ))}
+                      {fcProvSearch.trim() && filteredProveedoresFC.length === 0 && (
+                        <div className="p-3 space-y-2">
+                          <p className="text-xs text-zinc-400">No se encontró &quot;{fcProvSearch}&quot;</p>
+                          <div className="flex gap-2">
+                            <button onClick={() => { window.open("/proveedores?crear=" + encodeURIComponent(fcProvSearch), "_blank"); }}
+                              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-orange-500 text-white text-xs font-medium hover:bg-orange-600 transition-colors">
+                              <Plus className="h-3 w-3" /> Crear proveedor
+                            </button>
+                            <button onClick={() => { setFcForm({ ...fcForm, proveedor_id: "sin_proveedor", orden_compra_id: "" }); setFcProvFocused(false); }}
+                              className="px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                              Cargar sin proveedor
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

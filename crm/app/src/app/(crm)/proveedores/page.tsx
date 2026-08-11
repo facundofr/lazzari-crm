@@ -14,7 +14,7 @@ import {
   AlertTriangle, ChevronDown, ChevronRight, Loader2, X, Pencil, Tag,
   Sparkles, FileUp, Check, Trash2, Eye,
 } from "lucide-react";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 import { useUser } from "@/lib/auth-context";
@@ -145,6 +145,19 @@ export default function ProveedoresPage() {
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
+
+  // Auto-open create modal from ?crear= query param
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const crearNombre = params.get("crear");
+    if (crearNombre) {
+      setEditingId(null);
+      setForm({ ...emptyForm, razon_social: crearNombre });
+      setFormError("");
+      setModalOpen(true);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   // Detail
   const [selectedProv, setSelectedProv] = useState<Proveedor | null>(null);
