@@ -310,13 +310,32 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     }
   }
 
-  // Filters — direct selects (same style as Fact. Compra)
-  const [fvEstadoFilter, setFvEstadoFilter] = useState("todos");
+  // Filters — multi-select estado (like presupuestos)
+  const fvAllEstados = ["emitida", "parcial", "pagada", "vencida", "anulada"] as const;
+  const [fvSelectedEstados, setFvSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [fvTipoFilter, setFvTipoFilter] = useState("");
   const [clienteSearch, setClienteSearch] = useState("");
+  const fvIsAll = fvSelectedEstados.has("todos");
+
+  function fvToggleEstado(estado: string) {
+    setFvSelectedEstados(prev => {
+      if (estado === "todos") return new Set(["todos"]);
+      const next = new Set(prev);
+      next.delete("todos");
+      if (next.has(estado)) next.delete(estado); else next.add(estado);
+      if (next.size === 0 || next.size === fvAllEstados.length) return new Set(["todos"]);
+      return next;
+    });
+  }
+
+  const fvEstadoCounts = useMemo(() => {
+    const c: Record<string, number> = {};
+    facturas.forEach(f => { c[f.estado] = (c[f.estado] || 0) + 1; });
+    return c;
+  }, [facturas]);
 
   const filteredFacturas = facturas.filter((f) => {
-    if (fvEstadoFilter !== "todos" && f.estado !== fvEstadoFilter) return false;
+    if (!fvIsAll && !fvSelectedEstados.has(f.estado)) return false;
     if (fvTipoFilter && f.tipo !== fvTipoFilter) return false;
     if (clienteSearch.trim()) {
       const nombre = (f.clientes?.razon_social || "").toLowerCase();
@@ -952,7 +971,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           <StatCard title="CAE vigentes" value={String(caeVigentes)} icon={FileCheck} iconColor="text-blue-600" />
         </div>
 
-        {/* Search & filters — same style as Fact. Compra */}
+        {/* Search & tipo filter */}
         <div className="flex items-center gap-3 flex-wrap">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
@@ -960,15 +979,6 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
               placeholder="Buscar por cliente..."
               className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
           </div>
-          <select value={fvEstadoFilter} onChange={(e) => setFvEstadoFilter(e.target.value)}
-            className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-            <option value="todos">Todos los estados</option>
-            <option value="emitida">Emitida</option>
-            <option value="parcial">Cobro parcial</option>
-            <option value="pagada">Pagada</option>
-            <option value="vencida">Vencida</option>
-            <option value="anulada">Anulada</option>
-          </select>
           <select value={fvTipoFilter} onChange={(e) => setFvTipoFilter(e.target.value)}
             className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
             <option value="">Todos los tipos</option>
@@ -981,9 +991,25 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
             <option value="NCEA">NCEA</option>
             <option value="NCEB">NCEB</option>
           </select>
-          {(clienteSearch || fvEstadoFilter !== "todos" || fvTipoFilter) && (
+          {(clienteSearch || !fvIsAll || fvTipoFilter) && (
             <span className="text-xs text-zinc-500">{filteredFacturas.length} de {facturas.length}</span>
           )}
+        </div>
+        {/* Estado multi-select toggles */}
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => fvToggleEstado("todos")}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${fvIsAll ? "bg-orange-500 text-white shadow-sm" : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"}`}>
+            {fvIsAll && <Check className="h-3.5 w-3.5" />} Todos <span className={`rounded-full px-1.5 py-0.5 text-xs ${fvIsAll ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"}`}>{facturas.length}</span>
+          </button>
+          {([["emitida", "Emitida"], ["parcial", "Parcial"], ["pagada", "Pagada"], ["vencida", "Vencida"], ["anulada", "Anulada"]] as const).map(([key, label]) => {
+            const active = !fvIsAll && fvSelectedEstados.has(key);
+            return (
+              <button key={key} onClick={() => fvToggleEstado(key)}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${active ? "bg-orange-500 text-white shadow-sm" : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"}`}>
+                {active && <Check className="h-3.5 w-3.5" />} {label} <span className={`rounded-full px-1.5 py-0.5 text-xs ${active ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"}`}>{fvEstadoCounts[key] || 0}</span>
+              </button>
+            );
+          })}
         </div>
 
         {selectedIds.size > 0 && (
@@ -995,7 +1021,6 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
             <span className="text-xs text-zinc-500">Cambiar estado a:</span>
             <button onClick={() => handleBulkEstado("emitida")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-blue-950/30 transition-colors">Emitida</button>
             <button onClick={() => handleBulkEstado("pagada")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-emerald-950/30 transition-colors">Pagada</button>
-            <button onClick={() => handleBulkEstado("anulada")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-red-50 hover:border-red-300 hover:text-red-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-red-950/30 transition-colors">Anulada</button>
             <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">Deseleccionar</button>
           </div>
         )}

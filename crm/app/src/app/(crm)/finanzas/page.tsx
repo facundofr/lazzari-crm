@@ -473,7 +473,19 @@ export default function FinanzasPage() {
   const [editFCForm, setEditFCForm] = useState<{ numero_factura: string; fecha: string; fecha_vencimiento: string; subtotal: number; iva: number; percepciones: number; moneda: "ARS" | "USD"; notas: string; cae: string }>({ numero_factura: "", fecha: "", fecha_vencimiento: "", subtotal: 0, iva: 0, percepciones: 0, moneda: "ARS", notas: "", cae: "" });
   const [savingFC, setSavingFC] = useState(false);
   const [fcSearchQuery, setFcSearchQuery] = useState("");
-  const [fcEstadoFilter, setFcEstadoFilter] = useState<"todos" | "pendiente_aprobacion" | "pendiente" | "pagada" | "recibida" | "anulada">("todos");
+  const fcAllEstados = ["pendiente_aprobacion", "pendiente", "pagada", "recibida", "anulada"] as const;
+  const [fcSelectedEstados, setFcSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
+  const fcIsAll = fcSelectedEstados.has("todos");
+  function fcToggleEstado(estado: string) {
+    setFcSelectedEstados(prev => {
+      if (estado === "todos") return new Set(["todos"]);
+      const next = new Set(prev);
+      next.delete("todos");
+      if (next.has(estado)) next.delete(estado); else next.add(estado);
+      if (next.size === 0 || next.size === fcAllEstados.length) return new Set(["todos"]);
+      return next;
+    });
+  }
   const [fcTipoFilter, setFcTipoFilter] = useState("");
   const [fcSelectedIds, setFcSelectedIds] = useState<Set<string>>(new Set());
   const [newArticleOpen, setNewArticleOpen] = useState(false);
@@ -2931,8 +2943,10 @@ ${certRetGanHtml}
         {/* ── Facturas de Compra ── */}
         {tab === "facturas_compra" && (() => {
           const fcsPendientesAprobacion = facturasCompra.filter(f => f.estado === "pendiente_aprobacion");
+          const fcEstadoCounts: Record<string, number> = {};
+          for (const f of facturasCompra) fcEstadoCounts[f.estado] = (fcEstadoCounts[f.estado] || 0) + 1;
           const filteredFC = facturasCompra.filter(f => {
-            if (fcEstadoFilter !== "todos" && f.estado !== fcEstadoFilter) return false;
+            if (!fcIsAll && !fcSelectedEstados.has(f.estado)) return false;
             if (fcTipoFilter) {
               const tipoDoc = f.numero_factura.split(" ")[0] || "";
               if (tipoDoc !== fcTipoFilter) return false;
@@ -2957,7 +2971,7 @@ ${certRetGanHtml}
                     ({formatCurrency(fcsPendientesAprobacion.reduce((s, f) => s + f.total, 0))})
                   </span>
                 </div>
-                <button onClick={() => setFcEstadoFilter("pendiente_aprobacion")}
+                <button onClick={() => { setFcSelectedEstados(new Set(["pendiente_aprobacion"])); }}
                   className="text-xs font-semibold text-amber-700 dark:text-amber-300 hover:underline">
                   Ver pendientes
                 </button>
@@ -2989,15 +3003,22 @@ ${certRetGanHtml}
                   placeholder="Buscar por proveedor o nro. factura..."
                   className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
               </div>
-              <select value={fcEstadoFilter} onChange={(e) => setFcEstadoFilter(e.target.value as any)}
-                className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                <option value="todos">Todos los estados</option>
-                <option value="pendiente_aprobacion">Pend. aprobacion</option>
-                <option value="pendiente">Pendiente</option>
-                <option value="pagada">Pagada</option>
-                <option value="recibida">Recibida</option>
-                <option value="anulada">Anulada</option>
-              </select>
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={() => fcToggleEstado("todos")}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${fcIsAll ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"}`}>
+                  Todos <span className="ml-1 opacity-70">{facturasCompra.length}</span>
+                </button>
+                {([["pendiente_aprobacion", "Pend. aprob."], ["pendiente", "Pendiente"], ["pagada", "Pagada"], ["recibida", "Recibida"], ["anulada", "Anulada"]] as const).map(([key, label]) => {
+                  const active = fcSelectedEstados.has(key);
+                  const count = fcEstadoCounts[key] || 0;
+                  return (
+                    <button key={key} onClick={() => fcToggleEstado(key)}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${active ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"}`}>
+                      {label} <span className="ml-1 opacity-70">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
               <select value={fcTipoFilter} onChange={(e) => setFcTipoFilter(e.target.value)}
                 className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                 <option value="">Todos los tipos</option>
@@ -3010,7 +3031,7 @@ ${certRetGanHtml}
                 <option value="NCEA">NCEA</option>
                 <option value="NCEB">NCEB</option>
               </select>
-              {(fcSearchQuery || fcEstadoFilter !== "todos" || fcTipoFilter) && (
+              {(fcSearchQuery || !fcIsAll || fcTipoFilter) && (
                 <span className="text-xs text-zinc-500">{filteredFC.length} de {facturasCompra.length}</span>
               )}
             </div>
@@ -3024,7 +3045,6 @@ ${certRetGanHtml}
                 <button onClick={() => handleBulkEstadoFC("pendiente")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-amber-950/30 transition-colors">Pendiente</button>
                 <button onClick={() => handleBulkEstadoFC("recibida")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-blue-950/30 transition-colors">Recibida</button>
                 <button onClick={() => handleBulkEstadoFC("pagada")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-emerald-950/30 transition-colors">Pagada</button>
-                <button onClick={() => handleBulkEstadoFC("anulada")} className="rounded-lg border border-zinc-300 px-2.5 py-1 text-xs font-medium text-zinc-700 hover:bg-red-50 hover:border-red-300 hover:text-red-700 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-red-950/30 transition-colors">Anulada</button>
                 <button onClick={() => setFcSelectedIds(new Set())} className="ml-auto text-xs text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200">Deseleccionar</button>
               </div>
             )}
