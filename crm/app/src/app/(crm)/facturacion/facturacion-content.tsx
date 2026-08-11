@@ -4,7 +4,7 @@ import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
-import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
+
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { generateFacturaPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
@@ -290,34 +290,14 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     }
   }
 
-  // Filters
-  const filterConfigs: FilterConfig[] = [
-    { key: "fecha", label: "Fecha", type: "date-range" },
-    { key: "tipo", label: "Tipo", type: "select", options: [
-      { value: "FA", label: "Factura A" }, { value: "FB", label: "Factura B" },
-      { value: "FCEA", label: "FCE A" }, { value: "FCEB", label: "FCE B" },
-      { value: "NCA", label: "NC A" }, { value: "NCB", label: "NC B" },
-      { value: "NCEA", label: "NCE A" }, { value: "NCEB", label: "NCE B" },
-      { value: "NDA", label: "ND A" }, { value: "NDB", label: "ND B" },
-    ]},
-    { key: "estado", label: "Estado", type: "select", options: [
-      { value: "emitida", label: "Emitida" }, { value: "parcial", label: "Cobro parcial" }, { value: "pagada", label: "Pagada" },
-      { value: "anulada", label: "Anulada" }, { value: "vencida", label: "Vencida" },
-    ]},
-    { key: "monto", label: "Monto", type: "number-range" },
-  ];
-  const [filterValues, setFilterValues] = useState<FilterValues>({ fecha: { from: "", to: "" }, tipo: "", estado: "", monto: {} });
+  // Filters — direct selects (same style as Fact. Compra)
+  const [fvEstadoFilter, setFvEstadoFilter] = useState("todos");
+  const [fvTipoFilter, setFvTipoFilter] = useState("");
   const [clienteSearch, setClienteSearch] = useState("");
 
   const filteredFacturas = facturas.filter((f) => {
-    const fechaFilter = filterValues.fecha as { from?: string; to?: string } | undefined;
-    if (fechaFilter?.from && f.fecha < fechaFilter.from) return false;
-    if (fechaFilter?.to && f.fecha > fechaFilter.to) return false;
-    if (filterValues.tipo && f.tipo !== filterValues.tipo) return false;
-    if (filterValues.estado && f.estado !== filterValues.estado) return false;
-    const montoFilter = filterValues.monto as { min?: number; max?: number } | undefined;
-    if (montoFilter?.min !== undefined && Number(f.total) < montoFilter.min) return false;
-    if (montoFilter?.max !== undefined && Number(f.total) > montoFilter.max) return false;
+    if (fvEstadoFilter !== "todos" && f.estado !== fvEstadoFilter) return false;
+    if (fvTipoFilter && f.tipo !== fvTipoFilter) return false;
     if (clienteSearch.trim()) {
       const nombre = (f.clientes?.razon_social || "").toLowerCase();
       if (!nombre.includes(clienteSearch.trim().toLowerCase())) return false;
@@ -941,21 +921,39 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           <StatCard title="CAE vigentes" value={String(caeVigentes)} icon={FileCheck} iconColor="text-blue-600" />
         </div>
 
-        <div className="relative w-full sm:w-80">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-          <input
-            value={clienteSearch}
-            onChange={(e) => setClienteSearch(e.target.value)}
-            placeholder="Buscar por cliente (razón social)..."
-            className="w-full rounded-lg border border-zinc-200 pl-9 pr-8 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white placeholder:text-zinc-400"
-          />
-          {clienteSearch && (
-            <button onClick={() => setClienteSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600">
-              <X className="h-4 w-4" />
-            </button>
+        {/* Search & filters — same style as Fact. Compra */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative flex-1 max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+            <input value={clienteSearch} onChange={(e) => setClienteSearch(e.target.value)}
+              placeholder="Buscar por cliente..."
+              className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+          </div>
+          <select value={fvEstadoFilter} onChange={(e) => setFvEstadoFilter(e.target.value)}
+            className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+            <option value="todos">Todos los estados</option>
+            <option value="emitida">Emitida</option>
+            <option value="parcial">Cobro parcial</option>
+            <option value="pagada">Pagada</option>
+            <option value="vencida">Vencida</option>
+            <option value="anulada">Anulada</option>
+          </select>
+          <select value={fvTipoFilter} onChange={(e) => setFvTipoFilter(e.target.value)}
+            className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+            <option value="">Todos los tipos</option>
+            <option value="FA">FA</option>
+            <option value="FB">FB</option>
+            <option value="FCEA">FCEA</option>
+            <option value="FCEB">FCEB</option>
+            <option value="NCA">NCA</option>
+            <option value="NCB">NCB</option>
+            <option value="NCEA">NCEA</option>
+            <option value="NCEB">NCEB</option>
+          </select>
+          {(clienteSearch || fvEstadoFilter !== "todos" || fvTipoFilter) && (
+            <span className="text-xs text-zinc-500">{filteredFacturas.length} de {facturas.length}</span>
           )}
         </div>
-        <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
 
         {/* Data table */}
         <Card className="p-0 overflow-hidden">

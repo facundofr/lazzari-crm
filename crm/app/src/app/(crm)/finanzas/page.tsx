@@ -3237,6 +3237,16 @@ ${certRetGanHtml}
                       className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                   </div>
                   {ccClienteSearch && <span className="text-xs text-zinc-500">{filteredCcClientes.length} de {ccClientes.length}</span>}
+                  <button onClick={() => {
+                    const lines = ["Cliente,CUIT,Dias CC,Forma de Pago,Limite,Saldo"];
+                    filteredCcClientes.forEach(c => {
+                      lines.push(`"${c.razon_social}","${c.cuit || ""}",${c.dias_cuenta_corriente},"${c.forma_pago}",${c.limite_credito.toFixed(2)},${c.saldo_cuenta_corriente.toFixed(2)}`);
+                    });
+                    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+                    const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `CC_Clientes_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+                  }} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors ml-auto">
+                    <Download className="h-4 w-4" /> Exportar CSV
+                  </button>
                 </div>
                 <Card className="p-0 overflow-hidden">
                   <DataTable<CCRow>
@@ -3342,6 +3352,16 @@ ${certRetGanHtml}
                   <input value={ccProveedorSearch} onChange={(e) => setCcProveedorSearch(e.target.value)} placeholder="Buscar por nombre o CUIT..." className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                 </div>
                 {ccProveedorSearch && <span className="text-xs text-zinc-500">{filteredCcProveedores.length} de {ccProveedores.length}</span>}
+                <button onClick={() => {
+                  const lines = ["Proveedor,CUIT,Dias CC,Forma de Pago,Limite,Saldo"];
+                  filteredCcProveedores.forEach(p => {
+                    lines.push(`"${p.razon_social}","${p.cuit || ""}",${p.dias_cuenta_corriente},"${p.forma_pago}",${p.limite_credito.toFixed(2)},${p.saldo_cuenta_corriente.toFixed(2)}`);
+                  });
+                  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+                  const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `CC_Proveedores_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+                }} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors ml-auto">
+                  <Download className="h-4 w-4" /> Exportar CSV
+                </button>
               </div>
               <Card className="p-0 overflow-hidden">
                 <DataTable<CCRow>
