@@ -1302,19 +1302,23 @@ export default function FinanzasPage() {
         }
       }
 
-      // Create movimiento
-      const movData: Record<string, unknown> = {
-        tipo: "pago",
-        descripcion: `${opNumero} — ${provNombre}`,
-        monto: opNetoAPagar,
+      // Create movimientos (pago + retenciones)
+      const movBase: Record<string, unknown> = {
+        proveedor_id: opForm.proveedor_id,
         moneda: opForm.moneda,
         fecha: opForm.fecha,
-        proveedor_id: opForm.proveedor_id,
-        conciliado: false,
+        conciliado: true,
       };
-      if (profile?.id) movData.created_by = profile.id;
-      if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
-      await supabase.from("movimientos").insert(movData as any);
+      if (profile?.id) movBase.created_by = profile.id;
+      if (sociedadActiva?.id) (movBase as any).sociedad_id = sociedadActiva.id;
+
+      // Movimiento principal (neto a pagar)
+      await supabase.from("movimientos").insert({ ...movBase, tipo: "pago", descripcion: `${opNumero} — ${provNombre}`, monto: opNetoAPagar } as any);
+
+      // Movimiento retención ganancias
+      if (opRetencionGanancias > 0) {
+        await supabase.from("movimientos").insert({ ...movBase, tipo: "retencion_ganancias", descripcion: `${opNumero} — Ret. Ganancias — ${provNombre}`, monto: opRetencionGanancias } as any);
+      }
 
       // Mark echeqs used as endosado
       for (const m of opMedios) {
