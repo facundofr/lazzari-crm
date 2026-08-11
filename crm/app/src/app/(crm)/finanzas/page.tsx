@@ -2275,12 +2275,15 @@ ${certRetGanHtml}
       let qF = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado").eq("cliente_id", cliente.id).in("estado", ["emitida", "pagada", "parcial"]).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qF = qF.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: fData } = await qF;
-      // Fetch cobrado per factura from movimientos
+      // Fetch cobrado per factura from movimientos + cobro_aplicaciones
       let cobradoMap: Record<string, number> = {};
       if (fData && fData.length > 0) {
         const fIds = fData.map((f: any) => f.id);
         const { data: cobros } = await (supabase as any).from("movimientos").select("factura_id, monto").in("factura_id", fIds);
         if (cobros) (cobros as any[]).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
+        // Also count consolidated cobros via cobro_aplicaciones
+        const { data: aplicaciones } = await (supabase as any).from("cobro_aplicaciones").select("factura_id, monto").in("factura_id", fIds);
+        if (aplicaciones) (aplicaciones as any[]).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
       }
       if (fData) setCcDetailFacturas(fData.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.fecha_vencimiento ?? null, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: f.estado })));
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
@@ -2329,6 +2332,9 @@ ${certRetGanHtml}
         const { data: movs } = await (supabase as any).from("movimientos").select("factura_id, monto").in("factura_id", ids);
         const cobradoMap: Record<string, number> = {};
         (movs || []).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
+        // Also count consolidated cobros via cobro_aplicaciones
+        const { data: aplicaciones } = await (supabase as any).from("cobro_aplicaciones").select("factura_id, monto").in("factura_id", ids);
+        if (aplicaciones) (aplicaciones as any[]).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
         setCobroMultiFCs(data.map((f: any) => { const cobrado = cobradoMap[f.id] || 0; const saldo = Math.max(0, Number(f.total) - Number(f.total_acreditado || 0) - cobrado); return { id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", saldo, selected: false }; }).filter((f: CobroMultiFC) => f.saldo > 0.01));
       }
     } catch { /* noop */ }

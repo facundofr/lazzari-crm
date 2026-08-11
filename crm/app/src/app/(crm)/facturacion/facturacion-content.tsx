@@ -720,11 +720,13 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
       if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
       const { data } = await q;
       if (data && data.length > 0) {
-        // Query existing movimientos to get real saldo (not just total - total_acreditado)
+        // Query existing movimientos + cobro_aplicaciones to get real saldo
         const ids = data.map((f: any) => f.id);
         const { data: movs } = await (supabase as any).from("movimientos").select("factura_id, monto").in("factura_id", ids);
         const cobradoMap: Record<string, number> = {};
         (movs || []).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
+        const { data: aplicaciones } = await (supabase as any).from("cobro_aplicaciones").select("factura_id, monto").in("factura_id", ids);
+        if (aplicaciones) (aplicaciones as any[]).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
         setCmFCs(data.map((f: any) => {
           const cobrado = cobradoMap[f.id] || 0;
           const saldo = Number(f.total) - Number(f.total_acreditado || 0) - cobrado;
