@@ -16,7 +16,7 @@ import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
   ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, FileText, Search, Scissors,
-  Maximize2,
+  Maximize2, Pencil,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 
@@ -107,6 +107,15 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
   const [detailItems, setDetailItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number; subtotal: number }[]>([]);
   const [panelFullscreen, setPanelFullscreen] = useState(false);
+  const [editingFechaPago, setEditingFechaPago] = useState<string | null>(null);
+
+  async function saveFechaPago(id: string, newDate: string) {
+    setFacturas(prev => prev.map(f => f.id === id ? { ...f, fecha_vencimiento: newDate || null, _fechaVencCalc: newDate || "" } : f));
+    setEditingFechaPago(null);
+    const { error } = await supabase.from("facturas").update({ fecha_vencimiento: newDate || null } as any).eq("id", id);
+    if (error) { alert("Error: " + error.message); await fetchData(); }
+  }
+
   async function toggleRecibidaCliente(id: string, current: boolean) {
     const newVal = !current;
     setFacturas(prev => prev.map(f => f.id === id ? { ...f, recibida_cliente: newVal } : f));
@@ -1046,11 +1055,28 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                 : <span className="text-zinc-300">{"\u2014"}</span>
               },
               { key: "fecha", label: "Fecha", sortable: true, render: (r) => <span className="text-zinc-500">{formatDate(r.fecha)}</span> },
-              { key: "_fechaVencCalc" as any, label: "Vencimiento", sortable: true, render: (r) => {
+              { key: "_fechaVencCalc" as any, label: "Fecha de pago", sortable: true, render: (r) => {
                 const fv = r._fechaVencCalc;
-                if (!fv) return <span className="text-zinc-300">—</span>;
+                if (editingFechaPago === r.id) return (
+                  <div onClick={e => e.stopPropagation()}>
+                    <input type="date" autoFocus defaultValue={fv || ""} onBlur={e => saveFechaPago(r.id, e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setEditingFechaPago(null); }}
+                      className="w-32 px-1.5 py-0.5 rounded border border-orange-300 text-xs bg-white dark:bg-zinc-800 dark:text-white dark:border-orange-600" />
+                  </div>
+                );
+                if (!fv) return (
+                  <div className="flex items-center gap-1" onClick={e => { e.stopPropagation(); setEditingFechaPago(r.id); }}>
+                    <span className="text-zinc-300">—</span>
+                    <Pencil className="h-3 w-3 text-zinc-300 hover:text-orange-500 cursor-pointer" />
+                  </div>
+                );
                 const vencido = new Date(fv) < new Date(todayAR()) && r.estado !== "pagada" && r.estado !== "anulada";
-                return <span className={vencido ? "text-red-500 font-medium" : "text-zinc-500"}>{formatDate(fv)}</span>;
+                return (
+                  <div className="flex items-center gap-1" onClick={e => { e.stopPropagation(); setEditingFechaPago(r.id); }}>
+                    <span className={vencido ? "text-red-500 font-medium" : "text-zinc-500"}>{formatDate(fv)}</span>
+                    <Pencil className="h-3 w-3 text-zinc-300 hover:text-orange-500 cursor-pointer" />
+                  </div>
+                );
               }},
               { key: "total", label: "Total", sortable: true, className: "text-right", render: (r) => (
                 <span className="font-mono font-semibold block text-right">{formatCurrency(Number(r.total), r.moneda as "USD" | "ARS")}</span>
