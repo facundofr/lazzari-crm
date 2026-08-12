@@ -18,6 +18,7 @@ import {
   Maximize2, Upload,
 } from "lucide-react";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
+import { EmailComposeModal } from "@/components/email-compose-modal";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
@@ -149,6 +150,9 @@ export default function OrdenesCompraPage() {
 
   // Cargar factura modal
   const [cargarFCOpen, setCargarFCOpen] = useState(false);
+
+  // Email modal
+  const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
 
   // Create modal
   const [createOpen, setCreateOpen] = useState(false);
@@ -1878,6 +1882,19 @@ export default function OrdenesCompraPage() {
                     >
                       <Download className="h-4 w-4" />
                     </button>
+                    <button
+                      onClick={() => {
+                        const oc = detailOC;
+                        const provEmail = oc.proveedores?.email || "";
+                        const subject = `${oc.numero} — ${sociedadActiva?.razonSocial || "Lazzari"}`;
+                        const body = `Estimado/a,\n\nAdjuntamos la Orden de Compra N° ${oc.numero} del ${formatDate(oc.fecha)}.\nProveedor: ${oc.proveedores?.razon_social || "—"}\nTotal: ${formatCurrency(oc.total, oc.moneda as "ARS" | "USD")}.\n\nQuedamos a disposición ante cualquier consulta.\nSaludos,\n${sociedadActiva?.razonSocial || "Lazzari"}`;
+                        setEmailModal({ open: true, id: oc.id, to: provEmail, subject, body, filename: `${oc.numero}.pdf` });
+                      }}
+                      className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
+                      title="Enviar por email"
+                    >
+                      <Mail className="h-4 w-4" />
+                    </button>
                   </>
                 )}
                 <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
@@ -2355,6 +2372,19 @@ export default function OrdenesCompraPage() {
           onSuccess={() => { setCargarFCOpen(false); fetchData(); }}
         />
       )}
+
+      {/* Email compose modal */}
+      <EmailComposeModal
+        open={emailModal.open}
+        onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
+        documentType="orden_compra"
+        documentId={emailModal.id}
+        sociedadId={sociedadActiva?.id || ""}
+        defaultTo={emailModal.to}
+        defaultSubject={emailModal.subject}
+        defaultBody={emailModal.body}
+        pdfFilename={emailModal.filename}
+      />
     </>
   );
 }

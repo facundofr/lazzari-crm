@@ -11,6 +11,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
 import { generateRemitoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
+import { EmailComposeModal } from "@/components/email-compose-modal";
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -173,6 +174,10 @@ export default function RemitosPage() {
   // AFIP authorization
   const [autorizandoAFIP, setAutorizandoAFIP] = useState(false);
   const [afipError, setAfipError] = useState("");
+
+  // Email compose modal
+  const [emailModalOpen, setEmailModalOpen] = useState(false);
+  const [emailModalData, setEmailModalData] = useState<{ to: string; subject: string; body: string; filename: string; id: string }>({ to: "", subject: "", body: "", filename: "", id: "" });
 
   // Entrega parcial modal
   const [parcialModalOpen, setParcialModalOpen] = useState(false);
@@ -946,11 +951,23 @@ export default function RemitosPage() {
 
   function handleEmailRemito() {
     if (!detailRemito) return;
-    const text = buildRemitoSummaryText();
-    const emailTo = detailRemito.clientes?.email || "";
-    const subject = encodeURIComponent(`Remito ${detailRemito.numero}`);
-    const body = encodeURIComponent(text);
-    window.open(`mailto:${encodeURIComponent(emailTo)}?subject=${subject}&body=${body}`, "_blank");
+    const r = detailRemito;
+    const itemsHtml = detailItems.map((it, i) => `<li>${it.descripcion} — ${it.cantidad} ${it.unidad || "u"}</li>`).join("");
+    const body = [
+      `<p>Estimado/a,</p>`,
+      `<p>Adjuntamos el remito <strong>${r.numero}</strong> con fecha ${formatDate(r.fecha)}.</p>`,
+      `<ul>${itemsHtml}</ul>`,
+      r.observaciones ? `<p>Observaciones: ${r.observaciones}</p>` : "",
+      `<p>Saludos cordiales,<br/>${sociedadActiva?.razonSocial || "Lazzari"}</p>`,
+    ].filter(Boolean).join("");
+    setEmailModalData({
+      to: r.clientes?.email || "",
+      subject: `Remito ${r.numero} — ${sociedadActiva?.razonSocial || "Lazzari"}`,
+      body,
+      filename: `Remito-${r.numero}.pdf`,
+      id: r.id,
+    });
+    setEmailModalOpen(true);
   }
 
   function openPdfModal() {
@@ -2129,6 +2146,18 @@ export default function RemitosPage() {
           </div>
         </>
       )}
+
+      <EmailComposeModal
+        open={emailModalOpen}
+        onClose={() => setEmailModalOpen(false)}
+        documentType="remito"
+        documentId={emailModalData.id}
+        sociedadId={sociedadActiva?.id || ""}
+        defaultTo={emailModalData.to}
+        defaultSubject={emailModalData.subject}
+        defaultBody={emailModalData.body}
+        pdfFilename={emailModalData.filename}
+      />
     </>
   );
 }

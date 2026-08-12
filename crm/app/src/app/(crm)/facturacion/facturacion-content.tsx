@@ -9,6 +9,7 @@ import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { generateFacturaPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
+import { EmailComposeModal, type EmailDocumentType } from "@/components/email-compose-modal";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { mockFacturas } from "@/lib/mock-data";
@@ -107,6 +108,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
   const [detailItems, setDetailItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number; subtotal: number }[]>([]);
   const [panelFullscreen, setPanelFullscreen] = useState(false);
+  const [emailModal, setEmailModal] = useState<{ open: boolean; facturaId: string; to: string; subject: string; body: string; filename: string }>({ open: false, facturaId: "", to: "", subject: "", body: "", filename: "" });
   const [editingFechaPago, setEditingFechaPago] = useState<string | null>(null);
 
   async function saveFechaPago(id: string, newDate: string) {
@@ -872,12 +874,16 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   }
 
   function handleEmailFactura(f: FacturaRow) {
-    const text = buildFacturaSummaryText(f);
     const comp = formatComprobante(f.tipo, f.punto_venta, f.numero);
-    const emailTo = f.clientes?.email || "";
-    const subject = encodeURIComponent(comp);
-    const body = encodeURIComponent(text);
-    window.open(`mailto:${encodeURIComponent(emailTo)}?subject=${subject}&body=${body}`, "_blank");
+    const socName = sociedadActiva?.razonSocial || sociedadActiva?.nombre || "Lazzari";
+    setEmailModal({
+      open: true,
+      facturaId: f.id,
+      to: f.clientes?.email || "",
+      subject: `${comp} — ${socName}`,
+      body: buildFacturaSummaryText(f),
+      filename: `${f.tipo}-${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}.pdf`,
+    });
   }
 
   async function handlePrintFactura(f: FacturaRow) {
@@ -2209,6 +2215,19 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           </div>
         </div>
       )}
+
+      {/* Email compose modal */}
+      <EmailComposeModal
+        open={emailModal.open}
+        onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
+        documentType="factura"
+        documentId={emailModal.facturaId}
+        sociedadId={sociedadActiva?.id || ""}
+        defaultTo={emailModal.to}
+        defaultSubject={emailModal.subject}
+        defaultBody={emailModal.body}
+        pdfFilename={emailModal.filename}
+      />
     </>
   );
 }

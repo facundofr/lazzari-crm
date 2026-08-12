@@ -23,6 +23,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { useUser } from "@/lib/auth-context";
 import { PendientesWidget } from "@/components/presupuestos/pendientes-widget";
+import { EmailComposeModal } from "@/components/email-compose-modal";
 
 /** Number input that allows typing decimals (e.g. "10.") without losing the dot */
 function NumInput({ value, onChange, className, ...props }: { value: number | string; onChange: (n: number) => void; className?: string } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "type">) {
@@ -289,50 +290,14 @@ export default function PresupuestosPage() {
   const [vendedores, setVendedores] = useState<{id: string; full_name: string}[]>([]);
 
   // Email modal
-  const [emailModal, setEmailModal] = useState(false);
-  const [emailTo, setEmailTo] = useState("");
-  const [emailSubject, setEmailSubject] = useState("");
-  const [emailBody, setEmailBody] = useState("");
-  const [emailSending, setEmailSending] = useState(false);
+  const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
 
-  async function openEmailModal(pr: Presupuesto) {
+  function openEmailModal(pr: Presupuesto) {
     const clientEmail = (pr as any).clienteEmail || "";
-    // Try to get email template
-    let subject = `Presupuesto N° ${pr.numero} - ${sociedadActiva?.razonSocial || "Lazzari"}`;
-    let body = `Estimado/a,\n\nAdjuntamos el presupuesto N° ${pr.numero} para su consideración.\n\nQuedamos a disposición ante cualquier consulta.\nSaludos,\n${sociedadActiva?.razonSocial || "Lazzari"}`;
-    try {
-      const { data } = await (supabase as any).from("email_templates").select("asunto, cuerpo").eq("tipo", "presupuesto").eq("sociedad_id", sociedadActiva?.id).single();
-      if (data) {
-        subject = data.asunto.replace(/\{\{numero\}\}/g, pr.numero).replace(/\{\{sociedad\}\}/g, sociedadActiva?.razonSocial || "").replace(/\{\{cliente\}\}/g, pr.clienteNombre);
-        body = data.cuerpo.replace(/\{\{numero\}\}/g, pr.numero).replace(/\{\{sociedad\}\}/g, sociedadActiva?.razonSocial || "").replace(/\{\{cliente\}\}/g, pr.clienteNombre);
-      }
-    } catch {}
-    setEmailTo(clientEmail);
-    setEmailSubject(subject);
-    setEmailBody(body);
-    setEmailModal(true);
-  }
-
-  async function handleSendEmail() {
-    if (!emailTo || !selected) return;
-    setEmailSending(true);
-    try {
-      // 1. Generar PDF del PR en nueva ventana para que el usuario lo guarde/imprima
-      handlePrint(selected);
-
-      // 2. Abrir mailto con el texto (el usuario adjunta el PDF manualmente)
-      setTimeout(() => {
-        const mailtoUrl = `mailto:${encodeURIComponent(emailTo)}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
-        window.open(mailtoUrl, "_blank");
-      }, 800);
-
-      toast.success("Se abrió el PDF y el cliente de email. Adjuntá el PDF al mail.");
-      setEmailModal(false);
-    } catch {
-      toast.error("Error al preparar el email");
-    } finally {
-      setEmailSending(false);
-    }
+    const itemCount = pr.items.length;
+    const subject = `${pr.numero} — ${sociedadActiva?.razonSocial || "Lazzari"}`;
+    const body = `Estimado/a,\n\nAdjuntamos el presupuesto N° ${pr.numero} del ${formatDate(pr.fecha)}.\nTotal: ${formatCurrency(pr.total, pr.moneda)}${itemCount > 0 ? ` (${itemCount} ítems)` : ""}.\n\nQuedamos a disposición ante cualquier consulta.\nSaludos,\n${sociedadActiva?.razonSocial || "Lazzari"}`;
+    setEmailModal({ open: true, id: pr.id, to: clientEmail, subject, body, filename: `${pr.numero}.pdf` });
   }
 
   // Rechazo modal
@@ -3585,42 +3550,17 @@ export default function PresupuestosPage() {
       )}
 
       {/* ==================== EMAIL MODAL ==================== */}
-      {emailModal && (
-        <>
-          <div className="fixed inset-0 z-[70] bg-black/40" onClick={() => setEmailModal(false)} />
-          <div className="fixed inset-4 z-[70] m-auto h-fit max-h-[80vh] w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl dark:bg-zinc-900 flex flex-col">
-            <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-4 dark:border-zinc-700">
-              <div className="flex items-center gap-2">
-                <Mail className="h-5 w-5 text-blue-500" />
-                <h3 className="font-semibold text-zinc-900 dark:text-white">Enviar por email</h3>
-              </div>
-              <button onClick={() => setEmailModal(false)} className="rounded p-1 text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
-            </div>
-            <div className="p-5 space-y-4 overflow-y-auto">
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Para</label>
-                <input type="email" value={emailTo} onChange={(e) => setEmailTo(e.target.value)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="email@cliente.com" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Asunto</label>
-                <input type="text" value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Mensaje</label>
-                <textarea value={emailBody} onChange={(e) => setEmailBody(e.target.value)} rows={8} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-none" />
-              </div>
-              <p className="text-xs text-zinc-400">Se abrirá el PDF del presupuesto y tu cliente de email. Guardá el PDF e incluilo como adjunto.</p>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
-              <button onClick={() => setEmailModal(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
-              <button onClick={handleSendEmail} disabled={emailSending || !emailTo} className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                {emailSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
-                Enviar
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+      <EmailComposeModal
+        open={emailModal.open}
+        onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
+        documentType="presupuesto"
+        documentId={emailModal.id}
+        sociedadId={sociedadActiva?.id || ""}
+        defaultTo={emailModal.to}
+        defaultSubject={emailModal.subject}
+        defaultBody={emailModal.body}
+        pdfFilename={emailModal.filename}
+      />
     </>
   );
 }

@@ -10,11 +10,12 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles, Mail } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
+import { EmailComposeModal } from "@/components/email-compose-modal";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -440,6 +441,7 @@ export default function FinanzasPage() {
   const [editingOP, setEditingOP] = useState(false);
   const [editOPForm, setEditOPForm] = useState<{ fecha: string; moneda: "ARS" | "USD"; notas: string }>({ fecha: "", moneda: "ARS", notas: "" });
   const [savingOP, setSavingOP] = useState(false);
+  const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
 
   // Gastos manuales state
   const [gastosManuales, setGastosManuales] = useState<GastoManualRow[]>([]);
@@ -5217,6 +5219,9 @@ export default function FinanzasPage() {
                       <CheckCircle2 className="h-4 w-4" /> Marcar pagada
                     </button>
                 )}
+                <button onClick={() => setEmailModal({ open: true, id: selectedOP.id, to: "", subject: `OP ${selectedOP.numero || ""} — ${sociedadActiva?.razonSocial || "Lazzari"}`, body: `Adjunto encontrará la Orden de Pago ${selectedOP.numero || ""} por ${formatCurrency(selectedOP.neto, selectedOP.moneda)} a favor de ${selectedOP.proveedor_nombre}.`, filename: `OP-${selectedOP.numero || selectedOP.id.slice(0,8)}.pdf` })} className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                  <Mail className="h-4 w-4" /> Enviar
+                </button>
                 {selectedOP.estado !== "anulada" && (
                     <button
                       onClick={() => { handleAnularOP(selectedOP.id); setSelectedOP(null); }}
@@ -5551,6 +5556,17 @@ export default function FinanzasPage() {
           </div>
         </>
       )}
+      <EmailComposeModal
+        open={emailModal.open}
+        onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
+        documentType="orden_pago"
+        documentId={emailModal.id}
+        sociedadId={sociedadActiva?.id || ""}
+        defaultTo={emailModal.to}
+        defaultSubject={emailModal.subject}
+        defaultBody={emailModal.body}
+        pdfFilename={emailModal.filename}
+      />
     </>
   );
 }
