@@ -420,7 +420,7 @@ export interface ListaPreciosItem {
 }
 
 // ── Órdenes de compra ────────────────────────────────────────────
-export type OCStatus = "borrador" | "enviada" | "confirmada" | "recibida_parcial" | "recibida" | "cancelada";
+export type OCStatus = "borrador" | "pendiente" | "enviada" | "confirmada" | "recibida_parcial" | "recibida" | "cancelada";
 
 export interface OrdenCompra {
   id: string;

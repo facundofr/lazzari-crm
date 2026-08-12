@@ -24,8 +24,9 @@ import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" | "outline" | "purple" }> = {
   borrador: { label: "Borrador", variant: "outline" },
-  enviada: { label: "Enviada", variant: "info" },
-  confirmada: { label: "Confirmada", variant: "warning" },
+  pendiente: { label: "Pendiente", variant: "info" },
+  enviada: { label: "Pendiente", variant: "info" },
+  confirmada: { label: "Pendiente", variant: "info" },
   recibida_parcial: { label: "Parcial", variant: "purple" },
   recibida: { label: "Recibida", variant: "success" },
   cancelada: { label: "Cancelada", variant: "danger" },
@@ -416,7 +417,7 @@ export default function OrdenesCompraPage() {
     }
   };
 
-  const handleAdvanceEstado = async (oc: OCRow, nuevoEstado: "enviada" | "confirmada") => {
+  const handleAdvanceEstado = async (oc: OCRow, nuevoEstado: "pendiente") => {
     try {
       const { error } = await supabase.from("ordenes_compra").update({ estado: nuevoEstado } as any).eq("id", oc.id);
       if (error) throw error;
@@ -640,7 +641,7 @@ export default function OrdenesCompraPage() {
       if (detailOC.estado !== "cancelada") {
         if (allReceived && editItems.length > 0) newEstado = "recibida";
         else if (someReceived) newEstado = "recibida_parcial";
-        else if (detailOC.estado === "recibida" || detailOC.estado === "recibida_parcial") newEstado = "confirmada";
+        else if (detailOC.estado === "recibida" || detailOC.estado === "recibida_parcial") newEstado = "pendiente";
       }
 
       // 4. Update OC header
@@ -1149,7 +1150,11 @@ export default function OrdenesCompraPage() {
 
   // ── Computed ─────────────────────────────────────────────────────
   const filtered = ordenes.filter((oc) => {
-    if (filter !== "todas" && oc.estado !== filter) return false;
+    if (filter !== "todas") {
+      if (filter === "pendiente") {
+        if (!["pendiente", "enviada", "confirmada"].includes(oc.estado)) return false;
+      } else if (oc.estado !== filter) return false;
+    }
     const fechaFilter = smartFilterValues.fecha as { from?: string; to?: string } | undefined;
     if (fechaFilter?.from && oc.fecha < fechaFilter.from) return false;
     if (fechaFilter?.to && oc.fecha > fechaFilter.to) return false;
@@ -1170,10 +1175,10 @@ export default function OrdenesCompraPage() {
   });
 
   const totalPendiente = ordenes
-    .filter((oc) => ["enviada", "confirmada"].includes(oc.estado))
+    .filter((oc) => ["pendiente", "enviada", "confirmada"].includes(oc.estado))
     .reduce((a, oc) => a + Number(oc.total), 0);
   const pendientesRecepcion = ordenes.filter((oc) =>
-    ["enviada", "confirmada", "recibida_parcial"].includes(oc.estado)
+    ["pendiente", "enviada", "confirmada", "recibida_parcial"].includes(oc.estado)
   ).length;
 
   if (loading) {
@@ -1238,7 +1243,7 @@ export default function OrdenesCompraPage() {
           const late = ordenes.filter(oc =>
             oc.fecha_entrega_estimada &&
             oc.fecha_entrega_estimada < today &&
-            ["enviada", "confirmada", "recibida_parcial"].includes(oc.estado)
+            ["pendiente", "enviada", "confirmada", "recibida_parcial"].includes(oc.estado)
           );
           if (late.length === 0) return null;
           return (
@@ -1259,8 +1264,8 @@ export default function OrdenesCompraPage() {
 
         {/* Filter tabs */}
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {(["todas", "borrador", "enviada", "confirmada", "recibida_parcial", "recibida", "cancelada"] as const).map((status) => {
-            const count = status === "todas" ? ordenes.length : ordenes.filter((oc) => oc.estado === status).length;
+          {(["todas", "borrador", "pendiente", "recibida_parcial", "recibida", "cancelada"] as const).map((status) => {
+            const count = status === "todas" ? ordenes.length : ordenes.filter((oc) => status === "pendiente" ? ["pendiente", "enviada", "confirmada"].includes(oc.estado) : oc.estado === status).length;
             if (status !== "todas" && count === 0) return null;
             return (
               <button
@@ -1890,21 +1895,13 @@ export default function OrdenesCompraPage() {
                 <div className="flex flex-wrap gap-2">
                   {detailOC.estado === "borrador" && (
                     <button
-                      onClick={() => handleAdvanceEstado(detailOC, "enviada")}
+                      onClick={() => handleAdvanceEstado(detailOC, "pendiente")}
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
                     >
-                      <Send className="h-4 w-4" /> Marcar como enviada
+                      <Send className="h-4 w-4" /> Activar OC
                     </button>
                   )}
-                  {detailOC.estado === "enviada" && (
-                    <button
-                      onClick={() => handleAdvanceEstado(detailOC, "confirmada")}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition-colors"
-                    >
-                      <CheckCircle2 className="h-4 w-4" /> Confirmar OC
-                    </button>
-                  )}
-                  {["confirmada", "recibida_parcial"].includes(detailOC.estado) && detailItems.length > 0 && (
+                  {["pendiente", "enviada", "confirmada", "recibida_parcial"].includes(detailOC.estado) && detailItems.length > 0 && (
                     <button
                       onClick={handleMarcarTodoRecibido}
                       disabled={savingRecepcion === "all"}
@@ -2060,7 +2057,7 @@ export default function OrdenesCompraPage() {
               ) : null}
 
               {/* Notas de recepcion */}
-              {(detailOC.notas_recepcion || ["recibida_parcial", "confirmada", "enviada"].includes(detailOC.estado)) && (
+              {(detailOC.notas_recepcion || ["recibida_parcial", "pendiente", "enviada", "confirmada"].includes(detailOC.estado)) && (
                 <div className="text-sm">
                   <div className="flex items-center justify-between">
                     <span className="text-zinc-400 flex items-center gap-1.5">
@@ -2227,7 +2224,7 @@ export default function OrdenesCompraPage() {
               </div>
 
               {/* ── Recepcion de mercaderia ─────────────────────────── */}
-              {["confirmada", "recibida_parcial"].includes(detailOC.estado) && detailItems.length > 0 && !detailLoading && (
+              {["pendiente", "enviada", "confirmada", "recibida_parcial"].includes(detailOC.estado) && detailItems.length > 0 && !detailLoading && (
                 <div className="rounded-lg border-2 border-violet-200 dark:border-violet-800 bg-violet-50/50 dark:bg-violet-900/10 p-4 space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold flex items-center gap-2 text-violet-700 dark:text-violet-300">
