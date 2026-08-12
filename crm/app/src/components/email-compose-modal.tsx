@@ -48,14 +48,17 @@ export function EmailComposeModal({
   const [bodyHtml, setBodyHtml] = useState(defaultBody);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [prevOpen, setPrevOpen] = useState(false);
 
-  // Reset state when modal opens with new defaults
-  useState(() => {
+  // Reset state when modal opens (transition from closed → open)
+  if (open && !prevOpen) {
     setTo(defaultTo);
     setSubject(defaultSubject);
     setBodyHtml(defaultBody);
     setResult(null);
-  });
+    setSending(false);
+  }
+  if (open !== prevOpen) setPrevOpen(open);
 
   if (!open) return null;
 

@@ -8,8 +8,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
+import { createSupabaseServer } from "@/lib/supabase/server";
 
 // Lazy-import heavy deps only when needed
 async function renderPDF(html: string): Promise<Buffer> {
@@ -37,12 +37,7 @@ async function renderPDF(html: string): Promise<Buffer> {
   }
 }
 
-// ── Supabase admin client (server-side, no RLS) ──
-function getSupabase() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  return createClient(url, key);
-}
+// ── Supabase server client (uses session cookies for RLS) ──
 
 // ── Sociedad config ──
 const SOCIEDAD_DATA: Record<string, {
@@ -77,8 +72,8 @@ async function generateDocumentHTML(
   docType: string,
   docId: string,
   sociedadId: string,
+  supabase: any,
 ): Promise<{ html: string; filename: string; error?: string }> {
-  const supabase = getSupabase();
   const socData = SOCIEDAD_DATA[sociedadId];
   if (!socData) return { html: "", filename: "", error: "Sociedad no encontrada" };
 
@@ -167,7 +162,7 @@ async function generateDocumentHTML(
         clienteEmail: pr.clientes?.email, clienteTelefono: pr.clientes?.telefono,
         clienteDireccion: pr.clientes?.direccion, clienteLocalidad: pr.clientes?.localidad,
         clienteProvincia: pr.clientes?.provincia, vendedorNombre,
-        items: (items || []).map(it => ({
+        items: (items || []).map((it: any) => ({
           codigo: it.codigo || "", descripcion: it.descripcion,
           cantidad: it.cantidad, unidad: it.unidad || "u",
           precioVenta: it.precio_venta, total: it.total,
@@ -210,8 +205,8 @@ async function generateDocumentHTML(
         oc_cliente: r.oc_cliente, valor_declarado: r.valor_declarado,
         observaciones: r.observaciones, cliente: r.clientes,
         sucursal_nombre: sucursalNombre, sucursal_direccion: sucursalDireccion,
-        items: (items || []).map(it => ({ descripcion: it.descripcion, cantidad: it.cantidad, unidad: it.unidad })),
-        transportes: (transportes || []).map(t => ({
+        items: (items || []).map((it: any) => ({ descripcion: it.descripcion, cantidad: it.cantidad, unidad: it.unidad })),
+        transportes: (transportes || []).map((t: any) => ({
           transportista: t.transportista, destino: t.destino, costo: t.costo, moneda: t.moneda,
         })),
       }, socPDF);
@@ -244,7 +239,7 @@ async function generateDocumentHTML(
         estado: oc.estado, estadoLabel: statusLabels[oc.estado] || oc.estado.toUpperCase(),
         moneda: oc.moneda || "ARS", subtotal: oc.subtotal, iva: oc.iva, total: oc.total,
         observaciones: oc.observaciones, proveedor: oc.proveedores,
-        items: (items || []).map(it => ({
+        items: (items || []).map((it: any) => ({
           codigo: it.codigo || "", descripcion: it.descripcion,
           cantidad: it.cantidad, unidad: it.unidad,
           precio_unitario: it.precio_unitario, subtotal: it.subtotal,
@@ -335,7 +330,8 @@ export async function POST(req: NextRequest) {
     }
 
     // 1. Generate document HTML (fetches fresh from DB, validates CAE for facturas)
-    const { html, filename, error: docError } = await generateDocumentHTML(documentType, documentId, sociedadId);
+    const supabase = await createSupabaseServer();
+    const { html, filename, error: docError } = await generateDocumentHTML(documentType, documentId, sociedadId, supabase);
     if (docError) {
       return NextResponse.json({ error: docError }, { status: 400 });
     }
