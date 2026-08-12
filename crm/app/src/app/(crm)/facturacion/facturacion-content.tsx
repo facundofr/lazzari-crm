@@ -360,11 +360,18 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
       const { data, error } = await query;
 
       if (!error && data) {
+        const hoy = new Date().toISOString().slice(0, 10);
         setFacturas((data as unknown as FacturaRow[]).map(f => {
           const fv = f.fecha_vencimiento || (f.clientes?.dias_cuenta_corriente && f.fecha
             ? new Date(new Date(f.fecha).getTime() + ((f.clientes.dias_cuenta_corriente as number) * 86400000)).toISOString().slice(0, 10)
             : null);
-          return { ...f, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "" };
+          // Compute derived estado: emitida + vencida → "vencida", emitida sin vencer → "pendiente"
+          let estado = f.estado;
+          if (estado === "emitida") {
+            if (fv && fv < hoy) estado = "vencida";
+            else estado = "pendiente";
+          }
+          return { ...f, estado, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "" };
         }));
       } else if (error) {
         setFacturas(mockFacturas.map((f) => ({

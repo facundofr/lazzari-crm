@@ -3083,7 +3083,7 @@ ${certRetGanHtml}
                   { key: "op_vinculada" as any, label: "OP", sortable: false, render: (row) => (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       {row.op_vinculada ? (
-                        <button onClick={() => { setTab("ordenes_pago"); setTimeout(() => { const op = ordenesPago.find(o => o.id === row.op_vinculada!.id); if (op) setSelectedOP(op); }, 100); }}
+                        <button onClick={() => { const op = ordenesPago.find(o => o.id === row.op_vinculada!.id); if (op) { setSelectedOP(op); } else { alert("No se encontró la OP. Intente recargar la página."); } }}
                           className="flex items-center gap-1 text-xs" title="Ver orden de pago">
                           <Badge variant={row.op_vinculada.estado === "pagada" ? "success" : row.op_vinculada.estado === "anulada" ? "danger" : "warning"}>
                             {row.op_vinculada.numero || "OP"}
@@ -5216,7 +5216,7 @@ ${certRetGanHtml}
                         </Badge>
                       </span>
                     </div>
-                    <button onClick={() => { setSelectedFC(null); setTab("ordenes_pago"); setTimeout(() => { const op = ordenesPago.find(o => o.id === selectedFC.op_vinculada!.id); if (op) setSelectedOP(op); }, 100); }}
+                    <button onClick={() => { const op = ordenesPago.find(o => o.id === selectedFC.op_vinculada!.id); if (op) { setSelectedFC(null); setSelectedOP(op); } else { alert("No se encontró la OP. Intente recargar la página."); } }}
                       className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Ver OP">
                       <Eye className="h-4 w-4" />
                     </button>
