@@ -772,6 +772,318 @@ ${oc.observaciones ? `<div class="obs-block"><div class="obs-title">Observacione
 </div></body></html>`;
 }
 
+// ────────────────────────────────────────────────────────────────
+// ORDEN DE PAGO PDF
+// ────────────────────────────────────────────────────────────────
+interface OPMedio {
+  tipo: string;
+  monto: number;
+  fecha: string;
+  banco?: string;
+  numero_cheque?: string;
+  moneda: "ARS" | "USD";
+  cotizacion?: number;
+}
+
+interface OPFacturaVinculada {
+  numero: string;
+  fecha: string;
+  monto: number;
+}
+
+interface OPData {
+  numero: string;
+  fecha: string;
+  estado: string;
+  moneda: "ARS" | "USD";
+  monto_bruto: number;
+  retencion_ganancias_pct: number;
+  retencion_ganancias_monto: number;
+  neto: number;
+  notas?: string;
+  proveedor: {
+    razon_social: string;
+    cuit?: string;
+    direccion?: string;
+  };
+  medios: OPMedio[];
+  facturas_vinculadas: OPFacturaVinculada[];
+}
+
+// ── Monto en letras (Spanish) ──────────────────────────────────
+export function montoEnLetras(monto: number, moneda: "ARS" | "USD"): string {
+  const unidades = ["", "UN", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE"];
+  const especiales = ["DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISEIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE"];
+  const decenas = ["", "", "VEINTE", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA", "SETENTA", "OCHENTA", "NOVENTA"];
+  const centenas = ["", "CIENTO", "DOSCIENTOS", "TRESCIENTOS", "CUATROCIENTOS", "QUINIENTOS", "SEISCIENTOS", "SETECIENTOS", "OCHOCIENTOS", "NOVECIENTOS"];
+
+  const convertirGrupo = (n: number): string => {
+    if (n === 0) return "";
+    if (n === 100) return "CIEN";
+    let result = "";
+    if (n >= 100) { result += centenas[Math.floor(n / 100)] + " "; n = n % 100; }
+    if (n >= 20) {
+      result += decenas[Math.floor(n / 10)];
+      if (n % 10 > 0) result += (Math.floor(n / 10) === 2 ? "I" : " Y ") + unidades[n % 10];
+    } else if (n >= 10) {
+      result += especiales[n - 10];
+    } else if (n > 0) {
+      result += unidades[n];
+    }
+    return result.trim();
+  };
+
+  const entero = Math.floor(Math.abs(monto));
+  const centavos = Math.round((Math.abs(monto) - entero) * 100);
+  const monedaLabel = moneda === "USD" ? "DOLARES ESTADOUNIDENSES" : "PESOS ARGENTINOS";
+
+  if (entero === 0) return `SON ${monedaLabel} CERO CON ${String(centavos).padStart(2, "0")}/100 CENTAVOS`;
+
+  let texto = "";
+  const millones = Math.floor(entero / 1000000);
+  const miles = Math.floor((entero % 1000000) / 1000);
+  const resto = entero % 1000;
+
+  if (millones > 0) {
+    texto += (millones === 1 ? "UN MILLON" : convertirGrupo(millones) + " MILLONES") + " ";
+  }
+  if (miles > 0) {
+    texto += (miles === 1 ? "MIL" : convertirGrupo(miles) + " MIL") + " ";
+  }
+  if (resto > 0) {
+    texto += convertirGrupo(resto);
+  }
+
+  return `SON ${monedaLabel} ${texto.trim()} CON ${String(centavos).padStart(2, "0")}/100 CENTAVOS`;
+}
+
+// ── Format CUIT for display (XX-XXXXXXXX-X) ──
+function fmtCuit(c: string): string {
+  const digits = c.replace(/\D/g, "");
+  if (digits.length === 11) return `${digits.slice(0,2)}-${digits.slice(2,10)}-${digits.slice(10)}`;
+  return c;
+}
+
+// ── Format date as DD/MM/YYYY ──
+function fechaDD(f: string): string {
+  try {
+    const d = new Date(f + "T12:00:00");
+    return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
+  } catch { return f; }
+}
+
+export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
+  const c = soc.colorPrimario;
+  const mon = op.moneda;
+
+  // Separate medios by type
+  const cheques = op.medios.filter((m) => m.tipo === "cheque" || m.tipo === "cheque_propio" || m.tipo === "echeq");
+  const depositos = op.medios.filter((m) => m.tipo === "deposito" || m.tipo === "transferencia" || m.tipo === "efectivo");
+
+  const totalCheques = cheques.reduce((s, m) => s + Number(m.monto), 0);
+  const totalDepositos = depositos.reduce((s, m) => s + Number(m.monto), 0);
+  const totalRetGan = op.retencion_ganancias_monto || 0;
+  const totalRetenciones = totalRetGan;
+  const totalGeneral = totalCheques + totalDepositos + totalRetenciones;
+
+  const estadoLabel: Record<string, string> = { pendiente: "Pendiente", pagada: "Pagada", anulada: "Anulada" };
+
+  // ── FCs table ──
+  const fcsHtml = op.facturas_vinculadas.length > 0
+    ? `<table>
+        <thead><tr><th class="center">Fecha</th><th>Comprobante</th><th class="right">Monto abonado</th></tr></thead>
+        <tbody>${op.facturas_vinculadas.map(fc => `<tr><td class="center">${fechaDD(fc.fecha)}</td><td>${fc.numero}</td><td class="right mono">${formatCurrency(fc.monto, mon)}</td></tr>`).join("")}</tbody>
+      </table>`
+    : `<p style="color:#999;font-size:11px;margin-top:6px">Sin documentos vinculados</p>`;
+
+  // ── Cheques table ──
+  const chequesHtml = cheques.length > 0 ? `
+    <div style="margin-top:18px">
+      <div class="items-title">Cheques</div>
+      <table>
+        <thead><tr>
+          <th>Fecha</th><th>Banco</th><th>N\u00B0 Cheque</th><th>Moneda</th><th class="right">Importe</th><th class="right">Cotiz.</th><th class="right">Consolidado</th>
+        </tr></thead>
+        <tbody>${cheques.map((m) => {
+          const cons = Number(m.monto) * (Number(m.cotizacion) || 1);
+          return `<tr>
+            <td>${fechaDD(m.fecha)}</td><td>${m.banco || "\u2014"}</td><td class="mono">${m.numero_cheque || "\u2014"}</td><td class="center">${m.moneda || mon}</td>
+            <td class="right mono">${formatCurrency(Number(m.monto), m.moneda || mon)}</td>
+            <td class="right mono">${Number(m.cotizacion) || 1}</td>
+            <td class="right mono bold">${formatCurrency(cons, "ARS")}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>
+      <div class="totals-wrap"><div class="totals-box"><div class="total-row-final"><span>Total Cheques</span><span class="mono">${formatCurrency(totalCheques, mon)}</span></div></div></div>
+    </div>` : "";
+
+  // ── Depósitos / Transferencias table ──
+  const depositosHtml = depositos.length > 0 ? `
+    <div style="margin-top:18px">
+      <div class="items-title">Dep\u00F3sitos / Transferencias</div>
+      <table>
+        <thead><tr>
+          <th>Fecha</th><th>Moneda</th><th class="right">Importe</th><th class="right">Cotiz.</th><th class="right">Consolidado</th>
+        </tr></thead>
+        <tbody>${depositos.map((m) => {
+          const cons = Number(m.monto) * (Number(m.cotizacion) || 1);
+          return `<tr>
+            <td>${fechaDD(m.fecha)}</td><td class="center">${m.moneda || mon}</td>
+            <td class="right mono">${formatCurrency(Number(m.monto), m.moneda || mon)}</td>
+            <td class="right mono">${Number(m.cotizacion) || 1}</td>
+            <td class="right mono bold">${formatCurrency(cons, "ARS")}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>
+      <div class="totals-wrap"><div class="totals-box"><div class="total-row-final"><span>Total Dep\u00F3sitos</span><span class="mono">${formatCurrency(totalDepositos, mon)}</span></div></div></div>
+    </div>` : "";
+
+  // ── Retenciones table ──
+  const retencionesItems: { fecha: string; desc: string; monto: number }[] = [];
+  if (totalRetGan > 0) retencionesItems.push({ fecha: op.fecha, desc: `Retenci\u00F3n Ganancias (${op.retencion_ganancias_pct}%)`, monto: totalRetGan });
+
+  const retencionesHtml = retencionesItems.length > 0 ? `
+    <div style="margin-top:18px">
+      <div class="items-title">Retenciones</div>
+      <table>
+        <thead><tr><th>Fecha</th><th>Descripci\u00F3n</th><th>Moneda</th><th class="right">Importe</th></tr></thead>
+        <tbody>${retencionesItems.map(r => `<tr><td>${fechaDD(r.fecha)}</td><td>${r.desc}</td><td class="center">${mon}</td><td class="right mono bold">${formatCurrency(r.monto, mon)}</td></tr>`).join("")}</tbody>
+      </table>
+      <div class="totals-wrap"><div class="totals-box"><div class="total-row-final"><span>Total Retenciones</span><span class="mono">${formatCurrency(totalRetenciones, mon)}</span></div></div></div>
+    </div>` : "";
+
+  // ── Totals ──
+  const totalsHtml = `
+    <div class="totals-wrap" style="margin-top:24px">
+      <div class="totals-box">
+        ${totalCheques > 0 ? `<div class="total-row"><span>Total Cheques</span><span class="mono">${formatCurrency(totalCheques, mon)}</span></div>` : ""}
+        ${totalDepositos > 0 ? `<div class="total-row"><span>Total Dep\u00F3sitos / Transf.</span><span class="mono">${formatCurrency(totalDepositos, mon)}</span></div>` : ""}
+        ${totalRetenciones > 0 ? `<div class="total-row"><span>Total Retenciones</span><span class="mono">${formatCurrency(totalRetenciones, mon)}</span></div>` : ""}
+        <div class="total-row-final"><span>TOTAL (${mon})</span><span class="mono">${formatCurrency(totalGeneral, mon)}</span></div>
+      </div>
+    </div>`;
+
+  // ── Monto en letras ──
+  const letrasHtml = `<div style="font-size:10px;font-style:italic;color:#666;margin-top:10px">${montoEnLetras(totalGeneral, mon)}</div>`;
+
+  // ── Certificado retención ganancias (page 2) ──
+  const certHtml = totalRetGan > 0 ? `
+    <div class="page" style="page-break-before:always;padding-top:20px">
+      <div class="header-bar"></div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:16px 0 14px;border-bottom:2px solid #e0e0e0;margin-bottom:18px">
+        <div>
+          <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:42px;margin-bottom:4px" />
+          <div class="company-sub">${soc.razonSocial}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="doc-title">Cert. Ret. Impuesto a las Ganancias</div>
+          <div class="doc-number">${op.numero || "\u2014"}</div>
+          <div class="doc-date">${fechaDD(op.fecha)} &mdash; CUIT: ${soc.cuit}</div>
+        </div>
+      </div>
+
+      <div class="info-grid">
+        <div class="info-box">
+          <div class="info-box-title">A - Agente de retenci\u00F3n</div>
+          <div class="info-row"><div class="info-label">Raz\u00F3n Social</div><div class="info-value">${soc.razonSocial}</div></div>
+          <div class="info-row"><div class="info-label">CUIT</div><div class="info-value">${soc.cuit}</div></div>
+          <div class="info-row"><div class="info-label">Domicilio</div><div class="info-value">${soc.domicilio}</div></div>
+        </div>
+        <div class="info-box">
+          <div class="info-box-title">B - Sujeto retenido</div>
+          <div class="info-row"><div class="info-label">Raz\u00F3n Social</div><div class="info-value">${op.proveedor.razon_social}</div></div>
+          <div class="info-row"><div class="info-label">CUIT</div><div class="info-value">${op.proveedor.cuit ? fmtCuit(op.proveedor.cuit) : "\u2014"}</div></div>
+          <div class="info-row"><div class="info-label">Domicilio</div><div class="info-value">${op.proveedor.direccion || "\u2014"}</div></div>
+        </div>
+      </div>
+
+      <div class="items-title">C - Datos de la retenci\u00F3n</div>
+      <table>
+        <tbody>
+          <tr><td class="bold" style="width:240px">R\u00E9gimen</td><td>78 - Anexo II, inc. f) Enajenaci\u00F3n de bienes muebles y bienes de cambio</td></tr>
+          <tr><td class="bold">Importe sujeto a retenci\u00F3n</td><td class="mono">${formatCurrency(op.monto_bruto, mon)}</td></tr>
+          <tr><td class="bold">Importe retenido</td><td class="mono bold">${formatCurrency(totalRetGan, mon)}</td></tr>
+          <tr><td class="bold">Documentos que originan la retenci\u00F3n</td><td>${op.numero || "\u2014"} (${formatCurrency(totalGeneral, mon)})</td></tr>
+        </tbody>
+      </table>
+
+      <div style="font-size:10px;font-style:italic;color:#666;margin-top:14px;border:1px solid #e0e0e0;border-radius:6px;padding:10px 14px;background:#f9f9f9">
+        ${montoEnLetras(totalRetGan, mon)}
+      </div>
+
+      <div class="signatures">
+        <div class="sig-line">Firma y aclaraci\u00F3n</div>
+      </div>
+
+      <div class="footer">
+        <span>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</span>
+        <span>Certificado Ret. Ganancias &mdash; OP ${op.numero || ""}</span>
+        <span>Impreso: ${formatDate(new Date().toISOString())}</span>
+      </div>
+    </div>` : "";
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>OP ${op.numero || ""} - ${soc.razonSocial}</title>
+<style>${baseStyles(c)}</style></head><body>
+<div class="page">
+<div class="header-bar"></div>
+<div class="header">
+  <div class="header-left">
+    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
+    <div class="company-sub">${soc.razonSocial}</div>
+    <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
+    ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
+    ${soc.telefono ? `<div class="company-detail">Tel: ${soc.telefono}</div>` : ""}
+  </div>
+  <div class="header-right">
+    <div class="doc-title">Orden de Pago</div>
+    <div class="doc-number">${op.numero || "\u2014"}</div>
+    <div class="doc-badge">${estadoLabel[op.estado] || op.estado}</div>
+    <div class="doc-date">${formatDate(op.fecha)}</div>
+  </div>
+</div>
+
+<div class="info-grid">
+  <div class="info-box">
+    <div class="info-box-title">Proveedor</div>
+    <div class="info-row"><div class="info-value-lg">${op.proveedor.razon_social}</div></div>
+    ${op.proveedor.cuit ? `<div class="info-row"><div class="info-label">CUIT</div><div class="info-value">${fmtCuit(op.proveedor.cuit)}</div></div>` : ""}
+    ${op.proveedor.direccion ? `<div class="info-row"><div class="info-label">Domicilio</div><div class="info-value">${op.proveedor.direccion}</div></div>` : ""}
+  </div>
+  <div class="info-box">
+    <div class="info-box-title">Datos del pago</div>
+    <div class="info-row"><div class="info-label">Moneda</div><div class="info-value">${mon === "USD" ? "D\u00F3lares estadounidenses" : "Pesos argentinos"}</div></div>
+    <div class="info-row"><div class="info-label">Fecha</div><div class="info-value">${formatDate(op.fecha)}</div></div>
+    ${op.notas ? `<div class="info-row"><div class="info-label">Notas</div><div class="info-value">${op.notas}</div></div>` : ""}
+  </div>
+</div>
+
+<div class="items-title">Documentos abonados</div>
+${fcsHtml}
+
+${chequesHtml}
+${depositosHtml}
+${retencionesHtml}
+
+${totalsHtml}
+${letrasHtml}
+
+<div class="signatures">
+  <div class="sig-line">Firma y aclaraci\u00F3n</div>
+</div>
+
+<div class="footer">
+  <span>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</span>
+  <span>OP ${op.numero || ""}</span>
+  <span>Impreso: ${formatDate(new Date().toISOString())}</span>
+</div>
+<div class="footer-legal">Documento interno &mdash; Orden de pago emitida por ${soc.razonSocial}.</div>
+
+</div>
+${certHtml}
+</body></html>`;
+}
+
 // ── Helper to open PDF in new window ─────────────────────────────
 export function openPDFWindow(html: string) {
   const w = window.open("", "_blank");

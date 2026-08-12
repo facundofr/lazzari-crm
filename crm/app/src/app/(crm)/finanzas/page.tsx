@@ -14,6 +14,7 @@ import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, Chec
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
+import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -1412,11 +1413,7 @@ export default function FinanzasPage() {
   }
 
   async function handleGenerarComprobante(op: OrdenPagoRow) {
-    const isGrupoLA = sociedadActiva?.id === "fee94607-747a-4e87-ba24-aff9032f7a56";
-    const socNombre = isGrupoLA ? "Grupo LA S.A." : "Lazzari Soluciones Industriales";
-    const socCuit = isGrupoLA ? "30-71939604-2" : "20-37930912-8";
-    const socDir = isGrupoLA ? "CHARCAS 5151 Piso 1 Dpto 106" : "PUEYRREDON 653, Pergamino";
-    const socTel = isGrupoLA ? "" : "2477 628958";
+    if (!sociedadActiva) return;
 
     // Fetch proveedor CUIT & dirección
     let provCuit = "";
@@ -1429,69 +1426,8 @@ export default function FinanzasPage() {
       }
     } catch { /* ignore */ }
 
-    // Format CUIT for display (XX-XXXXXXXX-X)
-    const fmtCuit = (c: string) => {
-      const digits = c.replace(/\D/g, "");
-      if (digits.length === 11) return `${digits.slice(0,2)}-${digits.slice(2,10)}-${digits.slice(10)}`;
-      return c;
-    };
-
-    // Monto en letras
-    const montoEnLetras = (monto: number): string => {
-      const unidades = ["", "UN", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE"];
-      const especiales = ["DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISEIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE"];
-      const decenas = ["", "", "VEINTE", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA", "SETENTA", "OCHENTA", "NOVENTA"];
-      const centenas = ["", "CIENTO", "DOSCIENTOS", "TRESCIENTOS", "CUATROCIENTOS", "QUINIENTOS", "SEISCIENTOS", "SETECIENTOS", "OCHOCIENTOS", "NOVECIENTOS"];
-
-      const convertirGrupo = (n: number): string => {
-        if (n === 0) return "";
-        if (n === 100) return "CIEN";
-        let result = "";
-        if (n >= 100) { result += centenas[Math.floor(n / 100)] + " "; n = n % 100; }
-        if (n >= 20) {
-          result += decenas[Math.floor(n / 10)];
-          if (n % 10 > 0) result += (Math.floor(n / 10) === 2 ? "I" : " Y ") + unidades[n % 10];
-        } else if (n >= 10) {
-          result += especiales[n - 10];
-        } else if (n > 0) {
-          result += unidades[n];
-        }
-        return result.trim();
-      };
-
-      const entero = Math.floor(Math.abs(monto));
-      const centavos = Math.round((Math.abs(monto) - entero) * 100);
-      const monedaLabel = op.moneda === "USD" ? "DOLARES ESTADOUNIDENSES" : "PESOS ARGENTINOS";
-
-      if (entero === 0) return `SON ${monedaLabel} CERO CON ${String(centavos).padStart(2, "0")}/100 CENTAVOS`;
-
-      let texto = "";
-      const millones = Math.floor(entero / 1000000);
-      const miles = Math.floor((entero % 1000000) / 1000);
-      const resto = entero % 1000;
-
-      if (millones > 0) {
-        texto += (millones === 1 ? "UN MILLON" : convertirGrupo(millones) + " MILLONES") + " ";
-      }
-      if (miles > 0) {
-        texto += (miles === 1 ? "MIL" : convertirGrupo(miles) + " MIL") + " ";
-      }
-      if (resto > 0) {
-        texto += convertirGrupo(resto);
-      }
-
-      return `SON ${monedaLabel} ${texto.trim()} CON ${String(centavos).padStart(2, "0")}/100 CENTAVOS`;
-    };
-
-    const fechaDD = (f: string) => {
-      try {
-        const d = new Date(f + "T12:00:00");
-        return `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`;
-      } catch { return f; }
-    };
-
     // Fetch linked FCs
-    let fcsRows: {numero: string; fecha: string; monto: number}[] = [];
+    let fcsRows: { numero: string; fecha: string; monto: number }[] = [];
     try {
       const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto").eq("orden_pago_id", op.id);
       if (links && links.length > 0) {
@@ -1500,254 +1436,34 @@ export default function FinanzasPage() {
         if (fcs && fcs.length > 0) {
           fcsRows = fcs.map((fc: any) => {
             const link = links.find((l: any) => l.factura_compra_id === fc.id);
-            return { numero: fc.numero_factura || "—", fecha: fc.fecha, monto: Number(link?.monto ?? fc.total) };
+            return { numero: fc.numero_factura || "\u2014", fecha: fc.fecha, monto: Number(link?.monto ?? fc.total) };
           });
         }
       }
     } catch { /* ignore */ }
 
-    // Separate medios by type
-    const medios = op.medios_pago && op.medios_pago.length > 0 ? op.medios_pago : [{ tipo: op.medio_pago as OpMedioPago["tipo"], monto: op.neto, fecha: op.fecha, banco: "", numero_cheque: "", moneda: op.moneda as "ARS" | "USD", cotizacion: 1, tempId: "" }];
-    const cheques = medios.filter((m) => m.tipo === "cheque" || m.tipo === "cheque_propio" || m.tipo === "echeq");
-    const depositos = medios.filter((m) => m.tipo === "deposito" || m.tipo === "transferencia" || m.tipo === "efectivo");
+    // Build medios array
+    const medios = op.medios_pago && op.medios_pago.length > 0
+      ? op.medios_pago.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion }))
+      : [{ tipo: op.medio_pago, monto: op.neto, fecha: op.fecha, banco: "", numero_cheque: "", moneda: op.moneda as "ARS" | "USD", cotizacion: 1 }];
 
-    const totalCheques = cheques.reduce((s, m) => s + Number(m.monto), 0);
-    const totalDepositos = depositos.reduce((s, m) => s + Number(m.monto), 0);
-    const totalRetGan = op.retencion_ganancias_monto || 0;
-    const totalRetenciones = totalRetGan;
-    const totalGeneral = totalCheques + totalDepositos + totalRetenciones;
+    const soc = getSociedadPDF(sociedadActiva);
+    const html = generateOrdenPagoPDF({
+      numero: op.numero || "",
+      fecha: op.fecha,
+      estado: op.estado,
+      moneda: op.moneda,
+      monto_bruto: op.monto_bruto,
+      retencion_ganancias_pct: op.retencion_ganancias_pct,
+      retencion_ganancias_monto: op.retencion_ganancias_monto,
+      neto: op.neto,
+      notas: op.notas,
+      proveedor: { razon_social: op.proveedor_nombre, cuit: provCuit, direccion: provDir },
+      medios,
+      facturas_vinculadas: fcsRows,
+    }, soc);
 
-    // ── Build FCs table ──
-    const fcsHtml = fcsRows.length > 0 ? `
-      <table class="bordered">
-        <thead><tr><th style="text-align:center">Fecha</th><th style="text-align:left">Comprobante</th><th style="text-align:right">Monto abonado</th></tr></thead>
-        <tbody>${fcsRows.map(fc => `<tr><td style="text-align:center">${fechaDD(fc.fecha)}</td><td>${fc.numero}</td><td style="text-align:right">${formatCurrency(fc.monto, op.moneda)}</td></tr>`).join("")}</tbody>
-      </table>` : `<p style="color:#999;font-size:11px">Sin documentos vinculados</p>`;
-
-    // ── Cheques table ──
-    const chequesHtml = cheques.length > 0 ? `
-      <div class="section">
-        <div class="section-title">Cheques</div>
-        <table class="bordered">
-          <thead><tr>
-            <th>Fecha de cheque</th><th>Banco</th><th>N\u00B0 Cheque</th><th>Moneda</th><th style="text-align:right">Importe</th><th style="text-align:right">Cotizaci\u00F3n</th><th style="text-align:right">Importe consolidado</th>
-          </tr></thead>
-          <tbody>${cheques.map((m) => {
-            const importeConsolidado = Number(m.monto) * (Number(m.cotizacion) || 1);
-            return `<tr>
-              <td>${fechaDD(m.fecha)}</td><td>${m.banco || "\u2014"}</td><td>${m.numero_cheque || "\u2014"}</td><td>${m.moneda || op.moneda}</td>
-              <td style="text-align:right">${formatCurrency(Number(m.monto), m.moneda || op.moneda)}</td>
-              <td style="text-align:right">${Number(m.cotizacion) || 1}</td>
-              <td style="text-align:right">${formatCurrency(importeConsolidado, "ARS")}</td>
-            </tr>`;
-          }).join("")}</tbody>
-          <tfoot><tr><td colspan="6" style="text-align:right;font-weight:700">Total Cheques</td><td style="text-align:right;font-weight:700">${formatCurrency(totalCheques, op.moneda)}</td></tr></tfoot>
-        </table>
-      </div>` : "";
-
-    // ── Depósitos / Transferencias table ──
-    const depositosHtml = depositos.length > 0 ? `
-      <div class="section">
-        <div class="section-title">Dep\u00F3sitos / Transferencias</div>
-        <table class="bordered">
-          <thead><tr>
-            <th>Fecha</th><th>Moneda</th><th style="text-align:right">Importe</th><th style="text-align:right">Cotizaci\u00F3n</th><th style="text-align:right">Importe Consolidado</th>
-          </tr></thead>
-          <tbody>${depositos.map((m) => {
-            const importeConsolidado = Number(m.monto) * (Number(m.cotizacion) || 1);
-            return `<tr>
-              <td>${fechaDD(m.fecha)}</td><td>${m.moneda || op.moneda}</td>
-              <td style="text-align:right">${formatCurrency(Number(m.monto), m.moneda || op.moneda)}</td>
-              <td style="text-align:right">${Number(m.cotizacion) || 1}</td>
-              <td style="text-align:right">${formatCurrency(importeConsolidado, "ARS")}</td>
-            </tr>`;
-          }).join("")}</tbody>
-          <tfoot><tr><td colspan="4" style="text-align:right;font-weight:700">Total Dep\u00F3sitos</td><td style="text-align:right;font-weight:700">${formatCurrency(totalDepositos, op.moneda)}</td></tr></tfoot>
-        </table>
-      </div>` : "";
-
-    // ── Retenciones table ──
-    const retencionesItems: {fecha: string; desc: string; monto: number}[] = [];
-    if (totalRetGan > 0) retencionesItems.push({ fecha: op.fecha, desc: `Retenci\u00F3n Ganancias (${op.retencion_ganancias_pct}%)`, monto: totalRetGan });
-
-    const retencionesHtml = retencionesItems.length > 0 ? `
-      <div class="section">
-        <div class="section-title">Retenciones</div>
-        <table class="bordered">
-          <thead><tr><th>Fecha</th><th>Descripci\u00F3n</th><th>Moneda</th><th style="text-align:right">Importe</th></tr></thead>
-          <tbody>${retencionesItems.map(r => `<tr><td>${fechaDD(r.fecha)}</td><td>${r.desc}</td><td>${op.moneda}</td><td style="text-align:right">${formatCurrency(r.monto, op.moneda)}</td></tr>`).join("")}</tbody>
-          <tfoot><tr><td colspan="3" style="text-align:right;font-weight:700">Total Retenciones</td><td style="text-align:right;font-weight:700">${formatCurrency(totalRetenciones, op.moneda)}</td></tr></tfoot>
-        </table>
-      </div>` : "";
-
-    // ── Certificado de Retención Ganancias (página 2) ──
-    const certRetGanHtml = totalRetGan > 0 ? `
-      <div class="page-break"></div>
-      <div class="cert-page">
-        <div class="cert-header">
-          <div class="cert-logo">${socNombre}</div>
-          <div class="cert-title-block">
-            <div class="cert-main-title">CERT. RET. IMPUESTO A LAS GANANCIAS</div>
-            <table class="cert-info-table">
-              <tr><td>Original</td><td>N\u00B0: ${op.numero || "\u2014"}</td></tr>
-              <tr><td>Fecha: ${fechaDD(op.fecha)}</td><td>CUIT: ${socCuit}</td></tr>
-            </table>
-          </div>
-        </div>
-
-        <div class="cert-section">
-          <div class="cert-section-title">A - Datos del agente de retenci\u00F3n</div>
-          <table class="cert-data">
-            <tr><td class="cert-label">Raz\u00F3n Social:</td><td>${socNombre}</td></tr>
-            <tr><td class="cert-label">CUIT:</td><td>${socCuit}</td></tr>
-            <tr><td class="cert-label">Direcci\u00F3n:</td><td>${socDir}</td></tr>
-          </table>
-        </div>
-
-        <div class="cert-section">
-          <div class="cert-section-title">B - Datos del sujeto retenido</div>
-          <table class="cert-data">
-            <tr><td class="cert-label">Raz\u00F3n Social:</td><td>${op.proveedor_nombre}</td></tr>
-            <tr><td class="cert-label">CUIT:</td><td>${provCuit ? fmtCuit(provCuit) : "\u2014"}</td></tr>
-            <tr><td class="cert-label">Direcci\u00F3n:</td><td>${provDir || "\u2014"}</td></tr>
-          </table>
-        </div>
-
-        <div class="cert-section">
-          <div class="cert-section-title">C - Datos de la retenci\u00F3n</div>
-          <table class="cert-data">
-            <tr><td class="cert-label">R\u00E9gimen:</td><td>78 - Anexo II, inc. f) Enajenaci\u00F3n de bienes muebles y bienes de cambio</td></tr>
-            <tr><td class="cert-label">Importe sujeto a retenci\u00F3n:</td><td>${formatCurrency(op.monto_bruto, op.moneda)}</td></tr>
-            <tr><td class="cert-label">Importe retenido:</td><td style="font-weight:700">${formatCurrency(totalRetGan, op.moneda)}</td></tr>
-            <tr><td class="cert-label">Documentos que originan la retenci\u00F3n:</td><td>${op.numero || "\u2014"} (${formatCurrency(totalGeneral, op.moneda)})</td></tr>
-          </table>
-        </div>
-
-        <div class="cert-letras">
-          ${montoEnLetras(totalRetGan)}
-        </div>
-
-        <div class="firma-line">
-          <div class="firma-placeholder"></div>
-          <div class="firma-text">Firma y aclaraci\u00F3n</div>
-        </div>
-      </div>
-    ` : "";
-
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Orden de Pago ${op.numero || ""}</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 30px 40px; color: #333; font-size: 12px; line-height: 1.4; }
-
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #333; }
-  .header-left { }
-  .header-left .empresa { font-size: 14px; font-weight: 700; }
-  .header-left .dato { font-size: 11px; color: #555; margin-top: 1px; }
-  .header-right { text-align: right; font-size: 11px; }
-  .header-right .dato { margin-bottom: 1px; }
-
-  .op-title { text-align: center; font-size: 16px; font-weight: 700; margin: 16px 0; letter-spacing: 0.5px; }
-
-  .proveedor-bar { background: #e8e8e8; text-align: center; padding: 6px 12px; font-size: 13px; font-weight: 600; margin-bottom: 16px; }
-
-  .section { margin-bottom: 14px; }
-  .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; color: #444; border-bottom: 1px solid #ccc; padding-bottom: 2px; }
-
-  table.bordered { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 4px; }
-  table.bordered th { background: #f0f0f0; border: 1px solid #bbb; padding: 4px 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
-  table.bordered td { border: 1px solid #ccc; padding: 4px 6px; }
-  table.bordered tfoot td { border-top: 2px solid #999; background: #f8f8f8; }
-
-  .totals-box { border: 2px solid #333; padding: 10px 16px; margin-top: 16px; }
-  .totals-row { display: flex; justify-content: space-between; padding: 2px 0; font-size: 12px; }
-  .totals-row.grand { border-top: 2px solid #333; margin-top: 6px; padding-top: 6px; font-size: 14px; font-weight: 700; }
-  .totals-row .label { }
-  .totals-row .value { font-weight: 600; }
-
-  .letras { font-size: 11px; margin-top: 8px; font-style: italic; color: #555; }
-
-  .firma-line { margin-top: 60px; text-align: center; }
-  .firma-placeholder { border-top: 1px solid #333; width: 250px; margin: 0 auto; }
-  .firma-text { font-size: 11px; color: #666; margin-top: 4px; }
-
-  .page-break { page-break-before: always; margin-top: 40px; }
-
-  /* Certificado retenci\u00F3n */
-  .cert-page { padding-top: 20px; }
-  .cert-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 16px; }
-  .cert-logo { font-size: 16px; font-weight: 700; }
-  .cert-title-block { text-align: right; }
-  .cert-main-title { font-size: 13px; font-weight: 700; margin-bottom: 6px; }
-  .cert-info-table { font-size: 11px; }
-  .cert-info-table td { padding: 1px 8px; }
-  .cert-section { margin-bottom: 14px; }
-  .cert-section-title { font-size: 12px; font-weight: 700; background: #e8e8e8; padding: 4px 8px; margin-bottom: 6px; }
-  .cert-data { font-size: 12px; width: 100%; }
-  .cert-data td { padding: 2px 8px; }
-  .cert-label { font-weight: 600; width: 220px; color: #444; }
-  .cert-letras { font-size: 11px; font-style: italic; color: #555; margin-top: 12px; border: 1px solid #ccc; padding: 8px; background: #fafafa; }
-
-  .no-print { }
-  .print-btn { margin-top: 20px; text-align: center; }
-  .print-btn button { padding: 8px 28px; background: #FF4500; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 13px; }
-
-  @media print {
-    body { margin: 0; padding: 20px; }
-    .no-print { display: none !important; }
-    .page-break { page-break-before: always; }
-  }
-</style>
-</head><body>
-
-<!-- P\u00C1GINA 1: ORDEN DE PAGO -->
-<div class="header">
-  <div class="header-left">
-    <div class="empresa">${socNombre}</div>
-    <div class="dato">CUIT: ${socCuit}</div>
-    <div class="dato">${socDir}</div>
-  </div>
-  <div class="header-right">
-    <div class="dato"><strong>Hoja:</strong> 1</div>
-    <div class="dato"><strong>Fecha:</strong> ${fechaDD(op.fecha)}</div>
-    ${socTel ? `<div class="dato"><strong>Tel\u00E9fono:</strong> ${socTel}</div>` : ""}
-  </div>
-</div>
-
-<div class="op-title">Orden de Pago N\u00B0 ${op.numero || "\u2014"}</div>
-
-<div class="proveedor-bar">Proveedor: ${op.proveedor_nombre}</div>
-
-<div class="section">
-  <div class="section-title">Documentos abonados</div>
-  ${fcsHtml}
-</div>
-
-${chequesHtml}
-${depositosHtml}
-${retencionesHtml}
-
-<div class="totals-box">
-  <div class="totals-row"><span class="label">Total Redondeo:</span><span class="value">${formatCurrency(0, op.moneda)}</span></div>
-  <div class="totals-row grand"><span class="label">Total:</span><span class="value">${formatCurrency(totalGeneral, op.moneda)}</span></div>
-</div>
-
-<div class="letras">${montoEnLetras(totalGeneral)}</div>
-
-<div class="firma-line">
-  <div class="firma-placeholder"></div>
-  <div class="firma-text">Firma y aclaraci\u00F3n</div>
-</div>
-
-${certRetGanHtml}
-
-<div class="print-btn no-print">
-  <button onclick="window.print()">Imprimir</button>
-</div>
-
-</body></html>`;
-    const w = window.open("", "_blank", "width=800,height=700");
-    if (w) { w.document.write(html); w.document.close(); }
+    openPDFWindow(html);
   }
 
   async function handleUploadCertificado(opId: string, file: File) {
