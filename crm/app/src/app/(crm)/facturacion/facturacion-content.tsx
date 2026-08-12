@@ -1215,7 +1215,15 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                       <ShieldCheck className="h-3.5 w-3.5" /> Con ARCA
                     </button>
                     <button
-                      onClick={() => { setEmitManual(true); setEmitData((p) => ({ ...p, tipo: "X" })); }}
+                      onClick={async () => {
+                        setEmitManual(true);
+                        const newTipo = "X";
+                        setEmitData((p) => ({ ...p, tipo: newTipo }));
+                        try {
+                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, newTipo).eq("punto_venta" as any, emitData.punto_venta).order("numero", { ascending: false }).limit(1);
+                          setEmitData(prev => ({ ...prev, numero_manual: last && last.length > 0 ? String(Number(last[0].numero) + 1) : "1" }));
+                        } catch { /* ignore */ }
+                      }}
                       className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${emitManual ? "bg-zinc-700 text-white dark:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
                     >
                       <FileCheck className="h-3.5 w-3.5" /> Manual (sin CAE)
@@ -1238,9 +1246,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                       // Auto-update correlative number for new tipo
                       (async () => {
                         try {
-                          let qN = supabase.from("facturas").select("numero").eq("tipo" as any, newTipo).eq("punto_venta" as any, emitData.punto_venta);
-                          if (sociedadActiva?.id) qN = qN.eq("sociedad_id" as any, sociedadActiva.id);
-                          const { data: last } = await qN.order("numero", { ascending: false }).limit(1);
+                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, newTipo).eq("punto_venta" as any, emitData.punto_venta).order("numero", { ascending: false }).limit(1);
                           if (last && last.length > 0) {
                             setEmitData(prev => ({ ...prev, numero_manual: String(Number(last[0].numero) + 1) }));
                           } else {
