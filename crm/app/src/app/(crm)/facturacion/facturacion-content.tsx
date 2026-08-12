@@ -314,7 +314,14 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   }
 
   // Filters — multi-select estado (like presupuestos)
-  const fvAllEstados = ["emitida", "pendiente", "parcial", "pagada", "vencida", "anulada"] as const;
+  const ESTADO_GROUPS: Record<string, string[]> = {
+    emitida_all: ["pendiente", "parcial", "pagada", "vencida"],
+    pendiente_all: ["pendiente", "parcial", "vencida"],
+    vencida: ["vencida"],
+    pagada: ["pagada"],
+    anulada: ["anulada"],
+  };
+  const fvAllEstados = Object.keys(ESTADO_GROUPS);
   const [fvSelectedEstados, setFvSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [fvTipoFilter, setFvTipoFilter] = useState("");
   const [clienteSearch, setClienteSearch] = useState("");
@@ -333,12 +340,14 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
 
   const fvEstadoCounts = useMemo(() => {
     const c: Record<string, number> = {};
-    facturas.forEach(f => { c[f.estado] = (c[f.estado] || 0) + 1; });
+    for (const [grp, estados] of Object.entries(ESTADO_GROUPS)) {
+      c[grp] = facturas.filter(f => estados.includes(f.estado)).length;
+    }
     return c;
   }, [facturas]);
 
   const filteredFacturas = facturas.filter((f) => {
-    if (!fvIsAll && !fvSelectedEstados.has(f.estado)) return false;
+    if (!fvIsAll && !Array.from(fvSelectedEstados).some(grp => (ESTADO_GROUPS[grp] || [grp]).includes(f.estado))) return false;
     if (fvTipoFilter && f.tipo !== fvTipoFilter) return false;
     if (clienteSearch.trim()) {
       const nombre = (f.clientes?.razon_social || "").toLowerCase();
@@ -944,12 +953,12 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear && f.estado !== "anulada";
   });
   const facturadoMes = facturasEsteMes.reduce((a, f) => a + Number(f.total), 0);
-  const pendientesCobro = facturas.filter(f => f.estado === "emitida" || f.estado === "parcial").reduce((a, f) => a + Number(f.total), 0);
+  const pendientesCobro = facturas.filter(f => ["pendiente", "parcial", "vencida"].includes(f.estado)).reduce((a, f) => a + Number(f.total) - Number(f.total_acreditado || 0), 0);
   const facturasVencidas = facturas.filter(f => f.estado === "vencida").length;
   const caeVigentes = facturas.filter(f => f.cae && f.estado !== "anulada").length;
 
   function exportFacturasCSV() {
-    const csvLines: string[] = ["F.Venta;F.Pago;Cliente;Documento;Moneda;Importe;Saldo"];
+    const csvLines: string[] = ["Fecha;Vencimiento;Cliente;Documento;Moneda;Importe;Deuda"];
     filteredFacturas.forEach((f: any) => {
       const doc = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
       const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : Number(f.total) - (f.total_acreditado || 0);
@@ -1031,11 +1040,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
         </div>
         {/* Estado multi-select toggles */}
         <div className="flex gap-2 flex-wrap">
-          <button onClick={() => fvToggleEstado("todos")}
-            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${fvIsAll ? "bg-orange-500 text-white shadow-sm" : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"}`}>
-            {fvIsAll && <Check className="h-3.5 w-3.5" />} Todos <span className={`rounded-full px-1.5 py-0.5 text-xs ${fvIsAll ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"}`}>{facturas.length}</span>
-          </button>
-          {([["emitida", "Emitida"], ["pendiente", "Pendiente"], ["parcial", "Parcial"], ["pagada", "Pagada"], ["vencida", "Vencida"], ["anulada", "Anulada"]] as const).map(([key, label]) => {
+          {([["emitida_all", "Emitida"], ["pendiente_all", "Pendiente"], ["vencida", "Vencida"], ["pagada", "Pagada"], ["anulada", "Anulada"]] as const).map(([key, label]) => {
             const active = !fvIsAll && fvSelectedEstados.has(key);
             return (
               <button key={key} onClick={() => fvToggleEstado(key)}

@@ -476,7 +476,13 @@ export default function FinanzasPage() {
   const [editFCForm, setEditFCForm] = useState<{ numero_factura: string; fecha: string; fecha_vencimiento: string; subtotal: number; iva: number; percepciones: number; moneda: "ARS" | "USD"; notas: string; cae: string }>({ numero_factura: "", fecha: "", fecha_vencimiento: "", subtotal: 0, iva: 0, percepciones: 0, moneda: "ARS", notas: "", cae: "" });
   const [savingFC, setSavingFC] = useState(false);
   const [fcSearchQuery, setFcSearchQuery] = useState("");
-  const fcAllEstados = ["pendiente_aprobacion", "pendiente", "pagada", "recibida", "anulada"] as const;
+  const FC_ESTADO_GROUPS: Record<string, string[]> = {
+    emitida_all: ["pendiente_aprobacion", "pendiente", "pagada", "recibida"],
+    pendiente_all: ["pendiente_aprobacion", "pendiente"],
+    pagada_all: ["pagada", "recibida"],
+    anulada: ["anulada"],
+  };
+  const fcGroupKeys = Object.keys(FC_ESTADO_GROUPS);
   const [fcSelectedEstados, setFcSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const fcIsAll = fcSelectedEstados.has("todos");
   function fcToggleEstado(estado: string) {
@@ -485,7 +491,7 @@ export default function FinanzasPage() {
       const next = new Set(prev);
       next.delete("todos");
       if (next.has(estado)) next.delete(estado); else next.add(estado);
-      if (next.size === 0 || next.size === fcAllEstados.length) return new Set(["todos"]);
+      if (next.size === 0 || next.size === fcGroupKeys.length) return new Set(["todos"]);
       return next;
     });
   }
@@ -2145,7 +2151,7 @@ export default function FinanzasPage() {
   }
 
   function exportFCCompraCSV(data: FacturaCompraRow[]) {
-    const lines: string[] = ["Fecha;Vencimiento;Proveedor;Documento;Moneda;Importe;Saldo"];
+    const lines: string[] = ["Fecha;Vencimiento;Proveedor;Documento;Moneda;Importe;Deuda"];
     data.forEach(f => {
       const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : f.total;
       lines.push(`${f.fecha};${f.fecha_vencimiento || ""};"${f.proveedor_nombre}";"${f.numero_factura}";${f.moneda};"${formatCurrency(f.total, f.moneda as "ARS"|"USD")}";"${formatCurrency(saldo, f.moneda as "ARS"|"USD")}"`);
@@ -2665,7 +2671,7 @@ export default function FinanzasPage() {
           const fcEstadoCounts: Record<string, number> = {};
           for (const f of facturasCompra) fcEstadoCounts[f.estado] = (fcEstadoCounts[f.estado] || 0) + 1;
           const filteredFC = facturasCompra.filter(f => {
-            if (!fcIsAll && !fcSelectedEstados.has(f.estado)) return false;
+            if (!fcIsAll && !Array.from(fcSelectedEstados).some(grp => (FC_ESTADO_GROUPS[grp] || [grp]).includes(f.estado))) return false;
             if (fcTipoFilter) {
               const tipoDoc = f.numero_factura.split(" ")[0] || "";
               if (tipoDoc !== fcTipoFilter) return false;
@@ -2690,7 +2696,7 @@ export default function FinanzasPage() {
                     ({formatCurrency(fcsPendientesAprobacion.reduce((s, f) => s + f.total, 0))})
                   </span>
                 </div>
-                <button onClick={() => { setFcSelectedEstados(new Set(["pendiente_aprobacion"])); }}
+                <button onClick={() => { setFcSelectedEstados(new Set(["pendiente_all"])); }}
                   className="text-xs font-semibold text-amber-700 dark:text-amber-300 hover:underline">
                   Ver pendientes
                 </button>
@@ -2727,9 +2733,10 @@ export default function FinanzasPage() {
                   className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${fcIsAll ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"}`}>
                   Todos <span className="ml-1 opacity-70">{facturasCompra.length}</span>
                 </button>
-                {([["pendiente_aprobacion", "Pend. aprob."], ["pendiente", "Pendiente"], ["pagada", "Pagada"], ["recibida", "Recibida"], ["anulada", "Anulada"]] as const).map(([key, label]) => {
+                {([["emitida_all", "Emitida"], ["pendiente_all", "Pendiente"], ["pagada_all", "Pagada"], ["anulada", "Anulada"]] as const).map(([key, label]) => {
                   const active = fcSelectedEstados.has(key);
-                  const count = fcEstadoCounts[key] || 0;
+                  const groupEstados = FC_ESTADO_GROUPS[key] || [key];
+                  const count = groupEstados.reduce((s, e) => s + (fcEstadoCounts[e] || 0), 0);
                   return (
                     <button key={key} onClick={() => fcToggleEstado(key)}
                       className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${active ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"}`}>
