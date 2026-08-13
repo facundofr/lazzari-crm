@@ -1093,3 +1093,53 @@ export function openPDFWindow(html: string) {
     setTimeout(() => w.print(), 600);
   }
 }
+
+// ── Helper to convert HTML to PDF base64 (client-side) ──────────
+export async function htmlToPdfBase64(html: string): Promise<string> {
+  const html2pdf = (await import("html2pdf.js")).default;
+  // Create a temporary container
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  // Extract body content if full HTML document
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+  if (bodyMatch) {
+    container.innerHTML = bodyMatch[1];
+  }
+  // Apply styles from the HTML
+  const styleMatch = html.match(/<style[^>]*>([\s\S]*?)<\/style>/gi);
+  if (styleMatch) {
+    const styleEl = document.createElement("style");
+    styleEl.textContent = styleMatch.map(s => s.replace(/<\/?style[^>]*>/gi, "")).join("\n");
+    container.prepend(styleEl);
+  }
+  container.style.position = "absolute";
+  container.style.left = "-9999px";
+  container.style.top = "0";
+  document.body.appendChild(container);
+
+  try {
+    const blob: Blob = await html2pdf()
+      .set({
+        margin: [8, 8, 8, 8],
+        filename: "document.pdf",
+        image: { type: "jpeg", quality: 0.95 },
+        html2canvas: { scale: 2, useCORS: true, letterRendering: true },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+      })
+      .from(container)
+      .outputPdf("blob");
+
+    // Convert blob to base64
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = (reader.result as string).split(",")[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } finally {
+    document.body.removeChild(container);
+  }
+}

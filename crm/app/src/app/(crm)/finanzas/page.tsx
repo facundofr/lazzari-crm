@@ -14,7 +14,7 @@ import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, Chec
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
-import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
+import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
@@ -5567,12 +5567,59 @@ export default function FinanzasPage() {
         open={emailModal.open}
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="orden_pago"
-        documentId={emailModal.id}
-        sociedadId={sociedadActiva?.id || ""}
         defaultTo={emailModal.to}
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
+        generatePdf={async () => {
+          const op = ordenesPago.find(o => o.id === emailModal.id);
+          if (!op || !sociedadActiva) throw new Error("No se encontró la OP");
+
+          // Fetch proveedor CUIT & dirección
+          let provCuit = "";
+          let provDir = "";
+          try {
+            const { data: provData } = await (supabase as any).from("proveedores").select("cuit, direccion").eq("id", op.proveedor_id).single();
+            if (provData) { provCuit = provData.cuit || ""; provDir = provData.direccion || ""; }
+          } catch { /* ignore */ }
+
+          // Fetch linked FCs
+          let fcsRows: { numero: string; fecha: string; monto: number }[] = [];
+          try {
+            const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto").eq("orden_pago_id", op.id);
+            if (links && links.length > 0) {
+              const fcIds = links.map((l: any) => l.factura_compra_id);
+              const { data: fcs } = await (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, total").in("id", fcIds);
+              if (fcs && fcs.length > 0) {
+                fcsRows = fcs.map((fc: any) => {
+                  const link = links.find((l: any) => l.factura_compra_id === fc.id);
+                  return { numero: fc.numero_factura || "\u2014", fecha: fc.fecha, monto: Number(link?.monto ?? fc.total) };
+                });
+              }
+            }
+          } catch { /* ignore */ }
+
+          const medios = op.medios_pago && op.medios_pago.length > 0
+            ? op.medios_pago.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion }))
+            : [{ tipo: op.medio_pago, monto: op.neto, fecha: op.fecha, banco: "", numero_cheque: "", moneda: op.moneda as "ARS" | "USD", cotizacion: 1 }];
+
+          const soc = getSociedadPDF(sociedadActiva);
+          const html = generateOrdenPagoPDF({
+            numero: op.numero || "",
+            fecha: op.fecha,
+            estado: op.estado,
+            moneda: op.moneda,
+            monto_bruto: op.monto_bruto,
+            retencion_ganancias_pct: op.retencion_ganancias_pct,
+            retencion_ganancias_monto: op.retencion_ganancias_monto,
+            neto: op.neto,
+            notas: op.notas,
+            proveedor: { razon_social: op.proveedor_nombre, cuit: provCuit, direccion: provDir },
+            medios,
+            facturas_vinculadas: fcsRows,
+          }, soc);
+          return htmlToPdfBase64(html);
+        }}
       />
     </>
   );

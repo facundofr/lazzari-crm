@@ -9,8 +9,6 @@ interface EmailComposeModalProps {
   open: boolean;
   onClose: () => void;
   documentType: EmailDocumentType;
-  documentId: string;
-  sociedadId: string;
   /** Pre-filled recipient email(s) */
   defaultTo?: string;
   /** Pre-filled subject */
@@ -19,6 +17,8 @@ interface EmailComposeModalProps {
   defaultBody?: string;
   /** PDF filename hint for display */
   pdfFilename?: string;
+  /** Function that generates PDF and returns base64 string. MUST be provided. */
+  generatePdf: () => Promise<string>;
   /** Callback on successful send */
   onSuccess?: () => void;
 }
@@ -35,12 +35,11 @@ export function EmailComposeModal({
   open,
   onClose,
   documentType,
-  documentId,
-  sociedadId,
   defaultTo = "",
   defaultSubject = "",
   defaultBody = "",
   pdfFilename = "",
+  generatePdf,
   onSuccess,
 }: EmailComposeModalProps) {
   const [to, setTo] = useState(defaultTo);
@@ -74,6 +73,23 @@ export function EmailComposeModal({
     setResult(null);
 
     try {
+      // 1. Generate PDF client-side
+      let pdfBase64: string;
+      try {
+        pdfBase64 = await generatePdf();
+      } catch (pdfErr: any) {
+        setResult({ success: false, message: `Error al generar PDF: ${pdfErr.message || "desconocido"}` });
+        setSending(false);
+        return;
+      }
+
+      if (!pdfBase64) {
+        setResult({ success: false, message: "No se pudo generar el PDF. No se envía el email." });
+        setSending(false);
+        return;
+      }
+
+      // 2. Send to API with PDF attached
       const res = await fetch("/api/email/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -81,9 +97,8 @@ export function EmailComposeModal({
           to: emails,
           subject,
           bodyHtml: `<div style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">${bodyHtml.replace(/\n/g, "<br/>")}</div>`,
-          documentType,
-          documentId,
-          sociedadId,
+          pdfBase64,
+          pdfFilename: pdfFilename || `${DOC_LABELS[documentType]}.pdf`,
         }),
       });
 
@@ -172,7 +187,7 @@ export function EmailComposeModal({
               <p className="text-sm font-medium text-orange-700 dark:text-orange-300 truncate">
                 {pdfFilename || `${DOC_LABELS[documentType]}.pdf`}
               </p>
-              <p className="text-xs text-orange-500">Se genera y adjunta automáticamente al enviar</p>
+              <p className="text-xs text-orange-500">Se genera y adjunta automaticamente al enviar</p>
             </div>
           </div>
 

@@ -8,7 +8,7 @@ import { Modal } from "@/components/ui/modal";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { generatePresupuestoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
+import { generatePresupuestoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { mockPresupuestos } from "@/lib/mock-data";
 import type { Presupuesto, PRStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabase/client";
@@ -3554,12 +3554,48 @@ export default function PresupuestosPage() {
         open={emailModal.open}
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="presupuesto"
-        documentId={emailModal.id}
-        sociedadId={sociedadActiva?.id || ""}
         defaultTo={emailModal.to}
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
+        generatePdf={async () => {
+          const pr = presupuestos.find(p => p.id === emailModal.id);
+          if (!pr || !sociedadActiva) throw new Error("No se encontró el presupuesto");
+          const p = pr as any;
+          const soc = getSociedadPDF(sociedadActiva);
+          const estadoLabel = (statusConfig[pr.estado] || { label: pr.estado }).label;
+          const html = generatePresupuestoPDF({
+            numero: pr.numero,
+            fecha: pr.fecha,
+            vencimiento: pr.vencimiento,
+            estado: pr.estado,
+            estadoLabel,
+            moneda: pr.moneda,
+            subtotal: pr.subtotal,
+            iva: pr.iva,
+            total: pr.total,
+            observaciones: pr.observaciones,
+            creadoPor: pr.creadoPor,
+            clienteNombre: pr.clienteNombre,
+            clienteCuit: p.clienteCuit,
+            clienteCondicionIva: p.clienteCondicionIva,
+            clienteEmail: p.clienteEmail,
+            clienteTelefono: p.clienteTelefono,
+            clienteDireccion: p.clienteDireccion,
+            clienteLocalidad: p.clienteLocalidad,
+            clienteProvincia: p.clienteProvincia,
+            vendedorNombre: p.vendedorNombre,
+            items: pr.items.map(it => ({
+              codigo: it.codigo,
+              descripcion: it.descripcion,
+              cantidad: it.cantidad,
+              unidad: it.unidad,
+              precioVenta: it.precioVenta,
+              total: it.total,
+            })),
+          }, soc);
+          return htmlToPdfBase64(html);
+        }}
       />
     </>
   );

@@ -10,7 +10,7 @@ import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Che
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
-import { generateRemitoPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
+import { generateRemitoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -2151,12 +2151,42 @@ export default function RemitosPage() {
         open={emailModalOpen}
         onClose={() => setEmailModalOpen(false)}
         documentType="remito"
-        documentId={emailModalData.id}
-        sociedadId={sociedadActiva?.id || ""}
         defaultTo={emailModalData.to}
         defaultSubject={emailModalData.subject}
         defaultBody={emailModalData.body}
         pdfFilename={emailModalData.filename}
+        generatePdf={async () => {
+          if (!detailRemito || !sociedadActiva) throw new Error("No se encontró el remito");
+          const r = detailRemito;
+          const soc = getSociedadPDF(sociedadActiva);
+          const html = generateRemitoPDF({
+            numero: r.numero,
+            fecha: r.fecha,
+            cae: r.cae,
+            oc_cliente: r.oc_cliente,
+            valor_declarado: r.valor_declarado,
+            observaciones: r.observaciones,
+            cliente: r.clientes ? {
+              razon_social: r.clientes.razon_social,
+              cuit: r.clientes.cuit,
+              direccion: r.clientes.direccion,
+            } : null,
+            sucursal_nombre: r.sucursal_nombre,
+            sucursal_direccion: r.sucursal_direccion,
+            items: detailItems.map(it => ({
+              descripcion: it.descripcion,
+              cantidad: it.cantidad,
+              unidad: it.unidad,
+            })),
+            transportes: detailTransportes.map(t => ({
+              transportista: t.transportista,
+              destino: t.destino,
+              costo: t.costo,
+              moneda: t.moneda,
+            })),
+          }, soc);
+          return htmlToPdfBase64(html);
+        }}
       />
     </>
   );

@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { generateOrdenCompraPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
+import { generateOrdenCompraPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { supabase } from "@/lib/supabase/client";
 import { mockOrdenesCompra } from "@/lib/mock-data";
 import type { OCStatus } from "@/lib/types";
@@ -2378,12 +2378,51 @@ export default function OrdenesCompraPage() {
         open={emailModal.open}
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="orden_compra"
-        documentId={emailModal.id}
-        sociedadId={sociedadActiva?.id || ""}
         defaultTo={emailModal.to}
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
+        generatePdf={async () => {
+          if (!detailOC || !sociedadActiva) throw new Error("No se encontró la OC");
+          const oc = detailOC;
+          const prov = oc.proveedores;
+          const estadoLabel = (statusConfig[oc.estado] || { label: oc.estado }).label;
+          const mon = oc.moneda as "ARS" | "USD";
+          const soc = getSociedadPDF(sociedadActiva);
+          const html = generateOrdenCompraPDF({
+            numero: oc.numero,
+            fecha: oc.fecha,
+            fecha_entrega_estimada: oc.fecha_entrega_estimada,
+            estado: oc.estado,
+            estadoLabel,
+            moneda: mon,
+            subtotal: Number(oc.subtotal),
+            iva: Number(oc.iva),
+            total: Number(oc.total),
+            observaciones: oc.observaciones,
+            presupuesto_origen: oc.presupuesto_origen ? { numero: (oc.presupuesto_origen as { numero: string }).numero } : null,
+            proveedor: prov ? {
+              razon_social: prov.razon_social,
+              cuit: prov.cuit,
+              condicion_iva: prov.condicion_iva,
+              direccion: prov.direccion,
+              localidad: prov.localidad,
+              provincia: prov.provincia,
+              email: prov.email,
+              telefono: prov.telefono,
+              forma_pago: prov.forma_pago,
+            } : null,
+            items: detailItems.map(it => ({
+              codigo: it.codigo,
+              descripcion: it.descripcion,
+              cantidad: it.cantidad,
+              unidad: it.unidad,
+              precio_unitario: Number(it.precio_unitario),
+              subtotal: Number(it.subtotal),
+            })),
+          }, soc);
+          return htmlToPdfBase64(html);
+        }}
       />
     </>
   );

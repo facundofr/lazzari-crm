@@ -7,7 +7,7 @@ import { DataTable } from "@/components/ui/data-table";
 
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import { generateFacturaPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
+import { generateFacturaPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { EmailComposeModal, type EmailDocumentType } from "@/components/email-compose-modal";
 import { useUser } from "@/lib/auth-context";
@@ -2232,8 +2232,37 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
         open={emailModal.open}
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="factura"
-        documentId={emailModal.facturaId}
-        sociedadId={sociedadActiva?.id || ""}
+        generatePdf={async () => {
+          const f = facturas.find(ff => ff.id === emailModal.facturaId);
+          if (!f || !sociedadActiva) throw new Error("Factura no encontrada");
+          let pdfItems = detailItems;
+          if (pdfItems.length === 0) {
+            const { data } = await supabase.from("factura_items")
+              .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal")
+              .eq("factura_id", f.id).order("orden");
+            pdfItems = (data || []).map(d => ({ ...d, subtotal: d.subtotal ?? 0 }));
+          }
+          const soc = getSociedadPDF(sociedadActiva);
+          const cli = f.clientes;
+          const html = generateFacturaPDF({
+            tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero,
+            fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento,
+            condicion_venta: f.condicion_venta, moneda: f.moneda as "ARS" | "USD",
+            tipo_cambio: f.tipo_cambio, subtotal: Number(f.subtotal), iva: Number(f.iva), total: Number(f.total),
+            cae: f.cae, cae_vencimiento: f.cae_vencimiento, oc_cliente: f.oc_cliente,
+            cliente: cli ? {
+              razon_social: cli.razon_social, cuit: cli.cuit, condicion_iva: cli.condicion_iva,
+              direccion: cli.direccion, localidad: cli.localidad, provincia: cli.provincia,
+              email: cli.email, telefono: cli.telefono,
+            } : null,
+            items: pdfItems.map(it => ({
+              descripcion: it.descripcion, cantidad: it.cantidad,
+              precio_unitario: Number(it.precio_unitario), iva_porcentaje: it.iva_porcentaje,
+              subtotal: Number(it.subtotal),
+            })),
+          }, emisorData, soc);
+          return htmlToPdfBase64(html);
+        }}
         defaultTo={emailModal.to}
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
