@@ -1097,36 +1097,41 @@ export function openPDFWindow(html: string) {
 // ── Helper to convert HTML to PDF base64 (client-side) ──────────
 export async function htmlToPdfBase64(html: string): Promise<string> {
   const html2pdf = (await import("html2pdf.js")).default;
-  // Create a temporary container
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  // Extract body content if full HTML document
-  const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-  if (bodyMatch) {
-    container.innerHTML = bodyMatch[1];
-  }
-  // Apply styles from the HTML
-  const styleMatch = html.match(/<style[^>]*>([\s\S]*?)<\/style>/gi);
-  if (styleMatch) {
-    const styleEl = document.createElement("style");
-    styleEl.textContent = styleMatch.map(s => s.replace(/<\/?style[^>]*>/gi, "")).join("\n");
-    container.prepend(styleEl);
-  }
-  container.style.position = "absolute";
-  container.style.left = "-9999px";
-  container.style.top = "0";
-  document.body.appendChild(container);
+
+  // Use an iframe so the full HTML document (with <style>, <body>, etc.) renders correctly
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;height:297mm;border:none;";
+  document.body.appendChild(iframe);
 
   try {
+    // Write the full HTML into the iframe
+    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!iframeDoc) throw new Error("No se pudo crear iframe para PDF");
+    iframeDoc.open();
+    iframeDoc.write(html);
+    iframeDoc.close();
+
+    // Wait for images/fonts to load
+    await new Promise(r => setTimeout(r, 500));
+
+    const target = iframeDoc.body;
+    if (!target) throw new Error("El iframe no tiene body");
+
     const blob: Blob = await html2pdf()
       .set({
-        margin: [8, 8, 8, 8],
+        margin: [5, 5, 5, 5],
         filename: "document.pdf",
-        image: { type: "jpeg", quality: 0.95 },
-        html2canvas: { scale: 2, useCORS: true, letterRendering: true },
+        image: { type: "jpeg", quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          letterRendering: true,
+          windowWidth: target.scrollWidth || 794,
+          windowHeight: target.scrollHeight || 1123,
+        },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
       })
-      .from(container)
+      .from(target)
       .outputPdf("blob");
 
     // Convert blob to base64
@@ -1140,6 +1145,6 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
       reader.readAsDataURL(blob);
     });
   } finally {
-    document.body.removeChild(container);
+    document.body.removeChild(iframe);
   }
 }
