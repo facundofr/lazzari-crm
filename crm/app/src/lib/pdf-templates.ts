@@ -1098,43 +1098,57 @@ export function openPDFWindow(html: string) {
 export async function htmlToPdfBase64(html: string): Promise<string> {
   const html2pdf = (await import("html2pdf.js")).default;
 
-  // Use an iframe so the full HTML document (with <style>, <body>, etc.) renders correctly
-  const iframe = document.createElement("iframe");
-  iframe.style.cssText = "position:fixed;left:-10000px;top:0;width:210mm;height:297mm;border:none;";
-  document.body.appendChild(iframe);
+  // White overlay so the user doesn't see the rendering
+  const overlay = document.createElement("div");
+  // Must be visible (not opacity:0 or display:none) for html2canvas to capture.
+  // Position behind viewport with clip to prevent user seeing it.
+  overlay.style.cssText = "position:absolute;left:0;top:0;z-index:-1;background:#fff;width:794px;overflow:visible;pointer-events:none;";
+
+  // Extract <style> blocks and <body> content from full HTML document
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+  const styleMatches = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)];
+
+  // Combine all CSS; replace 'body' selector with our container class
+  let cssText = styleMatches.map(m => m[1]).join("\n");
+  cssText = cssText.replace(/\bbody\s*\{/g, ".pdf-root {");
+  // Also handle @media print body references
+  cssText = cssText.replace(/@media\s+print\s*\{[^}]*\}/g, "");
+  cssText = cssText.replace(/@page\s*\{[^}]*\}/g, "");
+
+  const styleEl = document.createElement("style");
+  styleEl.textContent = cssText;
+  overlay.appendChild(styleEl);
+
+  // Container simulates <body> with proper width for A4
+  const container = document.createElement("div");
+  container.className = "pdf-root";
+  container.style.cssText = "width:794px;background:#fff;";
+  container.innerHTML = bodyMatch ? bodyMatch[1] : html;
+  overlay.appendChild(container);
+
+  document.body.appendChild(overlay);
+
+  // Wait for images (logo base64) and layout to compute
+  await new Promise(r => setTimeout(r, 400));
 
   try {
-    // Write the full HTML into the iframe
-    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (!iframeDoc) throw new Error("No se pudo crear iframe para PDF");
-    iframeDoc.open();
-    iframeDoc.write(html);
-    iframeDoc.close();
-
-    // Wait for images/fonts to load
-    await new Promise(r => setTimeout(r, 500));
-
-    const target = iframeDoc.body;
-    if (!target) throw new Error("El iframe no tiene body");
-
     const blob: Blob = await html2pdf()
       .set({
-        margin: [5, 5, 5, 5],
-        filename: "document.pdf",
+        margin: [0, 0, 0, 0],
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: {
           scale: 2,
           useCORS: true,
           letterRendering: true,
-          windowWidth: target.scrollWidth || 794,
-          windowHeight: target.scrollHeight || 1123,
+          backgroundColor: "#ffffff",
+          width: 794,
+          windowWidth: 794,
         },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
       })
-      .from(target)
+      .from(container)
       .outputPdf("blob");
 
-    // Convert blob to base64
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -1145,6 +1159,6 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
       reader.readAsDataURL(blob);
     });
   } finally {
-    document.body.removeChild(iframe);
+    document.body.removeChild(overlay);
   }
 }
