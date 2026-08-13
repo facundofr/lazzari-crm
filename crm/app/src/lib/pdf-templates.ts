@@ -411,61 +411,74 @@ export function generateFacturaPDF(
     </tr>`).join("")
   : `<tr><td colspan="${isB ? 5 : 6}" style="text-align:center;color:#999;padding:20px;font-style:italic">Items detallados no disponibles</td></tr>`;
 
+  const trStyle = "font-size:11px;color:#555;padding:5px 0";
+  const tdMonoR = "text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222";
+  const trFinal = "font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222";
+  const tdFinalR = "text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700";
+
   const totalsHtml = isB
-    ? `<div class="total-row"><span>Subtotal</span><span class="mono">${formatCurrency(Number(f.total), mon)}</span></div>
-       <div class="total-row" style="color:#999;font-size:9px"><span>IVA incluido en precio</span><span class="mono">${formatCurrency(Number(f.iva), mon)}</span></div>
-       <div class="total-row-final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total), mon)}</span></div>`
-    : `<div class="total-row"><span>Neto gravado</span><span class="mono">${formatCurrency(Number(f.subtotal), mon)}</span></div>
-       <div class="total-row"><span>IVA 21%</span><span class="mono">${formatCurrency(Number(f.iva), mon)}</span></div>
-       <div class="total-row-final"><span>TOTAL</span><span class="mono">${formatCurrency(Number(f.total), mon)}</span></div>`;
+    ? `<table style="width:100%;border-collapse:collapse">
+        <tr><td style="${trStyle}">Subtotal</td><td style="${tdMonoR}">${formatCurrency(Number(f.total), mon)}</td></tr>
+        <tr><td style="${trStyle};color:#999;font-size:9px">IVA incluido en precio</td><td style="${tdMonoR};font-size:9px;color:#999">${formatCurrency(Number(f.iva), mon)}</td></tr>
+        <tr><td style="${trFinal}">TOTAL</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
+       </table>`
+    : `<table style="width:100%;border-collapse:collapse">
+        <tr><td style="${trStyle}">Neto gravado</td><td style="${tdMonoR}">${formatCurrency(Number(f.subtotal), mon)}</td></tr>
+        <tr><td style="${trStyle}">IVA 21%</td><td style="${tdMonoR}">${formatCurrency(Number(f.iva), mon)}</td></tr>
+        <tr><td style="${trFinal}">TOTAL</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
+       </table>`;
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${tipoLabel} ${letraComprobante} ${compNum}</title>
 <style>${facturaStyles(c)}</style></head><body>
 <div class="page">
 
-<div class="fc-header">
-  <div class="fc-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" />
-  </div>
-  <div class="fc-center">
-    <div class="fc-letra-box">${letraComprobante}</div>
-    <div class="fc-cod">${codTipo}</div>
-  </div>
-  <div class="fc-right">
-    <div class="comp-tipo">${tipoLabel}</div>
-    <div class="comp-sub">Original</div>
-    <div class="comp-line">N&ordm; <b>${compNum}</b></div>
-    <div class="comp-line">Fecha: <b>${formatDate(f.fecha)}</b></div>
-    <div class="comp-line">C.U.I.T.: <b>${emisor.cuit}</b></div>
-    ${soc.ingresosBrutos ? `<div class="comp-line">Ingresos brutos N&ordm; <b>${soc.ingresosBrutos}</b></div>` : ""}
-    ${soc.inicioActividades ? `<div class="comp-line">Inicio de actividad <b>${soc.inicioActividades}</b></div>` : ""}
-  </div>
-</div>
-<div class="emisor-block">
-  <div class="emisor-name" style="font-size:14px;text-transform:uppercase">${soc.nombre}</div>
-  ${soc.domicilio ? `<div class="emisor-detail" style="font-size:10px;font-weight:600;color:#333">${soc.domicilio.split(",")[0].toUpperCase()}</div>` : ""}
-  ${soc.email ? `<div class="emisor-detail" style="font-size:10px">${soc.email}</div>` : ""}
-  ${soc.web ? `<div class="emisor-detail" style="font-size:10px">${soc.web}</div>` : ""}
-  ${soc.telefono ? `<div class="emisor-detail" style="font-size:10px">Teléfonos: ${soc.telefono}</div>` : ""}
+<table style="width:100%;border:2px solid #222;border-collapse:collapse;margin-bottom:0;table-layout:fixed">
+  <tr>
+    <td style="width:50%;padding:14px 16px;text-align:center;vertical-align:middle">
+      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="max-height:80px" />
+    </td>
+    <td style="width:60px;border-left:2px solid #222;border-right:2px solid #222;text-align:center;vertical-align:top;padding-top:6px">
+      <div style="background:#222;color:#fff;font-size:32px;font-weight:900;line-height:1;padding:4px 10px;text-align:center;display:inline-block">${letraComprobante}</div>
+      <div style="font-size:8px;color:#444;text-align:center;margin-top:4px;font-weight:600">${codTipo}</div>
+    </td>
+    <td style="width:50%;padding:12px 16px;vertical-align:top">
+      <div style="font-size:13px;font-weight:700;font-style:italic;text-align:right;color:#222">${tipoLabel}</div>
+      <div style="font-size:9px;text-align:right;color:#666">Original</div>
+      <div style="font-size:10px;text-align:right;color:#444;margin-top:3px">N&ordm; <b style="color:#222;font-weight:700">${compNum}</b></div>
+      <div style="font-size:10px;text-align:right;color:#444;margin-top:3px">Fecha: <b style="color:#222;font-weight:700">${formatDate(f.fecha)}</b></div>
+      <div style="font-size:10px;text-align:right;color:#444;margin-top:3px">C.U.I.T.: <b style="color:#222;font-weight:700">${emisor.cuit}</b></div>
+      ${soc.ingresosBrutos ? `<div style="font-size:10px;text-align:right;color:#444;margin-top:3px">Ingresos brutos N&ordm; <b style="color:#222;font-weight:700">${soc.ingresosBrutos}</b></div>` : ""}
+      ${soc.inicioActividades ? `<div style="font-size:10px;text-align:right;color:#444;margin-top:3px">Inicio de actividad <b style="color:#222;font-weight:700">${soc.inicioActividades}</b></div>` : ""}
+    </td>
+  </tr>
+</table>
+<div style="border-left:2px solid #222;border-right:2px solid #222;border-bottom:2px solid #222;padding:12px 16px;margin-bottom:16px">
+  <div style="font-size:14px;font-weight:700;color:#222;text-transform:uppercase;margin-bottom:2px">${soc.nombre}</div>
+  ${soc.domicilio ? `<div style="font-size:10px;font-weight:600;color:#333;margin-top:1px">${soc.domicilio.split(",")[0].toUpperCase()}</div>` : ""}
+  ${soc.email ? `<div style="font-size:10px;color:#444;margin-top:1px">${soc.email}</div>` : ""}
+  ${soc.web ? `<div style="font-size:10px;color:#444;margin-top:1px">${soc.web}</div>` : ""}
+  ${soc.telefono ? `<div style="font-size:10px;color:#444;margin-top:1px">Teléfonos: ${soc.telefono}</div>` : ""}
 </div>
 
-<div class="fc-data">
-  <div class="fc-data-left">
-    <b>SR/ES</b>: ${cli?.razon_social || "\u2014"}${cli?.cuit ? ` <b>C.U.I.T.:</b> ${cli.cuit}` : ""}${cli?.condicion_iva ? ` - ${cli.condicion_iva === "RI" ? "Responsable inscripto" : cli.condicion_iva}` : ""}<br/>
-    ${cli?.direccion ? `<b>Dirección</b>: ${cli.direccion}${cli.localidad ? `, ${cli.localidad}` : ""}${cli.provincia ? `, ${cli.provincia}` : ""}<br/>` : ""}
-    ${cli?.email ? `<b>Email</b>: ${cli.email}<br/>` : ""}
-    ${cli?.telefono ? `<b>Teléfono</b>: ${cli.telefono}` : ""}
-  </div>
-  <div class="fc-data-right">
-    ${f.condicion_venta ? `Condición de venta: <b><i>${f.condicion_venta}</i></b><br/>` : ""}
-    ${soc.jurisdiccion ? `Jurisdicción: <b><i><u>${soc.jurisdiccion}</u></i></b><br/>` : ""}
-    ${f.fecha_vencimiento ? `Vencimiento: <b>${formatDate(f.fecha_vencimiento)}</b><br/>` : ""}
-    Moneda: ${mon === "USD" ? "DOLARES ESTADOUNIDENSES" : "PESOS ARGENTINOS"}
-    ${isUSD ? `<br/>Tipo de cambio: $ ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : ""}
-    ${f.oc_cliente ? `<br/>OC Cliente: <b>${f.oc_cliente}</b>` : ""}
-  </div>
-</div>
+<table style="width:100%;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #ccc;border-collapse:collapse">
+  <tr>
+    <td style="width:60%;font-size:10px;color:#333;line-height:1.6;vertical-align:top">
+      <b>SR/ES</b>: ${cli?.razon_social || "\u2014"}${cli?.cuit ? ` <b>C.U.I.T.:</b> ${cli.cuit}` : ""}${cli?.condicion_iva ? ` - ${cli.condicion_iva === "RI" ? "Responsable inscripto" : cli.condicion_iva}` : ""}<br/>
+      ${cli?.direccion ? `<b>Dirección</b>: ${cli.direccion}${cli.localidad ? `, ${cli.localidad}` : ""}${cli.provincia ? `, ${cli.provincia}` : ""}<br/>` : ""}
+      ${cli?.email ? `<b>Email</b>: ${cli.email}<br/>` : ""}
+      ${cli?.telefono ? `<b>Teléfono</b>: ${cli.telefono}` : ""}
+    </td>
+    <td style="width:40%;font-size:10px;color:#333;text-align:right;line-height:1.8;vertical-align:top">
+      ${f.condicion_venta ? `Condición de venta: <b><i>${f.condicion_venta}</i></b><br/>` : ""}
+      ${soc.jurisdiccion ? `Jurisdicción: <b><i><u>${soc.jurisdiccion}</u></i></b><br/>` : ""}
+      ${f.fecha_vencimiento ? `Vencimiento: <b>${formatDate(f.fecha_vencimiento)}</b><br/>` : ""}
+      Moneda: ${mon === "USD" ? "DOLARES ESTADOUNIDENSES" : "PESOS ARGENTINOS"}
+      ${isUSD ? `<br/>Tipo de cambio: $ ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : ""}
+      ${f.oc_cliente ? `<br/>OC Cliente: <b>${f.oc_cliente}</b>` : ""}
+    </td>
+  </tr>
+</table>
 
 <table>
   <thead><tr>
@@ -479,31 +492,35 @@ export function generateFacturaPDF(
   <tbody>${itemRows}</tbody>
 </table>
 
-<div class="totals-wrap">
-  <div class="totals-box">
-    ${isUSD ? `<div class="total-row" style="color:#999;font-size:9px"><span>Operación en USD &mdash; TC: ${Number(f.tipo_cambio).toLocaleString("es-AR")}</span><span class="mono">USD ${(Number(f.total) / Number(f.tipo_cambio!)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
+<table style="width:100%;margin-top:14px;border-collapse:collapse">
+  <tr><td></td><td style="width:260px">
+    ${isUSD ? `<table style="width:100%;border-collapse:collapse"><tr><td style="font-size:9px;color:#999;padding:5px 0">Operación en USD &mdash; TC: ${Number(f.tipo_cambio).toLocaleString("es-AR")}</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:9px;color:#999;padding:5px 0">USD ${(Number(f.total) / Number(f.tipo_cambio!)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td></tr></table>` : ""}
     ${totalsHtml}
-  </div>
-</div>
+  </td></tr>
+</table>
 
 ${f.cae ? `
-<div class="cae-section">
-  <div>
-    <div class="cae-label">CAE N°</div>
-    <div class="cae-value">${f.cae}</div>
-    ${f.cae_vencimiento ? `<div class="cae-vto">Fecha de vto. de CAE: ${formatDate(f.cae_vencimiento)}</div>` : ""}
-  </div>
-  <div class="qr-box">
-    <img src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(qrUrl)}" alt="QR ARCA" />
-    <div class="qr-text">Comprobante autorizado</div>
-  </div>
-</div>` : ""}
+<table style="width:100%;margin-top:20px;padding:14px 16px;border:1px solid #ddd;border-collapse:collapse">
+  <tr>
+    <td style="vertical-align:top">
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1px;color:#888;font-weight:700">CAE N°</div>
+      <div style="font-size:11px;font-weight:700;font-family:'Courier New',monospace;margin-top:2px;color:#222">${f.cae}</div>
+      ${f.cae_vencimiento ? `<div style="font-size:9px;color:#888;margin-top:3px">Fecha de vto. de CAE: ${formatDate(f.cae_vencimiento)}</div>` : ""}
+    </td>
+    <td style="text-align:center;width:120px;vertical-align:top">
+      <img src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(qrUrl)}" alt="QR ARCA" style="width:100px;height:100px" />
+      <div style="font-size:7px;color:#aaa;margin-top:2px">Comprobante autorizado</div>
+    </td>
+  </tr>
+</table>` : ""}
 
-<div class="footer">
-  <span>${emisor.razonSocial} &mdash; CUIT ${emisor.cuit}</span>
-  <span>${tipoLabel} ${letraComprobante} N° ${compNum}</span>
-  <span>Impreso: ${formatDate(new Date().toISOString())}</span>
-</div>
+<table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
+  <tr>
+    <td>${emisor.razonSocial} &mdash; CUIT ${emisor.cuit}</td>
+    <td style="text-align:center">${tipoLabel} ${letraComprobante} N° ${compNum}</td>
+    <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
+  </tr>
+</table>
 
 </div></body></html>`;
 }
