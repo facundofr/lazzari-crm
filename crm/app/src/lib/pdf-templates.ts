@@ -247,39 +247,43 @@ export function generatePresupuestoPDF(
 <style>${baseStyles(c)}</style></head><body>
 <div class="page">
 <div class="header-bar"></div>
-<div class="header">
-  <div class="header-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
-    <div class="company-sub">${soc.razonSocial}</div>
-    <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
-    ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-    <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
-  </div>
-  <div class="header-right">
-    <div class="doc-title">Presupuesto</div>
-    <div class="doc-number">${pr.numero}</div>
-    <div class="doc-badge">${pr.estadoLabel}</div>
-    <div class="doc-date">${formatDate(pr.fecha)}${pr.vencimiento ? ` &mdash; Vence: ${formatDate(pr.vencimiento)}` : ""}</div>
-  </div>
-</div>
+<table style="width:100%;border-bottom:2px solid #e0e0e0;margin-bottom:18px;padding:16px 0 14px;border-collapse:collapse">
+  <tr>
+    <td style="vertical-align:top">
+      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
+      <div class="company-sub">${soc.razonSocial}</div>
+      <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
+      ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
+      <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
+    </td>
+    <td style="text-align:right;vertical-align:top">
+      <div class="doc-title">Presupuesto</div>
+      <div class="doc-number">${pr.numero}</div>
+      <div class="doc-badge">${pr.estadoLabel}</div>
+      <div class="doc-date">${formatDate(pr.fecha)}${pr.vencimiento ? ` &mdash; Vence: ${formatDate(pr.vencimiento)}` : ""}</div>
+    </td>
+  </tr>
+</table>
 
-<div class="info-grid">
-  <div class="info-box">
-    <div class="info-box-title">Cliente</div>
-    <div class="info-row"><div class="info-value-lg">${pr.clienteNombre}</div></div>
-    ${pr.clienteCuit ? `<div class="info-row"><div class="info-label">CUIT</div><div class="info-value">${pr.clienteCuit}</div></div>` : ""}
-    ${pr.clienteCondicionIva ? `<div class="info-row"><div class="info-label">Cond. IVA</div><div class="info-value">${pr.clienteCondicionIva}</div></div>` : ""}
-    ${pr.clienteDireccion ? `<div class="info-row"><div class="info-label">Domicilio</div><div class="info-value">${pr.clienteDireccion}${pr.clienteLocalidad ? `, ${pr.clienteLocalidad}` : ""}${pr.clienteProvincia ? ` (${pr.clienteProvincia})` : ""}</div></div>` : ""}
-  </div>
-  <div class="info-box">
-    <div class="info-box-title">Datos comerciales</div>
-    ${pr.vendedorNombre ? `<div class="info-row"><div class="info-label">Vendedor</div><div class="info-value">${pr.vendedorNombre}</div></div>` : ""}
-    ${pr.condicionPago ? `<div class="info-row"><div class="info-label">Cond. de pago</div><div class="info-value">${pr.condicionPago}</div></div>` : ""}
-    <div class="info-row"><div class="info-label">Moneda</div><div class="info-value">${mon === "USD" ? "Dólares estadounidenses" : "Pesos argentinos"}</div></div>
-    ${pr.clienteEmail ? `<div class="info-row"><div class="info-label">Email</div><div class="info-value">${pr.clienteEmail}</div></div>` : ""}
-    ${pr.clienteTelefono ? `<div class="info-row"><div class="info-label">Teléfono</div><div class="info-value">${pr.clienteTelefono}</div></div>` : ""}
-  </div>
-</div>
+<table style="width:100%;margin-bottom:18px;border-collapse:separate;border-spacing:16px 0">
+  <tr>
+    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Cliente</div>
+      <div class="info-row"><div style="font-size:13px;font-weight:700;color:#222">${pr.clienteNombre}</div></div>
+      ${pr.clienteCuit ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteCuit}</div></div>` : ""}
+      ${pr.clienteCondicionIva ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Cond. IVA</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteCondicionIva}</div></div>` : ""}
+      ${pr.clienteDireccion ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteDireccion}${pr.clienteLocalidad ? `, ${pr.clienteLocalidad}` : ""}${pr.clienteProvincia ? ` (${pr.clienteProvincia})` : ""}</div></div>` : ""}
+    </td>
+    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Datos comerciales</div>
+      ${pr.vendedorNombre ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Vendedor</div><div style="font-size:11px;font-weight:500;color:#333">${pr.vendedorNombre}</div></div>` : ""}
+      ${pr.condicionPago ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Cond. de pago</div><div style="font-size:11px;font-weight:500;color:#333">${pr.condicionPago}</div></div>` : ""}
+      <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Moneda</div><div style="font-size:11px;font-weight:500;color:#333">${mon === "USD" ? "Dólares estadounidenses" : "Pesos argentinos"}</div></div>
+      ${pr.clienteEmail ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Email</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteEmail}</div></div>` : ""}
+      ${pr.clienteTelefono ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Teléfono</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteTelefono}</div></div>` : ""}
+    </td>
+  </tr>
+</table>
 
 <div class="items-title">Detalle de productos / servicios</div>
 <table>
@@ -295,21 +299,25 @@ export function generatePresupuestoPDF(
   <tbody>${itemRows}</tbody>
 </table>
 
-<div class="totals-wrap">
-  <div class="totals-box">
-    <div class="total-row"><span>Subtotal</span><span class="mono">${formatCurrency(pr.subtotal, mon)}</span></div>
-    <div class="total-row"><span>IVA</span><span class="mono">${formatCurrency(pr.iva, mon)}</span></div>
-    <div class="total-row-final"><span>TOTAL (${mon})</span><span class="mono">${formatCurrency(pr.total, mon)}</span></div>
-  </div>
-</div>
+<table style="width:100%;margin-top:14px;border-collapse:collapse">
+  <tr><td></td><td style="width:260px">
+    <table style="width:100%;border-collapse:collapse">
+      <tr><td style="font-size:11px;color:#555;padding:5px 0">Subtotal</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.subtotal, mon)}</td></tr>
+      <tr><td style="font-size:11px;color:#555;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.iva, mon)}</td></tr>
+      <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
+    </table>
+  </td></tr>
+</table>
 
 ${pr.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${pr.observaciones}</div></div>` : ""}
 
-<div class="footer">
-  <span>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</span>
-  <span>${pr.numero}${pr.creadoPor ? ` | ${pr.creadoPor}` : ""}</span>
-  <span>Impreso: ${formatDate(new Date().toISOString())}</span>
-</div>
+<table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
+  <tr>
+    <td>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</td>
+    <td style="text-align:center">${pr.numero}${pr.creadoPor ? ` | ${pr.creadoPor}` : ""}</td>
+    <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
+  </tr>
+</table>
 <div class="footer-legal">Este presupuesto tiene validez hasta la fecha de vencimiento indicada. Los precios pueden estar sujetos a modificaciones.</div>
 
 </div></body></html>`;
@@ -438,7 +446,7 @@ export function generateFacturaPDF(
     <td style="width:50%;padding:14px 16px;text-align:center;vertical-align:middle">
       <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="max-height:80px" />
     </td>
-    <td style="width:60px;border-left:2px solid #222;border-right:2px solid #222;text-align:center;vertical-align:top;padding-top:6px">
+    <td style="width:70px;border-left:2px solid #222;border-right:2px solid #222;text-align:center;vertical-align:top;padding:6px 5px 6px 5px">
       <div style="background:#222;color:#fff;font-size:32px;font-weight:900;line-height:1;padding:4px 10px;text-align:center;display:inline-block">${letraComprobante}</div>
       <div style="font-size:8px;color:#444;text-align:center;margin-top:4px;font-weight:600">${codTipo}</div>
     </td>
@@ -594,40 +602,44 @@ export function generateRemitoPDF(
 </style></head><body>
 <div class="page">
 <div class="header-bar"></div>
-<div class="header">
-  <div class="header-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
-    <div class="company-sub">${soc.razonSocial}</div>
-    <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
-    ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-    <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
-  </div>
-  <div class="header-right">
-    <div class="doc-title">Remito</div>
-    <div class="doc-number">${r.numero}</div>
-    <div class="doc-date">${formatDate(r.fecha)}</div>
-    ${r.cae ? `<div class="doc-date" style="margin-top:3px">CAE: ${r.cae}</div>` : ""}
-  </div>
-</div>
+<table style="width:100%;border-bottom:2px solid #e0e0e0;margin-bottom:18px;padding:16px 0 14px;border-collapse:collapse">
+  <tr>
+    <td style="vertical-align:top">
+      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
+      <div class="company-sub">${soc.razonSocial}</div>
+      <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
+      ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
+      <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
+    </td>
+    <td style="text-align:right;vertical-align:top">
+      <div class="doc-title">Remito</div>
+      <div class="doc-number">${r.numero}</div>
+      <div class="doc-date">${formatDate(r.fecha)}</div>
+      ${r.cae ? `<div class="doc-date" style="margin-top:3px">CAE: ${r.cae}</div>` : ""}
+    </td>
+  </tr>
+</table>
 
-<div class="info-grid">
-  <div class="info-box">
-    <div class="info-box-title">Destinatario</div>
-    <div class="info-row"><div class="info-value-lg">${cli?.razon_social || "\u2014"}</div></div>
-    ${cli?.cuit ? `<div class="info-row"><div class="info-label">CUIT</div><div class="info-value">${cli.cuit}</div></div>` : ""}
-    ${cli?.condicion_iva ? `<div class="info-row"><div class="info-label">Cond. IVA</div><div class="info-value">${cli.condicion_iva}</div></div>` : ""}
-    ${direccionEntrega ? `<div class="info-row"><div class="info-label">Dirección de entrega</div><div class="info-value">${direccionEntrega}</div></div>` : ""}
-  </div>
-  <div class="info-box">
-    <div class="info-box-title">Datos del remito</div>
-    ${r.oc_cliente ? `<div class="info-row"><div class="info-label">OC Cliente</div><div class="info-value" style="color:${c};font-weight:700;font-size:12px">${r.oc_cliente}</div></div>` : ""}
-    ${r.transportes.length > 0 ? r.transportes.map(t => `
-      <div class="info-row"><div class="info-label">Transportista</div><div class="info-value">${t.transportista}</div></div>
-      ${t.destino ? `<div class="info-row"><div class="info-label">Destino</div><div class="info-value">${t.destino}</div></div>` : ""}
-      ${t.costo ? `<div class="info-row"><div class="info-label">Costo flete</div><div class="info-value">${formatCurrency(Number(t.costo), (t.moneda || "ARS") as "USD" | "ARS")}</div></div>` : ""}
-    `).join("") : `<div class="info-row"><div class="info-value" style="color:#999;font-style:italic">Sin transporte asignado</div></div>`}
-  </div>
-</div>
+<table style="width:100%;margin-bottom:18px;border-collapse:separate;border-spacing:16px 0">
+  <tr>
+    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Destinatario</div>
+      <div class="info-row"><div style="font-size:13px;font-weight:700;color:#222">${cli?.razon_social || "\u2014"}</div></div>
+      ${cli?.cuit ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${cli.cuit}</div></div>` : ""}
+      ${cli?.condicion_iva ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Cond. IVA</div><div style="font-size:11px;font-weight:500;color:#333">${cli.condicion_iva}</div></div>` : ""}
+      ${direccionEntrega ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Dirección de entrega</div><div style="font-size:11px;font-weight:500;color:#333">${direccionEntrega}</div></div>` : ""}
+    </td>
+    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Datos del remito</div>
+      ${r.oc_cliente ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">OC Cliente</div><div style="font-size:11px;font-weight:500;color:${c};font-weight:700;font-size:12px">${r.oc_cliente}</div></div>` : ""}
+      ${r.transportes.length > 0 ? r.transportes.map(t => `
+        <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Transportista</div><div style="font-size:11px;font-weight:500;color:#333">${t.transportista}</div></div>
+        ${t.destino ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Destino</div><div style="font-size:11px;font-weight:500;color:#333">${t.destino}</div></div>` : ""}
+        ${t.costo ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Costo flete</div><div style="font-size:11px;font-weight:500;color:#333">${formatCurrency(Number(t.costo), (t.moneda || "ARS") as "USD" | "ARS")}</div></div>` : ""}
+      `).join("") : `<div class="info-row"><div style="font-size:11px;font-weight:500;color:#999;font-style:italic">Sin transporte asignado</div></div>`}
+    </td>
+  </tr>
+</table>
 
 <div class="items-title">Detalle de mercadería</div>
 <table>
@@ -644,16 +656,21 @@ ${r.valor_declarado ? `<div class="valor-declarado">VALOR DECLARADO: $ ${Number(
 
 ${r.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${r.observaciones}</div></div>` : ""}
 
-<div class="signatures">
-  <div class="sig-line">Firma y aclaración del emisor</div>
-  <div class="sig-line">Firma y aclaración del receptor</div>
-</div>
+<table style="width:100%;margin-top:60px;border-collapse:collapse">
+  <tr>
+    <td style="width:180px;border-top:1px solid #333;text-align:center;padding-top:6px;font-size:10px;color:#666">Firma y aclaración del emisor</td>
+    <td></td>
+    <td style="width:180px;border-top:1px solid #333;text-align:center;padding-top:6px;font-size:10px;color:#666">Firma y aclaración del receptor</td>
+  </tr>
+</table>
 
-<div class="footer">
-  <span>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</span>
-  <span>${r.numero}</span>
-  <span>Impreso: ${formatDate(new Date().toISOString())}</span>
-</div>
+<table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
+  <tr>
+    <td>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</td>
+    <td style="text-align:center">${r.numero}</td>
+    <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
+  </tr>
+</table>
 <div class="footer-legal">Duplicado &mdash; Recibí conforme la mercadería detallada precedentemente.</div>
 
 </div></body></html>`;
@@ -721,39 +738,43 @@ export function generateOrdenCompraPDF(
 <style>${baseStyles(c)}</style></head><body>
 <div class="page">
 <div class="header-bar"></div>
-<div class="header">
-  <div class="header-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
-    <div class="company-sub">${soc.razonSocial}</div>
-    <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
-    ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-    <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
-  </div>
-  <div class="header-right">
-    <div class="doc-title">Orden de Compra</div>
-    <div class="doc-number">${oc.numero}</div>
-    <div class="doc-badge">${oc.estadoLabel}</div>
-    <div class="doc-date">${formatDate(oc.fecha)}${oc.fecha_entrega_estimada ? ` &mdash; Entrega: ${formatDate(oc.fecha_entrega_estimada)}` : ""}</div>
-  </div>
-</div>
+<table style="width:100%;border-bottom:2px solid #e0e0e0;margin-bottom:18px;padding:16px 0 14px;border-collapse:collapse">
+  <tr>
+    <td style="vertical-align:top">
+      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
+      <div class="company-sub">${soc.razonSocial}</div>
+      <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
+      ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
+      <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
+    </td>
+    <td style="text-align:right;vertical-align:top">
+      <div class="doc-title">Orden de Compra</div>
+      <div class="doc-number">${oc.numero}</div>
+      <div class="doc-badge">${oc.estadoLabel}</div>
+      <div class="doc-date">${formatDate(oc.fecha)}${oc.fecha_entrega_estimada ? ` &mdash; Entrega: ${formatDate(oc.fecha_entrega_estimada)}` : ""}</div>
+    </td>
+  </tr>
+</table>
 
-<div class="info-grid">
-  <div class="info-box">
-    <div class="info-box-title">Proveedor</div>
-    <div class="info-row"><div class="info-value-lg">${prov?.razon_social || "\u2014"}</div></div>
-    ${prov?.cuit ? `<div class="info-row"><div class="info-label">CUIT</div><div class="info-value">${prov.cuit}</div></div>` : ""}
-    ${prov?.condicion_iva ? `<div class="info-row"><div class="info-label">Cond. IVA</div><div class="info-value">${prov.condicion_iva}</div></div>` : ""}
-    ${prov?.direccion ? `<div class="info-row"><div class="info-label">Domicilio</div><div class="info-value">${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? ` (${prov.provincia})` : ""}</div></div>` : ""}
-  </div>
-  <div class="info-box">
-    <div class="info-box-title">Datos de la orden</div>
-    ${prov?.forma_pago ? `<div class="info-row"><div class="info-label">Forma de pago</div><div class="info-value">${prov.forma_pago}</div></div>` : ""}
-    <div class="info-row"><div class="info-label">Moneda</div><div class="info-value">${mon === "USD" ? "Dólares estadounidenses" : "Pesos argentinos"}</div></div>
-    ${prov?.email ? `<div class="info-row"><div class="info-label">Email</div><div class="info-value">${prov.email}</div></div>` : ""}
-    ${prov?.telefono ? `<div class="info-row"><div class="info-label">Teléfono</div><div class="info-value">${prov.telefono}</div></div>` : ""}
-    ${oc.presupuesto_origen ? `<div class="info-row"><div class="info-label">PR Origen</div><div class="info-value" style="color:${c};font-weight:700">${oc.presupuesto_origen.numero}</div></div>` : ""}
-  </div>
-</div>
+<table style="width:100%;margin-bottom:18px;border-collapse:separate;border-spacing:16px 0">
+  <tr>
+    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Proveedor</div>
+      <div class="info-row"><div style="font-size:13px;font-weight:700;color:#222">${prov?.razon_social || "\u2014"}</div></div>
+      ${prov?.cuit ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${prov.cuit}</div></div>` : ""}
+      ${prov?.condicion_iva ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Cond. IVA</div><div style="font-size:11px;font-weight:500;color:#333">${prov.condicion_iva}</div></div>` : ""}
+      ${prov?.direccion ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? ` (${prov.provincia})` : ""}</div></div>` : ""}
+    </td>
+    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Datos de la orden</div>
+      ${prov?.forma_pago ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Forma de pago</div><div style="font-size:11px;font-weight:500;color:#333">${prov.forma_pago}</div></div>` : ""}
+      <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Moneda</div><div style="font-size:11px;font-weight:500;color:#333">${mon === "USD" ? "Dólares estadounidenses" : "Pesos argentinos"}</div></div>
+      ${prov?.email ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Email</div><div style="font-size:11px;font-weight:500;color:#333">${prov.email}</div></div>` : ""}
+      ${prov?.telefono ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Teléfono</div><div style="font-size:11px;font-weight:500;color:#333">${prov.telefono}</div></div>` : ""}
+      ${oc.presupuesto_origen ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">PR Origen</div><div style="font-size:11px;font-weight:500;color:${c};font-weight:700">${oc.presupuesto_origen.numero}</div></div>` : ""}
+    </td>
+  </tr>
+</table>
 
 <div class="items-title">Detalle de productos / servicios</div>
 <table>
@@ -769,21 +790,25 @@ export function generateOrdenCompraPDF(
   <tbody>${itemRows}</tbody>
 </table>
 
-<div class="totals-wrap">
-  <div class="totals-box">
-    <div class="total-row"><span>Subtotal</span><span class="mono">${formatCurrency(Number(oc.subtotal), mon)}</span></div>
-    <div class="total-row"><span>IVA</span><span class="mono">${formatCurrency(Number(oc.iva), mon)}</span></div>
-    <div class="total-row-final"><span>TOTAL (${mon})</span><span class="mono">${formatCurrency(Number(oc.total), mon)}</span></div>
-  </div>
-</div>
+<table style="width:100%;margin-top:14px;border-collapse:collapse">
+  <tr><td></td><td style="width:260px">
+    <table style="width:100%;border-collapse:collapse">
+      <tr><td style="font-size:11px;color:#555;padding:5px 0">Subtotal</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(Number(oc.subtotal), mon)}</td></tr>
+      <tr><td style="font-size:11px;color:#555;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(Number(oc.iva), mon)}</td></tr>
+      <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(Number(oc.total), mon)}</td></tr>
+    </table>
+  </td></tr>
+</table>
 
 ${oc.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${oc.observaciones}</div></div>` : ""}
 
-<div class="footer">
-  <span>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</span>
-  <span>${oc.numero}${oc.presupuesto_origen ? ` | PR: ${oc.presupuesto_origen.numero}` : ""}</span>
-  <span>Impreso: ${formatDate(new Date().toISOString())}</span>
-</div>
+<table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
+  <tr>
+    <td>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</td>
+    <td style="text-align:center">${oc.numero}${oc.presupuesto_origen ? ` | PR: ${oc.presupuesto_origen.numero}` : ""}</td>
+    <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
+  </tr>
+</table>
 <div class="footer-legal">Documento interno &mdash; Orden de compra emitida por ${soc.razonSocial}.</div>
 
 </div></body></html>`;
@@ -931,7 +956,7 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
           </tr>`;
         }).join("")}</tbody>
       </table>
-      <div class="totals-wrap"><div class="totals-box"><div class="total-row-final"><span>Total Cheques</span><span class="mono">${formatCurrency(totalCheques, mon)}</span></div></div></div>
+      <table style="width:100%;margin-top:14px;border-collapse:collapse"><tr><td></td><td style="width:260px"><table style="width:100%;border-collapse:collapse"><tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total Cheques</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalCheques, mon)}</td></tr></table></td></tr></table>
     </div>` : "";
 
   // ── Depósitos / Transferencias table ──
@@ -952,7 +977,7 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
           </tr>`;
         }).join("")}</tbody>
       </table>
-      <div class="totals-wrap"><div class="totals-box"><div class="total-row-final"><span>Total Dep\u00F3sitos</span><span class="mono">${formatCurrency(totalDepositos, mon)}</span></div></div></div>
+      <table style="width:100%;margin-top:14px;border-collapse:collapse"><tr><td></td><td style="width:260px"><table style="width:100%;border-collapse:collapse"><tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total Dep\u00F3sitos</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalDepositos, mon)}</td></tr></table></td></tr></table>
     </div>` : "";
 
   // ── Retenciones table ──
@@ -966,19 +991,21 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
         <thead><tr><th>Fecha</th><th>Descripci\u00F3n</th><th>Moneda</th><th class="right">Importe</th></tr></thead>
         <tbody>${retencionesItems.map(r => `<tr><td>${fechaDD(r.fecha)}</td><td>${r.desc}</td><td class="center">${mon}</td><td class="right mono bold">${formatCurrency(r.monto, mon)}</td></tr>`).join("")}</tbody>
       </table>
-      <div class="totals-wrap"><div class="totals-box"><div class="total-row-final"><span>Total Retenciones</span><span class="mono">${formatCurrency(totalRetenciones, mon)}</span></div></div></div>
+      <table style="width:100%;margin-top:14px;border-collapse:collapse"><tr><td></td><td style="width:260px"><table style="width:100%;border-collapse:collapse"><tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total Retenciones</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalRetenciones, mon)}</td></tr></table></td></tr></table>
     </div>` : "";
 
   // ── Totals ──
   const totalsHtml = `
-    <div class="totals-wrap" style="margin-top:24px">
-      <div class="totals-box">
-        ${totalCheques > 0 ? `<div class="total-row"><span>Total Cheques</span><span class="mono">${formatCurrency(totalCheques, mon)}</span></div>` : ""}
-        ${totalDepositos > 0 ? `<div class="total-row"><span>Total Dep\u00F3sitos / Transf.</span><span class="mono">${formatCurrency(totalDepositos, mon)}</span></div>` : ""}
-        ${totalRetenciones > 0 ? `<div class="total-row"><span>Total Retenciones</span><span class="mono">${formatCurrency(totalRetenciones, mon)}</span></div>` : ""}
-        <div class="total-row-final"><span>TOTAL (${mon})</span><span class="mono">${formatCurrency(totalGeneral, mon)}</span></div>
-      </div>
-    </div>`;
+    <table style="width:100%;margin-top:24px;border-collapse:collapse">
+      <tr><td></td><td style="width:260px">
+        <table style="width:100%;border-collapse:collapse">
+          ${totalCheques > 0 ? `<tr><td style="font-size:11px;color:#555;padding:5px 0">Total Cheques</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(totalCheques, mon)}</td></tr>` : ""}
+          ${totalDepositos > 0 ? `<tr><td style="font-size:11px;color:#555;padding:5px 0">Total Dep\u00F3sitos / Transf.</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(totalDepositos, mon)}</td></tr>` : ""}
+          ${totalRetenciones > 0 ? `<tr><td style="font-size:11px;color:#555;padding:5px 0">Total Retenciones</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(totalRetenciones, mon)}</td></tr>` : ""}
+          <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalGeneral, mon)}</td></tr>
+        </table>
+      </td></tr>
+    </table>`;
 
   // ── Monto en letras ──
   const letrasHtml = `<div style="font-size:10px;font-style:italic;color:#666;margin-top:10px">${montoEnLetras(totalGeneral, mon)}</div>`;
@@ -987,32 +1014,36 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
   const certHtml = totalRetGan > 0 ? `
     <div class="page" style="page-break-before:always;padding-top:20px">
       <div class="header-bar"></div>
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:16px 0 14px;border-bottom:2px solid #e0e0e0;margin-bottom:18px">
-        <div>
-          <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:42px;margin-bottom:4px" />
-          <div class="company-sub">${soc.razonSocial}</div>
-        </div>
-        <div style="text-align:right">
-          <div class="doc-title">Cert. Ret. Impuesto a las Ganancias</div>
-          <div class="doc-number">${op.numero || "\u2014"}</div>
-          <div class="doc-date">${fechaDD(op.fecha)} &mdash; CUIT: ${soc.cuit}</div>
-        </div>
-      </div>
+      <table style="width:100%;border-bottom:2px solid #e0e0e0;margin-bottom:18px;padding:16px 0 14px;border-collapse:collapse">
+        <tr>
+          <td style="vertical-align:top">
+            <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:42px;margin-bottom:4px" />
+            <div class="company-sub">${soc.razonSocial}</div>
+          </td>
+          <td style="text-align:right;vertical-align:top">
+            <div class="doc-title">Cert. Ret. Impuesto a las Ganancias</div>
+            <div class="doc-number">${op.numero || "\u2014"}</div>
+            <div class="doc-date">${fechaDD(op.fecha)} &mdash; CUIT: ${soc.cuit}</div>
+          </td>
+        </tr>
+      </table>
 
-      <div class="info-grid">
-        <div class="info-box">
-          <div class="info-box-title">A - Agente de retenci\u00F3n</div>
-          <div class="info-row"><div class="info-label">Raz\u00F3n Social</div><div class="info-value">${soc.razonSocial}</div></div>
-          <div class="info-row"><div class="info-label">CUIT</div><div class="info-value">${soc.cuit}</div></div>
-          <div class="info-row"><div class="info-label">Domicilio</div><div class="info-value">${soc.domicilio}</div></div>
-        </div>
-        <div class="info-box">
-          <div class="info-box-title">B - Sujeto retenido</div>
-          <div class="info-row"><div class="info-label">Raz\u00F3n Social</div><div class="info-value">${op.proveedor.razon_social}</div></div>
-          <div class="info-row"><div class="info-label">CUIT</div><div class="info-value">${op.proveedor.cuit ? fmtCuit(op.proveedor.cuit) : "\u2014"}</div></div>
-          <div class="info-row"><div class="info-label">Domicilio</div><div class="info-value">${op.proveedor.direccion || "\u2014"}</div></div>
-        </div>
-      </div>
+      <table style="width:100%;margin-bottom:18px;border-collapse:separate;border-spacing:16px 0">
+        <tr>
+          <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
+            <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">A - Agente de retenci\u00F3n</div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Raz\u00F3n Social</div><div style="font-size:11px;font-weight:500;color:#333">${soc.razonSocial}</div></div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${soc.cuit}</div></div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${soc.domicilio}</div></div>
+          </td>
+          <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
+            <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">B - Sujeto retenido</div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Raz\u00F3n Social</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.razon_social}</div></div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.cuit ? fmtCuit(op.proveedor.cuit) : "\u2014"}</div></div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.direccion || "\u2014"}</div></div>
+          </td>
+        </tr>
+      </table>
 
       <div class="items-title">C - Datos de la retenci\u00F3n</div>
       <table>
@@ -1028,15 +1059,20 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
         ${montoEnLetras(totalRetGan, mon)}
       </div>
 
-      <div class="signatures">
-        <div class="sig-line">Firma y aclaraci\u00F3n</div>
-      </div>
+      <table style="width:100%;margin-top:60px;border-collapse:collapse">
+        <tr>
+          <td style="width:180px;border-top:1px solid #333;text-align:center;padding-top:6px;font-size:10px;color:#666">Firma y aclaraci\u00F3n</td>
+          <td></td>
+        </tr>
+      </table>
 
-      <div class="footer">
-        <span>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</span>
-        <span>Certificado Ret. Ganancias &mdash; OP ${op.numero || ""}</span>
-        <span>Impreso: ${formatDate(new Date().toISOString())}</span>
-      </div>
+      <table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
+        <tr>
+          <td>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</td>
+          <td style="text-align:center">Certificado Ret. Ganancias &mdash; OP ${op.numero || ""}</td>
+          <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
+        </tr>
+      </table>
     </div>` : "";
 
   return `<!DOCTYPE html>
@@ -1044,36 +1080,40 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
 <style>${baseStyles(c)}</style></head><body>
 <div class="page">
 <div class="header-bar"></div>
-<div class="header">
-  <div class="header-left">
-    <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
-    <div class="company-sub">${soc.razonSocial}</div>
-    <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
-    ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-    ${soc.telefono ? `<div class="company-detail">Tel: ${soc.telefono}</div>` : ""}
-  </div>
-  <div class="header-right">
-    <div class="doc-title">Orden de Pago</div>
-    <div class="doc-number">${op.numero || "\u2014"}</div>
-    <div class="doc-badge">${estadoLabel[op.estado] || op.estado}</div>
-    <div class="doc-date">${formatDate(op.fecha)}</div>
-  </div>
-</div>
+<table style="width:100%;border-bottom:2px solid #e0e0e0;margin-bottom:18px;padding:16px 0 14px;border-collapse:collapse">
+  <tr>
+    <td style="vertical-align:top">
+      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
+      <div class="company-sub">${soc.razonSocial}</div>
+      <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
+      ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
+      ${soc.telefono ? `<div class="company-detail">Tel: ${soc.telefono}</div>` : ""}
+    </td>
+    <td style="text-align:right;vertical-align:top">
+      <div class="doc-title">Orden de Pago</div>
+      <div class="doc-number">${op.numero || "\u2014"}</div>
+      <div class="doc-badge">${estadoLabel[op.estado] || op.estado}</div>
+      <div class="doc-date">${formatDate(op.fecha)}</div>
+    </td>
+  </tr>
+</table>
 
-<div class="info-grid">
-  <div class="info-box">
-    <div class="info-box-title">Proveedor</div>
-    <div class="info-row"><div class="info-value-lg">${op.proveedor.razon_social}</div></div>
-    ${op.proveedor.cuit ? `<div class="info-row"><div class="info-label">CUIT</div><div class="info-value">${fmtCuit(op.proveedor.cuit)}</div></div>` : ""}
-    ${op.proveedor.direccion ? `<div class="info-row"><div class="info-label">Domicilio</div><div class="info-value">${op.proveedor.direccion}</div></div>` : ""}
-  </div>
-  <div class="info-box">
-    <div class="info-box-title">Datos del pago</div>
-    <div class="info-row"><div class="info-label">Moneda</div><div class="info-value">${mon === "USD" ? "D\u00F3lares estadounidenses" : "Pesos argentinos"}</div></div>
-    <div class="info-row"><div class="info-label">Fecha</div><div class="info-value">${formatDate(op.fecha)}</div></div>
-    ${op.notas ? `<div class="info-row"><div class="info-label">Notas</div><div class="info-value">${op.notas}</div></div>` : ""}
-  </div>
-</div>
+<table style="width:100%;margin-bottom:18px;border-collapse:separate;border-spacing:16px 0">
+  <tr>
+    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Proveedor</div>
+      <div class="info-row"><div style="font-size:13px;font-weight:700;color:#222">${op.proveedor.razon_social}</div></div>
+      ${op.proveedor.cuit ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${fmtCuit(op.proveedor.cuit)}</div></div>` : ""}
+      ${op.proveedor.direccion ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.direccion}</div></div>` : ""}
+    </td>
+    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Datos del pago</div>
+      <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Moneda</div><div style="font-size:11px;font-weight:500;color:#333">${mon === "USD" ? "D\u00F3lares estadounidenses" : "Pesos argentinos"}</div></div>
+      <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Fecha</div><div style="font-size:11px;font-weight:500;color:#333">${formatDate(op.fecha)}</div></div>
+      ${op.notas ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Notas</div><div style="font-size:11px;font-weight:500;color:#333">${op.notas}</div></div>` : ""}
+    </td>
+  </tr>
+</table>
 
 <div class="items-title">Documentos abonados</div>
 ${fcsHtml}
@@ -1085,15 +1125,20 @@ ${retencionesHtml}
 ${totalsHtml}
 ${letrasHtml}
 
-<div class="signatures">
-  <div class="sig-line">Firma y aclaraci\u00F3n</div>
-</div>
+<table style="width:100%;margin-top:60px;border-collapse:collapse">
+  <tr>
+    <td style="width:180px;border-top:1px solid #333;text-align:center;padding-top:6px;font-size:10px;color:#666">Firma y aclaraci\u00F3n</td>
+    <td></td>
+  </tr>
+</table>
 
-<div class="footer">
-  <span>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</span>
-  <span>OP ${op.numero || ""}</span>
-  <span>Impreso: ${formatDate(new Date().toISOString())}</span>
-</div>
+<table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
+  <tr>
+    <td>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</td>
+    <td style="text-align:center">OP ${op.numero || ""}</td>
+    <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
+  </tr>
+</table>
 <div class="footer-legal">Documento interno &mdash; Orden de pago emitida por ${soc.razonSocial}.</div>
 
 </div>
