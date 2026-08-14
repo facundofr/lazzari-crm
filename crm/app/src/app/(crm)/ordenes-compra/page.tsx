@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import { EmailComposeModal } from "@/components/email-compose-modal";
+import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
@@ -1883,12 +1884,17 @@ export default function OrdenesCompraPage() {
                       <Download className="h-4 w-4" />
                     </button>
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         const oc = detailOC;
-                        const provEmail = oc.proveedores?.email || "";
-                        const subject = `${oc.numero} — ${sociedadActiva?.razonSocial || "Lazzari"}`;
-                        const body = `Estimado/a,\n\nAdjuntamos la Orden de Compra N° ${oc.numero} del ${formatDate(oc.fecha)}.\nProveedor: ${oc.proveedores?.razon_social || "—"}\nTotal: ${formatCurrency(oc.total, oc.moneda as "ARS" | "USD")}.\n\nQuedamos a disposición ante cualquier consulta.\nSaludos,\n${sociedadActiva?.razonSocial || "Lazzari"}`;
-                        setEmailModal({ open: true, id: oc.id, to: provEmail, subject, body, filename: `${oc.numero}.pdf` });
+                        const template = await loadEmailTemplate("orden_compra", sociedadActiva?.id || "");
+                        const vars = {
+                          numero: oc.numero,
+                          sociedad: sociedadActiva?.razonSocial || "Lazzari",
+                          total: formatCurrency(oc.total, oc.moneda as "ARS" | "USD"),
+                          fecha: formatDate(oc.fecha),
+                          proveedor: oc.proveedores?.razon_social || "",
+                        };
+                        setEmailModal({ open: true, id: oc.id, to: oc.proveedores?.email || "", subject: applyTemplateVars(template.asunto, vars), body: applyTemplateVars(template.cuerpo, vars), filename: `${oc.numero}.pdf` });
                       }}
                       className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
                       title="Enviar por email"

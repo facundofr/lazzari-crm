@@ -44,7 +44,7 @@ const COMISION_TIPO_BADGE: Record<ComisionTipo, "info" | "purple" | "warning"> =
   monto_fijo: "warning",
 };
 
-type TemplateTipo = "presupuesto" | "factura" | "remito" | "cuenta_corriente";
+type TemplateTipo = "presupuesto" | "factura" | "remito" | "orden_compra" | "orden_pago" | "cuenta_corriente";
 
 interface EmailTemplate {
   tipo: TemplateTipo;
@@ -67,6 +67,16 @@ const DEFAULT_TEMPLATES: Record<TemplateTipo, EmailTemplate> = {
     tipo: "remito",
     asunto: "Remito {{numero}} — {{sociedad}}",
     cuerpo: "Estimado/a,\n\nAdjuntamos el remito {{numero}}.\n\nSaludos,\n{{sociedad}}",
+  },
+  orden_compra: {
+    tipo: "orden_compra",
+    asunto: "{{numero}} — {{sociedad}}",
+    cuerpo: "Estimado/a,\n\nAdjuntamos la Orden de Compra N° {{numero}} por un total de {{total}}.\n\nQuedamos a disposición ante cualquier consulta.\n\nSaludos,\n{{sociedad}}",
+  },
+  orden_pago: {
+    tipo: "orden_pago",
+    asunto: "Orden de Pago {{numero}} — {{sociedad}}",
+    cuerpo: "Estimado/a,\n\nAdjuntamos la Orden de Pago {{numero}} por un total de {{total}}.\n\nSaludos,\n{{sociedad}}",
   },
   cuenta_corriente: {
     tipo: "cuenta_corriente",
@@ -1161,9 +1171,9 @@ export default function ConfiguracionPage() {
               </p>
             </div>
 
-            {(["presupuesto", "factura", "remito", "cuenta_corriente"] as TemplateTipo[]).map((tipo) => {
+            {(["presupuesto", "factura", "remito", "orden_compra", "orden_pago", "cuenta_corriente"] as TemplateTipo[]).map((tipo) => {
               const template = templates[tipo];
-              const label = tipo === "presupuesto" ? "Presupuesto" : tipo === "factura" ? "Factura" : tipo === "remito" ? "Remito" : "Cuenta corriente";
+              const label = tipo === "presupuesto" ? "Presupuesto" : tipo === "factura" ? "Factura" : tipo === "remito" ? "Remito" : tipo === "orden_compra" ? "Orden de Compra" : tipo === "orden_pago" ? "Orden de Pago" : "Cuenta corriente";
               const isSaving = templateSaving === tipo;
               const isSaved = templateSaved === tipo;
 

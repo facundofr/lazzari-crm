@@ -16,6 +16,7 @@ import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { EmailComposeModal } from "@/components/email-compose-modal";
+import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -5226,7 +5227,7 @@ export default function FinanzasPage() {
                       <CheckCircle2 className="h-4 w-4" /> Marcar pagada
                     </button>
                 )}
-                <button onClick={() => setEmailModal({ open: true, id: selectedOP.id, to: "", subject: `OP ${selectedOP.numero || ""} — ${sociedadActiva?.razonSocial || "Lazzari"}`, body: `Adjunto encontrará la Orden de Pago ${selectedOP.numero || ""} por ${formatCurrency(selectedOP.neto, selectedOP.moneda)} a favor de ${selectedOP.proveedor_nombre}.`, filename: `OP-${selectedOP.numero || selectedOP.id.slice(0,8)}.pdf` })} className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                <button onClick={async () => { const template = await loadEmailTemplate("orden_pago", sociedadActiva?.id || ""); const vars = { numero: selectedOP.numero || "", sociedad: sociedadActiva?.razonSocial || "Lazzari", total: formatCurrency(selectedOP.neto, selectedOP.moneda), fecha: "", proveedor: selectedOP.proveedor_nombre || "" }; setEmailModal({ open: true, id: selectedOP.id, to: "", subject: applyTemplateVars(template.asunto, vars), body: applyTemplateVars(template.cuerpo, vars), filename: `OP-${selectedOP.numero || selectedOP.id.slice(0,8)}.pdf` }); }} className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
                   <Mail className="h-4 w-4" /> Enviar
                 </button>
                 {selectedOP.estado !== "anulada" && (

@@ -12,6 +12,7 @@ import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/co
 import { EmailComposeModal, type EmailDocumentType } from "@/components/email-compose-modal";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
+import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { mockFacturas } from "@/lib/mock-data";
 import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
@@ -882,15 +883,24 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     return lines.filter(Boolean).join("\n");
   }
 
-  function handleEmailFactura(f: FacturaRow) {
+  async function handleEmailFactura(f: FacturaRow) {
     const comp = formatComprobante(f.tipo, f.punto_venta, f.numero);
     const socName = sociedadActiva?.razonSocial || sociedadActiva?.nombre || "Lazzari";
+    const template = await loadEmailTemplate("factura", sociedadActiva?.id || "");
+    const vars = {
+      comprobante: comp,
+      numero: comp,
+      sociedad: socName,
+      total: formatCurrency(Number(f.total), f.moneda as "ARS" | "USD"),
+      fecha: formatDate(f.fecha),
+      cliente: f.clientes?.razon_social || "",
+    };
     setEmailModal({
       open: true,
       facturaId: f.id,
       to: f.clientes?.email || "",
-      subject: `${comp} — ${socName}`,
-      body: buildFacturaSummaryText(f),
+      subject: applyTemplateVars(template.asunto, vars),
+      body: applyTemplateVars(template.cuerpo, vars),
       filename: `${f.tipo}-${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}.pdf`,
     });
   }

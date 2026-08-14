@@ -12,6 +12,7 @@ import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
 import { generateRemitoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { EmailComposeModal } from "@/components/email-compose-modal";
+import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -949,21 +950,20 @@ export default function RemitosPage() {
     return lines;
   }
 
-  function handleEmailRemito() {
+  async function handleEmailRemito() {
     if (!detailRemito) return;
     const r = detailRemito;
-    const itemsHtml = detailItems.map((it, i) => `<li>${it.descripcion} — ${it.cantidad} ${it.unidad || "u"}</li>`).join("");
-    const body = [
-      `<p>Estimado/a,</p>`,
-      `<p>Adjuntamos el remito <strong>${r.numero}</strong> con fecha ${formatDate(r.fecha)}.</p>`,
-      `<ul>${itemsHtml}</ul>`,
-      r.observaciones ? `<p>Observaciones: ${r.observaciones}</p>` : "",
-      `<p>Saludos cordiales,<br/>${sociedadActiva?.razonSocial || "Lazzari"}</p>`,
-    ].filter(Boolean).join("");
+    const template = await loadEmailTemplate("remito", sociedadActiva?.id || "");
+    const vars = {
+      numero: r.numero,
+      sociedad: sociedadActiva?.razonSocial || "Lazzari",
+      fecha: formatDate(r.fecha),
+      cliente: r.clientes?.razon_social || "",
+    };
     setEmailModalData({
       to: r.clientes?.email || "",
-      subject: `Remito ${r.numero} — ${sociedadActiva?.razonSocial || "Lazzari"}`,
-      body,
+      subject: applyTemplateVars(template.asunto, vars),
+      body: applyTemplateVars(template.cuerpo, vars),
       filename: `Remito-${r.numero}.pdf`,
       id: r.id,
     });

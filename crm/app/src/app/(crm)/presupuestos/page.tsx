@@ -24,6 +24,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { useUser } from "@/lib/auth-context";
 import { PendientesWidget } from "@/components/presupuestos/pendientes-widget";
 import { EmailComposeModal } from "@/components/email-compose-modal";
+import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 
 /** Number input that allows typing decimals (e.g. "10.") without losing the dot */
 function NumInput({ value, onChange, className, ...props }: { value: number | string; onChange: (n: number) => void; className?: string } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "type">) {
@@ -292,12 +293,24 @@ export default function PresupuestosPage() {
   // Email modal
   const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
 
-  function openEmailModal(pr: Presupuesto) {
+  async function openEmailModal(pr: Presupuesto) {
     const clientEmail = (pr as any).clienteEmail || "";
-    const itemCount = pr.items.length;
-    const subject = `${pr.numero} — ${sociedadActiva?.razonSocial || "Lazzari"}`;
-    const body = `Estimado/a,\n\nAdjuntamos el presupuesto N° ${pr.numero} del ${formatDate(pr.fecha)}.\nTotal: ${formatCurrency(pr.total, pr.moneda)}${itemCount > 0 ? ` (${itemCount} ítems)` : ""}.\n\nQuedamos a disposición ante cualquier consulta.\nSaludos,\n${sociedadActiva?.razonSocial || "Lazzari"}`;
-    setEmailModal({ open: true, id: pr.id, to: clientEmail, subject, body, filename: `${pr.numero}.pdf` });
+    const template = await loadEmailTemplate("presupuesto", sociedadActiva?.id || "");
+    const vars = {
+      numero: pr.numero,
+      sociedad: sociedadActiva?.razonSocial || "Lazzari",
+      total: formatCurrency(pr.total, pr.moneda),
+      fecha: formatDate(pr.fecha),
+      cliente: pr.clienteNombre || "",
+    };
+    setEmailModal({
+      open: true,
+      id: pr.id,
+      to: clientEmail,
+      subject: applyTemplateVars(template.asunto, vars),
+      body: applyTemplateVars(template.cuerpo, vars),
+      filename: `${pr.numero}.pdf`,
+    });
   }
 
   // Rechazo modal
