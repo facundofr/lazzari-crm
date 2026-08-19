@@ -488,7 +488,7 @@ export default function ConfiguracionPage() {
     try {
       const { error } = await (supabase as any).from("configuracion").upsert(
         { key: "empresa", value: empresa, sociedad_id: sociedadActiva.id },
-        { onConflict: "key" }
+        { onConflict: "sociedad_id,key" }
       );
       if (error) {
         alert("Error al guardar configuración de empresa: " + error.message);

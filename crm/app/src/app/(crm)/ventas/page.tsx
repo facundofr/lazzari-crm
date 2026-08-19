@@ -314,7 +314,7 @@ export default function VentasPage() {
       descripcion: it.descripcion,
       cantidad: it.cantidad,
       precio_unitario: it.precio_venta || (it.total ? it.total / (it.cantidad || 1) : 0),
-      iva_porcentaje: it.iva_porcentaje || 21,
+      iva_porcentaje: it.iva_porcentaje ?? 21,
     }));
 
     setEmitVenta(venta);
@@ -446,7 +446,7 @@ export default function VentasPage() {
       } else {
         total = emitItems.reduce((sum, it) => sum + it.cantidad * conv(it.precio_unitario), 0);
         subtotal = emitItems.reduce((sum, it) => {
-          const rate = (it.iva_porcentaje || 21) / 100;
+          const rate = (it.iva_porcentaje ?? 21) / 100;
           return sum + (it.cantidad * conv(it.precio_unitario)) / (1 + rate);
         }, 0);
         iva = total - subtotal;
@@ -472,7 +472,7 @@ export default function VentasPage() {
           condicion_venta: emitCondVenta || null,
           fecha_vencimiento: emitFechaVenc || null,
           observaciones: emitObservaciones || null,
-          sociedad_id: (p as any).sociedad_id || null,
+          sociedad_id: sociedadActiva?.id || null,
         })
         .select("id")
         .single();
@@ -951,7 +951,7 @@ export default function VentasPage() {
                               </Badge>
                             </div>
                             <Link
-                              href="/facturacion"
+                              href="/finanzas"
                               className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700"
                             >
                               Ver en facturacion <ArrowRight className="h-3 w-3" />
@@ -999,7 +999,7 @@ export default function VentasPage() {
                           <div className="space-y-3">
                             <p className="text-sm text-zinc-500">Factura emitida, pendiente de cobro</p>
                             <Link
-                              href="/facturacion"
+                              href="/finanzas"
                               className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700 w-fit"
                             >
                               <DollarSign className="h-4 w-4" />

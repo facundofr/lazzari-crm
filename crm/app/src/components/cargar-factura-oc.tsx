@@ -135,7 +135,7 @@ export default function CargarFacturaOC({
       if (d.cae) setCae(d.cae);
       if (d.moneda) setMoneda(d.moneda === "USD" ? "USD" : "ARS");
       if (d.subtotal) setSubtotal(Number(d.subtotal) || 0);
-      if (d.iva_porcentaje) setIvaPorcentaje(Number(d.iva_porcentaje) || 21);
+      if (d.iva_porcentaje != null) setIvaPorcentaje(Number(d.iva_porcentaje) || 21);
       if (d.percepciones) setPercepciones(Number(d.percepciones) || 0);
       if (d.notas) setNotas(d.notas);
 
@@ -146,7 +146,7 @@ export default function CargarFacturaOC({
           descripcion: it.descripcion || "",
           cantidad: Number(it.cantidad) || 1,
           precio_unitario: Number(it.precio_unitario) || 0,
-          iva_porcentaje: Number(it.iva_porcentaje) || 21,
+          iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
           unidad: it.unidad || "UN",
         })));
       }

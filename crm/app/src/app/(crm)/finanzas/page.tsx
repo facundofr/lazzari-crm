@@ -1317,7 +1317,8 @@ export default function FinanzasPage() {
           factura_compra_id: fc.id,
           monto: fc.monto_a_pagar,
         }));
-        await (supabase as any).from("op_facturas_compra").insert(links);
+        const { error: linkErr } = await (supabase as any).from("op_facturas_compra").insert(links);
+        if (linkErr) throw new Error("Error al vincular FCs: " + linkErr.message);
         // If monto_a_pagar == saldo_pendiente → pagada; else stays as está
         for (const fc of selectedFCs) {
           if (Math.abs(fc.monto_a_pagar - fc.saldo_pendiente) < 1) {
@@ -1337,11 +1338,13 @@ export default function FinanzasPage() {
       if (sociedadActiva?.id) (movBase as any).sociedad_id = sociedadActiva.id;
 
       // Movimiento principal (neto a pagar)
-      await supabase.from("movimientos").insert({ ...movBase, tipo: "pago", descripcion: `${opNumero} — ${provNombre}`, monto: opNetoAPagar } as any);
+      const { error: movErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "pago", descripcion: `${opNumero} — ${provNombre}`, monto: opNetoAPagar } as any);
+      if (movErr) throw new Error("Error al crear movimiento: " + movErr.message);
 
       // Movimiento retención ganancias
       if (opRetencionGanancias > 0) {
-        await supabase.from("movimientos").insert({ ...movBase, tipo: "retencion_ganancias", descripcion: `${opNumero} — Ret. Ganancias — ${provNombre}`, monto: opRetencionGanancias } as any);
+        const { error: retErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "retencion_ganancias", descripcion: `${opNumero} — Ret. Ganancias — ${provNombre}`, monto: opRetencionGanancias } as any);
+        if (retErr) throw new Error("Error al crear movimiento retención: " + retErr.message);
       }
 
       // Mark echeqs used as endosado
@@ -1687,7 +1690,7 @@ export default function FinanzasPage() {
           cantidad: Number(it.cantidad) || 1,
           precio_unitario: Number(it.precio_unitario) || 0,
           unidad: it.unidad || "UN",
-          iva_porcentaje: Number(it.iva_porcentaje) || 21,
+          iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
         }));
         setFcItems(parsedItems);
       }
@@ -4584,7 +4587,7 @@ export default function FinanzasPage() {
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-xs font-medium text-zinc-500">Items recibidos (para stock)</label>
                     <button type="button"
-                      onClick={() => setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: "", codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, unidad: "UN", iva_porcentaje: fcForm.iva_porcentaje || 21 }])}
+                      onClick={() => setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: "", codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, unidad: "UN", iva_porcentaje: fcForm.iva_porcentaje ?? 21 }])}
                       className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium">
                       <Plus className="h-3.5 w-3.5" /> Agregar item
                     </button>
@@ -4604,7 +4607,7 @@ export default function FinanzasPage() {
                         <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
                           {matches.map((p) => (
                             <button key={p.id} type="button" onClick={() => {
-                              setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: p.id, codigo: p.codigo, descripcion: p.nombre, cantidad: 1, precio_unitario: Number(p.precio_costo), unidad: p.unidad || "UN", iva_porcentaje: fcForm.iva_porcentaje || 21 }]);
+                              setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: p.id, codigo: p.codigo, descripcion: p.nombre, cantidad: 1, precio_unitario: Number(p.precio_costo), unidad: p.unidad || "UN", iva_porcentaje: fcForm.iva_porcentaje ?? 21 }]);
                               setFcProdSearch("");
                             }} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex items-center justify-between">
                               <span><span className="font-mono text-zinc-400 mr-2">{p.codigo}</span>{p.nombre}</span>

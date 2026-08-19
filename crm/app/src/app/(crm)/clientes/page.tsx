@@ -540,18 +540,22 @@ export default function ClientesPage() {
 
       try {
         // Fetch approved presupuestos with items for this client
-        const { data: presupuestos, error: presError } = await supabase
+        let presQ = supabase
           .from("presupuestos")
           .select("id, fecha, total, presupuesto_items(categoria, cantidad, total)")
           .eq("cliente_id", clienteId)
           .eq("estado", "aprobado")
           .order("fecha", { ascending: false });
+        if (sociedadActiva?.id) presQ = presQ.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: presupuestos, error: presError } = await presQ;
 
         // Fetch facturas total for this client
-        const { data: facturas, error: factError } = await supabase
+        let factQ = supabase
           .from("facturas")
           .select("total")
           .eq("cliente_id", clienteId);
+        if (sociedadActiva?.id) factQ = factQ.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: facturas, error: factError } = await factQ;
 
         if (presError || factError) {
           // Fallback to mock data

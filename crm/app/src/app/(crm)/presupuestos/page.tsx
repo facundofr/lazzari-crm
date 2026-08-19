@@ -1469,7 +1469,7 @@ export default function PresupuestosPage() {
           precio_costo: Number(it.precio_costo) || 0,
           markup_porcentaje: Number(it.markup_porcentaje) || 0,
           precio_venta: Number(it.precio_venta) || 0,
-          iva_porcentaje: Number(it.iva_porcentaje) || 21,
+          iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
           proveedor_nombre: it.proveedor_nombre || "",
           proveedor_id: it.proveedor_id || "",
           lista_item_id: it.lista_item_id || "",

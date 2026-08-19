@@ -583,7 +583,7 @@ export default function OrdenesCompraPage() {
           unidad: it.unidad || "u",
           precio_unitario: Number(it.precio_unitario) || 0,
           producto_id: it.producto_id || null,
-          iva_porcentaje: Number(it.iva_porcentaje) || 21,
+          iva_porcentaje: Number(it.iva_porcentaje) ?? 21,
           orden: detailItems.length + idx,
         }));
         const { error: insErr } = await supabase.from("orden_compra_items").insert(insertRows as any);
@@ -634,7 +634,7 @@ export default function OrdenesCompraPage() {
       const newSubtotal = editItems.reduce((sum, it) => sum + Number(it.cantidad) * Number(it.precio_unitario), 0);
       const newIva = editItems.reduce((sum, it) => {
         const lineSubtotal = Number(it.cantidad) * Number(it.precio_unitario);
-        const ivaPct = (Number(it.iva_porcentaje) || 21) / 100;
+        const ivaPct = (it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21) / 100;
         return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
       }, 0);
       const newTotal = newSubtotal + newIva;

@@ -209,7 +209,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     setNcFactura(factura);
     setNcItems(
       items && items.length > 0
-        ? items.map(it => ({ descripcion: it.descripcion, cantidad: Number(it.cantidad), precio_unitario: Number(it.precio_unitario), iva_porcentaje: Number(it.iva_porcentaje) || 21 }))
+        ? items.map(it => ({ descripcion: it.descripcion, cantidad: Number(it.cantidad), precio_unitario: Number(it.precio_unitario), iva_porcentaje: Number(it.iva_porcentaje) ?? 21 }))
         : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]
     );
     setNcManual(arcaStatus !== null && arcaStatus.certOk === false);
@@ -258,9 +258,10 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
         if (!data.success) throw new Error(data.error || "Error al emitir NC");
 
         // Actualizar total_acreditado en la factura original
-        await (supabase as any).from("facturas").update({
+        const { error: acredArcaErr } = await (supabase as any).from("facturas").update({
           total_acreditado: (Number(ncFactura.total_acreditado) || 0) + ncTotals.total,
         }).eq("id", ncFactura.id);
+        if (acredArcaErr) console.error("Error actualizando total_acreditado:", acredArcaErr.message);
 
         setNcResult(data.factura.comprobante + (data.factura.cae ? ` — CAE: ${data.factura.cae}` : ""));
       } else {
@@ -284,6 +285,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
             estado: "emitida",
             sociedad_id: sociedadActiva?.id || null,
             factura_origen_id: ncFactura.id,
+            created_by: profile?.id || null,
           })
           .select("id")
           .single();
@@ -294,12 +296,14 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           const itemRows = ncItems.map((it, idx) => {
             return { factura_id: newNc.id, descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: it.precio_unitario, iva_porcentaje: isFacturaANc ? it.iva_porcentaje : 21, orden: idx };
           });
-          await (supabase as any).from("factura_items").insert(itemRows);
+          const { error: ncItemsErr } = await (supabase as any).from("factura_items").insert(itemRows);
+          if (ncItemsErr) throw new Error("Error al guardar items NC: " + ncItemsErr.message);
         }
 
-        await (supabase as any).from("facturas").update({
+        const { error: acredErr } = await (supabase as any).from("facturas").update({
           total_acreditado: (Number(ncFactura.total_acreditado) || 0) + ncTotals.total,
         }).eq("id", ncFactura.id);
+        if (acredErr) throw new Error("Error al actualizar total_acreditado: " + acredErr.message);
 
         setNcResult(formatComprobante(ncTipo, emisorData.ptoVta, Number(ncNumero)) + " (manual)");
       }
@@ -584,6 +588,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           tipo_cambio: emitData.moneda === "USD" && emitData.tipo_cambio > 0 ? emitData.tipo_cambio : null,
           estado: "emitida",
           sociedad_id: sociedadActiva?.id || null,
+          created_by: profile?.id || null,
         })
         .select("id")
         .single();
@@ -600,7 +605,8 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
             iva_porcentaje: isFacturaA ? it.iva_porcentaje : 21,
             orden: idx,
           }));
-        await (supabase as any).from("factura_items").insert(itemRows);
+        const { error: itemsErr } = await (supabase as any).from("factura_items").insert(itemRows);
+        if (itemsErr) throw new Error("Error al guardar items: " + itemsErr.message);
       }
 
       const comp = formatComprobante(emitData.tipo, emitData.punto_venta, numManual);
