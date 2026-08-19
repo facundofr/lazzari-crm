@@ -7,7 +7,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { supabase } from "@/lib/supabase/client";
 import {
-  Truck, Plus, X, Loader2, CheckCircle2, Building2,
+  Truck, Plus, Minus, X, Loader2, CheckCircle2, Building2,
   MapPin, FileText, Phone, Mail, User, Pencil,
   ToggleLeft, ToggleRight, Package,
   ChevronRight, Calendar, DollarSign, Hash,
@@ -229,7 +229,7 @@ export default function TransportesPage() {
 
   const handleSaveViaje = async () => {
     if (!formViaje.tipo) { toast.error("Seleccioná tipo de viaje"); return; }
-    if (!formViaje.destino.trim()) { toast.error("Destino es obligatorio"); return; }
+    if (formViaje.tipo === "externo" && !formViaje.destino.trim()) { toast.error("Destino es obligatorio"); return; }
     if (formViaje.tipo === "externo" && !formViaje.transportista_id) {
       toast.error("Seleccioná un transportista"); return;
     }
@@ -252,7 +252,7 @@ export default function TransportesPage() {
         transportista_id: formViaje.tipo === "externo" ? formViaje.transportista_id || null : null,
         cliente_id: formViaje.cliente_id || null,
         remito_id: formViaje.remito_id || null,
-        destino: formViaje.destino.trim(),
+        destino: formViaje.tipo === "interno" ? (formViaje.destino.trim() || "Interno") : formViaje.destino.trim(),
         origen: formViaje.origen.trim() || null,
         costo: formViaje.costo ? parseFloat(formViaje.costo) : null,
         moneda: formViaje.moneda,
@@ -633,6 +633,155 @@ export default function TransportesPage() {
                   />
                 )}
               </Card>
+
+              {/* ── Viajes internos aggregation card ── */}
+              {(() => {
+                const internosAll = viajes.filter((v) => v.tipo === "interno");
+                if (internosAll.length === 0) return null;
+
+                // Group by (fecha, transportista)
+                const groupMap = new Map<string, ViajeRow[]>();
+                internosAll.forEach((v) => {
+                  const key = `${v.fecha}||${v.transportista}`;
+                  const arr = groupMap.get(key) || [];
+                  arr.push(v);
+                  groupMap.set(key, arr);
+                });
+
+                const groups = Array.from(groupMap.entries())
+                  .map(([key, rows]) => {
+                    const [fecha, conductor] = key.split("||");
+                    return { fecha, conductor, rows, costo: rows[0]?.costo ?? 0 };
+                  })
+                  .sort((a, b) => b.fecha.localeCompare(a.fecha));
+
+                const handleAddInterno = async (fecha: string, conductor: string, costo: number) => {
+                  try {
+                    const { error } = await (supabase as any).from("transportes").insert({
+                      sociedad_id: socId,
+                      tipo: "interno",
+                      fecha,
+                      transportista: conductor,
+                      transportista_id: null,
+                      cliente_id: null,
+                      remito_id: null,
+                      destino: "Interno",
+                      origen: null,
+                      costo: costo || null,
+                      moneda: "ARS",
+                      bultos: null,
+                      descripcion_carga: null,
+                      notas: null,
+                      estado: "entregado",
+                      created_by: profile?.id || null,
+                    });
+                    if (error) throw error;
+                    toast.success("Viaje interno agregado");
+                    fetchViajes();
+                  } catch (e: any) {
+                    toast.error(`Error: ${e.message}`);
+                  }
+                };
+
+                const handleRemoveInterno = async (rows: ViajeRow[]) => {
+                  if (rows.length === 0) return;
+                  if (!confirm("¿Eliminar el último viaje interno de este grupo?")) return;
+                  // Delete the most recently created
+                  const sorted = [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at));
+                  try {
+                    const { error } = await (supabase as any).from("transportes").delete().eq("id", sorted[0].id);
+                    if (error) throw error;
+                    toast.success("Viaje interno eliminado");
+                    fetchViajes();
+                  } catch (e: any) {
+                    toast.error(`Error: ${e.message}`);
+                  }
+                };
+
+                const handleCostoChange = async (rows: ViajeRow[], nuevoCosto: number) => {
+                  try {
+                    const ids = rows.map((r) => r.id);
+                    const { error } = await (supabase as any)
+                      .from("transportes")
+                      .update({ costo: nuevoCosto || null })
+                      .in("id", ids);
+                    if (error) throw error;
+                    toast.success("Costo actualizado");
+                    fetchViajes();
+                  } catch (e: any) {
+                    toast.error(`Error: ${e.message}`);
+                  }
+                };
+
+                return (
+                  <Card className="mt-6 p-0">
+                    <div className="border-b border-zinc-200 dark:border-zinc-700 px-4 py-3">
+                      <h3 className="text-sm font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
+                        <Truck size={16} className="text-green-600" /> Viajes internos
+                      </h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50">
+                            <th className="text-left px-4 py-2 font-medium text-zinc-600 dark:text-zinc-400">Fecha</th>
+                            <th className="text-left px-4 py-2 font-medium text-zinc-600 dark:text-zinc-400">Conductor</th>
+                            <th className="text-center px-4 py-2 font-medium text-zinc-600 dark:text-zinc-400">Viajes</th>
+                            <th className="text-right px-4 py-2 font-medium text-zinc-600 dark:text-zinc-400">Costo unit.</th>
+                            <th className="text-right px-4 py-2 font-medium text-zinc-600 dark:text-zinc-400">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {groups.map((g) => (
+                            <tr key={`${g.fecha}-${g.conductor}`} className="border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/30">
+                              <td className="px-4 py-2.5 text-zinc-700 dark:text-zinc-300">{formatDate(g.fecha)}</td>
+                              <td className="px-4 py-2.5 font-medium text-zinc-900 dark:text-white">{g.conductor || "Sin conductor"}</td>
+                              <td className="px-4 py-2.5">
+                                <div className="flex items-center justify-center gap-2">
+                                  <button
+                                    onClick={() => handleRemoveInterno(g.rows)}
+                                    className="rounded-md p-1 text-zinc-500 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400 transition-colors"
+                                    title="Quitar viaje"
+                                  >
+                                    <Minus size={14} />
+                                  </button>
+                                  <span className="font-semibold text-zinc-900 dark:text-white min-w-[24px] text-center">{g.rows.length}</span>
+                                  <button
+                                    onClick={() => handleAddInterno(g.fecha, g.conductor, g.costo)}
+                                    className="rounded-md p-1 text-zinc-500 hover:bg-green-100 hover:text-green-600 dark:hover:bg-green-900/30 dark:hover:text-green-400 transition-colors"
+                                    title="Agregar viaje"
+                                  >
+                                    <Plus size={14} />
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  defaultValue={g.costo || ""}
+                                  onBlur={(e) => {
+                                    const val = parseFloat(e.target.value) || 0;
+                                    if (val !== (g.costo || 0)) handleCostoChange(g.rows, val);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                                  }}
+                                  placeholder="0.00"
+                                  className="w-24 text-right rounded border border-zinc-300 bg-white px-2 py-1 text-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                                />
+                              </td>
+                              <td className="px-4 py-2.5 text-right font-medium text-zinc-900 dark:text-white">
+                                {formatCurrency(g.rows.length * (g.costo || 0), "ARS")}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Card>
+                );
+              })()}
             </div>
 
             {/* Panel detalle viaje */}
@@ -936,125 +1085,130 @@ export default function TransportesPage() {
                     />
                   </div>
 
-                  {/* Cliente */}
-                  <div>
-                    <label className={labelClass}>Cliente</label>
-                    <select
-                      value={formViaje.cliente_id}
-                      onChange={(e) => setFormViaje((f) => ({ ...f, cliente_id: e.target.value }))}
-                      className={inputClass}
-                    >
-                      <option value="">Sin cliente</option>
-                      {clientes.map((c) => (
-                        <option key={c.id} value={c.id}>{c.razon_social}</option>
-                      ))}
-                    </select>
-                  </div>
+                  {/* ── Campos solo para externo ── */}
+                  {formViaje.tipo === "externo" && (
+                    <>
+                      {/* Cliente */}
+                      <div>
+                        <label className={labelClass}>Cliente</label>
+                        <select
+                          value={formViaje.cliente_id}
+                          onChange={(e) => setFormViaje((f) => ({ ...f, cliente_id: e.target.value }))}
+                          className={inputClass}
+                        >
+                          <option value="">Sin cliente</option>
+                          {clientes.map((c) => (
+                            <option key={c.id} value={c.id}>{c.razon_social}</option>
+                          ))}
+                        </select>
+                      </div>
 
-                  {/* Remito */}
-                  <div>
-                    <label className={labelClass}>Remito</label>
-                    <select
-                      value={formViaje.remito_id}
-                      onChange={(e) => setFormViaje((f) => ({ ...f, remito_id: e.target.value }))}
-                      className={inputClass}
-                    >
-                      <option value="">Sin remito</option>
-                      {remitos.map((r) => (
-                        <option key={r.id} value={r.id}>{r.numero}</option>
-                      ))}
-                    </select>
-                  </div>
+                      {/* Remito */}
+                      <div>
+                        <label className={labelClass}>Remito</label>
+                        <select
+                          value={formViaje.remito_id}
+                          onChange={(e) => setFormViaje((f) => ({ ...f, remito_id: e.target.value }))}
+                          className={inputClass}
+                        >
+                          <option value="">Sin remito</option>
+                          {remitos.map((r) => (
+                            <option key={r.id} value={r.id}>{r.numero}</option>
+                          ))}
+                        </select>
+                      </div>
 
-                  {/* Origen / Destino */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className={labelClass}>Origen</label>
-                      <input
-                        type="text"
-                        value={formViaje.origen}
-                        onChange={(e) => setFormViaje((f) => ({ ...f, origen: e.target.value }))}
-                        placeholder="Origen"
-                        className={inputClass}
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass}>Destino *</label>
-                      <input
-                        type="text"
-                        value={formViaje.destino}
-                        onChange={(e) => setFormViaje((f) => ({ ...f, destino: e.target.value }))}
-                        placeholder="Destino"
-                        className={inputClass}
-                      />
-                    </div>
-                  </div>
+                      {/* Origen / Destino */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={labelClass}>Origen</label>
+                          <input
+                            type="text"
+                            value={formViaje.origen}
+                            onChange={(e) => setFormViaje((f) => ({ ...f, origen: e.target.value }))}
+                            placeholder="Origen"
+                            className={inputClass}
+                          />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Destino *</label>
+                          <input
+                            type="text"
+                            value={formViaje.destino}
+                            onChange={(e) => setFormViaje((f) => ({ ...f, destino: e.target.value }))}
+                            placeholder="Destino"
+                            className={inputClass}
+                          />
+                        </div>
+                      </div>
 
-                  {/* Costo / Moneda / Bultos */}
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <label className={labelClass}>Costo</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={formViaje.costo}
-                        onChange={(e) => setFormViaje((f) => ({ ...f, costo: e.target.value }))}
-                        placeholder="0.00"
-                        className={inputClass}
-                      />
-                    </div>
-                    <div>
-                      <label className={labelClass}>Moneda</label>
-                      <select
-                        value={formViaje.moneda}
-                        onChange={(e) => setFormViaje((f) => ({ ...f, moneda: e.target.value }))}
-                        className={inputClass}
-                      >
-                        <option value="ARS">ARS</option>
-                        <option value="USD">USD</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className={labelClass}>Bultos</label>
-                      <input
-                        type="number"
-                        value={formViaje.bultos}
-                        onChange={(e) => setFormViaje((f) => ({ ...f, bultos: e.target.value }))}
-                        placeholder="0"
-                        className={inputClass}
-                      />
-                    </div>
-                  </div>
+                      {/* Costo / Moneda / Bultos */}
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className={labelClass}>Costo</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={formViaje.costo}
+                            onChange={(e) => setFormViaje((f) => ({ ...f, costo: e.target.value }))}
+                            placeholder="0.00"
+                            className={inputClass}
+                          />
+                        </div>
+                        <div>
+                          <label className={labelClass}>Moneda</label>
+                          <select
+                            value={formViaje.moneda}
+                            onChange={(e) => setFormViaje((f) => ({ ...f, moneda: e.target.value }))}
+                            className={inputClass}
+                          >
+                            <option value="ARS">ARS</option>
+                            <option value="USD">USD</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className={labelClass}>Bultos</label>
+                          <input
+                            type="number"
+                            value={formViaje.bultos}
+                            onChange={(e) => setFormViaje((f) => ({ ...f, bultos: e.target.value }))}
+                            placeholder="0"
+                            className={inputClass}
+                          />
+                        </div>
+                      </div>
 
-                  {/* Descripcion carga */}
-                  <div>
-                    <label className={labelClass}>Descripción de carga</label>
-                    <input
-                      type="text"
-                      value={formViaje.descripcion_carga}
-                      onChange={(e) => setFormViaje((f) => ({ ...f, descripcion_carga: e.target.value }))}
-                      placeholder="Ej: 3 pallets de válvulas"
-                      className={inputClass}
-                    />
-                  </div>
+                      {/* Descripcion carga */}
+                      <div>
+                        <label className={labelClass}>Descripción de carga</label>
+                        <input
+                          type="text"
+                          value={formViaje.descripcion_carga}
+                          onChange={(e) => setFormViaje((f) => ({ ...f, descripcion_carga: e.target.value }))}
+                          placeholder="Ej: 3 pallets de válvulas"
+                          className={inputClass}
+                        />
+                      </div>
 
-                  {/* Notas */}
-                  <div>
-                    <label className={labelClass}>Notas</label>
-                    <textarea
-                      value={formViaje.notas}
-                      onChange={(e) => setFormViaje((f) => ({ ...f, notas: e.target.value }))}
-                      placeholder="Notas adicionales..."
-                      rows={2}
-                      className={inputClass}
-                    />
-                  </div>
+                      {/* Notas */}
+                      <div>
+                        <label className={labelClass}>Notas</label>
+                        <textarea
+                          value={formViaje.notas}
+                          onChange={(e) => setFormViaje((f) => ({ ...f, notas: e.target.value }))}
+                          placeholder="Notas adicionales..."
+                          rows={2}
+                          className={inputClass}
+                        />
+                      </div>
 
-                  {/* Sin remito warning */}
-                  {!formViaje.remito_id && formViaje.costo && (
-                    <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300">
-                      Sin remito asociado. El costo se registrará como gasto de transporte.
-                    </div>
+                      {/* Sin remito warning */}
+                      {!formViaje.remito_id && formViaje.costo && (
+                        <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300">
+                          Sin remito asociado. El costo se registrará como gasto de transporte.
+                        </div>
+                      )}
+                    </>
                   )}
                 </>
               )}

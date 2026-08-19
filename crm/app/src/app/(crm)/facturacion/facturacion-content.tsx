@@ -1218,7 +1218,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
                     <button
-                      onClick={() => { setEmitManual(false); setEmitData((p) => ({ ...p, tipo: p.tipo === "X" ? "FA" : p.tipo })); }}
+                      onClick={() => { setEmitManual(false); setEmitData((p) => ({ ...p, tipo: p.tipo === "X" ? "FA" : p.tipo, punto_venta: emisorData.ptoVta })); }}
                       disabled={arcaStatus !== null && arcaStatus.certOk === false}
                       className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${!emitManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"} disabled:opacity-40 disabled:cursor-not-allowed`}
                     >
@@ -1228,9 +1228,10 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                       onClick={async () => {
                         setEmitManual(true);
                         const newTipo = "X";
-                        setEmitData((p) => ({ ...p, tipo: newTipo }));
+                        const manualPv = 0;
+                        setEmitData((p) => ({ ...p, tipo: newTipo, punto_venta: manualPv }));
                         try {
-                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, newTipo).eq("punto_venta" as any, emitData.punto_venta).order("numero", { ascending: false }).limit(1);
+                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, newTipo).eq("punto_venta" as any, manualPv).order("numero", { ascending: false }).limit(1);
                           setEmitData(prev => ({ ...prev, numero_manual: last && last.length > 0 ? String(Number(last[0].numero) + 1) : "1" }));
                         } catch { /* ignore */ }
                       }}
@@ -1299,7 +1300,14 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                   <div className="col-span-2">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">PV</label>
                     {emitManual ? (
-                      <input type="number" min={1} value={emitData.punto_venta} onChange={(e) => setEmitData((p) => ({ ...p, punto_venta: Number(e.target.value) }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                      <input type="number" min={0} value={emitData.punto_venta} onChange={async (e) => {
+                        const newPv = Number(e.target.value);
+                        setEmitData((p) => ({ ...p, punto_venta: newPv }));
+                        try {
+                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, emitData.tipo).eq("punto_venta" as any, newPv).order("numero", { ascending: false }).limit(1);
+                          setEmitData(prev => ({ ...prev, numero_manual: last && last.length > 0 ? String(Number(last[0].numero) + 1) : "1" }));
+                        } catch { /* ignore */ }
+                      }} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
                     ) : emisorData.ptoVtaOpciones && emisorData.ptoVtaOpciones.length > 1 ? (
                       <select
                         value={emitData.punto_venta}
