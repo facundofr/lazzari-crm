@@ -153,7 +153,8 @@ export async function POST(req: NextRequest) {
           totalIva += Math.round(neto * ivaPct / 100 * 100) / 100;
         } else {
           const totalItem = Number(item.cantidad) * precioItem;
-          const neto = Math.round(totalItem / 1.21 * 100) / 100;
+          const ivaPctB = Number(item.iva_porcentaje ?? 21);
+          const neto = Math.round(totalItem / (1 + ivaPctB / 100) * 100) / 100;
           totalNeto += neto;
           totalIva += Math.round((totalItem - neto) * 100) / 100;
         }
@@ -334,10 +335,10 @@ export async function POST(req: NextRequest) {
         ivaPct = Number(item.iva_porcentaje ?? 21);
         ivaImporte = Math.round(neto * ivaPct / 100 * 100) / 100;
       } else {
-        // FB/NCB: precio es final (IVA incluido), siempre 21% para productos
+        // FB/NCB: precio es final (IVA incluido), usar IVA del item
         const totalItem = Number(item.cantidad) * precioItem;
-        ivaPct = 21;
-        neto = Math.round(totalItem / 1.21 * 100) / 100;
+        ivaPct = Number(item.iva_porcentaje ?? 21);
+        neto = Math.round(totalItem / (1 + ivaPct / 100) * 100) / 100;
         ivaImporte = Math.round((totalItem - neto) * 100) / 100;
       }
 

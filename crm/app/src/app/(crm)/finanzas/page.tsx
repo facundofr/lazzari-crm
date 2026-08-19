@@ -1589,9 +1589,10 @@ export default function FinanzasPage() {
           if (gmForm.proveedor_id) (movData as any).proveedor_id = gmForm.proveedor_id;
           if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
           if (profile?.id) (movData as any).created_by = profile.id;
-          await supabase.from("movimientos").insert(movData as any);
-        } catch (movErr) {
-          console.warn("Gasto creado pero error al registrar movimiento:", movErr);
+          const { error: movGastoErr } = await supabase.from("movimientos").insert(movData as any);
+          if (movGastoErr) throw new Error("Gasto creado pero error al registrar movimiento: " + movGastoErr.message);
+        } catch (movErr: any) {
+          alert(movErr.message || "Error al registrar movimiento del gasto");
         }
       }
 
@@ -1752,7 +1753,8 @@ export default function FinanzasPage() {
           iva_porcentaje: it.iva_porcentaje,
           sociedad_id: sociedadActiva?.id || null,
         }));
-        await (supabase as any).from("facturas_compra_items").insert(itemsToInsert);
+        const { error: fcItemsErr } = await (supabase as any).from("facturas_compra_items").insert(itemsToInsert);
+        if (fcItemsErr) throw new Error("Error al guardar items de FC: " + fcItemsErr.message);
 
         // Stock se actualiza al marcar como "recibida" (handleRecibirFC)
       }

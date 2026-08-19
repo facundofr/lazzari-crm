@@ -209,7 +209,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     setNcFactura(factura);
     setNcItems(
       items && items.length > 0
-        ? items.map(it => ({ descripcion: it.descripcion, cantidad: Number(it.cantidad), precio_unitario: Number(it.precio_unitario), iva_porcentaje: Number(it.iva_porcentaje) ?? 21 }))
+        ? items.map(it => ({ descripcion: it.descripcion, cantidad: Number(it.cantidad), precio_unitario: Number(it.precio_unitario), iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21 }))
         : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]
     );
     setNcManual(arcaStatus !== null && arcaStatus.certOk === false);
@@ -968,8 +968,9 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     const d = new Date(f.fecha);
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear && f.estado !== "anulada";
   });
-  const facturadoMes = facturasEsteMes.reduce((a, f) => a + Number(f.total), 0);
-  const pendientesCobro = facturas.filter(f => ["pendiente", "parcial", "vencida"].includes(f.estado)).reduce((a, f) => a + Number(f.total) - Number(f.total_acreditado || 0), 0);
+  const ncTipos = ["NCA", "NCB", "NCEA", "NCEB", "NDA", "NDB"];
+  const facturadoMes = facturasEsteMes.reduce((a, f) => a + (ncTipos.includes(f.tipo) ? -Number(f.total) : Number(f.total)), 0);
+  const pendientesCobro = facturas.filter(f => ["pendiente", "parcial", "vencida"].includes(f.estado) && !ncTipos.includes(f.tipo)).reduce((a, f) => a + Number(f.total) - Number(f.total_acreditado || 0), 0);
   const facturasVencidas = facturas.filter(f => f.estado === "vencida").length;
   const caeVigentes = facturas.filter(f => f.cae && f.estado !== "anulada").length;
 

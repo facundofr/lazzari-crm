@@ -198,7 +198,7 @@ export default function VentasPage() {
           id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id, modalidad_emision, oc_cliente, observaciones,
           vendedor_profile:vendedor_id(full_name, avatar_url),
           clientes(razon_social, cuit, condicion_iva),
-          presupuesto_items(descripcion, cantidad, precio_venta, iva_porcentaje, total)
+          presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total)
         `)
         .eq("estado", "aprobado")
         .order("fecha", { ascending: false });
@@ -530,16 +530,17 @@ export default function VentasPage() {
 
       // Create remito items from presupuesto items
       if (p.presupuesto_items?.length > 0) {
-        const items = p.presupuesto_items.map((item, idx) => ({
+        const items = p.presupuesto_items.map((item: any, idx: number) => ({
           remito_id: remitoData.id,
           descripcion: item.descripcion,
           cantidad: item.cantidad,
           unidad: "u",
           orden: idx,
+          presupuesto_item_id: item.id || null,
         }));
         const { error: riError } = await (supabase.from("remito_items") as any).insert(items);
         if (riError) {
-          console.error("Error creando remito items:", riError);
+          alert("Error creando items del remito: " + riError.message);
         }
       }
 
@@ -1026,7 +1027,7 @@ export default function VentasPage() {
                     <Link href="/remitos" className="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
                       Remitos
                     </Link>
-                    <Link href="/facturacion" className="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                    <Link href="/finanzas" className="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
                       Facturacion
                     </Link>
                   </div>

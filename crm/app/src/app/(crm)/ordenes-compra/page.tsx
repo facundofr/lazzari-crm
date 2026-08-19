@@ -583,7 +583,7 @@ export default function OrdenesCompraPage() {
           unidad: it.unidad || "u",
           precio_unitario: Number(it.precio_unitario) || 0,
           producto_id: it.producto_id || null,
-          iva_porcentaje: Number(it.iva_porcentaje) ?? 21,
+          iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
           orden: detailItems.length + idx,
         }));
         const { error: insErr } = await supabase.from("orden_compra_items").insert(insertRows as any);

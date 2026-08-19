@@ -645,36 +645,18 @@ export default function ClientesPage() {
 
       try {
         // Fetch in parallel: presupuestos, facturas, items
+        const socFilter = sociedadActiva?.id;
         const [presRes, factRes, itemsRes, allPresCountRes, allFactSumRes] = await Promise.all([
           // Last 5 presupuestos
-          supabase
-            .from("presupuestos")
-            .select("id, numero, fecha, estado, total, moneda")
-            .eq("cliente_id", clienteId)
-            .order("fecha", { ascending: false })
-            .limit(5),
+          (() => { let q = supabase.from("presupuestos").select("id, numero, fecha, estado, total, moneda").eq("cliente_id", clienteId).order("fecha", { ascending: false }).limit(5); if (socFilter) q = q.eq("sociedad_id" as any, socFilter); return q; })(),
           // Last 5 facturas
-          supabase
-            .from("facturas")
-            .select("id, tipo, numero, punto_venta, fecha, estado, total, moneda")
-            .eq("cliente_id", clienteId)
-            .order("fecha", { ascending: false })
-            .limit(5),
+          (() => { let q = supabase.from("facturas").select("id, tipo, numero, punto_venta, fecha, estado, total, moneda").eq("cliente_id", clienteId).order("fecha", { ascending: false }).limit(5); if (socFilter) q = q.eq("sociedad_id" as any, socFilter); return q; })(),
           // All presupuesto items for this client (for top items analysis)
-          supabase
-            .from("presupuesto_items")
-            .select("descripcion, cantidad, presupuesto_id, presupuestos!inner(cliente_id)")
-            .eq("presupuestos.cliente_id", clienteId),
+          (() => { let q = supabase.from("presupuesto_items").select("descripcion, cantidad, presupuesto_id, presupuestos!inner(cliente_id, sociedad_id)").eq("presupuestos.cliente_id", clienteId); if (socFilter) q = q.eq("presupuestos.sociedad_id" as any, socFilter); return q; })(),
           // Total presupuestos count
-          supabase
-            .from("presupuestos")
-            .select("id", { count: "exact", head: true })
-            .eq("cliente_id", clienteId),
+          (() => { let q = supabase.from("presupuestos").select("id", { count: "exact", head: true }).eq("cliente_id", clienteId); if (socFilter) q = q.eq("sociedad_id" as any, socFilter); return q; })(),
           // Total facturado sum
-          supabase
-            .from("facturas")
-            .select("total")
-            .eq("cliente_id", clienteId),
+          (() => { let q = supabase.from("facturas").select("total").eq("cliente_id", clienteId); if (socFilter) q = q.eq("sociedad_id" as any, socFilter); return q; })(),
         ]);
 
         const presupuestos: FichaPresupuesto[] = (presRes.data || []).map((p: any) => ({
@@ -775,12 +757,14 @@ export default function ClientesPage() {
       const events: TimelineEvent[] = [];
       try {
         // Presupuestos
-        const { data: prs } = await supabase
+        let prsQ = supabase
           .from("presupuestos")
           .select("id, numero, fecha, total, estado, moneda")
           .eq("cliente_id", clienteId)
           .order("fecha", { ascending: false })
           .limit(20);
+        if (sociedadActiva?.id) prsQ = prsQ.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: prs } = await prsQ;
         if (prs) {
           for (const p of prs) {
             events.push({
@@ -795,12 +779,14 @@ export default function ClientesPage() {
         }
 
         // Facturas
-        const { data: facts } = await supabase
+        let factsQ = supabase
           .from("facturas")
           .select("id, tipo, numero, punto_venta, fecha, total, estado, moneda")
           .eq("cliente_id", clienteId)
           .order("fecha", { ascending: false })
-          .limit(20) as { data: any[] | null };
+          .limit(20);
+        if (sociedadActiva?.id) factsQ = factsQ.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: facts } = await factsQ as { data: any[] | null };
         if (facts) {
           for (const f of facts) {
             const comprobante = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
@@ -816,12 +802,14 @@ export default function ClientesPage() {
         }
 
         // Remitos
-        const { data: rems } = await supabase
+        let remsQ = supabase
           .from("remitos")
           .select("id, numero, fecha, estado")
           .eq("cliente_id", clienteId)
           .order("fecha", { ascending: false })
           .limit(20);
+        if (sociedadActiva?.id) remsQ = remsQ.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: rems } = await remsQ;
         if (rems) {
           for (const r of rems) {
             events.push({
@@ -836,12 +824,14 @@ export default function ClientesPage() {
         }
 
         // Movimientos (cobros)
-        const { data: movs } = await supabase
+        let movsQ = supabase
           .from("movimientos")
           .select("id, tipo, fecha, monto, descripcion, moneda")
           .eq("cliente_id", clienteId)
           .order("fecha", { ascending: false })
           .limit(20);
+        if (sociedadActiva?.id) movsQ = movsQ.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: movs } = await movsQ;
         if (movs) {
           for (const m of movs) {
             events.push({
