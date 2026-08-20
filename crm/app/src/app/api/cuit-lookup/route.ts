@@ -129,6 +129,65 @@ function determinarCondicionIVA(text: string, activeImpuestos: Set<number>): { c
   return { condicion_iva: "CF", fuente: "Sin datos fiscales" };
 }
 
+/** RG 830 Anexo VIII — Conceptos de retención Ganancias con alícuotas para inscriptos y no inscriptos */
+const RG830_CONCEPTOS: Record<string, { label: string; inscripto: number; no_inscripto: number }> = {
+  compraventa_bienes: { label: "Compraventa de bienes", inscripto: 2, no_inscripto: 28 },
+  servicios: { label: "Servicios y locaciones", inscripto: 2, no_inscripto: 28 },
+  honorarios: { label: "Honorarios profesionales", inscripto: 2, no_inscripto: 28 },
+  alquileres_inmuebles: { label: "Alquileres de inmuebles", inscripto: 6, no_inscripto: 28 },
+  alquileres_muebles: { label: "Alquileres de muebles", inscripto: 2, no_inscripto: 28 },
+  intereses_financieros: { label: "Intereses (financieras)", inscripto: 3, no_inscripto: 28 },
+  intereses_otros: { label: "Intereses (otros)", inscripto: 6, no_inscripto: 28 },
+  transporte: { label: "Transporte de carga", inscripto: 0.25, no_inscripto: 28 },
+  fletes: { label: "Fletes", inscripto: 0.25, no_inscripto: 28 },
+  comisiones: { label: "Comisiones", inscripto: 2, no_inscripto: 28 },
+  publicidad: { label: "Publicidad y propaganda", inscripto: 2, no_inscripto: 28 },
+  seguros: { label: "Seguros", inscripto: 2, no_inscripto: 28 },
+};
+
+/** Mapea actividad AFIP a concepto de retención RG 830 */
+function actividadToConceptoRG830(idActividad: string): { concepto: string; alicuota_inscripto: number; alicuota_no_inscripto: number } {
+  const act = Number(idActividad);
+  // Transporte / fletes
+  if ((act >= 491000 && act <= 492999) || act === 522010 || act === 522090) {
+    return { concepto: "transporte", alicuota_inscripto: 0.25, alicuota_no_inscripto: 28 };
+  }
+  // Alquileres inmuebles
+  if (act >= 681000 && act <= 682099) {
+    return { concepto: "alquileres_inmuebles", alicuota_inscripto: 6, alicuota_no_inscripto: 28 };
+  }
+  // Financieras / bancos
+  if (act >= 641000 && act <= 649999) {
+    return { concepto: "intereses_financieros", alicuota_inscripto: 3, alicuota_no_inscripto: 28 };
+  }
+  // Seguros
+  if (act >= 651000 && act <= 653999) {
+    return { concepto: "seguros", alicuota_inscripto: 2, alicuota_no_inscripto: 28 };
+  }
+  // Servicios profesionales / consultoría
+  if (act >= 691000 && act <= 702099) {
+    return { concepto: "honorarios", alicuota_inscripto: 2, alicuota_no_inscripto: 28 };
+  }
+  // Publicidad
+  if (act >= 731000 && act <= 731099) {
+    return { concepto: "publicidad", alicuota_inscripto: 2, alicuota_no_inscripto: 28 };
+  }
+  // Comisionistas / intermediación
+  if (act >= 461000 && act <= 461099) {
+    return { concepto: "comisiones", alicuota_inscripto: 2, alicuota_no_inscripto: 28 };
+  }
+  // Alquiler de maquinaria / muebles
+  if (act >= 771000 && act <= 773099) {
+    return { concepto: "alquileres_muebles", alicuota_inscripto: 2, alicuota_no_inscripto: 28 };
+  }
+  // Servicios generales
+  if (act >= 800000 && act <= 969999) {
+    return { concepto: "servicios", alicuota_inscripto: 2, alicuota_no_inscripto: 28 };
+  }
+  // Default: compraventa de bienes (industria, comercio, manufactura, agro, minería)
+  return { concepto: "compraventa_bienes", alicuota_inscripto: 2, alicuota_no_inscripto: 28 };
+}
+
 /** Parsea la respuesta SOAP del padron (funciona para A5 y A13) */
 function parsePadronResponse(text: string, serviceName: string) {
   const razonSocial =
@@ -142,6 +201,11 @@ function parsePadronResponse(text: string, serviceName: string) {
   const estadoClave = xmlTag(text, "estadoClave");
   const activeImpuestos = parseActiveImpuestos(text);
   const { condicion_iva, fuente } = determinarCondicionIVA(text, activeImpuestos);
+  const idActividadPrincipal = xmlTag(text, "idActividadPrincipal");
+  const descripcionActividad = xmlTag(text, "descripcionActividadPrincipal");
+
+  // Determinar concepto RG 830 basado en actividad principal
+  const rg830 = idActividadPrincipal ? actividadToConceptoRG830(idActividadPrincipal) : null;
 
   return {
     razon_social: razonSocial,
@@ -154,6 +218,14 @@ function parsePadronResponse(text: string, serviceName: string) {
     cp: domicilio?.cp || "",
     tipo_persona: tipoPersona,
     estado_clave: estadoClave,
+    actividad_principal: idActividadPrincipal || null,
+    actividad_descripcion: descripcionActividad || null,
+    retencion_ganancias: rg830 ? {
+      concepto: rg830.concepto,
+      concepto_label: RG830_CONCEPTOS[rg830.concepto]?.label || rg830.concepto,
+      alicuota_inscripto: rg830.alicuota_inscripto,
+      alicuota_no_inscripto: rg830.alicuota_no_inscripto,
+    } : null,
   };
 }
 

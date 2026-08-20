@@ -74,7 +74,9 @@ function mapSupabaseProveedor(row: Record<string, unknown>): Proveedor {
     activo: (row.activo as boolean) ?? true,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
-  };
+    conceptoRetencionGanancias: (row.concepto_retencion_ganancias as string) ?? "",
+    alicuotaGanancias: row.alicuota_ganancias != null ? Number(row.alicuota_ganancias) : null,
+  } as Proveedor & { conceptoRetencionGanancias: string; alicuotaGanancias: number | null };
 }
 
 function mapSupabaseLista(row: Record<string, unknown>): ListaPrecios {
@@ -102,6 +104,21 @@ function mapSupabaseLista(row: Record<string, unknown>): ListaPrecios {
   };
 }
 
+const CONCEPTOS_RG830: Record<string, string> = {
+  compraventa_bienes: "Compraventa de bienes",
+  servicios: "Servicios y locaciones",
+  honorarios: "Honorarios profesionales",
+  alquileres_inmuebles: "Alquileres de inmuebles",
+  alquileres_muebles: "Alquileres de muebles",
+  intereses_financieros: "Intereses (financieras)",
+  intereses_otros: "Intereses (otros)",
+  transporte: "Transporte de carga",
+  fletes: "Fletes",
+  comisiones: "Comisiones",
+  publicidad: "Publicidad y propaganda",
+  seguros: "Seguros",
+};
+
 const emptyForm = {
   razon_social: "",
   cuit: "",
@@ -119,6 +136,8 @@ const emptyForm = {
   clasificacion_tags: [] as string[],
   marcas: "",
   clasificacion_nota: "",
+  concepto_retencion_ganancias: "" as string,
+  alicuota_ganancias: null as number | null,
 };
 
 export default function ProveedoresPage() {
@@ -210,11 +229,14 @@ export default function ProveedoresPage() {
         direccion: data.direccion || prev.direccion,
         localidad: data.localidad || prev.localidad,
         provincia: data.provincia || prev.provincia,
+        concepto_retencion_ganancias: data.retencion_ganancias?.concepto || prev.concepto_retencion_ganancias,
+        alicuota_ganancias: data.retencion_ganancias?.alicuota_inscripto ?? prev.alicuota_ganancias,
       }));
       if (!data.condicion_iva) {
         toast.warning("ARCA no pudo determinar la condicion IVA. Verificalo manualmente.");
       } else {
-        toast.success(`Datos cargados desde AFIP — ${data.condicion_iva === "RI" ? "Resp. Inscripto" : data.condicion_iva}`);
+        const retInfo = data.retencion_ganancias ? ` | Ret. Gan.: ${data.retencion_ganancias.alicuota_inscripto}% (${data.retencion_ganancias.concepto_label})` : "";
+        toast.success(`Datos cargados desde AFIP — ${data.condicion_iva === "RI" ? "Resp. Inscripto" : data.condicion_iva}${retInfo}`);
       }
     } catch { toast.error("Error al consultar CUIT"); }
     finally { setCuitLoading(false); }
@@ -359,6 +381,8 @@ export default function ProveedoresPage() {
       limite_credito: p.limiteCredito, notas: p.notas,
       clasificacion_tags: p.clasificacionTags ?? [], marcas: p.marcas ?? "",
       clasificacion_nota: p.clasificacionNota ?? "",
+      concepto_retencion_ganancias: (p as any).conceptoRetencionGanancias ?? "",
+      alicuota_ganancias: (p as any).alicuotaGanancias ?? null,
     });
     setFormError("");
     setModalOpen(true);
@@ -792,6 +816,12 @@ export default function ProveedoresPage() {
                   <div><p className="text-xs text-zinc-500">Dias CC</p><p className="text-sm font-medium">{selectedProv.diasCuentaCorriente}</p></div>
                   <div><p className="text-xs text-zinc-500">Limite credito</p><p className="text-sm font-medium">{formatCurrency(selectedProv.limiteCredito)}</p></div>
                   <div><p className="text-xs text-zinc-500">Saldo CC</p><p className="text-sm font-medium text-red-600">{formatCurrency(selectedProv.saldoCuentaCorriente)}</p></div>
+                  {((selectedProv as any).conceptoRetencionGanancias || (selectedProv as any).alicuotaGanancias != null) && (
+                    <>
+                      <div><p className="text-xs text-zinc-500">Ret. Ganancias</p><p className="text-sm font-medium">{CONCEPTOS_RG830[(selectedProv as any).conceptoRetencionGanancias] || "—"}</p></div>
+                      <div><p className="text-xs text-zinc-500">Alícuota</p><p className="text-sm font-medium text-violet-600">{(selectedProv as any).alicuotaGanancias != null ? `${(selectedProv as any).alicuotaGanancias}%` : "—"}</p></div>
+                    </>
+                  )}
                 </div>
               </div>
               {(selectedProv.clasificacionTags?.length > 0 || selectedProv.marcas || selectedProv.clasificacionNota) && (
@@ -869,6 +899,29 @@ export default function ProveedoresPage() {
               <div><label className="text-xs font-medium text-zinc-500">Dias CC</label><input type="number" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Limite credito</label><input type="number" value={form.limite_credito} onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div className="col-span-2"><label className="text-xs font-medium text-zinc-500">Notas</label><textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={3} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              {/* Retención Ganancias RG 830 */}
+              <div className="col-span-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">Retención Ganancias (RG 830)</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Concepto de retención</label>
+                    <select value={form.concepto_retencion_ganancias} onChange={(e) => {
+                      const concepto = e.target.value;
+                      const alicuotas: Record<string, number> = { compraventa_bienes: 2, servicios: 2, honorarios: 2, alquileres_inmuebles: 6, alquileres_muebles: 2, intereses_financieros: 3, intereses_otros: 6, transporte: 0.25, fletes: 0.25, comisiones: 2, publicidad: 2, seguros: 2 };
+                      setForm({ ...form, concepto_retencion_ganancias: concepto, alicuota_ganancias: concepto ? (alicuotas[concepto] ?? 2) : null });
+                    }} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
+                      <option value="">Sin definir (usa tasa global)</option>
+                      {Object.entries(CONCEPTOS_RG830).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Alícuota inscripto (%)</label>
+                    <input type="number" step="0.25" value={form.alicuota_ganancias ?? ""} onChange={(e) => setForm({ ...form, alicuota_ganancias: e.target.value ? Number(e.target.value) : null })}
+                      placeholder="Ej: 2" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+                    <p className="text-[10px] text-zinc-400 mt-0.5">Se auto-completa al consultar CUIT en ARCA</p>
+                  </div>
+                </div>
+              </div>
               {/* Clasificacion */}
               <div className="col-span-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
                 <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><Tag className="h-4 w-4" /> Clasificacion del proveedor</h3>

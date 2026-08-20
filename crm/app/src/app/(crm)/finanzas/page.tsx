@@ -98,6 +98,8 @@ interface ProveedorOption {
   razon_social: string;
   cuit?: string | null;
   condicion_iva?: string | null;
+  alicuota_ganancias?: number | null;
+  concepto_retencion_ganancias?: string | null;
 }
 
 interface OrdenPagoRow {
@@ -779,10 +781,10 @@ export default function FinanzasPage() {
 
         // Fetch proveedores list for OP/gastos selectors
         try {
-          let qProv = supabase.from("proveedores").select("id, razon_social, cuit, condicion_iva").order("razon_social");
+          let qProv = supabase.from("proveedores").select("id, razon_social, cuit, condicion_iva, alicuota_ganancias, concepto_retencion_ganancias" as any).order("razon_social");
           if (sociedadActiva?.id) qProv = qProv.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: provData } = await qProv;
-          if (provData) setProveedoresOptions(provData as ProveedorOption[]);
+          if (provData) setProveedoresOptions(provData as unknown as ProveedorOption[]);
         } catch { /* ignore */ }
 
         // Fetch retencion config
@@ -1192,11 +1194,13 @@ export default function FinanzasPage() {
       const acumuladoMensual = opMonthlyBase + opBaseSinIVA;
       if (acumuladoMensual >= retencionConfig.minimo_ganancias) {
         aplica_ganancias = true;
-        retencion_ganancias_pct = retencionConfig.tasa_ganancias_ri;
+        // Usar alícuota específica del proveedor (RG 830 por actividad), fallback a tasa global
+        const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
+        retencion_ganancias_pct = prov?.alicuota_ganancias ?? retencionConfig.tasa_ganancias_ri;
       }
     }
     setOpForm(prev => ({ ...prev, aplica_ganancias, retencion_ganancias_pct }));
-  }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase, opForm.proveedor_id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── OP handlers ──
   function openOPModal(preloadProveedorId?: string) {
@@ -4127,20 +4131,25 @@ export default function FinanzasPage() {
                   <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3">
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-semibold text-violet-700 dark:text-violet-300 flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" />Ret. Ganancias</label>
-                      <button type="button" onClick={() => setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? retencionConfig.tasa_ganancias_ri : 0 })}
+                      <button type="button" onClick={() => { const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id); setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? (prov?.alicuota_ganancias ?? retencionConfig.tasa_ganancias_ri) : 0 }); }}
                         className={`relative inline-flex h-5 w-9 items-center rounded-full ${opForm.aplica_ganancias ? "bg-violet-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
                         <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${opForm.aplica_ganancias ? "translate-x-4.5" : "translate-x-0.5"}`} />
                       </button>
                     </div>
                     {opForm.aplica_ganancias && (
-                      <div className="flex items-center gap-2">
-                        <input type="number" step="0.5" value={opForm.retencion_ganancias_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_ganancias_pct: Number(e.target.value) })}
-                          className="w-20 rounded border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                        <span className="text-xs text-zinc-400">%</span>
-                        {[2, 6, 28].map(pct => (
-                          <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, retencion_ganancias_pct: pct })}
-                            className={`rounded px-1.5 py-0.5 text-xs font-medium ${opForm.retencion_ganancias_pct === pct ? "bg-violet-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>{pct}%</button>
-                        ))}
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <input type="number" step="0.5" value={opForm.retencion_ganancias_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_ganancias_pct: Number(e.target.value) })}
+                            className="w-20 rounded border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          <span className="text-xs text-zinc-400">%</span>
+                          {[0.25, 2, 3, 6, 28].map(pct => (
+                            <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, retencion_ganancias_pct: pct })}
+                              className={`rounded px-1.5 py-0.5 text-xs font-medium ${opForm.retencion_ganancias_pct === pct ? "bg-violet-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>{pct}%</button>
+                          ))}
+                        </div>
+                        {(() => { const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id); return prov?.concepto_retencion_ganancias ? (
+                          <p className="text-[10px] text-violet-500 mt-1">RG 830: {prov.concepto_retencion_ganancias.replace(/_/g, " ")} → {prov.alicuota_ganancias}% inscripto</p>
+                        ) : null; })()}
                       </div>
                     )}
                   </div>
