@@ -138,6 +138,12 @@ const STEP_ICONS = [FileText, Truck, Receipt, DollarSign];
 export default function VentasPage() {
   const { profile, role, sociedadActiva } = useUser();
 
+  const minFecha = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 5);
+    return d.toISOString().slice(0, 10);
+  }, []);
+
   const pvOpciones = useMemo(() => {
     if (sociedadActiva?.nombre === "Grupo LA") return [10];
     return [15, 16];
@@ -1148,6 +1154,8 @@ export default function VentasPage() {
                   <input
                     type="date"
                     value={emitFecha}
+                    min={minFecha}
+                    max={todayAR()}
                     onChange={e => {
                       setEmitFecha(e.target.value);
                       setEmitFechaVenc(calcFechaVenc(emitCondVenta, e.target.value));

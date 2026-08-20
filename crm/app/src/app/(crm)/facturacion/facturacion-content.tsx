@@ -165,10 +165,29 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     numero_manual: "",
     moneda: "ARS" as "ARS" | "USD",
     tipo_cambio: 0,
+    fecha: todayAR(),
     condicion_venta: "Cta. Cte.",
     fecha_vencimiento: "",
     items: [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] as EmitItem[],
   });
+
+  function calcFechaVencFC(condVenta: string, fechaBase: string): string {
+    const diasMap: Record<string, number> = {
+      "Contado": 0, "Cta. Cte.": 30,
+      "15 días": 15, "30 días": 30, "60 días": 60, "90 días": 90,
+    };
+    const dias = diasMap[condVenta];
+    if (dias == null || !fechaBase) return "";
+    const d = new Date(fechaBase + "T12:00:00");
+    d.setDate(d.getDate() + dias);
+    return d.toISOString().slice(0, 10);
+  }
+
+  const minFecha = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 5);
+    return d.toISOString().slice(0, 10);
+  }, []);
 
   // ── NC (Nota de Crédito) modal ────────────────────────────────
   const [ncOpen, setNcOpen] = useState(false);
@@ -444,6 +463,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
     setEmitManual(forceManual);
     setCotizBna(null);
     const tipoInicial = prefill?.tipo || (forceManual ? "X" : "FB");
+    const hoy = todayAR();
     setEmitData({
       tipo: tipoInicial,
       cliente_id: prefill?.cliente_id || "",
@@ -451,8 +471,9 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
       numero_manual: "",
       moneda: prefill?.moneda || "ARS",
       tipo_cambio: prefill?.tipo_cambio || 0,
+      fecha: hoy,
       condicion_venta: "Cta. Cte.",
-      fecha_vencimiento: "",
+      fecha_vencimiento: calcFechaVencFC("Cta. Cte.", hoy),
       items: prefill?.items || [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],
     });
     setEmitStep("form");
@@ -528,6 +549,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           punto_venta: emitData.punto_venta,
           moneda: emitData.moneda,
           tipo_cambio: isUSD ? tc : null,
+          fecha: emitData.fecha || null,
           condicion_venta: emitData.condicion_venta || null,
           fecha_vencimiento: emitData.fecha_vencimiento || null,
           items: emitData.items,
@@ -566,7 +588,6 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
 
     try {
       const cliente = clientes.find(c => c.id === emitData.cliente_id);
-      const today = todayAR();
 
       // Insert factura directly without ARCA
       const { data: newFactura, error: facturaErr } = await (supabase as any)
@@ -576,7 +597,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
           punto_venta: emitData.punto_venta,
           numero: numManual,
           cliente_id: emitData.cliente_id === "consumidor_final" ? null : emitData.cliente_id,
-          fecha: today,
+          fecha: emitData.fecha || todayAR(),
           fecha_vencimiento: emitData.fecha_vencimiento || null,
           condicion_venta: emitData.condicion_venta || null,
           cae: null,
@@ -1395,11 +1416,19 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                   )}
                 </div>
 
-                {/* Condicion de venta + Fecha vencimiento */}
+                {/* Fecha facturación + Condicion de venta + Fecha vencimiento */}
                 <div className="grid grid-cols-12 gap-4">
-                  <div className="col-span-6">
+                  <div className="col-span-3">
+                    <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha facturación</label>
+                    <input type="date" value={emitData.fecha} min={minFecha} max={todayAR()}
+                      onChange={(e) => setEmitData((p) => ({ ...p, fecha: e.target.value, fecha_vencimiento: calcFechaVencFC(p.condicion_venta, e.target.value) }))}
+                      className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                  </div>
+                  <div className="col-span-3">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Condición de venta</label>
-                    <select value={emitData.condicion_venta} onChange={(e) => setEmitData((p) => ({ ...p, condicion_venta: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                    <select value={emitData.condicion_venta}
+                      onChange={(e) => setEmitData((p) => ({ ...p, condicion_venta: e.target.value, fecha_vencimiento: calcFechaVencFC(e.target.value, p.fecha) }))}
+                      className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
                       <option value="Contado">Contado</option>
                       <option value="Cta. Cte.">Cta. Cte.</option>
                       <option value="15 días">15 días</option>
@@ -1408,7 +1437,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                       <option value="90 días">90 días</option>
                     </select>
                   </div>
-                  <div className="col-span-6">
+                  <div className="col-span-3">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha vencimiento</label>
                     <input type="date" value={emitData.fecha_vencimiento} onChange={(e) => setEmitData((p) => ({ ...p, fecha_vencimiento: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
                   </div>
