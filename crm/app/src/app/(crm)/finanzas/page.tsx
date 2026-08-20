@@ -166,6 +166,7 @@ interface FacturaCompraRow {
   archivo_nombre?: string;
   solo_iva?: boolean;
   cae?: string;
+  percepciones_detalle?: { tipo: string; monto: number; localidad?: string }[];
   op_vinculada?: { id: string; numero: string; estado: string; fecha: string } | null;
   ocs_vinculadas?: { numero: string }[];
 }
@@ -889,6 +890,7 @@ export default function FinanzasPage() {
               archivo_nombre: r.archivo_nombre ?? undefined,
               solo_iva: r.solo_iva ?? false,
               cae: r.cae ?? undefined,
+              percepciones_detalle: r.percepciones_detalle ? (typeof r.percepciones_detalle === "string" ? JSON.parse(r.percepciones_detalle) : r.percepciones_detalle) : undefined,
               op_vinculada: r.op_facturas_compra?.length > 0 && r.op_facturas_compra[0]?.ordenes_pago
                 ? { id: r.op_facturas_compra[0].ordenes_pago.id, numero: r.op_facturas_compra[0].ordenes_pago.numero, estado: r.op_facturas_compra[0].ordenes_pago.estado, fecha: r.op_facturas_compra[0].ordenes_pago.fecha }
                 : null,
@@ -2809,7 +2811,18 @@ export default function FinanzasPage() {
                       )}
                     </div>
                   )},
-                  { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.total, row.moneda)}</span> },
+                  { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => (
+                    <div className="text-right">
+                      <span className="font-mono font-semibold text-red-600">{formatCurrency(row.total, row.moneda)}</span>
+                      {row.percepciones > 0 && (
+                        <p className="text-[10px] text-zinc-400 mt-0.5">
+                          {row.percepciones_detalle && row.percepciones_detalle.length > 0
+                            ? row.percepciones_detalle.map(p => `${p.tipo === "iibb" ? "IIBB" : p.tipo === "ganancias" ? "Gan" : p.tipo === "iva" ? "IVA" : "Mun"} ${formatCurrency(p.monto, row.moneda)}`).join(" · ")
+                            : `Perc. ${formatCurrency(row.percepciones, row.moneda)}`}
+                        </p>
+                      )}
+                    </div>
+                  )},
                   { key: "estado", label: "Estado", sortable: true, render: (row) => (
                     <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : row.estado === "recibida" ? "info" : row.estado === "pendiente_aprobacion" ? "orange" : "warning"}>
                       {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : row.estado === "recibida" ? "Recibida" : row.estado === "pendiente_aprobacion" ? "Por aprobar" : "Pendiente"}
@@ -4903,10 +4916,26 @@ export default function FinanzasPage() {
                     <span className="font-mono dark:text-white">{formatCurrency(selectedFC.iva, selectedFC.moneda)}</span>
                   </div>
                   {selectedFC.percepciones > 0 && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-500">Percepciones</span>
-                      <span className="font-mono dark:text-white">{formatCurrency(selectedFC.percepciones, selectedFC.moneda)}</span>
-                    </div>
+                    <>
+                      {selectedFC.percepciones_detalle && selectedFC.percepciones_detalle.length > 0 ? (
+                        selectedFC.percepciones_detalle.map((p, idx) => (
+                          <div key={idx} className="flex items-center justify-between text-sm">
+                            <span className="text-zinc-500">
+                              {p.tipo === "iibb" ? `Perc. IIBB${p.localidad ? ` (${p.localidad})` : ""}` :
+                               p.tipo === "ganancias" ? "Perc. Ganancias" :
+                               p.tipo === "iva" ? "Perc. IVA" :
+                               p.tipo === "municipal" ? "Perc. Municipal" : `Perc. ${p.tipo}`}
+                            </span>
+                            <span className="font-mono dark:text-white">{formatCurrency(p.monto, selectedFC.moneda)}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-zinc-500">Percepciones</span>
+                          <span className="font-mono dark:text-white">{formatCurrency(selectedFC.percepciones, selectedFC.moneda)}</span>
+                        </div>
+                      )}
+                    </>
                   )}
                   {selectedFC.tipo === "solo_iva" && (selectedFC.costo_real ?? 0) > 0 && (
                     <div className="flex items-center justify-between text-sm">

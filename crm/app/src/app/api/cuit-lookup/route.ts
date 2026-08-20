@@ -202,7 +202,7 @@ function parsePadronResponse(text: string, serviceName: string) {
   const activeImpuestos = parseActiveImpuestos(text);
   const { condicion_iva, fuente } = determinarCondicionIVA(text, activeImpuestos);
   const idActividadPrincipal = xmlTag(text, "idActividadPrincipal");
-  const descripcionActividad = xmlTag(text, "descripcionActividadPrincipal");
+  const descripcionActividad = xmlTag(text, "descripcionActividad");
 
   // Determinar concepto RG 830 basado en actividad principal
   const rg830 = idActividadPrincipal ? actividadToConceptoRG830(idActividadPrincipal) : null;
