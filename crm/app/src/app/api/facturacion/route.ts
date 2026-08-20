@@ -123,6 +123,7 @@ export async function POST(req: NextRequest) {
       nota_interna,   // optional string — internal note
       manual,         // optional boolean — skip ARCA, use numero_manual
       numero_manual,  // optional number — invoice number for manual mode
+      fecha,          // optional date string YYYY-MM-DD — custom invoice date (defaults to today)
     } = body;
 
     const authHeader = req.headers.get("authorization");
@@ -164,7 +165,7 @@ export async function POST(req: NextRequest) {
       const totalFinal = Math.round((totalNeto + totalIva) * 100) / 100;
 
       const ptoVta = Number(punto_venta) || 0;
-      const fechaHoy = new Date().toISOString().slice(0, 10);
+      const fechaFactura = fecha || new Date().toISOString().slice(0, 10);
 
       const { data: factura, error: insertError } = await supabase
         .from("facturas")
@@ -174,7 +175,7 @@ export async function POST(req: NextRequest) {
           numero: Number(numero_manual),
           cliente_id: cliente_id === "consumidor_final" ? null : cliente_id,
           presupuesto_id: presupuesto_id || null,
-          fecha: fechaHoy,
+          fecha: fechaFactura,
           cae: null,
           cae_vencimiento: null,
           subtotal: totalNeto,
@@ -373,7 +374,7 @@ export async function POST(req: NextRequest) {
       Importe: Math.round(vals.importe * 100) / 100,
     }));
 
-    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const today = fecha ? fecha.replace(/-/g, "") : new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
     const result = await arca.crearFacturaAuto(ptoVta, cbteTipo, {
       Concepto: 1, // Productos
@@ -410,7 +411,7 @@ export async function POST(req: NextRequest) {
     // Convert YYYYMMDD → YYYY-MM-DD for DB date column
     const caeFchVto = `${rawFchVto.slice(0, 4)}-${rawFchVto.slice(4, 6)}-${rawFchVto.slice(6, 8)}`;
     const cbteNro = Number(firstDet.CbteDesde);
-    const fechaHoy = new Date().toISOString().slice(0, 10);
+    const fechaFactura = fecha || new Date().toISOString().slice(0, 10);
 
     // Save factura to database
     const { data: factura, error: insertError } = await supabase
@@ -421,7 +422,7 @@ export async function POST(req: NextRequest) {
         numero: cbteNro,
         cliente_id: cliente_id === "consumidor_final" ? null : cliente_id,
         presupuesto_id: presupuesto_id || null,
-        fecha: fechaHoy,
+        fecha: fechaFactura,
         cae,
         cae_vencimiento: caeFchVto,
         subtotal: totalNeto,

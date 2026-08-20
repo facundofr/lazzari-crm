@@ -18,7 +18,7 @@ import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
   ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, FileText, Search, Scissors,
-  Maximize2, Pencil,
+  Maximize2, Pencil, Trash2,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 
@@ -646,6 +646,20 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
       if (detailFactura?.id === id) setDetailFactura(prev => prev ? { ...prev, estado: "emitida" } : null);
       alert("Factura revertida a Emitida");
     } catch (err) { alert("Error al revertir: " + (err as Error).message); }
+  }
+
+  async function handleEliminar(id: string) {
+    if (!confirm("¿Eliminar esta factura manual permanentemente? Esta acción no se puede deshacer.")) return;
+    try {
+      // Delete items first
+      const { error: itemsErr } = await supabase.from("factura_items").delete().eq("factura_id", id);
+      if (itemsErr) { alert("Error eliminando items: " + itemsErr.message); return; }
+      const { error } = await supabase.from("facturas").delete().eq("id", id);
+      if (error) { alert("Error eliminando factura: " + error.message); return; }
+      await fetchData();
+      if (detailFactura?.id === id) { setDetailFactura(null); setPanelFullscreen(false); }
+      alert("Factura eliminada");
+    } catch (err) { alert("Error: " + (err as Error).message); }
   }
 
 
@@ -1712,9 +1726,14 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                         </button>
                       )}
                       {!detailFactura.cae && (
-                        <button onClick={() => handleAnular(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-red-950/30">
-                          <XCircle className="h-4 w-4" /> Anular comprobante
-                        </button>
+                        <>
+                          <button onClick={() => handleAnular(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-red-950/30">
+                            <XCircle className="h-4 w-4" /> Anular comprobante
+                          </button>
+                          <button onClick={() => handleEliminar(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-red-200 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 hover:border-red-300 transition-colors dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30">
+                            <Trash2 className="h-4 w-4" /> Eliminar factura
+                          </button>
+                        </>
                       )}
                     </>
                   )}

@@ -38,7 +38,7 @@ interface VentaPresupuesto {
   oc_cliente: string | null;
   observaciones: string | null;
   vendedor_profile: { full_name: string; avatar_url: string | null } | null;
-  clientes: { razon_social: string; cuit: string; condicion_iva: string } | null;
+  clientes: { razon_social: string; cuit: string; condicion_iva: string; forma_pago: string | null } | null;
   presupuesto_items: {
     descripcion: string;
     cantidad: number;
@@ -117,6 +117,19 @@ function getVentaStep(v: Venta): VentaStep {
   return 0; // Pendiente
 }
 
+function calcFechaVenc(condVenta: string, fechaBase: string): string {
+  const diasMap: Record<string, number> = {
+    "Contado": 0, "Cta. Cte.": 30,
+    "15 días": 15, "30 días": 30, "60 días": 60, "90 días": 90,
+    "Cheque 30 días": 30, "Cheque 60 días": 60, "Cheque 90 días": 90,
+  };
+  const dias = diasMap[condVenta];
+  if (dias == null || !fechaBase) return "";
+  const d = new Date(fechaBase + "T12:00:00");
+  d.setDate(d.getDate() + dias);
+  return d.toISOString().slice(0, 10);
+}
+
 const STEP_LABELS = ["Presupuesto", "Entrega", "Factura", "Cobro"];
 const STEP_ICONS = [FileText, Truck, Receipt, DollarSign];
 
@@ -151,6 +164,8 @@ export default function VentasPage() {
   const [emitSuccess, setEmitSuccess] = useState("");
   const [emitManual, setEmitManual] = useState(false);
   const [emitNextNum, setEmitNextNum] = useState<number | null>(null);
+  const [emitFecha, setEmitFecha] = useState("");
+  const [emitPvManual, setEmitPvManual] = useState<number>(0);
   const [emitCondVenta, setEmitCondVenta] = useState("Contado");
   const [emitFechaVenc, setEmitFechaVenc] = useState("");
   const [emitObservaciones, setEmitObservaciones] = useState("");
@@ -197,7 +212,7 @@ export default function VentasPage() {
         .select(`
           id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id, modalidad_emision, oc_cliente, observaciones,
           vendedor_profile:vendedor_id(full_name, avatar_url),
-          clientes(razon_social, cuit, condicion_iva),
+          clientes(razon_social, cuit, condicion_iva, forma_pago),
           presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total)
         `)
         .eq("estado", "aprobado")
@@ -320,12 +335,18 @@ export default function VentasPage() {
     setEmitVenta(venta);
     setEmitTipo(defaultTipo as "FA" | "FB" | "FCEA" | "FCEB");
     setEmitItems(items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]);
+    const hoy = todayAR();
+    const condCliente = p.clientes?.forma_pago || "Contado";
+
     setEmitTipoCambio(p.tipo_cambio || 0);
     setEmitMoneda(p.moneda as "ARS" | "USD" || "ARS");
     setEmitError("");
     setEmitSuccess("");
     setEmitManual((p as any).modalidad_emision === "manual");
-    setEmitCondVenta("Contado");
+    setEmitPvManual(0);
+    setEmitFecha(hoy);
+    setEmitCondVenta(condCliente);
+    setEmitFechaVenc(calcFechaVenc(condCliente, hoy));
     setEmitObservaciones("");
     setCotizBna(null);
     setEmitModalOpen(true);
@@ -375,6 +396,7 @@ export default function VentasPage() {
           items: emitItems.map(it => ({ ...it, precio_unitario: convertPrice(it.precio_unitario) })),
           presupuesto_id: p.id,
           sociedad_id: sociedadActiva?.id || null,
+          fecha: emitFecha || null,
           condicion_venta: emitCondVenta || null,
           fecha_vencimiento: emitFechaVenc || null,
           observaciones: emitObservaciones || null,
@@ -414,11 +436,12 @@ export default function VentasPage() {
 
     try {
       // Get next numero for this tipo+punto_venta+sociedad
+      const pvManual = emitPvManual || 0;
       let maxQuery = supabase
         .from("facturas")
         .select("numero")
         .eq("tipo" as any, emitTipo)
-        .eq("punto_venta" as any, pvCrm);
+        .eq("punto_venta" as any, pvManual);
       if (sociedadActiva?.id) {
         maxQuery = maxQuery.eq("sociedad_id" as any, sociedadActiva.id);
       }
@@ -456,11 +479,11 @@ export default function VentasPage() {
       const { data: facturaData, error: fError } = await (supabase.from("facturas") as any)
         .insert({
           tipo: emitTipo,
-          punto_venta: pvCrm,
+          punto_venta: pvManual,
           numero: nextNumero,
           cliente_id: p.cliente_id,
           presupuesto_id: p.id,
-          fecha: todayAR(),
+          fecha: emitFecha || todayAR(),
           cae: null,
           cae_vencimiento: null,
           subtotal,
@@ -838,7 +861,7 @@ export default function VentasPage() {
                         <span>{selectedVenta.presupuesto.presupuesto_items?.length || 0} productos</span>
                       </div>
                       <Link
-                        href={`/presupuestos`}
+                        href={`/presupuestos?selected=${selectedVenta.presupuesto.id}`}
                         className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 mt-1"
                       >
                         Ver presupuesto <ArrowRight className="h-3 w-3" />
@@ -1076,7 +1099,15 @@ export default function VentasPage() {
                   </div>
                   <div>
                     <span className="text-zinc-500">Punto de venta</span>
-                    {pvOpciones.length > 1 ? (
+                    {emitManual ? (
+                      <input
+                        type="number" min={0}
+                        value={emitPvManual || ""}
+                        onChange={e => setEmitPvManual(Number(e.target.value))}
+                        placeholder="PV"
+                        className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2 py-1 text-sm font-mono font-bold dark:text-white"
+                      />
+                    ) : pvOpciones.length > 1 ? (
                       <select
                         value={pvCrm}
                         onChange={(e) => { const newPv = Number(e.target.value); setPvCrm(newPv); fetchNextNum(emitTipo, newPv); }}
@@ -1093,9 +1124,23 @@ export default function VentasPage() {
                   <div>
                     <span className="text-zinc-500">Nro. comprobante</span>
                     <p className="font-mono font-bold text-orange-600 dark:text-orange-400">
-                      {emitNextNum != null ? `${String(pvCrm).padStart(4, "0")}-${String(emitNextNum).padStart(8, "0")}` : "…"}
+                      {emitNextNum != null ? `${String(emitManual ? emitPvManual : pvCrm).padStart(4, "0")}-${String(emitNextNum).padStart(8, "0")}` : "…"}
                     </p>
                   </div>
+                </div>
+
+                {/* Fecha de facturación */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha de facturación</label>
+                  <input
+                    type="date"
+                    value={emitFecha}
+                    onChange={e => {
+                      setEmitFecha(e.target.value);
+                      setEmitFechaVenc(calcFechaVenc(emitCondVenta, e.target.value));
+                    }}
+                    className="w-full max-w-xs rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                  />
                 </div>
 
                 {/* Info adicional del PR */}
@@ -1300,7 +1345,7 @@ export default function VentasPage() {
                     <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Condición de venta</label>
                     <select
                       value={emitCondVenta}
-                      onChange={e => setEmitCondVenta(e.target.value)}
+                      onChange={e => { setEmitCondVenta(e.target.value); setEmitFechaVenc(calcFechaVenc(e.target.value, emitFecha)); }}
                       className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                     >
                       <option value="Contado">Contado</option>

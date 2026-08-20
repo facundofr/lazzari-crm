@@ -657,6 +657,19 @@ export default function PresupuestosPage() {
     fetchPresupuestos();
   }, [fetchPresupuestos]);
 
+  // Auto-select PR from URL ?selected=UUID
+  useEffect(() => {
+    if (loading || presupuestos.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const selId = params.get("selected");
+    if (selId && !selected) {
+      const found = presupuestos.find(p => p.id === selId);
+      if (found) setSelected(found);
+      // Clean URL param
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [loading, presupuestos.length]);
+
   // Fetch items separately when selected PR has no items (fallback query omitted them)
   useEffect(() => {
     if (!selected?.id || selected.items.length > 0) return;
