@@ -11,7 +11,7 @@ import {
   FileText, Receipt, Truck, CheckCircle2,
   Loader2, X, ChevronRight, ChevronDown,
   Plus, Minus, DollarSign, Eye, AlertCircle,
-  ArrowRight, Clock, Package, ClipboardList,
+  ArrowRight, Clock, Package, ClipboardList, Search,
 } from "lucide-react";
 import { FichasRelevamiento } from "@/components/ventas/fichas-relevamiento";
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -148,6 +148,7 @@ export default function VentasPage() {
   const [loading, setLoading] = useState(true);
   const [vendedores, setVendedores] = useState<VendedorOption[]>([]);
   const [filterVendedor, setFilterVendedor] = useState<string>("todos");
+  const [filterCliente, setFilterCliente] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
@@ -280,14 +281,16 @@ export default function VentasPage() {
   // ── Filtered data ──────────────────────────────────────────────
 
   const filteredVentas = useMemo(() => {
+    const q = filterCliente.toLowerCase().trim();
     return ventas.filter(v => {
       if (filterVendedor !== "todos" && v.presupuesto.vendedor_id !== filterVendedor) return false;
       if (filterStatus) {
         if (getVentaStage(v) !== filterStatus) return false;
       }
+      if (q && !(v.presupuesto.clientes?.razon_social || "").toLowerCase().includes(q) && !v.presupuesto.numero.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [ventas, filterVendedor, filterStatus]);
+  }, [ventas, filterVendedor, filterStatus, filterCliente]);
 
   // KPIs from filtered ventas (respecting vendedor filter, ignoring step filter)
   const kpis = useMemo(() => {
@@ -658,7 +661,17 @@ export default function VentasPage() {
         </div>
 
         {/* Filters */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+            <input
+              type="text"
+              value={filterCliente}
+              onChange={e => setFilterCliente(e.target.value)}
+              placeholder="Buscar cliente o PR..."
+              className="rounded-lg border border-zinc-300 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white w-56"
+            />
+          </div>
           {role !== "vendedor" && (
             <select
               value={filterVendedor}
