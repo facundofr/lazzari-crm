@@ -201,8 +201,10 @@ function parsePadronResponse(text: string, serviceName: string) {
   const estadoClave = xmlTag(text, "estadoClave");
   const activeImpuestos = parseActiveImpuestos(text);
   const { condicion_iva, fuente } = determinarCondicionIVA(text, activeImpuestos);
-  const idActividadPrincipal = xmlTag(text, "idActividadPrincipal");
-  const descripcionActividad = xmlTag(text, "descripcionActividad");
+  // A13 devuelve idActividadPrincipal directo; A5 devuelve actividad[].idActividad (array)
+  // Intentar A13 tag primero, fallback a primer idActividad del array (A5, orden=1 es la principal)
+  const idActividadPrincipal = xmlTag(text, "idActividadPrincipal") || xmlTag(text, "idActividad");
+  const descripcionActividad = xmlTag(text, "descripcionActividadPrincipal") || xmlTag(text, "descripcionActividad");
 
   // Determinar concepto RG 830 basado en actividad principal
   const rg830 = idActividadPrincipal ? actividadToConceptoRG830(idActividadPrincipal) : null;
