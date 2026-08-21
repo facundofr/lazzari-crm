@@ -1152,7 +1152,6 @@ export function openPDFWindow(html: string) {
   if (w) {
     w.document.write(html);
     w.document.close();
-    setTimeout(() => w.print(), 600);
   }
 }
 

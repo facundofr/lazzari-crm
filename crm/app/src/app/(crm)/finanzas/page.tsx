@@ -357,7 +357,13 @@ const emptyMovForm = {
 
 export default function FinanzasPage() {
   const { sociedadActiva, profile } = useUser();
-  const [tab, setTab] = useState<FinanzasTab>("movimientos");
+  const [tab, setTab] = useState<FinanzasTab>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("factura")) return "facturacion";
+    }
+    return "movimientos";
+  });
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
   const [loading, setLoading] = useState(true);
 
@@ -3859,7 +3865,7 @@ export default function FinanzasPage() {
         {/* ── Facturación (embedded) ── */}
         {tab === "facturacion" && (
           <Suspense fallback={<div className="flex items-center justify-center py-24"><Loader2 className="h-8 w-8 animate-spin text-zinc-400" /></div>}>
-            <FacturacionEmbed embedded />
+            <FacturacionEmbed embedded autoSelectId={typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("factura") || undefined : undefined} />
           </Suspense>
         )}
       </div>

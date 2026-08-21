@@ -79,7 +79,7 @@ function formatComprobante(tipo: string, pv: number, num: number) {
   return `${tipo} ${String(pv).padStart(4, "0")}-${String(num).padStart(8, "0")}`;
 }
 
-export function FacturacionContent({ embedded = false }: { embedded?: boolean }) {
+export function FacturacionContent({ embedded = false, autoSelectId }: { embedded?: boolean; autoSelectId?: string }) {
   const { sociedadActiva, profile } = useUser();
 
   const emisorData = useMemo(() => {
@@ -435,6 +435,21 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
   }, [sociedadActiva]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Auto-select factura from URL param
+  useEffect(() => {
+    if (!autoSelectId || facturas.length === 0) return;
+    const match = facturas.find((f) => f.id === autoSelectId);
+    if (match) {
+      setDetailFactura(match);
+      // Clean URL param
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("factura");
+        window.history.replaceState({}, "", url.pathname + url.search);
+      }
+    }
+  }, [autoSelectId, facturas]);
 
   // Check ARCA status when sociedad changes
   useEffect(() => {

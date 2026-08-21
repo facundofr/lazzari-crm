@@ -2366,11 +2366,9 @@ export default function PresupuestosPage() {
                 <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                   <Copy className="h-4 w-4" />
                 </button>
-                {["solicitud", "pendiente"].includes(selected.estado) && (
-                  <button onClick={() => handleDelete(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                )}
+                <button onClick={() => handleDelete(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
+                  <Trash2 className="h-4 w-4" />
+                </button>
                 <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
                   <Maximize2 className="h-4 w-4" />
                 </button>
@@ -2472,6 +2470,49 @@ export default function PresupuestosPage() {
                     <p className="text-sm font-medium">{formatDate(selected.enviadoAt)}</p>
                   </div>
                 )}
+                <div>
+                  <p className="text-xs text-zinc-500 flex items-center gap-1"><Paperclip className="h-3 w-3" /> Archivo adjunto</p>
+                  {(selected as any).archivoUrl ? (
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <a href={(selected as any).archivoUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sm text-blue-600 hover:underline dark:text-blue-400 truncate max-w-[180px]">
+                        <FileText className="h-3.5 w-3.5 shrink-0" />
+                        {(selected as any).archivoNombre || "Descargar"}
+                      </a>
+                      <button
+                        onClick={async () => {
+                          const path = `pr/${selected.id}/${(selected as any).archivoNombre}`;
+                          await supabase.storage.from("presupuestos").remove([path]);
+                          await supabase.from("presupuestos").update({ archivo_url: null, archivo_nombre: null } as any).eq("id", selected.id);
+                          setSelected({ ...selected, archivoUrl: null, archivoNombre: null } as any);
+                          await fetchPresupuestos();
+                          toast.success("Archivo eliminado");
+                        }}
+                        className="text-red-400 hover:text-red-600"
+                        title="Eliminar archivo"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="flex items-center gap-1 cursor-pointer text-sm text-zinc-400 hover:text-orange-600 transition-colors mt-0.5">
+                      <Upload className="h-3.5 w-3.5" />
+                      <span>Subir archivo</span>
+                      <input type="file" className="hidden" onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const path = `pr/${selected.id}/${file.name}`;
+                        const { error: upErr } = await supabase.storage.from("presupuestos").upload(path, file, { upsert: true });
+                        if (upErr) { toast.error("Error al subir archivo"); return; }
+                        const { data: urlData } = supabase.storage.from("presupuestos").getPublicUrl(path);
+                        await supabase.from("presupuestos").update({ archivo_url: urlData.publicUrl, archivo_nombre: file.name } as any).eq("id", selected.id);
+                        setSelected({ ...selected, archivoUrl: urlData.publicUrl, archivoNombre: file.name } as any);
+                        await fetchPresupuestos();
+                        toast.success("Archivo adjuntado");
+                        e.target.value = "";
+                      }} />
+                    </label>
+                  )}
+                </div>
               </div>
 
               {/* Items table */}
@@ -2563,62 +2604,6 @@ export default function PresupuestosPage() {
                 </div>
               )}
 
-              {/* Archivo adjunto */}
-              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2 flex items-center gap-1.5">
-                  <Paperclip className="h-3.5 w-3.5" />
-                  Archivo adjunto
-                </h3>
-                {(selected as any).archivoUrl ? (
-                  <div className="flex items-center gap-2">
-                    <a
-                      href={(selected as any).archivoUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-2 text-sm text-blue-600 hover:underline dark:text-blue-400"
-                    >
-                      <FileText className="h-4 w-4" />
-                      {(selected as any).archivoNombre || "Descargar"}
-                    </a>
-                    <button
-                      onClick={async () => {
-                        const path = `pr/${selected.id}/${(selected as any).archivoNombre}`;
-                        await supabase.storage.from("presupuestos").remove([path]);
-                        await supabase.from("presupuestos").update({ archivo_url: null, archivo_nombre: null } as any).eq("id", selected.id);
-                        setSelected({ ...selected, archivoUrl: null, archivoNombre: null } as any);
-                        await fetchPresupuestos();
-                        toast.success("Archivo eliminado");
-                      }}
-                      className="text-red-400 hover:text-red-600"
-                      title="Eliminar archivo"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ) : (
-                  <label className="flex items-center gap-2 cursor-pointer text-sm text-zinc-500 hover:text-orange-600 transition-colors">
-                    <Upload className="h-4 w-4" />
-                    <span>Subir archivo</span>
-                    <input
-                      type="file"
-                      className="hidden"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        const path = `pr/${selected.id}/${file.name}`;
-                        const { error: upErr } = await supabase.storage.from("presupuestos").upload(path, file, { upsert: true });
-                        if (upErr) { toast.error("Error al subir archivo"); return; }
-                        const { data: urlData } = supabase.storage.from("presupuestos").getPublicUrl(path);
-                        await supabase.from("presupuestos").update({ archivo_url: urlData.publicUrl, archivo_nombre: file.name } as any).eq("id", selected.id);
-                        setSelected({ ...selected, archivoUrl: urlData.publicUrl, archivoNombre: file.name } as any);
-                        await fetchPresupuestos();
-                        toast.success("Archivo adjuntado");
-                        e.target.value = "";
-                      }}
-                    />
-                  </label>
-                )}
-              </div>
 
               {/* Motivo rechazo */}
               {selected.motivoRechazo && (

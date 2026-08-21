@@ -505,6 +505,7 @@ export default function VentasPage() {
           fecha_vencimiento: emitFechaVenc || null,
           observaciones: emitObservaciones || null,
           sociedad_id: sociedadActiva?.id || null,
+          oc_cliente: (p as any).oc_cliente || null,
         })
         .select("id")
         .single();
@@ -989,7 +990,7 @@ export default function VentasPage() {
                               </Badge>
                             </div>
                             <Link
-                              href="/finanzas"
+                              href={`/finanzas?factura=${facturaActiva.id}`}
                               className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700"
                             >
                               Ver en facturacion <ArrowRight className="h-3 w-3" />
