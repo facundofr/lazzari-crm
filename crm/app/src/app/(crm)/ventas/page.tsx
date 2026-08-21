@@ -933,18 +933,13 @@ export default function VentasPage() {
                     ) : (
                       <div className="space-y-3">
                         <p className="text-sm text-zinc-500">Sin remitos generados</p>
-                        <button
-                          onClick={() => handleCrearRemito(selectedVenta)}
-                          disabled={creatingRemito}
-                          className="flex items-center gap-2 rounded-lg bg-orange-600 px-3 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+                        <Link
+                          href={`/presupuestos?selected=${selectedVenta.presupuesto.id}`}
+                          className="flex items-center gap-2 rounded-lg bg-orange-600 px-3 py-2 text-sm font-medium text-white hover:bg-orange-700 w-fit"
                         >
-                          {creatingRemito ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Truck className="h-4 w-4" />
-                          )}
-                          Generar remito desde presupuesto
-                        </button>
+                          <Truck className="h-4 w-4" />
+                          Remitar desde presupuesto
+                        </Link>
                       </div>
                     )}
                   </DetailSection>
