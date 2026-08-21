@@ -300,6 +300,22 @@ export default function RemitosPage() {
     }
   }
 
+  async function handleDeleteRemito(id: string) {
+    if (!confirm("¿Seguro que querés eliminar este remito? Esta acción no se puede deshacer.")) return;
+    try {
+      const { error: itemsErr } = await (supabase as any).from("remito_items").delete().eq("remito_id", id);
+      if (itemsErr) throw itemsErr;
+      const { error: remErr } = await supabase.from("remitos").delete().eq("id", id);
+      if (remErr) throw remErr;
+      setDetailRemito(null);
+      setPanelFullscreen(false);
+      alert("Remito eliminado");
+      await fetchData();
+    } catch (err) {
+      alert("Error al eliminar remito: " + (err instanceof Error ? err.message : "Error desconocido"));
+    }
+  }
+
   async function openParcialModal(remito: RemitoRow) {
     setParcialRemito(remito);
     setParcialModalOpen(true);
@@ -1190,6 +1206,9 @@ export default function RemitosPage() {
                 </button>
                 <button onClick={openPdfModal} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors" title="Descargar PDF">
                   <Download className="h-3.5 w-3.5" /> PDF
+                </button>
+                <button onClick={() => handleDeleteRemito(detailRemito.id)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar remito">
+                  <Trash2 className="h-4 w-4" />
                 </button>
                 <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
                   <Maximize2 className="h-4 w-4" />
