@@ -4,10 +4,10 @@ import { createServerClient } from "@supabase/ssr";
 
 export async function POST(request: NextRequest) {
   try {
-    const { mensaje, cliente_id, moneda } = await request.json();
+    const { mensaje, cliente_id, moneda, imagen } = await request.json();
 
-    if (!mensaje?.trim()) {
-      return Response.json({ error: "Se requiere un mensaje del cliente" }, { status: 400 });
+    if (!mensaje?.trim() && !imagen) {
+      return Response.json({ error: "Se requiere un mensaje o una imagen" }, { status: 400 });
     }
 
     const apiKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
@@ -65,40 +65,59 @@ export async function POST(request: NextRequest) {
 
     const client = new Anthropic({ apiKey });
 
+    // Build user content: text + optional image
+    const userContent: Anthropic.MessageParam["content"] = [];
+    if (imagen) {
+      userContent.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: imagen.media_type || "image/jpeg",
+          data: imagen.data,
+        },
+      });
+    }
+    userContent.push({
+      type: "text",
+      text: mensaje?.trim()
+        ? `Mensaje/pedido del cliente:\n\n${mensaje}`
+        : "Analizá la imagen adjunta e identificá los productos pedidos.",
+    });
+
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 4096,
       system: `Sos un asistente que arma presupuestos para Lazzari Soluciones Industriales, empresa de válvulas, caños, fittings, instrumentación y materiales industriales en Argentina.
 
-Tu tarea: dado un mensaje de un cliente pidiendo productos, buscá los items más relevantes en el catálogo de listas de precios de proveedores y devolvé un JSON con los items para el presupuesto.
+Tu tarea: dado un mensaje o imagen de un cliente pidiendo productos, buscá los items más relevantes en el catálogo de listas de precios de proveedores y devolvé un JSON con los items para el presupuesto. Si te envían una foto (de un mail, WhatsApp, lista, PDF, etc.), extraé los productos y cantidades de la imagen.
 ${clienteInfo}
 Moneda del presupuesto: ${moneda || "USD"}
 
-CATALOGO DE LISTAS DE PRECIOS (proveedores) — UNICA fuente de datos válida:
+CATALOGO DE LISTAS DE PRECIOS (proveedores):
 ${JSON.stringify(catalogItems, null, 0)}
 
 REGLAS:
-1. SOLO devolvé items que existan en el CATALOGO DE LISTAS DE PRECIOS. NUNCA inventes productos ni códigos. Si un producto pedido no existe en el catálogo, NO lo incluyas en items — mencionalo en notas_generales.
-2. Buscá por CÓDIGO EXACTO primero. Si el cliente menciona un código (ej: "ABC-123"), buscá ese código exacto en el catálogo. Los códigos pueden tener letras, números, guiones, barras, puntos.
-3. Si no hay match exacto por código, buscá por descripción similar (ej: "válvula esférica 1/2" → buscar en descripciones).
-4. Si dos proveedores tienen un item similar, elegí el de mejor precio en la moneda del presupuesto.
-5. Interpretá cantidades del mensaje. Si no se especifica, usá 1.
-6. Usá la unidad del catálogo (UN, MT, KG, etc).
-7. El campo "nota" es para aclaraciones (ej: "alternativa sugerida", "verificar medida con cliente").
-8. Usá el codigo, descripcion, precio y lista_id EXACTOS del catálogo. Copialos tal cual aparecen, sin modificar.
+1. Buscá PRIMERO en el CATALOGO. Usá código exacto, luego descripción similar.
+2. Si dos proveedores tienen un item similar, elegí el de mejor precio en la moneda del presupuesto.
+3. Si un producto pedido NO existe en el catálogo, IGUAL incluiló en items con "en_catalogo": false. En ese caso inventá un código descriptivo (ej: "VALV-ESF-2"), poné la mejor descripción que puedas, precio_costo: 0, lista_id: null, y en nota aclaralo (ej: "No encontrado en catálogo, verificar precio").
+4. Para items del catálogo usá el codigo, descripcion, precio y lista_id EXACTOS. Copialos tal cual, sin modificar. Poné "en_catalogo": true.
+5. Interpretá cantidades del mensaje/imagen. Si no se especifica, usá 1.
+6. Usá la unidad del catálogo (UN, MT, KG, etc). Si no hay catálogo, estimá la unidad apropiada.
+7. El campo "nota" es para aclaraciones (ej: "alternativa sugerida", "verificar medida con cliente", "no encontrado en catálogo").
 
 Respondé SOLO con un JSON válido, sin markdown ni explicaciones:
 {
   "items": [
     {
-      "codigo": "string (exacto del catálogo)",
-      "descripcion": "string (exacta del catálogo)",
+      "codigo": "string",
+      "descripcion": "string",
       "categoria": "string",
       "cantidad": number,
       "unidad": "string",
-      "precio_costo": number (exacto del catálogo),
+      "precio_costo": number,
       "proveedor": "string",
-      "lista_id": "string (exacto del catálogo)",
+      "lista_id": "string o null",
+      "en_catalogo": boolean,
       "nota": "string opcional"
     }
   ],
@@ -107,7 +126,7 @@ Respondé SOLO con un JSON válido, sin markdown ni explicaciones:
       messages: [
         {
           role: "user",
-          content: `Mensaje del cliente:\n\n${mensaje}`,
+          content: userContent,
         },
       ],
     });

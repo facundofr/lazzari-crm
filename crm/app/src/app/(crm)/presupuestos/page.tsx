@@ -17,7 +17,7 @@ import {
   PauseCircle, Edit3, Loader2, X, Trash2, ArrowRight, AlertTriangle, Plus, Minus,
   Printer, Sparkles, Download, ClipboardCopy, Check, Mail, GripVertical,
   Phone, CalendarClock, Inbox, Paperclip, Upload, Truck, Receipt,
-  Maximize2,
+  Maximize2, ImagePlus,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
@@ -337,6 +337,7 @@ export default function PresupuestosPage() {
   // AI presupuesto
   const [showAIPanel, setShowAIPanel] = useState(false);
   const [aiMessage, setAiMessage] = useState("");
+  const [aiImage, setAiImage] = useState<{ data: string; media_type: string; name: string } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiNotes, setAiNotes] = useState("");
   // Drag-to-reorder items
@@ -549,7 +550,7 @@ export default function PresupuestosPage() {
   }
 
   async function handleAIGenerate() {
-    if (!aiMessage.trim()) return;
+    if (!aiMessage.trim() && !aiImage) return;
     setAiLoading(true);
     setAiNotes("");
     try {
@@ -560,6 +561,7 @@ export default function PresupuestosPage() {
           mensaje: aiMessage,
           cliente_id: newPR.cliente_id || null,
           moneda: newPR.moneda,
+          imagen: aiImage ? { data: aiImage.data, media_type: aiImage.media_type } : undefined,
         }),
       });
       const data = await res.json();
@@ -591,6 +593,7 @@ export default function PresupuestosPage() {
         toast.success(`IA generó ${newItems.length} item(s)`);
         setShowAIPanel(false);
         setAiMessage("");
+        setAiImage(null);
       } else {
         toast.warning("La IA no encontró productos para este pedido");
       }
@@ -2991,26 +2994,59 @@ export default function PresupuestosPage() {
                 <span className="text-sm font-semibold text-orange-800 dark:text-orange-300">Pega el mensaje del cliente</span>
               </div>
               <p className="text-xs text-orange-600 dark:text-orange-400 mb-3">
-                La IA va a buscar los productos en las listas de precios y armar los items del presupuesto automaticamente.
+                Pegá el mensaje del cliente o subí una foto (captura de WhatsApp, mail, lista de productos, etc). La IA busca en las listas de precios y crea los items que no encuentre.
               </p>
               <textarea
                 value={aiMessage}
                 onChange={(e) => setAiMessage(e.target.value)}
-                rows={4}
+                rows={3}
                 placeholder="Ej: Necesito 3 válvulas esféricas de 2 pulgadas, 10 metros de caño SCH40 de 4 y un manómetro de glicerina..."
                 className="w-full rounded-lg border border-orange-200 px-3 py-2 text-sm dark:border-orange-800 dark:bg-zinc-900 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-200 resize-none"
               />
+              {/* Image upload */}
+              <div className="flex items-center gap-3 mt-2">
+                <label className="flex items-center gap-1.5 cursor-pointer text-xs text-orange-600 hover:text-orange-800 dark:text-orange-400 dark:hover:text-orange-300 transition-colors">
+                  <ImagePlus className="h-4 w-4" />
+                  <span>{aiImage ? "Cambiar foto" : "Adjuntar foto"}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      if (file.size > 10 * 1024 * 1024) { toast.error("Imagen muy grande (máx 10MB)"); return; }
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        const result = reader.result as string;
+                        const base64 = result.split(",")[1];
+                        const mediaType = file.type || "image/jpeg";
+                        setAiImage({ data: base64, media_type: mediaType, name: file.name });
+                      };
+                      reader.readAsDataURL(file);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                {aiImage && (
+                  <div className="flex items-center gap-1.5 text-xs text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 px-2 py-1 rounded-md">
+                    <Check className="h-3 w-3" />
+                    <span className="truncate max-w-[180px]">{aiImage.name}</span>
+                    <button onClick={() => setAiImage(null)} className="text-red-400 hover:text-red-600 ml-1"><X className="h-3 w-3" /></button>
+                  </div>
+                )}
+              </div>
               <div className="flex items-center justify-between mt-3">
-                <button onClick={() => { setShowAIPanel(false); setAiMessage(""); }} className="text-xs text-zinc-500 hover:text-zinc-700">
+                <button onClick={() => { setShowAIPanel(false); setAiMessage(""); setAiImage(null); }} className="text-xs text-zinc-500 hover:text-zinc-700">
                   Cancelar
                 </button>
                 <button
                   onClick={handleAIGenerate}
-                  disabled={aiLoading || !aiMessage.trim()}
+                  disabled={aiLoading || (!aiMessage.trim() && !aiImage)}
                   className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
                 >
                   {aiLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                  {aiLoading ? "Buscando productos..." : "Generar items"}
+                  {aiLoading ? "Procesando..." : "Generar items"}
                 </button>
               </div>
             </div>
