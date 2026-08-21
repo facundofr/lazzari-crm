@@ -422,7 +422,7 @@ export default function OrdenesCompraPage() {
     }
   };
 
-  const handleAdvanceEstado = async (oc: OCRow, nuevoEstado: "pendiente") => {
+  const handleAdvanceEstado = async (oc: OCRow, nuevoEstado: "enviada" | "confirmada") => {
     try {
       const { error } = await supabase.from("ordenes_compra").update({ estado: nuevoEstado } as any).eq("id", oc.id);
       if (error) throw error;
@@ -646,7 +646,7 @@ export default function OrdenesCompraPage() {
       if (detailOC.estado !== "cancelada") {
         if (allReceived && editItems.length > 0) newEstado = "recibida";
         else if (someReceived) newEstado = "recibida_parcial";
-        else if (detailOC.estado === "recibida" || detailOC.estado === "recibida_parcial") newEstado = "pendiente";
+        else if (detailOC.estado === "recibida" || detailOC.estado === "recibida_parcial") newEstado = "enviada";
       }
 
       // 4. Update OC header
@@ -1918,7 +1918,7 @@ export default function OrdenesCompraPage() {
                 <div className="flex flex-wrap gap-2">
                   {detailOC.estado === "borrador" && (
                     <button
-                      onClick={() => handleAdvanceEstado(detailOC, "pendiente")}
+                      onClick={() => handleAdvanceEstado(detailOC, "enviada")}
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
                     >
                       <Send className="h-4 w-4" /> Activar OC
