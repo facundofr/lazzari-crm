@@ -1744,7 +1744,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Acciones</h4>
                 <div className="space-y-2">
-                  {(detailFactura.estado === "emitida" || detailFactura.estado === "parcial") && (
+                  {detailFactura.estado !== "pagada" && detailFactura.estado !== "anulada" && (
                     <>
                       <button onClick={() => openCobroModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
                         <DollarSign className="h-4 w-4" /> Registrar cobro
@@ -1759,7 +1759,7 @@ export function FacturacionContent({ embedded = false }: { embedded?: boolean })
                           <button onClick={() => handleAnular(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-red-950/30">
                             <XCircle className="h-4 w-4" /> Anular comprobante
                           </button>
-                          <button onClick={() => handleEliminar(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-red-200 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 hover:border-red-300 transition-colors dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30">
+                          <button onClick={() => handleEliminar(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-red-200 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 hover:border-red-300 transition-colors dark:border-zinc-700 dark:text-red-400 dark:hover:bg-red-950/30">
                             <Trash2 className="h-4 w-4" /> Eliminar factura
                           </button>
                         </>
