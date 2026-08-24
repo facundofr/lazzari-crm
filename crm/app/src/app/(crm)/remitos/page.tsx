@@ -1264,7 +1264,7 @@ export default function RemitosPage() {
                   <div>
                     <span className="text-zinc-400">Presupuesto origen</span>
                     <button
-                      onClick={() => window.open(`/presupuestos`, "_self")}
+                      onClick={() => window.open(`/presupuestos?selected=${detailRemito.presupuesto_id}`, "_self")}
                       className="flex items-center gap-1 mt-0.5"
                       title="Ir a presupuestos"
                     >

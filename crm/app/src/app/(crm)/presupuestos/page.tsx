@@ -1012,7 +1012,8 @@ export default function PresupuestosPage() {
         if (error) throw new Error(error.message);
 
         // Replace items: delete old, insert new
-        await supabase.from("presupuesto_items").delete().eq("presupuesto_id", editingPRId);
+        const { error: delItemsErr } = await supabase.from("presupuesto_items").delete().eq("presupuesto_id", editingPRId);
+        if (delItemsErr) throw new Error("Error al actualizar items: " + delItemsErr.message);
         if (itemsWithTotals.length > 0) {
           const { error: itemsError } = await supabase.from("presupuesto_items").insert(buildItemRows(editingPRId) as any);
           if (itemsError) throw new Error("Error al guardar items: " + itemsError.message);
@@ -2571,15 +2572,15 @@ export default function PresupuestosPage() {
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
                           <td className="px-3 py-2">{item.descripcion}</td>
                           <td className="px-3 py-2 text-right">{item.cantidad} {item.unidad}</td>
-                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">{formatCurrency(item.precioCosto)}</td>
+                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">{formatCurrency(item.precioCosto, selected.moneda as "ARS" | "USD")}</td>
                           <td className="px-3 py-2 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>
                           <td className={`px-3 py-2 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
                             <span className="inline-flex items-center gap-1">
                               {belowCost && <AlertTriangle className="h-3 w-3 shrink-0" />}
-                              {formatCurrency(item.precioVenta)}
+                              {formatCurrency(item.precioVenta, selected.moneda as "ARS" | "USD")}
                             </span>
                           </td>
-                          <td className="px-3 py-2 text-right font-mono font-semibold">{formatCurrency(item.total)}</td>
+                          <td className="px-3 py-2 text-right font-mono font-semibold">{formatCurrency(item.total, selected.moneda as "ARS" | "USD")}</td>
                         </tr>
                         );
                       })}
@@ -3433,10 +3434,10 @@ export default function PresupuestosPage() {
                 onClick={() => {
                   const pr = postCreatePR;
                   const text = buildPRSummaryText(pr);
-                  const email = pr.clienteNombre ? "" : "";
+                  const email = (pr as any).clienteEmail || "";
                   const subject = encodeURIComponent(`Presupuesto ${pr.numero}`);
                   const body = encodeURIComponent(text);
-                  window.open(`mailto:?subject=${subject}&body=${body}`, "_blank");
+                  window.open(`mailto:${email}?subject=${subject}&body=${body}`, "_blank");
                   setPostCreatePR(null);
                 }}
                 className="flex items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-700 transition-colors"

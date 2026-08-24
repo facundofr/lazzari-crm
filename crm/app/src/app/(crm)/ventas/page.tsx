@@ -527,7 +527,7 @@ export default function VentasPage() {
       const { error: itemsError } = await (supabase.from("factura_items") as any).insert(facturaItems);
       if (itemsError) throw itemsError;
 
-      const comp = `${emitTipo} ${String(pvCrm).padStart(4, "0")}-${String(nextNumero).padStart(8, "0")}`;
+      const comp = `${emitTipo} ${String(pvManual).padStart(4, "0")}-${String(nextNumero).padStart(8, "0")}`;
       setEmitSuccess(`${comp} emitida (manual, sin CAE)`);
       await fetchData();
     } catch (err) {

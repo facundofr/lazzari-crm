@@ -2949,14 +2949,14 @@ export default function FinanzasPage() {
                         <Printer className="h-3.5 w-3.5" />
                       </button>
                       {row.estado === "pendiente" && (
-                        <>
                           <button onClick={() => handlePagarOP(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar como pagada">
                             <CheckCircle2 className="h-3.5 w-3.5" />
                           </button>
+                      )}
+                      {row.estado !== "anulada" && (
                           <button onClick={() => handleAnularOP(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Anular">
                             <Ban className="h-3.5 w-3.5" />
                           </button>
-                        </>
                       )}
                     </div>
                   )},

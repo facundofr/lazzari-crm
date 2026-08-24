@@ -249,6 +249,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     }
 
     const ncTipo = ncFactura.tipo === "FCEA" ? "NCEA" : ncFactura.tipo === "FCEB" ? "NCEB" : ncFactura.tipo === "FA" ? "NCA" : "NCB";
+    setNcSaving(true);
     setNcStep("saving");
     setNcError("");
 
@@ -1075,8 +1076,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       <div className="p-6 lg:p-8 space-y-6">
         {/* KPIs */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard title="Facturado este mes" value={formatCurrency(facturadoMes)} icon={DollarSign} iconColor="text-emerald-600" />
-          <StatCard title="Pendientes de cobro" value={formatCurrency(pendientesCobro)} icon={Clock} iconColor="text-amber-500" />
+          <StatCard title="Facturado este mes" value={formatCurrency(facturadoMes, "ARS")} icon={DollarSign} iconColor="text-emerald-600" />
+          <StatCard title="Pendientes de cobro" value={formatCurrency(pendientesCobro, "ARS")} icon={Clock} iconColor="text-amber-500" />
           <StatCard title="Comprobantes vencidos" value={String(facturasVencidas)} icon={AlertTriangle} iconColor="text-red-500" />
           <StatCard title="CAE vigentes" value={String(caeVigentes)} icon={FileCheck} iconColor="text-blue-600" />
         </div>
