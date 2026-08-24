@@ -78,6 +78,7 @@ interface DetailItem {
   subtotal: number;
   producto_id: string | null;
   iva_porcentaje: number;
+  proveedor_id: string | null;
 }
 
 interface ProveedorOption {
@@ -288,11 +289,11 @@ export default function OrdenesCompraPage() {
     try {
       const { data, error } = await supabase
         .from("orden_compra_items")
-        .select("id, codigo, descripcion, cantidad, cantidad_recibida, unidad, precio_unitario, subtotal, producto_id, iva_porcentaje" as any)
+        .select("id, codigo, descripcion, cantidad, cantidad_recibida, unidad, precio_unitario, subtotal, producto_id, iva_porcentaje, proveedor_id" as any)
         .eq("orden_id", ocId)
         .order("orden", { ascending: true });
       if (!error && data) {
-        setDetailItems((data as any[]).map((it: any) => ({ ...it, iva_porcentaje: Number(it.iva_porcentaje ?? 21) })) as DetailItem[]);
+        setDetailItems((data as any[]).map((it: any) => ({ ...it, iva_porcentaje: Number(it.iva_porcentaje ?? 21), proveedor_id: it.proveedor_id || null })) as DetailItem[]);
       } else {
         setDetailItems([]);
       }
@@ -1176,6 +1177,115 @@ export default function OrdenesCompraPage() {
     }
   };
 
+  // ── Asignar proveedor a item de OC ─────────────────────────────
+  const handleItemProveedorChange = async (itemId: string, provId: string) => {
+    const { error } = await supabase.from("orden_compra_items").update({ proveedor_id: provId || null } as any).eq("id", itemId);
+    if (error) { alert("Error al asignar proveedor al item"); return; }
+    setDetailItems(prev => prev.map(it => it.id === itemId ? { ...it, proveedor_id: provId || null } : it));
+  };
+
+  // ── Dividir OC por proveedor ──────────────────────────────────
+  const [dividiendo, setDividiendo] = useState(false);
+  const handleDividirPorProveedor = async () => {
+    if (!detailOC || !sociedadActiva) return;
+    // Group items by proveedor_id
+    const groups = new Map<string, DetailItem[]>();
+    let sinProv = false;
+    for (const item of detailItems) {
+      if (!item.proveedor_id) { sinProv = true; continue; }
+      const list = groups.get(item.proveedor_id) || [];
+      list.push(item);
+      groups.set(item.proveedor_id, list);
+    }
+    if (sinProv) {
+      alert("Hay items sin proveedor asignado. Asigná un proveedor a todos los items antes de dividir.");
+      return;
+    }
+    if (groups.size <= 1) {
+      // All items same proveedor — just assign to the OC header
+      const provId = [...groups.keys()][0];
+      if (provId && !detailOC.proveedor_id) {
+        const { error } = await supabase.from("ordenes_compra").update({ proveedor_id: provId } as any).eq("id", detailOC.id);
+        if (error) { alert("Error al asignar proveedor"); return; }
+        const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
+        if (fresh) setDetailOC(fresh as any);
+        await fetchData();
+        alert("Todos los items son del mismo proveedor. Se asignó a la OC.");
+      } else {
+        alert("Todos los items son del mismo proveedor. No es necesario dividir.");
+      }
+      return;
+    }
+    if (!confirm(`Se creará ${groups.size} OC(s) nuevas (una por proveedor) y se eliminará la OC ${detailOC.numero}. ¿Continuar?`)) return;
+    setDividiendo(true);
+    try {
+      const today = todayAR();
+      let created = 0;
+      for (const [provId, items] of groups) {
+        const subtotal = items.reduce((sum, it) => sum + Number(it.precio_unitario) * Number(it.cantidad), 0);
+        const iva = items.reduce((sum, it) => {
+          const lineSubtotal = Number(it.precio_unitario) * Number(it.cantidad);
+          const ivaPct = (it.iva_porcentaje ?? 21) / 100;
+          return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
+        }, 0);
+
+        const { data: ocRow, error: ocErr } = await supabase
+          .from("ordenes_compra")
+          .insert({
+            proveedor_id: provId,
+            fecha: detailOC.fecha || today,
+            fecha_entrega_estimada: detailOC.fecha_entrega_estimada || null,
+            moneda: detailOC.moneda,
+            estado: "borrador",
+            subtotal: Math.round(subtotal * 100) / 100,
+            iva,
+            total: Math.round((subtotal + iva) * 100) / 100,
+            observaciones: detailOC.observaciones || `Dividida de ${detailOC.numero}`,
+            sociedad_id: sociedadActiva.id,
+            presupuesto_origen_id: detailOC.presupuesto_origen_id || null,
+            created_by: profile?.id || null,
+          } as any)
+          .select("id")
+          .single();
+
+        if (ocErr || !ocRow) {
+          alert(`Error al crear OC para proveedor: ${ocErr?.message}`);
+          continue;
+        }
+
+        const ocItems = items.map((it, idx) => ({
+          orden_id: ocRow.id,
+          codigo: it.codigo,
+          descripcion: it.descripcion,
+          cantidad: it.cantidad,
+          cantidad_recibida: it.cantidad_recibida,
+          unidad: it.unidad || "u",
+          precio_unitario: it.precio_unitario,
+          producto_id: it.producto_id || null,
+          iva_porcentaje: it.iva_porcentaje ?? 21,
+          proveedor_id: provId,
+          orden: idx,
+        }));
+        const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
+        if (itemsErr) alert(`Error al insertar items: ${itemsErr.message}`);
+        else created++;
+      }
+
+      // Delete original OC items + OC
+      await supabase.from("orden_compra_items").delete().eq("orden_id", detailOC.id);
+      await supabase.from("ordenes_compra").delete().eq("id", detailOC.id);
+
+      setDetailOC(null);
+      setPanelFullscreen(false);
+      await fetchData();
+      alert(`Se crearon ${created} OC(s) nuevas, una por cada proveedor.`);
+    } catch (err) {
+      alert("Error al dividir OC: " + (err as any)?.message);
+    } finally {
+      setDividiendo(false);
+    }
+  };
+
   // ── Computed ─────────────────────────────────────────────────────
   const filtered = ordenes.filter((oc) => {
     if (filter !== "todas") {
@@ -2030,6 +2140,7 @@ export default function OrdenesCompraPage() {
                 ) : (
                   <div className="space-y-3">
                     <p className="text-sm text-amber-600 dark:text-amber-400 font-medium">Sin proveedor asignado</p>
+                    <p className="text-xs text-zinc-400">Asigná un proveedor a toda la OC, o asigná proveedores por item en la tabla de abajo y dividí la OC.</p>
                     <div>
                       <select
                         onChange={async (e) => {
@@ -2045,10 +2156,20 @@ export default function OrdenesCompraPage() {
                         className="w-full rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white"
                         defaultValue=""
                       >
-                        <option value="">Asignar proveedor...</option>
+                        <option value="">Asignar proveedor a toda la OC...</option>
                         {proveedores.map((p) => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
                       </select>
                     </div>
+                    {detailItems.some(it => it.proveedor_id) && (
+                      <button
+                        onClick={handleDividirPorProveedor}
+                        disabled={dividiendo}
+                        className="flex items-center gap-2 w-full justify-center px-3 py-2 text-sm font-medium rounded-lg bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50 transition-colors"
+                      >
+                        {dividiendo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Merge className="h-4 w-4" />}
+                        Dividir OC por proveedor
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -2155,7 +2276,7 @@ export default function OrdenesCompraPage() {
                   <h3 className="text-sm font-semibold">Items ({(editMode ? editItems : detailItems).length})</h3>
                   <div className="flex items-center gap-2">
                     {editMode && (
-                      <button onClick={() => setEditItems(prev => [...prev, { id: `new_${Date.now()}`, codigo: "", descripcion: "", cantidad: 1, cantidad_recibida: 0, unidad: "u", precio_unitario: 0, subtotal: 0, producto_id: null, iva_porcentaje: 21 }])}
+                      <button onClick={() => setEditItems(prev => [...prev, { id: `new_${Date.now()}`, codigo: "", descripcion: "", cantidad: 1, cantidad_recibida: 0, unidad: "u", precio_unitario: 0, subtotal: 0, producto_id: null, iva_porcentaje: 21, proveedor_id: null }])}
                         className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
                         <Plus className="h-3 w-3" /> Agregar item
                       </button>
@@ -2184,6 +2305,7 @@ export default function OrdenesCompraPage() {
                           <th className="px-3 py-2 text-right">Cant.</th>
                           <th className="px-3 py-2 text-right">P. Unit.</th>
                           <th className="px-3 py-2 text-right">Subtotal</th>
+                          {!detailOC.proveedores && <th className="px-3 py-2">Proveedor</th>}
                           <th className="px-3 py-2 text-center">Recibido</th>
                           {editMode && <th className="px-3 py-2 w-8"></th>}
                         </tr>
@@ -2232,6 +2354,18 @@ export default function OrdenesCompraPage() {
                                   ? formatCurrency(Number(item.cantidad) * Number(item.precio_unitario), detailOC.moneda as "ARS" | "USD")
                                   : formatCurrency(Number(item.subtotal), detailOC.moneda as "ARS" | "USD")}
                               </td>
+                              {!detailOC.proveedores && (
+                                <td className="px-3 py-2">
+                                  <select
+                                    value={item.proveedor_id || ""}
+                                    onChange={(e) => handleItemProveedorChange(item.id, e.target.value)}
+                                    className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1.5 py-1 bg-white dark:bg-zinc-800 dark:text-white max-w-[140px] truncate"
+                                  >
+                                    <option value="">Sin proveedor</option>
+                                    {proveedores.map(p => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
+                                  </select>
+                                </td>
+                              )}
                               <td className="px-3 py-2">
                                 {editMode ? (
                                   <div className="flex items-center justify-center">
