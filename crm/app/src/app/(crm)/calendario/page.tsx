@@ -20,7 +20,7 @@ import {
   CheckCircle2,
   Trash2,
 } from "lucide-react";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatDateTime } from "@/lib/utils";
 
@@ -121,6 +121,9 @@ export default function CalendarioPage() {
   // Create modal
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
+  const [clienteSearch, setClienteSearch] = useState("");
+  const [clienteDropdownOpen, setClienteDropdownOpen] = useState(false);
+  const clienteSearchRef = useRef<HTMLDivElement>(null);
   const [creating, setCreating] = useState(false);
   const [createForm, setCreateForm] = useState({
     titulo: "",
@@ -178,6 +181,22 @@ export default function CalendarioPage() {
     }
     fetchUsers();
   }, []);
+
+  // Close cliente dropdown on click outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (clienteSearchRef.current && !clienteSearchRef.current.contains(e.target as Node)) {
+        setClienteDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const filteredClientes = useMemo(() => {
+    if (!clienteSearch) return clientes;
+    return clientes.filter((c) => c.razon_social.toLowerCase().includes(clienteSearch.toLowerCase()));
+  }, [clientes, clienteSearch]);
 
   // ── Filtered events ──────────────────────────────────────────
   const filteredEventos = useMemo(() => {
@@ -288,6 +307,8 @@ export default function CalendarioPage() {
   async function openCreateModal(presetDate?: string) {
     const nowAR = new Date(new Date().toLocaleString("en-US", { timeZone: AR_TZ }));
     const defaultDate = presetDate || `${nowAR.getFullYear()}-${String(nowAR.getMonth() + 1).padStart(2, "0")}-${String(nowAR.getDate()).padStart(2, "0")}T${String(nowAR.getHours()).padStart(2, "0")}:${String(nowAR.getMinutes()).padStart(2, "0")}`;
+    setClienteSearch("");
+    setClienteDropdownOpen(false);
     setCreateForm({
       titulo: "",
       tipo: "visita",
@@ -919,16 +940,37 @@ export default function CalendarioPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente</label>
-                  <select
-                    value={createForm.cliente_id}
-                    onChange={(e) => setCreateForm({ ...createForm, cliente_id: e.target.value })}
-                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                  >
-                    <option value="">Sin cliente</option>
-                    {clientes.map((c) => (
-                      <option key={c.id} value={c.id}>{c.razon_social}</option>
-                    ))}
-                  </select>
+                  <div className="relative" ref={clienteSearchRef}>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        placeholder="Buscar cliente..."
+                        value={clienteSearch || (createForm.cliente_id ? clientes.find(c => c.id === createForm.cliente_id)?.razon_social || "" : "")}
+                        onChange={(e) => { setClienteSearch(e.target.value); setClienteDropdownOpen(true); if (!e.target.value) setCreateForm({ ...createForm, cliente_id: "" }); }}
+                        onFocus={() => { if (clienteSearch || !createForm.cliente_id) setClienteDropdownOpen(true); }}
+                        className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                      />
+                      {createForm.cliente_id && (
+                        <button onClick={() => { setCreateForm({ ...createForm, cliente_id: "" }); setClienteSearch(""); }} className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-zinc-400 hover:text-zinc-600">
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+                    {clienteDropdownOpen && (clienteSearch || !createForm.cliente_id) && filteredClientes.length > 0 && (
+                      <div className="absolute z-50 mt-1 max-h-48 w-full overflow-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                        {filteredClientes.slice(0, 50).map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => { setCreateForm({ ...createForm, cliente_id: c.id }); setClienteSearch(""); setClienteDropdownOpen(false); }}
+                            className="block w-full px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 dark:text-white"
+                          >
+                            {c.razon_social}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Responsable</label>

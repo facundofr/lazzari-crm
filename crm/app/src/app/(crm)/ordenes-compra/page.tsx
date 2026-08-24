@@ -15,7 +15,7 @@ import {
   X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
   PackageCheck, MessageSquare, Edit3, Plus, Minus,
-  Maximize2, Upload,
+  Maximize2, Upload, Trash2,
 } from "lucide-react";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import { EmailComposeModal } from "@/components/email-compose-modal";
@@ -419,6 +419,29 @@ export default function OrdenesCompraPage() {
       if (detailOC?.id === oc.id) { setDetailOC(null); setPanelFullscreen(false); }
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Error al cancelar");
+    }
+  };
+
+  const handleDeleteOC = async (oc: OCRow) => {
+    if (!confirm(`¿Eliminar la OC ${oc.numero}? Esta acción no se puede deshacer.`)) return;
+    try {
+      // 1. Delete orden_compra_items
+      const { error: itemsErr } = await supabase
+        .from("orden_compra_items")
+        .delete()
+        .eq("orden_id", oc.id);
+      if (itemsErr) throw itemsErr;
+      // 2. Delete the OC itself
+      const { error: ocErr } = await supabase
+        .from("ordenes_compra")
+        .delete()
+        .eq("id", oc.id);
+      if (ocErr) throw ocErr;
+      // 3. Refresh and close panel
+      await fetchData();
+      if (detailOC?.id === oc.id) { setDetailOC(null); setPanelFullscreen(false); }
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Error al eliminar OC");
     }
   };
 
@@ -1901,6 +1924,13 @@ export default function OrdenesCompraPage() {
                     >
                       <Mail className="h-4 w-4" />
                     </button>
+                    <button
+                      onClick={() => handleDeleteOC(detailOC)}
+                      className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
+                      title="Eliminar OC"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
                   </>
                 )}
                 <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
@@ -2007,14 +2037,10 @@ export default function OrdenesCompraPage() {
                           if (!provId || !detailOC) return;
                           const { error } = await supabase.from("ordenes_compra").update({ proveedor_id: provId } as any).eq("id", detailOC.id);
                           if (error) { alert("Error al asignar proveedor"); return; }
+                          // Re-fetch OC with full joins to get proveedor data
+                          const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
+                          if (fresh) setDetailOC(fresh as any);
                           await fetchData();
-                          // Reload detail
-                          const updated = ordenes.find(o => o.id === detailOC.id);
-                          if (updated) setDetailOC(updated);
-                          else {
-                            const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
-                            if (fresh) setDetailOC(fresh as any);
-                          }
                         }}
                         className="w-full rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white"
                         defaultValue=""

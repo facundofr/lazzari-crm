@@ -982,9 +982,9 @@ export default function PresupuestosPage() {
 
       if (editingPRId) {
         // ── UPDATE existing PR ──
-        const { error } = await supabase
-          .from("presupuestos")
-          .update({
+        // If current estado is "solicitud", auto-promote to "pendiente"
+        const currentPR = presupuestos.find(p => p.id === editingPRId);
+        const updatePayload: Record<string, unknown> = {
             cliente_id: newPR.cliente_id,
             vendedor_id: newPR.vendedor_id,
             sucursal_id: newPR.sucursal_id || null,
@@ -1000,7 +1000,14 @@ export default function PresupuestosPage() {
             vencimiento: newPR.vencimiento,
             tipo_comprobante: newPR.tipo_comprobante || null,
             modalidad_emision: newPR.modalidad_emision,
-          } as any)
+        };
+        if (currentPR?.estado === "solicitud") {
+          updatePayload.estado = "pendiente";
+          updatePayload.enviado_at = new Date().toISOString();
+        }
+        const { error } = await supabase
+          .from("presupuestos")
+          .update(updatePayload as any)
           .eq("id", editingPRId);
         if (error) throw new Error(error.message);
 
@@ -1369,7 +1376,7 @@ export default function PresupuestosPage() {
 
       const statusLabels: Record<string, string> = {
         solicitud: "marcado como solicitud",
-        pendiente: "enviado al cliente",
+        pendiente: "marcado como pendiente",
         aprobado: "aprobado",
         rechazado: "rechazado",
         postergado: "postergado",
@@ -1456,6 +1463,8 @@ export default function PresupuestosPage() {
       if (delPrErr) throw delPrErr;
       setSelected(null);
       setPanelFullscreen(false);
+      // Immediately remove from local state so table updates even before refetch
+      setPresupuestos(prev => prev.filter(p => p.id !== id));
       toast.success("Presupuesto eliminado");
       await fetchPresupuestos();
     } catch (err) {
@@ -1474,23 +1483,37 @@ export default function PresupuestosPage() {
         .single();
       if (error || !fullPR) { toast.error("Error al cargar presupuesto"); return; }
 
+      const prMoneda = fullPR.moneda || "USD";
+      const prTc = Number(fullPR.tipo_cambio) || 0;
       const items: NewPRItem[] = (fullPR.presupuesto_items || [])
         .sort((a: any, b: any) => (a.orden || 0) - (b.orden || 0))
-        .map((it: any) => ({
+        .map((it: any) => {
+          const costo = Number(it.precio_costo) || 0;
+          const pv = Number(it.precio_venta) || 0;
+          let markup = Number(it.markup_porcentaje) || 0;
+          // Back-calculate markup if DB has null/0 but precio_venta and precio_costo exist
+          if (!markup && costo > 0 && pv > 0) {
+            const costoConv = convertCosto(costo, it.costo_moneda || "USD", prMoneda, prTc);
+            if (costoConv > 0) {
+              markup = Number((((pv / costoConv) - 1) * 100).toFixed(2));
+            }
+          }
+          return {
           codigo: it.codigo || "",
           descripcion: it.descripcion || "",
           categoria: it.categoria || "",
           cantidad: Number(it.cantidad) || 1,
           unidad: it.unidad || "UN",
-          precio_costo: Number(it.precio_costo) || 0,
-          markup_porcentaje: Number(it.markup_porcentaje) || 0,
-          precio_venta: Number(it.precio_venta) || 0,
+          precio_costo: costo,
+          markup_porcentaje: markup,
+          precio_venta: pv,
           iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
           proveedor_nombre: it.proveedor_nombre || "",
           proveedor_id: it.proveedor_id || "",
           lista_item_id: it.lista_item_id || "",
           costo_moneda: (it.costo_moneda || "USD") as "ARS" | "USD",
-        }));
+        };
+        });
 
       setNewPR({
         cliente_id: fullPR.cliente_id || "",
@@ -3239,8 +3262,8 @@ export default function PresupuestosPage() {
           </div>
         </div>}
 
-        {/* Notas internas y Observaciones — solo en modo presupuesto (solicitud ya tiene los suyos arriba) */}
-        {!esSolicitud && <>
+        {/* Notas internas y Observaciones — en modo presupuesto, o al editar una solicitud */}
+        {(!esSolicitud || editingPRId) && <>
         <Textarea
           label="Notas internas (solo uso interno)"
           value={newPR.notas_internas}
