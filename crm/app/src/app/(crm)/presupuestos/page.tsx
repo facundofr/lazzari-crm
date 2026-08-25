@@ -1458,8 +1458,14 @@ export default function PresupuestosPage() {
         alert(`No se puede eliminar: este presupuesto tiene ${linked.join(", ")} asociados.`);
         return;
       }
+      // Delete all FK-linked records before deleting the presupuesto
       const { error: delItemsErr } = await supabase.from("presupuesto_items").delete().eq("presupuesto_id", id);
       if (delItemsErr) throw delItemsErr;
+      // Clean up secondary references (eventos, pendientes, fichas, notas_credito)
+      await (supabase as any).from("eventos").delete().eq("presupuesto_id", id);
+      await (supabase as any).from("pendientes").delete().eq("presupuesto_id", id);
+      await (supabase as any).from("fichas_relevamiento").delete().eq("presupuesto_id", id);
+      await (supabase as any).from("notas_credito").delete().eq("presupuesto_id", id);
       const { error: delPrErr } = await supabase.from("presupuestos").delete().eq("id", id);
       if (delPrErr) throw delPrErr;
       setSelected(null);
