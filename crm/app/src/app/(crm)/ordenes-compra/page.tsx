@@ -134,6 +134,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 
 export default function OrdenesCompraPage() {
   const { sociedadActiva, profile } = useUser();
+  const canManageCompras = profile?.role === "super_admin" || profile?.role === "admin" || profile?.role === "administrativo";
   const [filter, setFilter] = useState<OCStatus | "todas">("todas");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1335,11 +1336,11 @@ export default function OrdenesCompraPage() {
       <Header
         title="Compras"
         subtitle={`${ordenes.length} compras`}
-        action={{ label: "Nueva OC", onClick: openCreateModal }}
+        action={canManageCompras ? { label: "Nueva OC", onClick: openCreateModal } : undefined}
       />
 
       {/* Secondary action bar */}
-      <div className="px-4 sm:px-8 pt-2 flex justify-end gap-3">
+      {canManageCompras && <div className="px-4 sm:px-8 pt-2 flex justify-end gap-3">
         <button
           onClick={() => setCargarFCOpen(true)}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
@@ -1361,7 +1362,7 @@ export default function OrdenesCompraPage() {
           <Merge className="h-4 w-4" />
           Consolidar pedidos
         </button>
-      </div>
+      </div>}
 
       <div className="p-4 sm:p-8 space-y-6">
         {/* Success message */}
@@ -1491,6 +1492,17 @@ export default function OrdenesCompraPage() {
                 sortable: true,
                 render: (row) => {
                   const isPedido = row.pedido ?? false;
+                  if (!canManageCompras) {
+                    return (
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                        isPedido
+                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                          : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+                      }`}>
+                        {isPedido ? <><Check className="h-3 w-3" /> Si</> : <><X className="h-3 w-3" /> No</>}
+                      </span>
+                    );
+                  }
                   return (
                     <button
                       onClick={(e) => handleTogglePedido(row, e)}
@@ -1546,7 +1558,7 @@ export default function OrdenesCompraPage() {
                       />
                       <span className="text-xs text-zinc-500 hidden sm:inline">{label}</span>
                       {/* Note icon for parcial/demorado */}
-                      {(recibido > 0 || isLate) && row.estado !== "recibida" && (
+                      {canManageCompras && (recibido > 0 || isLate) && row.estado !== "recibida" && (
                         <button
                           onClick={(e) => openNotaPopover(row, e)}
                           className={`p-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors ${row.notas_recepcion ? "text-orange-500" : "text-zinc-300 hover:text-zinc-500"}`}
@@ -1597,7 +1609,7 @@ export default function OrdenesCompraPage() {
                 label: "Acciones",
                 render: (row) => (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    {row.estado !== "recibida" && row.estado !== "cancelada" && (
+                    {canManageCompras && row.estado !== "recibida" && row.estado !== "cancelada" && (
                       <button onClick={() => handleCancel(row)} className="px-2 py-1 rounded text-xs font-medium bg-red-50 text-red-500 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 transition-colors" title="Cancelar OC">
                         Cancelar
                       </button>
@@ -1994,14 +2006,16 @@ export default function OrdenesCompraPage() {
                   </>
                 ) : (
                   <>
-                    <button
-                      onClick={startEditMode}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 transition-colors"
-                      title="Editar OC"
-                    >
-                      <Edit3 className="h-3.5 w-3.5" />
-                      Editar
-                    </button>
+                    {canManageCompras && (
+                      <button
+                        onClick={startEditMode}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 transition-colors"
+                        title="Editar OC"
+                      >
+                        <Edit3 className="h-3.5 w-3.5" />
+                        Editar
+                      </button>
+                    )}
                     <button
                       onClick={handleCopySummary}
                       className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
@@ -2016,7 +2030,7 @@ export default function OrdenesCompraPage() {
                     >
                       <Download className="h-4 w-4" />
                     </button>
-                    <button
+                    {canManageCompras && <button
                       onClick={async () => {
                         const oc = detailOC;
                         const template = await loadEmailTemplate("orden_compra", sociedadActiva?.id || "");
@@ -2033,14 +2047,14 @@ export default function OrdenesCompraPage() {
                       title="Enviar por email"
                     >
                       <Mail className="h-4 w-4" />
-                    </button>
-                    <button
+                    </button>}
+                    {canManageCompras && <button
                       onClick={() => handleDeleteOC(detailOC)}
                       className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
                       title="Eliminar OC"
                     >
                       <Trash2 className="h-4 w-4" />
-                    </button>
+                    </button>}
                   </>
                 )}
                 <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
@@ -2054,7 +2068,7 @@ export default function OrdenesCompraPage() {
 
             <div className="px-6 py-5 space-y-6">
               {/* ── Action Buttons ─────────────────────────────────────── */}
-              {!["recibida", "cancelada"].includes(detailOC.estado) && (
+              {canManageCompras && !["recibida", "cancelada"].includes(detailOC.estado) && (
                 <div className="flex flex-wrap gap-2">
                   {detailOC.estado === "borrador" && (
                     <button
@@ -2140,6 +2154,7 @@ export default function OrdenesCompraPage() {
                 ) : (
                   <div className="space-y-3">
                     <p className="text-sm text-amber-600 dark:text-amber-400 font-medium">Sin proveedor asignado</p>
+                    {canManageCompras ? <>
                     <p className="text-xs text-zinc-400">Asigná un proveedor a toda la OC, o asigná proveedores por item en la tabla de abajo y dividí la OC.</p>
                     <div>
                       <select
@@ -2169,6 +2184,9 @@ export default function OrdenesCompraPage() {
                         {dividiendo ? <Loader2 className="h-4 w-4 animate-spin" /> : <Merge className="h-4 w-4" />}
                         Dividir OC por proveedor
                       </button>
+                    )}
+                    </> : (
+                      <p className="text-xs text-zinc-400">Esta orden todavía no tiene un proveedor asignado.</p>
                     )}
                   </div>
                 )}
@@ -2234,12 +2252,12 @@ export default function OrdenesCompraPage() {
                       <MessageSquare className="h-3.5 w-3.5" />
                       Nota de recepcion
                     </span>
-                    <button
+                    {canManageCompras && <button
                       onClick={(e) => openNotaPopover(detailOC, e)}
                       className="text-xs text-orange-500 hover:text-orange-600 font-medium"
                     >
                       {detailOC.notas_recepcion ? "Editar" : "Agregar nota"}
-                    </button>
+                    </button>}
                   </div>
                   {detailOC.notas_recepcion ? (
                     <p className="mt-1 text-zinc-700 dark:text-zinc-300 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
@@ -2356,14 +2374,18 @@ export default function OrdenesCompraPage() {
                               </td>
                               {!detailOC.proveedores && (
                                 <td className="px-3 py-2">
-                                  <select
+                                  {canManageCompras ? <select
                                     value={item.proveedor_id || ""}
                                     onChange={(e) => handleItemProveedorChange(item.id, e.target.value)}
                                     className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1.5 py-1 bg-white dark:bg-zinc-800 dark:text-white max-w-[140px] truncate"
                                   >
                                     <option value="">Sin proveedor</option>
                                     {proveedores.map(p => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
-                                  </select>
+                                  </select> : (
+                                    <span className="text-xs text-zinc-500">
+                                      {proveedores.find(p => p.id === item.proveedor_id)?.razon_social || "Sin proveedor"}
+                                    </span>
+                                  )}
                                 </td>
                               )}
                               <td className="px-3 py-2">
@@ -2407,7 +2429,7 @@ export default function OrdenesCompraPage() {
               </div>
 
               {/* ── Recepcion de mercaderia ─────────────────────────── */}
-              {["pendiente", "enviada", "confirmada", "recibida_parcial"].includes(detailOC.estado) && detailItems.length > 0 && !detailLoading && (
+              {canManageCompras && ["pendiente", "enviada", "confirmada", "recibida_parcial"].includes(detailOC.estado) && detailItems.length > 0 && !detailLoading && (
                 <div className="rounded-lg border-2 border-violet-200 dark:border-violet-800 bg-violet-50/50 dark:bg-violet-900/10 p-4 space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold flex items-center gap-2 text-violet-700 dark:text-violet-300">

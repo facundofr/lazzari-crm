@@ -220,6 +220,7 @@ interface PRData {
   clienteDireccion?: string;
   clienteLocalidad?: string;
   clienteProvincia?: string;
+  sucursalNombre?: string;
   vendedorNombre?: string;
   items: PRItem[];
 }
@@ -273,6 +274,7 @@ export function generatePresupuestoPDF(
       ${pr.clienteCuit ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteCuit}</div></div>` : ""}
       ${pr.clienteCondicionIva ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Cond. IVA</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteCondicionIva}</div></div>` : ""}
       ${pr.clienteDireccion ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteDireccion}${pr.clienteLocalidad ? `, ${pr.clienteLocalidad}` : ""}${pr.clienteProvincia ? ` (${pr.clienteProvincia})` : ""}</div></div>` : ""}
+      ${pr.sucursalNombre ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Sucursal</div><div style="font-size:11px;font-weight:500;color:#333">${pr.sucursalNombre}</div></div>` : ""}
     </td>
     <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
       <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Datos comerciales</div>

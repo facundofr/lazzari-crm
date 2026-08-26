@@ -38,10 +38,11 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   vendedor: [
     { module: "dashboard", actions: ["read"] },
     { module: "clientes", actions: ["read", "create", "update"] },
-    { module: "presupuestos", actions: ["read", "create", "update"] },
+    { module: "presupuestos", actions: ["read", "create", "update", "delete"] },
     { module: "remitos", actions: ["read", "create"] },
     { module: "proveedores", actions: ["read"] },
     { module: "listas_precios", actions: ["read"] },
+    { module: "ordenes_compra", actions: ["read"] },
     { module: "stock", actions: ["read"] },
     { module: "reportes", actions: ["read"] },
     { module: "calendario", actions: ["read", "create", "update"] },
@@ -49,7 +50,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   administrativo: [
     { module: "dashboard", actions: ["read"] },
     { module: "clientes", actions: ["read", "update"] },
-    { module: "presupuestos", actions: ["read", "update"] },
+    { module: "presupuestos", actions: ["read", "update", "delete"] },
     { module: "facturacion", actions: ["read", "create", "update", "export"] },
     { module: "remitos", actions: ["read", "create", "update", "export"] },
     { module: "stock", actions: ["read", "create", "update"] },
@@ -65,7 +66,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   viewer: [
     { module: "dashboard", actions: ["read"] },
     { module: "clientes", actions: ["read"] },
-    { module: "presupuestos", actions: ["read"] },
+    { module: "presupuestos", actions: ["read", "delete"] },
     { module: "facturacion", actions: ["read"] },
     { module: "stock", actions: ["read"] },
     { module: "reportes", actions: ["read"] },
@@ -220,7 +221,9 @@ export interface Presupuesto {
   vendedorAvatar?: string | null;
   sociedadId?: string;
   sucursalId?: string;
+  sucursalNombre?: string;
   contactoId?: string;
+  contactoNombre?: string;
   ocCliente?: string;
   enviadoAt?: string;
   respondidoAt?: string;

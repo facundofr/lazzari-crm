@@ -255,7 +255,7 @@ function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, 
 export default function PresupuestosPage() {
   const { profile, sociedadActiva } = useUser();
   const { toast } = useToast();
-  const canDeletePresupuestos = profile?.role === "admin" || profile?.role === "super_admin";
+  const canDeletePresupuestos = Boolean(profile);
   const allEstados: (PRStatus | "facturado")[] = ["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido", "facturado"];
   const [selectedEstados, setSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [vistaSeguimiento, setVistaSeguimiento] = useState(false);
@@ -1727,6 +1727,7 @@ export default function PresupuestosPage() {
       p.clienteEmail ? `Email: ${p.clienteEmail}` : null,
       p.clienteTelefono ? `Tel: ${p.clienteTelefono}` : null,
       p.clienteDireccion ? `Dir: ${p.clienteDireccion}${p.clienteLocalidad ? `, ${p.clienteLocalidad}` : ""}${p.clienteProvincia ? `, ${p.clienteProvincia}` : ""}` : null,
+      p.sucursalNombre ? `Sucursal: ${p.sucursalNombre}` : null,
       "",
       "*Items:*",
       ...pr.items.map((it, i) =>
@@ -1773,6 +1774,7 @@ export default function PresupuestosPage() {
       clienteDireccion: p.clienteDireccion,
       clienteLocalidad: p.clienteLocalidad,
       clienteProvincia: p.clienteProvincia,
+      sucursalNombre: p.sucursalNombre,
       vendedorNombre: p.vendedorNombre,
       items: pr.items.map(it => ({
         codigo: it.codigo,
@@ -2139,6 +2141,14 @@ export default function PresupuestosPage() {
                 },
               },
               {
+                key: "clienteNombre", label: "Cliente", sortable: true,
+                render: (row) => <span className="font-medium text-xs">{row.clienteNombre}</span>,
+              },
+              {
+                key: "sucursalNombre", label: "Sucursal", sortable: true,
+                render: (row) => <span className="text-xs text-zinc-600 dark:text-zinc-300">{row.sucursalNombre || "—"}</span>,
+              },
+              {
                 key: "total", label: "Monto", className: "text-right", sortable: true,
                 render: (row) => {
                   if (row.estado === "solicitud") return <span className="text-zinc-400 text-xs">—</span>;
@@ -2148,10 +2158,6 @@ export default function PresupuestosPage() {
                     </span>
                   );
                 },
-              },
-              {
-                key: "clienteNombre", label: "Cliente", sortable: true,
-                render: (row) => <span className="font-medium text-xs">{row.clienteNombre}</span>,
               },
               {
                 key: "vendedorNombre" as any, label: "Vend / Op", sortable: true,
@@ -2263,6 +2269,15 @@ export default function PresupuestosPage() {
                           return <option key={s} value={s}>{cfg.label}</option>;
                         })}
                     </select>
+                    {canDeletePresupuestos && (
+                      <button
+                        onClick={() => handleDelete(row.id)}
+                        className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40"
+                        title="Eliminar presupuesto"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
                   </div>
                 ),
               },
@@ -2434,6 +2449,10 @@ export default function PresupuestosPage() {
                       <option key={v.id} value={v.id}>{v.full_name}</option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <p className="text-xs text-zinc-500">Sucursal</p>
+                  <p className="text-sm font-medium">{selected.sucursalNombre || "—"}</p>
                 </div>
                 <div>
                   <p className="text-xs text-zinc-500">Operador</p>
@@ -3652,6 +3671,7 @@ export default function PresupuestosPage() {
             clienteDireccion: p.clienteDireccion,
             clienteLocalidad: p.clienteLocalidad,
             clienteProvincia: p.clienteProvincia,
+            sucursalNombre: p.sucursalNombre,
             vendedorNombre: p.vendedorNombre,
             items: pr.items.map(it => ({
               codigo: it.codigo,
