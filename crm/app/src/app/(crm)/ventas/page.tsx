@@ -136,7 +136,7 @@ const STEP_ICONS = [FileText, Truck, Receipt, DollarSign];
 // ── Component ────────────────────────────────────────────────────
 
 export default function VentasPage() {
-  const { profile, role, sociedadActiva } = useUser();
+  const { role, sociedadActiva } = useUser();
 
   const minFecha = useMemo(() => {
     const d = new Date();
@@ -201,13 +201,6 @@ export default function VentasPage() {
 
   // Remito creation state
   const [creatingRemito, setCreatingRemito] = useState(false);
-
-  // Auto-filter vendedor for vendedor role
-  useEffect(() => {
-    if (role === "vendedor" && profile?.id) {
-      setFilterVendedor(profile.id);
-    }
-  }, [role, profile?.id]);
 
   useEffect(() => { setPvCrm(pvOpciones[0]); }, [pvOpciones]);
 
@@ -679,18 +672,16 @@ export default function VentasPage() {
               className="rounded-lg border border-zinc-300 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white w-56"
             />
           </div>
-          {role !== "vendedor" && (
-            <select
-              value={filterVendedor}
-              onChange={e => setFilterVendedor(e.target.value)}
-              className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-            >
-              <option value="todos">Todos los vendedores</option>
-              {vendedores.map(v => (
-                <option key={v.id} value={v.id}>{v.full_name}</option>
-              ))}
-            </select>
-          )}
+          <select
+            value={filterVendedor}
+            onChange={e => setFilterVendedor(e.target.value)}
+            className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+          >
+            <option value="todos">Todos los vendedores</option>
+            {vendedores.map(v => (
+              <option key={v.id} value={v.id}>{v.full_name}</option>
+            ))}
+          </select>
           {filterStatus !== null && (
             <button
               onClick={() => setFilterStatus(null)}
@@ -998,7 +989,9 @@ export default function VentasPage() {
                           </div>
                         );
                       }
-                      return (
+                      return role === "vendedor" ? (
+                        <p className="text-sm text-zinc-500">Pendiente de facturación administrativa</p>
+                      ) : (
                         <div className="space-y-3">
                           <p className="text-sm text-zinc-500">Sin factura emitida</p>
                           <button
