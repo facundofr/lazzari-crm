@@ -30,6 +30,7 @@ import type { Role } from "@/lib/types";
 import { ROLE_PERMISSIONS } from "@/lib/types";
 import { useUser } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
+import { APP_VERSION_LABEL } from "@/lib/app-version";
 
 const navigation = [
   // ── Comercial ──
@@ -207,6 +208,18 @@ export function Sidebar() {
           {theme === "dark" ? <Sun className="h-5 w-5 shrink-0" /> : <Moon className="h-5 w-5 shrink-0" />}
           {(!collapsed || mobileSidebarOpen) && <span>{theme === "dark" ? "Modo claro" : "Modo oscuro"}</span>}
         </button>
+
+        {/* Versión publicada: permite comprobar visualmente qué release está cargado */}
+        <div
+          className={cn(
+            "mt-1 px-3 text-[10px] font-medium tracking-wide text-zinc-400 dark:text-zinc-500",
+            collapsed && !mobileSidebarOpen ? "text-center" : "text-right"
+          )}
+          title={`Versión publicada ${APP_VERSION_LABEL}`}
+          data-testid="app-version"
+        >
+          {collapsed && !mobileSidebarOpen ? APP_VERSION_LABEL.replace("1.1.", "") : APP_VERSION_LABEL}
+        </div>
 
         {/* User */}
         <div className={cn("mt-2 flex items-center gap-3 rounded-lg px-3 py-2.5", collapsed && !mobileSidebarOpen && "justify-center")}>
