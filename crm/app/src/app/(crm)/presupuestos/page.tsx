@@ -255,6 +255,7 @@ function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, 
 export default function PresupuestosPage() {
   const { profile, sociedadActiva } = useUser();
   const { toast } = useToast();
+  const canDeletePresupuestos = profile?.role === "admin" || profile?.role === "super_admin";
   const allEstados: (PRStatus | "facturado")[] = ["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido", "facturado"];
   const [selectedEstados, setSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [vistaSeguimiento, setVistaSeguimiento] = useState(false);
@@ -982,8 +983,7 @@ export default function PresupuestosPage() {
 
       if (editingPRId) {
         // ── UPDATE existing PR ──
-        // If current estado is "solicitud", auto-promote to "pendiente"
-        const currentPR = presupuestos.find(p => p.id === editingPRId);
+        // Editing a solicitud is its conversion to a PR: keep the same row/number.
         const updatePayload: Record<string, unknown> = {
             cliente_id: newPR.cliente_id,
             vendedor_id: newPR.vendedor_id,
@@ -1001,7 +1001,7 @@ export default function PresupuestosPage() {
             tipo_comprobante: newPR.tipo_comprobante || null,
             modalidad_emision: newPR.modalidad_emision,
         };
-        if (currentPR?.estado === "solicitud") {
+        if (esSolicitud) {
           updatePayload.estado = "pendiente";
           updatePayload.enviado_at = new Date().toISOString();
         }
@@ -1441,42 +1441,20 @@ export default function PresupuestosPage() {
   async function handleDelete(id: string) {
     if (!confirm("Seguro que queres eliminar este presupuesto?")) return;
     try {
-      const [facRes, remRes, ocRes] = await Promise.all([
-        (supabase as any).from("facturas").select("id").eq("presupuesto_id", id).limit(1),
-        (supabase as any).from("remitos").select("id").eq("presupuesto_id", id).limit(1),
-        supabase.from("ordenes_compra").select("id").eq("presupuesto_origen_id", id).limit(1),
-      ]);
-      if (facRes.error || remRes.error || ocRes.error) {
-        alert("Error al verificar registros vinculados. No se eliminó.");
-        return;
-      }
-      const linked: string[] = [];
-      if (facRes.data?.length) linked.push("facturas");
-      if (remRes.data?.length) linked.push("remitos");
-      if (ocRes.data?.length) linked.push("ordenes de compra");
-      if (linked.length > 0) {
-        alert(`No se puede eliminar: este presupuesto tiene ${linked.join(", ")} asociados.`);
-        return;
-      }
-      // Delete all FK-linked records before deleting the presupuesto
-      const { error: delItemsErr } = await supabase.from("presupuesto_items").delete().eq("presupuesto_id", id);
-      if (delItemsErr) throw delItemsErr;
-      // Clean up secondary references (eventos, pendientes, fichas, notas_credito)
-      await (supabase as any).from("eventos").delete().eq("presupuesto_id", id);
-      await (supabase as any).from("pendientes").delete().eq("presupuesto_id", id);
-      await (supabase as any).from("fichas_relevamiento").delete().eq("presupuesto_id", id);
-      await (supabase as any).from("notas_credito").delete().eq("presupuesto_id", id);
-      const { error: delPrErr } = await supabase.from("presupuestos").delete().eq("id", id);
-      if (delPrErr) throw delPrErr;
+      const { data: deletedId, error } = await (supabase as any).rpc("delete_presupuesto_safe", {
+        p_presupuesto_id: id,
+      });
+      if (error) throw new Error(error.message);
+      if (deletedId !== id) throw new Error("Supabase no confirmó la eliminación del presupuesto");
       setSelected(null);
       setPanelFullscreen(false);
-      // Immediately remove from local state so table updates even before refetch
       setPresupuestos(prev => prev.filter(p => p.id !== id));
       toast.success("Presupuesto eliminado");
       await fetchPresupuestos();
-    } catch (err) {
+    } catch (err: unknown) {
       console.error("Error deleting:", err);
-      toast.error("Error al eliminar presupuesto");
+      const message = err instanceof Error ? err.message : "Error inesperado";
+      toast.error(`No se pudo eliminar: ${message}`);
     }
   }
 
@@ -2248,9 +2226,20 @@ export default function PresupuestosPage() {
                     <button onClick={() => setSelected(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Ver">
                       <Eye className="h-4 w-4" />
                     </button>
-                    <button onClick={() => handleDuplicate(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
-                      <Copy className="h-4 w-4" />
-                    </button>
+                    {row.estado === "solicitud" ? (
+                      <button
+                        onClick={() => handleEditPR(row)}
+                        className="flex items-center gap-1 rounded-md bg-orange-50 px-2 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-100 dark:bg-orange-950/30 dark:text-orange-400"
+                        title="Convertir esta solicitud en presupuesto"
+                      >
+                        <ArrowRight className="h-3.5 w-3.5" />
+                        Convertir
+                      </button>
+                    ) : (
+                      <button onClick={() => handleDuplicate(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar presupuesto">
+                        <Copy className="h-4 w-4" />
+                      </button>
+                    )}
                     <select
                       value=""
                       onChange={(e) => {
@@ -2377,10 +2366,10 @@ export default function PresupuestosPage() {
                   <button
                     onClick={() => handleEditPR(selected)}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 transition-colors"
-                    title="Editar presupuesto"
+                    title={selected.estado === "solicitud" ? "Convertir esta solicitud en presupuesto" : "Editar presupuesto"}
                   >
-                    <Edit3 className="h-3.5 w-3.5" />
-                    Editar
+                    {selected.estado === "solicitud" ? <ArrowRight className="h-3.5 w-3.5" /> : <Edit3 className="h-3.5 w-3.5" />}
+                    {selected.estado === "solicitud" ? "Convertir" : "Editar"}
                   </button>
                 )}
                 {(selected.estado === "aprobado" || selected.estado === "remitido") && remitidoStatus[selected.id] !== "total" && (
@@ -2396,9 +2385,11 @@ export default function PresupuestosPage() {
                 <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                   <Copy className="h-4 w-4" />
                 </button>
-                <button onClick={() => handleDelete(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                {canDeletePresupuestos && (
+                  <button onClick={() => handleDelete(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
                 <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
                   <Maximize2 className="h-4 w-4" />
                 </button>
@@ -2681,8 +2672,8 @@ export default function PresupuestosPage() {
       <Modal
         open={showNewPR}
         onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
-        title={editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
-        description={editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
+        title={editingPRId && esSolicitud ? "Convertir Solicitud en Presupuesto" : editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
+        description={editingPRId && esSolicitud ? "Completa la cotización. La solicitud se convertirá en PR sin crear un registro duplicado." : editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="xl"
         allowFullscreen
         footer={
@@ -2700,8 +2691,8 @@ export default function PresupuestosPage() {
                 esSolicitud && !editingPRId ? "bg-blue-600 hover:bg-blue-700" : "bg-orange-500 hover:bg-orange-600"
               }`}
             >
-              {newPRSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : editingPRId ? <Check className="h-4 w-4" /> : esSolicitud ? <Inbox className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
-              {editingPRId ? "Guardar cambios" : esSolicitud ? "Crear Solicitud" : "Crear Presupuesto"}
+              {newPRSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : editingPRId && esSolicitud ? <ArrowRight className="h-4 w-4" /> : editingPRId ? <Check className="h-4 w-4" /> : esSolicitud ? <Inbox className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+              {editingPRId && esSolicitud ? "Convertir en Presupuesto" : editingPRId ? "Guardar cambios" : esSolicitud ? "Crear Solicitud" : "Crear Presupuesto"}
             </button>
           </>
         }
