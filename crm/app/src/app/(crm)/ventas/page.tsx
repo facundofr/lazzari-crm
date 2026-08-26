@@ -77,6 +77,36 @@ interface Venta {
   remitos: VentaRemito[];
 }
 
+type EmitTipo = "FA" | "FB" | "FCEA" | "FCEB";
+
+interface EmitItem {
+  descripcion: string;
+  cantidad: number;
+  precio_unitario: number;
+  iva_porcentaje: number;
+}
+
+function isFacturaA(tipo: EmitTipo): boolean {
+  return tipo.endsWith("A");
+}
+
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function convertItemsForInvoiceType(items: EmitItem[], from: EmitTipo, to: EmitTipo): EmitItem[] {
+  if (isFacturaA(from) === isFacturaA(to)) return items;
+
+  return items.map((item) => {
+    const ivaFactor = 1 + (item.iva_porcentaje ?? 21) / 100;
+    const precioUnitario = isFacturaA(from)
+      ? item.precio_unitario * ivaFactor
+      : item.precio_unitario / ivaFactor;
+
+    return { ...item, precio_unitario: roundMoney(precioUnitario) };
+  });
+}
+
 // ── Pipeline logic ───────────────────────────────────────────────
 // Entrega y Factura son independientes: se puede facturar sin entregar y viceversa
 
@@ -162,8 +192,8 @@ export default function VentasPage() {
   // Emit modal state
   const [emitModalOpen, setEmitModalOpen] = useState(false);
   const [emitVenta, setEmitVenta] = useState<Venta | null>(null);
-  const [emitTipo, setEmitTipo] = useState<"FA" | "FB" | "FCEA" | "FCEB">("FB");
-  const [emitItems, setEmitItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number }[]>([]);
+  const [emitTipo, setEmitTipo] = useState<EmitTipo>("FB");
+  const [emitItems, setEmitItems] = useState<EmitItem[]>([]);
   const [emitting, setEmitting] = useState(false);
   const [emitTipoCambio, setEmitTipoCambio] = useState<number>(0);
   const [emitMoneda, setEmitMoneda] = useState<"ARS" | "USD">("ARS");
@@ -325,17 +355,27 @@ export default function VentasPage() {
   function openEmitModal(venta: Venta) {
     const p = venta.presupuesto;
     const condIva = p.clientes?.condicion_iva;
-    const defaultTipo = condIva === "RI" ? "FA" : "FB";
+    const defaultTipo: EmitTipo = condIva === "RI" ? "FA" : "FB";
 
-    const items = (p.presupuesto_items || []).map(it => ({
-      descripcion: it.descripcion,
-      cantidad: it.cantidad,
-      precio_unitario: it.precio_venta || (it.total ? it.total / (it.cantidad || 1) : 0),
-      iva_porcentaje: it.iva_porcentaje ?? 21,
-    }));
+    const items = (p.presupuesto_items || []).map(it => {
+      const ivaPorcentaje = it.iva_porcentaje ?? 21;
+      const precioNeto = it.precio_venta ?? (it.total
+        ? it.total / (it.cantidad || 1) / (1 + ivaPorcentaje / 100)
+        : 0);
+
+      return {
+        descripcion: it.descripcion,
+        cantidad: it.cantidad,
+        // El PR guarda precio neto. La factura B debe recibir el precio final con IVA incluido.
+        precio_unitario: isFacturaA(defaultTipo)
+          ? roundMoney(precioNeto)
+          : roundMoney(precioNeto * (1 + ivaPorcentaje / 100)),
+        iva_porcentaje: ivaPorcentaje,
+      };
+    });
 
     setEmitVenta(venta);
-    setEmitTipo(defaultTipo as "FA" | "FB" | "FCEA" | "FCEB");
+    setEmitTipo(defaultTipo);
     setEmitItems(items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]);
     const hoy = todayAR();
     const condCliente = p.clientes?.forma_pago || "Contado";
@@ -1176,7 +1216,12 @@ export default function VentasPage() {
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo de comprobante</label>
                   <select
                     value={emitTipo}
-                    onChange={e => { const t = e.target.value as "FA" | "FB" | "FCEA" | "FCEB"; setEmitTipo(t); fetchNextNum(t); }}
+                    onChange={e => {
+                      const t = e.target.value as EmitTipo;
+                      setEmitItems((items) => convertItemsForInvoiceType(items, emitTipo, t));
+                      setEmitTipo(t);
+                      fetchNextNum(t);
+                    }}
                     className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   >
                     {emitVenta.presupuesto.clientes?.condicion_iva === "RI" && (
