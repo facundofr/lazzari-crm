@@ -100,6 +100,23 @@ function baseStyles(color: string) {
     .info-value { font-size: 11px; font-weight: 500; color: #333; }
     .info-value-lg { font-size: 13px; font-weight: 700; color: #222; }
 
+    /* Shared compact document structure */
+    .doc-header-table { width: 100%; border-bottom: 2px solid #e5e5e5; border-collapse: collapse; }
+    .doc-header-table td { border: 0; background: transparent !important; padding: 12px 0 10px; }
+    .doc-header-table td:last-child { text-align: right; vertical-align: top; }
+    .doc-header-logo { height: 43px; display: block; margin-bottom: 3px; }
+    .doc-marker-cell { width: 76px; text-align: center !important; vertical-align: top; }
+    .doc-marker { display: inline-flex; min-width: 46px; min-height: 46px; padding: 5px 8px; border: 2px solid ${color}; color: ${color}; align-items: center; justify-content: center; font-size: 28px; line-height: 1; font-weight: 900; }
+    .doc-marker-code { margin-top: 3px; color: #777; font-size: 7px; font-weight: 700; text-transform: uppercase; }
+    .legal-banner { margin: 6px 0 12px; padding: 4px 8px; border: 1px solid #dedede; color: #555; text-align: center; font-size: 8px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; }
+    .compact-strip { width: 100%; margin-bottom: 14px; border-top: 1px solid #dedede; border-bottom: 1px solid #dedede; border-collapse: collapse; table-layout: fixed; }
+    .compact-strip td { padding: 8px 10px; vertical-align: top; border: 0; background: transparent !important; }
+    .compact-strip td + td { border-left: 1px solid #e5e5e5; }
+    .compact-title { margin-bottom: 5px; color: ${color}; font-size: 8px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; }
+    .compact-primary { margin-bottom: 3px; color: #222; font-size: 12px; font-weight: 700; }
+    .compact-line { margin-top: 2px; color: #444; font-size: 9px; line-height: 1.35; }
+    .compact-label { color: #888; font-size: 7px; font-weight: 800; letter-spacing: .45px; text-transform: uppercase; margin-right: 4px; }
+
     /* Items table */
     .items-title { font-size: 8px; text-transform: uppercase; letter-spacing: 1.5px; color: ${color}; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #f0f0f0; }
     table { width: 100%; border-collapse: collapse; }
@@ -128,7 +145,7 @@ function baseStyles(color: string) {
     .obs-text { font-size: 11px; color: #555; line-height: 1.5; white-space: pre-wrap; }
 
     /* Footer */
-    .footer { margin-top: 36px; padding-top: 10px; border-top: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; font-size: 8px; color: #bbb; }
+    .footer { margin-top: 24px; padding-top: 8px; border-top: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; font-size: 8px; color: #bbb; }
     .footer-legal { text-align: center; font-size: 7px; color: #ccc; margin-top: 6px; }
 
     /* Signatures */
@@ -145,6 +162,48 @@ function baseStyles(color: string) {
     }
     @page { margin: 8mm; size: A4; }
   `;
+}
+
+interface DocumentHeaderOptions {
+  title: string;
+  number: string;
+  date: string;
+  secondary?: string;
+  badge?: string;
+  marker?: string;
+  markerCode?: string;
+  legalLegend?: boolean;
+  fiscalDetails?: boolean;
+}
+
+function documentHeader(soc: SociedadPDF, options: DocumentHeaderOptions): string {
+  return `
+    <div class="header-bar"></div>
+    <table class="doc-header-table">
+      <tr>
+        <td style="vertical-align:top">
+          <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" class="doc-header-logo" />
+          <div class="company-sub">${soc.razonSocial}</div>
+          <div class="company-detail">CUIT ${soc.cuit} | ${soc.condicionIva}</div>
+          ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
+          ${options.fiscalDetails && soc.ingresosBrutos ? `<div class="company-detail">IIBB ${soc.ingresosBrutos}${soc.inicioActividades ? ` | Inicio de actividades ${soc.inicioActividades}` : ""}</div>` : ""}
+          ${soc.email ? `<div class="company-detail">${soc.email}</div>` : ""}
+        </td>
+        ${options.marker ? `<td class="doc-marker-cell"><div class="doc-marker">${options.marker}</div>${options.markerCode ? `<div class="doc-marker-code">${options.markerCode}</div>` : ""}</td>` : ""}
+        <td>
+          <div class="doc-title">${options.title}</div>
+          <div class="doc-number">${options.number}</div>
+          ${options.badge ? `<div class="doc-badge">${options.badge}</div>` : ""}
+          <div class="doc-date">${options.date}${options.secondary ? ` &mdash; ${options.secondary}` : ""}</div>
+        </td>
+      </tr>
+    </table>
+    ${options.legalLegend ? `<div class="legal-banner">Documento no válido como factura</div>` : `<div style="height:12px"></div>`}
+  `;
+}
+
+function documentFooter(soc: SociedadPDF, documentLabel: string): string {
+  return `<div class="footer"><span>${soc.razonSocial}</span><span>${documentLabel}</span></div>`;
 }
 
 // ── Factura-specific styles (ARCA layout — matches Netegia design) ─
@@ -247,42 +306,30 @@ export function generatePresupuestoPDF(
 <html><head><meta charset="utf-8"><title>${pr.numero} - ${soc.razonSocial}</title>
 <style>${baseStyles(c)}</style></head><body>
 <div class="page">
-<div class="header-bar"></div>
-<table style="width:100%;border-bottom:2px solid #e0e0e0;margin-bottom:18px;padding:16px 0 14px;border-collapse:collapse">
-  <tr>
-    <td style="vertical-align:top">
-      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
-      <div class="company-sub">${soc.razonSocial}</div>
-      <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
-      ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-      <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
-    </td>
-    <td style="text-align:right;vertical-align:top">
-      <div class="doc-title">Presupuesto</div>
-      <div class="doc-number">${pr.numero}</div>
-      <div class="doc-badge">${pr.estadoLabel}</div>
-      <div class="doc-date">${formatDate(pr.fecha)}${pr.vencimiento ? ` &mdash; Vence: ${formatDate(pr.vencimiento)}` : ""}</div>
-    </td>
-  </tr>
-</table>
+${documentHeader(soc, {
+  title: "Presupuesto",
+  number: pr.numero,
+  date: formatDate(pr.fecha),
+  secondary: pr.vencimiento ? `Vence ${formatDate(pr.vencimiento)}` : "",
+  badge: pr.estadoLabel,
+  marker: "X",
+  legalLegend: true,
+})}
 
-<table style="width:100%;margin-bottom:18px;border-collapse:separate;border-spacing:16px 0">
+<table class="compact-strip">
   <tr>
-    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
-      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Cliente</div>
-      <div class="info-row"><div style="font-size:13px;font-weight:700;color:#222">${pr.clienteNombre}</div></div>
-      ${pr.clienteCuit ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteCuit}</div></div>` : ""}
-      ${pr.clienteCondicionIva ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Cond. IVA</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteCondicionIva}</div></div>` : ""}
-      ${pr.clienteDireccion ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteDireccion}${pr.clienteLocalidad ? `, ${pr.clienteLocalidad}` : ""}${pr.clienteProvincia ? ` (${pr.clienteProvincia})` : ""}</div></div>` : ""}
-      ${pr.sucursalNombre ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Sucursal</div><div style="font-size:11px;font-weight:500;color:#333">${pr.sucursalNombre}</div></div>` : ""}
+    <td style="width:64%">
+      <div class="compact-title">Cliente</div>
+      <div class="compact-primary">${pr.clienteNombre}</div>
+      ${(pr.clienteCuit || pr.clienteCondicionIva) ? `<div class="compact-line">${pr.clienteCuit ? `<span class="compact-label">CUIT</span>${pr.clienteCuit}` : ""}${pr.clienteCuit && pr.clienteCondicionIva ? ` &nbsp;|&nbsp; ` : ""}${pr.clienteCondicionIva ? `<span class="compact-label">IVA</span>${pr.clienteCondicionIva}` : ""}</div>` : ""}
+      ${pr.clienteDireccion ? `<div class="compact-line"><span class="compact-label">Domicilio</span>${pr.clienteDireccion}${pr.clienteLocalidad ? `, ${pr.clienteLocalidad}` : ""}${pr.clienteProvincia ? ` (${pr.clienteProvincia})` : ""}</div>` : ""}
+      ${pr.sucursalNombre ? `<div class="compact-line"><span class="compact-label">Sucursal</span>${pr.sucursalNombre}</div>` : ""}
     </td>
-    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
-      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Datos comerciales</div>
-      ${pr.vendedorNombre ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Vendedor</div><div style="font-size:11px;font-weight:500;color:#333">${pr.vendedorNombre}</div></div>` : ""}
-      ${pr.condicionPago ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Cond. de pago</div><div style="font-size:11px;font-weight:500;color:#333">${pr.condicionPago}</div></div>` : ""}
-      <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Moneda</div><div style="font-size:11px;font-weight:500;color:#333">${mon === "USD" ? "Dólares estadounidenses" : "Pesos argentinos"}</div></div>
-      ${pr.clienteEmail ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Email</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteEmail}</div></div>` : ""}
-      ${pr.clienteTelefono ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Teléfono</div><div style="font-size:11px;font-weight:500;color:#333">${pr.clienteTelefono}</div></div>` : ""}
+    <td style="width:36%">
+      <div class="compact-title">Datos comerciales</div>
+      ${pr.vendedorNombre ? `<div class="compact-line"><span class="compact-label">Vendedor</span>${pr.vendedorNombre}</div>` : ""}
+      ${pr.condicionPago ? `<div class="compact-line"><span class="compact-label">Pago</span>${pr.condicionPago}</div>` : ""}
+      <div class="compact-line"><span class="compact-label">Moneda</span>${mon === "USD" ? "Dólares estadounidenses" : "Pesos argentinos"}</div>
     </td>
   </tr>
 </table>
@@ -313,13 +360,7 @@ export function generatePresupuestoPDF(
 
 ${pr.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${pr.observaciones}</div></div>` : ""}
 
-<table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
-  <tr>
-    <td>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</td>
-    <td style="text-align:center">${pr.numero}${pr.creadoPor ? ` | ${pr.creadoPor}` : ""}</td>
-    <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
-  </tr>
-</table>
+${documentFooter(soc, pr.numero)}
 <div class="footer-legal">Este presupuesto tiene validez hasta la fecha de vencimiento indicada. Los precios pueden estar sujetos a modificaciones.</div>
 
 </div></body></html>`;
@@ -442,11 +483,12 @@ export function generateFacturaPDF(
 <html><head><meta charset="utf-8"><title>${tipoLabel} ${letraComprobante} ${compNum}</title>
 <style>${facturaStyles(c)}</style></head><body>
 <div class="page">
+<div class="header-bar" style="margin-bottom:6px"></div>
 
 <table style="width:100%;border:2px solid #222;border-collapse:collapse;margin-bottom:0;table-layout:fixed">
   <tr>
     <td style="width:50%;padding:14px 16px;text-align:center;vertical-align:middle">
-      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="max-height:80px" />
+      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="max-height:62px" />
     </td>
     <td style="width:70px;border-left:2px solid #222;border-right:2px solid #222;text-align:center;vertical-align:top;padding:6px 5px 6px 5px">
       <div style="background:#222;color:#fff;font-size:32px;font-weight:900;line-height:1;padding:4px 10px;text-align:center;display:inline-block">${letraComprobante}</div>
@@ -463,12 +505,9 @@ export function generateFacturaPDF(
     </td>
   </tr>
 </table>
-<div style="border-left:2px solid #222;border-right:2px solid #222;border-bottom:2px solid #222;padding:12px 16px;margin-bottom:16px">
-  <div style="font-size:14px;font-weight:700;color:#222;text-transform:uppercase;margin-bottom:2px">${soc.nombre}</div>
-  ${soc.domicilio ? `<div style="font-size:10px;font-weight:600;color:#333;margin-top:1px">${soc.domicilio.split(",")[0].toUpperCase()}</div>` : ""}
-  ${soc.email ? `<div style="font-size:10px;color:#444;margin-top:1px">${soc.email}</div>` : ""}
-  ${soc.web ? `<div style="font-size:10px;color:#444;margin-top:1px">${soc.web}</div>` : ""}
-  ${soc.telefono ? `<div style="font-size:10px;color:#444;margin-top:1px">Teléfonos: ${soc.telefono}</div>` : ""}
+<div style="border-left:2px solid #222;border-right:2px solid #222;border-bottom:2px solid #222;padding:7px 14px;margin-bottom:12px">
+  <div style="font-size:11px;font-weight:700;color:#222;text-transform:uppercase">${soc.razonSocial}</div>
+  <div style="font-size:9px;color:#444;margin-top:2px">${emisor.condicionIva}${soc.domicilio ? ` &nbsp;|&nbsp; ${soc.domicilio}` : ""}</div>
 </div>
 
 <table style="width:100%;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #ccc;border-collapse:collapse">
@@ -476,8 +515,6 @@ export function generateFacturaPDF(
     <td style="width:60%;font-size:10px;color:#333;line-height:1.6;vertical-align:top">
       <b>SR/ES</b>: ${cli?.razon_social || "\u2014"}${cli?.cuit ? ` <b>C.U.I.T.:</b> ${cli.cuit}` : ""}${cli?.condicion_iva ? ` - ${cli.condicion_iva === "RI" ? "Responsable inscripto" : cli.condicion_iva}` : ""}<br/>
       ${cli?.direccion ? `<b>Dirección</b>: ${cli.direccion}${cli.localidad ? `, ${cli.localidad}` : ""}${cli.provincia ? `, ${cli.provincia}` : ""}<br/>` : ""}
-      ${cli?.email ? `<b>Email</b>: ${cli.email}<br/>` : ""}
-      ${cli?.telefono ? `<b>Teléfono</b>: ${cli.telefono}` : ""}
     </td>
     <td style="width:40%;font-size:10px;color:#333;text-align:right;line-height:1.8;vertical-align:top">
       ${f.condicion_venta ? `Condición de venta: <b><i>${f.condicion_venta}</i></b><br/>` : ""}
@@ -524,13 +561,7 @@ ${f.cae ? `
   </tr>
 </table>` : ""}
 
-<table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
-  <tr>
-    <td>${emisor.razonSocial} &mdash; CUIT ${emisor.cuit}</td>
-    <td style="text-align:center">${tipoLabel} ${letraComprobante} N° ${compNum}</td>
-    <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
-  </tr>
-</table>
+${documentFooter(soc, `${tipoLabel} ${letraComprobante} N° ${compNum}`)}
 
 </div></body></html>`;
 }
@@ -603,42 +634,33 @@ export function generateRemitoPDF(
   .transport-item { flex: 1; min-width: 140px; }
 </style></head><body>
 <div class="page">
-<div class="header-bar"></div>
-<table style="width:100%;border-bottom:2px solid #e0e0e0;margin-bottom:18px;padding:16px 0 14px;border-collapse:collapse">
-  <tr>
-    <td style="vertical-align:top">
-      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
-      <div class="company-sub">${soc.razonSocial}</div>
-      <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
-      ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-      <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
-    </td>
-    <td style="text-align:right;vertical-align:top">
-      <div class="doc-title">Remito</div>
-      <div class="doc-number">${r.numero}</div>
-      <div class="doc-date">${formatDate(r.fecha)}</div>
-      ${r.cae ? `<div class="doc-date" style="margin-top:3px">CAE: ${r.cae}</div>` : ""}
-    </td>
-  </tr>
-</table>
+${documentHeader(soc, {
+  title: "Remito",
+  number: r.numero,
+  date: formatDate(r.fecha),
+  secondary: "Original",
+  marker: "R",
+  markerCode: "Código 091",
+  legalLegend: true,
+  fiscalDetails: true,
+})}
 
-<table style="width:100%;margin-bottom:18px;border-collapse:separate;border-spacing:16px 0">
+<table class="compact-strip">
   <tr>
-    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
-      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Destinatario</div>
-      <div class="info-row"><div style="font-size:13px;font-weight:700;color:#222">${cli?.razon_social || "\u2014"}</div></div>
-      ${cli?.cuit ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${cli.cuit}</div></div>` : ""}
-      ${cli?.condicion_iva ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Cond. IVA</div><div style="font-size:11px;font-weight:500;color:#333">${cli.condicion_iva}</div></div>` : ""}
-      ${direccionEntrega ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Dirección de entrega</div><div style="font-size:11px;font-weight:500;color:#333">${direccionEntrega}</div></div>` : ""}
+    <td style="width:64%">
+      <div class="compact-title">Destinatario</div>
+      <div class="compact-primary">${cli?.razon_social || "\u2014"}</div>
+      ${(cli?.cuit || cli?.condicion_iva) ? `<div class="compact-line">${cli?.cuit ? `<span class="compact-label">CUIT</span>${cli.cuit}` : ""}${cli?.cuit && cli?.condicion_iva ? ` &nbsp;|&nbsp; ` : ""}${cli?.condicion_iva ? `<span class="compact-label">IVA</span>${cli.condicion_iva}` : ""}</div>` : ""}
+      ${direccionEntrega ? `<div class="compact-line"><span class="compact-label">Entrega</span>${direccionEntrega}</div>` : ""}
     </td>
-    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
-      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Datos del remito</div>
-      ${r.oc_cliente ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">OC Cliente</div><div style="font-size:11px;font-weight:500;color:${c};font-weight:700;font-size:12px">${r.oc_cliente}</div></div>` : ""}
+    <td style="width:36%">
+      <div class="compact-title">Datos del remito</div>
+      ${r.oc_cliente ? `<div class="compact-line"><span class="compact-label">OC cliente</span>${r.oc_cliente}</div>` : ""}
       ${r.transportes.length > 0 ? r.transportes.map(t => `
-        <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Transportista</div><div style="font-size:11px;font-weight:500;color:#333">${t.transportista}</div></div>
-        ${t.destino ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Destino</div><div style="font-size:11px;font-weight:500;color:#333">${t.destino}</div></div>` : ""}
-        ${t.costo ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Costo flete</div><div style="font-size:11px;font-weight:500;color:#333">${formatCurrency(Number(t.costo), (t.moneda || "ARS") as "USD" | "ARS")}</div></div>` : ""}
-      `).join("") : `<div class="info-row"><div style="font-size:11px;font-weight:500;color:#999;font-style:italic">Sin transporte asignado</div></div>`}
+        <div class="compact-line"><span class="compact-label">Transportista</span>${t.transportista}</div>
+        ${t.destino ? `<div class="compact-line"><span class="compact-label">Destino</span>${t.destino}</div>` : ""}
+      `).join("") : `<div class="compact-line" style="color:#999;font-style:italic">Sin transporte asignado</div>`}
+      ${r.cae ? `<div class="compact-line"><span class="compact-label">CAR</span>${r.cae}</div>` : `<div class="compact-line"><span class="compact-label">Autorización</span>Pendiente</div>`}
     </td>
   </tr>
 </table>
@@ -658,22 +680,17 @@ ${r.valor_declarado ? `<div class="valor-declarado">VALOR DECLARADO: $ ${Number(
 
 ${r.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${r.observaciones}</div></div>` : ""}
 
-<table style="width:100%;margin-top:60px;border-collapse:collapse">
+<table style="width:100%;margin-top:48px;border-collapse:collapse">
   <tr>
+    <td style="width:90px;font-size:10px;color:#666"><b>Bultos:</b> ______</td>
     <td style="width:180px;border-top:1px solid #333;text-align:center;padding-top:6px;font-size:10px;color:#666">Firma y aclaración del emisor</td>
     <td></td>
     <td style="width:180px;border-top:1px solid #333;text-align:center;padding-top:6px;font-size:10px;color:#666">Firma y aclaración del receptor</td>
   </tr>
 </table>
 
-<table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
-  <tr>
-    <td>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</td>
-    <td style="text-align:center">${r.numero}</td>
-    <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
-  </tr>
-</table>
-<div class="footer-legal">Duplicado &mdash; Recibí conforme la mercadería detallada precedentemente.</div>
+${documentFooter(soc, r.numero)}
+<div class="footer-legal">Recibí conforme la mercadería detallada precedentemente.</div>
 
 </div></body></html>`;
 }
@@ -739,41 +756,29 @@ export function generateOrdenCompraPDF(
 <html><head><meta charset="utf-8"><title>${oc.numero} - ${soc.razonSocial}</title>
 <style>${baseStyles(c)}</style></head><body>
 <div class="page">
-<div class="header-bar"></div>
-<table style="width:100%;border-bottom:2px solid #e0e0e0;margin-bottom:18px;padding:16px 0 14px;border-collapse:collapse">
-  <tr>
-    <td style="vertical-align:top">
-      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
-      <div class="company-sub">${soc.razonSocial}</div>
-      <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
-      ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-      <div class="company-detail">ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar</div>
-    </td>
-    <td style="text-align:right;vertical-align:top">
-      <div class="doc-title">Orden de Compra</div>
-      <div class="doc-number">${oc.numero}</div>
-      <div class="doc-badge">${oc.estadoLabel}</div>
-      <div class="doc-date">${formatDate(oc.fecha)}${oc.fecha_entrega_estimada ? ` &mdash; Entrega: ${formatDate(oc.fecha_entrega_estimada)}` : ""}</div>
-    </td>
-  </tr>
-</table>
+${documentHeader(soc, {
+  title: "Orden de compra",
+  number: oc.numero,
+  date: formatDate(oc.fecha),
+  secondary: oc.fecha_entrega_estimada ? `Entrega ${formatDate(oc.fecha_entrega_estimada)}` : "",
+  badge: oc.estadoLabel,
+  marker: "X",
+  legalLegend: true,
+})}
 
-<table style="width:100%;margin-bottom:18px;border-collapse:separate;border-spacing:16px 0">
+<table class="compact-strip">
   <tr>
-    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
-      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Proveedor</div>
-      <div class="info-row"><div style="font-size:13px;font-weight:700;color:#222">${prov?.razon_social || "\u2014"}</div></div>
-      ${prov?.cuit ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${prov.cuit}</div></div>` : ""}
-      ${prov?.condicion_iva ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Cond. IVA</div><div style="font-size:11px;font-weight:500;color:#333">${prov.condicion_iva}</div></div>` : ""}
-      ${prov?.direccion ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? ` (${prov.provincia})` : ""}</div></div>` : ""}
+    <td style="width:64%">
+      <div class="compact-title">Proveedor</div>
+      <div class="compact-primary">${prov?.razon_social || "\u2014"}</div>
+      ${(prov?.cuit || prov?.condicion_iva) ? `<div class="compact-line">${prov?.cuit ? `<span class="compact-label">CUIT</span>${prov.cuit}` : ""}${prov?.cuit && prov?.condicion_iva ? ` &nbsp;|&nbsp; ` : ""}${prov?.condicion_iva ? `<span class="compact-label">IVA</span>${prov.condicion_iva}` : ""}</div>` : ""}
+      ${prov?.direccion ? `<div class="compact-line"><span class="compact-label">Domicilio</span>${prov.direccion}${prov.localidad ? `, ${prov.localidad}` : ""}${prov.provincia ? ` (${prov.provincia})` : ""}</div>` : ""}
     </td>
-    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
-      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Datos de la orden</div>
-      ${prov?.forma_pago ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Forma de pago</div><div style="font-size:11px;font-weight:500;color:#333">${prov.forma_pago}</div></div>` : ""}
-      <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Moneda</div><div style="font-size:11px;font-weight:500;color:#333">${mon === "USD" ? "Dólares estadounidenses" : "Pesos argentinos"}</div></div>
-      ${prov?.email ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Email</div><div style="font-size:11px;font-weight:500;color:#333">${prov.email}</div></div>` : ""}
-      ${prov?.telefono ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Teléfono</div><div style="font-size:11px;font-weight:500;color:#333">${prov.telefono}</div></div>` : ""}
-      ${oc.presupuesto_origen ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">PR Origen</div><div style="font-size:11px;font-weight:500;color:${c};font-weight:700">${oc.presupuesto_origen.numero}</div></div>` : ""}
+    <td style="width:36%">
+      <div class="compact-title">Datos de la orden</div>
+      ${prov?.forma_pago ? `<div class="compact-line"><span class="compact-label">Pago</span>${prov.forma_pago}</div>` : ""}
+      <div class="compact-line"><span class="compact-label">Moneda</span>${mon === "USD" ? "Dólares estadounidenses" : "Pesos argentinos"}</div>
+      ${oc.presupuesto_origen ? `<div class="compact-line"><span class="compact-label">PR origen</span>${oc.presupuesto_origen.numero}</div>` : ""}
     </td>
   </tr>
 </table>
@@ -804,14 +809,7 @@ export function generateOrdenCompraPDF(
 
 ${oc.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${oc.observaciones}</div></div>` : ""}
 
-<table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
-  <tr>
-    <td>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</td>
-    <td style="text-align:center">${oc.numero}${oc.presupuesto_origen ? ` | PR: ${oc.presupuesto_origen.numero}` : ""}</td>
-    <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
-  </tr>
-</table>
-<div class="footer-legal">Documento interno &mdash; Orden de compra emitida por ${soc.razonSocial}.</div>
+${documentFooter(soc, oc.numero)}
 
 </div></body></html>`;
 }
@@ -1068,51 +1066,34 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
         </tr>
       </table>
 
-      <table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
-        <tr>
-          <td>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</td>
-          <td style="text-align:center">Certificado Ret. Ganancias &mdash; OP ${op.numero || ""}</td>
-          <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
-        </tr>
-      </table>
+      ${documentFooter(soc, `Certificado Ret. Ganancias - OP ${op.numero || ""}`)}
     </div>` : "";
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>OP ${op.numero || ""} - ${soc.razonSocial}</title>
 <style>${baseStyles(c)}</style></head><body>
 <div class="page">
-<div class="header-bar"></div>
-<table style="width:100%;border-bottom:2px solid #e0e0e0;margin-bottom:18px;padding:16px 0 14px;border-collapse:collapse">
-  <tr>
-    <td style="vertical-align:top">
-      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="height:52px;margin-bottom:4px" />
-      <div class="company-sub">${soc.razonSocial}</div>
-      <div class="company-detail">CUIT: ${soc.cuit} | ${soc.condicionIva}</div>
-      ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
-      ${soc.telefono ? `<div class="company-detail">Tel: ${soc.telefono}</div>` : ""}
-    </td>
-    <td style="text-align:right;vertical-align:top">
-      <div class="doc-title">Orden de Pago</div>
-      <div class="doc-number">${op.numero || "\u2014"}</div>
-      <div class="doc-badge">${estadoLabel[op.estado] || op.estado}</div>
-      <div class="doc-date">${formatDate(op.fecha)}</div>
-    </td>
-  </tr>
-</table>
+${documentHeader(soc, {
+  title: "Orden de pago",
+  number: op.numero || "\u2014",
+  date: formatDate(op.fecha),
+  badge: estadoLabel[op.estado] || op.estado,
+  marker: "X",
+  legalLegend: true,
+})}
 
-<table style="width:100%;margin-bottom:18px;border-collapse:separate;border-spacing:16px 0">
+<table class="compact-strip">
   <tr>
-    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
-      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Proveedor</div>
-      <div class="info-row"><div style="font-size:13px;font-weight:700;color:#222">${op.proveedor.razon_social}</div></div>
-      ${op.proveedor.cuit ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${fmtCuit(op.proveedor.cuit)}</div></div>` : ""}
-      ${op.proveedor.direccion ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.direccion}</div></div>` : ""}
+    <td style="width:64%">
+      <div class="compact-title">Proveedor</div>
+      <div class="compact-primary">${op.proveedor.razon_social}</div>
+      ${op.proveedor.cuit ? `<div class="compact-line"><span class="compact-label">CUIT</span>${fmtCuit(op.proveedor.cuit)}</div>` : ""}
+      ${op.proveedor.direccion ? `<div class="compact-line"><span class="compact-label">Domicilio</span>${op.proveedor.direccion}</div>` : ""}
     </td>
-    <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
-      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">Datos del pago</div>
-      <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Moneda</div><div style="font-size:11px;font-weight:500;color:#333">${mon === "USD" ? "D\u00F3lares estadounidenses" : "Pesos argentinos"}</div></div>
-      <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Fecha</div><div style="font-size:11px;font-weight:500;color:#333">${formatDate(op.fecha)}</div></div>
-      ${op.notas ? `<div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Notas</div><div style="font-size:11px;font-weight:500;color:#333">${op.notas}</div></div>` : ""}
+    <td style="width:36%">
+      <div class="compact-title">Datos del pago</div>
+      <div class="compact-line"><span class="compact-label">Moneda</span>${mon === "USD" ? "D\u00F3lares estadounidenses" : "Pesos argentinos"}</div>
+      ${op.notas ? `<div class="compact-line"><span class="compact-label">Notas</span>${op.notas}</div>` : ""}
     </td>
   </tr>
 </table>
@@ -1127,21 +1108,14 @@ ${retencionesHtml}
 ${totalsHtml}
 ${letrasHtml}
 
-<table style="width:100%;margin-top:60px;border-collapse:collapse">
+<table style="width:100%;margin-top:34px;border-collapse:collapse">
   <tr>
     <td style="width:180px;border-top:1px solid #333;text-align:center;padding-top:6px;font-size:10px;color:#666">Firma y aclaraci\u00F3n</td>
     <td></td>
   </tr>
 </table>
 
-<table style="width:100%;margin-top:36px;padding-top:10px;border-top:1px solid #e0e0e0;border-collapse:collapse;font-size:8px;color:#bbb">
-  <tr>
-    <td>${soc.razonSocial} &mdash; CUIT ${soc.cuit}</td>
-    <td style="text-align:center">OP ${op.numero || ""}</td>
-    <td style="text-align:right">Impreso: ${formatDate(new Date().toISOString())}</td>
-  </tr>
-</table>
-<div class="footer-legal">Documento interno &mdash; Orden de pago emitida por ${soc.razonSocial}.</div>
+${documentFooter(soc, `OP ${op.numero || ""}`)}
 
 </div>
 ${certHtml}
@@ -1191,8 +1165,18 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
 
   document.body.appendChild(overlay);
 
-  // Wait for images (logo base64) and layout to compute
-  await new Promise(r => setTimeout(r, 400));
+  // Wait for every image (including the ARCA QR) before rasterizing.
+  const images = Array.from(container.querySelectorAll("img"));
+  await Promise.all(images.map((img) => {
+    if (img.complete) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const done = () => resolve();
+      img.addEventListener("load", done, { once: true });
+      img.addEventListener("error", done, { once: true });
+      window.setTimeout(done, 3000);
+    });
+  }));
+  await new Promise(r => setTimeout(r, 100));
 
   try {
     const blob: Blob = await html2pdf()

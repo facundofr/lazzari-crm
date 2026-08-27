@@ -128,6 +128,7 @@ export default function RemitosPage() {
   const [createItems, setCreateItems] = useState<CreateItem[]>([]);
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
   const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; subtotal: number | null; total: number | null; cliente_id: string | null }[]>([]);
+  const [loadingPresupuestosCliente, setLoadingPresupuestosCliente] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
   const [valorDeclaradoSugerido, setValorDeclaradoSugerido] = useState("");
@@ -171,6 +172,8 @@ export default function RemitosPage() {
   const [selectedPresupuestos, setSelectedPresupuestos] = useState<Set<string>>(new Set());
   const [generatingIA, setGeneratingIA] = useState(false);
   const [iaSuccess, setIaSuccess] = useState("");
+  const [iaError, setIaError] = useState("");
+  const [loadingIA, setLoadingIA] = useState(false);
 
   // AFIP authorization
   const [autorizandoAFIP, setAutorizandoAFIP] = useState(false);
@@ -473,21 +476,44 @@ export default function RemitosPage() {
     setCreateError("");
     setValorDeclaradoSugerido("");
     setClienteSucursales([]);
-
-    let clienteQ = supabase.from("clientes").select("id, razon_social").eq("activo", true).order("razon_social");
-    if (sociedadActiva?.id) clienteQ = clienteQ.eq("sociedad_id" as any, sociedadActiva.id);
-
-    const [clientesRes, presupuestosRes] = await Promise.all([
-      clienteQ,
-      (() => {
-        let prQ = (supabase as any).from("presupuestos").select("id, numero, subtotal, total, cliente_id").in("estado", ["aprobado", "remitido"]);
-        if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id", sociedadActiva.id);
-        return prQ.order("created_at", { ascending: false });
-      })(),
-    ]);
-    if (clientesRes.data) setClientes(clientesRes.data as { id: string; razon_social: string }[]);
-    if (presupuestosRes.data) setPresupuestosAprobados(presupuestosRes.data as any[]);
+    setPresupuestosAprobados([]);
     setCreateModalOpen(true);
+
+    // Some legacy clients have activo=null, so only exclude records explicitly disabled.
+    let clienteQ = (supabase as any).from("clientes").select("id, razon_social, activo").order("razon_social");
+    if (sociedadActiva?.id) clienteQ = clienteQ.eq("sociedad_id" as any, sociedadActiva.id);
+    const { data, error } = await clienteQ;
+    if (error) {
+      setClientes([]);
+      setCreateError(`No se pudieron cargar los clientes: ${error.message}`);
+      return;
+    }
+    setClientes(((data || []) as Array<{ id: string; razon_social: string; activo: boolean | null }>)
+      .filter((cliente) => cliente.activo !== false)
+      .map(({ id, razon_social }) => ({ id, razon_social })));
+  }
+
+  async function loadPresupuestosForCliente(clienteId: string) {
+    setPresupuestosAprobados([]);
+    if (!clienteId) return;
+    setLoadingPresupuestosCliente(true);
+    try {
+      let prQ = (supabase as any)
+        .from("presupuestos")
+        .select("id, numero, subtotal, total, cliente_id, estado")
+        .eq("cliente_id", clienteId)
+        .in("estado", ["aprobado", "remitido"])
+        .order("created_at", { ascending: false });
+      if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id", sociedadActiva.id);
+      const { data, error } = await prQ;
+      if (error) throw error;
+      setPresupuestosAprobados((data || []) as any[]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error desconocido";
+      setCreateError(`No se pudieron cargar los presupuestos del cliente: ${message}`);
+    } finally {
+      setLoadingPresupuestosCliente(false);
+    }
   }
 
   // Fetch items from PR when selected
@@ -636,7 +662,9 @@ export default function RemitosPage() {
         }));
         const { error: itemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
         if (itemsErr) {
-          console.error("Error inserting remito items:", itemsErr);
+          await (supabase as any).from("remitos").delete().eq("id", remitoData.id);
+          setCreateError(`No se pudieron guardar los items del remito: ${itemsErr.message}`);
+          return;
         }
         if (gi > 0) nextNum++;
       }
@@ -654,14 +682,51 @@ export default function RemitosPage() {
   async function openIAModal() {
     setSelectedPresupuestos(new Set());
     setIaSuccess("");
-    let iaQ = supabase
-      .from("presupuestos")
-      .select("id, numero, cliente_id, clientes(razon_social), presupuesto_items(id, descripcion, cantidad, unidad, orden)")
-      .eq("estado", "aprobado");
-    if (sociedadActiva?.id) iaQ = iaQ.eq("sociedad_id" as any, sociedadActiva.id);
-    const { data } = await iaQ;
-    if (data) setPresupuestosIA(data as unknown as PresupuestoIA[]);
+    setIaError("");
+    setPresupuestosIA([]);
     setIaModalOpen(true);
+    setLoadingIA(true);
+    try {
+      let iaQ = (supabase as any)
+        .from("presupuestos")
+        .select("id, numero, cliente_id")
+        .eq("estado", "aprobado")
+        .order("created_at", { ascending: false });
+      if (sociedadActiva?.id) iaQ = iaQ.eq("sociedad_id", sociedadActiva.id);
+      const { data: headers, error: headersError } = await iaQ;
+      if (headersError) throw headersError;
+
+      const prRows = (headers || []) as Array<{ id: string; numero: string; cliente_id: string }>;
+      if (prRows.length === 0) return;
+
+      const prIds = prRows.map((p) => p.id);
+      const clienteIds = [...new Set(prRows.map((p) => p.cliente_id).filter(Boolean))];
+      const [itemsRes, clientesRes] = await Promise.all([
+        (supabase as any).from("presupuesto_items").select("id, presupuesto_id, descripcion, cantidad, unidad, orden").in("presupuesto_id", prIds).order("orden"),
+        clienteIds.length > 0
+          ? (supabase as any).from("clientes").select("id, razon_social").in("id", clienteIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+      if (itemsRes.error) throw itemsRes.error;
+
+      const clienteMap = new Map<string, string>(((clientesRes.data || []) as Array<{ id: string; razon_social: string }>).map((c) => [c.id, c.razon_social]));
+      const itemsByPR = new Map<string, PresupuestoIA["presupuesto_items"]>();
+      for (const item of (itemsRes.data || []) as Array<PresupuestoIA["presupuesto_items"][number] & { presupuesto_id: string }>) {
+        const list = itemsByPR.get(item.presupuesto_id) || [];
+        list.push(item);
+        itemsByPR.set(item.presupuesto_id, list);
+      }
+      setPresupuestosIA(prRows.map((p) => ({
+        ...p,
+        clientes: { razon_social: clienteMap.get(p.cliente_id) || "Cliente sin acceso" },
+        presupuesto_items: itemsByPR.get(p.id) || [],
+      })));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Error desconocido";
+      setIaError(`No se pudieron cargar los presupuestos aprobados: ${message}`);
+    } finally {
+      setLoadingIA(false);
+    }
   }
 
   function togglePresupuesto(id: string) {
@@ -676,23 +741,50 @@ export default function RemitosPage() {
   async function handleGenerateIA() {
     if (selectedPresupuestos.size === 0) return;
     setGeneratingIA(true);
+    setIaError("");
+    setIaSuccess("");
     try {
       let idx = remitos.reduce((max, r) => {
         const parts = r.numero?.split("-");
         const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
         return n > max ? n : max;
       }, 0) + 1;
+      let createdCount = 0;
+      const generationErrors: string[] = [];
+
+      const selectedIds = [...selectedPresupuestos];
+      const { data: existingRows, error: existingError } = await (supabase as any)
+        .from("remitos")
+        .select("presupuesto_id")
+        .in("presupuesto_id", selectedIds);
+      if (existingError) throw existingError;
+      const alreadyGenerated = new Set((existingRows || []).map((row: { presupuesto_id: string }) => row.presupuesto_id));
+
       for (const pId of selectedPresupuestos) {
         const p = presupuestosIA.find((x) => x.id === pId);
         if (!p) continue;
         const numero = `R-0001-${String(idx).padStart(8, "0")}`;
+        idx++;
+
+        if (alreadyGenerated.has(p.id)) {
+          generationErrors.push(`${p.numero}: ya tiene un remito generado`);
+          continue;
+        }
+        if (p.presupuesto_items.length === 0) {
+          generationErrors.push(`${p.numero}: no tiene items para remitir`);
+          continue;
+        }
 
         // Fetch total for valor_declarado
-        const { data: prHeader } = await supabase
+        const { data: prHeader, error: headerError } = await supabase
           .from("presupuestos")
           .select("total, subtotal")
           .eq("id", pId)
           .single();
+        if (headerError) {
+          generationErrors.push(`${p.numero}: ${headerError.message}`);
+          continue;
+        }
         const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
 
         const { data: remitoData, error: rErr } = await (supabase.from("remitos") as any).insert({
@@ -707,12 +799,12 @@ export default function RemitosPage() {
           created_by: profile?.id || null,
         }).select("id").single();
 
-        if (rErr) {
-          console.error("Error creating remito:", rErr);
+        if (rErr || !remitoData) {
+          generationErrors.push(`${p.numero}: ${rErr?.message || "no se pudo crear el remito"}`);
           continue;
         }
 
-        if (remitoData && p.presupuesto_items.length > 0) {
+        if (remitoData) {
           const items = p.presupuesto_items.map((item, idx) => ({
             remito_id: remitoData.id,
             descripcion: item.descripcion,
@@ -722,16 +814,28 @@ export default function RemitosPage() {
             presupuesto_item_id: item.id || null,
           }));
           const { error: itemsErr } = await (supabase.from("remito_items") as any).insert(items);
-          if (itemsErr) console.error("Error inserting remito items for PR", p.numero, itemsErr);
+          if (itemsErr) {
+            await (supabase as any).from("remitos").delete().eq("id", remitoData.id);
+            generationErrors.push(`${p.numero}: no se pudieron guardar los items (${itemsErr.message})`);
+            continue;
+          }
         }
         // Mark PR as remitido
-        await supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", p.id);
-        idx++;
+        const { error: statusError } = await supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", p.id);
+        if (statusError) {
+          await (supabase as any).from("remito_items").delete().eq("remito_id", remitoData.id);
+          await (supabase as any).from("remitos").delete().eq("id", remitoData.id);
+          generationErrors.push(`${p.numero}: no se pudo actualizar el presupuesto (${statusError.message})`);
+          continue;
+        }
+        createdCount++;
       }
-      setIaSuccess(`Se generaron ${selectedPresupuestos.size} remito(s) exitosamente.`);
       await fetchData();
+      if (createdCount > 0) setIaSuccess(`Se generaron ${createdCount} remito(s) correctamente y ya aparecen en el listado.`);
+      if (generationErrors.length > 0) setIaError(generationErrors.join(" · "));
     } catch (err) {
-      console.error("Error generating remitos:", err);
+      const message = err instanceof Error ? err.message : "Error desconocido";
+      setIaError(`No se pudieron generar los remitos: ${message}`);
     } finally {
       setGeneratingIA(false);
     }
@@ -1598,6 +1702,8 @@ export default function RemitosPage() {
                     setCreateForm((prev) => ({ ...prev, cliente_id: clienteId, presupuesto_id: "" }));
                     setCreateItems([]);
                     setClienteSucursales([]);
+                    setCreateError("");
+                    await loadPresupuestosForCliente(clienteId);
                     if (clienteId) {
                       const { data: sucs } = await (supabase as any).from("cliente_sucursales").select("id, nombre, direccion, localidad, provincia, cp").eq("cliente_id", clienteId).eq("activo", true).order("principal", { ascending: false });
                       if (sucs && sucs.length > 0) setClienteSucursales(sucs as Sucursal[]);
@@ -1618,16 +1724,17 @@ export default function RemitosPage() {
                 <select
                   value={createForm.presupuesto_id}
                   onChange={(e) => handlePRSelect(e.target.value)}
+                  disabled={!createForm.cliente_id || loadingPresupuestosCliente}
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                 >
-                  <option value="">Sin presupuesto</option>
+                  <option value="">{loadingPresupuestosCliente ? "Cargando presupuestos..." : "Sin presupuesto"}</option>
                   {filteredPRs.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.numero}{p.total ? ` — $${Number(p.total).toLocaleString("es-AR")}` : p.subtotal ? ` — Neto: $${Number(p.subtotal).toLocaleString("es-AR")}` : ""}
                     </option>
                   ))}
                 </select>
-                {createForm.cliente_id && filteredPRs.length === 0 && (
+                {createForm.cliente_id && !loadingPresupuestosCliente && filteredPRs.length === 0 && (
                   <p className="text-xs text-zinc-400 mt-1">No hay presupuestos aprobados para este cliente</p>
                 )}
               </div>
@@ -1793,6 +1900,12 @@ export default function RemitosPage() {
               </button>
             </div>
 
+            {iaError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+                {iaError}
+              </div>
+            )}
+
             {iaSuccess ? (
               <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300">
                 <div className="flex items-center gap-2">
@@ -1805,7 +1918,11 @@ export default function RemitosPage() {
                 <p className="text-sm text-zinc-500">
                   Seleccioná presupuestos aprobados para generar remitos automáticamente con todos sus items y valor declarado.
                 </p>
-                {presupuestosIA.length === 0 ? (
+                {loadingIA ? (
+                  <div className="flex items-center justify-center gap-2 py-6 text-sm text-zinc-400">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Cargando presupuestos aprobados...
+                  </div>
+                ) : presupuestosIA.length === 0 ? (
                   <p className="text-sm text-zinc-400 py-4 text-center">No hay presupuestos aprobados disponibles.</p>
                 ) : (
                   <div className="space-y-2">

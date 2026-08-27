@@ -2039,8 +2039,9 @@ export default function PresupuestosPage() {
                               </p>
                             </div>
                             <div>
-                              <span className="text-zinc-400">Monto</span>
-                              <p className="font-mono font-semibold text-zinc-700 dark:text-zinc-200">{formatCurrency(pr.total, pr.moneda)}</p>
+                              <span className="text-zinc-400">Subtotal s/IVA</span>
+                              <p className="font-mono font-semibold text-zinc-700 dark:text-zinc-200">{formatCurrency(pr.subtotal, pr.moneda)}</p>
+                              <p className="text-[10px] text-zinc-400">Total: {formatCurrency(pr.total, pr.moneda)}</p>
                             </div>
                             <div>
                               <span className="text-zinc-400">Vendedor</span>
@@ -2149,7 +2150,18 @@ export default function PresupuestosPage() {
                 render: (row) => <span className="text-xs text-zinc-600 dark:text-zinc-300">{row.sucursalNombre || "—"}</span>,
               },
               {
-                key: "total", label: "Monto", className: "text-right", sortable: true,
+                key: "subtotal", label: "Subtotal s/IVA", className: "text-right", sortable: true,
+                render: (row) => {
+                  if (row.estado === "solicitud") return <span className="text-zinc-400 text-xs">—</span>;
+                  return (
+                    <span className="font-mono text-xs block text-right whitespace-nowrap text-zinc-600 dark:text-zinc-300">
+                      {formatCurrency(row.subtotal, row.moneda)}
+                    </span>
+                  );
+                },
+              },
+              {
+                key: "total", label: "Total c/IVA", className: "text-right", sortable: true,
                 render: (row) => {
                   if (row.estado === "solicitud") return <span className="text-zinc-400 text-xs">—</span>;
                   return (
