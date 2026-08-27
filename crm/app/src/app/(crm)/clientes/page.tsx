@@ -38,6 +38,14 @@ const provincias = [
   "Tierra del Fuego", "Tucumán",
 ];
 
+function formatPersonName(value: string) {
+  return value
+    .toLocaleLowerCase("es-AR")
+    .replace(/(^|[\s'-])(\p{L})/gu, (_, separator: string, letter: string) =>
+      `${separator}${letter.toLocaleUpperCase("es-AR")}`
+    );
+}
+
 interface ClienteRow {
   id: string;
   type: string;
@@ -2957,15 +2965,14 @@ export default function ClientesPage() {
                 ) : (
                   <div className="rounded-lg border border-orange-200 bg-orange-50/50 dark:border-orange-900/40 dark:bg-orange-900/10 p-3 space-y-2">
                     <div className="grid grid-cols-2 gap-2">
-                      <Input label="Nombre *" value={newContactoModal.nombre} onChange={(e) => setNewContactoModal((p) => ({ ...p, nombre: e.target.value }))} placeholder="Juan Pérez" />
+                      <Input label="Nombre y apellido *" value={newContactoModal.nombre} onChange={(e) => setNewContactoModal((p) => ({ ...p, nombre: formatPersonName(e.target.value) }))} placeholder="Juan Pérez" />
                       <Input label="Cargo" value={newContactoModal.cargo} onChange={(e) => setNewContactoModal((p) => ({ ...p, cargo: e.target.value }))} placeholder="Compras, Gerente..." />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <Input label="Email" type="email" value={newContactoModal.email} onChange={(e) => setNewContactoModal((p) => ({ ...p, email: e.target.value }))} />
-                      <Input label="Teléfono" value={newContactoModal.telefono} onChange={(e) => setNewContactoModal((p) => ({ ...p, telefono: e.target.value }))} />
+                      <Input label="WhatsApp" value={newContactoModal.whatsapp} onChange={(e) => setNewContactoModal((p) => ({ ...p, whatsapp: e.target.value }))} />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <Input label="WhatsApp" value={newContactoModal.whatsapp} onChange={(e) => setNewContactoModal((p) => ({ ...p, whatsapp: e.target.value }))} />
                       <div className="space-y-1.5">
                         <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Sucursal</label>
                         <select value={newContactoModal.sucursal_id} onChange={(e) => setNewContactoModal((p) => ({ ...p, sucursal_id: e.target.value }))} className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
@@ -2983,7 +2990,7 @@ export default function ClientesPage() {
                       <button type="button" onClick={() => { setShowContactoModalForm(false); setNewContactoModal({ nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", sucursal_id: "", principal: false, notas: "" }); }} className="rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-50 dark:border-zinc-700">Cancelar</button>
                       <button type="button" onClick={() => {
                         if (!newContactoModal.nombre.trim()) return;
-                        setFormContactos((prev) => [...prev, { ...newContactoModal, nombre: newContactoModal.nombre.trim(), isNew: true }]);
+                        setFormContactos((prev) => [...prev, { ...newContactoModal, nombre: formatPersonName(newContactoModal.nombre.trim()), isNew: true }]);
                         setNewContactoModal({ nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", sucursal_id: "", principal: false, notas: "" });
                         setShowContactoModalForm(false);
                       }} className="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600">Agregar</button>
