@@ -3008,9 +3008,11 @@ export default function ClientesPage() {
                 />
               </div>
               <Input
-                label="Telefono"
+                label="WhatsApp"
+                type="tel"
                 value={form.telefono}
                 onChange={(e) => setForm({ ...form, telefono: e.target.value })}
+                placeholder="Ej: +54 9 11 1234-5678"
               />
               <Input
                 label="Email facturacion"
