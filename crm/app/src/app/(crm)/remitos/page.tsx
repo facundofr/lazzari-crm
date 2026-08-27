@@ -502,7 +502,7 @@ export default function RemitosPage() {
         .from("presupuestos")
         .select("id, numero, subtotal, total, cliente_id, estado")
         .eq("cliente_id", clienteId)
-        .in("estado", ["aprobado", "remitido"])
+        .eq("estado", "aprobado")
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id", sociedadActiva.id);
       const { data, error } = await prQ;
@@ -820,14 +820,9 @@ export default function RemitosPage() {
             continue;
           }
         }
-        // Mark PR as remitido
-        const { error: statusError } = await supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", p.id);
-        if (statusError) {
-          await (supabase as any).from("remito_items").delete().eq("remito_id", remitoData.id);
-          await (supabase as any).from("remitos").delete().eq("id", remitoData.id);
-          generationErrors.push(`${p.numero}: no se pudo actualizar el presupuesto (${statusError.message})`);
-          continue;
-        }
+        // El presupuesto conserva su estado aprobado: pr_status no incluye
+        // "remitido". La relación remitos.presupuesto_id identifica que ya fue
+        // generado y evita duplicados sin alterar el ciclo comercial del PR.
         createdCount++;
       }
       await fetchData();
