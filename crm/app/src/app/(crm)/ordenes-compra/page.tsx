@@ -134,7 +134,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 
 export default function OrdenesCompraPage() {
   const { sociedadActiva, profile } = useUser();
-  const canManageCompras = profile?.role === "super_admin" || profile?.role === "admin" || profile?.role === "administrativo";
+  const canManageCompras = profile?.role === "super_admin" || profile?.role === "admin" || profile?.role === "administrativo" || profile?.role === "vendedor";
   const [filter, setFilter] = useState<OCStatus | "todas">("todas");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
   const [loading, setLoading] = useState(true);

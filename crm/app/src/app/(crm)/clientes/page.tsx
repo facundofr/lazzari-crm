@@ -1293,7 +1293,10 @@ export default function ClientesPage() {
       setModalOpen(false);
       await fetchClientes();
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Error al guardar";
+      const dbError = err as { code?: string; message?: string } | null;
+      const msg = dbError?.code === "23505"
+        ? "Ya existe un cliente con ese CUIT/DNI en esta sociedad"
+        : dbError?.message || (err instanceof Error ? err.message : "Error al guardar");
       setFormError(msg);
       toast.error(msg);
     } finally {
