@@ -106,12 +106,14 @@ function baseStyles(color: string) {
 
     /* Shared compact document structure */
     .doc-header-table { width: 100%; border-bottom: 2px solid #e5e5e5; border-collapse: collapse; }
+    .doc-header-wrap { position: relative; }
     .doc-header-table td { border: 0; background: transparent !important; padding: 12px 0 10px; }
     .doc-header-table td:last-child { text-align: right; vertical-align: top; }
     .doc-header-logo { height: 43px; display: block; margin-bottom: 3px; }
     .doc-marker-cell { width: 76px; text-align: center !important; vertical-align: top; }
     .doc-marker { display: inline-flex; min-width: 46px; min-height: 46px; padding: 5px 8px; border: 2px solid ${color}; color: ${color}; align-items: center; justify-content: center; font-size: 28px; line-height: 1; font-weight: 900; }
     .doc-marker-code { margin-top: 3px; color: #777; font-size: 7px; font-weight: 700; text-transform: uppercase; }
+    .doc-marker-overlay { position: absolute; left: 50%; top: 12px; z-index: 2; transform: translateX(-50%); text-align: center; }
     .legal-banner { margin: 6px 0 12px; padding: 4px 8px; border: 1px solid #dedede; color: #555; text-align: center; font-size: 8px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; }
     .compact-strip { width: 100%; margin-bottom: 14px; border-top: 1px solid #dedede; border-bottom: 1px solid #dedede; border-collapse: collapse; table-layout: fixed; }
     .compact-strip td { padding: 8px 10px; vertical-align: top; border: 0; background: transparent !important; }
@@ -175,6 +177,7 @@ interface DocumentHeaderOptions {
   secondary?: string;
   badge?: string;
   marker?: string;
+  centerMarker?: boolean;
   markerCode?: string;
   legalLegend?: boolean;
   fiscalDetails?: boolean;
@@ -185,9 +188,11 @@ function documentHeader(soc: SociedadPDF, options: DocumentHeaderOptions): strin
   const contactEmail = options.contactEmail || soc.email;
   return `
     <div class="header-bar"></div>
+    <div class="doc-header-wrap">
+    ${options.marker && options.centerMarker ? `<div class="doc-marker-overlay"><div class="doc-marker"${options.marker.length > 2 ? ` style="font-size:17px"` : ""}>${options.marker}</div>${options.markerCode ? `<div class="doc-marker-code">${options.markerCode}</div>` : ""}</div>` : ""}
     <table class="doc-header-table">
       <tr>
-        <td style="vertical-align:top">
+        <td style="vertical-align:top${options.centerMarker ? ";width:50%" : ""}">
           <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" class="doc-header-logo" />
           <div class="company-sub">${soc.razonSocial}</div>
           <div class="company-detail">CUIT ${soc.cuit} | ${soc.condicionIva}</div>
@@ -195,8 +200,8 @@ function documentHeader(soc: SociedadPDF, options: DocumentHeaderOptions): strin
           ${options.fiscalDetails && soc.ingresosBrutos ? `<div class="company-detail">IIBB ${soc.ingresosBrutos}${soc.inicioActividades ? ` | Inicio de actividades ${soc.inicioActividades}` : ""}</div>` : ""}
           ${contactEmail ? `<div class="company-detail">${contactEmail}</div>` : ""}
         </td>
-        ${options.marker ? `<td class="doc-marker-cell"><div class="doc-marker"${options.marker.length > 2 ? ` style="font-size:17px"` : ""}>${options.marker}</div>${options.markerCode ? `<div class="doc-marker-code">${options.markerCode}</div>` : ""}</td>` : ""}
-        <td>
+        ${options.marker && !options.centerMarker ? `<td class="doc-marker-cell"><div class="doc-marker"${options.marker.length > 2 ? ` style="font-size:17px"` : ""}>${options.marker}</div>${options.markerCode ? `<div class="doc-marker-code">${options.markerCode}</div>` : ""}</td>` : ""}
+        <td${options.centerMarker ? ` style="width:50%"` : ""}>
           <div class="doc-title">${options.title}</div>
           <div class="doc-number">${options.number}</div>
           ${options.badge ? `<div class="doc-badge">${options.badge}</div>` : ""}
@@ -204,6 +209,7 @@ function documentHeader(soc: SociedadPDF, options: DocumentHeaderOptions): strin
         </td>
       </tr>
     </table>
+    </div>
     ${options.legalLegend ? `<div class="legal-banner">Documento no válido como factura</div>` : `<div style="height:12px"></div>`}
   `;
 }
@@ -323,6 +329,7 @@ ${documentHeader(soc, {
   secondary: pr.vencimiento ? `Vence ${formatDate(pr.vencimiento)}` : "",
   badge: pr.estadoLabel,
   marker: `PR ${pr.tipoComprobante || "X"}`,
+  centerMarker: true,
   legalLegend: true,
   contactEmail: soc.commercialEmail,
 })}
