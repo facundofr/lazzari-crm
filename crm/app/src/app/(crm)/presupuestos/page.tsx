@@ -3119,6 +3119,7 @@ export default function PresupuestosPage() {
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">Markup%</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Venta</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">IVA%</th>
+                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-28">Subtotal</th>
                   <th className="px-2 py-2 w-8"></th>
                 </tr>
               </thead>
@@ -3267,6 +3268,9 @@ export default function PresupuestosPage() {
                           <option value={27}>27</option>
                           <option value={0}>0</option>
                         </select>
+                      </td>
+                      <td className="px-2 py-1.5 text-right font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-200 whitespace-nowrap">
+                        {formatCurrency(calcItemTotals(item).subtotal, newPR.moneda)}
                       </td>
                       <td className="px-2 py-1.5">
                         {newPR.items.length > 1 && (

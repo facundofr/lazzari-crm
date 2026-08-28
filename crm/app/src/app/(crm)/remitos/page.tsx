@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2 } from "lucide-react";
+import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
@@ -127,6 +127,8 @@ export default function RemitosPage() {
   });
   const [createItems, setCreateItems] = useState<CreateItem[]>([]);
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
+  const [clienteSearch, setClienteSearch] = useState("");
+  const [clienteDropdownOpen, setClienteDropdownOpen] = useState(false);
   const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; subtotal: number | null; total: number | null; cliente_id: string | null }[]>([]);
   const [loadingPresupuestosCliente, setLoadingPresupuestosCliente] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -248,6 +250,14 @@ export default function RemitosPage() {
     if (!createForm.cliente_id) return presupuestosAprobados;
     return presupuestosAprobados.filter(p => p.cliente_id === createForm.cliente_id);
   }, [presupuestosAprobados, createForm.cliente_id]);
+
+  const filteredClientes = useMemo(() => {
+    const term = clienteSearch.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    if (!term) return clientes;
+    return clientes.filter((cliente) =>
+      cliente.razon_social.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().includes(term)
+    );
+  }, [clientes, clienteSearch]);
 
   const fetchData = useCallback(async () => {
       try {
@@ -477,6 +487,8 @@ export default function RemitosPage() {
     setValorDeclaradoSugerido("");
     setClienteSucursales([]);
     setPresupuestosAprobados([]);
+    setClienteSearch("");
+    setClienteDropdownOpen(false);
     setCreateModalOpen(true);
 
     // Some legacy clients have activo=null, so only exclude records explicitly disabled.
@@ -513,6 +525,26 @@ export default function RemitosPage() {
       setCreateError(`No se pudieron cargar los presupuestos del cliente: ${message}`);
     } finally {
       setLoadingPresupuestosCliente(false);
+    }
+  }
+
+  async function handleClienteSelect(clienteId: string) {
+    const cliente = clientes.find((item) => item.id === clienteId);
+    setClienteSearch(cliente?.razon_social || "");
+    setClienteDropdownOpen(false);
+    setCreateForm((prev) => ({ ...prev, cliente_id: clienteId, presupuesto_id: "" }));
+    setCreateItems([]);
+    setClienteSucursales([]);
+    setCreateError("");
+    await loadPresupuestosForCliente(clienteId);
+    if (clienteId) {
+      const { data: sucs } = await (supabase as any)
+        .from("cliente_sucursales")
+        .select("id, nombre, direccion, localidad, provincia, cp")
+        .eq("cliente_id", clienteId)
+        .eq("activo", true)
+        .order("principal", { ascending: false });
+      if (sucs && sucs.length > 0) setClienteSucursales(sucs as Sucursal[]);
     }
   }
 
@@ -1690,27 +1722,45 @@ export default function RemitosPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Cliente *</label>
-                <select
-                  value={createForm.cliente_id}
-                  onChange={async (e) => {
-                    const clienteId = e.target.value;
-                    setCreateForm((prev) => ({ ...prev, cliente_id: clienteId, presupuesto_id: "" }));
-                    setCreateItems([]);
-                    setClienteSucursales([]);
-                    setCreateError("");
-                    await loadPresupuestosForCliente(clienteId);
-                    if (clienteId) {
-                      const { data: sucs } = await (supabase as any).from("cliente_sucursales").select("id, nombre, direccion, localidad, provincia, cp").eq("cliente_id", clienteId).eq("activo", true).order("principal", { ascending: false });
-                      if (sucs && sucs.length > 0) setClienteSucursales(sucs as Sucursal[]);
-                    }
-                  }}
-                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                >
-                  <option value="">Seleccionar cliente...</option>
-                  {clientes.map((c) => (
-                    <option key={c.id} value={c.id}>{c.razon_social}</option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                  <input
+                    type="text"
+                    value={clienteSearch}
+                    onFocus={() => setClienteDropdownOpen(true)}
+                    onBlur={() => window.setTimeout(() => setClienteDropdownOpen(false), 150)}
+                    onChange={(e) => {
+                      setClienteSearch(e.target.value);
+                      setClienteDropdownOpen(true);
+                      if (createForm.cliente_id) {
+                        setCreateForm((prev) => ({ ...prev, cliente_id: "", presupuesto_id: "" }));
+                        setCreateItems([]);
+                        setClienteSucursales([]);
+                        setPresupuestosAprobados([]);
+                      }
+                    }}
+                    placeholder="Escribí para buscar un cliente..."
+                    autoComplete="off"
+                    className="w-full rounded-lg border border-zinc-300 py-2 pl-9 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                  />
+                  {clienteDropdownOpen && (
+                    <div className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+                      {filteredClientes.length > 0 ? filteredClientes.map((cliente) => (
+                        <button
+                          key={cliente.id}
+                          type="button"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => handleClienteSelect(cliente.id)}
+                          className={`block w-full px-3 py-2 text-left text-sm hover:bg-orange-50 hover:text-orange-700 dark:hover:bg-orange-950/30 dark:hover:text-orange-400 ${cliente.id === createForm.cliente_id ? "bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400" : "text-zinc-700 dark:text-zinc-200"}`}
+                        >
+                          {cliente.razon_social}
+                        </button>
+                      )) : (
+                        <p className="px-3 py-3 text-sm text-zinc-400">No se encontraron clientes</p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">

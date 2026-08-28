@@ -309,7 +309,7 @@ export function generatePresupuestoPDF(
       <td class="right">${it.cantidad}</td>
       <td class="center">${it.unidad || "u"}</td>
       <td class="right mono">${formatCurrency(it.precioVenta, mon)}</td>
-      <td class="right mono bold">${formatCurrency(it.total, mon)}</td>
+      <td class="right mono bold">${formatCurrency(Number(it.cantidad) * Number(it.precioVenta), mon)}</td>
     </tr>`).join("");
 
   return `<!DOCTYPE html>
@@ -354,7 +354,7 @@ ${documentHeader(soc, {
     <th class="right" style="width:55px">Cant.</th>
     <th class="center" style="width:50px">Unid.</th>
     <th class="right" style="width:95px">P. Unitario</th>
-    <th class="right" style="width:95px">Total</th>
+    <th class="right" style="width:95px">Subtotal</th>
   </tr></thead>
   <tbody>${itemRows}</tbody>
 </table>
