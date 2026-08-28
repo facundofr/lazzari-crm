@@ -1008,7 +1008,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         subtotal: Number(it.subtotal),
       })),
     }, emisorData, soc);
-    openPDFWindow(html);
+    openPDFWindow(html, `Factura-${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}.pdf`);
   }
 
   // ── KPIs ───────────────────────────────────────────────────────
@@ -2360,4 +2360,3 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     </>
   );
 }
-

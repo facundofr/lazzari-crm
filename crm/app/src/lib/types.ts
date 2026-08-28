@@ -213,6 +213,7 @@ export interface Presupuesto {
   total: number;
   moneda: "USD" | "ARS";
   tipoCambio?: number | null;
+  cotizacionModalidad?: "divisas" | "billetes";
   observaciones: string;
   notasInternas: string;
   creadoPor: string;
@@ -222,6 +223,7 @@ export interface Presupuesto {
   sociedadId?: string;
   sucursalId?: string;
   sucursalNombre?: string;
+  sucursalDireccion?: string;
   contactoId?: string;
   contactoNombre?: string;
   ocCliente?: string;

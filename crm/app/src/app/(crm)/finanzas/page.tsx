@@ -1487,7 +1487,7 @@ export default function FinanzasPage() {
       facturas_vinculadas: fcsRows,
     }, soc);
 
-    openPDFWindow(html);
+    openPDFWindow(html, `${op.numero || "Orden-de-pago"}.pdf`);
   }
 
   async function handleUploadCertificado(opId: string, file: File) {

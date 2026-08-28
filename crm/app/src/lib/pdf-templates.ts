@@ -17,6 +17,7 @@ interface SociedadPDF {
   domicilio: string;
   telefono: string;
   email: string;
+  commercialEmail: string;
   web: string;
   inicioActividades: string;
   ingresosBrutos: string;
@@ -31,6 +32,7 @@ const SOCIEDAD_EXTRA: Record<string, Partial<SociedadPDF>> = {
     domicilio: "Pueyrredón 653, Pergamino, Buenos Aires",
     telefono: "2477 628958",
     email: "administracion@lazzari.com.ar",
+    commercialEmail: "ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar",
     web: "http://www.lazzari.com.ar",
     inicioActividades: "01-09-2017",
     ingresosBrutos: "20379309128",
@@ -40,6 +42,7 @@ const SOCIEDAD_EXTRA: Record<string, Partial<SociedadPDF>> = {
     domicilio: "Pueyrredón 653, Pergamino, Buenos Aires",
     telefono: "2477 628958",
     email: "administracion@grupola.com.ar",
+    commercialEmail: "ventas@lazzari.com.ar | jeronimo@lazzari.com.ar | sebastian@lazzari.com.ar",
     web: "",
     inicioActividades: "01-01-2020",
     ingresosBrutos: "30719396042",
@@ -65,6 +68,7 @@ export function getSociedadPDF(sociedad: {
     domicilio: extra.domicilio || "",
     telefono: extra.telefono || "",
     email: extra.email || "",
+    commercialEmail: extra.commercialEmail || extra.email || "",
     web: extra.web || "",
     inicioActividades: extra.inicioActividades || "",
     ingresosBrutos: extra.ingresosBrutos || "",
@@ -174,9 +178,11 @@ interface DocumentHeaderOptions {
   markerCode?: string;
   legalLegend?: boolean;
   fiscalDetails?: boolean;
+  contactEmail?: string;
 }
 
 function documentHeader(soc: SociedadPDF, options: DocumentHeaderOptions): string {
+  const contactEmail = options.contactEmail || soc.email;
   return `
     <div class="header-bar"></div>
     <table class="doc-header-table">
@@ -187,9 +193,9 @@ function documentHeader(soc: SociedadPDF, options: DocumentHeaderOptions): strin
           <div class="company-detail">CUIT ${soc.cuit} | ${soc.condicionIva}</div>
           ${soc.domicilio ? `<div class="company-detail">${soc.domicilio}</div>` : ""}
           ${options.fiscalDetails && soc.ingresosBrutos ? `<div class="company-detail">IIBB ${soc.ingresosBrutos}${soc.inicioActividades ? ` | Inicio de actividades ${soc.inicioActividades}` : ""}</div>` : ""}
-          ${soc.email ? `<div class="company-detail">${soc.email}</div>` : ""}
+          ${contactEmail ? `<div class="company-detail">${contactEmail}</div>` : ""}
         </td>
-        ${options.marker ? `<td class="doc-marker-cell"><div class="doc-marker">${options.marker}</div>${options.markerCode ? `<div class="doc-marker-code">${options.markerCode}</div>` : ""}</td>` : ""}
+        ${options.marker ? `<td class="doc-marker-cell"><div class="doc-marker"${options.marker.length > 2 ? ` style="font-size:17px"` : ""}>${options.marker}</div>${options.markerCode ? `<div class="doc-marker-code">${options.markerCode}</div>` : ""}</td>` : ""}
         <td>
           <div class="doc-title">${options.title}</div>
           <div class="doc-number">${options.number}</div>
@@ -280,7 +286,11 @@ interface PRData {
   clienteLocalidad?: string;
   clienteProvincia?: string;
   sucursalNombre?: string;
+  sucursalDireccion?: string;
   vendedorNombre?: string;
+  tipoComprobante?: string;
+  cotizacionModalidad?: "divisas" | "billetes";
+  tipoCambio?: number | null;
   items: PRItem[];
 }
 
@@ -312,8 +322,9 @@ ${documentHeader(soc, {
   date: formatDate(pr.fecha),
   secondary: pr.vencimiento ? `Vence ${formatDate(pr.vencimiento)}` : "",
   badge: pr.estadoLabel,
-  marker: "X",
+  marker: `PR ${pr.tipoComprobante || "X"}`,
   legalLegend: true,
+  contactEmail: soc.commercialEmail,
 })}
 
 <table class="compact-strip">
@@ -322,14 +333,14 @@ ${documentHeader(soc, {
       <div class="compact-title">Cliente</div>
       <div class="compact-primary">${pr.clienteNombre}</div>
       ${(pr.clienteCuit || pr.clienteCondicionIva) ? `<div class="compact-line">${pr.clienteCuit ? `<span class="compact-label">CUIT</span>${pr.clienteCuit}` : ""}${pr.clienteCuit && pr.clienteCondicionIva ? ` &nbsp;|&nbsp; ` : ""}${pr.clienteCondicionIva ? `<span class="compact-label">IVA</span>${pr.clienteCondicionIva}` : ""}</div>` : ""}
-      ${pr.clienteDireccion ? `<div class="compact-line"><span class="compact-label">Domicilio</span>${pr.clienteDireccion}${pr.clienteLocalidad ? `, ${pr.clienteLocalidad}` : ""}${pr.clienteProvincia ? ` (${pr.clienteProvincia})` : ""}</div>` : ""}
-      ${pr.sucursalNombre ? `<div class="compact-line"><span class="compact-label">Sucursal</span>${pr.sucursalNombre}</div>` : ""}
+      ${pr.sucursalNombre ? `<div class="compact-line"><span class="compact-label">Sucursal</span>${pr.sucursalNombre}${pr.sucursalDireccion ? ` &mdash; ${pr.sucursalDireccion}` : ""}</div>` : ""}
     </td>
     <td style="width:36%">
       <div class="compact-title">Datos comerciales</div>
       ${pr.vendedorNombre ? `<div class="compact-line"><span class="compact-label">Vendedor</span>${pr.vendedorNombre}</div>` : ""}
       ${pr.condicionPago ? `<div class="compact-line"><span class="compact-label">Pago</span>${pr.condicionPago}</div>` : ""}
-      <div class="compact-line"><span class="compact-label">Moneda</span>${mon === "USD" ? "Dólares estadounidenses" : "Pesos argentinos"}</div>
+      <div class="compact-line"><span class="compact-label">Moneda</span>${mon === "USD" ? `USD ${pr.cotizacionModalidad === "billetes" ? "billete" : "divisa"}` : "ARS - Pesos argentinos"}</div>
+      ${mon === "USD" && pr.tipoCambio ? `<div class="compact-line"><span class="compact-label">Tipo de cambio</span>$ ${Number(pr.tipoCambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>` : ""}
     </td>
   </tr>
 </table>
@@ -508,6 +519,7 @@ export function generateFacturaPDF(
 <div style="border-left:2px solid #222;border-right:2px solid #222;border-bottom:2px solid #222;padding:7px 14px;margin-bottom:12px">
   <div style="font-size:11px;font-weight:700;color:#222;text-transform:uppercase">${soc.razonSocial}</div>
   <div style="font-size:9px;color:#444;margin-top:2px">${emisor.condicionIva}${soc.domicilio ? ` &nbsp;|&nbsp; ${soc.domicilio}` : ""}</div>
+  ${soc.email ? `<div style="font-size:9px;color:#444;margin-top:2px">${soc.email}</div>` : ""}
 </div>
 
 <table style="width:100%;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #ccc;border-collapse:collapse">
@@ -639,10 +651,10 @@ ${documentHeader(soc, {
   number: r.numero,
   date: formatDate(r.fecha),
   secondary: "Original",
-  marker: "R",
-  markerCode: "Código 091",
+  marker: r.cae ? "R" : "X",
+  markerCode: r.cae ? "Código 091 - Remito con CAE" : "Remito manual",
   legalLegend: true,
-  fiscalDetails: true,
+  contactEmail: soc.commercialEmail,
 })}
 
 <table class="compact-strip">
@@ -762,8 +774,9 @@ ${documentHeader(soc, {
   date: formatDate(oc.fecha),
   secondary: oc.fecha_entrega_estimada ? `Entrega ${formatDate(oc.fecha_entrega_estimada)}` : "",
   badge: oc.estadoLabel,
-  marker: "X",
+  marker: "OC",
   legalLegend: true,
+  contactEmail: soc.commercialEmail,
 })}
 
 <table class="compact-strip">
@@ -1078,8 +1091,8 @@ ${documentHeader(soc, {
   number: op.numero || "\u2014",
   date: formatDate(op.fecha),
   badge: estadoLabel[op.estado] || op.estado,
-  marker: "X",
   legalLegend: true,
+  fiscalDetails: true,
 })}
 
 <table class="compact-strip">
@@ -1122,12 +1135,27 @@ ${certHtml}
 </body></html>`;
 }
 
-// ── Helper to open PDF in new window ─────────────────────────────
-export function openPDFWindow(html: string) {
-  const w = window.open("", "_blank");
-  if (w) {
-    w.document.write(html);
-    w.document.close();
+// ── Helper to generate and download the actual PDF ──────────────
+export async function openPDFWindow(html: string, filename?: string) {
+  try {
+    const base64 = await htmlToPdfBase64(html);
+    const binary = window.atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const title = html.match(/<title>([^<]+)<\/title>/i)?.[1] || "documento";
+    const safeName = (filename || `${title}.pdf`).replace(/[\\/:*?"<>|]+/g, "-");
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = safeName.toLowerCase().endsWith(".pdf") ? safeName : `${safeName}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    console.error("No se pudo generar el PDF:", error);
+    window.alert("No se pudo descargar el PDF. Intentá nuevamente.");
   }
 }
 

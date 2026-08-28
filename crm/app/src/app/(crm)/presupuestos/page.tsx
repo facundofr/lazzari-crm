@@ -66,6 +66,7 @@ interface SupabasePresupuesto {
   total: number;
   moneda: "USD" | "ARS";
   tipo_cambio: number | null;
+  cotizacion_modalidad?: "divisas" | "billetes" | null;
   observaciones: string;
   notas_internas: string;
   enviado_at?: string | null;
@@ -85,7 +86,7 @@ interface SupabasePresupuesto {
   clientes?: { razon_social: string; cuit: string; email?: string | null; telefono?: string | null; direccion?: string | null; localidad?: string | null; provincia?: string | null; condicion_iva?: string | null } | null;
   created_by_profile?: { full_name: string } | null;
   vendedor_profile?: { full_name: string; avatar_url: string | null } | null;
-  sucursal?: { nombre: string } | null;
+  sucursal?: { nombre: string; direccion?: string | null; localidad?: string | null; provincia?: string | null } | null;
   contacto?: { nombre: string } | null;
   presupuesto_items?: PresupuestoItem[];
 }
@@ -138,6 +139,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     total: row.total,
     moneda: row.moneda,
     tipoCambio: row.tipo_cambio ?? null,
+    cotizacionModalidad: row.cotizacion_modalidad ?? "divisas",
     observaciones: row.observaciones ?? "",
     notasInternas: row.notas_internas ?? "",
     creadoPor: (row as any).created_by_profile?.full_name ?? row.created_by ?? "",
@@ -150,6 +152,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     vendedorAvatar: row.vendedor_profile?.avatar_url ?? null,
     vendedorId: row.vendedor_id ?? null,
     sucursalNombre: row.sucursal?.nombre ?? "",
+    sucursalDireccion: [row.sucursal?.direccion, row.sucursal?.localidad, row.sucursal?.provincia].filter(Boolean).join(", "),
     contactoNombre: row.contacto?.nombre ?? "",
     ocCliente: row.oc_cliente ?? "",
     tipoComprobante: row.tipo_comprobante ?? "",
@@ -368,7 +371,7 @@ export default function PresupuestosPage() {
       if (res.ok) {
         const data = await res.json();
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
-        setNewPR((p) => ({ ...p, tipo_cambio: data.valor_venta }));
+        setNewPR((p) => ({ ...p, tipo_cambio: data.valor_venta, cotizacion_modalidad: modalidad }));
       }
     } catch { /* silencioso */ } finally {
       setCotizBnaLoading(false);
@@ -394,6 +397,7 @@ export default function PresupuestosPage() {
     contacto_id: "",
     moneda: "USD" as "USD" | "ARS",
     tipo_cambio: 0,
+    cotizacion_modalidad: "divisas" as "divisas" | "billetes",
     markup_general: 30,
     observaciones: "",
     notas_internas: "",
@@ -619,7 +623,7 @@ export default function PresupuestosPage() {
       // First try with items + vendedor profile
       let q = (supabase as any)
         .from("presupuestos")
-        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre), contacto:contacto_id(nombre), presupuesto_items(*)`)
+        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       let res: { data: any; error: any } = await q;
@@ -995,6 +999,7 @@ export default function PresupuestosPage() {
             total: subtotal + ivaTotal,
             moneda: newPR.moneda,
             tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
+            cotizacion_modalidad: newPR.moneda === "USD" ? newPR.cotizacion_modalidad : null,
             observaciones: newPR.observaciones,
             notas_internas: newPR.notas_internas,
             vencimiento: newPR.vencimiento,
@@ -1022,7 +1027,7 @@ export default function PresupuestosPage() {
         setShowNewPR(false);
         setEsSolicitud(false);
         setEditingPRId(null);
-        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
+        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
         await fetchPresupuestos();
         toast.success("Presupuesto actualizado");
       } else {
@@ -1048,6 +1053,7 @@ export default function PresupuestosPage() {
             total: subtotal + ivaTotal,
             moneda: newPR.moneda,
             tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
+            cotizacion_modalidad: newPR.moneda === "USD" ? newPR.cotizacion_modalidad : null,
             observaciones: newPR.observaciones,
             notas_internas: newPR.notas_internas,
             tipo_comprobante: newPR.tipo_comprobante || null,
@@ -1065,12 +1071,12 @@ export default function PresupuestosPage() {
 
         setShowNewPR(false);
         setEsSolicitud(false);
-        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
+        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
 
         // Fetch the newly created PR with full joins before refreshing the list
         const { data: fullRow } = await (supabase as any)
           .from("presupuestos")
-          .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre), contacto:contacto_id(nombre), presupuesto_items(*)`)
+          .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
           .eq("id", newRow.id)
           .single();
         const createdPR = fullRow ? mapToPresupuesto(fullRow as any) : mapToPresupuesto(newRow as any);
@@ -1507,6 +1513,7 @@ export default function PresupuestosPage() {
         contacto_id: fullPR.contacto_id || "",
         moneda: fullPR.moneda || "USD",
         tipo_cambio: Number(fullPR.tipo_cambio) || 0,
+        cotizacion_modalidad: (fullPR.cotizacion_modalidad || "divisas") as "divisas" | "billetes",
         markup_general: Number(fullPR.markup_general) || 30,
         observaciones: fullPR.observaciones || "",
         notas_internas: fullPR.notas_internas || "",
@@ -1775,7 +1782,11 @@ export default function PresupuestosPage() {
       clienteLocalidad: p.clienteLocalidad,
       clienteProvincia: p.clienteProvincia,
       sucursalNombre: p.sucursalNombre,
+      sucursalDireccion: p.sucursalDireccion,
       vendedorNombre: p.vendedorNombre,
+      tipoComprobante: p.tipoComprobante,
+      cotizacionModalidad: p.cotizacionModalidad,
+      tipoCambio: p.tipoCambio,
       items: pr.items.map(it => ({
         codigo: it.codigo,
         descripcion: it.descripcion,
@@ -1785,7 +1796,7 @@ export default function PresupuestosPage() {
         total: it.total,
       })),
     }, soc);
-    openPDFWindow(html);
+    openPDFWindow(html, `${pr.numero}.pdf`);
   }
 
   if (loading) {
@@ -2702,7 +2713,7 @@ export default function PresupuestosPage() {
       {/* ==================== NUEVO PR MODAL ==================== */}
       <Modal
         open={showNewPR}
-        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
+        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
         title={editingPRId && esSolicitud ? "Convertir Solicitud en Presupuesto" : editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
         description={editingPRId && esSolicitud ? "Completa la cotización. La solicitud se convertirá en PR sin crear un registro duplicado." : editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="xl"
@@ -2710,7 +2721,7 @@ export default function PresupuestosPage() {
         footer={
           <>
             <button
-              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
+              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
               className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
             >
               Cancelar
@@ -3684,7 +3695,11 @@ export default function PresupuestosPage() {
             clienteLocalidad: p.clienteLocalidad,
             clienteProvincia: p.clienteProvincia,
             sucursalNombre: p.sucursalNombre,
+            sucursalDireccion: p.sucursalDireccion,
             vendedorNombre: p.vendedorNombre,
+            tipoComprobante: p.tipoComprobante,
+            cotizacionModalidad: p.cotizacionModalidad,
+            tipoCambio: p.tipoCambio,
             items: pr.items.map(it => ({
               codigo: it.codigo,
               descripcion: it.descripcion,

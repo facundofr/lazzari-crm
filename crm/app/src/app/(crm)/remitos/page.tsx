@@ -1121,7 +1121,7 @@ export default function RemitosPage() {
         moneda: t.moneda,
       })),
     }, soc);
-    openPDFWindow(html);
+    openPDFWindow(html, `Remito-${r.numero}.pdf`);
   }
 
   async function handleCreateTransporteFromRemito() {

@@ -781,7 +781,7 @@ export default function OrdenesCompraPage() {
         subtotal: Number(it.subtotal),
       })),
     }, soc);
-    openPDFWindow(html);
+    openPDFWindow(html, `${oc.numero}.pdf`);
   };
 
   const [copiedSummary, setCopiedSummary] = useState(false);
