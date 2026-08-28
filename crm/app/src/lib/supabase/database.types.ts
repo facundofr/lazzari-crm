@@ -1546,15 +1546,18 @@ export type Database = {
           created_at: string
           created_by: string | null
           cuit: string
+          cbu: string | null
           dias_cuenta_corriente: number
           direccion: string | null
           email: string | null
           forma_pago: string | null
           id: string
           limite_credito: number
+          alias_bancario: string | null
           localidad: string | null
           marcas: string | null
           notas: string | null
+          numero_cuenta: string | null
           provincia: string | null
           razon_social: string
           rubro: string | null
@@ -1570,15 +1573,18 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           cuit: string
+          cbu?: string | null
           dias_cuenta_corriente?: number
           direccion?: string | null
           email?: string | null
           forma_pago?: string | null
           id?: string
           limite_credito?: number
+          alias_bancario?: string | null
           localidad?: string | null
           marcas?: string | null
           notas?: string | null
+          numero_cuenta?: string | null
           provincia?: string | null
           razon_social: string
           rubro?: string | null
@@ -1594,15 +1600,18 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           cuit?: string
+          cbu?: string | null
           dias_cuenta_corriente?: number
           direccion?: string | null
           email?: string | null
           forma_pago?: string | null
           id?: string
           limite_credito?: number
+          alias_bancario?: string | null
           localidad?: string | null
           marcas?: string | null
           notas?: string | null
+          numero_cuenta?: string | null
           provincia?: string | null
           razon_social?: string
           rubro?: string | null

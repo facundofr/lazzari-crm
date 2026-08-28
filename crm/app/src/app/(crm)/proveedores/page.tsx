@@ -57,6 +57,9 @@ function mapSupabaseProveedor(row: Record<string, unknown>): Proveedor {
     direccion: row.direccion as string,
     localidad: row.localidad as string,
     provincia: row.provincia as string,
+    cbu: (row.cbu as string) ?? "",
+    aliasBancario: (row.alias_bancario as string) ?? "",
+    numeroCuenta: (row.numero_cuenta as string) ?? "",
     contactos: (Array.isArray(row.contactos) ? row.contactos : []).map((c: Record<string, unknown>) => ({
       id: c.id as string, nombre: c.nombre as string, cargo: c.cargo as string,
       email: c.email as string, telefono: c.telefono as string, principal: c.principal as boolean,
@@ -128,6 +131,9 @@ const emptyForm = {
   direccion: "",
   localidad: "",
   provincia: "",
+  cbu: "",
+  alias_bancario: "",
+  numero_cuenta: "",
   rubro: "",
   forma_pago: "Transferencia",
   dias_cuenta_corriente: 30,
@@ -377,6 +383,7 @@ export default function ProveedoresPage() {
       razon_social: p.razonSocial, cuit: p.cuit, condicion_iva: p.condicionIva,
       email: p.email, telefono: p.telefono, direccion: p.direccion,
       localidad: p.localidad, provincia: p.provincia, rubro: p.rubro,
+      cbu: p.cbu ?? "", alias_bancario: p.aliasBancario ?? "", numero_cuenta: p.numeroCuenta ?? "",
       forma_pago: p.formaPago, dias_cuenta_corriente: p.diasCuentaCorriente,
       limite_credito: p.limiteCredito, notas: p.notas,
       clasificacion_tags: p.clasificacionTags ?? [], marcas: p.marcas ?? "",
@@ -824,6 +831,16 @@ export default function ProveedoresPage() {
                   )}
                 </div>
               </div>
+              {(selectedProv.cbu || selectedProv.aliasBancario || selectedProv.numeroCuenta) && (
+                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                  <h3 className="text-sm font-semibold mb-3">Datos bancarios</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2"><p className="text-xs text-zinc-500">CBU / CVU</p><p className="text-sm font-mono font-medium">{selectedProv.cbu || "—"}</p></div>
+                    <div><p className="text-xs text-zinc-500">Alias</p><p className="text-sm font-medium">{selectedProv.aliasBancario || "—"}</p></div>
+                    <div><p className="text-xs text-zinc-500">N° de cuenta</p><p className="text-sm font-medium">{selectedProv.numeroCuenta || "—"}</p></div>
+                  </div>
+                </div>
+              )}
               {(selectedProv.clasificacionTags?.length > 0 || selectedProv.marcas || selectedProv.clasificacionNota) && (
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                   <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><Tag className="h-4 w-4" /> Clasificacion</h3>
@@ -898,6 +915,12 @@ export default function ProveedoresPage() {
               </div>
               <div><label className="text-xs font-medium text-zinc-500">Dias CC</label><input type="number" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Limite credito</label><input type="number" value={form.limite_credito} onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div className="col-span-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                <h3 className="text-sm font-semibold">Datos bancarios <span className="font-normal text-zinc-400">(opcionales)</span></h3>
+              </div>
+              <div><label className="text-xs font-medium text-zinc-500">CBU / CVU</label><input value={form.cbu} onChange={(e) => setForm({ ...form, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div><label className="text-xs font-medium text-zinc-500">Alias</label><input value={form.alias_bancario} onChange={(e) => setForm({ ...form, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div><label className="text-xs font-medium text-zinc-500">N° de cuenta</label><input value={form.numero_cuenta} onChange={(e) => setForm({ ...form, numero_cuenta: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div className="col-span-2"><label className="text-xs font-medium text-zinc-500">Notas</label><textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={3} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               {/* Retención Ganancias RG 830 */}
               <div className="col-span-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { X, Upload, Loader2, Sparkles, Check, Search } from "lucide-react";
+import { X, Upload, Loader2, Sparkles, Check, Search, Plus } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 
@@ -32,6 +32,25 @@ interface FCItem {
   unidad: string;
 }
 
+const emptyNuevoProveedor = {
+  razon_social: "",
+  cuit: "",
+  condicion_iva: "RI",
+  rubro: "",
+  email: "",
+  telefono: "",
+  direccion: "",
+  localidad: "",
+  provincia: "",
+  forma_pago: "Transferencia",
+  dias_cuenta_corriente: 30,
+  limite_credito: 0,
+  cbu: "",
+  alias_bancario: "",
+  numero_cuenta: "",
+  notas: "",
+};
+
 interface Props {
   sociedadId: string;
   profileId: string | null;
@@ -52,6 +71,10 @@ export default function CargarFacturaOC({
   const [proveedorSearch, setProveedorSearch] = useState("");
   const [proveedores, setProveedores] = useState<ProveedorOption[]>([]);
   const [proveedoresLoaded, setProveedoresLoaded] = useState(false);
+  const [nuevoProveedorOpen, setNuevoProveedorOpen] = useState(false);
+  const [nuevoProveedor, setNuevoProveedor] = useState(emptyNuevoProveedor);
+  const [nuevoProveedorSaving, setNuevoProveedorSaving] = useState(false);
+  const [nuevoProveedorError, setNuevoProveedorError] = useState("");
   const [numeroFactura, setNumeroFactura] = useState("");
   const [fecha, setFecha] = useState(todayStr());
   const [fechaVencimiento, setFechaVencimiento] = useState("");
@@ -106,6 +129,46 @@ export default function CargarFacturaOC({
       if (data) setProveedores(data as ProveedorOption[]);
     } catch { /* noop */ }
     setProveedoresLoaded(true);
+  }
+
+  function openNuevoProveedor() {
+    setNuevoProveedor({ ...emptyNuevoProveedor, razon_social: proveedorSearch.trim() });
+    setNuevoProveedorError("");
+    setNuevoProveedorOpen(true);
+  }
+
+  async function handleCrearProveedor() {
+    if (!nuevoProveedor.razon_social.trim() || !nuevoProveedor.cuit.trim()) {
+      setNuevoProveedorError("Razón social y CUIT son obligatorios");
+      return;
+    }
+    setNuevoProveedorSaving(true);
+    setNuevoProveedorError("");
+    try {
+      const { data, error: insertError } = await (supabase as any)
+        .from("proveedores")
+        .insert({
+          ...nuevoProveedor,
+          razon_social: nuevoProveedor.razon_social.trim(),
+          cuit: nuevoProveedor.cuit.trim(),
+          sociedad_id: sociedadId,
+          created_by: profileId,
+        })
+        .select("id, razon_social, cuit")
+        .single();
+      if (insertError || !data) throw new Error(insertError?.message || "No se pudo crear el proveedor");
+
+      const created = data as ProveedorOption;
+      setProveedores(prev => [...prev.filter(p => p.id !== created.id), created].sort((a, b) => a.razon_social.localeCompare(b.razon_social)));
+      setProveedorId(created.id);
+      setProveedorSearch(created.razon_social);
+      setSelectedOCIds(new Set());
+      setNuevoProveedorOpen(false);
+    } catch (err: any) {
+      setNuevoProveedorError(err?.message || "Error al crear el proveedor");
+    } finally {
+      setNuevoProveedorSaving(false);
+    }
   }
 
   // ── Parse PDF ──
@@ -363,7 +426,7 @@ export default function CargarFacturaOC({
                   <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-sm">
                     <Check size={14} className="text-green-600" />
                     <span className="font-medium">{selectedProvNombre}</span>
-                    <button onClick={() => { setProveedorId(""); setProveedorSearch(""); }}
+                    <button onClick={() => { setProveedorId(""); setProveedorSearch(""); setSelectedOCIds(new Set()); }}
                       className="ml-auto text-xs text-zinc-400 hover:text-zinc-600">Cambiar</button>
                   </div>
                 ) : (
@@ -382,7 +445,7 @@ export default function CargarFacturaOC({
                     {proveedorSearch && filteredProveedores.length > 0 && (
                       <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-lg">
                         {filteredProveedores.map(p => (
-                          <button key={p.id} onClick={() => { setProveedorId(p.id); setProveedorSearch(p.razon_social); }}
+                          <button key={p.id} onClick={() => { setProveedorId(p.id); setProveedorSearch(p.razon_social); setSelectedOCIds(new Set()); }}
                             className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700">
                             <span className="font-medium">{p.razon_social}</span>
                             {p.cuit && <span className="ml-2 text-xs text-zinc-400">{p.cuit}</span>}
@@ -390,6 +453,14 @@ export default function CargarFacturaOC({
                         ))}
                       </div>
                     )}
+                    <button
+                      type="button"
+                      onClick={openNuevoProveedor}
+                      className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-orange-300 px-3 py-2 text-xs font-semibold text-orange-600 hover:bg-orange-50 dark:border-orange-800 dark:hover:bg-orange-950/30"
+                    >
+                      <Plus size={14} />
+                      {proveedorSearch.trim() ? `Crear “${proveedorSearch.trim()}” como proveedor` : "Crear proveedor nuevo"}
+                    </button>
                   </>
                 )}
               </div>
@@ -569,6 +640,49 @@ export default function CargarFacturaOC({
           </div>
         </div>
       </div>
+
+      {nuevoProveedorOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/65 p-4">
+          <div className="my-6 w-full max-w-2xl rounded-xl bg-white shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4 dark:border-zinc-700">
+              <div>
+                <h3 className="font-bold text-zinc-900 dark:text-white">Nuevo proveedor</h3>
+                <p className="text-xs text-zinc-500">Se guardará y quedará seleccionado en esta factura.</p>
+              </div>
+              <button type="button" onClick={() => setNuevoProveedorOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X size={18} /></button>
+            </div>
+
+            <div className="max-h-[72vh] overflow-y-auto p-6">
+              {nuevoProveedorError && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400">{nuevoProveedorError}</div>}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Razón social *</label><input value={nuevoProveedor.razon_social} onChange={e => setNuevoProveedor({ ...nuevoProveedor, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">CUIT *</label><input value={nuevoProveedor.cuit} onChange={e => setNuevoProveedor({ ...nuevoProveedor, cuit: e.target.value })} placeholder="XX-XXXXXXXX-X" className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm font-mono dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">Condición IVA</label><select value={nuevoProveedor.condicion_iva} onChange={e => setNuevoProveedor({ ...nuevoProveedor, condicion_iva: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"><option value="RI">Responsable Inscripto</option><option value="Monotributo">Monotributo</option><option value="Exento">Exento</option></select></div>
+                <div><label className="text-xs font-medium text-zinc-500">Rubro</label><input value={nuevoProveedor.rubro} onChange={e => setNuevoProveedor({ ...nuevoProveedor, rubro: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">Email</label><input type="email" value={nuevoProveedor.email} onChange={e => setNuevoProveedor({ ...nuevoProveedor, email: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">Teléfono</label><input value={nuevoProveedor.telefono} onChange={e => setNuevoProveedor({ ...nuevoProveedor, telefono: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">Dirección</label><input value={nuevoProveedor.direccion} onChange={e => setNuevoProveedor({ ...nuevoProveedor, direccion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">Localidad</label><input value={nuevoProveedor.localidad} onChange={e => setNuevoProveedor({ ...nuevoProveedor, localidad: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">Provincia</label><input value={nuevoProveedor.provincia} onChange={e => setNuevoProveedor({ ...nuevoProveedor, provincia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">Forma de pago</label><select value={nuevoProveedor.forma_pago} onChange={e => setNuevoProveedor({ ...nuevoProveedor, forma_pago: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"><option value="Transferencia">Transferencia</option><option value="Cheque">Cheque</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option></select></div>
+                <div><label className="text-xs font-medium text-zinc-500">Días cuenta corriente</label><input type="number" value={nuevoProveedor.dias_cuenta_corriente} onChange={e => setNuevoProveedor({ ...nuevoProveedor, dias_cuenta_corriente: Number(e.target.value) || 0 })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">Límite de crédito</label><input type="number" value={nuevoProveedor.limite_credito} onChange={e => setNuevoProveedor({ ...nuevoProveedor, limite_credito: Number(e.target.value) || 0 })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+
+                <div className="sm:col-span-2 mt-2 border-t border-zinc-200 pt-4 dark:border-zinc-700"><h4 className="text-sm font-semibold">Datos bancarios <span className="font-normal text-zinc-400">(opcionales)</span></h4></div>
+                <div><label className="text-xs font-medium text-zinc-500">CBU / CVU</label><input value={nuevoProveedor.cbu} onChange={e => setNuevoProveedor({ ...nuevoProveedor, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm font-mono dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">Alias</label><input value={nuevoProveedor.alias_bancario} onChange={e => setNuevoProveedor({ ...nuevoProveedor, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">N° de cuenta</label><input value={nuevoProveedor.numero_cuenta} onChange={e => setNuevoProveedor({ ...nuevoProveedor, numero_cuenta: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Notas</label><textarea rows={2} value={nuevoProveedor.notas} onChange={e => setNuevoProveedor({ ...nuevoProveedor, notas: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 border-t border-zinc-200 px-6 py-4 dark:border-zinc-700">
+              <button type="button" onClick={() => setNuevoProveedorOpen(false)} className="rounded-lg border border-zinc-300 px-4 py-2 text-sm dark:border-zinc-600">Cancelar</button>
+              <button type="button" onClick={handleCrearProveedor} disabled={nuevoProveedorSaving} className="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50">{nuevoProveedorSaving && <Loader2 size={15} className="animate-spin" />}{nuevoProveedorSaving ? "Creando..." : "Crear y seleccionar"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

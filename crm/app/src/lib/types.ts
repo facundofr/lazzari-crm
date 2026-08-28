@@ -379,6 +379,9 @@ export interface Proveedor {
   direccion: string;
   localidad: string;
   provincia: string;
+  cbu?: string;
+  aliasBancario?: string;
+  numeroCuenta?: string;
   contactos: Contacto[];
   rubro: string;
   formaPago: string;
