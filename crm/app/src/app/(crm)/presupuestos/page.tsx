@@ -1772,9 +1772,30 @@ export default function PresupuestosPage() {
     setTimeout(() => setCopiedPR(false), 2000);
   }
 
-  function handlePrint(pr: Presupuesto) {
+  async function loadSucursalForPDF(pr: Presupuesto) {
+    const fallback = {
+      nombre: pr.sucursalNombre || "",
+      direccion: pr.sucursalDireccion || "",
+    };
+    if (!pr.sucursalId) return fallback;
+
+    const { data, error } = await (supabase as any)
+      .from("cliente_sucursales")
+      .select("nombre, direccion, localidad, provincia")
+      .eq("id", pr.sucursalId)
+      .maybeSingle();
+    if (error || !data) return fallback;
+
+    return {
+      nombre: data.nombre || fallback.nombre,
+      direccion: [data.direccion, data.localidad, data.provincia].filter(Boolean).join(", ") || fallback.direccion,
+    };
+  }
+
+  async function handlePrint(pr: Presupuesto) {
     const p = pr as any;
     if (!sociedadActiva) return;
+    const sucursalPDF = await loadSucursalForPDF(pr);
     const soc = getSociedadPDF(sociedadActiva);
     const estadoLabel = (statusConfig[pr.estado] || { label: pr.estado }).label;
     const html = generatePresupuestoPDF({
@@ -1794,11 +1815,8 @@ export default function PresupuestosPage() {
       clienteCondicionIva: p.clienteCondicionIva,
       clienteEmail: p.clienteEmail,
       clienteTelefono: p.clienteTelefono,
-      clienteDireccion: p.clienteDireccion,
-      clienteLocalidad: p.clienteLocalidad,
-      clienteProvincia: p.clienteProvincia,
-      sucursalNombre: p.sucursalNombre,
-      sucursalDireccion: p.sucursalDireccion,
+      sucursalNombre: sucursalPDF.nombre,
+      sucursalDireccion: sucursalPDF.direccion,
       vendedorNombre: p.vendedorNombre,
       tipoComprobante: p.tipoComprobante,
       cotizacionModalidad: p.cotizacionModalidad,
@@ -3695,6 +3713,7 @@ export default function PresupuestosPage() {
           const pr = presupuestos.find(p => p.id === emailModal.id);
           if (!pr || !sociedadActiva) throw new Error("No se encontró el presupuesto");
           const p = pr as any;
+          const sucursalPDF = await loadSucursalForPDF(pr);
           const soc = getSociedadPDF(sociedadActiva);
           const estadoLabel = (statusConfig[pr.estado] || { label: pr.estado }).label;
           const html = generatePresupuestoPDF({
@@ -3714,11 +3733,8 @@ export default function PresupuestosPage() {
             clienteCondicionIva: p.clienteCondicionIva,
             clienteEmail: p.clienteEmail,
             clienteTelefono: p.clienteTelefono,
-            clienteDireccion: p.clienteDireccion,
-            clienteLocalidad: p.clienteLocalidad,
-            clienteProvincia: p.clienteProvincia,
-            sucursalNombre: p.sucursalNombre,
-            sucursalDireccion: p.sucursalDireccion,
+            sucursalNombre: sucursalPDF.nombre,
+            sucursalDireccion: sucursalPDF.direccion,
             vendedorNombre: p.vendedorNombre,
             tipoComprobante: p.tipoComprobante,
             cotizacionModalidad: p.cotizacionModalidad,
