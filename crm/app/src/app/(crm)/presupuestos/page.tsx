@@ -191,6 +191,7 @@ interface NewPRItem {
   iva_porcentaje: number;
   proveedor_nombre: string;
   proveedor_id: string;
+  stock_propio: boolean;
   lista_item_id: string;
   costo_moneda: "ARS" | "USD";
 }
@@ -243,7 +244,7 @@ function calcItemTotals(item: NewPRItem) {
 const emptyItem: NewPRItem = {
   codigo: "", descripcion: "", categoria: "", cantidad: 1, unidad: "UN",
   precio_costo: 0, markup_porcentaje: 0, precio_venta: 0, iva_porcentaje: 21,
-  proveedor_nombre: "", proveedor_id: "", lista_item_id: "", costo_moneda: "USD",
+  proveedor_nombre: "", proveedor_id: "", stock_propio: false, lista_item_id: "", costo_moneda: "USD",
 };
 
 /** Convierte precio_costo a la moneda del presupuesto */
@@ -522,6 +523,7 @@ export default function PresupuestosPage() {
         precio_venta: precioVenta,
         proveedor_nombre: suggestion.proveedor_nombre,
         proveedor_id: suggestion.proveedor_id,
+        stock_propio: false,
         lista_item_id: suggestion.id,
       };
       return { ...prev, items };
@@ -590,6 +592,7 @@ export default function PresupuestosPage() {
             iva_porcentaje: 21,
             proveedor_nombre: item.proveedor || "",
             proveedor_id: "",
+            stock_propio: false,
             lista_item_id: item.lista_id || "",
           };
         });
@@ -976,10 +979,12 @@ export default function PresupuestosPage() {
         unidad: it.unidad ?? "u",
         precio_costo: it.precio_costo ?? 0,
         markup_porcentaje: it.markup_porcentaje ?? 0,
+        precio_venta: it.precio_venta ?? 0,
         iva_porcentaje: it.iva_porcentaje ?? 21,
-        // precio_venta, subtotal, iva, total son columnas generadas por DB — no se insertan
+        // subtotal, iva y total los recalcula Supabase desde el precio de venta exacto.
         orden: it.orden,
         proveedor_id: it.proveedor_id || null,
+        stock_propio: Boolean(it.stock_propio),
         lista_item_id: it.lista_item_id || null,
         proveedor_nombre: it.proveedor_nombre || null,
         costo_moneda: it.costo_moneda || "ARS",
@@ -1192,9 +1197,13 @@ export default function PresupuestosPage() {
         return;
       }
 
-      // Group items by proveedor_id (items sin proveedor van a key "__sin_proveedor__")
+      // Los items de stock propio conservan su costo para el margen, pero no requieren compra.
+      const stockItemsCount = items.filter((item: any) => Boolean(item.stock_propio)).length;
+      const itemsAComprar = items.filter((item: any) => !item.stock_propio);
+
+      // Group purchasable items by proveedor_id (items sin proveedor van a key "__sin_proveedor__")
       const byProveedor: Record<string, any[]> = {};
-      for (const item of items) {
+      for (const item of itemsAComprar) {
         const provId = (item as any).proveedor_id || "__sin_proveedor__";
         if (!byProveedor[provId]) byProveedor[provId] = [];
         byProveedor[provId].push(item);
@@ -1205,7 +1214,10 @@ export default function PresupuestosPage() {
       const conProveedorIds = Object.keys(byProveedor).filter(k => k !== "__sin_proveedor__");
 
       if (conProveedorIds.length === 0 && sinProveedorCount === 0) {
-        toast.info("PR aprobado. No se generaron OC (sin items).");
+        toast.info(stockItemsCount > 0
+          ? `PR aprobado. ${stockItemsCount} item(s) salen de stock propio; no se generó OC.`
+          : "PR aprobado. No se generaron OC (sin items)."
+        );
         return;
       }
 
@@ -1318,6 +1330,9 @@ export default function PresupuestosPage() {
       if (sinProveedorCount > 0 && sinProvItems.length > 0) {
         toast.info(`${sinProveedorCount} item(s) sin proveedor — OC creada en borrador para asignar proveedor`);
       }
+      if (stockItemsCount > 0) {
+        toast.info(`${stockItemsCount} item(s) de stock propio excluidos de las órdenes de compra`);
+      }
     } catch (err) {
       console.error("Error generating OCs:", err);
       toast.warning("PR aprobado pero hubo un error al generar las OC");
@@ -1429,7 +1444,7 @@ export default function PresupuestosPage() {
       }
 
       if (presupuesto_items && presupuesto_items.length > 0) {
-        const items = presupuesto_items.map(({ id: _iid, presupuesto_id: _pid, created_at: _ica, precio_venta: _pv, subtotal: _st, iva: _iv, total: _tot, ...itemRest }: Record<string, unknown>) => ({
+        const items = presupuesto_items.map(({ id: _iid, presupuesto_id: _pid, created_at: _ica, subtotal: _st, iva: _iv, total: _tot, ...itemRest }: Record<string, unknown>) => ({
           ...itemRest,
           presupuesto_id: newPRRow.id,
         }));
@@ -1501,6 +1516,7 @@ export default function PresupuestosPage() {
           iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
           proveedor_nombre: it.proveedor_nombre || "",
           proveedor_id: it.proveedor_id || "",
+          stock_propio: Boolean(it.stock_propio),
           lista_item_id: it.lista_item_id || "",
           costo_moneda: (it.costo_moneda || "USD") as "ARS" | "USD",
         };
@@ -3185,20 +3201,23 @@ export default function PresupuestosPage() {
                       </td>
                       <td className="px-2 py-1.5">
                         <select
-                          value={item.proveedor_id || ""}
+                          value={item.stock_propio ? "__stock_propio__" : (item.proveedor_id || "")}
                           onChange={(e) => {
                             const provId = e.target.value;
-                            const provNombre = proveedoresOptions.find(p => p.id === provId)?.razon_social || "";
+                            const esStockPropio = provId === "__stock_propio__";
+                            const proveedorId = esStockPropio ? "" : provId;
+                            const provNombre = esStockPropio ? "Stock propio" : (proveedoresOptions.find(p => p.id === provId)?.razon_social || "");
                             setNewPR((prev) => {
                               const items = [...prev.items];
-                              items[idx] = { ...items[idx], proveedor_id: provId, proveedor_nombre: provNombre };
+                              items[idx] = { ...items[idx], proveedor_id: proveedorId, proveedor_nombre: provNombre, stock_propio: esStockPropio };
                               return { ...prev, items };
                             });
                           }}
                           className="w-full rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100"
                           title={item.proveedor_nombre || "Sin proveedor"}
                         >
-                          <option value="">—</option>
+                          <option value="">Sin proveedor</option>
+                          <option value="__stock_propio__">Stock propio — no genera OC</option>
                           {proveedoresOptions.map(p => (
                             <option key={p.id} value={p.id}>{p.razon_social}</option>
                           ))}
