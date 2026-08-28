@@ -121,6 +121,8 @@ function baseStyles(color: string) {
     .compact-title { margin-bottom: 5px; color: ${color}; font-size: 8px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; }
     .compact-primary { margin-bottom: 3px; color: #222; font-size: 12px; font-weight: 700; }
     .compact-line { margin-top: 2px; color: #444; font-size: 9px; line-height: 1.35; }
+    .compact-line-aligned { display: grid; grid-template-columns: 76px minmax(0, 1fr); column-gap: 4px; align-items: baseline; }
+    .compact-line-aligned .compact-label { margin-right: 0; }
     .compact-label { color: #888; font-size: 7px; font-weight: 800; letter-spacing: .45px; text-transform: uppercase; margin-right: 4px; }
 
     /* Items table */
@@ -344,10 +346,10 @@ ${documentHeader(soc, {
     </td>
     <td style="width:36%">
       <div class="compact-title">Datos comerciales</div>
-      ${pr.vendedorNombre ? `<div class="compact-line"><span class="compact-label">Vendedor</span>${pr.vendedorNombre}</div>` : ""}
-      ${pr.condicionPago ? `<div class="compact-line"><span class="compact-label">Pago</span>${pr.condicionPago}</div>` : ""}
-      <div class="compact-line"><span class="compact-label">Moneda</span>${mon === "USD" ? `USD ${pr.cotizacionModalidad === "billetes" ? "billete" : "divisa"}` : "ARS - Pesos argentinos"}</div>
-      ${mon === "USD" && pr.tipoCambio ? `<div class="compact-line"><span class="compact-label">Tipo de cambio</span>$ ${Number(pr.tipoCambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>` : ""}
+      ${pr.vendedorNombre ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Vendedor</span><span>${pr.vendedorNombre}</span></div>` : ""}
+      ${pr.condicionPago ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Pago</span><span>${pr.condicionPago}</span></div>` : ""}
+      <div class="compact-line compact-line-aligned"><span class="compact-label">Moneda</span><span>${mon === "USD" ? `USD ${pr.cotizacionModalidad === "billetes" ? "billete" : "divisa"}` : "ARS - Pesos argentinos"}</span></div>
+      ${mon === "USD" && pr.tipoCambio ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Tipo de cambio</span><span>$ ${Number(pr.tipoCambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
     </td>
   </tr>
 </table>
@@ -1174,7 +1176,7 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
   const overlay = document.createElement("div");
   // Must be visible (not opacity:0 or display:none) for html2canvas to capture.
   // Position behind viewport with clip to prevent user seeing it.
-  overlay.style.cssText = "position:absolute;left:0;top:0;z-index:-1;background:#fff;width:794px;overflow:visible;pointer-events:none;";
+  overlay.style.cssText = "position:fixed;left:-10000px;top:0;z-index:0;background:#fff;width:794px;overflow:visible;pointer-events:none;contain:layout style;";
 
   // Extract <style> blocks and <body> content from full HTML document
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);

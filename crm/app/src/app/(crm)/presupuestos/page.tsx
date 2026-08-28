@@ -1830,7 +1830,7 @@ export default function PresupuestosPage() {
         total: it.total,
       })),
     }, soc);
-    openPDFWindow(html, `${pr.numero}.pdf`);
+    await openPDFWindow(html, `${pr.numero}.pdf`);
   }
 
   if (loading) {
