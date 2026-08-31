@@ -489,9 +489,8 @@ export function generateFacturaPDF(
 
   const totalsHtml = isB
     ? `<table style="width:100%;border-collapse:collapse">
-        <tr><td style="${trStyle}">Subtotal</td><td style="${tdMonoR}">${formatCurrency(Number(f.total), mon)}</td></tr>
-        <tr><td style="${trStyle};color:#999;font-size:9px">IVA incluido en precio</td><td style="${tdMonoR};font-size:9px;color:#999">${formatCurrency(Number(f.iva), mon)}</td></tr>
-        <tr><td style="${trFinal}">TOTAL</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
+        <tr><td style="${trStyle};color:#777">Precios finales con IVA incluido</td><td></td></tr>
+        <tr><td style="${trFinal}">TOTAL (${mon})</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
        </table>`
     : `<table style="width:100%;border-collapse:collapse">
         <tr><td style="${trStyle}">Neto gravado</td><td style="${tdMonoR}">${formatCurrency(Number(f.subtotal), mon)}</td></tr>
@@ -501,53 +500,39 @@ export function generateFacturaPDF(
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${tipoLabel} ${letraComprobante} ${compNum}</title>
-<style>${facturaStyles(c)}</style></head><body>
+<style>${baseStyles(c)}</style></head><body>
 <div class="page">
-<div class="header-bar" style="margin-bottom:6px"></div>
+${documentHeader(soc, {
+  title: tipoLabel,
+  number: compNum,
+  date: formatDate(f.fecha),
+  secondary: f.fecha_vencimiento ? `Vence ${formatDate(f.fecha_vencimiento)}` : "Original",
+  marker: letraComprobante,
+  centerMarker: true,
+  markerCode: `Código ${codTipo}`,
+  fiscalDetails: true,
+  contactEmail: soc.email,
+})}
 
-<table style="width:100%;border:2px solid #222;border-collapse:collapse;margin-bottom:0;table-layout:fixed">
+<table class="compact-strip">
   <tr>
-    <td style="width:50%;padding:14px 16px;text-align:center;vertical-align:middle">
-      <img src="${LAZZARI_LOGO_B64}" alt="${soc.nombre}" style="max-height:62px" />
+    <td style="width:60%">
+      <div class="compact-title">Cliente</div>
+      <div class="compact-primary">${cli?.razon_social || "\u2014"}</div>
+      ${(cli?.cuit || cli?.condicion_iva) ? `<div class="compact-line">${cli?.cuit ? `<span class="compact-label">CUIT</span>${cli.cuit}` : ""}${cli?.cuit && cli?.condicion_iva ? ` &nbsp;|&nbsp; ` : ""}${cli?.condicion_iva ? `<span class="compact-label">IVA</span>${cli.condicion_iva === "RI" ? "Responsable inscripto" : cli.condicion_iva}` : ""}</div>` : ""}
+      ${cli?.direccion ? `<div class="compact-line"><span class="compact-label">Domicilio fiscal</span>${cli.direccion}${cli.localidad ? `, ${cli.localidad}` : ""}${cli.provincia ? `, ${cli.provincia}` : ""}</div>` : ""}
     </td>
-    <td style="width:70px;border-left:2px solid #222;border-right:2px solid #222;text-align:center;vertical-align:top;padding:6px 5px 6px 5px">
-      <div style="background:#222;color:#fff;font-size:32px;font-weight:900;line-height:1;padding:4px 10px;text-align:center;display:inline-block">${letraComprobante}</div>
-      <div style="font-size:8px;color:#444;text-align:center;margin-top:4px;font-weight:600">${codTipo}</div>
-    </td>
-    <td style="width:50%;padding:12px 16px;vertical-align:top">
-      <div style="font-size:13px;font-weight:700;font-style:italic;text-align:right;color:#222">${tipoLabel}</div>
-      <div style="font-size:9px;text-align:right;color:#666">Original</div>
-      <div style="font-size:10px;text-align:right;color:#444;margin-top:3px">N&ordm; <b style="color:#222;font-weight:700">${compNum}</b></div>
-      <div style="font-size:10px;text-align:right;color:#444;margin-top:3px">Fecha: <b style="color:#222;font-weight:700">${formatDate(f.fecha)}</b></div>
-      <div style="font-size:10px;text-align:right;color:#444;margin-top:3px">C.U.I.T.: <b style="color:#222;font-weight:700">${emisor.cuit}</b></div>
-      ${soc.ingresosBrutos ? `<div style="font-size:10px;text-align:right;color:#444;margin-top:3px">Ingresos brutos N&ordm; <b style="color:#222;font-weight:700">${soc.ingresosBrutos}</b></div>` : ""}
-      ${soc.inicioActividades ? `<div style="font-size:10px;text-align:right;color:#444;margin-top:3px">Inicio de actividad <b style="color:#222;font-weight:700">${soc.inicioActividades}</b></div>` : ""}
-    </td>
-  </tr>
-</table>
-<div style="border-left:2px solid #222;border-right:2px solid #222;border-bottom:2px solid #222;padding:7px 14px;margin-bottom:12px">
-  <div style="font-size:11px;font-weight:700;color:#222;text-transform:uppercase">${soc.razonSocial}</div>
-  <div style="font-size:9px;color:#444;margin-top:2px">${emisor.condicionIva}${soc.domicilio ? ` &nbsp;|&nbsp; ${soc.domicilio}` : ""}</div>
-  ${soc.email ? `<div style="font-size:9px;color:#444;margin-top:2px">${soc.email}</div>` : ""}
-</div>
-
-<table style="width:100%;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid #ccc;border-collapse:collapse">
-  <tr>
-    <td style="width:60%;font-size:10px;color:#333;line-height:1.6;vertical-align:top">
-      <b>SR/ES</b>: ${cli?.razon_social || "\u2014"}${cli?.cuit ? ` <b>C.U.I.T.:</b> ${cli.cuit}` : ""}${cli?.condicion_iva ? ` - ${cli.condicion_iva === "RI" ? "Responsable inscripto" : cli.condicion_iva}` : ""}<br/>
-      ${cli?.direccion ? `<b>Dirección</b>: ${cli.direccion}${cli.localidad ? `, ${cli.localidad}` : ""}${cli.provincia ? `, ${cli.provincia}` : ""}<br/>` : ""}
-    </td>
-    <td style="width:40%;font-size:10px;color:#333;text-align:right;line-height:1.8;vertical-align:top">
-      ${f.condicion_venta ? `Condición de venta: <b><i>${f.condicion_venta}</i></b><br/>` : ""}
-      ${soc.jurisdiccion ? `Jurisdicción: <b><i><u>${soc.jurisdiccion}</u></i></b><br/>` : ""}
-      ${f.fecha_vencimiento ? `Vencimiento: <b>${formatDate(f.fecha_vencimiento)}</b><br/>` : ""}
-      Moneda: ${mon === "USD" ? "DOLARES ESTADOUNIDENSES" : "PESOS ARGENTINOS"}
-      ${isUSD ? `<br/>Tipo de cambio: $ ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : ""}
-      ${f.oc_cliente ? `<br/>OC Cliente: <b>${f.oc_cliente}</b>` : ""}
+    <td style="width:40%">
+      <div class="compact-title">Datos del comprobante</div>
+      ${f.condicion_venta ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Pago</span><span>${f.condicion_venta}</span></div>` : ""}
+      <div class="compact-line compact-line-aligned"><span class="compact-label">Moneda</span><span>${mon === "USD" ? "USD — Dólares estadounidenses" : "ARS — Pesos argentinos"}</span></div>
+      ${isUSD ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Tipo de cambio</span><span>$ ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
+      ${f.oc_cliente ? `<div class="compact-line compact-line-aligned"><span class="compact-label">OC cliente</span><span>${f.oc_cliente}</span></div>` : ""}
     </td>
   </tr>
 </table>
 
+<div class="items-title">Detalle de productos / servicios</div>
 <table>
   <thead><tr>
     <th class="center" style="width:32px">#</th>
@@ -562,7 +547,7 @@ export function generateFacturaPDF(
 
 <table style="width:100%;margin-top:14px;border-collapse:collapse">
   <tr><td></td><td style="width:260px">
-    ${isUSD ? `<table style="width:100%;border-collapse:collapse"><tr><td style="font-size:9px;color:#999;padding:5px 0">Operación en USD &mdash; TC: ${Number(f.tipo_cambio).toLocaleString("es-AR")}</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:9px;color:#999;padding:5px 0">USD ${(Number(f.total) / Number(f.tipo_cambio!)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td></tr></table>` : ""}
+    ${isUSD ? `<div style="font-size:9px;color:#999;padding:5px 0">Operación en USD &mdash; TC: ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>` : ""}
     ${totalsHtml}
   </td></tr>
 </table>

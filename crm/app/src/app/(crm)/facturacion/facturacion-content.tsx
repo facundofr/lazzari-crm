@@ -688,10 +688,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   async function handleEliminar(id: string) {
     if (!confirm("¿Eliminar esta factura manual permanentemente? Esta acción no se puede deshacer.")) return;
     try {
-      // Delete items first
-      const { error: itemsErr } = await supabase.from("factura_items").delete().eq("factura_id", id);
-      if (itemsErr) { alert("Error eliminando items: " + itemsErr.message); return; }
-      const { error } = await supabase.from("facturas").delete().eq("id", id);
+      const { error } = await (supabase as any).rpc("delete_manual_invoice", { p_factura_id: id });
       if (error) { alert("Error eliminando factura: " + error.message); return; }
       await fetchData();
       if (detailFactura?.id === id) { setDetailFactura(null); setPanelFullscreen(false); }
@@ -1771,21 +1768,21 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                         </button>
                       )}
                       {!detailFactura.cae && (
-                        <>
-                          <button onClick={() => handleAnular(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-red-950/30">
-                            <XCircle className="h-4 w-4" /> Anular comprobante
-                          </button>
-                          <button onClick={() => handleEliminar(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-red-200 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 hover:border-red-300 transition-colors dark:border-zinc-700 dark:text-red-400 dark:hover:bg-red-950/30">
-                            <Trash2 className="h-4 w-4" /> Eliminar factura
-                          </button>
-                        </>
+                        <button onClick={() => handleAnular(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-red-50 hover:border-red-200 hover:text-red-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-red-950/30">
+                          <XCircle className="h-4 w-4" /> Anular comprobante
+                        </button>
                       )}
                     </>
                   )}
                   {detailFactura.estado === "anulada" && !detailFactura.cae && (
-                    <button onClick={() => handleRevertirAnulacion(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
-                      <CheckCircle2 className="h-4 w-4" /> Revertir anulación
-                    </button>
+                    <>
+                      <button onClick={() => handleRevertirAnulacion(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
+                        <CheckCircle2 className="h-4 w-4" /> Revertir anulación
+                      </button>
+                      <button onClick={() => handleEliminar(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-red-200 px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 hover:border-red-300 transition-colors dark:border-zinc-700 dark:text-red-400 dark:hover:bg-red-950/30">
+                        <Trash2 className="h-4 w-4" /> Eliminar factura manual
+                      </button>
+                    </>
                   )}
                 </div>
               </div>

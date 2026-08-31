@@ -6,12 +6,13 @@ import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate, getInitials, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
+import { generateFacturaPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
 import Link from "next/link";
 import {
   FileText, Receipt, Truck, CheckCircle2,
   Loader2, X, ChevronRight, ChevronDown,
   Plus, Minus, DollarSign, Eye, AlertCircle,
-  ArrowRight, Clock, Package, ClipboardList, Search,
+  ArrowRight, Clock, Package, ClipboardList, Search, Download,
 } from "lucide-react";
 import { FichasRelevamiento } from "@/components/ventas/fichas-relevamiento";
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -61,6 +62,11 @@ interface VentaFactura {
   moneda: string;
   estado: string;
   presupuesto_id: string | null;
+  tipo_cambio?: number | null;
+  cae_vencimiento?: string | null;
+  fecha_vencimiento?: string | null;
+  condicion_venta?: string | null;
+  oc_cliente?: string | null;
 }
 
 interface VentaRemito {
@@ -199,6 +205,8 @@ export default function VentasPage() {
   const [emitMoneda, setEmitMoneda] = useState<"ARS" | "USD">("ARS");
   const [emitError, setEmitError] = useState("");
   const [emitSuccess, setEmitSuccess] = useState("");
+  const [emitFacturaId, setEmitFacturaId] = useState<string | null>(null);
+  const [downloadingFacturaId, setDownloadingFacturaId] = useState<string | null>(null);
   const [emitManual, setEmitManual] = useState(false);
   const [emitNextNum, setEmitNextNum] = useState<number | null>(null);
   const [emitFecha, setEmitFecha] = useState("");
@@ -264,7 +272,7 @@ export default function VentasPage() {
       const [facturasRes, remitosRes] = await Promise.all([
         pIds.length > 0
           ? (() => {
-              let q = (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, subtotal, iva, total, moneda, estado, presupuesto_id").in("presupuesto_id", pIds);
+              let q = (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, cae_vencimiento, subtotal, iva, total, moneda, tipo_cambio, estado, presupuesto_id, fecha_vencimiento, condicion_venta, oc_cliente").in("presupuesto_id", pIds);
               if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
               return q;
             })()
@@ -304,6 +312,73 @@ export default function VentasPage() {
       setLoading(false);
     }
   }, [sociedadActiva]);
+
+  async function downloadFactura(facturaId: string) {
+    if (!sociedadActiva || downloadingFacturaId) return;
+    setDownloadingFacturaId(facturaId);
+    try {
+      const [{ data: factura, error: facturaError }, { data: items, error: itemsError }] = await Promise.all([
+        (supabase as any).from("facturas")
+          .select("*, clientes(razon_social, cuit, condicion_iva, direccion, localidad, provincia, email, telefono)")
+          .eq("id", facturaId).single(),
+        supabase.from("factura_items")
+          .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal")
+          .eq("factura_id", facturaId).order("orden"),
+      ]);
+      if (facturaError || !factura) throw facturaError || new Error("Factura no encontrada");
+      if (itemsError) throw itemsError;
+
+      const soc = getSociedadPDF(sociedadActiva);
+      const cli = factura.clientes;
+      const html = generateFacturaPDF({
+        tipo: factura.tipo,
+        punto_venta: factura.punto_venta,
+        numero: factura.numero,
+        fecha: factura.fecha,
+        fecha_vencimiento: factura.fecha_vencimiento,
+        condicion_venta: factura.condicion_venta,
+        moneda: factura.moneda || "ARS",
+        tipo_cambio: factura.tipo_cambio,
+        subtotal: Number(factura.subtotal),
+        iva: Number(factura.iva),
+        total: Number(factura.total),
+        cae: factura.cae,
+        cae_vencimiento: factura.cae_vencimiento,
+        oc_cliente: factura.oc_cliente,
+        cliente: cli ? {
+          razon_social: cli.razon_social,
+          cuit: cli.cuit,
+          condicion_iva: cli.condicion_iva,
+          direccion: cli.direccion,
+          localidad: cli.localidad,
+          provincia: cli.provincia,
+          email: cli.email,
+          telefono: cli.telefono,
+        } : null,
+        items: (items || []).map((it) => ({
+          descripcion: it.descripcion,
+          cantidad: Number(it.cantidad),
+          precio_unitario: Number(it.precio_unitario),
+          iva_porcentaje: Number(it.iva_porcentaje),
+          subtotal: Number(it.subtotal ?? (Number(it.cantidad) * Number(it.precio_unitario))),
+        })),
+      }, {
+        razonSocial: soc.razonSocial,
+        cuit: soc.cuit,
+        cuitNumero: Number(soc.cuit.replace(/\D/g, "")),
+        condicionIva: soc.condicionIva,
+        domicilio: soc.domicilio,
+        ptoVta: factura.punto_venta,
+      }, soc);
+      const filename = `${factura.tipo}-${String(factura.punto_venta).padStart(4, "0")}-${String(factura.numero).padStart(8, "0")}.pdf`;
+      await openPDFWindow(html, filename);
+    } catch (error) {
+      console.error("Error descargando factura:", error);
+      alert("No se pudo descargar la factura. Intentá nuevamente.");
+    } finally {
+      setDownloadingFacturaId(null);
+    }
+  }
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -384,6 +459,7 @@ export default function VentasPage() {
     setEmitMoneda(p.moneda as "ARS" | "USD" || "ARS");
     setEmitError("");
     setEmitSuccess("");
+    setEmitFacturaId(null);
     setEmitManual((p as any).modalidad_emision === "manual");
     setEmitPvManual(0);
     setEmitFecha(hoy);
@@ -449,6 +525,7 @@ export default function VentasPage() {
 
       if (data.success) {
         setEmitSuccess(`${data.factura.comprobante} emitida - CAE: ${data.factura.cae}`);
+        setEmitFacturaId(data.factura.id);
         await fetchData();
       } else {
         setEmitError(data.error || "Error al emitir factura");
@@ -562,6 +639,7 @@ export default function VentasPage() {
 
       const comp = `${emitTipo} ${String(pvManual).padStart(4, "0")}-${String(nextNumero).padStart(8, "0")}`;
       setEmitSuccess(`${comp} emitida (manual, sin CAE)`);
+      setEmitFacturaId(facturaData.id);
       await fetchData();
     } catch (err) {
       setEmitError("Error al crear factura manual");
@@ -1020,12 +1098,22 @@ export default function VentasPage() {
                                 {facturaActiva.estado}
                               </Badge>
                             </div>
-                            <Link
-                              href={`/finanzas?factura=${facturaActiva.id}`}
-                              className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700"
-                            >
-                              Ver en facturacion <ArrowRight className="h-3 w-3" />
-                            </Link>
+                            <div className="flex flex-wrap items-center gap-3 pt-1">
+                              <button
+                                onClick={() => downloadFactura(facturaActiva.id)}
+                                disabled={downloadingFacturaId === facturaActiva.id}
+                                className="inline-flex items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-2 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-60"
+                              >
+                                {downloadingFacturaId === facturaActiva.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                                Descargar PDF
+                              </button>
+                              <Link
+                                href={`/finanzas?factura=${facturaActiva.id}`}
+                                className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700"
+                              >
+                                Ver en facturación <ArrowRight className="h-3 w-3" />
+                              </Link>
+                            </div>
                           </div>
                         );
                       }
@@ -1127,12 +1215,24 @@ export default function VentasPage() {
                   <CheckCircle2 className="h-5 w-5" />
                   <p className="font-medium">{emitSuccess}</p>
                 </div>
-                <button
-                  onClick={() => setEmitModalOpen(false)}
-                  className="mt-3 rounded-lg border border-green-300 px-4 py-2 text-sm font-medium text-green-700 hover:bg-green-100"
-                >
-                  Cerrar
-                </button>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {emitFacturaId && (
+                    <button
+                      onClick={() => downloadFactura(emitFacturaId)}
+                      disabled={downloadingFacturaId === emitFacturaId}
+                      className="inline-flex items-center gap-2 rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-800 disabled:opacity-60"
+                    >
+                      {downloadingFacturaId === emitFacturaId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                      Descargar factura PDF
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setEmitModalOpen(false)}
+                    className="rounded-lg border border-green-300 px-4 py-2 text-sm font-medium text-green-700 hover:bg-green-100"
+                  >
+                    Cerrar
+                  </button>
+                </div>
               </div>
             ) : (
               <>
