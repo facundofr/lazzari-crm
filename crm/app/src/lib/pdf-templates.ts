@@ -511,7 +511,11 @@ export function generateFacturaPDF(
     ? `<table style="width:100%;border-collapse:collapse">
         <tr><td style="${trStyle};color:#777">Precios finales con IVA incluido</td><td></td></tr>
         <tr><td style="${trFinal}">TOTAL (${mon})</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
-       </table>`
+       </table>
+       <div style="margin-top:10px;padding-top:8px;border-top:1px solid #bbb">
+         <div style="font-size:9px;font-weight:700;color:#555;line-height:1.35">Régimen de Transparencia Fiscal al Consumidor (Ley 27.743)</div>
+         <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:#444"><span>IVA contenido</span><span style="font-family:'Courier New',monospace;font-weight:700">${formatCurrency(Number(f.iva), mon)}</span></div>
+       </div>`
     : `<table style="width:100%;border-collapse:collapse">
         <tr><td style="${trStyle}">Neto gravado</td><td style="${tdMonoR}">${formatCurrency(Number(f.subtotal), mon)}</td></tr>
         <tr><td style="${trStyle}">IVA 21%</td><td style="${tdMonoR}">${formatCurrency(Number(f.iva), mon)}</td></tr>
