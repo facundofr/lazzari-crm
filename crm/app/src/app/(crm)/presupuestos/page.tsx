@@ -961,14 +961,23 @@ export default function PresupuestosPage() {
 
     setNewPRSaving(true);
     try {
-      // Calculate totals
+      // En un PR manual, el precio ingresado por el usuario ya es el precio final.
+      // No se agrega IVA al presupuesto (si luego se factura, se extrae del total final).
+      const isManualPR = newPR.modalidad_emision === "manual";
       let subtotal = 0;
       let ivaTotal = 0;
       const itemsWithTotals = validItems.map((it, idx) => {
         const t = calcItemTotals(it);
         subtotal += t.subtotal;
-        ivaTotal += t.iva;
-        return { ...it, subtotal: t.subtotal, iva: t.iva, total: t.total, orden: idx + 1 };
+        ivaTotal += isManualPR ? 0 : t.iva;
+        return {
+          ...it,
+          iva_porcentaje: isManualPR ? 0 : it.iva_porcentaje,
+          subtotal: t.subtotal,
+          iva: isManualPR ? 0 : t.iva,
+          total: isManualPR ? t.subtotal : t.total,
+          orden: idx + 1,
+        };
       });
 
       const buildItemRows = (prId: string) => itemsWithTotals.map((it) => ({
@@ -1738,6 +1747,8 @@ export default function PresupuestosPage() {
     const estadoLabel = (statusConfig[pr.estado] || { label: pr.estado }).label;
     const mon = pr.moneda;
     const isB = p.tipoComprobante === "B";
+    const isManual = p.modalidadEmision === "manual";
+    const manualTotal = pr.items.reduce((sum, it) => sum + it.cantidad * it.precioVenta, 0);
     const lines = [
       `*PRESUPUESTO ${pr.numero}*`,
       "",
@@ -1762,9 +1773,9 @@ export default function PresupuestosPage() {
         return `${i + 1}. ${it.codigo} - ${it.descripcion}\n   ${it.cantidad} ${it.unidad} x ${formatCurrency(precioUnitarioCliente, mon)} = ${formatCurrency(totalCliente, mon)}`;
       }),
       "",
-      `Subtotal: ${formatCurrency(isB ? pr.total : pr.subtotal, mon)}`,
-      isB ? `IVA contenido: ${formatCurrency(pr.iva, mon)}` : `IVA: ${formatCurrency(pr.iva, mon)}`,
-      `*Total: ${formatCurrency(pr.total, mon)}*`,
+      isManual ? null : `Subtotal: ${formatCurrency(isB ? pr.total : pr.subtotal, mon)}`,
+      isManual ? null : (isB ? `IVA contenido: ${formatCurrency(pr.iva, mon)}` : `IVA: ${formatCurrency(pr.iva, mon)}`),
+      `*Total: ${formatCurrency(isManual ? manualTotal : pr.total, mon)}*`,
       pr.observaciones ? `\nObs: ${pr.observaciones}` : null,
     ];
     return lines.filter((l) => l !== null).join("\n");
@@ -1824,6 +1835,7 @@ export default function PresupuestosPage() {
       sucursalDireccion: sucursalPDF.direccion,
       vendedorNombre: p.vendedorNombre,
       tipoComprobante: p.tipoComprobante,
+      modalidadEmision: p.modalidadEmision,
       cotizacionModalidad: p.cotizacionModalidad,
       tipoCambio: p.tipoCambio,
       items: pr.items.map(it => ({
@@ -1856,7 +1868,7 @@ export default function PresupuestosPage() {
   newPR.items.forEach((it) => {
     const t = calcItemTotals(it);
     newPRSub += t.subtotal;
-    newPRIva += t.iva;
+    newPRIva += newPR.modalidad_emision === "manual" ? 0 : t.iva;
   });
 
   return (
@@ -3339,8 +3351,10 @@ export default function PresupuestosPage() {
           {/* Items totals preview */}
           <div className="flex justify-end mt-3">
             <div className="w-56 space-y-1 text-sm rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800/50">
-              <div className="flex justify-between"><span className="text-zinc-500">Subtotal</span><span className="font-mono">{formatCurrency(newPRSub, newPR.moneda)}</span></div>
-              <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(newPRIva, newPR.moneda)}</span></div>
+              {newPR.modalidad_emision !== "manual" && <>
+                <div className="flex justify-between"><span className="text-zinc-500">Subtotal</span><span className="font-mono">{formatCurrency(newPRSub, newPR.moneda)}</span></div>
+                <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(newPRIva, newPR.moneda)}</span></div>
+              </>}
               <div className="flex justify-between font-bold border-t border-zinc-200 pt-1 dark:border-zinc-700"><span>Total</span><span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(newPRSub + newPRIva, newPR.moneda)}</span></div>
               {newPR.tipo_cambio > 0 && (
                 <div className="text-xs text-zinc-400 text-right pt-1">TC aplicado: {newPR.tipo_cambio.toLocaleString("es-AR")}</div>
@@ -3743,6 +3757,7 @@ export default function PresupuestosPage() {
             sucursalDireccion: sucursalPDF.direccion,
             vendedorNombre: p.vendedorNombre,
             tipoComprobante: p.tipoComprobante,
+            modalidadEmision: p.modalidadEmision,
             cotizacionModalidad: p.cotizacionModalidad,
             tipoCambio: p.tipoCambio,
             items: pr.items.map(it => ({

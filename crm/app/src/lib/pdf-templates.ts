@@ -298,6 +298,7 @@ interface PRData {
   sucursalDireccion?: string;
   vendedorNombre?: string;
   tipoComprobante?: string;
+  modalidadEmision?: string;
   cotizacionModalidad?: "divisas" | "billetes";
   tipoCambio?: number | null;
   items: PRItem[];
@@ -310,6 +311,11 @@ export function generatePresupuestoPDF(
   const c = soc.colorPrimario;
   const mon = pr.moneda;
   const isB = pr.tipoComprobante === "B";
+  const isManual = pr.modalidadEmision === "manual";
+  const manualTotal = pr.items.reduce(
+    (sum, it) => sum + Number(it.cantidad) * Number(it.precioVenta),
+    0
+  );
 
   const itemRows = pr.items.map((it, i) => {
     const ivaPct = Number(it.ivaPorcentaje ?? 21);
@@ -374,14 +380,17 @@ ${documentHeader(soc, {
     <th class="right" style="width:55px">Cant.</th>
     <th class="center" style="width:50px">Unid.</th>
     <th class="right" style="width:95px">${isB ? "P. Unit. final" : "P. Unitario"}</th>
-    <th class="right" style="width:95px">${isB ? "Total final" : "Subtotal"}</th>
+    <th class="right" style="width:95px">${isB ? "Total final" : isManual ? "Total" : "Subtotal"}</th>
   </tr></thead>
   <tbody>${itemRows}</tbody>
 </table>
 
 <table style="width:100%;margin-top:14px;border-collapse:collapse">
   <tr><td></td><td style="width:260px">
-    ${isB ? `
+    ${isManual ? `
+      <table style="width:100%;border-collapse:collapse">
+        <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(manualTotal, mon)}</td></tr>
+      </table>` : isB ? `
       <table style="width:100%;border-collapse:collapse">
         <tr><td style="font-size:11px;color:#555;padding:5px 0">Subtotal (IVA incluido)</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.total, mon)}</td></tr>
         <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>

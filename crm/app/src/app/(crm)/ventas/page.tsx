@@ -431,9 +431,10 @@ export default function VentasPage() {
     const p = venta.presupuesto;
     const condIva = p.clientes?.condicion_iva;
     const defaultTipo: EmitTipo = condIva === "RI" ? "FA" : "FB";
+    const sourceIsManual = (p as any).modalidad_emision === "manual";
 
     const items = (p.presupuesto_items || []).map(it => {
-      const ivaPorcentaje = it.iva_porcentaje ?? 21;
+      const ivaPorcentaje = Number(it.iva_porcentaje) > 0 ? Number(it.iva_porcentaje) : 21;
       const precioNeto = it.precio_venta ?? (it.total
         ? it.total / (it.cantidad || 1) / (1 + ivaPorcentaje / 100)
         : 0);
@@ -441,10 +442,15 @@ export default function VentasPage() {
       return {
         descripcion: it.descripcion,
         cantidad: it.cantidad,
-        // El PR guarda precio neto. La factura B debe recibir el precio final con IVA incluido.
+        // Un PR manual ya guarda el precio final; no se le vuelve a sumar IVA al facturarlo.
+        // Los PR A/B electrónicos guardan precio neto y mantienen la lógica habitual.
         precio_unitario: isFacturaA(defaultTipo)
-          ? roundMoney(precioNeto)
-          : roundMoney(precioNeto * (1 + ivaPorcentaje / 100)),
+          ? sourceIsManual
+            ? roundMoney(precioNeto / (1 + ivaPorcentaje / 100))
+            : roundMoney(precioNeto)
+          : sourceIsManual
+            ? roundMoney(precioNeto)
+            : roundMoney(precioNeto * (1 + ivaPorcentaje / 100)),
         iva_porcentaje: ivaPorcentaje,
       };
     });
