@@ -245,6 +245,7 @@ export interface PresupuestoItem {
   markupPorcentaje: number;
   precioVenta: number;
   subtotal: number;
+  ivaPorcentaje?: number;
   iva: number;
   total: number;
 }

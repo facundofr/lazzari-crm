@@ -131,6 +131,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
       markupPorcentaje: it.markup_porcentaje,
       precioVenta: it.precio_venta,
       subtotal: it.subtotal,
+      ivaPorcentaje: it.iva_porcentaje ?? 21,
       iva: it.iva,
       total: it.total,
     })),
@@ -1736,6 +1737,7 @@ export default function PresupuestosPage() {
     const p = pr as any;
     const estadoLabel = (statusConfig[pr.estado] || { label: pr.estado }).label;
     const mon = pr.moneda;
+    const isB = p.tipoComprobante === "B";
     const lines = [
       `*PRESUPUESTO ${pr.numero}*`,
       "",
@@ -1753,12 +1755,15 @@ export default function PresupuestosPage() {
       p.sucursalNombre ? `Sucursal: ${p.sucursalNombre}` : null,
       "",
       "*Items:*",
-      ...pr.items.map((it, i) =>
-        `${i + 1}. ${it.codigo} - ${it.descripcion}\n   ${it.cantidad} ${it.unidad} x ${formatCurrency(it.precioVenta, mon)} = ${formatCurrency(it.total, mon)}`
-      ),
+      ...pr.items.map((it, i) => {
+        const ivaPct = Number(it.ivaPorcentaje ?? (it.subtotal ? (it.iva / it.subtotal) * 100 : 21));
+        const precioUnitarioCliente = isB ? it.precioVenta * (1 + ivaPct / 100) : it.precioVenta;
+        const totalCliente = isB ? it.total : it.cantidad * it.precioVenta;
+        return `${i + 1}. ${it.codigo} - ${it.descripcion}\n   ${it.cantidad} ${it.unidad} x ${formatCurrency(precioUnitarioCliente, mon)} = ${formatCurrency(totalCliente, mon)}`;
+      }),
       "",
-      `Subtotal: ${formatCurrency(pr.subtotal, mon)}`,
-      `IVA: ${formatCurrency(pr.iva, mon)}`,
+      `Subtotal: ${formatCurrency(isB ? pr.total : pr.subtotal, mon)}`,
+      isB ? `IVA contenido: ${formatCurrency(pr.iva, mon)}` : `IVA: ${formatCurrency(pr.iva, mon)}`,
       `*Total: ${formatCurrency(pr.total, mon)}*`,
       pr.observaciones ? `\nObs: ${pr.observaciones}` : null,
     ];
@@ -1828,6 +1833,7 @@ export default function PresupuestosPage() {
         unidad: it.unidad,
         precioVenta: it.precioVenta,
         total: it.total,
+        ivaPorcentaje: it.ivaPorcentaje ?? (it.subtotal ? (it.iva / it.subtotal) * 100 : 21),
       })),
     }, soc);
     await openPDFWindow(html, `${pr.numero}.pdf`);
@@ -3746,6 +3752,7 @@ export default function PresupuestosPage() {
               unidad: it.unidad,
               precioVenta: it.precioVenta,
               total: it.total,
+              ivaPorcentaje: it.ivaPorcentaje ?? (it.subtotal ? (it.iva / it.subtotal) * 100 : 21),
             })),
           }, soc);
           return htmlToPdfBase64(html);

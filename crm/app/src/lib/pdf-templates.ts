@@ -270,6 +270,7 @@ interface PRItem {
   unidad: string;
   precioVenta: number;
   total: number;
+  ivaPorcentaje?: number;
 }
 
 interface PRData {
@@ -308,17 +309,27 @@ export function generatePresupuestoPDF(
 ): string {
   const c = soc.colorPrimario;
   const mon = pr.moneda;
+  const isB = pr.tipoComprobante === "B";
 
-  const itemRows = pr.items.map((it, i) => `
+  const itemRows = pr.items.map((it, i) => {
+    const ivaPct = Number(it.ivaPorcentaje ?? 21);
+    const precioUnitarioCliente = isB
+      ? Number(it.precioVenta) * (1 + ivaPct / 100)
+      : Number(it.precioVenta);
+    const totalCliente = isB
+      ? (Number(it.total) || Number(it.cantidad) * precioUnitarioCliente)
+      : Number(it.cantidad) * Number(it.precioVenta);
+    return `
     <tr>
       <td class="center">${i + 1}</td>
       <td class="mono">${it.codigo || ""}</td>
       <td>${it.descripcion}</td>
       <td class="right">${it.cantidad}</td>
       <td class="center">${it.unidad || "u"}</td>
-      <td class="right mono">${formatCurrency(it.precioVenta, mon)}</td>
-      <td class="right mono bold">${formatCurrency(Number(it.cantidad) * Number(it.precioVenta), mon)}</td>
-    </tr>`).join("");
+      <td class="right mono">${formatCurrency(precioUnitarioCliente, mon)}</td>
+      <td class="right mono bold">${formatCurrency(totalCliente, mon)}</td>
+    </tr>`;
+  }).join("");
 
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>${pr.numero} - ${soc.razonSocial}</title>
@@ -362,19 +373,28 @@ ${documentHeader(soc, {
     <th>Descripción</th>
     <th class="right" style="width:55px">Cant.</th>
     <th class="center" style="width:50px">Unid.</th>
-    <th class="right" style="width:95px">P. Unitario</th>
-    <th class="right" style="width:95px">Subtotal</th>
+    <th class="right" style="width:95px">${isB ? "P. Unit. final" : "P. Unitario"}</th>
+    <th class="right" style="width:95px">${isB ? "Total final" : "Subtotal"}</th>
   </tr></thead>
   <tbody>${itemRows}</tbody>
 </table>
 
 <table style="width:100%;margin-top:14px;border-collapse:collapse">
   <tr><td></td><td style="width:260px">
-    <table style="width:100%;border-collapse:collapse">
-      <tr><td style="font-size:11px;color:#555;padding:5px 0">Subtotal</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.subtotal, mon)}</td></tr>
-      <tr><td style="font-size:11px;color:#555;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.iva, mon)}</td></tr>
-      <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
-    </table>
+    ${isB ? `
+      <table style="width:100%;border-collapse:collapse">
+        <tr><td style="font-size:11px;color:#555;padding:5px 0">Subtotal (IVA incluido)</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.total, mon)}</td></tr>
+        <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
+      </table>
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid #bbb">
+        <div style="font-size:9px;font-weight:700;color:#555;line-height:1.35">Régimen de Transparencia Fiscal al Consumidor (Ley 27.743)</div>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:#444"><span>IVA contenido</span><span style="font-family:'Courier New',monospace;font-weight:700">${formatCurrency(pr.iva, mon)}</span></div>
+      </div>` : `
+      <table style="width:100%;border-collapse:collapse">
+        <tr><td style="font-size:11px;color:#555;padding:5px 0">Subtotal</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.subtotal, mon)}</td></tr>
+        <tr><td style="font-size:11px;color:#555;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.iva, mon)}</td></tr>
+        <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
+      </table>`}
   </td></tr>
 </table>
 
