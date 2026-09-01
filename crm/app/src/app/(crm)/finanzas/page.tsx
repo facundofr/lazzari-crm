@@ -6,11 +6,11 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
-import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
+import { formatCurrency, formatDate, formatDateTime, todayAR } from "@/lib/utils";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles, Mail } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles, Mail, MailCheck } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -96,6 +96,7 @@ const emptyEcheqForm = {
 interface ProveedorOption {
   id: string;
   razon_social: string;
+  email?: string | null;
   cuit?: string | null;
   condicion_iva?: string | null;
   alicuota_ganancias?: number | null;
@@ -108,6 +109,7 @@ interface OrdenPagoRow {
   fecha: string;
   proveedor_id: string;
   proveedor_nombre: string;
+  proveedor_email?: string | null;
   monto_bruto: number;
   retencion_pct: number;
   monto_retencion: number;
@@ -122,6 +124,7 @@ interface OrdenPagoRow {
   estado: "pendiente" | "pagada" | "anulada";
   comprobante_url?: string;
   certificado_retencion_url?: string;
+  email_enviado_at?: string | null;
   created_at: string;
 }
 
@@ -788,7 +791,7 @@ export default function FinanzasPage() {
 
         // Fetch proveedores list for OP/gastos selectors
         try {
-          let qProv = supabase.from("proveedores").select("id, razon_social, cuit, condicion_iva, alicuota_ganancias, concepto_retencion_ganancias" as any).order("razon_social");
+          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, alicuota_ganancias, concepto_retencion_ganancias" as any).order("razon_social");
           if (sociedadActiva?.id) qProv = qProv.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: provData } = await qProv;
           if (provData) setProveedoresOptions(provData as unknown as ProveedorOption[]);
@@ -832,13 +835,14 @@ export default function FinanzasPage() {
 
         // Fetch ordenes de pago (movimientos with tipo=pago that have op_ prefix in descripcion)
         try {
-          let qOp = (supabase as any).from("ordenes_pago").select("*, proveedores(razon_social)").order("fecha", { ascending: false });
+          let qOp = (supabase as any).from("ordenes_pago").select("*, proveedores(razon_social, email)").order("fecha", { ascending: false });
           if (sociedadActiva?.id) qOp = qOp.eq("sociedad_id", sociedadActiva.id);
           const { data: opData } = await qOp;
           if (opData) {
             setOrdenesPago(opData.map((r: any) => ({
               id: r.id, numero: r.numero ?? undefined, fecha: r.fecha, proveedor_id: r.proveedor_id,
               proveedor_nombre: r.proveedores?.razon_social ?? "—",
+              proveedor_email: r.proveedores?.email ?? null,
               monto_bruto: Number(r.monto_bruto), retencion_pct: Number(r.retencion_porcentaje ?? r.retencion_pct ?? 0),
               monto_retencion: Number(r.retencion_monto ?? r.monto_retencion ?? 0),
               retencion_ganancias_pct: Number(r.retencion_ganancias_pct ?? 0),
@@ -850,6 +854,7 @@ export default function FinanzasPage() {
               estado: r.estado ?? "pendiente",
               comprobante_url: r.comprobante_url ?? undefined,
               certificado_retencion_url: r.certificado_retencion_url ?? undefined,
+              email_enviado_at: r.email_enviado_at ?? null,
               created_at: r.created_at,
             })));
           }
@@ -1488,6 +1493,29 @@ export default function FinanzasPage() {
     }, soc);
 
     openPDFWindow(html, `${op.numero || "Orden-de-pago"}.pdf`);
+  }
+
+  async function openOrdenPagoEmail(op: OrdenPagoRow) {
+    const template = await loadEmailTemplate("orden_pago", sociedadActiva?.id || "");
+    const vars = {
+      numero: op.numero || "",
+      sociedad: sociedadActiva?.razonSocial || "Lazzari",
+      total: formatCurrency(op.neto, op.moneda),
+      fecha: formatDate(op.fecha),
+      proveedor: op.proveedor_nombre || "",
+    };
+    const proveedorEmail = op.proveedor_email
+      || proveedoresOptions.find((proveedor) => proveedor.id === op.proveedor_id)?.email
+      || "";
+
+    setEmailModal({
+      open: true,
+      id: op.id,
+      to: proveedorEmail,
+      subject: applyTemplateVars(template.asunto, vars),
+      body: applyTemplateVars(template.cuerpo, vars),
+      filename: `OP-${op.numero || op.id.slice(0, 8)}.pdf`,
+    });
   }
 
   async function handleUploadCertificado(opId: string, file: File) {
@@ -2947,6 +2975,13 @@ export default function FinanzasPage() {
                       </button>
                       <button onClick={() => handleGenerarComprobante(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Generar comprobante">
                         <Printer className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => openOrdenPagoEmail(row)}
+                        className={`rounded p-1.5 transition-colors ${row.email_enviado_at ? "text-emerald-600 hover:bg-emerald-100" : "text-zinc-400 hover:bg-orange-100 hover:text-orange-600"}`}
+                        title={row.email_enviado_at ? `Enviada por email el ${formatDateTime(row.email_enviado_at)}` : "Enviar por email"}
+                      >
+                        {row.email_enviado_at ? <MailCheck className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />}
                       </button>
                       {row.estado === "pendiente" && (
                           <button onClick={() => handlePagarOP(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar como pagada">
@@ -5276,8 +5311,13 @@ export default function FinanzasPage() {
                       <CheckCircle2 className="h-4 w-4" /> Marcar pagada
                     </button>
                 )}
-                <button onClick={async () => { const template = await loadEmailTemplate("orden_pago", sociedadActiva?.id || ""); const vars = { numero: selectedOP.numero || "", sociedad: sociedadActiva?.razonSocial || "Lazzari", total: formatCurrency(selectedOP.neto, selectedOP.moneda), fecha: "", proveedor: selectedOP.proveedor_nombre || "" }; setEmailModal({ open: true, id: selectedOP.id, to: "", subject: applyTemplateVars(template.asunto, vars), body: applyTemplateVars(template.cuerpo, vars), filename: `OP-${selectedOP.numero || selectedOP.id.slice(0,8)}.pdf` }); }} className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
-                  <Mail className="h-4 w-4" /> Enviar
+                <button
+                  onClick={() => openOrdenPagoEmail(selectedOP)}
+                  className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${selectedOP.email_enviado_at ? "border-emerald-200 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-800 dark:hover:bg-emerald-950/20" : "border-zinc-300 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-800"}`}
+                  title={selectedOP.email_enviado_at ? `Enviada por email el ${formatDateTime(selectedOP.email_enviado_at)}` : "Enviar por email"}
+                >
+                  {selectedOP.email_enviado_at ? <MailCheck className="h-4 w-4" /> : <Mail className="h-4 w-4" />}
+                  {selectedOP.email_enviado_at ? "Enviada" : "Enviar"}
                 </button>
                 {selectedOP.estado !== "anulada" && (
                     <button
@@ -5621,6 +5661,24 @@ export default function FinanzasPage() {
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
+        onSuccess={async () => {
+          const sentAt = new Date().toISOString();
+          const ordenPagoId = emailModal.id;
+          const { error } = await (supabase as any)
+            .from("ordenes_pago")
+            .update({ email_enviado_at: sentAt })
+            .eq("id", ordenPagoId);
+          if (error) {
+            alert(`El email se envió, pero no se pudo guardar la marca de envío: ${error.message}`);
+            return;
+          }
+          setOrdenesPago((prev) => prev.map((orden) =>
+            orden.id === ordenPagoId ? { ...orden, email_enviado_at: sentAt } : orden
+          ));
+          setSelectedOP((prev) =>
+            prev?.id === ordenPagoId ? { ...prev, email_enviado_at: sentAt } : prev
+          );
+        }}
         generatePdf={async () => {
           const op = ordenesPago.find(o => o.id === emailModal.id);
           if (!op || !sociedadActiva) throw new Error("No se encontró la OP");
