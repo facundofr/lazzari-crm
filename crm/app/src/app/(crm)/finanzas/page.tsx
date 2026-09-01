@@ -4399,14 +4399,12 @@ export default function FinanzasPage() {
                 <button type="button" onClick={() => setFcForm({ ...fcForm, tipo_fc: "mercaderia", solo_iva: false })}
                   className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-colors ${fcForm.tipo_fc === "mercaderia" ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
                   <ShoppingCart className={`h-5 w-5 ${fcForm.tipo_fc === "mercaderia" ? "text-orange-500" : "text-zinc-400"}`} />
-                  <span className={`text-sm font-semibold ${fcForm.tipo_fc === "mercaderia" ? "text-orange-700 dark:text-orange-300" : "text-zinc-600 dark:text-zinc-300"}`}>Compra de mercadería</span>
-                  <span className="text-xs text-zinc-400 text-center">Solo libro IVA, sin stock</span>
+                  <span className={`text-sm font-semibold ${fcForm.tipo_fc === "mercaderia" ? "text-orange-700 dark:text-orange-300" : "text-zinc-600 dark:text-zinc-300"}`}>Compra</span>
                 </button>
                 <button type="button" onClick={() => setFcForm({ ...fcForm, tipo_fc: "solo_iva", solo_iva: true })}
                   className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-colors ${fcForm.tipo_fc === "solo_iva" ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
                   <FileText className={`h-5 w-5 ${fcForm.tipo_fc === "solo_iva" ? "text-blue-500" : "text-zinc-400"}`} />
                   <span className={`text-sm font-semibold ${fcForm.tipo_fc === "solo_iva" ? "text-blue-700 dark:text-blue-300" : "text-zinc-600 dark:text-zinc-300"}`}>Solo IVA / contable</span>
-                  <span className="text-xs text-zinc-400 text-center">Solo libro IVA, sin stock</span>
                 </button>
               </div>
 
