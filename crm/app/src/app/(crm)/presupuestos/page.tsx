@@ -972,7 +972,9 @@ export default function PresupuestosPage() {
         ivaTotal += isManualPR ? 0 : t.iva;
         return {
           ...it,
-          iva_porcentaje: isManualPR ? 0 : it.iva_porcentaje,
+          // En el PR manual no se muestra ni suma IVA, pero conservamos la
+          // alícuota interna para facturación y órdenes de compra posteriores.
+          iva_porcentaje: it.iva_porcentaje,
           subtotal: t.subtotal,
           iva: isManualPR ? 0 : t.iva,
           total: isManualPR ? t.subtotal : t.total,

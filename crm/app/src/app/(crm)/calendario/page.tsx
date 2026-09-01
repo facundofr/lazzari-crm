@@ -15,6 +15,7 @@ import {
   Clock,
   MapPin,
   Eye,
+  Lock,
   Users,
   FileText,
   CheckCircle2,
@@ -57,6 +58,7 @@ interface EventoRow {
   sociedad_id: string | null;
   color: string;
   completado: boolean;
+  visibilidad: "publico" | "privado";
   created_at: string;
   clientes: { razon_social: string } | null;
   asignado: { full_name: string; email: string } | null;
@@ -135,11 +137,13 @@ export default function CalendarioPage() {
     descripcion: "",
     color: "#3B82F6",
     asignado_a: "", // user_id del responsable
+    visibilidad: "privado" as "publico" | "privado",
   });
 
   // Filters
   const [filterTipo, setFilterTipo] = useState("");
   const [filterUserId, setFilterUserId] = useState("");
+  const [filterVisibilidad, setFilterVisibilidad] = useState("");
   const [users, setUsers] = useState<{ id: string; full_name: string }[]>([]);
 
   // ── Fetch data ────────────────────────────────────────────────
@@ -203,9 +207,10 @@ export default function CalendarioPage() {
     return eventos.filter((e) => {
       if (filterTipo && e.tipo !== filterTipo) return false;
       if (filterUserId && e.user_id !== filterUserId) return false;
+      if (filterVisibilidad && e.visibilidad !== filterVisibilidad) return false;
       return true;
     });
-  }, [eventos, filterTipo, filterUserId]);
+  }, [eventos, filterTipo, filterUserId, filterVisibilidad]);
 
   // ── Events grouped by date key ───────────────────────────────
   const eventsByDate = useMemo(() => {
@@ -319,6 +324,7 @@ export default function CalendarioPage() {
       descripcion: "",
       color: "#3B82F6",
       asignado_a: profile?.id || "",
+      visibilidad: "privado",
     });
     let cq = supabase
       .from("clientes")
@@ -358,6 +364,7 @@ export default function CalendarioPage() {
         created_by: profile?.id || null,
         sociedad_id: sociedadActiva?.id || null,
         completado: false,
+        visibilidad: createForm.visibilidad,
       });
       if (error) { alert(error.message); return; }
 
@@ -412,6 +419,13 @@ export default function CalendarioPage() {
     } catch (err) {
       console.error("Error deleting evento:", err);
     }
+  }
+
+  function canManageEvento(evento: EventoRow): boolean {
+    return evento.created_by === profile?.id
+      || evento.user_id === profile?.id
+      || profile?.role === "admin"
+      || profile?.role === "super_admin";
   }
 
   // ── Today key ────────────────────────────────────────────────
@@ -499,6 +513,15 @@ export default function CalendarioPage() {
             {users.map((u) => (
               <option key={u.id} value={u.id}>{u.full_name || u.id}</option>
             ))}
+          </select>
+          <select
+            value={filterVisibilidad}
+            onChange={(e) => setFilterVisibilidad(e.target.value)}
+            className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+          >
+            <option value="">Públicos y privados</option>
+            <option value="publico">Públicos</option>
+            <option value="privado">Privados</option>
           </select>
         </div>
 
@@ -592,6 +615,7 @@ export default function CalendarioPage() {
                           style={{ backgroundColor: ev.color }}
                         />
                         <span className="truncate">{ev.titulo}</span>
+                        {ev.visibilidad === "privado" && <Lock className="h-2.5 w-2.5 shrink-0" />}
                       </div>
                     ))}
                     {dayEvents.length > 3 && (
@@ -636,6 +660,7 @@ export default function CalendarioPage() {
                       <p className="text-sm font-medium dark:text-white truncate">{ev.titulo}</p>
                       <div className="flex items-center gap-2 mt-0.5">
                         <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                        <Badge variant="outline">{ev.visibilidad === "privado" ? "Privado" : "Público"}</Badge>
                         <span className={`text-xs ${ev.isOverdue ? "text-red-500 font-medium" : "text-zinc-400"}`}>{dateLabel}</span>
                         {ev.clientes?.razon_social && <span className="text-xs text-zinc-400 truncate">· {ev.clientes.razon_social}</span>}
                         {ev.creador?.full_name && <span className="text-xs text-zinc-400 truncate">· Creado por {ev.creador.full_name.split(" ")[0]}</span>}
@@ -644,13 +669,13 @@ export default function CalendarioPage() {
                     {ev.asignado && (
                       <span className="text-xs text-zinc-400 shrink-0" title="Responsable">{ev.asignado.full_name?.split(" ")[0] || "—"}</span>
                     )}
-                    <button
+                    {canManageEvento(ev) && <button
                       onClick={(e) => { e.stopPropagation(); toggleCompletado(ev.id, ev.completado); }}
                       className="rounded p-1.5 text-zinc-400 hover:bg-emerald-100 hover:text-emerald-600 dark:hover:bg-emerald-900/30 transition-colors"
                       title="Marcar completado"
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                    </button>
+                    </button>}
                   </div>
                 );
               })}
@@ -707,6 +732,7 @@ export default function CalendarioPage() {
                         </p>
                         <div className="flex items-center gap-2 mt-0.5">
                           <Badge variant={cfg.variant}>{cfg.label}</Badge>
+                          <Badge variant="outline">{ev.visibilidad === "privado" ? "Privado" : "Público"}</Badge>
                           {!ev.todo_el_dia && (
                             <span className="text-xs text-zinc-400">
                               {new Date(ev.fecha_inicio).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit", timeZone: AR_TZ })}
@@ -726,7 +752,7 @@ export default function CalendarioPage() {
                           {ev.clientes.razon_social}
                         </span>
                       )}
-                      <button
+                      {canManageEvento(ev) && <button
                         onClick={(e) => {
                           e.stopPropagation();
                           toggleCompletado(ev.id, ev.completado);
@@ -739,7 +765,7 @@ export default function CalendarioPage() {
                         title={ev.completado ? "Marcar pendiente" : "Marcar completado"}
                       >
                         <CheckCircle2 className="h-4 w-4" />
-                      </button>
+                      </button>}
                     </div>
                   );
                 })}
@@ -765,6 +791,9 @@ export default function CalendarioPage() {
                   {detailEvento.completado && (
                     <Badge variant="success">Completado</Badge>
                   )}
+                  <Badge variant="outline">
+                    {detailEvento.visibilidad === "privado" ? "Privado" : "Público"}
+                  </Badge>
                 </div>
                 <p className="text-sm text-zinc-400 mt-0.5">
                   {(tipoConfig[detailEvento.tipo] || tipoConfig.otro).label}
@@ -777,7 +806,7 @@ export default function CalendarioPage() {
 
             <div className="px-6 py-5 space-y-5">
               {/* Actions */}
-              <div className="flex flex-wrap gap-2">
+              {canManageEvento(detailEvento) && <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => toggleCompletado(detailEvento.id, detailEvento.completado)}
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
@@ -795,7 +824,7 @@ export default function CalendarioPage() {
                 >
                   <Trash2 className="h-4 w-4" /> Eliminar
                 </button>
-              </div>
+              </div>}
 
               {/* Info grid */}
               <div className="grid grid-cols-2 gap-4 text-sm">
@@ -828,6 +857,13 @@ export default function CalendarioPage() {
                 <div>
                   <span className="text-zinc-400">Todo el dia</span>
                   <p className="font-medium dark:text-white">{detailEvento.todo_el_dia ? "Si" : "No"}</p>
+                </div>
+                <div>
+                  <span className="text-zinc-400">Visibilidad</span>
+                  <p className="font-medium dark:text-white flex items-center gap-1.5">
+                    {detailEvento.visibilidad === "privado" ? <Lock className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    {detailEvento.visibilidad === "privado" ? "Privado" : "Público"}
+                  </p>
                 </div>
                 {detailEvento.clientes?.razon_social && (
                   <div>
@@ -924,6 +960,17 @@ export default function CalendarioPage() {
                     className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   />
                 </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Quién puede verlo</label>
+                <select
+                  value={createForm.visibilidad}
+                  onChange={(e) => setCreateForm({ ...createForm, visibilidad: e.target.value as "publico" | "privado" })}
+                  className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                >
+                  <option value="privado">Privado — solo vos y el responsable</option>
+                  <option value="publico">Público — todos los usuarios</option>
+                </select>
               </div>
               <div className="flex items-center gap-2">
                 <input
