@@ -10,7 +10,7 @@ import {
   Truck, Plus, Minus, X, Loader2, CheckCircle2, Building2,
   MapPin, FileText, Phone, Mail, User, Pencil,
   ToggleLeft, ToggleRight, Package,
-  ChevronRight, Calendar, DollarSign, Hash,
+  ChevronRight, Calendar, DollarSign, Hash, Upload, Receipt,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
@@ -55,6 +55,13 @@ interface ViajeRow {
   bultos: number | null;
   estado: string;
   notas: string | null;
+  factura_compra_id: string | null;
+  facturas_compra?: {
+    id: string;
+    numero_factura: string;
+    archivo_url: string | null;
+    estado: string;
+  } | null;
   created_at: string;
 }
 
@@ -66,6 +73,12 @@ interface ClienteOption {
 interface RemitoOption {
   id: string;
   numero: string;
+}
+
+interface ProveedorOption {
+  id: string;
+  razon_social: string;
+  cuit: string | null;
 }
 
 const estadoConfig: Record<string, { label: string; variant: "success" | "warning" | "info" | "danger" | "outline" }> = {
@@ -108,7 +121,23 @@ export default function TransportesPage() {
   // ─── Options for selects ───
   const [clientes, setClientes] = useState<ClienteOption[]>([]);
   const [remitos, setRemitos] = useState<RemitoOption[]>([]);
+  const [proveedores, setProveedores] = useState<ProveedorOption[]>([]);
   const [saving, setSaving] = useState(false);
+
+  // ─── Factura de transporte → Finanzas ───
+  const [showFacturaViaje, setShowFacturaViaje] = useState(false);
+  const [facturaViajeIds, setFacturaViajeIds] = useState<string[]>([]);
+  const [facturaSaving, setFacturaSaving] = useState(false);
+  const [facturaFile, setFacturaFile] = useState<File | null>(null);
+  const [facturaForm, setFacturaForm] = useState({
+    proveedor_id: "",
+    numero_factura: "",
+    fecha: todayAR(),
+    total: "",
+    iva_porcentaje: "21",
+    moneda: "ARS",
+    detalle: "",
+  });
 
   // ─── Nuevo viaje form ───
   const [formViaje, setFormViaje] = useState({
@@ -150,7 +179,7 @@ export default function TransportesPage() {
     try {
       const { data, error } = await (supabase as any)
         .from("transportes")
-        .select("*")
+        .select("*, facturas_compra(id, numero_factura, archivo_url, estado)")
         .or(`sociedad_id.eq.${socId},sociedad_id.is.null`)
         .order("fecha", { ascending: false });
       if (error) throw error;
@@ -182,15 +211,17 @@ export default function TransportesPage() {
     }
   }, [socId]);
 
-  // ── Fetch clientes + remitos for selects ────────────────────────────
+  // ── Fetch clientes + remitos + proveedores for selects ─────────────
   const fetchOptions = useCallback(async () => {
     if (!socId) return;
-    const [cliRes, remRes] = await Promise.all([
+    const [cliRes, remRes, provRes] = await Promise.all([
       (supabase as any).from("clientes").select("id, razon_social").eq("sociedad_id", socId).order("razon_social"),
       (supabase as any).from("remitos").select("id, numero").eq("sociedad_id", socId).order("numero", { ascending: false }).limit(200),
+      (supabase as any).from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", socId).eq("activo", true).order("razon_social"),
     ]);
     if (cliRes.data) setClientes(cliRes.data);
     if (remRes.data) setRemitos(remRes.data);
+    if (provRes.data) setProveedores(provRes.data);
   }, [socId]);
 
   useEffect(() => {
@@ -293,6 +324,10 @@ export default function TransportesPage() {
   };
 
   const handleDeleteViaje = async (id: string) => {
+    if (viajes.find((viaje) => viaje.id === id)?.factura_compra_id) {
+      toast.error("No se puede eliminar un viaje que ya fue enviado a pagos");
+      return;
+    }
     if (!confirm("¿Eliminar este viaje?")) return;
     try {
       const { error } = await (supabase as any).from("transportes").delete().eq("id", id);
@@ -472,6 +507,117 @@ export default function TransportesPage() {
     return r?.numero || null;
   };
 
+  const openFacturaParaPagos = (rows: ViajeRow[]) => {
+    if (rows.length === 0) return;
+    if (rows.some((row) => row.factura_compra_id)) {
+      toast.error("Este viaje ya tiene una factura enviada a pagos");
+      return;
+    }
+
+    const first = rows[0];
+    const transportista = first.transportista_id
+      ? transportistas.find((item) => item.id === first.transportista_id)
+      : null;
+    const normalizedName = (first.transportista || "").trim().toLowerCase();
+    const proveedorSugerido = proveedores.find((proveedor) =>
+      (transportista?.cuit && proveedor.cuit?.replace(/\D/g, "") === transportista.cuit.replace(/\D/g, ""))
+      || proveedor.razon_social.trim().toLowerCase() === normalizedName
+    );
+    const total = rows.reduce((sum, row) => sum + Number(row.costo || 0), 0);
+
+    setFacturaViajeIds(rows.map((row) => row.id));
+    setFacturaFile(null);
+    setFacturaForm({
+      proveedor_id: proveedorSugerido?.id || "",
+      numero_factura: "",
+      fecha: todayAR(),
+      total: total > 0 ? String(total) : "",
+      iva_porcentaje: "21",
+      moneda: first.moneda || "ARS",
+      detalle: rows.length > 1
+        ? `${rows.length} viajes internos del ${formatDate(first.fecha)} — ${first.transportista}`
+        : `Viaje del ${formatDate(first.fecha)} — ${first.transportista}`,
+    });
+    setShowFacturaViaje(true);
+  };
+
+  const handleEnviarFacturaAPagos = async () => {
+    const total = Number(facturaForm.total);
+    const ivaPorcentaje = Number(facturaForm.iva_porcentaje);
+    if (!facturaForm.proveedor_id) { toast.error("Seleccioná el proveedor que va a cobrar"); return; }
+    if (!facturaForm.numero_factura.trim()) { toast.error("Ingresá el número de factura"); return; }
+    if (!facturaFile) { toast.error("Adjuntá la factura en PDF o imagen"); return; }
+    if (!total || total <= 0) { toast.error("Ingresá el total de la factura"); return; }
+    if (facturaViajeIds.length === 0 || !socId) return;
+
+    const subtotal = ivaPorcentaje > 0 ? total / (1 + ivaPorcentaje / 100) : total;
+    const iva = total - subtotal;
+    let createdFacturaId = "";
+    let uploadedPath = "";
+    setFacturaSaving(true);
+    try {
+      const { data: factura, error: facturaError } = await (supabase as any)
+        .from("facturas_compra")
+        .insert({
+          numero_factura: facturaForm.numero_factura.trim(),
+          proveedor_id: facturaForm.proveedor_id,
+          fecha: facturaForm.fecha,
+          subtotal: Math.round(subtotal * 100) / 100,
+          iva_porcentaje: ivaPorcentaje,
+          iva: Math.round(iva * 100) / 100,
+          percepciones: 0,
+          total: Math.round(total * 100) / 100,
+          moneda: facturaForm.moneda,
+          notas: `Factura de transporte — ${facturaForm.detalle}`,
+          estado: "pendiente",
+          solo_iva: false,
+          tipo: "mercaderia",
+          sociedad_id: socId,
+          created_by: profile?.id || null,
+        })
+        .select("id")
+        .single();
+      if (facturaError || !factura?.id) throw facturaError || new Error("No se pudo crear la factura");
+      createdFacturaId = factura.id;
+
+      const extension = facturaFile.name.split(".").pop() || "pdf";
+      uploadedPath = `${socId}/${createdFacturaId}/factura-transporte.${extension}`;
+      const { error: uploadError } = await supabase.storage
+        .from("facturas-compra")
+        .upload(uploadedPath, facturaFile, { upsert: true });
+      if (uploadError) throw uploadError;
+
+      const { data: urlData } = supabase.storage.from("facturas-compra").getPublicUrl(uploadedPath);
+      const { error: archivoError } = await (supabase as any)
+        .from("facturas_compra")
+        .update({ archivo_url: urlData.publicUrl, archivo_nombre: facturaFile.name })
+        .eq("id", createdFacturaId);
+      if (archivoError) throw archivoError;
+
+      const { error: linkError } = await (supabase as any)
+        .from("transportes")
+        .update({ factura_compra_id: createdFacturaId })
+        .in("id", facturaViajeIds);
+      if (linkError) throw linkError;
+
+      toast.success("Factura enviada a Finanzas y pendiente de pago");
+      setShowFacturaViaje(false);
+      setFacturaViajeIds([]);
+      setFacturaFile(null);
+      await fetchViajes();
+    } catch (e: any) {
+      if (createdFacturaId) {
+        await (supabase as any).from("facturas_compra").delete().eq("id", createdFacturaId);
+      }
+      if (uploadedPath) {
+        await supabase.storage.from("facturas-compra").remove([uploadedPath]);
+      }
+      toast.error(`No se pudo enviar a pagos: ${e.message}`);
+    } finally {
+      setFacturaSaving(false);
+    }
+  };
+
   // ── Filtered viajes ─────────────────────────────────────────────────
   const filteredViajes = viajes.filter((v) => {
     if (filterValues.tipo && v.tipo !== filterValues.tipo) return false;
@@ -532,6 +678,22 @@ export default function TransportesPage() {
     }},
     { key: "costo" as const, label: "Costo", sortable: true, render: (v: ViajeRow) => (
       v.costo ? formatCurrency(v.costo, v.moneda as "ARS" | "USD") : "—"
+    )},
+    { key: "factura_compra_id" as const, label: "Factura", render: (v: ViajeRow) => (
+      v.factura_compra_id ? (
+        <button
+          onClick={(event) => {
+            event.stopPropagation();
+            if (v.facturas_compra?.archivo_url) window.open(v.facturas_compra.archivo_url, "_blank", "noopener,noreferrer");
+          }}
+          className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700"
+          title="Factura enviada a pagos"
+        >
+          <CheckCircle2 size={13} /> {v.facturas_compra?.numero_factura || "En pagos"}
+        </button>
+      ) : (
+        <span className="text-zinc-400 text-sm">Sin factura</span>
+      )
     )},
     { key: "estado" as const, label: "Estado", render: (v: ViajeRow) => {
       const cfg = estadoConfig[v.estado] || { label: v.estado, variant: "outline" as const };
@@ -639,10 +801,11 @@ export default function TransportesPage() {
                 const internosAll = viajes.filter((v) => v.tipo === "interno");
                 if (internosAll.length === 0) return null;
 
-                // Group by (fecha, transportista)
+                // Group by (fecha, transportista, factura). Los viajes nuevos quedan
+                // separados de un lote ya enviado a pagos para no alterar su importe.
                 const groupMap = new Map<string, ViajeRow[]>();
                 internosAll.forEach((v) => {
-                  const key = `${v.fecha}||${v.transportista}`;
+                  const key = `${v.fecha}||${v.transportista}||${v.factura_compra_id || "pendiente"}`;
                   const arr = groupMap.get(key) || [];
                   arr.push(v);
                   groupMap.set(key, arr);
@@ -650,8 +813,16 @@ export default function TransportesPage() {
 
                 const groups = Array.from(groupMap.entries())
                   .map(([key, rows]) => {
-                    const [fecha, conductor] = key.split("||");
-                    return { fecha, conductor, rows, costo: rows[0]?.costo ?? 0 };
+                    const [fecha, conductor, facturaKey] = key.split("||");
+                    return {
+                      fecha,
+                      conductor,
+                      facturaKey,
+                      facturaId: rows[0]?.factura_compra_id || null,
+                      rows,
+                      costo: rows[0]?.costo ?? 0,
+                      factura: rows[0]?.facturas_compra || null,
+                    };
                   })
                   .sort((a, b) => b.fecha.localeCompare(a.fecha));
 
@@ -685,6 +856,10 @@ export default function TransportesPage() {
 
                 const handleRemoveInterno = async (rows: ViajeRow[]) => {
                   if (rows.length === 0) return;
+                  if (rows.some((row) => row.factura_compra_id)) {
+                    toast.error("Este lote ya fue enviado a pagos y no se puede modificar");
+                    return;
+                  }
                   if (!confirm("¿Eliminar el último viaje interno de este grupo?")) return;
                   // Delete the most recently created
                   const sorted = [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -699,6 +874,10 @@ export default function TransportesPage() {
                 };
 
                 const handleCostoChange = async (rows: ViajeRow[], nuevoCosto: number) => {
+                  if (rows.some((row) => row.factura_compra_id)) {
+                    toast.error("Este lote ya fue enviado a pagos y no se puede modificar");
+                    return;
+                  }
                   try {
                     const ids = rows.map((r) => r.id);
                     const { error } = await (supabase as any)
@@ -729,18 +908,20 @@ export default function TransportesPage() {
                             <th className="text-center px-4 py-2 font-medium text-zinc-600 dark:text-zinc-400">Viajes</th>
                             <th className="text-right px-4 py-2 font-medium text-zinc-600 dark:text-zinc-400">Costo unit.</th>
                             <th className="text-right px-4 py-2 font-medium text-zinc-600 dark:text-zinc-400">Total</th>
+                            <th className="text-right px-4 py-2 font-medium text-zinc-600 dark:text-zinc-400">Factura / pago</th>
                           </tr>
                         </thead>
                         <tbody>
                           {groups.map((g) => (
-                            <tr key={`${g.fecha}-${g.conductor}`} className="border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/30">
+                            <tr key={`${g.fecha}-${g.conductor}-${g.facturaKey}`} className="border-b border-zinc-100 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-800/30">
                               <td className="px-4 py-2.5 text-zinc-700 dark:text-zinc-300">{formatDate(g.fecha)}</td>
                               <td className="px-4 py-2.5 font-medium text-zinc-900 dark:text-white">{g.conductor || "Sin conductor"}</td>
                               <td className="px-4 py-2.5">
                                 <div className="flex items-center justify-center gap-2">
                                   <button
                                     onClick={() => handleRemoveInterno(g.rows)}
-                                    className="rounded-md p-1 text-zinc-500 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400 transition-colors"
+                                    disabled={Boolean(g.facturaId)}
+                                    className="rounded-md p-1 text-zinc-500 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
                                     title="Quitar viaje"
                                   >
                                     <Minus size={14} />
@@ -748,7 +929,8 @@ export default function TransportesPage() {
                                   <span className="font-semibold text-zinc-900 dark:text-white min-w-[24px] text-center">{g.rows.length}</span>
                                   <button
                                     onClick={() => handleAddInterno(g.fecha, g.conductor, g.costo)}
-                                    className="rounded-md p-1 text-zinc-500 hover:bg-green-100 hover:text-green-600 dark:hover:bg-green-900/30 dark:hover:text-green-400 transition-colors"
+                                    disabled={Boolean(g.facturaId)}
+                                    className="rounded-md p-1 text-zinc-500 hover:bg-green-100 hover:text-green-600 dark:hover:bg-green-900/30 dark:hover:text-green-400 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
                                     title="Agregar viaje"
                                   >
                                     <Plus size={14} />
@@ -760,6 +942,7 @@ export default function TransportesPage() {
                                   type="number"
                                   step="0.01"
                                   defaultValue={g.costo || ""}
+                                  disabled={Boolean(g.facturaId)}
                                   onBlur={(e) => {
                                     const val = parseFloat(e.target.value) || 0;
                                     if (val !== (g.costo || 0)) handleCostoChange(g.rows, val);
@@ -768,11 +951,29 @@ export default function TransportesPage() {
                                     if (e.key === "Enter") (e.target as HTMLInputElement).blur();
                                   }}
                                   placeholder="0.00"
-                                  className="w-24 text-right rounded border border-zinc-300 bg-white px-2 py-1 text-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                                  className="w-24 text-right rounded border border-zinc-300 bg-white px-2 py-1 text-sm focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 disabled:bg-zinc-100 disabled:text-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white dark:disabled:bg-zinc-800/50"
                                 />
                               </td>
                               <td className="px-4 py-2.5 text-right font-medium text-zinc-900 dark:text-white">
                                 {formatCurrency(g.rows.length * (g.costo || 0), "ARS")}
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                {g.facturaId ? (
+                                  <button
+                                    onClick={() => g.factura?.archivo_url && window.open(g.factura.archivo_url, "_blank", "noopener,noreferrer")}
+                                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400"
+                                    title="Ver factura enviada a pagos"
+                                  >
+                                    <CheckCircle2 size={14} /> {g.factura?.numero_factura || "En pagos"}
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => openFacturaParaPagos(g.rows)}
+                                    className="inline-flex items-center gap-1.5 rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-100 dark:bg-orange-950/30 dark:text-orange-400"
+                                  >
+                                    <Receipt size={14} /> Cargar factura
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           ))}
@@ -816,6 +1017,9 @@ export default function TransportesPage() {
                       <DetailRow icon={MapPin} label="Destino" value={selectedViaje.destino} />
                       <DetailRow icon={FileText} label="Remito" value={getRemitoNumero(selectedViaje.remito_id) || "Sin remito"} />
                       <DetailRow icon={DollarSign} label="Costo" value={selectedViaje.costo ? formatCurrency(selectedViaje.costo, selectedViaje.moneda as "ARS" | "USD") : "—"} />
+                      {selectedViaje.factura_compra_id && (
+                        <DetailRow icon={Receipt} label="Factura en pagos" value={selectedViaje.facturas_compra?.numero_factura || "Registrada"} />
+                      )}
                       {selectedViaje.bultos && <DetailRow icon={Package} label="Bultos" value={String(selectedViaje.bultos)} />}
                       {selectedViaje.descripcion_carga && <DetailRow icon={Hash} label="Carga" value={selectedViaje.descripcion_carga} />}
                       {selectedViaje.notas && (
@@ -874,26 +1078,47 @@ export default function TransportesPage() {
 
                     {/* Actions */}
                     <div className="flex gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-700">
-                      <button
-                        onClick={() => startEditViaje(selectedViaje)}
-                        className="flex items-center gap-1.5 rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                      >
-                        <Pencil size={14} /> Editar
-                      </button>
-                      {selectedViaje.tipo === "interno" && (
+                      {selectedViaje.factura_compra_id ? (
                         <button
-                          onClick={() => handleAgregarParada(selectedViaje)}
-                          className="flex items-center gap-1.5 rounded-lg bg-orange-50 px-3 py-2 text-sm font-medium text-orange-700 hover:bg-orange-100 dark:bg-orange-900/20 dark:text-orange-400 dark:hover:bg-orange-900/30"
+                          onClick={() => selectedViaje.facturas_compra?.archivo_url && window.open(selectedViaje.facturas_compra.archivo_url, "_blank", "noopener,noreferrer")}
+                          className="flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400"
                         >
-                          <Plus size={14} /> Agregar parada
+                          <CheckCircle2 size={14} /> Ver factura enviada
                         </button>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => startEditViaje(selectedViaje)}
+                            className="flex items-center gap-1.5 rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                          >
+                            <Pencil size={14} /> Editar
+                          </button>
+                          <button
+                            onClick={() => openFacturaParaPagos(
+                              selectedViaje.tipo === "interno"
+                                ? [selectedViaje, ...getParadasInternas(selectedViaje)].filter((row) => !row.factura_compra_id)
+                                : [selectedViaje]
+                            )}
+                            className="flex items-center gap-1.5 rounded-lg bg-orange-50 px-3 py-2 text-sm font-medium text-orange-700 hover:bg-orange-100 dark:bg-orange-950/30 dark:text-orange-400"
+                          >
+                            <Receipt size={14} /> Enviar factura a pagos
+                          </button>
+                          {selectedViaje.tipo === "interno" && (
+                            <button
+                              onClick={() => handleAgregarParada(selectedViaje)}
+                              className="flex items-center gap-1.5 rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                            >
+                              <Plus size={14} /> Parada
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeleteViaje(selectedViaje.id)}
+                            className="ml-auto flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30"
+                          >
+                            <X size={14} /> Eliminar
+                          </button>
+                        </>
                       )}
-                      <button
-                        onClick={() => handleDeleteViaje(selectedViaje.id)}
-                        className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 ml-auto"
-                      >
-                        <X size={14} /> Eliminar
-                      </button>
                     </div>
                   </div>
                 </Card>
@@ -1233,6 +1458,150 @@ export default function TransportesPage() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════
+          MODAL: FACTURA DE TRANSPORTE → FINANZAS / PAGOS
+         ══════════════════════════════════════════════════════════════════ */}
+      {showFacturaViaje && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl dark:bg-zinc-900 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-zinc-200 p-4 dark:border-zinc-700">
+              <div>
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Enviar factura a pagos</h2>
+                <p className="mt-0.5 text-xs text-zinc-500">Se registrará en Facturas de Compra como pendiente</p>
+              </div>
+              <button onClick={() => setShowFacturaViaje(false)} className="text-zinc-400 hover:text-zinc-600">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4">
+              <div className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2.5 text-sm text-orange-800 dark:border-orange-900 dark:bg-orange-950/30 dark:text-orange-300">
+                <span className="font-medium">{facturaViajeIds.length} {facturaViajeIds.length === 1 ? "viaje" : "viajes"}</span>
+                <span className="block text-xs mt-0.5">{facturaForm.detalle}</span>
+              </div>
+
+              <div>
+                <label className={labelClass}>Proveedor que va a cobrar *</label>
+                <select
+                  value={facturaForm.proveedor_id}
+                  onChange={(e) => setFacturaForm((form) => ({ ...form, proveedor_id: e.target.value }))}
+                  className={inputClass}
+                >
+                  <option value="">Seleccionar proveedor...</option>
+                  {proveedores.map((proveedor) => (
+                    <option key={proveedor.id} value={proveedor.id}>{proveedor.razon_social}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-zinc-400">Es quien aparecerá después para generar la orden de pago.</p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelClass}>Número de factura *</label>
+                  <input
+                    value={facturaForm.numero_factura}
+                    onChange={(e) => setFacturaForm((form) => ({ ...form, numero_factura: e.target.value }))}
+                    placeholder="Ej: 0001-00001234"
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Fecha *</label>
+                  <input
+                    type="date"
+                    value={facturaForm.fecha}
+                    onChange={(e) => setFacturaForm((form) => ({ ...form, fecha: e.target.value }))}
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Total de la factura *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={facturaForm.total}
+                    onChange={(e) => setFacturaForm((form) => ({ ...form, total: e.target.value }))}
+                    placeholder="0,00"
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Moneda</label>
+                  <select
+                    value={facturaForm.moneda}
+                    onChange={(e) => setFacturaForm((form) => ({ ...form, moneda: e.target.value }))}
+                    className={inputClass}
+                  >
+                    <option value="ARS">ARS</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+                <div className="col-span-2">
+                  <label className={labelClass}>IVA incluido en el total</label>
+                  <select
+                    value={facturaForm.iva_porcentaje}
+                    onChange={(e) => setFacturaForm((form) => ({ ...form, iva_porcentaje: e.target.value }))}
+                    className={inputClass}
+                  >
+                    <option value="0">0%</option>
+                    <option value="10.5">10,5%</option>
+                    <option value="21">21%</option>
+                    <option value="27">27%</option>
+                  </select>
+                </div>
+              </div>
+
+              {Number(facturaForm.total) > 0 && (
+                <div className="rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                  Neto estimado: <span className="font-mono font-semibold">{formatCurrency(
+                    Number(facturaForm.total) / (1 + Number(facturaForm.iva_porcentaje) / 100),
+                    facturaForm.moneda as "ARS" | "USD"
+                  )}</span>
+                  <span className="mx-2 text-zinc-300">|</span>
+                  IVA: <span className="font-mono font-semibold">{formatCurrency(
+                    Number(facturaForm.total) - (Number(facturaForm.total) / (1 + Number(facturaForm.iva_porcentaje) / 100)),
+                    facturaForm.moneda as "ARS" | "USD"
+                  )}</span>
+                </div>
+              )}
+
+              <div>
+                <label className={labelClass}>Factura adjunta *</label>
+                <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-zinc-300 px-3 py-3 text-sm text-zinc-600 hover:border-orange-400 hover:bg-orange-50/50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-orange-950/20">
+                  <Upload size={18} className="text-orange-500" />
+                  <span className="min-w-0 flex-1 truncate">{facturaFile?.name || "Seleccionar PDF o imagen"}</span>
+                  <input
+                    type="file"
+                    accept=".pdf,image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    onChange={(e) => setFacturaFile(e.target.files?.[0] || null)}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-zinc-200 p-4 dark:border-zinc-700">
+              <button
+                onClick={() => setShowFacturaViaje(false)}
+                disabled={facturaSaving}
+                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleEnviarFacturaAPagos}
+                disabled={facturaSaving}
+                className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+              >
+                {facturaSaving ? <Loader2 size={16} className="animate-spin" /> : <Receipt size={16} />}
+                {facturaSaving ? "Enviando..." : "Enviar a pagos"}
+              </button>
+            </div>
           </div>
         </div>
       )}
