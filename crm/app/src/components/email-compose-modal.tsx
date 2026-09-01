@@ -20,7 +20,7 @@ interface EmailComposeModalProps {
   /** Function that generates PDF and returns base64 string. MUST be provided. */
   generatePdf: () => Promise<string>;
   /** Callback on successful send */
-  onSuccess?: () => void;
+  onSuccess?: () => void | Promise<void>;
 }
 
 const DOC_LABELS: Record<EmailDocumentType, string> = {
@@ -107,8 +107,8 @@ export function EmailComposeModal({
       if (!res.ok || data.error) {
         setResult({ success: false, message: data.error || "Error al enviar" });
       } else {
+        await onSuccess?.();
         setResult({ success: true, message: `Email enviado correctamente a ${emails.join(", ")}` });
-        onSuccess?.();
       }
     } catch (err: any) {
       setResult({ success: false, message: err.message || "Error de conexión" });

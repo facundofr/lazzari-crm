@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 
 import { StatCard } from "@/components/ui/stat-card";
-import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
+import { formatCurrency, formatDate, formatDateTime, todayAR } from "@/lib/utils";
 import { generateFacturaPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { EmailComposeModal, type EmailDocumentType } from "@/components/email-compose-modal";
@@ -17,7 +17,7 @@ import { mockFacturas } from "@/lib/mock-data";
 import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
-  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, FileText, Search, Scissors,
+  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, MailCheck, FileText, Search, Scissors,
   Maximize2, Pencil, Trash2,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -54,6 +54,7 @@ interface FacturaRow {
   total_acreditado?: number | null;
   modalidad_emision?: string | null;
   recibida_cliente?: boolean;
+  email_enviado_at?: string | null;
   clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string; dias_cuenta_corriente?: number | null } | null;
   _clienteNombre?: string;
   _fechaVencCalc?: string;
@@ -1174,8 +1175,14 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 </div>
               )},
               { key: "_mail" as any, label: "", sortable: false, className: "w-10", render: (r: FacturaRow) => (
-                <div onClick={(e) => { e.stopPropagation(); handleEmailFactura(r); }} className="flex justify-center cursor-pointer" title="Enviar por email">
-                  <Mail className="h-4 w-4 text-zinc-700 dark:text-zinc-300 hover:text-orange-500 transition-colors" />
+                <div
+                  onClick={(e) => { e.stopPropagation(); handleEmailFactura(r); }}
+                  className="flex justify-center cursor-pointer"
+                  title={r.email_enviado_at ? `Enviada por email el ${formatDateTime(r.email_enviado_at)}` : "Enviar por email"}
+                >
+                  {r.email_enviado_at
+                    ? <MailCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                    : <Mail className="h-4 w-4 text-zinc-700 dark:text-zinc-300 hover:text-orange-500 transition-colors" />}
                 </div>
               )},
             ]}
@@ -2353,6 +2360,24 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
+        onSuccess={async () => {
+          const sentAt = new Date().toISOString();
+          const facturaId = emailModal.facturaId;
+          const { error } = await (supabase as any)
+            .from("facturas")
+            .update({ email_enviado_at: sentAt })
+            .eq("id", facturaId);
+          if (error) {
+            alert(`El email se envió, pero no se pudo guardar la marca de envío: ${error.message}`);
+            return;
+          }
+          setFacturas((prev) => prev.map((factura) =>
+            factura.id === facturaId ? { ...factura, email_enviado_at: sentAt } : factura
+          ));
+          setDetailFactura((prev) =>
+            prev?.id === facturaId ? { ...prev, email_enviado_at: sentAt } : prev
+          );
+        }}
       />
     </>
   );
