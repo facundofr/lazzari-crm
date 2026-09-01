@@ -264,6 +264,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
         if (prefsRes.data) {
           const prefs = prefsRes.data as Record<string, boolean>;
           filtered = filtered.filter((alert) => {
+            if (alert.module === "calendario") return true;
             const prefKey = ALERT_TIPO_TO_PREF[alert.tipo];
             // If we have a mapping and the pref is explicitly false, filter it out
             if (prefKey && prefs[prefKey] === false) return false;
@@ -283,6 +284,13 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   useEffect(() => {
     if (!profile?.id) return;
     fetchAlerts();
+  }, [fetchAlerts, profile?.id]);
+
+  // Recoge recordatorios de calendario creados por Supabase sin exigir recarga.
+  useEffect(() => {
+    if (!profile?.id) return;
+    const interval = window.setInterval(fetchAlerts, 30_000);
+    return () => window.clearInterval(interval);
   }, [fetchAlerts, profile?.id]);
 
   const unread = alerts.filter((a) => !a.read);

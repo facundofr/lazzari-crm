@@ -1029,6 +1029,9 @@ export default function CalendarioPage() {
                   />
                 </div>
               </div>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                La campana notificará al responsable cuando comience el evento. Los eventos de todo el día se notifican a las 09:00.
+              </p>
               <div>
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Quién puede verlo</label>
                 <select
