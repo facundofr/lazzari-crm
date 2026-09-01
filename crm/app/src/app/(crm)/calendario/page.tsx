@@ -20,6 +20,7 @@ import {
   FileText,
   CheckCircle2,
   Trash2,
+  Pencil,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useUser } from "@/lib/auth-context";
@@ -102,6 +103,20 @@ function parseLocalDate(dateStr: string): Date {
   return new Date(dateStr);
 }
 
+function toDateTimeInput(dateStr: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: AR_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(dateStr));
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}T${value.hour}:${value.minute}`;
+}
+
 // ── Page ────────────────────────────────────────────────────────
 export default function CalendarioPage() {
   const { sociedadActiva, profile } = useUser();
@@ -122,6 +137,7 @@ export default function CalendarioPage() {
 
   // Create modal
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [editingEventoId, setEditingEventoId] = useState<string | null>(null);
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
   const [clienteSearch, setClienteSearch] = useState("");
   const [clienteDropdownOpen, setClienteDropdownOpen] = useState(false);
@@ -314,6 +330,7 @@ export default function CalendarioPage() {
     const defaultDate = presetDate || `${nowAR.getFullYear()}-${String(nowAR.getMonth() + 1).padStart(2, "0")}-${String(nowAR.getDate()).padStart(2, "0")}T${String(nowAR.getHours()).padStart(2, "0")}:${String(nowAR.getMinutes()).padStart(2, "0")}`;
     setClienteSearch("");
     setClienteDropdownOpen(false);
+    setEditingEventoId(null);
     setCreateForm({
       titulo: "",
       tipo: "visita",
@@ -337,6 +354,38 @@ export default function CalendarioPage() {
     setCreateModalOpen(true);
   }
 
+  async function openEditModal(evento: EventoRow) {
+    setClienteSearch("");
+    setClienteDropdownOpen(false);
+    setEditingEventoId(evento.id);
+    setCreateForm({
+      titulo: evento.titulo,
+      tipo: evento.tipo,
+      fecha_inicio: evento.todo_el_dia ? toDateKey(parseLocalDate(evento.fecha_inicio)) : toDateTimeInput(evento.fecha_inicio),
+      fecha_fin: evento.fecha_fin
+        ? (evento.todo_el_dia ? toDateKey(parseLocalDate(evento.fecha_fin)) : toDateTimeInput(evento.fecha_fin))
+        : "",
+      todo_el_dia: evento.todo_el_dia,
+      cliente_id: evento.cliente_id || "",
+      descripcion: evento.descripcion || "",
+      color: evento.color || tipoConfig[evento.tipo]?.color || "#3B82F6",
+      asignado_a: evento.user_id || "",
+      visibilidad: evento.visibilidad || "publico",
+    });
+
+    let cq = supabase
+      .from("clientes")
+      .select("id, razon_social")
+      .eq("activo", true)
+      .order("razon_social");
+    if (sociedadActiva?.id) cq = cq.eq("sociedad_id" as any, sociedadActiva.id);
+    const { data } = await cq;
+    if (data) setClientes(data as { id: string; razon_social: string }[]);
+
+    setDetailEvento(null);
+    setCreateModalOpen(true);
+  }
+
   async function handleCreateEvento() {
     if (!createForm.titulo || !createForm.fecha_inicio) return;
     setCreating(true);
@@ -351,7 +400,7 @@ export default function CalendarioPage() {
           : createForm.fecha_fin)
         : null;
 
-      const { error } = await (supabase as any).from("eventos").insert({
+      const eventValues = {
         titulo: createForm.titulo,
         tipo: createForm.tipo,
         fecha_inicio: new Date(fechaInicioStr).toISOString(),
@@ -361,16 +410,22 @@ export default function CalendarioPage() {
         descripcion: createForm.descripcion || null,
         color: createForm.color,
         user_id: createForm.asignado_a || profile?.id || null,
-        created_by: profile?.id || null,
-        sociedad_id: sociedadActiva?.id || null,
-        completado: false,
         visibilidad: createForm.visibilidad,
-      });
+      };
+
+      const { error } = editingEventoId
+        ? await (supabase as any).from("eventos").update(eventValues).eq("id", editingEventoId)
+        : await (supabase as any).from("eventos").insert({
+          ...eventValues,
+          created_by: profile?.id || null,
+          sociedad_id: sociedadActiva?.id || null,
+          completado: false,
+        });
       if (error) { alert(error.message); return; }
 
       // Notify assigned user (if different from creator)
       const assignedTo = createForm.asignado_a || null;
-      if (assignedTo && assignedTo !== profile?.id) {
+      if (!editingEventoId && assignedTo && assignedTo !== profile?.id) {
         const fechaLabel = createForm.todo_el_dia
           ? createForm.fecha_inicio.split("T")[0]
           : new Date(createForm.fecha_inicio).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: AR_TZ });
@@ -385,6 +440,7 @@ export default function CalendarioPage() {
       }
 
       setCreateModalOpen(false);
+      setEditingEventoId(null);
       setSelectedDate(null);
       await fetchData();
     } catch (err) {
@@ -427,6 +483,12 @@ export default function CalendarioPage() {
       || profile?.role === "admin"
       || profile?.role === "super_admin";
   }
+
+  const editingEvento = editingEventoId ? eventos.find((evento) => evento.id === editingEventoId) : null;
+  const canReassignEditingEvento = !editingEvento
+    || editingEvento.created_by === profile?.id
+    || profile?.role === "admin"
+    || profile?.role === "super_admin";
 
   // ── Today key ────────────────────────────────────────────────
   const todayKey = toDateKey(today);
@@ -808,6 +870,12 @@ export default function CalendarioPage() {
               {/* Actions */}
               {canManageEvento(detailEvento) && <div className="flex flex-wrap gap-2">
                 <button
+                  onClick={() => openEditModal(detailEvento)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:hover:bg-orange-900/50 transition-colors"
+                >
+                  <Pencil className="h-4 w-4" /> Editar
+                </button>
+                <button
                   onClick={() => toggleCompletado(detailEvento.id, detailEvento.completado)}
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                     detailEvento.completado
@@ -909,8 +977,8 @@ export default function CalendarioPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
           <Card className="w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold dark:text-white">Nuevo Evento</h2>
-              <button onClick={() => setCreateModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
+              <h2 className="text-lg font-semibold dark:text-white">{editingEventoId ? "Editar Evento" : "Nuevo Evento"}</h2>
+              <button onClick={() => { setCreateModalOpen(false); setEditingEventoId(null); }} className="text-zinc-400 hover:text-zinc-600">
                 <X className="h-5 w-5" />
               </button>
             </div>
@@ -1024,7 +1092,8 @@ export default function CalendarioPage() {
                   <select
                     value={createForm.asignado_a}
                     onChange={(e) => setCreateForm({ ...createForm, asignado_a: e.target.value })}
-                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                    disabled={!canReassignEditingEvento}
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm disabled:bg-zinc-100 disabled:text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white dark:disabled:bg-zinc-800"
                   >
                     <option value="">Sin asignar</option>
                     {users.map((u) => (
@@ -1065,7 +1134,7 @@ export default function CalendarioPage() {
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button
-                onClick={() => setCreateModalOpen(false)}
+                onClick={() => { setCreateModalOpen(false); setEditingEventoId(null); }}
                 className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
               >
                 Cancelar
@@ -1075,7 +1144,7 @@ export default function CalendarioPage() {
                 disabled={creating || !createForm.titulo || !createForm.fecha_inicio}
                 className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
               >
-                {creating ? "Creando..." : "Crear Evento"}
+                {creating ? "Guardando..." : editingEventoId ? "Guardar cambios" : "Crear Evento"}
               </button>
             </div>
           </Card>
