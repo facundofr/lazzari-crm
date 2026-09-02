@@ -16,7 +16,7 @@ import {
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
   PackageCheck, MessageSquare, Edit3, Plus, Minus,
   Maximize2, Upload, Trash2,
-  Search,
+  Search, CreditCard,
 } from "lucide-react";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import { EmailComposeModal } from "@/components/email-compose-modal";
@@ -60,6 +60,9 @@ interface OCRow {
   moneda: string;
   presupuesto_origen_id: string | null;
   pedido: boolean;
+  estado_pago: "pendiente" | "pagada";
+  medio_pago: string | null;
+  pagada_at: string | null;
   notas_recepcion: string | null;
   observaciones: string;
   created_at: string;
@@ -72,9 +75,12 @@ interface OCRow {
 }
 
 const ocPagada = (oc: OCRow) => {
+  if (oc.estado_pago === "pagada") return true;
   const facturas = (oc.facturas_vinculadas || []).filter((factura) => factura.estado !== "anulada");
   return facturas.length > 0 && facturas.every((factura) => factura.estado === "pagada");
 };
+
+const ocPagadaConTarjeta = (oc: OCRow) => oc.estado_pago === "pagada" && oc.medio_pago === "tarjeta";
 
 interface DetailItem {
   id: string;
@@ -109,6 +115,9 @@ function mapMockToOCRow(oc: (typeof mockOrdenesCompra)[number]): OCRow {
     moneda: oc.moneda,
     presupuesto_origen_id: oc.presupuestoOrigenId || null,
     pedido: oc.estado !== "borrador",
+    estado_pago: "pendiente",
+    medio_pago: null,
+    pagada_at: null,
     notas_recepcion: null,
     observaciones: oc.observaciones,
     created_at: oc.fecha,
@@ -207,6 +216,7 @@ export default function OrdenesCompraPage() {
     moneda: "ARS" as "ARS" | "USD",
     observaciones: "",
     presupuesto_origen_id: "",
+    pagada_con_tarjeta: false,
   });
   const [presupuestosAprobados, setPresupuestosAprobados] = useState<{ id: string; numero: string; clienteNombre: string }[]>([]);
   const [formLoading, setFormLoading] = useState(false);
@@ -245,7 +255,9 @@ export default function OrdenesCompraPage() {
 
   // Items sin proveedor modal
   interface ItemSinProveedor {
+    origen: "presupuesto" | "orden_compra";
     item_id: string;
+    oc_id?: string;
     pr_id: string;
     pr_numero: string;
     cliente_nombre: string;
@@ -274,7 +286,7 @@ export default function OrdenesCompraPage() {
   // Edit mode
   const [editMode, setEditMode] = useState(false);
   const [editItems, setEditItems] = useState<DetailItem[]>([]);
-  const [editOC, setEditOC] = useState<{ proveedor_id: string; fecha_entrega_estimada: string; observaciones: string }>({ proveedor_id: "", fecha_entrega_estimada: "", observaciones: "" });
+  const [editOC, setEditOC] = useState<{ proveedor_id: string; fecha_entrega_estimada: string; observaciones: string; pagada_con_tarjeta: boolean }>({ proveedor_id: "", fecha_entrega_estimada: "", observaciones: "", pagada_con_tarjeta: false });
   const [savingEdit, setSavingEdit] = useState(false);
 
   // ── Fetch main data ──────────────────────────────────────────────
@@ -365,7 +377,7 @@ export default function OrdenesCompraPage() {
 
   // ── Handlers ─────────────────────────────────────────────────────
   const openCreateModal = () => {
-    setFormData({ proveedor_id: "", fecha: new Date().toISOString().slice(0, 10), fecha_entrega_estimada: "", moneda: "ARS", observaciones: "", presupuesto_origen_id: "" });
+    setFormData({ proveedor_id: "", fecha: new Date().toISOString().slice(0, 10), fecha_entrega_estimada: "", moneda: "ARS", observaciones: "", presupuesto_origen_id: "", pagada_con_tarjeta: false });
     setFormError("");
     setCreateOpen(true);
     fetchProveedores();
@@ -441,6 +453,9 @@ export default function OrdenesCompraPage() {
         sociedad_id: sociedadActiva?.id || null,
         presupuesto_origen_id: formData.presupuesto_origen_id || null,
         created_by: profile?.id || null,
+        estado_pago: formData.pagada_con_tarjeta ? "pagada" : "pendiente",
+        medio_pago: formData.pagada_con_tarjeta ? "tarjeta" : null,
+        pagada_at: formData.pagada_con_tarjeta ? new Date().toISOString() : null,
       } as any).select("id").single();
       if (error) throw error;
 
@@ -650,6 +665,7 @@ export default function OrdenesCompraPage() {
       proveedor_id: detailOC.proveedor_id || "",
       fecha_entrega_estimada: detailOC.fecha_entrega_estimada || "",
       observaciones: detailOC.observaciones || "",
+      pagada_con_tarjeta: ocPagadaConTarjeta(detailOC),
     });
     fetchProveedores();
     setEditMode(true);
@@ -764,6 +780,9 @@ export default function OrdenesCompraPage() {
           estado: newEstado,
           fecha_entrega_estimada: editOC.fecha_entrega_estimada || null,
           observaciones: editOC.observaciones || "",
+          estado_pago: editOC.pagada_con_tarjeta ? "pagada" : "pendiente",
+          medio_pago: editOC.pagada_con_tarjeta ? "tarjeta" : null,
+          pagada_at: editOC.pagada_con_tarjeta ? (detailOC.pagada_at || new Date().toISOString()) : null,
         } as any)
         .eq("id", detailOC.id);
       if (ocErr) throw new Error(`Error al actualizar OC: ${ocErr.message}`);
@@ -884,6 +903,25 @@ export default function OrdenesCompraPage() {
       if (detailOC?.id === oc.id) setDetailOC({ ...oc, pedido: newVal });
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Error al actualizar pedido");
+    }
+  };
+
+  // ── Pago directo con tarjeta (sin orden de pago) ────────────────
+  const handleTogglePagoTarjeta = async (oc: OCRow, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    const marcarPagada = !ocPagadaConTarjeta(oc);
+    try {
+      const pagoPatch = {
+        estado_pago: marcarPagada ? "pagada" : "pendiente",
+        medio_pago: marcarPagada ? "tarjeta" : null,
+        pagada_at: marcarPagada ? new Date().toISOString() : null,
+      };
+      const { error } = await supabase.from("ordenes_compra").update(pagoPatch as any).eq("id", oc.id);
+      if (error) throw error;
+      setOrdenes((prev) => prev.map((row) => row.id === oc.id ? { ...row, ...pagoPatch } as OCRow : row));
+      if (detailOC?.id === oc.id) setDetailOC((prev) => prev ? { ...prev, ...pagoPatch } as OCRow : prev);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Error al actualizar el pago");
     }
   };
 
@@ -1174,11 +1212,43 @@ export default function OrdenesCompraPage() {
     setSinProveedorOpen(true);
     setSinProveedorLoading(true);
     try {
-      // Fetch approved/remitido PRs
+      // Primero toma OCs ya creadas que siguen sin proveedor. Este era el caso
+      // que quedaba invisible cuando el item original del PR ya estaba asignado.
+      let ocQuery = (supabase as any)
+        .from("ordenes_compra")
+        .select("id, numero, moneda, presupuesto_origen_id, orden_compra_items(id, codigo, descripcion, cantidad, precio_unitario, unidad, proveedor_id)")
+        .is("proveedor_id", null)
+        .neq("estado", "cancelada")
+        .order("created_at", { ascending: false });
+      if (sociedadActiva?.id) ocQuery = ocQuery.eq("sociedad_id", sociedadActiva.id);
+      const { data: ocsSinProveedor, error: ocError } = await ocQuery;
+      if (ocError) throw ocError;
+
+      const itemsDeOC: ItemSinProveedor[] = (ocsSinProveedor || []).flatMap((oc: any) =>
+        (oc.orden_compra_items || [])
+          .filter((item: any) => !item.proveedor_id)
+          .map((item: any) => ({
+            origen: "orden_compra" as const,
+            item_id: item.id,
+            oc_id: oc.id,
+            pr_id: oc.presupuesto_origen_id || "",
+            pr_numero: oc.numero || "OC sin numero",
+            cliente_nombre: "Orden de compra ya creada",
+            codigo: item.codigo || "",
+            descripcion: item.descripcion || "",
+            cantidad: Number(item.cantidad || 0),
+            precio_costo: Number(item.precio_unitario || 0),
+            unidad: item.unidad || "UN",
+            moneda: oc.moneda || "ARS",
+            proveedor_id: "",
+          }))
+      );
+
+      // También incluye items de PR aprobados que todavía no generaron una OC.
       let prQuery = (supabase as any).from("presupuestos").select("id, numero, moneda, clientes(razon_social)").in("estado", ["aprobado", "remitido"]);
       if (sociedadActiva?.id) prQuery = prQuery.eq("sociedad_id", sociedadActiva.id);
       const { data: prs } = await prQuery;
-      if (!prs || prs.length === 0) { setSinProveedorItems([]); return; }
+      if (!prs || prs.length === 0) { setSinProveedorItems(itemsDeOC); return; }
 
       const prIds = prs.map((p: any) => p.id);
       const { data: items } = await supabase
@@ -1186,12 +1256,14 @@ export default function OrdenesCompraPage() {
         .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id, costo_moneda, stock_propio" as any)
         .in("presupuesto_id", prIds) as { data: any[] | null };
 
-      const sinProv = (items || []).filter((it: any) => !it.proveedor_id && !it.stock_propio);
+      const prsConOC = new Set(ordenes.map((oc) => oc.presupuesto_origen_id).filter(Boolean));
+      const sinProv = (items || []).filter((it: any) => !it.proveedor_id && !it.stock_propio && !prsConOC.has(it.presupuesto_id));
       const prMap = new Map((prs as any[]).map((p: any) => [p.id, p]));
 
-      setSinProveedorItems(sinProv.map((it: any) => {
+      const itemsDePR: ItemSinProveedor[] = sinProv.map((it: any) => {
         const pr = prMap.get(it.presupuesto_id) as any;
         return {
+          origen: "presupuesto" as const,
           item_id: it.id,
           pr_id: it.presupuesto_id,
           pr_numero: pr?.numero || "",
@@ -1204,7 +1276,8 @@ export default function OrdenesCompraPage() {
           moneda: (it.costo_moneda as string) || "ARS",
           proveedor_id: "",
         };
-      }));
+      });
+      setSinProveedorItems([...itemsDeOC, ...itemsDePR]);
 
       // Load proveedores for assignment
       let provQ = supabase.from("proveedores").select("id, razon_social").eq("activo", true).order("razon_social");
@@ -1231,18 +1304,40 @@ export default function OrdenesCompraPage() {
 
       let updated = 0;
       for (const item of toUpdate) {
-        const { error } = await supabase
-          .from("presupuesto_items")
+        const tabla = item.origen === "orden_compra" ? "orden_compra_items" : "presupuesto_items";
+        const payload = item.origen === "orden_compra"
+          ? { proveedor_id: item.proveedor_id }
+          : { proveedor_id: item.proveedor_id, proveedor_nombre: provNameMap.get(item.proveedor_id) || "" };
+        const { error } = await (supabase as any)
+          .from(tabla)
           .update({
-            proveedor_id: item.proveedor_id,
-            proveedor_nombre: provNameMap.get(item.proveedor_id) || "",
-          } as any)
+            ...payload,
+          })
           .eq("id", item.item_id);
-        if (!error) updated++;
+        if (error) throw new Error(`No se pudo asignar el proveedor a ${item.descripcion}: ${error.message}`);
+        updated++;
+      }
+
+      // Si todos los items de una OC quedaron con el mismo proveedor, también
+      // completa el encabezado para que deje de figurar "Sin proveedor".
+      const ocIds = [...new Set(toUpdate.filter((item) => item.oc_id).map((item) => item.oc_id as string))];
+      for (const ocId of ocIds) {
+        const { data: ocItems, error: ocItemsError } = await (supabase as any)
+          .from("orden_compra_items")
+          .select("proveedor_id")
+          .eq("orden_id", ocId);
+        if (ocItemsError) throw ocItemsError;
+        const providerIds = [...new Set((ocItems || []).map((item: any) => item.proveedor_id).filter(Boolean))];
+        const hasMissing = (ocItems || []).some((item: any) => !item.proveedor_id);
+        if (!hasMissing && providerIds.length === 1) {
+          const { error: headerError } = await supabase.from("ordenes_compra").update({ proveedor_id: providerIds[0] } as any).eq("id", ocId);
+          if (headerError) throw headerError;
+        }
       }
       if (updated > 0) {
         setSinProveedorItems(prev => prev.filter(it => !it.proveedor_id));
         setConsolidateSuccessMsg(`Se asignó proveedor a ${updated} item(s)`);
+        await fetchData();
       }
       if (sinProveedorItems.filter(it => !it.proveedor_id).length === 0) {
         setSinProveedorOpen(false);
@@ -1670,9 +1765,22 @@ export default function OrdenesCompraPage() {
               {
                 key: "facturas_vinculadas" as any,
                 label: "Pago",
-                render: (row) => row.estado === "cancelada" ? <span className="text-zinc-300">—</span> : ocPagada(row)
-                  ? <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada</Badge>
-                  : <Badge variant="warning">Pendiente</Badge>,
+                render: (row) => {
+                  if (row.estado === "cancelada") return <span className="text-zinc-300">—</span>;
+                  if (ocPagadaConTarjeta(row)) {
+                    return canManageCompras ? (
+                      <button onClick={(event) => handleTogglePagoTarjeta(row, event)} title="Quitar pago directo">
+                        <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Pagada · Tarjeta</Badge>
+                      </button>
+                    ) : <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Pagada · Tarjeta</Badge>;
+                  }
+                  if (ocPagada(row)) return <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada</Badge>;
+                  return canManageCompras ? (
+                    <button onClick={(event) => handleTogglePagoTarjeta(row, event)} title="Marcar pagada con tarjeta">
+                      <Badge variant="warning">Pendiente</Badge>
+                    </button>
+                  ) : <Badge variant="warning">Pendiente</Badge>;
+                },
               },
               {
                 key: "estado",
@@ -1826,7 +1934,11 @@ export default function OrdenesCompraPage() {
               {formError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</div>}
               <div>
                 <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Proveedor *</label>
-                <ProveedorPicker value={formData.proveedor_id} options={proveedores} onChange={(proveedor_id) => setFormData((prev) => ({ ...prev, proveedor_id }))} />
+                <ProveedorPicker value={formData.proveedor_id} options={proveedores} onChange={(proveedor_id) => {
+                  const proveedor = proveedores.find((item) => item.id === proveedor_id);
+                  const esMercadoLibre = proveedor?.razon_social.trim().toLowerCase() === "mercado libre";
+                  setFormData((prev) => ({ ...prev, proveedor_id, pagada_con_tarjeta: esMercadoLibre ? true : prev.pagada_con_tarjeta }));
+                }} />
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Vincular a PR (opcional)</label>
@@ -1852,6 +1964,13 @@ export default function OrdenesCompraPage() {
                   <option value="USD">USD - Dolares</option>
                 </select>
               </div>
+              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                <input type="checkbox" checked={formData.pagada_con_tarjeta} onChange={(event) => setFormData((prev) => ({ ...prev, pagada_con_tarjeta: event.target.checked }))} className="mt-0.5 h-4 w-4 accent-orange-600" />
+                <span className="text-sm dark:text-zinc-200">
+                  <strong className="flex items-center gap-1.5"><CreditCard className="h-4 w-4" /> Ya pagada con tarjeta</strong>
+                  <span className="mt-0.5 block text-xs font-normal text-zinc-500">Queda pagada desde la OC, sin generar una orden de pago.</span>
+                </span>
+              </label>
               <div className="sm:col-span-2">
                 <label className="block text-sm font-semibold mb-1 text-amber-700 dark:text-amber-400">
                   <span className="flex items-center gap-1.5">
@@ -1999,8 +2118,8 @@ export default function OrdenesCompraPage() {
           <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] flex flex-col">
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
               <div>
-                <h2 className="text-lg font-semibold dark:text-white">Items sin proveedor asignado</h2>
-                <p className="text-xs text-zinc-400 mt-0.5">Items de presupuestos aprobados que no tienen proveedor — asigná uno para poder generar OC</p>
+                <h2 className="text-lg font-semibold dark:text-white">Items y OC sin proveedor asignado</h2>
+                <p className="text-xs text-zinc-400 mt-0.5">Incluye presupuestos pendientes y órdenes de compra que todavía figuran sin proveedor.</p>
               </div>
               <button onClick={() => setSinProveedorOpen(false)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
                 <X className="h-5 w-5" />
@@ -2016,7 +2135,7 @@ export default function OrdenesCompraPage() {
               ) : sinProveedorItems.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-center">
                   <CheckCircle2 className="h-10 w-10 text-emerald-400 mb-3" />
-                  <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">Todos los items tienen proveedor</p>
+                  <p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">Todos los items y las OC tienen proveedor</p>
                   <p className="text-xs text-zinc-400 mt-1">No hay items pendientes de asignación.</p>
                 </div>
               ) : (
@@ -2031,6 +2150,7 @@ export default function OrdenesCompraPage() {
                           </div>
                           <div className="flex items-center gap-3 mt-1">
                             <span className="text-xs text-blue-500 font-mono">{item.pr_numero}</span>
+                            <Badge variant={item.origen === "orden_compra" ? "warning" : "info"}>{item.origen === "orden_compra" ? "OC" : "PR"}</Badge>
                             <span className="text-xs text-zinc-400">{item.cliente_nombre}</span>
                             <span className="text-xs text-zinc-500">{item.cantidad} {item.unidad}</span>
                             {item.precio_costo > 0 && (
@@ -2142,6 +2262,11 @@ export default function OrdenesCompraPage() {
                   <Badge variant={detailOC.pedido ? "success" : "outline"}>
                     {detailOC.pedido ? "Pedido" : "No pedido"}
                   </Badge>
+                  {ocPagadaConTarjeta(detailOC)
+                    ? <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Pagada · Tarjeta</Badge>
+                    : ocPagada(detailOC)
+                      ? <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada</Badge>
+                      : <Badge variant="warning">Pago pendiente</Badge>}
                   {(() => {
                     const totalQty = detailOC.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
                     const recibido = detailOC.orden_compra_items.reduce((a, i) => a + Number(i.cantidad_recibida), 0);
@@ -2276,6 +2401,13 @@ export default function OrdenesCompraPage() {
                     </button>
                   )}
                   <button
+                    onClick={(event) => handleTogglePagoTarjeta(detailOC, event)}
+                    className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${ocPagadaConTarjeta(detailOC) ? "border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950/20" : "border-orange-300 text-orange-600 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-950/20"}`}
+                  >
+                    <CreditCard className="h-4 w-4" />
+                    {ocPagadaConTarjeta(detailOC) ? "Pagada con tarjeta" : "Marcar pagada con tarjeta"}
+                  </button>
+                  <button
                     onClick={() => handleCancel(detailOC)}
                     className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors"
                   >
@@ -2297,8 +2429,16 @@ export default function OrdenesCompraPage() {
                 {editMode ? (
                   <div className="space-y-2">
                     <label className="block text-xs font-medium uppercase tracking-wide text-zinc-400">Proveedor de la OC</label>
-                    <ProveedorPicker value={editOC.proveedor_id} options={proveedores} onChange={(proveedor_id) => setEditOC((prev) => ({ ...prev, proveedor_id }))} />
+                    <ProveedorPicker value={editOC.proveedor_id} options={proveedores} onChange={(proveedor_id) => {
+                      const proveedor = proveedores.find((item) => item.id === proveedor_id);
+                      const esMercadoLibre = proveedor?.razon_social.trim().toLowerCase() === "mercado libre";
+                      setEditOC((prev) => ({ ...prev, proveedor_id, pagada_con_tarjeta: esMercadoLibre ? true : prev.pagada_con_tarjeta }));
+                    }} />
                     <p className="text-xs text-zinc-400">Podés cambiarlo o dejar la OC sin proveedor y completarlo más adelante.</p>
+                    <label className="flex cursor-pointer items-center gap-2 pt-2 text-sm dark:text-zinc-200">
+                      <input type="checkbox" checked={editOC.pagada_con_tarjeta} onChange={(event) => setEditOC((prev) => ({ ...prev, pagada_con_tarjeta: event.target.checked }))} className="h-4 w-4 accent-orange-600" />
+                      Pagada con tarjeta
+                    </label>
                   </div>
                 ) : detailOC.proveedores ? (
                   <div className="space-y-2 text-sm">
