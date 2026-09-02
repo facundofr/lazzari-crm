@@ -1539,8 +1539,14 @@ export default function OrdenesCompraPage() {
           <DataTable<OCRow>
             columns={[
               {
+                key: "fecha",
+                label: "Fecha",
+                sortable: true,
+                render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span>,
+              },
+              {
                 key: "numero",
-                label: "N° OC",
+                label: "Orden de compra",
                 sortable: true,
                 render: (row) => (
                   <div className="flex items-center gap-2">
@@ -1563,30 +1569,29 @@ export default function OrdenesCompraPage() {
                 ),
               },
               {
+                key: "orden_compra_items",
+                label: "Detalle",
+                render: (row) => {
+                  const descripciones = row.orden_compra_items.map((item) => item.descripcion || item.codigo).filter(Boolean) as string[];
+                  const detalle = descripciones.length > 0 ? descripciones.slice(0, 2).join(", ") : `${row.orden_compra_items.length} items`;
+                  return (
+                    <div className="flex max-w-[320px] items-center gap-1.5" title={descripciones.join(", ")}>
+                      <span className="truncate text-zinc-600 dark:text-zinc-300">{detalle}</span>
+                      {descripciones.length > 2 && <span className="shrink-0 text-xs text-zinc-400">+{descripciones.length - 2}</span>}
+                      {row.observaciones && (
+                        <span title={row.observaciones} className="inline-flex h-4 w-4 shrink-0 cursor-help items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400">
+                          <MessageSquare className="h-2.5 w-2.5" />
+                        </span>
+                      )}
+                    </div>
+                  );
+                },
+              },
+              {
                 key: "created_by",
                 label: "Operador",
                 sortable: true,
                 render: (row) => <span className="font-medium">{row.created_by_profile?.full_name || "—"}</span>,
-              },
-              {
-                key: "orden_compra_items",
-                label: "Items",
-                render: (row) => (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-zinc-500">{row.orden_compra_items.length} items</span>
-                    {row.observaciones && (
-                      <span title={row.observaciones} className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 cursor-help">
-                        <MessageSquare className="h-2.5 w-2.5" />
-                      </span>
-                    )}
-                  </div>
-                ),
-              },
-              {
-                key: "fecha",
-                label: "Fecha",
-                sortable: true,
-                render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span>,
               },
               {
                 key: "total",
