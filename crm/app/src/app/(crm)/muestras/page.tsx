@@ -352,7 +352,7 @@ export default function MuestrasPage() {
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
-      <Header title="Muestras" subtitle={`${envios.length} registros de muestras`} action={{ label: "Nueva muestra", onClick: openNuevoEnvio }} />
+      <Header title="Muestras" subtitle={`${envios.length} registros de muestras`} action={{ label: "Registrar entrega", onClick: openNuevoEnvio }} />
       <main className="mx-auto max-w-7xl space-y-5 px-4 py-6 sm:px-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex gap-2 overflow-x-auto">
