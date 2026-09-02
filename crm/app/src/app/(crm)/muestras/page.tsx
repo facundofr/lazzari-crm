@@ -34,6 +34,8 @@ interface MuestraEnvio {
   sucursal_id: string | null;
   estado: "en_cliente" | "parcial" | "devuelto";
   observaciones: string | null;
+  created_by: string | null;
+  created_by_profile?: { full_name: string } | null;
   created_at: string;
 }
 
@@ -47,9 +49,18 @@ interface MuestraItem {
 
 interface ClienteOption { id: string; razon_social: string }
 interface SucursalOption { id: string; cliente_id: string; nombre: string; direccion: string | null; localidad: string | null }
-interface DraftItem { producto_id: string; cantidad: number }
+interface DraftItem {
+  producto_id: string;
+  codigo: string;
+  descripcion: string;
+  talle: string;
+  color: string;
+  stock_total: number;
+  cantidad: number;
+}
 
 const emptyProducto = { codigo: "", descripcion: "", talle: "", color: "", stock_total: 0 };
+const emptyDraftItem: DraftItem = { producto_id: "", codigo: "", descripcion: "", talle: "", color: "", stock_total: 1, cantidad: 1 };
 
 const estadoConfig = {
   en_cliente: { label: "En cliente", variant: "warning" as const },
@@ -76,10 +87,11 @@ export default function MuestrasPage() {
   const [panelFullscreen, setPanelFullscreen] = useState(false);
   const [clientSearch, setClientSearch] = useState("");
   const [clientDropdownOpen, setClientDropdownOpen] = useState(false);
+  const [activeItemSearch, setActiveItemSearch] = useState<number | null>(null);
 
   const [envioModal, setEnvioModal] = useState(false);
   const [envioForm, setEnvioForm] = useState({ fecha: todayAR(), cliente_id: "", sucursal_id: "", observaciones: "" });
-  const [draftItems, setDraftItems] = useState<DraftItem[]>([{ producto_id: "", cantidad: 1 }]);
+  const [draftItems, setDraftItems] = useState<DraftItem[]>([{ ...emptyDraftItem }]);
 
   const [productoModal, setProductoModal] = useState(false);
   const [editingProductoId, setEditingProductoId] = useState<string | null>(null);
@@ -92,7 +104,7 @@ export default function MuestrasPage() {
     try {
       const [prodRes, envRes, itemRes, cliRes, sucRes] = await Promise.all([
         (supabase as any).from("muestra_productos").select("*").eq("sociedad_id", sociedadId).order("descripcion"),
-        (supabase as any).from("muestra_envios").select("*").eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).order("created_at", { ascending: false }),
+        (supabase as any).from("muestra_envios").select("*, created_by_profile:created_by(full_name)").eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).order("created_at", { ascending: false }),
         (supabase as any).from("muestra_envio_items").select("*"),
         (supabase as any).from("clientes").select("id, razon_social").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
         (supabase as any).from("cliente_sucursales").select("id, cliente_id, nombre, direccion, localidad").eq("activo", true).order("principal", { ascending: false }),
@@ -155,9 +167,29 @@ export default function MuestrasPage() {
 
   function openNuevoEnvio() {
     setEnvioForm({ fecha: todayAR(), cliente_id: "", sucursal_id: "", observaciones: "" });
-    setDraftItems([{ producto_id: "", cantidad: 1 }]);
+    setDraftItems([{ ...emptyDraftItem }]);
     setClientSearch("");
+    setActiveItemSearch(null);
     setEnvioModal(true);
+  }
+
+  function seleccionarProducto(index: number, producto: MuestraProducto) {
+    setDraftItems((prev) => prev.map((item, itemIndex) => itemIndex === index ? {
+      producto_id: producto.id,
+      codigo: producto.codigo,
+      descripcion: producto.descripcion,
+      talle: producto.talle || "",
+      color: producto.color || "",
+      stock_total: producto.stock_total,
+      cantidad: Math.max(1, Math.min(item.cantidad || 1, Math.max(disponibles(producto), 1))),
+    } : item));
+    setActiveItemSearch(null);
+  }
+
+  function updateDraftItem(index: number, patch: Partial<DraftItem>, detach = false) {
+    setDraftItems((prev) => prev.map((item, itemIndex) => itemIndex === index
+      ? { ...item, ...(detach ? { producto_id: "" } : {}), ...patch }
+      : item));
   }
 
   async function eliminarEnvio(envio: MuestraEnvio) {
@@ -221,18 +253,45 @@ export default function MuestrasPage() {
   async function handleCreateEnvio() {
     if (!sociedadId) return;
     if (!envioForm.cliente_id) { toast.error("Seleccioná un cliente"); return; }
-    const cleanItems = draftItems.filter((item) => item.producto_id && item.cantidad > 0);
+    const cleanItems = draftItems.filter((item) => item.codigo.trim() && item.descripcion.trim() && item.cantidad > 0);
     if (cleanItems.length === 0) { toast.error("Agregá al menos una muestra"); return; }
-    if (new Set(cleanItems.map((item) => item.producto_id)).size !== cleanItems.length) { toast.error("No repitas la misma muestra en el envío"); return; }
+    const itemKeys = cleanItems.map((item) => item.producto_id || item.codigo.trim().toLowerCase());
+    if (new Set(itemKeys).size !== cleanItems.length) { toast.error("No repitas la misma muestra en el envío"); return; }
     const unavailable = cleanItems.find((item) => {
+      if (!item.producto_id) return item.stock_total < item.cantidad;
       const producto = productoMap.get(item.producto_id);
       return !producto || item.cantidad > disponibles(producto);
     });
-    if (unavailable) { toast.error("Una de las cantidades supera el stock disponible"); return; }
+    if (unavailable) { toast.error("La cantidad a enviar no puede superar el stock disponible"); return; }
 
     setSaving(true);
     let envioId = "";
     try {
+      const resolvedItems: { producto_id: string; cantidad: number }[] = [];
+      for (const item of cleanItems) {
+        if (item.producto_id) {
+          resolvedItems.push({ producto_id: item.producto_id, cantidad: item.cantidad });
+          continue;
+        }
+        const existing = productos.find((producto) => producto.codigo.toLowerCase() === item.codigo.trim().toLowerCase());
+        if (existing) {
+          if (item.cantidad > disponibles(existing)) throw new Error(`Stock insuficiente para ${existing.codigo}`);
+          resolvedItems.push({ producto_id: existing.id, cantidad: item.cantidad });
+          continue;
+        }
+        const { data: created, error: createError } = await (supabase as any).from("muestra_productos").insert({
+          sociedad_id: sociedadId,
+          codigo: item.codigo.trim().toUpperCase(),
+          descripcion: item.descripcion.trim(),
+          talle: item.talle.trim() || null,
+          color: item.color.trim() || null,
+          stock_total: Math.max(Number(item.stock_total) || 0, Number(item.cantidad) || 0),
+          created_by: profile?.id || null,
+        }).select("id").single();
+        if (createError || !created?.id) throw createError || new Error(`No se pudo crear ${item.codigo}`);
+        resolvedItems.push({ producto_id: created.id, cantidad: item.cantidad });
+      }
+
       const { data: envio, error: envioError } = await (supabase as any).from("muestra_envios").insert({
         sociedad_id: sociedadId,
         numero: "",
@@ -246,7 +305,7 @@ export default function MuestrasPage() {
       if (envioError || !envio?.id) throw envioError || new Error("No se pudo crear el envío");
       envioId = envio.id;
       const { error: itemError } = await (supabase as any).from("muestra_envio_items").insert(
-        cleanItems.map((item) => ({ envio_id: envioId, producto_id: item.producto_id, cantidad: item.cantidad, cantidad_devuelta: 0 }))
+        resolvedItems.map((item) => ({ envio_id: envioId, producto_id: item.producto_id, cantidad: item.cantidad, cantidad_devuelta: 0 }))
       );
       if (itemError) throw itemError;
       toast.success("Muestras registradas en el cliente");
@@ -326,7 +385,245 @@ export default function MuestrasPage() {
         </div>
       </main>
 
-      {envioModal && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="max-h-[94vh] w-full max-w-5xl overflow-y-auto rounded-xl bg-white shadow-2xl dark:bg-zinc-900"><div className="flex items-center justify-between border-b p-5 dark:border-zinc-800"><div><h2 className="text-lg font-bold">Nueva muestra</h2><p className="text-sm text-zinc-500">Mismo flujo de un PR: cliente, sucursal, detalle y cantidades.</p></div><button onClick={() => setEnvioModal(false)}><X className="text-zinc-400" /></button></div><div className="space-y-5 p-5"><div className="grid grid-cols-2 gap-4"><div className="relative"><label className={labelClass}>Cliente *</label><div className="relative"><Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" /><input value={clientSearch} onFocus={() => setClientDropdownOpen(true)} onChange={(e) => { setClientSearch(e.target.value); setClientDropdownOpen(true); if (envioForm.cliente_id) setEnvioForm((form) => ({ ...form, cliente_id: "", sucursal_id: "" })); }} placeholder="Buscar cliente..." className={`${inputClass} pl-9`} /></div>{clientDropdownOpen && <div className="absolute z-20 mt-1 max-h-52 w-full overflow-y-auto rounded-lg border bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-800">{clientes.filter((cliente) => cliente.razon_social.toLowerCase().includes(clientSearch.toLowerCase())).slice(0, 25).map((cliente) => <button type="button" key={cliente.id} onClick={() => { setEnvioForm((form) => ({ ...form, cliente_id: cliente.id, sucursal_id: "" })); setClientSearch(cliente.razon_social); setClientDropdownOpen(false); }} className="block w-full px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700">{cliente.razon_social}</button>)}</div>}</div><div><label className={labelClass}>Sucursal / destino</label><select value={envioForm.sucursal_id} onChange={(e) => setEnvioForm((form) => ({ ...form, sucursal_id: e.target.value }))} className={inputClass}><option value="">Casa central</option>{sucursales.filter((s) => s.cliente_id === envioForm.cliente_id).map((s) => <option key={s.id} value={s.id}>{s.nombre}{s.localidad ? ` — ${s.localidad}` : ""}</option>)}</select></div><div><label className={labelClass}>Fecha</label><input type="date" value={envioForm.fecha} onChange={(e) => setEnvioForm((form) => ({ ...form, fecha: e.target.value }))} className={inputClass} /></div><div><label className={labelClass}>Observaciones</label><input value={envioForm.observaciones} onChange={(e) => setEnvioForm((form) => ({ ...form, observaciones: e.target.value }))} placeholder="Persona que recibió, motivo..." className={inputClass} /></div></div><div><div className="mb-2 flex items-center justify-between"><p className="text-sm font-semibold">Detalle de muestras</p><button onClick={() => setDraftItems((prev) => [...prev, { producto_id: "", cantidad: 1 }])} className="flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-2 text-xs font-medium text-white"><Plus size={14} /> Agregar prenda</button></div><div className="rounded-lg border dark:border-zinc-700"><div className="grid grid-cols-[1fr_120px_40px] gap-2 border-b bg-zinc-50 px-3 py-2 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800"><span>Prenda / talle / color</span><span>Cantidad</span><span></span></div><div className="space-y-2 p-3">{draftItems.map((draft, index) => { const selected = productoMap.get(draft.producto_id); return <div key={index} className="grid grid-cols-[1fr_120px_40px] items-center gap-2"><select value={draft.producto_id} onChange={(e) => setDraftItems((prev) => prev.map((item, i) => i === index ? { ...item, producto_id: e.target.value } : item))} className={inputClass}><option value="">Seleccionar muestra...</option>{productos.filter((p) => p.activo && (disponibles(p) > 0 || p.id === draft.producto_id)).map((p) => <option key={p.id} value={p.id}>{p.codigo} — {p.descripcion}{p.talle ? ` · ${p.talle}` : ""}{p.color ? ` · ${p.color}` : ""} ({disponibles(p)} disp.)</option>)}</select><input type="number" min="1" max={selected ? disponibles(selected) : undefined} value={draft.cantidad} onChange={(e) => setDraftItems((prev) => prev.map((item, i) => i === index ? { ...item, cantidad: Number(e.target.value) } : item))} className={inputClass} /><button disabled={draftItems.length === 1} onClick={() => setDraftItems((prev) => prev.filter((_, i) => i !== index))} className="rounded p-2 text-zinc-400 hover:text-red-500 disabled:opacity-30"><Trash2 size={16} /></button></div>; })}</div></div></div></div><div className="flex justify-end gap-2 border-t p-5 dark:border-zinc-800"><button onClick={() => setEnvioModal(false)} className="rounded-lg border px-4 py-2 text-sm dark:border-zinc-700">Cancelar</button><button onClick={handleCreateEnvio} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-600 px-5 py-2 text-sm font-medium text-white disabled:opacity-50">{saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Guardar muestra</button></div></div></div>}
+      {envioModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[96vh] w-full max-w-7xl overflow-y-auto rounded-xl bg-white shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between border-b p-5 dark:border-zinc-800">
+              <div>
+                <h2 className="text-lg font-bold">Nueva muestra</h2>
+                <p className="text-sm text-zinc-500">Completá los datos y las prendas igual que al cargar un presupuesto.</p>
+              </div>
+              <button onClick={() => setEnvioModal(false)} className="rounded p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <X className="text-zinc-400" />
+              </button>
+            </div>
+
+            <div className="space-y-6 p-5">
+              <div className="rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-500 dark:bg-zinc-800/70">
+                Creado por: <span className="font-semibold text-zinc-800 dark:text-zinc-100">{profile?.full_name || "Usuario actual"}</span>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="relative">
+                  <label className={labelClass}>Cliente *</label>
+                  <div className="relative">
+                    <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                    <input
+                      value={clientSearch}
+                      onFocus={() => setClientDropdownOpen(true)}
+                      onChange={(event) => {
+                        setClientSearch(event.target.value);
+                        setClientDropdownOpen(true);
+                        if (envioForm.cliente_id) {
+                          setEnvioForm((form) => ({ ...form, cliente_id: "", sucursal_id: "" }));
+                        }
+                      }}
+                      placeholder="Buscar cliente..."
+                      className={`${inputClass} pl-9`}
+                    />
+                  </div>
+                  {clientDropdownOpen && (
+                    <div className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-lg border bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-800">
+                      {clientes
+                        .filter((cliente) => cliente.razon_social.toLowerCase().includes(clientSearch.toLowerCase()))
+                        .slice(0, 25)
+                        .map((cliente) => (
+                          <button
+                            type="button"
+                            key={cliente.id}
+                            onClick={() => {
+                              setEnvioForm((form) => ({ ...form, cliente_id: cliente.id, sucursal_id: "" }));
+                              setClientSearch(cliente.razon_social);
+                              setClientDropdownOpen(false);
+                            }}
+                            className="block w-full px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
+                          >
+                            {cliente.razon_social}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className={labelClass}>Vendedor / operador</label>
+                  <input value={profile?.full_name || "Usuario actual"} readOnly className={`${inputClass} bg-zinc-50 dark:bg-zinc-800`} />
+                </div>
+
+                <div>
+                  <label className={labelClass}>Sucursal / destino</label>
+                  <select
+                    value={envioForm.sucursal_id}
+                    onChange={(event) => setEnvioForm((form) => ({ ...form, sucursal_id: event.target.value }))}
+                    className={inputClass}
+                  >
+                    <option value="">Casa central</option>
+                    {sucursales
+                      .filter((sucursal) => sucursal.cliente_id === envioForm.cliente_id)
+                      .map((sucursal) => (
+                        <option key={sucursal.id} value={sucursal.id}>
+                          {sucursal.nombre}{sucursal.localidad ? ` — ${sucursal.localidad}` : ""}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className={labelClass}>Fecha de envío</label>
+                  <input
+                    type="date"
+                    value={envioForm.fecha}
+                    onChange={(event) => setEnvioForm((form) => ({ ...form, fecha: event.target.value }))}
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold">Ítems de la muestra</p>
+                    <p className="text-xs text-zinc-500">Buscá una prenda existente o cargala directamente en esta grilla.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDraftItems((previous) => [...previous, { ...emptyDraftItem }])}
+                    className="flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-2 text-xs font-medium text-white"
+                  >
+                    <Plus size={14} /> Agregar ítem
+                  </button>
+                </div>
+
+                <div className="overflow-visible rounded-lg border dark:border-zinc-700">
+                  <div className="hidden grid-cols-[135px_minmax(220px,1fr)_110px_120px_105px_95px_115px_40px] gap-2 border-b bg-zinc-50 px-3 py-2 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 lg:grid">
+                    <span>Código</span>
+                    <span>Descripción</span>
+                    <span>Talle</span>
+                    <span>Color</span>
+                    <span>Stock total</span>
+                    <span>Disponible</span>
+                    <span>Cant. enviar</span>
+                    <span />
+                  </div>
+
+                  <div className="space-y-3 p-3">
+                    {draftItems.map((draft, index) => {
+                      const selected = productoMap.get(draft.producto_id);
+                      const available = selected ? disponibles(selected) : Number(draft.stock_total) || 0;
+                      const itemNeedle = `${draft.codigo} ${draft.descripcion}`.trim().toLowerCase();
+                      const suggestions = productos.filter((producto) => {
+                        if (!producto.activo || disponibles(producto) <= 0) return false;
+                        if (!itemNeedle) return true;
+                        return [producto.codigo, producto.descripcion, producto.talle || "", producto.color || ""]
+                          .join(" ")
+                          .toLowerCase()
+                          .includes(itemNeedle);
+                      }).slice(0, 12);
+
+                      return (
+                        <div key={index} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700 lg:border-0 lg:p-0">
+                          <div className="grid gap-2 lg:grid-cols-[135px_minmax(220px,1fr)_110px_120px_105px_95px_115px_40px] lg:items-start">
+                            <div className="relative">
+                              <label className={`${labelClass} lg:hidden`}>Código</label>
+                              <div className="relative">
+                                <input
+                                  value={draft.codigo}
+                                  onFocus={() => setActiveItemSearch(index)}
+                                  onChange={(event) => {
+                                    updateDraftItem(index, { codigo: event.target.value }, true);
+                                    setActiveItemSearch(index);
+                                  }}
+                                  placeholder="Código"
+                                  className={`${inputClass} pr-8`}
+                                />
+                                <Search size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+                              </div>
+                              {activeItemSearch === index && suggestions.length > 0 && (
+                                <div className="absolute z-40 mt-1 max-h-56 min-w-[430px] overflow-y-auto rounded-lg border bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-800">
+                                  {suggestions.map((producto) => (
+                                    <button
+                                      type="button"
+                                      key={producto.id}
+                                      onClick={() => seleccionarProducto(index, producto)}
+                                      className="flex w-full items-center justify-between gap-4 px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
+                                    >
+                                      <span>
+                                        <span className="font-mono text-xs text-zinc-500">{producto.codigo}</span>
+                                        <span className="ml-2 font-medium">{producto.descripcion}</span>
+                                        <span className="ml-2 text-xs text-zinc-400">{[producto.talle, producto.color].filter(Boolean).join(" · ")}</span>
+                                      </span>
+                                      <span className="whitespace-nowrap text-xs text-emerald-600">{disponibles(producto)} disp.</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
+                            <div>
+                              <label className={`${labelClass} lg:hidden`}>Descripción</label>
+                              <input
+                                value={draft.descripcion}
+                                onFocus={() => setActiveItemSearch(index)}
+                                onChange={(event) => updateDraftItem(index, { descripcion: event.target.value }, true)}
+                                placeholder="Descripción de la prenda"
+                                readOnly={Boolean(selected)}
+                                className={`${inputClass} ${selected ? "bg-zinc-50 dark:bg-zinc-800" : ""}`}
+                              />
+                            </div>
+                            <div>
+                              <label className={`${labelClass} lg:hidden`}>Talle</label>
+                              <input value={draft.talle} onChange={(event) => updateDraftItem(index, { talle: event.target.value })} placeholder="Talle" readOnly={Boolean(selected)} className={`${inputClass} ${selected ? "bg-zinc-50 dark:bg-zinc-800" : ""}`} />
+                            </div>
+                            <div>
+                              <label className={`${labelClass} lg:hidden`}>Color</label>
+                              <input value={draft.color} onChange={(event) => updateDraftItem(index, { color: event.target.value })} placeholder="Color" readOnly={Boolean(selected)} className={`${inputClass} ${selected ? "bg-zinc-50 dark:bg-zinc-800" : ""}`} />
+                            </div>
+                            <div>
+                              <label className={`${labelClass} lg:hidden`}>Stock total</label>
+                              <input type="number" min="1" value={draft.stock_total} onChange={(event) => updateDraftItem(index, { stock_total: Number(event.target.value) })} readOnly={Boolean(selected)} className={`${inputClass} ${selected ? "bg-zinc-50 dark:bg-zinc-800" : ""}`} />
+                            </div>
+                            <div>
+                              <label className={`${labelClass} lg:hidden`}>Disponible</label>
+                              <div className="rounded-lg bg-zinc-50 px-3 py-2 text-center text-sm font-semibold text-emerald-600 dark:bg-zinc-800">{available}</div>
+                            </div>
+                            <div>
+                              <label className={`${labelClass} lg:hidden`}>Cantidad a enviar</label>
+                              <input type="number" min="1" max={available || undefined} value={draft.cantidad} onChange={(event) => updateDraftItem(index, { cantidad: Number(event.target.value) })} className={inputClass} />
+                            </div>
+                            <button type="button" disabled={draftItems.length === 1} onClick={() => setDraftItems((previous) => previous.filter((_, itemIndex) => itemIndex !== index))} className="rounded p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-30" title="Quitar ítem">
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                          <p className="mt-1 text-[11px] text-zinc-400">
+                            {selected ? "Inventario de muestras existente" : "La prenda se agregará al inventario al guardar"}
+                          </p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <button type="button" onClick={() => setDraftItems((previous) => [...previous, { ...emptyDraftItem }])} className="mt-3 flex items-center gap-1 rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-xs text-zinc-500 hover:border-orange-400 hover:text-orange-600 dark:border-zinc-700">
+                  <Plus size={14} /> Agregar ítem
+                </button>
+              </div>
+
+              <div>
+                <label className={labelClass}>Observaciones</label>
+                <textarea value={envioForm.observaciones} onChange={(event) => setEnvioForm((form) => ({ ...form, observaciones: event.target.value }))} placeholder="Persona que recibió, motivo del envío, indicaciones internas..." rows={3} className={inputClass} />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t p-5 dark:border-zinc-800">
+              <button onClick={() => setEnvioModal(false)} className="rounded-lg border px-4 py-2 text-sm dark:border-zinc-700">Cancelar</button>
+              <button onClick={handleCreateEnvio} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-600 px-5 py-2 text-sm font-medium text-white disabled:opacity-50">
+                {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
+                Guardar muestra
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {productoModal && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-lg rounded-xl bg-white shadow-2xl dark:bg-zinc-900"><div className="flex items-center justify-between border-b p-5 dark:border-zinc-800"><div><h2 className="text-lg font-bold">{editingProductoId ? "Editar muestra" : "Nueva muestra"}</h2><p className="text-sm text-zinc-500">Inventario separado del stock comercial</p></div><button onClick={() => setProductoModal(false)}><X className="text-zinc-400" /></button></div><div className="grid grid-cols-2 gap-4 p-5"><div><label className={labelClass}>Código *</label><input value={productoForm.codigo} onChange={(e) => setProductoForm((form) => ({ ...form, codigo: e.target.value }))} placeholder="M-001" className={inputClass} /></div><div><label className={labelClass}>Cantidad total *</label><input type="number" min="0" value={productoForm.stock_total} onChange={(e) => setProductoForm((form) => ({ ...form, stock_total: Number(e.target.value) }))} className={inputClass} /></div><div className="col-span-2"><label className={labelClass}>Prenda / descripción *</label><input value={productoForm.descripcion} onChange={(e) => setProductoForm((form) => ({ ...form, descripcion: e.target.value }))} placeholder="Ej: Remera corporativa manga corta" className={inputClass} /></div><div><label className={labelClass}>Talle</label><input value={productoForm.talle} onChange={(e) => setProductoForm((form) => ({ ...form, talle: e.target.value }))} placeholder="S, M, L, XL..." className={inputClass} /></div><div><label className={labelClass}>Color</label><input value={productoForm.color} onChange={(e) => setProductoForm((form) => ({ ...form, color: e.target.value }))} placeholder="Negro" className={inputClass} /></div></div><div className="flex justify-end gap-2 border-t p-5 dark:border-zinc-800"><button onClick={() => setProductoModal(false)} className="rounded-lg border px-4 py-2 text-sm dark:border-zinc-700">Cancelar</button><button onClick={handleSaveProducto} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{saving ? <Loader2 size={16} className="animate-spin" /> : <Package size={16} />} Guardar</button></div></div></div>}
     </div>
