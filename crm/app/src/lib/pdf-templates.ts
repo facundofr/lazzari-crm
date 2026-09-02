@@ -471,7 +471,9 @@ export function generateFacturaPDF(
   const c = soc.colorPrimario;
   const cli = f.cliente;
   const letraComprobante = f.tipo.slice(-1);
-  const isB = f.tipo === "FB" || f.tipo === "NCB" || f.tipo === "X" || f.tipo === "NDB" || f.tipo === "FCEB" || f.tipo === "NCEB";
+  const isManualX = f.tipo === "X";
+  const isB = f.tipo === "FB" || f.tipo === "NCB" || f.tipo === "NDB" || f.tipo === "FCEB" || f.tipo === "NCEB";
+  const hideItemIva = isB || isManualX;
   const isUSD = f.moneda === "USD" && f.tipo_cambio;
 
   const compNum = `${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
@@ -506,17 +508,22 @@ export function generateFacturaPDF(
       <td>${it.descripcion}</td>
       <td class="right mono">${it.cantidad}</td>
       <td class="right mono">${formatCurrency(Number(it.precio_unitario), mon)}</td>
-      ${isB ? "" : `<td class="right">${it.iva_porcentaje}%</td>`}
+      ${hideItemIva ? "" : `<td class="right">${it.iva_porcentaje}%</td>`}
       <td class="right mono bold">${formatCurrency(Number(it.subtotal), mon)}</td>
     </tr>`).join("")
-  : `<tr><td colspan="${isB ? 5 : 6}" style="text-align:center;color:#999;padding:20px;font-style:italic">Items detallados no disponibles</td></tr>`;
+  : `<tr><td colspan="${hideItemIva ? 5 : 6}" style="text-align:center;color:#999;padding:20px;font-style:italic">Items detallados no disponibles</td></tr>`;
 
   const trStyle = "font-size:11px;color:#555;padding:5px 0";
   const tdMonoR = "text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222";
   const trFinal = "font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222";
   const tdFinalR = "text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700";
 
-  const totalsHtml = isB
+  const totalsHtml = isManualX
+    ? `<table style="width:100%;border-collapse:collapse">
+        <tr><td style="${trStyle};color:#777">Comprobante interno sin IVA</td><td></td></tr>
+        <tr><td style="${trFinal}">TOTAL (${mon})</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
+       </table>`
+    : isB
     ? `<table style="width:100%;border-collapse:collapse">
         <tr><td style="${trStyle};color:#777">Precios finales con IVA incluido</td><td></td></tr>
         <tr><td style="${trFinal}">TOTAL (${mon})</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
@@ -542,7 +549,7 @@ ${documentHeader(soc, {
   secondary: f.fecha_vencimiento ? `Vence ${formatDate(f.fecha_vencimiento)}` : "Original",
   marker: letraComprobante,
   centerMarker: true,
-  markerCode: `Código ${codTipo}`,
+  markerCode: isManualX ? "Comprobante interno sin IVA" : `Código ${codTipo}`,
   fiscalDetails: true,
   contactEmail: soc.email,
 })}
@@ -572,7 +579,7 @@ ${documentHeader(soc, {
     <th>Descripción</th>
     <th class="right" style="width:65px">Cantidad</th>
     <th class="right" style="width:95px">P. Unitario</th>
-    ${isB ? "" : `<th class="right" style="width:55px">IVA %</th>`}
+    ${hideItemIva ? "" : `<th class="right" style="width:55px">IVA %</th>`}
     <th class="right" style="width:95px">Subtotal</th>
   </tr></thead>
   <tbody>${itemRows}</tbody>

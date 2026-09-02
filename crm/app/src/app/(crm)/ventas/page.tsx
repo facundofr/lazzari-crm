@@ -83,7 +83,7 @@ interface Venta {
   remitos: VentaRemito[];
 }
 
-type EmitTipo = "FA" | "FB" | "FCEA" | "FCEB";
+type EmitTipo = "FA" | "FB" | "FCEA" | "FCEB" | "X";
 
 interface EmitItem {
   descripcion: string;
@@ -432,6 +432,7 @@ export default function VentasPage() {
     const condIva = p.clientes?.condicion_iva;
     const defaultTipo: EmitTipo = condIva === "RI" ? "FA" : "FB";
     const sourceIsManual = (p as any).modalidad_emision === "manual";
+    const initialTipo: EmitTipo = sourceIsManual ? "X" : defaultTipo;
 
     const items = (p.presupuesto_items || []).map(it => {
       const ivaPorcentaje = Number(it.iva_porcentaje) > 0 ? Number(it.iva_porcentaje) : 21;
@@ -456,7 +457,7 @@ export default function VentasPage() {
     });
 
     setEmitVenta(venta);
-    setEmitTipo(defaultTipo);
+    setEmitTipo(initialTipo);
     setEmitItems(items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]);
     const hoy = todayAR();
     const condCliente = p.clientes?.forma_pago || "Contado";
@@ -466,7 +467,7 @@ export default function VentasPage() {
     setEmitError("");
     setEmitSuccess("");
     setEmitFacturaId(null);
-    setEmitManual((p as any).modalidad_emision === "manual");
+    setEmitManual(sourceIsManual);
     setEmitPvManual(0);
     setEmitFecha(hoy);
     setEmitCondVenta(condCliente);
@@ -474,7 +475,7 @@ export default function VentasPage() {
     setEmitObservaciones("");
     setCotizBna(null);
     setEmitModalOpen(true);
-    fetchNextNum(defaultTipo);
+    fetchNextNum(initialTipo, sourceIsManual ? 0 : undefined);
   }
 
   async function handleEmitFactura() {
@@ -560,12 +561,13 @@ export default function VentasPage() {
     setEmitError("");
 
     try {
-      // Get next numero for this tipo+punto_venta+sociedad
+      // Todo comprobante manual es X, con precio final y sin IVA.
+      const tipoManual: EmitTipo = "X";
       const pvManual = emitPvManual || 0;
       let maxQuery = supabase
         .from("facturas")
         .select("numero")
-        .eq("tipo" as any, emitTipo)
+        .eq("tipo" as any, tipoManual)
         .eq("punto_venta" as any, pvManual);
       if (sociedadActiva?.id) {
         maxQuery = maxQuery.eq("sociedad_id" as any, sociedadActiva.id);
@@ -577,9 +579,6 @@ export default function VentasPage() {
       const nextNumero = ((maxRows && maxRows.length > 0 ? maxRows[0].numero : 0) || 0) + 1;
 
       // Calculate totals — convert prices if moneda changed
-      let subtotal: number;
-      let iva: number;
-      let total: number;
       const prMoneda = p.moneda || "ARS";
       const needsConv = emitMoneda !== prMoneda && emitTipoCambio > 0;
       const conv = (price: number) => {
@@ -587,23 +586,14 @@ export default function VentasPage() {
         return prMoneda === "USD" ? Math.round(price * emitTipoCambio * 100) / 100 : Math.round(price / emitTipoCambio * 100) / 100;
       };
 
-      if (emitTipo === "FA" || emitTipo === "FCEA") {
-        subtotal = emitItems.reduce((sum, it) => sum + it.cantidad * conv(it.precio_unitario), 0);
-        iva = emitItems.reduce((sum, it) => sum + it.cantidad * conv(it.precio_unitario) * it.iva_porcentaje / 100, 0);
-        total = subtotal + iva;
-      } else {
-        total = emitItems.reduce((sum, it) => sum + it.cantidad * conv(it.precio_unitario), 0);
-        subtotal = emitItems.reduce((sum, it) => {
-          const rate = (it.iva_porcentaje ?? 21) / 100;
-          return sum + (it.cantidad * conv(it.precio_unitario)) / (1 + rate);
-        }, 0);
-        iva = total - subtotal;
-      }
+      const total = roundMoney(emitItems.reduce((sum, it) => sum + it.cantidad * conv(it.precio_unitario), 0));
+      const subtotal = total;
+      const iva = 0;
 
       // Insert factura
       const { data: facturaData, error: fError } = await (supabase.from("facturas") as any)
         .insert({
-          tipo: emitTipo,
+          tipo: tipoManual,
           punto_venta: pvManual,
           numero: nextNumero,
           cliente_id: p.cliente_id,
@@ -637,13 +627,13 @@ export default function VentasPage() {
         descripcion: it.descripcion,
         cantidad: it.cantidad,
         precio_unitario: conv(it.precio_unitario),
-        iva_porcentaje: (emitTipo === "FA" || emitTipo === "FCEA") ? it.iva_porcentaje : 21,
+        iva_porcentaje: 0,
         orden: idx,
       }));
       const { error: itemsError } = await (supabase.from("factura_items") as any).insert(facturaItems);
       if (itemsError) throw itemsError;
 
-      const comp = `${emitTipo} ${String(pvManual).padStart(4, "0")}-${String(nextNumero).padStart(8, "0")}`;
+      const comp = `${tipoManual} ${String(pvManual).padStart(4, "0")}-${String(nextNumero).padStart(8, "0")}`;
       setEmitSuccess(`${comp} emitida (manual, sin CAE)`);
       setEmitFacturaId(facturaData.id);
       await fetchData();
@@ -1257,7 +1247,11 @@ export default function VentasPage() {
                       <input
                         type="number" min={0}
                         value={emitPvManual || ""}
-                        onChange={e => setEmitPvManual(Number(e.target.value))}
+                        onChange={e => {
+                          const newPv = Number(e.target.value);
+                          setEmitPvManual(newPv);
+                          fetchNextNum("X", newPv);
+                        }}
                         placeholder="PV"
                         className="mt-1 w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2 py-1 text-sm font-mono font-bold dark:text-white"
                       />
@@ -1322,14 +1316,18 @@ export default function VentasPage() {
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo de comprobante</label>
                   <select
                     value={emitTipo}
+                    disabled={emitManual}
                     onChange={e => {
                       const t = e.target.value as EmitTipo;
                       setEmitItems((items) => convertItemsForInvoiceType(items, emitTipo, t));
                       setEmitTipo(t);
                       fetchNextNum(t);
                     }}
-                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white disabled:cursor-not-allowed disabled:bg-zinc-100 dark:disabled:bg-zinc-800/60"
                   >
+                    {emitManual ? (
+                      <option value="X">Comprobante X (sin IVA)</option>
+                    ) : (<>
                     {emitVenta.presupuesto.clientes?.condicion_iva === "RI" && (
                       <option value="FA">Factura A (discrimina IVA)</option>
                     )}
@@ -1338,6 +1336,7 @@ export default function VentasPage() {
                       <option value="FCEA">FCE A — Crédito Electrónica (MiPyMEs)</option>
                     )}
                     <option value="FCEB">FCE B — Crédito Electrónica (MiPyMEs)</option>
+                    </>)}
                   </select>
                 </div>
 
@@ -1347,7 +1346,20 @@ export default function VentasPage() {
                     <input
                       type="checkbox"
                       checked={emitManual}
-                      onChange={e => setEmitManual(e.target.checked)}
+                      onChange={e => {
+                        const manual = e.target.checked;
+                        setEmitManual(manual);
+                        if (manual) {
+                          setEmitTipo("X");
+                          setEmitPvManual(0);
+                          fetchNextNum("X", 0);
+                        } else {
+                          const tipoArca: EmitTipo = emitVenta.presupuesto.clientes?.condicion_iva === "RI" ? "FA" : "FB";
+                          setEmitItems((items) => convertItemsForInvoiceType(items, "X", tipoArca));
+                          setEmitTipo(tipoArca);
+                          fetchNextNum(tipoArca);
+                        }
+                      }}
                       className="sr-only peer"
                     />
                     <div className="w-9 h-5 bg-zinc-300 peer-focus:outline-none rounded-full peer dark:bg-zinc-600 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-zinc-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:after:border-zinc-500 peer-checked:bg-orange-500" />
@@ -1580,7 +1592,7 @@ export default function VentasPage() {
                       return (
                         <>
                           <div className="flex justify-between text-sm font-bold">
-                            <span>Total (IVA incluido)</span>
+                            <span>{emitManual || emitTipo === "X" ? "Total (sin IVA)" : "Total (IVA incluido)"}</span>
                             <span>{formatCurrency(total, prMon)}</span>
                           </div>
                           {needsConv && (

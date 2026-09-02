@@ -479,12 +479,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     const forceManual = arcaStatus !== null && arcaStatus.certOk === false;
     setEmitManual(forceManual);
     setCotizBna(null);
-    const tipoInicial = prefill?.tipo || (forceManual ? "X" : "FB");
+    const tipoInicial = forceManual ? "X" : (prefill?.tipo || "FB");
     const hoy = todayAR();
     setEmitData({
       tipo: tipoInicial,
       cliente_id: prefill?.cliente_id || "",
-      punto_venta: emisorData.ptoVta,
+      punto_venta: forceManual ? 0 : emisorData.ptoVta,
       numero_manual: "",
       moneda: prefill?.moneda || "ARS",
       tipo_cambio: prefill?.tipo_cambio || 0,
@@ -504,7 +504,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     // Auto-fill next correlative number
     (async () => {
       try {
-        const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, tipoInicial).eq("punto_venta" as any, emisorData.ptoVta).order("numero", { ascending: false }).limit(1);
+        const pvInicial = forceManual ? 0 : emisorData.ptoVta;
+        const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, tipoInicial).eq("punto_venta" as any, pvInicial).order("numero", { ascending: false }).limit(1);
         if (last && last.length > 0) {
           setEmitData(prev => ({ ...prev, numero_manual: String(Number(last[0].numero) + 1) }));
         }
@@ -527,6 +528,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const tc = emitData.tipo_cambio || 0;
 
   const emitTotals = emitData.items.reduce((acc, it) => {
+    if (emitManual || emitData.tipo === "X") {
+      const total = it.cantidad * it.precio_unitario;
+      return { neto: acc.neto + total, iva: acc.iva, total: acc.total + total };
+    }
     if (isFacturaA) {
       const neto = it.cantidad * it.precio_unitario;
       const iva = neto * (it.iva_porcentaje / 100);
@@ -610,7 +615,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       const { data: newFactura, error: facturaErr } = await (supabase as any)
         .from("facturas")
         .insert({
-          tipo: emitData.tipo,
+          tipo: "X",
           punto_venta: emitData.punto_venta,
           numero: numManual,
           cliente_id: emitData.cliente_id === "consumidor_final" ? null : emitData.cliente_id,
@@ -619,8 +624,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           condicion_venta: emitData.condicion_venta || null,
           cae: null,
           cae_vencimiento: null,
-          subtotal: emitTotals.neto,
-          iva: emitTotals.iva,
+          subtotal: emitTotals.total,
+          iva: 0,
           total: emitTotals.total,
           moneda: emitData.moneda,
           tipo_cambio: emitData.moneda === "USD" && emitData.tipo_cambio > 0 ? emitData.tipo_cambio : null,
@@ -640,14 +645,14 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             descripcion: it.descripcion,
             cantidad: it.cantidad,
             precio_unitario: it.precio_unitario,
-            iva_porcentaje: isFacturaA ? it.iva_porcentaje : 21,
+            iva_porcentaje: 0,
             orden: idx,
           }));
         const { error: itemsErr } = await (supabase as any).from("factura_items").insert(itemRows);
         if (itemsErr) throw new Error("Error al guardar items: " + itemsErr.message);
       }
 
-      const comp = formatComprobante(emitData.tipo, emitData.punto_venta, numManual);
+      const comp = formatComprobante("X", emitData.punto_venta, numManual);
       setEmitResult({
         comprobante: comp,
         cae: null,
@@ -887,6 +892,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   const [copied, setCopied] = useState(false);
   function handleCopy(f: FacturaRow) {
+    const isManualX = f.tipo === "X";
     const lines = [
       `*${formatComprobante(f.tipo, f.punto_venta, f.numero)}*`,
       "",
@@ -899,8 +905,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       `*Cliente:* ${f.clientes?.razon_social || "\u2014"}`,
       f.clientes?.cuit ? `CUIT: ${f.clientes.cuit}` : null,
       "",
-      `Neto: ${formatCurrency(Number(f.subtotal), f.moneda as "USD" | "ARS")}`,
-      `IVA: ${formatCurrency(Number(f.iva), f.moneda as "USD" | "ARS")}`,
+      isManualX ? null : `Neto: ${formatCurrency(Number(f.subtotal), f.moneda as "USD" | "ARS")}`,
+      isManualX ? null : `IVA: ${formatCurrency(Number(f.iva), f.moneda as "USD" | "ARS")}`,
       `*Total: ${formatCurrency(Number(f.total), f.moneda as "USD" | "ARS")}*`,
       f.cae ? `\nCAE: ${f.cae}` : null,
       f.cae_vencimiento ? `Vto CAE: ${formatDate(f.cae_vencimiento)}` : null,
@@ -911,6 +917,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   }
 
   function buildFacturaSummaryText(f: FacturaRow) {
+    const isManualX = f.tipo === "X";
     const comp = formatComprobante(f.tipo, f.punto_venta, f.numero);
     const lines = [
       `${comp}`,
@@ -928,8 +935,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       "DETALLE:",
       ...detailItems.map((it, i) => `${i + 1}. ${it.descripcion} — ${it.cantidad} x ${formatCurrency(it.precio_unitario, f.moneda as "USD" | "ARS")} = ${formatCurrency(it.subtotal, f.moneda as "USD" | "ARS")}`),
       "",
-      `Subtotal: ${formatCurrency(Number(f.subtotal), f.moneda as "USD" | "ARS")}`,
-      `IVA: ${formatCurrency(Number(f.iva), f.moneda as "USD" | "ARS")}`,
+      isManualX ? null : `Subtotal: ${formatCurrency(Number(f.subtotal), f.moneda as "USD" | "ARS")}`,
+      isManualX ? null : `IVA: ${formatCurrency(Number(f.iva), f.moneda as "USD" | "ARS")}`,
       `TOTAL: ${formatCurrency(Number(f.total), f.moneda as "USD" | "ARS")}`,
       f.moneda === "USD" && f.tipo_cambio ? `Moneda: USD — TC: ${Number(f.tipo_cambio).toLocaleString("es-AR")}` : null,
       f.cae ? `\nCAE: ${f.cae}` : null,
@@ -1313,7 +1320,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 <div className="grid grid-cols-12 gap-4">
                   <div className="col-span-3">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Tipo *</label>
-                    <select value={emitData.tipo} onChange={(e) => {
+                    <select value={emitData.tipo} disabled={emitManual} onChange={(e) => {
                       const newTipo = e.target.value;
                       setEmitData((p) => ({ ...p, tipo: newTipo }));
                       // Auto-update correlative number for new tipo
@@ -1327,14 +1334,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                           }
                         } catch { /* ignore */ }
                       })();
-                    }} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
-                      {emitManual && (
-                        <optgroup label="Manual (sin ARCA)">
-                          <option value="X">Factura X (interna)</option>
-                          <option value="NDA">ND A</option>
-                          <option value="NDB">ND B</option>
-                        </optgroup>
-                      )}
+                    }} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white disabled:cursor-not-allowed disabled:bg-zinc-100 dark:disabled:bg-zinc-800/60">
+                      {emitManual ? (
+                        <option value="X">Comprobante X (sin IVA)</option>
+                      ) : (<>
                       <optgroup label="Facturas">
                         <option value="FA">Factura A</option>
                         <option value="FB">Factura B</option>
@@ -1349,6 +1352,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                         <option value="NCEA">NCE A (MiPyMEs)</option>
                         <option value="NCEB">NCE B (MiPyMEs)</option>
                       </optgroup>
+                      </>)}
                     </select>
                   </div>
                   <div className="col-span-7">
@@ -1525,7 +1529,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                     </>
                   ) : (
                     <div className="flex justify-between font-semibold text-base">
-                      <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total, isUSD ? "USD" : "ARS")}</span>
+                      <span>{emitManual || emitData.tipo === "X" ? "Total (sin IVA)" : "Total"}</span><span className="font-mono">{formatCurrency(emitTotals.total, isUSD ? "USD" : "ARS")}</span>
                     </div>
                   )}
                   {isUSD && tc > 0 && (
@@ -1714,16 +1718,18 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Importes</h4>
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                  <div className="flex items-center justify-between px-4 py-2.5 text-sm">
-                    <span className="text-zinc-500">Neto gravado</span>
-                    <span className="font-mono">{formatCurrency(Number(detailFactura.subtotal), detailFactura.moneda as "USD" | "ARS")}</span>
-                  </div>
-                  <div className="flex items-center justify-between px-4 py-2.5 text-sm border-t border-zinc-100 dark:border-zinc-800">
-                    <span className="text-zinc-500">IVA</span>
-                    <span className="font-mono">{formatCurrency(Number(detailFactura.iva), detailFactura.moneda as "USD" | "ARS")}</span>
-                  </div>
+                  {detailFactura.tipo !== "X" && (<>
+                    <div className="flex items-center justify-between px-4 py-2.5 text-sm">
+                      <span className="text-zinc-500">Neto gravado</span>
+                      <span className="font-mono">{formatCurrency(Number(detailFactura.subtotal), detailFactura.moneda as "USD" | "ARS")}</span>
+                    </div>
+                    <div className="flex items-center justify-between px-4 py-2.5 text-sm border-t border-zinc-100 dark:border-zinc-800">
+                      <span className="text-zinc-500">IVA</span>
+                      <span className="font-mono">{formatCurrency(Number(detailFactura.iva), detailFactura.moneda as "USD" | "ARS")}</span>
+                    </div>
+                  </>)}
                   <div className="flex items-center justify-between px-4 py-3 text-sm border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 font-semibold">
-                    <span className="text-zinc-700 dark:text-zinc-300">Total</span>
+                    <span className="text-zinc-700 dark:text-zinc-300">{detailFactura.tipo === "X" ? "Total (sin IVA)" : "Total"}</span>
                     <span className="font-mono text-base">{formatCurrency(Number(detailFactura.total), detailFactura.moneda as "USD" | "ARS")}</span>
                   </div>
                   {detailFactura.moneda === "USD" && detailFactura.tipo_cambio && (
