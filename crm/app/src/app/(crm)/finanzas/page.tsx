@@ -291,6 +291,9 @@ interface MovimientoRow {
   factura_id?: string;
   conciliado: boolean;
   created_at: string;
+  anulado?: boolean;
+  monto_original?: number | null;
+  anulado_at?: string | null;
   clientes?: { razon_social: string } | null;
   proveedores?: { razon_social: string } | null;
 }
@@ -372,6 +375,7 @@ export default function FinanzasPage() {
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingMovId, setEditingMovId] = useState<string | null>(null);
   const [movForm, setMovForm] = useState(emptyMovForm);
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -995,9 +999,23 @@ export default function FinanzasPage() {
       if (movForm.cliente_id) insertData.cliente_id = movForm.cliente_id;
       if (movForm.proveedor_id) insertData.proveedor_id = movForm.proveedor_id;
       if (profile?.id) insertData.created_by = profile.id;
-      const { error } = await supabase.from("movimientos").insert(insertData as any);
-      if (error) throw error;
+      if (editingMovId) {
+        const { error } = await (supabase as any).rpc("gestionar_cobro", {
+          p_movimiento_id: editingMovId,
+          p_accion: "editar",
+          p_descripcion: movForm.descripcion,
+          p_monto: movForm.monto,
+          p_moneda: movForm.moneda,
+          p_fecha: movForm.fecha,
+          p_tipo: movForm.tipo,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from("movimientos").insert(insertData as any);
+        if (error) throw error;
+      }
       setModalOpen(false);
+      setEditingMovId(null);
       setMovForm(emptyMovForm);
       setMovClienteSearch("");
       setMovProvSearch("");
@@ -1106,11 +1124,48 @@ export default function FinanzasPage() {
   async function handleDeleteMov(id: string) {
     if (!confirm("¿Seguro que queres eliminar este movimiento?")) return;
     try {
-      const { error } = await supabase.from("movimientos").delete().eq("id", id);
+      const { error } = await (supabase as any).rpc("gestionar_cobro", {
+        p_movimiento_id: id,
+        p_accion: "eliminar",
+      });
       if (error) throw error;
+      if (selectedMov?.id === id) setSelectedMov(null);
       await fetchData();
     } catch (err) {
       alert("Error al eliminar: " + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  function openEditMov(mov: MovimientoRow) {
+    if (mov.anulado) return;
+    setEditingMovId(mov.id);
+    setMovForm({
+      tipo: mov.tipo as typeof emptyMovForm.tipo,
+      descripcion: mov.descripcion,
+      monto: Number(mov.monto),
+      fecha: mov.fecha,
+      moneda: (mov.moneda || "ARS") as "ARS" | "USD",
+      cliente_id: mov.cliente_id || "",
+      proveedor_id: mov.proveedor_id || "",
+    });
+    setMovClienteSearch(mov.clientes?.razon_social || "");
+    setMovProvSearch(mov.proveedores?.razon_social || "");
+    setFormError("");
+    setModalOpen(true);
+  }
+
+  async function handleAnularMov(id: string) {
+    if (!confirm("¿Anular este cobro? Se conservará el registro, se revertirá el importe y se recalculará la factura.")) return;
+    try {
+      const { error } = await (supabase as any).rpc("gestionar_cobro", {
+        p_movimiento_id: id,
+        p_accion: "anular",
+      });
+      if (error) throw error;
+      setSelectedMov(null);
+      await fetchData();
+    } catch (err) {
+      alert("Error al anular: " + (err instanceof Error ? err.message : String(err)));
     }
   }
 
@@ -2405,7 +2460,7 @@ export default function FinanzasPage() {
 
   return (
     <>
-      <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setMovForm(emptyMovForm); setFormError(""); setModalOpen(true); } }} />
+      <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setEditingMovId(null); setMovForm(emptyMovForm); setMovClienteSearch(""); setMovProvSearch(""); setFormError(""); setModalOpen(true); } }} />
       <div className="p-4 sm:p-8 space-y-6">
         {/* ── Resumen de Caja ── */}
         <Card className="p-4">
@@ -2584,15 +2639,26 @@ export default function FinanzasPage() {
                 { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => {
                   const isIngreso = ["cobro", "cheque_recibido", "transferencia", "efectivo", "deposito", "retencion_iva", "retencion_ganancias", "retencion_iibb", "retencion_suss"].includes(row.tipo) && !!row.cliente_id;
                   const isEgreso = ["pago", "cheque_emitido"].includes(row.tipo) || (!!row.proveedor_id && !row.cliente_id);
-                  return <span className={`font-mono font-semibold block text-right ${isIngreso ? "text-emerald-600" : isEgreso ? "text-red-600" : "text-zinc-700 dark:text-zinc-300"}`}>{isIngreso ? "+" : isEgreso ? "-" : ""}{formatCurrency(row.monto, row.moneda as "ARS" | "USD")}</span>;
+                  const visibleAmount = row.anulado ? Number(row.monto_original || 0) : row.monto;
+                  return <span className={`font-mono font-semibold block text-right ${row.anulado ? "text-zinc-400 line-through" : isIngreso ? "text-emerald-600" : isEgreso ? "text-red-600" : "text-zinc-700 dark:text-zinc-300"}`}>{isIngreso ? "+" : isEgreso ? "-" : ""}{formatCurrency(visibleAmount, row.moneda as "ARS" | "USD")}</span>;
                 }},
-                { key: "conciliado", label: "Conciliado", sortable: true, render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Si" : "Pendiente"}</Badge> },
+                { key: "conciliado", label: "Estado", sortable: true, render: (row) => row.anulado ? <Badge variant="danger">Anulado</Badge> : <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Conciliado" : "Pendiente"}</Badge> },
                 { key: "actions", label: "", sortable: false, render: (row) => (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    {!row.conciliado && (
+                    {!row.anulado && !row.conciliado && (
                       <button onClick={() => handleConciliar(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Conciliar">
                         <CheckCircle2 className="h-3.5 w-3.5" />
                       </button>
+                    )}
+                    {!row.anulado && (
+                      <>
+                        <button onClick={() => openEditMov(row)} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Editar">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
+                        <button onClick={() => handleAnularMov(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-amber-100 hover:text-amber-600" title="Anular">
+                          <Ban className="h-3.5 w-3.5" />
+                        </button>
+                      </>
                     )}
                     <button onClick={() => handleDeleteMov(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar">
                       <Trash2 className="h-3.5 w-3.5" />
@@ -2627,7 +2693,7 @@ export default function FinanzasPage() {
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
                     <p className="text-xs text-zinc-400 uppercase">Monto</p>
-                    <p className="font-mono text-lg font-bold">{formatCurrency(selectedMov.monto, (selectedMov.moneda || "ARS") as "ARS" | "USD")}</p>
+                    <p className={`font-mono text-lg font-bold ${selectedMov.anulado ? "text-zinc-400 line-through" : ""}`}>{formatCurrency(selectedMov.anulado ? Number(selectedMov.monto_original || 0) : selectedMov.monto, (selectedMov.moneda || "ARS") as "ARS" | "USD")}</p>
                   </div>
                   <div>
                     <p className="text-xs text-zinc-400 uppercase">Fecha</p>
@@ -2635,8 +2701,8 @@ export default function FinanzasPage() {
                   </div>
                   <div>
                     <p className="text-xs text-zinc-400 uppercase">Estado</p>
-                    <Badge variant={selectedMov.conciliado ? "success" : "warning"}>
-                      {selectedMov.conciliado ? "Conciliado" : "Pendiente"}
+                    <Badge variant={selectedMov.anulado ? "danger" : selectedMov.conciliado ? "success" : "warning"}>
+                      {selectedMov.anulado ? "Anulado" : selectedMov.conciliado ? "Conciliado" : "Pendiente"}
                     </Badge>
                   </div>
                   <div>
@@ -2695,13 +2761,25 @@ export default function FinanzasPage() {
 
                 {/* Actions */}
                 <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
-                  {!selectedMov.conciliado && (
+                  {!selectedMov.anulado && !selectedMov.conciliado && (
                     <button onClick={async () => { await handleConciliar(selectedMov.id); setSelectedMov({ ...selectedMov, conciliado: true }); }}
                       className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
                       <CheckCircle2 className="h-4 w-4" /> Conciliar
                     </button>
                   )}
-                  <button onClick={() => { handleDeleteMov(selectedMov.id); setSelectedMov(null); }}
+                  {!selectedMov.anulado && (
+                    <>
+                      <button onClick={() => { const mov = selectedMov; setSelectedMov(null); openEditMov(mov); }}
+                        className="flex items-center gap-1.5 rounded-lg border border-blue-300 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20">
+                        <Pencil className="h-4 w-4" /> Editar
+                      </button>
+                      <button onClick={() => handleAnularMov(selectedMov.id)}
+                        className="flex items-center gap-1.5 rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20">
+                        <Ban className="h-4 w-4" /> Anular
+                      </button>
+                    </>
+                  )}
+                  <button onClick={() => handleDeleteMov(selectedMov.id)}
                     className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
                     <Trash2 className="h-4 w-4" /> Eliminar
                   </button>
@@ -3959,11 +4037,11 @@ export default function FinanzasPage() {
       {/* Nuevo movimiento modal */}
       {modalOpen && (
         <>
-          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setModalOpen(false)} />
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => { setModalOpen(false); setEditingMovId(null); }} />
           <div className="fixed inset-4 z-50 m-auto h-fit max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold dark:text-white">Nuevo movimiento</h2>
-              <button onClick={() => setModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              <h2 className="text-lg font-bold dark:text-white">{editingMovId ? "Editar cobro" : "Nuevo movimiento"}</h2>
+              <button onClick={() => { setModalOpen(false); setEditingMovId(null); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
             </div>
             {formError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{formError}</div>}
             <div className="space-y-4">
@@ -4048,10 +4126,10 @@ export default function FinanzasPage() {
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
-              <button onClick={() => setModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
+              <button onClick={() => { setModalOpen(false); setEditingMovId(null); }} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
               <button onClick={handleCreateMov} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                Crear movimiento
+                {editingMovId ? "Guardar cambios" : "Crear movimiento"}
               </button>
             </div>
           </div>
