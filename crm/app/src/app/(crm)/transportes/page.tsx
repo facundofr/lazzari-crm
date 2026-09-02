@@ -179,11 +179,27 @@ export default function TransportesPage() {
     try {
       const { data, error } = await (supabase as any)
         .from("transportes")
-        .select("*, facturas_compra(id, numero_factura, archivo_url, estado)")
+        .select("*")
         .or(`sociedad_id.eq.${socId},sociedad_id.is.null`)
         .order("fecha", { ascending: false });
       if (error) throw error;
-      setViajes(data || []);
+
+      const rows = (data || []) as ViajeRow[];
+      const facturaIds = [...new Set(rows.map((row) => row.factura_compra_id).filter(Boolean))] as string[];
+      let facturasMap = new Map<string, ViajeRow["facturas_compra"]>();
+      if (facturaIds.length > 0) {
+        const { data: facturas, error: facturasError } = await (supabase as any)
+          .from("facturas_compra")
+          .select("id, numero_factura, archivo_url, estado")
+          .in("id", facturaIds);
+        if (facturasError) throw facturasError;
+        facturasMap = new Map((facturas || []).map((factura: any) => [factura.id, factura]));
+      }
+
+      setViajes(rows.map((row) => ({
+        ...row,
+        facturas_compra: row.factura_compra_id ? facturasMap.get(row.factura_compra_id) || null : null,
+      })));
     } catch (e: any) {
       console.error("Error fetching viajes:", e);
       toast.error("Error al cargar viajes");
