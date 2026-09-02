@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import * as fs from "fs";
 import * as path from "path";
+import { crearFacturaWsfeNode } from "@/lib/arca-wsfe-node";
+
+export const runtime = "nodejs";
 
 // Lazy-import arca-facturacion (ESM module)
 let Arca: any;
@@ -78,7 +81,16 @@ function getArcaInstance(config: ArcaConfig = DEFAULT_ARCA_CONFIG) {
 
   const production = process.env.ARCA_PRODUCTION !== "false";
 
-  return new Arca({ cuit: config.cuit, cert, key, production });
+  return new Arca({ cuit: config.cuit, cert, key, production, requestTimeoutMs: 30_000, retries: 2, retryDelayMs: 750 });
+}
+
+function condicionIvaArca(value?: string | null) {
+  const normalized = (value || "").trim().toUpperCase();
+  if (["RI", "RESPONSABLE INSCRIPTO"].includes(normalized)) return 1;
+  if (["EX", "EXENTO"].includes(normalized)) return 4;
+  if (["CF", "CONSUMIDOR FINAL"].includes(normalized)) return 5;
+  if (["MONOTRIBUTO", "MONOTRIBUTISTA"].includes(normalized)) return 6;
+  return 7;
 }
 
 function getSupabase(authHeader?: string | null) {
@@ -376,7 +388,16 @@ export async function POST(req: NextRequest) {
 
     const today = fecha ? fecha.replace(/-/g, "") : new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
-    const result = await arca.crearFacturaAuto(ptoVta, cbteTipo, {
+    // El ticket WSAA se obtiene con el SDK. Para WSFE usamos node:https con IPv4
+    // y reintentos: evita los fallos intermitentes de fetch/undici observados en Vercel.
+    const auth = await arca.getAuth("wsfe");
+    const production = process.env.ARCA_PRODUCTION !== "false";
+    const result = await crearFacturaWsfeNode({
+      auth,
+      production,
+      ptoVta,
+      cbteTipo,
+      invoice: {
       Concepto: 1, // Productos
       DocTipo: docTipo,
       DocNro: Number(docNro),
@@ -389,7 +410,10 @@ export async function POST(req: NextRequest) {
       ImpIVA: totalIva,
       MonId: isUSD ? "DOL" : "PES",
       MonCotiz: isUSD ? tc : 1,
+      CondicionIVAReceptorId: cliente_id === "consumidor_final" ? 5 : condicionIvaArca(cliente?.condicion_iva),
+      ...(isUSD ? { CanMisMonExt: "N" as const } : {}),
       Iva: ivaArray,
+      },
     });
 
     // Extract CAE from response
