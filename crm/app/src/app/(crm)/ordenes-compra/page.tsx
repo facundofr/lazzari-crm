@@ -16,6 +16,7 @@ import {
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
   PackageCheck, MessageSquare, Edit3, Plus, Minus,
   Maximize2, Upload, Trash2,
+  Search,
 } from "lucide-react";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import { EmailComposeModal } from "@/components/email-compose-modal";
@@ -62,9 +63,11 @@ interface OCRow {
   notas_recepcion: string | null;
   observaciones: string;
   created_at: string;
+  created_by: string | null;
   proveedores: ProveedorInfo | null;
+  created_by_profile: { full_name: string } | null;
   presupuesto_origen: { numero: string } | null;
-  orden_compra_items: { cantidad: number; cantidad_recibida: number }[];
+  orden_compra_items: { codigo: string | null; descripcion: string | null; cantidad: number; cantidad_recibida: number }[];
 }
 
 interface DetailItem {
@@ -103,9 +106,13 @@ function mapMockToOCRow(oc: (typeof mockOrdenesCompra)[number]): OCRow {
     notas_recepcion: null,
     observaciones: oc.observaciones,
     created_at: oc.fecha,
+    created_by: null,
     proveedores: { razon_social: oc.proveedorNombre, cuit: null, email: null, telefono: null, direccion: null, localidad: null, provincia: null, forma_pago: null, condicion_iva: null },
+    created_by_profile: null,
     presupuesto_origen: null,
     orden_compra_items: oc.items.map((i) => ({
+      codigo: i.codigo,
+      descripcion: i.descripcion,
       cantidad: i.cantidad,
       cantidad_recibida: i.cantidadRecibida,
     })),
@@ -136,6 +143,8 @@ export default function OrdenesCompraPage() {
   const { sociedadActiva, profile } = useUser();
   const canManageCompras = profile?.role === "super_admin" || profile?.role === "admin" || profile?.role === "administrativo" || profile?.role === "vendedor";
   const [filter, setFilter] = useState<OCStatus | "todas">("todas");
+  const [search, setSearch] = useState("");
+  const [operadorFilter, setOperadorFilter] = useState("");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -245,8 +254,9 @@ export default function OrdenesCompraPage() {
         .select(`
           *,
           proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva),
+          created_by_profile:created_by(full_name),
           presupuesto_origen:presupuesto_origen_id(numero),
-          orden_compra_items(cantidad, cantidad_recibida)
+          orden_compra_items(codigo, descripcion, cantidad, cantidad_recibida)
         `)
         .order("created_at", { ascending: false });
 
@@ -1347,6 +1357,21 @@ export default function OrdenesCompraPage() {
         if (!["pendiente", "enviada", "confirmada"].includes(oc.estado)) return false;
       } else if (oc.estado !== filter) return false;
     }
+    if (search.trim()) {
+      const needle = search.trim().toLocaleLowerCase("es");
+      const searchable = [
+        oc.numero,
+        oc.proveedores?.razon_social,
+        oc.proveedores?.cuit,
+        oc.proveedores?.email,
+        oc.presupuesto_origen?.numero,
+        oc.created_by_profile?.full_name,
+        oc.observaciones,
+        ...oc.orden_compra_items.flatMap((item) => [item.codigo, item.descripcion]),
+      ].filter(Boolean).join(" ").toLocaleLowerCase("es");
+      if (!searchable.includes(needle)) return false;
+    }
+    if (operadorFilter && oc.created_by !== operadorFilter) return false;
     const fechaFilter = smartFilterValues.fecha as { from?: string; to?: string } | undefined;
     if (fechaFilter?.from && oc.fecha < fechaFilter.from) return false;
     if (fechaFilter?.to && oc.fecha > fechaFilter.to) return false;
@@ -1357,6 +1382,14 @@ export default function OrdenesCompraPage() {
     if (montoFilter?.max !== undefined && Number(oc.total) > montoFilter.max) return false;
     return true;
   });
+
+  const operadores = Array.from(
+    new Map(
+      ordenes
+        .filter((oc) => oc.created_by && oc.created_by_profile?.full_name)
+        .map((oc) => [oc.created_by as string, oc.created_by_profile!.full_name])
+    )
+  ).map(([id, nombre]) => ({ id, nombre })).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
 
   const now = new Date();
   const currentMonth = now.getMonth();
@@ -1478,6 +1511,27 @@ export default function OrdenesCompraPage() {
           })}
         </div>
 
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative min-w-[240px] max-w-lg flex-1">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Buscar por N° OC, proveedor, PR o items..."
+              className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+            />
+          </div>
+          <select
+            value={operadorFilter}
+            onChange={(event) => setOperadorFilter(event.target.value)}
+            className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+          >
+            <option value="">Todos los operadores</option>
+            {operadores.map((operador) => <option key={operador.id} value={operador.id}>{operador.nombre}</option>)}
+          </select>
+        </div>
+
         <SmartFilters filters={smartFilterConfigs} values={smartFilterValues} onChange={setSmartFilterValues} />
 
         {/* Data table */}
@@ -1507,6 +1561,12 @@ export default function OrdenesCompraPage() {
                     )}
                   </div>
                 ),
+              },
+              {
+                key: "created_by",
+                label: "Operador",
+                sortable: true,
+                render: (row) => <span className="font-medium">{row.created_by_profile?.full_name || "—"}</span>,
               },
               {
                 key: "orden_compra_items",
