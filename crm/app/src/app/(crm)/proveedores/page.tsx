@@ -337,6 +337,7 @@ export default function ProveedoresPage() {
         { value: "Cuenta corriente", label: "Cuenta corriente" },
         { value: "Cheque", label: "Cheque" },
         { value: "Transferencia", label: "Transferencia" },
+        { value: "Tarjeta", label: "Tarjeta" },
       ],
     },
   ];
@@ -910,7 +911,7 @@ export default function ProveedoresPage() {
               <div><label className="text-xs font-medium text-zinc-500">Provincia</label><input value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Forma de pago</label>
                 <select value={form.forma_pago} onChange={(e) => setForm({ ...form, forma_pago: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
-                  <option value="Transferencia">Transferencia</option><option value="Cheque">Cheque</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option>
+                  <option value="Transferencia">Transferencia</option><option value="Tarjeta">Tarjeta</option><option value="Cheque">Cheque</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option>
                 </select>
               </div>
               <div><label className="text-xs font-medium text-zinc-500">Dias CC</label><input type="number" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>

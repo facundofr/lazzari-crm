@@ -248,7 +248,7 @@ export default function ClientesPage() {
     ]},
     { key: "formaPago", label: "Forma de pago", type: "select", options: [
       { value: "Efectivo", label: "Efectivo" }, { value: "Cuenta corriente", label: "Cuenta corriente" },
-      { value: "Cheque", label: "Cheque" }, { value: "Transferencia", label: "Transferencia" }
+      { value: "Cheque", label: "Cheque" }, { value: "Transferencia", label: "Transferencia" }, { value: "Tarjeta", label: "Tarjeta" }
     ]},
     { key: "saldo", label: "Saldo CC", type: "number-range" },
     { key: "estado", label: "Estado", type: "select", options: [
@@ -3102,6 +3102,7 @@ export default function ClientesPage() {
                 onChange={(e) => setForm({ ...form, forma_pago: e.target.value })}
                 options={[
                   { value: "Transferencia", label: "Transferencia" },
+                  { value: "Tarjeta", label: "Tarjeta" },
                   { value: "Cheque", label: "Cheque" },
                   { value: "Efectivo", label: "Efectivo" },
                   { value: "Cuenta corriente", label: "Cuenta corriente" },

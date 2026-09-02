@@ -68,7 +68,13 @@ interface OCRow {
   created_by_profile: { full_name: string } | null;
   presupuesto_origen: { numero: string } | null;
   orden_compra_items: { codigo: string | null; descripcion: string | null; cantidad: number; cantidad_recibida: number }[];
+  facturas_vinculadas?: { estado: string; total: number; moneda: string }[];
 }
+
+const ocPagada = (oc: OCRow) => {
+  const facturas = (oc.facturas_vinculadas || []).filter((factura) => factura.estado !== "anulada");
+  return facturas.length > 0 && facturas.every((factura) => factura.estado === "pagada");
+};
 
 interface DetailItem {
   id: string;
@@ -139,10 +145,34 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   );
 }
 
+function ProveedorPicker({ value, options, onChange, placeholder = "Buscar proveedor...", compact = false }: {
+  value: string;
+  options: ProveedorOption[];
+  onChange: (id: string) => void;
+  placeholder?: string;
+  compact?: boolean;
+}) {
+  const selected = options.find((option) => option.id === value);
+  const [query, setQuery] = useState(selected?.razon_social || "");
+  const [open, setOpen] = useState(false);
+  useEffect(() => { setQuery(selected?.razon_social || ""); }, [selected?.razon_social]);
+  const filteredOptions = options.filter((option) => option.razon_social.toLowerCase().includes(query.toLowerCase())).slice(0, 30);
+  return <div className="relative" onClick={(event) => event.stopPropagation()}>
+    <Search className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 ${compact ? "h-3 w-3" : "h-4 w-4"}`} />
+    <input value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setOpen(true); if (value) onChange(""); }} placeholder={placeholder} className={`w-full rounded-lg border border-zinc-300 bg-white pr-8 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white ${compact ? "py-1 pl-7 text-xs" : "py-2 pl-9 text-sm"}`} />
+    {query && <button type="button" onClick={() => { setQuery(""); onChange(""); setOpen(true); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400"><X className="h-3.5 w-3.5" /></button>}
+    {open && <div className="absolute z-50 mt-1 max-h-52 w-full min-w-[260px] overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-800">
+      <button type="button" onClick={() => { onChange(""); setQuery(""); setOpen(false); }} className="block w-full px-3 py-2 text-left text-xs italic text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700">Sin proveedor</button>
+      {filteredOptions.map((option) => <button type="button" key={option.id} onClick={() => { onChange(option.id); setQuery(option.razon_social); setOpen(false); }} className="block w-full px-3 py-2 text-left text-sm hover:bg-orange-50 dark:hover:bg-zinc-700">{option.razon_social}</button>)}
+      {filteredOptions.length === 0 && <p className="px-3 py-3 text-xs text-zinc-400">No se encontraron proveedores</p>}
+    </div>}
+  </div>;
+}
+
 export default function OrdenesCompraPage() {
   const { sociedadActiva, profile } = useUser();
   const canManageCompras = profile?.role === "super_admin" || profile?.role === "admin" || profile?.role === "administrativo" || profile?.role === "vendedor";
-  const [filter, setFilter] = useState<OCStatus | "todas">("todas");
+  const [filter, setFilter] = useState<OCStatus | "todas" | "pago_pendiente" | "pagada">("todas");
   const [search, setSearch] = useState("");
   const [operadorFilter, setOperadorFilter] = useState("");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
@@ -162,6 +192,7 @@ export default function OrdenesCompraPage() {
 
   // Cargar factura modal
   const [cargarFCOpen, setCargarFCOpen] = useState(false);
+  const [cargarFCPreselectedId, setCargarFCPreselectedId] = useState<string | undefined>();
 
   // Email modal
   const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
@@ -196,6 +227,7 @@ export default function OrdenesCompraPage() {
     proveedor_nombre: string;
     moneda: string;
     iva_porcentaje: number;
+    compra_sin_iva: boolean;
     selected: boolean;
   }
   interface ProveedorGroup {
@@ -265,7 +297,23 @@ export default function OrdenesCompraPage() {
       const { data, error } = await q;
 
       if (!error && data) {
-        setOrdenes(data as unknown as OCRow[]);
+        const rows = data as unknown as OCRow[];
+        const ids = rows.map((row) => row.id);
+        const linksByOC = new Map<string, { estado: string; total: number; moneda: string }[]>();
+        if (ids.length > 0) {
+          const { data: links } = await (supabase as any)
+            .from("factura_compra_ocs")
+            .select("orden_compra_id, facturas_compra(estado, total, moneda)")
+            .in("orden_compra_id", ids);
+          for (const link of links || []) {
+            const factura = link.facturas_compra;
+            if (!factura) continue;
+            const list = linksByOC.get(link.orden_compra_id) || [];
+            list.push(factura);
+            linksByOC.set(link.orden_compra_id, list);
+          }
+        }
+        setOrdenes(rows.map((row) => ({ ...row, facturas_vinculadas: linksByOC.get(row.id) || [] })));
       } else if (error) {
         setOrdenes(mockOrdenesCompra.map(mapMockToOCRow));
       }
@@ -364,7 +412,17 @@ export default function OrdenesCompraPage() {
       }
 
       const itemsSubtotal = prItems.reduce((sum, it) => sum + (Number(it.precio_costo) || 0) * (Number(it.cantidad) || 0), 0);
+      let linkedPRManual = false;
+      if (formData.presupuesto_origen_id) {
+        const { data: linkedPR } = await (supabase as any)
+          .from("presupuestos")
+          .select("modalidad_emision")
+          .eq("id", formData.presupuesto_origen_id)
+          .single();
+        linkedPRManual = linkedPR?.modalidad_emision === "manual";
+      }
       const itemsIva = prItems.reduce((sum, it) => {
+        if (linkedPRManual) return sum;
         const lineSubtotal = (Number(it.precio_costo) || 0) * (Number(it.cantidad) || 0);
         const ivaPct = Number(it.iva_porcentaje ?? 21) / 100;
         return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
@@ -376,7 +434,7 @@ export default function OrdenesCompraPage() {
         fecha_entrega_estimada: formData.fecha_entrega_estimada || null,
         moneda: formData.moneda,
         observaciones: formData.observaciones,
-        estado: "borrador",
+        estado: "pendiente",
         subtotal: Math.round(itemsSubtotal * 100) / 100,
         iva: itemsIva,
         total: Math.round((itemsSubtotal + itemsIva) * 100) / 100,
@@ -397,7 +455,7 @@ export default function OrdenesCompraPage() {
           unidad: it.unidad || "u",
           precio_unitario: Number(it.precio_costo) || 0,
           producto_id: it.producto_id || null,
-          iva_porcentaje: Number(it.iva_porcentaje ?? 21),
+          iva_porcentaje: linkedPRManual ? 0 : Number(it.iva_porcentaje ?? 21),
           orden: idx,
         }));
         const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
@@ -921,9 +979,9 @@ export default function OrdenesCompraPage() {
     setConsolidateLoading(true);
     try {
       // Get approved presupuestos that have items with proveedor_id
-      let prQuery = supabase
+      let prQuery = (supabase as any)
         .from("presupuestos")
-        .select("id, numero, cliente_id, moneda, clientes(razon_social)")
+        .select("id, numero, cliente_id, moneda, modalidad_emision, clientes(razon_social)")
         .eq("estado", "aprobado");
       if (sociedadActiva?.id) prQuery = prQuery.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: prs } = await prQuery;
@@ -935,7 +993,7 @@ export default function OrdenesCompraPage() {
       }
 
       // Get all presupuesto items with proveedor
-      const prIds = prs.map(p => p.id);
+      const prIds = prs.map((p: any) => p.id);
       const { data: items } = await supabase
         .from("presupuesto_items")
         .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id, proveedor_nombre, iva_porcentaje, costo_moneda")
@@ -973,7 +1031,7 @@ export default function OrdenesCompraPage() {
       }
 
       // Build proveedor groups
-      const prMap = new Map(prs.map(p => [p.id, p]));
+      const prMap = new Map<string, any>(prs.map((p: any) => [p.id, p]));
       const groups: Record<string, ProveedorGroup> = {};
 
       for (const item of pendingItems) {
@@ -1004,6 +1062,7 @@ export default function OrdenesCompraPage() {
           proveedor_nombre: (item.proveedor_nombre as string) || "",
           moneda: itemCostoMoneda,
           iva_porcentaje: Number(item.iva_porcentaje ?? 21),
+          compra_sin_iva: (pr as any).modalidad_emision === "manual",
           selected: true,
         });
       }
@@ -1049,7 +1108,7 @@ export default function OrdenesCompraPage() {
         const subtotal = selectedItems.reduce((sum, it) => sum + it.precio_costo * it.cantidad, 0);
         const iva = selectedItems.reduce((sum, it) => {
           const lineSubtotal = it.precio_costo * it.cantidad;
-          const ivaPct = (it.iva_porcentaje ?? 21) / 100;
+          const ivaPct = it.compra_sin_iva ? 0 : (it.iva_porcentaje ?? 21) / 100;
           return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
         }, 0);
 
@@ -1064,7 +1123,7 @@ export default function OrdenesCompraPage() {
             proveedor_id: group.id,
             fecha: today,
             moneda: group.moneda,
-            estado: "borrador",
+            estado: "pendiente",
             subtotal: Math.round(subtotal * 100) / 100,
             iva,
             total: Math.round((subtotal + iva) * 100) / 100,
@@ -1087,7 +1146,7 @@ export default function OrdenesCompraPage() {
           cantidad_recibida: 0,
           unidad: it.unidad,
           precio_unitario: it.precio_costo,
-          iva_porcentaje: it.iva_porcentaje ?? 21,
+          iva_porcentaje: it.compra_sin_iva ? 0 : it.iva_porcentaje ?? 21,
           orden: idx,
         }));
 
@@ -1251,7 +1310,7 @@ export default function OrdenesCompraPage() {
       let created = 0;
       for (const [provId, items] of groups) {
         const subtotal = items.reduce((sum, it) => sum + Number(it.precio_unitario) * Number(it.cantidad), 0);
-        const iva = items.reduce((sum, it) => {
+        const iva = Number(detailOC.iva) === 0 ? 0 : items.reduce((sum, it) => {
           const lineSubtotal = Number(it.precio_unitario) * Number(it.cantidad);
           const ivaPct = (it.iva_porcentaje ?? 21) / 100;
           return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
@@ -1264,7 +1323,7 @@ export default function OrdenesCompraPage() {
             fecha: detailOC.fecha || today,
             fecha_entrega_estimada: detailOC.fecha_entrega_estimada || null,
             moneda: detailOC.moneda,
-            estado: "borrador",
+            estado: "pendiente",
             subtotal: Math.round(subtotal * 100) / 100,
             iva,
             total: Math.round((subtotal + iva) * 100) / 100,
@@ -1290,7 +1349,7 @@ export default function OrdenesCompraPage() {
           unidad: it.unidad || "u",
           precio_unitario: it.precio_unitario,
           producto_id: it.producto_id || null,
-          iva_porcentaje: it.iva_porcentaje ?? 21,
+          iva_porcentaje: Number(detailOC.iva) === 0 ? 0 : it.iva_porcentaje ?? 21,
           proveedor_id: provId,
           orden: idx,
         }));
@@ -1353,7 +1412,11 @@ export default function OrdenesCompraPage() {
   // ── Computed ─────────────────────────────────────────────────────
   const filtered = ordenes.filter((oc) => {
     if (filter !== "todas") {
-      if (filter === "pendiente") {
+      if (filter === "pagada") {
+        if (!ocPagada(oc)) return false;
+      } else if (filter === "pago_pendiente") {
+        if (ocPagada(oc) || oc.estado === "cancelada") return false;
+      } else if (filter === "pendiente") {
         if (!["pendiente", "enviada", "confirmada"].includes(oc.estado)) return false;
       } else if (oc.estado !== filter) return false;
     }
@@ -1428,7 +1491,7 @@ export default function OrdenesCompraPage() {
       {/* Secondary action bar */}
       {canManageCompras && <div className="px-4 sm:px-8 pt-2 flex justify-end gap-3">
         <button
-          onClick={() => setCargarFCOpen(true)}
+          onClick={() => { setCargarFCPreselectedId(undefined); setCargarFCOpen(true); }}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
         >
           <Upload className="h-4 w-4" />
@@ -1489,8 +1552,8 @@ export default function OrdenesCompraPage() {
 
         {/* Filter tabs */}
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {(["todas", "borrador", "pendiente", "recibida_parcial", "recibida", "cancelada"] as const).map((status) => {
-            const count = status === "todas" ? ordenes.length : ordenes.filter((oc) => status === "pendiente" ? ["pendiente", "enviada", "confirmada"].includes(oc.estado) : oc.estado === status).length;
+          {(["todas", "pendiente", "recibida_parcial", "recibida", "pago_pendiente", "pagada", "cancelada"] as const).map((status) => {
+            const count = status === "todas" ? ordenes.length : ordenes.filter((oc) => status === "pendiente" ? ["pendiente", "enviada", "confirmada"].includes(oc.estado) : status === "pagada" ? ocPagada(oc) : status === "pago_pendiente" ? !ocPagada(oc) && oc.estado !== "cancelada" : oc.estado === status).length;
             if (status !== "todas" && count === 0) return null;
             return (
               <button
@@ -1502,7 +1565,7 @@ export default function OrdenesCompraPage() {
                     : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700"
                 }`}
               >
-                {status === "todas" ? "Todas" : statusConfig[status].label}
+                {status === "todas" ? "Todas" : status === "pagada" ? "Pagadas" : status === "pago_pendiente" ? "Pago pendiente" : (statusConfig[status] || { label: status }).label}
                 <span className={`rounded-full px-1.5 py-0.5 text-xs ${filter === status ? "bg-white/20" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"}`}>
                   {count}
                 </span>
@@ -1603,6 +1666,13 @@ export default function OrdenesCompraPage() {
                     {formatCurrency(Number(row.total), row.moneda as "ARS" | "USD")}
                   </span>
                 ),
+              },
+              {
+                key: "facturas_vinculadas" as any,
+                label: "Pago",
+                render: (row) => row.estado === "cancelada" ? <span className="text-zinc-300">—</span> : ocPagada(row)
+                  ? <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada</Badge>
+                  : <Badge variant="warning">Pendiente</Badge>,
               },
               {
                 key: "estado",
@@ -1756,10 +1826,7 @@ export default function OrdenesCompraPage() {
               {formError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</div>}
               <div>
                 <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Proveedor *</label>
-                <select value={formData.proveedor_id} onChange={(e) => setFormData((p) => ({ ...p, proveedor_id: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
-                  <option value="">Seleccionar proveedor...</option>
-                  {proveedores.map((prov) => <option key={prov.id} value={prov.id}>{prov.razon_social}</option>)}
-                </select>
+                <ProveedorPicker value={formData.proveedor_id} options={proveedores} onChange={(proveedor_id) => setFormData((prev) => ({ ...prev, proveedor_id }))} />
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Vincular a PR (opcional)</label>
@@ -1971,21 +2038,15 @@ export default function OrdenesCompraPage() {
                             )}
                           </div>
                         </div>
-                        <select
+                        <div className="min-w-[220px]"><ProveedorPicker
                           value={item.proveedor_id}
-                          onChange={(e) => {
-                            const val = e.target.value;
+                          options={sinProveedorProvs}
+                          onChange={(val) => {
                             setSinProveedorItems(prev => prev.map(it =>
                               it.item_id === item.item_id ? { ...it, proveedor_id: val } : it
                             ));
                           }}
-                          className="text-sm border border-zinc-300 dark:border-zinc-600 rounded-md px-2 py-1.5 bg-white dark:bg-zinc-800 dark:text-white min-w-[180px]"
-                        >
-                          <option value="">Seleccionar proveedor...</option>
-                          {sinProveedorProvs.map(p => (
-                            <option key={p.id} value={p.id}>{p.razon_social}</option>
-                          ))}
-                        </select>
+                        /></div>
                       </div>
                     </div>
                   ))}
@@ -2206,6 +2267,14 @@ export default function OrdenesCompraPage() {
                       Marcar todo recibido
                     </button>
                   )}
+                  {detailOC.proveedor_id && (
+                    <button
+                      onClick={() => { setCargarFCPreselectedId(detailOC.id); setCargarFCOpen(true); }}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                    >
+                      <Upload className="h-4 w-4" /> Cargar factura de esta OC
+                    </button>
+                  )}
                   <button
                     onClick={() => handleCancel(detailOC)}
                     className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors"
@@ -2228,14 +2297,7 @@ export default function OrdenesCompraPage() {
                 {editMode ? (
                   <div className="space-y-2">
                     <label className="block text-xs font-medium uppercase tracking-wide text-zinc-400">Proveedor de la OC</label>
-                    <select
-                      value={editOC.proveedor_id}
-                      onChange={(e) => setEditOC((prev) => ({ ...prev, proveedor_id: e.target.value }))}
-                      className="w-full rounded-lg border border-blue-300 bg-white px-3 py-2 text-sm dark:border-blue-700 dark:bg-zinc-800 dark:text-white"
-                    >
-                      <option value="">Sin proveedor asignado</option>
-                      {proveedores.map((p) => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
-                    </select>
+                    <ProveedorPicker value={editOC.proveedor_id} options={proveedores} onChange={(proveedor_id) => setEditOC((prev) => ({ ...prev, proveedor_id }))} />
                     <p className="text-xs text-zinc-400">Podés cambiarlo o dejar la OC sin proveedor y completarlo más adelante.</p>
                   </div>
                 ) : detailOC.proveedores ? (
@@ -2288,9 +2350,11 @@ export default function OrdenesCompraPage() {
                     {canManageCompras ? <>
                     <p className="text-xs text-zinc-400">Asigná un proveedor a toda la OC, o asigná proveedores por item en la tabla de abajo y dividí la OC.</p>
                     <div>
-                      <select
-                        onChange={async (e) => {
-                          const provId = e.target.value;
+                      <ProveedorPicker
+                        value=""
+                        options={proveedores}
+                        placeholder="Buscar proveedor para toda la OC..."
+                        onChange={async (provId) => {
                           if (!provId || !detailOC) return;
                           const { error } = await supabase.from("ordenes_compra").update({ proveedor_id: provId } as any).eq("id", detailOC.id);
                           if (error) { alert("Error al asignar proveedor"); return; }
@@ -2301,12 +2365,7 @@ export default function OrdenesCompraPage() {
                           if (fresh) setDetailOC(fresh as any);
                           await fetchData();
                         }}
-                        className="w-full rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white"
-                        defaultValue=""
-                      >
-                        <option value="">Asignar proveedor a toda la OC...</option>
-                        {proveedores.map((p) => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
-                      </select>
+                      />
                     </div>
                     {detailItems.some(it => it.proveedor_id) && (
                       <button
@@ -2507,14 +2566,7 @@ export default function OrdenesCompraPage() {
                               </td>
                               {!detailOC.proveedores && (
                                 <td className="px-3 py-2">
-                                  {canManageCompras ? <select
-                                    value={item.proveedor_id || ""}
-                                    onChange={(e) => handleItemProveedorChange(item.id, e.target.value)}
-                                    className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1.5 py-1 bg-white dark:bg-zinc-800 dark:text-white max-w-[140px] truncate"
-                                  >
-                                    <option value="">Sin proveedor</option>
-                                    {proveedores.map(p => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
-                                  </select> : (
+                                  {canManageCompras ? <ProveedorPicker value={item.proveedor_id || ""} options={proveedores} onChange={(proveedorId) => handleItemProveedorChange(item.id, proveedorId)} compact /> : (
                                     <span className="text-xs text-zinc-500">
                                       {proveedores.find(p => p.id === item.proveedor_id)?.razon_social || "Sin proveedor"}
                                     </span>
@@ -2689,8 +2741,9 @@ export default function OrdenesCompraPage() {
             estado: (statusConfig[o.estado] || { label: o.estado }).label,
             fecha: o.fecha,
           }))}
+          preselectedOCId={cargarFCPreselectedId}
           onClose={() => setCargarFCOpen(false)}
-          onSuccess={() => { setCargarFCOpen(false); fetchData(); }}
+          onSuccess={() => { setCargarFCOpen(false); setCargarFCPreselectedId(undefined); fetchData(); }}
         />
       )}
 

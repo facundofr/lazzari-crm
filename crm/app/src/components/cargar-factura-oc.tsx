@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { X, Upload, Loader2, Sparkles, Check, Search, Plus } from "lucide-react";
-import { formatCurrency } from "@/lib/utils";
+import { useState, useMemo, useEffect } from "react";
+import { X, Loader2, Sparkles, Check, Search, Plus, Trash2, Maximize2, Minimize2 } from "lucide-react";
+import { formatCurrency, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 
 // ── Types ────────────────────────────────────────────────
@@ -55,20 +55,20 @@ interface Props {
   sociedadId: string;
   profileId: string | null;
   ordenes: OCParaVincular[];
+  preselectedOCId?: string;
   onClose: () => void;
   onSuccess: () => void;
 }
 
 const uid = () => Math.random().toString(36).slice(2, 9);
-const todayStr = () => new Date().toISOString().slice(0, 10);
-
 // ── Component ────────────────────────────────────────────
 export default function CargarFacturaOC({
-  sociedadId, profileId, ordenes, onClose, onSuccess,
+  sociedadId, profileId, ordenes, preselectedOCId, onClose, onSuccess,
 }: Props) {
+  const initialOC = preselectedOCId ? ordenes.find((oc) => oc.id === preselectedOCId) : undefined;
   // ── Form state ──
-  const [proveedorId, setProveedorId] = useState("");
-  const [proveedorSearch, setProveedorSearch] = useState("");
+  const [proveedorId, setProveedorId] = useState(initialOC?.proveedor_id || "");
+  const [proveedorSearch, setProveedorSearch] = useState(initialOC?.proveedor_nombre || "");
   const [proveedores, setProveedores] = useState<ProveedorOption[]>([]);
   const [proveedoresLoaded, setProveedoresLoaded] = useState(false);
   const [nuevoProveedorOpen, setNuevoProveedorOpen] = useState(false);
@@ -76,7 +76,7 @@ export default function CargarFacturaOC({
   const [nuevoProveedorSaving, setNuevoProveedorSaving] = useState(false);
   const [nuevoProveedorError, setNuevoProveedorError] = useState("");
   const [numeroFactura, setNumeroFactura] = useState("");
-  const [fecha, setFecha] = useState(todayStr());
+  const [fecha, setFecha] = useState(todayAR());
   const [fechaVencimiento, setFechaVencimiento] = useState("");
   const [cae, setCae] = useState("");
   const [moneda, setMoneda] = useState<"ARS" | "USD">("ARS");
@@ -87,7 +87,11 @@ export default function CargarFacturaOC({
   const [items, setItems] = useState<FCItem[]>([]);
 
   // ── OC selection ──
-  const [selectedOCIds, setSelectedOCIds] = useState<Set<string>>(new Set());
+  const [selectedOCIds, setSelectedOCIds] = useState<Set<string>>(new Set(preselectedOCId ? [preselectedOCId] : []));
+  const [ocSearch, setOcSearch] = useState("");
+  const [fullscreen, setFullscreen] = useState(false);
+  const [pagadaSinOP, setPagadaSinOP] = useState(false);
+  const [cuitLoading, setCuitLoading] = useState(false);
 
   // ── File & parsing ──
   const [file, setFile] = useState<File | null>(null);
@@ -100,14 +104,23 @@ export default function CargarFacturaOC({
   const [error, setError] = useState("");
 
   // ── Computed ──
-  const iva = useMemo(() => Math.round(subtotal * ivaPorcentaje) / 100, [subtotal, ivaPorcentaje]);
+  const iva = useMemo(() => {
+    if (items.length === 0) return Math.round(subtotal * ivaPorcentaje) / 100;
+    return Math.round(items.reduce((sum, item) => (
+      sum + Number(item.cantidad) * Number(item.precio_unitario) * Number(item.iva_porcentaje || 0) / 100
+    ), 0) * 100) / 100;
+  }, [items, subtotal, ivaPorcentaje]);
   const total = useMemo(() => Math.round((subtotal + iva + percepciones) * 100) / 100, [subtotal, iva, percepciones]);
 
   // Filter OCs by selected proveedor
   const ocsFiltered = useMemo(() => {
-    if (!proveedorId) return ordenes;
-    return ordenes.filter(oc => oc.proveedor_id === proveedorId);
-  }, [ordenes, proveedorId]);
+    const q = ocSearch.trim().toLowerCase();
+    return ordenes.filter((oc) => {
+      if (proveedorId && oc.proveedor_id !== proveedorId) return false;
+      if (q && !`${oc.numero} ${oc.proveedor_nombre} ${oc.estado}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [ordenes, proveedorId, ocSearch]);
 
   const filteredProveedores = useMemo(() => {
     if (!proveedorSearch.trim()) return proveedores.slice(0, 20);
@@ -118,6 +131,42 @@ export default function CargarFacturaOC({
   }, [proveedores, proveedorSearch]);
 
   const selectedProvNombre = proveedores.find(p => p.id === proveedorId)?.razon_social || "";
+
+  useEffect(() => {
+    if (items.length > 0) {
+      setSubtotal(Math.round(items.reduce((sum, item) => sum + Number(item.cantidad) * Number(item.precio_unitario), 0) * 100) / 100);
+    }
+  }, [items]);
+
+  useEffect(() => {
+    void loadProveedores();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sociedadId]);
+
+  async function lookupNuevoProveedor() {
+    const cuit = nuevoProveedor.cuit.replace(/\D/g, "");
+    if (cuit.length !== 11) { setNuevoProveedorError("El CUIT debe tener 11 dígitos"); return; }
+    setCuitLoading(true);
+    setNuevoProveedorError("");
+    try {
+      const res = await fetch(`/api/cuit-lookup?cuit=${cuit}`);
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "No se pudo consultar AFIP");
+      setNuevoProveedor((prev) => ({
+        ...prev,
+        cuit,
+        razon_social: data.razon_social || prev.razon_social,
+        condicion_iva: data.condicion_iva || prev.condicion_iva,
+        direccion: data.direccion || prev.direccion,
+        localidad: data.localidad || prev.localidad,
+        provincia: data.provincia || prev.provincia,
+      }));
+    } catch (err) {
+      setNuevoProveedorError(err instanceof Error ? err.message : "No se pudo consultar AFIP");
+    } finally {
+      setCuitLoading(false);
+    }
+  }
 
   // ── Load proveedores ──
   async function loadProveedores() {
@@ -276,7 +325,7 @@ export default function CargarFacturaOC({
         percepciones,
         total,
         moneda,
-        estado: "pendiente_aprobacion",
+        estado: pagadaSinOP ? "pagada" : "pendiente_aprobacion",
         tipo: "mercaderia",
         solo_iva: false,
         notas: notas || null,
@@ -306,7 +355,8 @@ export default function CargarFacturaOC({
           iva_porcentaje: it.iva_porcentaje,
           sociedad_id: sociedadId,
         }));
-        await (supabase as any).from("facturas_compra_items").insert(itemsInsert);
+        const { error: itemsError } = await (supabase as any).from("facturas_compra_items").insert(itemsInsert);
+        if (itemsError) throw new Error(`Error al guardar los items: ${itemsError.message}`);
       }
 
       // Insert OC links (junction table)
@@ -319,6 +369,35 @@ export default function CargarFacturaOC({
           .from("factura_compra_ocs")
           .insert(links);
         if (linkErr) throw new Error(linkErr.message);
+      }
+
+      // Si la factura corresponde a una sola OC, la OC refleja el costo real facturado.
+      // Para facturas consolidadas no se reparte automáticamente porque no hay una
+      // asignación fiable del importe entre varias órdenes.
+      if (selectedOCIds.size === 1) {
+        const ocId = Array.from(selectedOCIds)[0];
+        const { data: allLinks } = await (supabase as any)
+          .from("factura_compra_ocs")
+          .select("facturas_compra(estado, subtotal, iva, total, moneda)")
+          .eq("orden_compra_id", ocId);
+        const linkedInvoices = (allLinks || [])
+          .flatMap((link: any) => Array.isArray(link.facturas_compra) ? link.facturas_compra : [link.facturas_compra])
+          .filter((invoice: any) => invoice && invoice.estado !== "anulada");
+        const currencies = new Set(linkedInvoices.map((invoice: any) => invoice.moneda));
+        if (linkedInvoices.length > 0 && currencies.size === 1) {
+          const actual = linkedInvoices.reduce((acc: { subtotal: number; iva: number; total: number }, invoice: any) => ({
+            subtotal: acc.subtotal + Number(invoice.subtotal || 0),
+            iva: acc.iva + Number(invoice.iva || 0),
+            total: acc.total + Number(invoice.total || 0),
+          }), { subtotal: 0, iva: 0, total: 0 });
+          const { error: reconcileError } = await (supabase as any).from("ordenes_compra").update({
+            moneda: linkedInvoices[0].moneda,
+            subtotal: Math.round(actual.subtotal * 100) / 100,
+            iva: Math.round(actual.iva * 100) / 100,
+            total: Math.round(actual.total * 100) / 100,
+          }).eq("id", ocId);
+          if (reconcileError) console.warn("La factura se guardó pero no se pudo actualizar el importe real de la OC:", reconcileError);
+        }
       }
 
       // Upload file
@@ -341,7 +420,7 @@ export default function CargarFacturaOC({
         }
       }
 
-      alert("Factura cargada y enviada para aprobacion");
+      alert(pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");
       onSuccess();
     } catch (err: any) {
       setError(err.message || "Error al guardar");
@@ -353,19 +432,20 @@ export default function CargarFacturaOC({
   // ── Render ──
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center overflow-y-auto p-4 pt-8 pb-8">
-      <div className="bg-white dark:bg-zinc-900 w-full max-w-4xl rounded-xl shadow-2xl">
+      <div className={`bg-white dark:bg-zinc-900 w-full rounded-xl shadow-2xl ${fullscreen ? "min-h-[calc(100vh-2rem)] max-w-none" : "max-w-5xl"}`}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
           <div>
             <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Cargar factura de proveedor</h2>
             <p className="text-sm text-zinc-500">Cargá la factura y vinculala a las ordenes de compra correspondientes</p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800">
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setFullscreen((value) => !value)} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800" title={fullscreen ? "Reducir" : "Ampliar"}>{fullscreen ? <Minimize2 size={19} /> : <Maximize2 size={19} />}</button>
+            <button onClick={onClose} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800"><X size={20} /></button>
+          </div>
         </div>
 
-        <div className="px-6 py-5 space-y-6 max-h-[75vh] overflow-y-auto">
+        <div className={`px-6 py-5 space-y-6 overflow-y-auto ${fullscreen ? "max-h-[calc(100vh-10rem)]" : "max-h-[75vh]"}`}>
           {/* ── 1. Upload ── */}
           <section>
             <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-3">
@@ -514,7 +594,11 @@ export default function CargarFacturaOC({
               {/* IVA % */}
               <div>
                 <label className="block text-[10px] uppercase text-zinc-400 mb-1">IVA %</label>
-                <select value={ivaPorcentaje} onChange={e => setIvaPorcentaje(Number(e.target.value))}
+                <select value={ivaPorcentaje} onChange={e => {
+                  const value = Number(e.target.value);
+                  setIvaPorcentaje(value);
+                  setItems((prev) => prev.map((item) => ({ ...item, iva_porcentaje: value })));
+                }}
                   className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
                   <option value={0}>0% (Exento)</option>
                   <option value={10.5}>10.5%</option>
@@ -537,27 +621,29 @@ export default function CargarFacturaOC({
               <span className="font-bold text-zinc-900 dark:text-zinc-100">Total: <span className="font-mono text-orange-600">{formatCurrency(total, moneda)}</span></span>
             </div>
 
-            {/* Items preview */}
+            {/* Items editables */}
             {items.length > 0 && (
               <div className="mt-4">
-                <p className="text-[10px] uppercase text-zinc-400 mb-1">Items detectados ({items.length})</p>
-                <div className="max-h-32 overflow-y-auto">
+                <div className="mb-2 flex items-center justify-between"><p className="text-[10px] uppercase text-zinc-400">Items detectados y editables ({items.length})</p><button type="button" onClick={() => setItems((prev) => [...prev, { tempId: uid(), descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: ivaPorcentaje, unidad: "UN" }])} className="inline-flex items-center gap-1 text-xs font-medium text-orange-600"><Plus size={13} /> Agregar item</button></div>
+                <div className="max-h-64 overflow-y-auto">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-zinc-50 dark:bg-zinc-800 text-zinc-500">
-                        <th className="px-2 py-1 text-left">Descripcion</th>
+                        <th className="px-2 py-1 text-left">Descripción</th>
                         <th className="px-2 py-1 text-right">Cant.</th>
                         <th className="px-2 py-1 text-right">P. Unit.</th>
                         <th className="px-2 py-1 text-right">IVA</th>
+                        <th className="w-8"></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {items.map(it => (
+                      {items.map((it, index) => (
                         <tr key={it.tempId} className="border-b border-zinc-100 dark:border-zinc-800">
-                          <td className="px-2 py-1 truncate max-w-[200px]">{it.descripcion}</td>
-                          <td className="px-2 py-1 text-right font-mono">{it.cantidad}</td>
-                          <td className="px-2 py-1 text-right font-mono">{formatCurrency(it.precio_unitario, moneda)}</td>
-                          <td className="px-2 py-1 text-right">{it.iva_porcentaje}%</td>
+                          <td className="px-1 py-1"><input value={it.descripcion} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, descripcion: e.target.value } : item))} className="w-full rounded border border-zinc-200 bg-transparent px-2 py-1.5 dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><input type="number" min="0" step="0.01" value={it.cantidad} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, cantidad: Number(e.target.value) || 0 } : item))} className="w-20 rounded border border-zinc-200 bg-transparent px-2 py-1.5 text-right font-mono dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><input type="number" min="0" step="0.01" value={it.precio_unitario} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, precio_unitario: Number(e.target.value) || 0 } : item))} className="w-28 rounded border border-zinc-200 bg-transparent px-2 py-1.5 text-right font-mono dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><select value={it.iva_porcentaje} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, iva_porcentaje: Number(e.target.value) } : item))} className="rounded border border-zinc-200 bg-transparent px-1 py-1.5 dark:border-zinc-700"><option value={0}>0%</option><option value={10.5}>10,5%</option><option value={21}>21%</option><option value={27}>27%</option></select></td>
+                          <td><button type="button" onClick={() => setItems((prev) => prev.filter((_, i) => i !== index))} className="rounded p-1 text-zinc-400 hover:text-red-500"><Trash2 size={14} /></button></td>
                         </tr>
                       ))}
                     </tbody>
@@ -569,9 +655,7 @@ export default function CargarFacturaOC({
 
           {/* ── 3. Vincular OCs ── */}
           <section>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-3">
-              3. Vincular ordenes de compra
-            </h3>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-bold uppercase tracking-wider text-orange-600">3. Vincular órdenes de compra</h3><div className="relative w-72 max-w-full"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" /><input value={ocSearch} onChange={(e) => setOcSearch(e.target.value)} placeholder="Buscar OC, proveedor o estado..." className="w-full rounded-lg border border-zinc-200 bg-transparent py-1.5 pl-8 pr-2 text-xs dark:border-zinc-700" /></div></div>
             {ocsFiltered.length === 0 ? (
               <p className="text-sm text-zinc-400 italic">
                 {proveedorId
@@ -613,6 +697,7 @@ export default function CargarFacturaOC({
             <textarea value={notas} onChange={e => setNotas(e.target.value)} rows={2}
               placeholder="Opcional"
               className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
+            <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-700"><input type="checkbox" checked={pagadaSinOP} onChange={(e) => setPagadaSinOP(e.target.checked)} className="mt-0.5 accent-orange-600" /><span><strong>Ya pagada con tarjeta / marketplace</strong><span className="block text-xs font-normal text-zinc-500">La factura queda pagada sin generar una orden de pago ni duplicar el gasto.</span></span></label>
           </section>
 
           {/* Error */}
@@ -656,7 +741,7 @@ export default function CargarFacturaOC({
               {nuevoProveedorError && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400">{nuevoProveedorError}</div>}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Razón social *</label><input value={nuevoProveedor.razon_social} onChange={e => setNuevoProveedor({ ...nuevoProveedor, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">CUIT *</label><input value={nuevoProveedor.cuit} onChange={e => setNuevoProveedor({ ...nuevoProveedor, cuit: e.target.value })} placeholder="XX-XXXXXXXX-X" className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm font-mono dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">CUIT *</label><div className="mt-1 flex gap-2"><input value={nuevoProveedor.cuit} onChange={e => setNuevoProveedor({ ...nuevoProveedor, cuit: e.target.value })} placeholder="XX-XXXXXXXX-X" className="min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-mono dark:border-zinc-600 dark:bg-zinc-800" /><button type="button" onClick={lookupNuevoProveedor} disabled={cuitLoading} className="inline-flex items-center gap-1 rounded-lg border border-blue-300 px-3 text-xs font-semibold text-blue-600 hover:bg-blue-50 disabled:opacity-50">{cuitLoading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />} AFIP</button></div></div>
                 <div><label className="text-xs font-medium text-zinc-500">Condición IVA</label><select value={nuevoProveedor.condicion_iva} onChange={e => setNuevoProveedor({ ...nuevoProveedor, condicion_iva: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"><option value="RI">Responsable Inscripto</option><option value="Monotributo">Monotributo</option><option value="Exento">Exento</option></select></div>
                 <div><label className="text-xs font-medium text-zinc-500">Rubro</label><input value={nuevoProveedor.rubro} onChange={e => setNuevoProveedor({ ...nuevoProveedor, rubro: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
                 <div><label className="text-xs font-medium text-zinc-500">Email</label><input type="email" value={nuevoProveedor.email} onChange={e => setNuevoProveedor({ ...nuevoProveedor, email: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
@@ -664,7 +749,7 @@ export default function CargarFacturaOC({
                 <div><label className="text-xs font-medium text-zinc-500">Dirección</label><input value={nuevoProveedor.direccion} onChange={e => setNuevoProveedor({ ...nuevoProveedor, direccion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
                 <div><label className="text-xs font-medium text-zinc-500">Localidad</label><input value={nuevoProveedor.localidad} onChange={e => setNuevoProveedor({ ...nuevoProveedor, localidad: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
                 <div><label className="text-xs font-medium text-zinc-500">Provincia</label><input value={nuevoProveedor.provincia} onChange={e => setNuevoProveedor({ ...nuevoProveedor, provincia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">Forma de pago</label><select value={nuevoProveedor.forma_pago} onChange={e => setNuevoProveedor({ ...nuevoProveedor, forma_pago: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"><option value="Transferencia">Transferencia</option><option value="Cheque">Cheque</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option></select></div>
+                <div><label className="text-xs font-medium text-zinc-500">Forma de pago</label><select value={nuevoProveedor.forma_pago} onChange={e => setNuevoProveedor({ ...nuevoProveedor, forma_pago: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"><option value="Transferencia">Transferencia</option><option value="Tarjeta">Tarjeta</option><option value="Cheque">Cheque</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option></select></div>
                 <div><label className="text-xs font-medium text-zinc-500">Días cuenta corriente</label><input type="number" value={nuevoProveedor.dias_cuenta_corriente} onChange={e => setNuevoProveedor({ ...nuevoProveedor, dias_cuenta_corriente: Number(e.target.value) || 0 })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
                 <div><label className="text-xs font-medium text-zinc-500">Límite de crédito</label><input type="number" value={nuevoProveedor.limite_credito} onChange={e => setNuevoProveedor({ ...nuevoProveedor, limite_credito: Number(e.target.value) || 0 })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
 

@@ -109,6 +109,7 @@ interface PresupuestoItem {
 }
 
 function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
+  const isManual = row.modalidad_emision === "manual";
   return {
     id: row.id,
     numero: row.numero,
@@ -132,8 +133,8 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
       precioVenta: it.precio_venta,
       subtotal: it.subtotal,
       ivaPorcentaje: it.iva_porcentaje ?? 21,
-      iva: it.iva,
-      total: it.total,
+      iva: isManual ? 0 : it.iva,
+      total: isManual ? Number(it.cantidad) * Number(it.precio_venta) : it.total,
     })),
     subtotal: row.subtotal,
     iva: row.iva,
@@ -707,8 +708,10 @@ export default function PresupuestosPage() {
             precioVenta: it.precio_venta,
             subtotal: it.subtotal,
             ivaPorcentaje: it.iva_porcentaje ?? 21,
-            iva: it.iva,
-            total: it.total,
+            iva: (prev as any).modalidadEmision === "manual" ? 0 : it.iva,
+            total: (prev as any).modalidadEmision === "manual"
+              ? Number(it.cantidad) * Number(it.precio_venta)
+              : it.total,
           }))
         } : null);
       }
@@ -1192,11 +1195,12 @@ export default function PresupuestosPage() {
       // Get presupuesto header for numero and sociedad_id
       const { data: prHeader } = await (supabase as any)
         .from("presupuestos")
-        .select("numero, sociedad_id")
+        .select("numero, sociedad_id, modalidad_emision")
         .eq("id", prId)
         .single();
       const prNumero = prHeader?.numero ?? "";
       const sociedadId = prHeader?.sociedad_id ?? sociedadActiva?.id ?? null;
+      const compraSinIva = prHeader?.modalidad_emision === "manual";
 
       // Check if OCs already exist for this PR (avoid duplicates on re-approval)
       const { data: existingOCs } = await supabase
@@ -1240,7 +1244,7 @@ export default function PresupuestosPage() {
       for (const provId of conProveedorIds) {
         const provItems = byProveedor[provId];
         const subtotal = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
-        const iva = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
+        const iva = compraSinIva ? 0 : provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
 
         // Determine OC moneda from items' costo_moneda (cost currency), NOT from PR sale moneda
         // If items have mixed cost currencies, default to ARS
@@ -1255,7 +1259,7 @@ export default function PresupuestosPage() {
             sociedad_id: sociedadId,
             fecha: today,
             moneda: ocMoneda,
-            estado: "borrador",
+            estado: "pendiente",
             subtotal,
             iva,
             total: subtotal + iva,
@@ -1279,7 +1283,7 @@ export default function PresupuestosPage() {
           cantidad: Number(it.cantidad) || 1,
           unidad: it.unidad || "u",
           precio_unitario: Number(it.precio_costo) || 0,
-          iva_porcentaje: Number(it.iva_porcentaje ?? 21),
+          iva_porcentaje: compraSinIva ? 0 : Number(it.iva_porcentaje ?? 21),
           orden: idx + 1,
           cantidad_recibida: 0,
         }));
@@ -1295,7 +1299,7 @@ export default function PresupuestosPage() {
       const sinProvItems = byProveedor["__sin_proveedor__"] || [];
       if (sinProvItems.length > 0) {
         const subtotalSP = sinProvItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
-        const ivaSP = sinProvItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
+        const ivaSP = compraSinIva ? 0 : sinProvItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
         const costoMonedasSP = new Set(sinProvItems.map((it: any) => it.costo_moneda || "ARS"));
         const ocMonedaSP = costoMonedasSP.size === 1 ? [...costoMonedasSP][0] : "ARS";
 
@@ -1307,7 +1311,7 @@ export default function PresupuestosPage() {
             sociedad_id: sociedadId,
             fecha: todayAR(),
             moneda: ocMonedaSP,
-            estado: "borrador",
+            estado: "pendiente",
             subtotal: subtotalSP,
             iva: ivaSP,
             total: subtotalSP + ivaSP,
@@ -1325,7 +1329,7 @@ export default function PresupuestosPage() {
             cantidad: Number(it.cantidad) || 1,
             unidad: it.unidad || "u",
             precio_unitario: Number(it.precio_costo) || 0,
-            iva_porcentaje: Number(it.iva_porcentaje ?? 21),
+            iva_porcentaje: compraSinIva ? 0 : Number(it.iva_porcentaje ?? 21),
             orden: idx + 1,
             cantidad_recibida: 0,
           }));
@@ -1511,7 +1515,7 @@ export default function PresupuestosPage() {
           let markup = Number(it.markup_porcentaje) || 0;
           // Back-calculate markup if DB has null/0 but precio_venta and precio_costo exist
           if (!markup && costo > 0 && pv > 0) {
-            const costoConv = convertCosto(costo, it.costo_moneda || "USD", prMoneda, prTc);
+            const costoConv = convertCosto(costo, it.costo_moneda || "ARS", prMoneda, prTc);
             if (costoConv > 0) {
               markup = Number((((pv / costoConv) - 1) * 100).toFixed(2));
             }
@@ -1530,7 +1534,7 @@ export default function PresupuestosPage() {
           proveedor_id: it.proveedor_id || "",
           stock_propio: Boolean(it.stock_propio),
           lista_item_id: it.lista_item_id || "",
-          costo_moneda: (it.costo_moneda || "USD") as "ARS" | "USD",
+          costo_moneda: (it.costo_moneda || "ARS") as "ARS" | "USD",
         };
         });
 
