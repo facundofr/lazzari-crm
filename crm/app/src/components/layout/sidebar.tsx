@@ -23,6 +23,7 @@ import {
   X,
   ArrowRightLeft,
   Calendar,
+  Shirt,
 } from "lucide-react";
 import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -37,6 +38,7 @@ const navigation = [
   { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
   { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
   { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
+  { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras" },
   { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
   // ── Compras & logistica ──
   { name: "Compras", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
