@@ -1,9 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 
-const EXTRACTION_PROMPT = `Sos un experto en extracción de datos de facturas de compra argentinas.
+const EXTRACTION_PROMPT = `Sos un experto en extracción de datos de facturas de compra y notas de pedido argentinas.
 
-Te voy a pasar un PDF o imagen de una factura de compra (factura de proveedor). Tu tarea es extraer los datos principales y devolver un JSON con esta estructura exacta:
+Te voy a pasar un PDF o imagen de una factura de compra o nota de pedido de proveedor. Tu tarea es extraer los datos principales y devolver un JSON con esta estructura exacta:
 
 {
   "proveedor": {
@@ -21,10 +21,12 @@ Te voy a pasar un PDF o imagen de una factura de compra (factura de proveedor). 
       "descripcion": "descripción del producto/servicio",
       "cantidad": 1,
       "precio_unitario": 123.45,
+      "descuento_porcentaje": 10,
       "iva_porcentaje": 21,
       "unidad": "UN"
     }
   ],
+  "descuento_general_porcentaje": 0,
   "subtotal": 123.45,
   "iva_porcentaje": 21,
   "iva": 25.92,
@@ -35,6 +37,10 @@ Te voy a pasar un PDF o imagen de una factura de compra (factura de proveedor). 
 
 Reglas:
 - Extraé todos los items/líneas de la factura.
+- El precio_unitario debe ser el precio de lista antes del descuento. Extraé el descuento de cada renglón en descuento_porcentaje.
+- Si el documento aplica un único descuento general, devolvelo en descuento_general_porcentaje y repetilo en cada item que no tenga un descuento propio.
+- Si el descuento aparece como importe y no como porcentaje, calculá el porcentaje equivalente.
+- El subtotal debe ser el neto luego de aplicar descuentos y antes del IVA.
 - Los precios deben ser números (sin símbolos de moneda).
 - Si un campo no existe en el documento, usá null para texto o 0 para números.
 - El número de factura debe incluir punto de venta si aparece (ej: 0001-00012345).

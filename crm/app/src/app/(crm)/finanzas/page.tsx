@@ -178,6 +178,8 @@ interface OCOption {
   id: string;
   numero: string;
   proveedor_id: string;
+  total: number;
+  moneda: "ARS" | "USD";
 }
 
 const emptyFCForm = {
@@ -205,9 +207,14 @@ interface FCItem {
   descripcion: string;
   cantidad: number;
   precio_unitario: number;
+  descuento_porcentaje: number;
   unidad: string;
   iva_porcentaje: number;
 }
+
+const fcItemNeto = (item: Pick<FCItem, "cantidad" | "precio_unitario" | "descuento_porcentaje">) => (
+  Number(item.cantidad) * Number(item.precio_unitario) * (1 - Number(item.descuento_porcentaje || 0) / 100)
+);
 
 const GASTO_CATEGORIAS = ["Transporte", "Servicios", "Materiales", "Varios", "Comisiones", "Impuestos"] as const;
 
@@ -485,10 +492,12 @@ export default function FinanzasPage() {
   const [fcProvSearch, setFcProvSearch] = useState("");
   const [fcProvFocused, setFcProvFocused] = useState(false);
   const [ocOptions, setOcOptions] = useState<OCOption[]>([]);
+  const [fcOCPreviouslyInvoiced, setFcOCPreviouslyInvoiced] = useState<{ total: number; monedas: string[] }>({ total: 0, monedas: [] });
+  const [fcOCCheckLoading, setFcOCCheckLoading] = useState(false);
   const [fcFile, setFcFile] = useState<File | null>(null);
   const [fcUploading, setFcUploading] = useState(false);
   const [selectedFC, setSelectedFC] = useState<FacturaCompraRow | null>(null);
-  const [selectedFCItems, setSelectedFCItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; unidad: string; iva_porcentaje: number }[]>([]);
+  const [selectedFCItems, setSelectedFCItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; descuento_porcentaje: number; unidad: string; iva_porcentaje: number }[]>([]);
   const [editingFC, setEditingFC] = useState(false);
   const [editFCForm, setEditFCForm] = useState<{ numero_factura: string; fecha: string; fecha_vencimiento: string; subtotal: number; iva: number; percepciones: number; moneda: "ARS" | "USD"; notas: string; cae: string }>({ numero_factura: "", fecha: "", fecha_vencimiento: "", subtotal: 0, iva: 0, percepciones: 0, moneda: "ARS", notas: "", cae: "" });
   const [savingFC, setSavingFC] = useState(false);
@@ -522,6 +531,52 @@ export default function FinanzasPage() {
   const [fcProdSearch, setFcProdSearch] = useState("");
   const [fcProdFocused, setFcProdFocused] = useState(false);
   const [fcProductos, setFcProductos] = useState<{ id: string; codigo: string; nombre: string; precio_costo: number; unidad: string; stock: number }[]>([]);
+
+  useEffect(() => {
+    if (fcItems.length === 0) return;
+    const calculatedSubtotal = Math.round(fcItems.reduce((sum, item) => sum + fcItemNeto(item), 0) * 100) / 100;
+    setFcForm((prev) => Math.abs(prev.subtotal - calculatedSubtotal) < 0.01 ? prev : { ...prev, subtotal: calculatedSubtotal });
+  }, [fcItems]);
+
+  async function fetchExistingOCInvoices(ocId: string) {
+    const [{ data: junctionLinks, error: junctionError }, { data: legacyInvoices, error: legacyError }] = await Promise.all([
+      (supabase as any).from("factura_compra_ocs").select("factura_compra_id, facturas_compra(id, estado, total, moneda)").eq("orden_compra_id", ocId),
+      (supabase as any).from("facturas_compra").select("id, estado, total, moneda").eq("orden_compra_id", ocId),
+    ]);
+    if (junctionError || legacyError) throw new Error("No se pudo verificar lo ya facturado para la OC.");
+    const byId = new Map<string, { total: number; moneda: string }>();
+    for (const link of junctionLinks || []) {
+      const raw = Array.isArray(link.facturas_compra) ? link.facturas_compra[0] : link.facturas_compra;
+      if (!raw || raw.estado === "anulada" || byId.has(raw.id)) continue;
+      byId.set(raw.id, { total: Number(raw.total || 0), moneda: raw.moneda || "ARS" });
+    }
+    for (const raw of legacyInvoices || []) {
+      if (!raw || raw.estado === "anulada" || byId.has(raw.id)) continue;
+      byId.set(raw.id, { total: Number(raw.total || 0), moneda: raw.moneda || "ARS" });
+    }
+    return Array.from(byId.values());
+  }
+
+  useEffect(() => {
+    if (!fcForm.orden_compra_id) {
+      setFcOCPreviouslyInvoiced({ total: 0, monedas: [] });
+      return;
+    }
+    let cancelled = false;
+    setFcOCCheckLoading(true);
+    fetchExistingOCInvoices(fcForm.orden_compra_id)
+      .then((invoices) => {
+        if (!cancelled) setFcOCPreviouslyInvoiced({
+          total: Math.round(invoices.reduce((sum, invoice) => sum + invoice.total, 0) * 100) / 100,
+          monedas: Array.from(new Set(invoices.map((invoice) => invoice.moneda))),
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setFcOCPreviouslyInvoiced({ total: Number.POSITIVE_INFINITY, monedas: [] });
+      })
+      .finally(() => { if (!cancelled) setFcOCCheckLoading(false); });
+    return () => { cancelled = true; };
+  }, [fcForm.orden_compra_id]);
 
   // FC PDF parsing state
   const [fcPdfParsing, setFcPdfParsing] = useState(false);
@@ -918,7 +973,7 @@ export default function FinanzasPage() {
 
         // Fetch ordenes de compra for optional linking
         try {
-          let qOc = supabase.from("ordenes_compra").select("id, numero, proveedor_id").order("numero", { ascending: false });
+          let qOc = supabase.from("ordenes_compra").select("id, numero, proveedor_id, total, moneda").order("numero", { ascending: false });
           if (sociedadActiva?.id) qOc = qOc.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: ocData } = await qOc;
           if (ocData) setOcOptions(ocData as OCOption[]);
@@ -975,7 +1030,7 @@ export default function FinanzasPage() {
     if (!selectedFC?.id) { setSelectedFCItems([]); return; }
     (async () => {
       try {
-        const { data } = await (supabase as any).from("facturas_compra_items").select("descripcion, cantidad, precio_unitario, unidad, iva_porcentaje").eq("factura_compra_id", selectedFC.id);
+        const { data } = await (supabase as any).from("facturas_compra_items").select("descripcion, cantidad, precio_unitario, descuento_porcentaje, unidad, iva_porcentaje").eq("factura_compra_id", selectedFC.id);
         setSelectedFCItems(data ?? []);
       } catch { setSelectedFCItems([]); }
     })();
@@ -1733,14 +1788,14 @@ export default function FinanzasPage() {
 
   // Compute IVA: if items exist with per-item IVA, compute from items; otherwise use header rate
   const fcIva = fcItems.length > 0
-    ? fcItems.reduce((sum, it) => sum + (it.cantidad * it.precio_unitario) * ((it.iva_porcentaje ?? 21) / 100), 0)
+    ? fcItems.reduce((sum, it) => sum + fcItemNeto(it) * ((it.iva_porcentaje ?? 21) / 100), 0)
     : fcForm.subtotal * (fcForm.iva_porcentaje / 100);
   const fcTotal = fcForm.subtotal + fcIva + fcForm.percepciones;
   // Group items by IVA rate for display
   const fcIvaByRate: Record<number, number> = {};
   if (fcItems.length > 0) {
     for (const it of fcItems) {
-      const lineSubtotal = it.cantidad * it.precio_unitario;
+      const lineSubtotal = fcItemNeto(it);
       const lineIva = lineSubtotal * ((it.iva_porcentaje ?? 21) / 100);
       fcIvaByRate[it.iva_porcentaje ?? 21] = (fcIvaByRate[it.iva_porcentaje ?? 21] || 0) + lineIva;
     }
@@ -1778,13 +1833,14 @@ export default function FinanzasPage() {
       }
       // Auto-fill items if present
       if (d.items && Array.isArray(d.items) && d.items.length > 0) {
-        const parsedItems: FCItem[] = d.items.map((it: { descripcion?: string; cantidad?: number; precio_unitario?: number; iva_porcentaje?: number; unidad?: string }, idx: number) => ({
+        const parsedItems: FCItem[] = d.items.map((it: { descripcion?: string; cantidad?: number; precio_unitario?: number; descuento_porcentaje?: number; iva_porcentaje?: number; unidad?: string }, idx: number) => ({
           tempId: `pdf-${Date.now()}-${idx}`,
           producto_id: "",
           codigo: "",
           descripcion: it.descripcion || "",
           cantidad: Number(it.cantidad) || 1,
           precio_unitario: Number(it.precio_unitario) || 0,
+          descuento_porcentaje: Math.max(0, Math.min(100, Number(it.descuento_porcentaje ?? d.descuento_general_porcentaje) || 0)),
           unidad: it.unidad || "UN",
           iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
         }));
@@ -1808,6 +1864,27 @@ export default function FinanzasPage() {
     setFcSaving(true);
     setFcError("");
     try {
+      if (isMercaderia && fcForm.orden_compra_id) {
+        const { data: freshOC, error: freshOCError } = await (supabase as any)
+          .from("ordenes_compra")
+          .select("id, total, moneda")
+          .eq("id", fcForm.orden_compra_id)
+          .single();
+        if (freshOCError || !freshOC) throw new Error("No se pudo verificar la OC. No se guardó nada.");
+        if (freshOC.moneda !== fcForm.moneda) {
+          throw new Error(`La factura está en ${fcForm.moneda} y la OC está en ${freshOC.moneda}.`);
+        }
+        const previousInvoices = await fetchExistingOCInvoices(fcForm.orden_compra_id);
+        if (previousInvoices.some((invoice) => invoice.moneda !== fcForm.moneda)) {
+          throw new Error("La OC tiene facturas vinculadas en otra moneda. Revisala antes de continuar.");
+        }
+        const previousTotal = previousInvoices.reduce((sum, invoice) => sum + invoice.total, 0);
+        const remaining = Math.round((Number(freshOC.total || 0) - previousTotal) * 100) / 100;
+        if (fcTotal - remaining > 0.01) {
+          throw new Error(`El comprobante supera en ${formatCurrency(fcTotal - remaining, fcForm.moneda)} el saldo de la OC. Corregí precios, descuentos o IVA.`);
+        }
+      }
+
       const provId = fcForm.proveedor_id === "sin_proveedor" ? null : fcForm.proveedor_id;
       const insertData: Record<string, unknown> = {
         numero_factura: fcForm.numero_factura.trim(),
@@ -1844,6 +1921,7 @@ export default function FinanzasPage() {
           descripcion: it.descripcion,
           cantidad: it.cantidad,
           precio_unitario: it.precio_unitario,
+          descuento_porcentaje: it.descuento_porcentaje,
           unidad: it.unidad,
           iva_porcentaje: it.iva_porcentaje,
           sociedad_id: sociedadActiva?.id || null,
@@ -2068,6 +2146,17 @@ export default function FinanzasPage() {
   const filteredOCsForFC = fcForm.proveedor_id && fcForm.proveedor_id !== "sin_proveedor"
     ? ocOptions.filter(oc => oc.proveedor_id === fcForm.proveedor_id)
     : ocOptions;
+  const selectedFCOrder = ocOptions.find((oc) => oc.id === fcForm.orden_compra_id);
+  const fcOCRemaining = selectedFCOrder
+    ? Math.round((Number(selectedFCOrder.total || 0) - fcOCPreviouslyInvoiced.total) * 100) / 100
+    : 0;
+  const fcOCDifference = Math.round((fcOCRemaining - fcTotal) * 100) / 100;
+  const fcOCBlocked = Boolean(selectedFCOrder) && (
+    !Number.isFinite(fcOCPreviouslyInvoiced.total)
+    || selectedFCOrder?.moneda !== fcForm.moneda
+    || fcOCPreviouslyInvoiced.monedas.some((currency) => currency !== fcForm.moneda)
+    || fcOCDifference < -0.01
+  );
 
   // Filtered proveedores for search (by razon_social, nombre, or CUIT)
   const filteredProveedoresOP = proveedorSearch.trim()
@@ -4671,7 +4760,7 @@ export default function FinanzasPage() {
                   {fcItems.length > 0 && Object.keys(fcIvaByRate).length > 1 ? (
                     <>
                       {Object.entries(fcIvaByRate).sort(([a], [b]) => Number(a) - Number(b)).map(([rate, amount]) => {
-                        const rateSubtotal = fcItems.filter(it => (it.iva_porcentaje ?? 21) === Number(rate)).reduce((s, it) => s + it.cantidad * it.precio_unitario, 0);
+                        const rateSubtotal = fcItems.filter(it => (it.iva_porcentaje ?? 21) === Number(rate)).reduce((s, it) => s + fcItemNeto(it), 0);
                         return (
                           <div key={rate} className="flex items-center justify-between text-sm">
                             <span className="text-zinc-500">
@@ -4728,7 +4817,7 @@ export default function FinanzasPage() {
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-xs font-medium text-zinc-500">Items recibidos (para stock)</label>
                     <button type="button"
-                      onClick={() => setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: "", codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, unidad: "UN", iva_porcentaje: fcForm.iva_porcentaje ?? 21 }])}
+                      onClick={() => setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: "", codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, unidad: "UN", iva_porcentaje: fcForm.iva_porcentaje ?? 21 }])}
                       className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium">
                       <Plus className="h-3.5 w-3.5" /> Agregar item
                     </button>
@@ -4748,7 +4837,7 @@ export default function FinanzasPage() {
                         <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
                           {matches.map((p) => (
                             <button key={p.id} type="button" onClick={() => {
-                              setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: p.id, codigo: p.codigo, descripcion: p.nombre, cantidad: 1, precio_unitario: Number(p.precio_costo), unidad: p.unidad || "UN", iva_porcentaje: fcForm.iva_porcentaje ?? 21 }]);
+                              setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: p.id, codigo: p.codigo, descripcion: p.nombre, cantidad: 1, precio_unitario: Number(p.precio_costo), descuento_porcentaje: 0, unidad: p.unidad || "UN", iva_porcentaje: fcForm.iva_porcentaje ?? 21 }]);
                               setFcProdSearch("");
                             }} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex items-center justify-between">
                               <span><span className="font-mono text-zinc-400 mr-2">{p.codigo}</span>{p.nombre}</span>
@@ -4764,24 +4853,27 @@ export default function FinanzasPage() {
                       {fcItems.map((it, idx) => (
                         <div key={it.tempId} className="grid grid-cols-12 gap-1.5 items-center rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-2">
                           <input value={it.descripcion} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], descripcion: e.target.value }; setFcItems(n); }}
-                            placeholder="Descripción *" className="col-span-4 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                            placeholder="Descripción *" className="col-span-2 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
                           <input type="number" value={it.cantidad || ""} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], cantidad: Number(e.target.value) }; setFcItems(n); }}
-                            placeholder="Cant." className="col-span-2 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                            placeholder="Cant." className="col-span-1 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
                           <input type="number" value={it.precio_unitario || ""} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], precio_unitario: Number(e.target.value) }; setFcItems(n); }}
                             placeholder="$ unit." className="col-span-2 rounded border border-zinc-200 px-2 py-1 text-xs font-mono dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
+                          <input type="number" min="0" max="100" step="0.01" value={it.descuento_porcentaje || ""} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], descuento_porcentaje: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }; setFcItems(n); }}
+                            placeholder="Desc. %" title="Descuento porcentual" className="col-span-1 rounded border border-zinc-200 px-1 py-1 text-xs font-mono dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
                           <select value={it.iva_porcentaje ?? 21} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], iva_porcentaje: Number(e.target.value) }; setFcItems(n); }}
-                            className="col-span-2 rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white">
+                            className="col-span-1 rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white">
                             <option value={21}>21%</option>
                             <option value={10.5}>10.5%</option>
                             <option value={27}>27%</option>
                             <option value={0}>0%</option>
                           </select>
-                          <span className="col-span-1 text-xs text-zinc-400 text-center">{it.unidad}</span>
+                          <span className="col-span-1 text-center text-xs text-zinc-400">{it.unidad}</span>
+                          <span className="col-span-3 text-right text-xs font-mono text-zinc-500" title="Neto después del descuento">{formatCurrency(fcItemNeto(it), fcForm.moneda)}</span>
                           <button type="button" onClick={() => setFcItems(fcItems.filter((_, i) => i !== idx))} className="col-span-1 text-zinc-400 hover:text-red-500 flex justify-center"><X className="h-3.5 w-3.5" /></button>
                         </div>
                       ))}
                       <div className="text-right text-xs text-zinc-400 pr-1">
-                        {fcItems.length} item{fcItems.length !== 1 ? "s" : ""} — Total merch: {formatCurrency(fcItems.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0), fcForm.moneda)}
+                        {fcItems.length} item{fcItems.length !== 1 ? "s" : ""} — Neto con descuentos: {formatCurrency(fcItems.reduce((s, i) => s + fcItemNeto(i), 0), fcForm.moneda)}
                       </div>
                     </div>
                   ) : (
@@ -4805,6 +4897,17 @@ export default function FinanzasPage() {
                 </select>
                 {fcForm.proveedor_id && filteredOCsForFC.length === 0 && (
                   <p className="text-xs text-zinc-400 mt-1">No hay OCs para este proveedor</p>
+                )}
+                {selectedFCOrder && (
+                  <div className={`mt-2 rounded-lg border p-3 text-xs ${fcOCBlocked ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300" : Math.abs(fcOCDifference) <= 0.01 ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300" : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"}`}>
+                    {fcOCCheckLoading
+                      ? "Verificando importes ya facturados..."
+                      : fcOCBlocked
+                        ? (selectedFCOrder.moneda !== fcForm.moneda ? `La OC está en ${selectedFCOrder.moneda} y el comprobante en ${fcForm.moneda}.` : !Number.isFinite(fcOCPreviouslyInvoiced.total) ? "No se pudo verificar la OC; no se permitirá guardar." : `El comprobante supera el saldo de la OC en ${formatCurrency(Math.abs(fcOCDifference), fcForm.moneda)}.`)
+                        : Math.abs(fcOCDifference) <= 0.01
+                          ? "Importe conciliado: comprobante y OC coinciden."
+                          : `Factura parcial: quedarán ${formatCurrency(fcOCDifference, fcForm.moneda)} pendientes en la OC.`}
+                  </div>
                 )}
               </div>
               )}
@@ -4876,7 +4979,7 @@ export default function FinanzasPage() {
             </div>
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
               <button onClick={() => setFcModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
-              <button onClick={handleCreateFC} disabled={fcSaving || !fcForm.proveedor_id || !fcForm.numero_factura.trim() || fcForm.subtotal <= 0}
+              <button onClick={handleCreateFC} disabled={fcSaving || fcOCCheckLoading || fcOCBlocked || !fcForm.proveedor_id || !fcForm.numero_factura.trim() || fcForm.subtotal <= 0}
                 className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {fcSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                 Crear factura
@@ -5078,9 +5181,9 @@ export default function FinanzasPage() {
                       <div key={idx} className="px-4 py-2 text-sm flex items-center justify-between">
                         <div className="flex-1 min-w-0">
                           <p className="font-medium dark:text-white truncate">{it.descripcion}</p>
-                          <p className="text-xs text-zinc-400">{it.cantidad} {it.unidad} x {formatCurrency(it.precio_unitario, selectedFC.moneda)} — IVA {it.iva_porcentaje ?? 21}%</p>
+                          <p className="text-xs text-zinc-400">{it.cantidad} {it.unidad} x {formatCurrency(it.precio_unitario, selectedFC.moneda)}{Number(it.descuento_porcentaje || 0) > 0 ? ` — Desc. ${Number(it.descuento_porcentaje).toLocaleString("es-AR")}%` : ""} — IVA {it.iva_porcentaje ?? 21}%</p>
                         </div>
-                        <span className="font-mono text-sm ml-2 dark:text-white">{formatCurrency(it.cantidad * it.precio_unitario, selectedFC.moneda)}</span>
+                        <span className="font-mono text-sm ml-2 dark:text-white">{formatCurrency(fcItemNeto(it), selectedFC.moneda)}</span>
                       </div>
                     ))}
                   </div>
