@@ -69,7 +69,7 @@ interface OCRow {
   created_by: string | null;
   proveedores: ProveedorInfo | null;
   created_by_profile: { full_name: string } | null;
-  presupuesto_origen: { numero: string } | null;
+  presupuesto_origen: { numero: string; modalidad_emision?: string | null } | null;
   orden_compra_items: { codigo: string | null; descripcion: string | null; cantidad: number; cantidad_recibida: number }[];
   facturas_vinculadas?: { estado: string; total: number; moneda: string }[];
 }
@@ -81,6 +81,12 @@ const ocPagada = (oc: OCRow) => {
 };
 
 const ocPagadaConTarjeta = (oc: OCRow) => oc.estado_pago === "pagada" && oc.medio_pago === "tarjeta";
+
+// Una OC originada en un PR manual debe conservarse sin IVA durante todo su ciclo
+// (creacion, edicion y division por proveedor). El chequeo del encabezado cubre
+// tambien OCs historicas creadas sin IVA antes de guardar la modalidad de origen.
+const ocCompraSinIva = (oc: OCRow) =>
+  oc.presupuesto_origen?.modalidad_emision === "manual" || Number(oc.iva) === 0;
 
 interface DetailItem {
   id: string;
@@ -299,7 +305,7 @@ export default function OrdenesCompraPage() {
           *,
           proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva),
           created_by_profile:created_by(full_name),
-          presupuesto_origen:presupuesto_origen_id(numero),
+          presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision),
           orden_compra_items(codigo, descripcion, cantidad, cantidad_recibida)
         `)
         .order("created_at", { ascending: false });
@@ -675,6 +681,7 @@ export default function OrdenesCompraPage() {
     if (!detailOC) return;
     setSavingEdit(true);
     try {
+      const compraSinIva = ocCompraSinIva(detailOC);
       // 1. Delete removed items
       const editIds = new Set(editItems.map(it => it.id));
       const deletedItems = detailItems.filter(it => !editIds.has(it.id));
@@ -694,7 +701,7 @@ export default function OrdenesCompraPage() {
           unidad: it.unidad || "u",
           precio_unitario: Number(it.precio_unitario) || 0,
           producto_id: it.producto_id || null,
-          iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
+          iva_porcentaje: compraSinIva ? 0 : (it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21),
           orden: detailItems.length + idx,
         }));
         const { error: insErr } = await supabase.from("orden_compra_items").insert(insertRows as any);
@@ -741,9 +748,19 @@ export default function OrdenesCompraPage() {
         }
       }
 
+      // Normaliza tambien items historicos: una OC de PR manual nunca debe
+      // recuperar IVA por una edicion posterior.
+      if (compraSinIva) {
+        const { error: normalizeIvaError } = await supabase
+          .from("orden_compra_items")
+          .update({ iva_porcentaje: 0 } as any)
+          .eq("orden_id", detailOC.id);
+        if (normalizeIvaError) throw new Error(`Error al conservar la OC sin IVA: ${normalizeIvaError.message}`);
+      }
+
       // 2. Recalculate OC totals using per-item IVA rates
       const newSubtotal = editItems.reduce((sum, it) => sum + Number(it.cantidad) * Number(it.precio_unitario), 0);
-      const newIva = editItems.reduce((sum, it) => {
+      const newIva = compraSinIva ? 0 : editItems.reduce((sum, it) => {
         const lineSubtotal = Number(it.cantidad) * Number(it.precio_unitario);
         const ivaPct = (it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21) / 100;
         return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
@@ -791,7 +808,7 @@ export default function OrdenesCompraPage() {
       await fetchDetailItems(detailOC.id);
       const { data: freshOC } = await supabase
         .from("ordenes_compra")
-        .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero), orden_compra_items(cantidad, cantidad_recibida)")
+        .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
         .eq("id", detailOC.id)
         .single();
       if (freshOC) setDetailOC(freshOC as unknown as OCRow);
@@ -1382,7 +1399,7 @@ export default function OrdenesCompraPage() {
       if (provId && !detailOC.proveedor_id) {
         const { error } = await supabase.from("ordenes_compra").update({ proveedor_id: provId } as any).eq("id", detailOC.id);
         if (error) { alert("Error al asignar proveedor"); return; }
-        const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
+        const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
         if (fresh) setDetailOC(fresh as any);
         await fetchData();
         alert("Todos los items son del mismo proveedor. Se asignó a la OC.");
@@ -1405,7 +1422,7 @@ export default function OrdenesCompraPage() {
       let created = 0;
       for (const [provId, items] of groups) {
         const subtotal = items.reduce((sum, it) => sum + Number(it.precio_unitario) * Number(it.cantidad), 0);
-        const iva = Number(detailOC.iva) === 0 ? 0 : items.reduce((sum, it) => {
+        const iva = ocCompraSinIva(detailOC) ? 0 : items.reduce((sum, it) => {
           const lineSubtotal = Number(it.precio_unitario) * Number(it.cantidad);
           const ivaPct = (it.iva_porcentaje ?? 21) / 100;
           return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
@@ -1444,7 +1461,7 @@ export default function OrdenesCompraPage() {
           unidad: it.unidad || "u",
           precio_unitario: it.precio_unitario,
           producto_id: it.producto_id || null,
-          iva_porcentaje: Number(detailOC.iva) === 0 ? 0 : it.iva_porcentaje ?? 21,
+          iva_porcentaje: ocCompraSinIva(detailOC) ? 0 : it.iva_porcentaje ?? 21,
           proveedor_id: provId,
           orden: idx,
         }));
@@ -1461,7 +1478,7 @@ export default function OrdenesCompraPage() {
         originalModified = true;
 
         const subtotalRestante = sinProveedor.reduce((sum, item) => sum + Number(item.precio_unitario) * Number(item.cantidad), 0);
-        const ivaRestante = sinProveedor.reduce((sum, item) => {
+        const ivaRestante = ocCompraSinIva(detailOC) ? 0 : sinProveedor.reduce((sum, item) => {
           const subtotalItem = Number(item.precio_unitario) * Number(item.cantidad);
           return sum + Math.round(subtotalItem * ((item.iva_porcentaje ?? 21) / 100) * 100) / 100;
         }, 0);
@@ -1475,7 +1492,7 @@ export default function OrdenesCompraPage() {
 
         await fetchDetailItems(detailOC.id);
         const { data: freshOriginal } = await supabase.from("ordenes_compra")
-          .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero), orden_compra_items(cantidad, cantidad_recibida)")
+          .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
           .eq("id", detailOC.id).single();
         if (freshOriginal) setDetailOC(freshOriginal as unknown as OCRow);
         await fetchData();
@@ -2501,7 +2518,7 @@ export default function OrdenesCompraPage() {
                           const { error: itemProvError } = await supabase.from("orden_compra_items").update({ proveedor_id: provId } as any).eq("orden_id", detailOC.id);
                           if (itemProvError) { alert("Se asignó la OC, pero no se pudo actualizar el proveedor de sus items"); return; }
                           // Re-fetch OC with full joins to get proveedor data
-                          const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
+                          const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
                           if (fresh) setDetailOC(fresh as any);
                           await fetchData();
                         }}
@@ -2626,7 +2643,7 @@ export default function OrdenesCompraPage() {
                   <h3 className="text-sm font-semibold">Items ({(editMode ? editItems : detailItems).length})</h3>
                   <div className="flex items-center gap-2">
                     {editMode && (
-                      <button onClick={() => setEditItems(prev => [...prev, { id: `new_${Date.now()}`, codigo: "", descripcion: "", cantidad: 1, cantidad_recibida: 0, unidad: "u", precio_unitario: 0, subtotal: 0, producto_id: null, iva_porcentaje: 21, proveedor_id: null }])}
+                      <button onClick={() => setEditItems(prev => [...prev, { id: `new_${Date.now()}`, codigo: "", descripcion: "", cantidad: 1, cantidad_recibida: 0, unidad: "u", precio_unitario: 0, subtotal: 0, producto_id: null, iva_porcentaje: ocCompraSinIva(detailOC) ? 0 : 21, proveedor_id: null }])}
                         className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
                         <Plus className="h-3 w-3" /> Agregar item
                       </button>
