@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import * as fs from "fs";
 import * as path from "path";
+import * as tls from "node:tls";
+
+// AFIP uses DH keys smaller than OpenSSL 3.x default minimum
+if (!tls.DEFAULT_CIPHERS.includes("@SECLEVEL=0")) {
+  (tls as any).DEFAULT_CIPHERS += ":@SECLEVEL=0";
+}
 
 /**
  * POST /api/remito

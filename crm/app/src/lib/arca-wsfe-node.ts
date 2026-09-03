@@ -1,5 +1,12 @@
 import { request as httpsRequest } from "node:https";
+import * as tls from "node:tls";
 import { XMLParser } from "fast-xml-parser";
+
+// AFIP uses DH keys smaller than OpenSSL 3.x SECLEVEL=2 minimum (2048 bits).
+// Lower security level globally so both our calls and the Arca SDK succeed.
+if (!tls.DEFAULT_CIPHERS.includes("@SECLEVEL=0")) {
+  (tls as any).DEFAULT_CIPHERS += ":@SECLEVEL=0";
+}
 
 const WSFE_PRODUCTION = "https://servicios1.afip.gov.ar/wsfev1/service.asmx";
 const WSFE_TESTING = "https://wswhomo.afip.gov.ar/wsfev1/service.asmx";
@@ -77,6 +84,7 @@ async function postSoap(endpoint: string, method: string, body: string, attempts
           path: url.pathname,
           method: "POST",
           family: 4,
+          ciphers: "DEFAULT:@SECLEVEL=0",
           headers: {
             "Content-Type": "text/xml; charset=utf-8",
             SOAPAction: `"${WSFE_NAMESPACE}${method}"`,
