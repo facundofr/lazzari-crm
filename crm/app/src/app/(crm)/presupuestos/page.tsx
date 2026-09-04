@@ -19,7 +19,8 @@ import {
   Phone, CalendarClock, Inbox, Paperclip, Upload, Truck, Receipt,
   Maximize2, ImagePlus,
 } from "lucide-react";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { useUser } from "@/lib/auth-context";
 import { PendientesWidget } from "@/components/presupuestos/pendientes-widget";
@@ -49,6 +50,84 @@ function NumInput({ value, onChange, className, ...props }: { value: number | st
       className={className}
       {...props}
     />
+  );
+}
+
+/** Compact proveedor picker for PR item rows — searchable with portal dropdown */
+function ProveedorItemPicker({ value, stockPropio, options, onChange }: {
+  value: string;
+  stockPropio: boolean;
+  options: { id: string; razon_social: string }[];
+  onChange: (provId: string, provNombre: string, esStockPropio: boolean) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [style, setStyle] = useState<React.CSSProperties>({});
+
+  const label = stockPropio ? "Stock propio" : (options.find(p => p.id === value)?.razon_social || "");
+
+  const filtered = useMemo(() => {
+    if (!q.trim()) return options.slice(0, 30);
+    const lower = q.toLowerCase();
+    return options.filter(p => p.razon_social.toLowerCase().includes(lower)).slice(0, 30);
+  }, [options, q]);
+
+  const updatePos = useCallback(() => {
+    if (!inputRef.current) return;
+    const r = inputRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - r.bottom;
+    const up = spaceBelow < 200 && r.top > 200;
+    setStyle({
+      position: "fixed", left: r.left, width: Math.max(r.width, 220), zIndex: 9999,
+      ...(up ? { bottom: window.innerHeight - r.top + 2 } : { top: r.bottom + 2 }),
+    });
+  }, []);
+
+  return (
+    <div className="relative">
+      {open ? (
+        <input
+          ref={inputRef}
+          autoFocus
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          onFocus={() => { updatePos(); setOpen(true); }}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          placeholder="Buscar proveedor..."
+          className="w-full rounded border border-orange-400 px-1.5 py-1 text-xs dark:border-orange-600 dark:bg-zinc-800 dark:text-white focus:outline-none"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => { setQ(""); setOpen(true); }}
+          className="w-full text-left rounded border border-zinc-200 px-1.5 py-1 text-xs truncate dark:border-zinc-700 dark:bg-zinc-800 dark:text-white hover:border-orange-300"
+          title={label || "Sin proveedor"}
+        >
+          {label || <span className="text-zinc-400">Sin proveedor</span>}
+        </button>
+      )}
+      {open && typeof document !== "undefined" && createPortal(
+        <div style={style} className="rounded-lg border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900 max-h-48 overflow-y-auto">
+          <button type="button" onMouseDown={e => { e.preventDefault(); onChange("", "", false); setOpen(false); }}
+            className="w-full text-left px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+            Sin proveedor
+          </button>
+          <button type="button" onMouseDown={e => { e.preventDefault(); onChange("", "Stock propio", true); setOpen(false); }}
+            className="w-full text-left px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30">
+            Stock propio — no genera OC
+          </button>
+          {filtered.map(p => (
+            <button key={p.id} type="button" onMouseDown={e => { e.preventDefault(); onChange(p.id, p.razon_social, false); setOpen(false); }}
+              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-orange-50 dark:hover:bg-orange-900/20 ${p.id === value ? "bg-orange-50 font-semibold dark:bg-orange-900/30" : ""}`}>
+              {p.razon_social}
+            </button>
+          ))}
+          {filtered.length === 0 && <p className="px-3 py-2 text-xs text-zinc-400">Sin resultados</p>}
+        </div>,
+        document.body
+      )}
+    </div>
   );
 }
 
@@ -3245,28 +3324,18 @@ export default function PresupuestosPage() {
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                       </td>
                       <td className="px-2 py-1.5">
-                        <select
-                          value={item.stock_propio ? "__stock_propio__" : (item.proveedor_id || "")}
-                          onChange={(e) => {
-                            const provId = e.target.value;
-                            const esStockPropio = provId === "__stock_propio__";
-                            const proveedorId = esStockPropio ? "" : provId;
-                            const provNombre = esStockPropio ? "Stock propio" : (proveedoresOptions.find(p => p.id === provId)?.razon_social || "");
+                        <ProveedorItemPicker
+                          value={item.proveedor_id || ""}
+                          stockPropio={!!item.stock_propio}
+                          options={proveedoresOptions}
+                          onChange={(provId, provNombre, esStockPropio) => {
                             setNewPR((prev) => {
                               const items = [...prev.items];
-                              items[idx] = { ...items[idx], proveedor_id: proveedorId, proveedor_nombre: provNombre, stock_propio: esStockPropio };
+                              items[idx] = { ...items[idx], proveedor_id: provId, proveedor_nombre: provNombre, stock_propio: esStockPropio };
                               return { ...prev, items };
                             });
                           }}
-                          className="w-full rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100"
-                          title={item.proveedor_nombre || "Sin proveedor"}
-                        >
-                          <option value="">Sin proveedor</option>
-                          <option value="__stock_propio__">Stock propio — no genera OC</option>
-                          {proveedoresOptions.map(p => (
-                            <option key={p.id} value={p.id}>{p.razon_social}</option>
-                          ))}
-                        </select>
+                        />
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="relative">
