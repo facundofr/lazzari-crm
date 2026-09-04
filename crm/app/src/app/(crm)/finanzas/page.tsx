@@ -162,6 +162,7 @@ interface FacturaCompraRow {
   moneda: "ARS" | "USD";
   estado: "pendiente" | "pagada" | "anulada" | "recibida" | "pendiente_aprobacion";
   tipo: "mercaderia" | "solo_iva";
+  tipo_comprobante?: string;
   notas: string;
   costo_real?: number;
   created_at: string;
@@ -954,6 +955,7 @@ export default function FinanzasPage() {
               total: Number(r.total), moneda: (r.moneda as "ARS" | "USD") ?? "ARS",
               estado: r.estado ?? "pendiente", notas: r.notas ?? "",
               tipo: (r.tipo as "mercaderia" | "solo_iva") ?? (r.solo_iva ? "solo_iva" : "mercaderia"),
+              tipo_comprobante: r.tipo_comprobante ?? "FC A",
               created_at: r.created_at,
               costo_real: Number(r.costo_real ?? 0),
               archivo_url: r.archivo_url ?? undefined,
@@ -2998,7 +3000,7 @@ export default function FinanzasPage() {
                   )},
                   { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
                   { key: "fecha_vencimiento", label: "Vencimiento", sortable: true, render: (row) => row.fecha_vencimiento ? <span className="text-zinc-500 text-xs">{formatDate(row.fecha_vencimiento)}</span> : <span className="text-zinc-300">—</span> },
-                  { key: "numero_factura", label: "Nro. Factura", sortable: true, render: (row) => <span className="font-mono font-medium">{row.numero_factura}</span> },
+                  { key: "numero_factura", label: "Nro. Factura", sortable: true, render: (row) => <span className="font-mono font-medium">{row.tipo_comprobante && row.tipo_comprobante !== "FC A" ? `${row.tipo_comprobante} ` : ""}{row.numero_factura}</span> },
                   { key: "proveedor_nombre", label: "Proveedor", sortable: true, render: (row) => (
                     <div>
                       <span className="font-medium">{row.proveedor_nombre}</span>

@@ -80,6 +80,7 @@ export default function CargarFacturaOC({
   const [nuevoProveedor, setNuevoProveedor] = useState(emptyNuevoProveedor);
   const [nuevoProveedorSaving, setNuevoProveedorSaving] = useState(false);
   const [nuevoProveedorError, setNuevoProveedorError] = useState("");
+  const [tipoComprobante, setTipoComprobante] = useState("FC A");
   const [numeroFactura, setNumeroFactura] = useState("");
   const [fecha, setFecha] = useState(todayAR());
   const [fechaVencimiento, setFechaVencimiento] = useState("");
@@ -319,6 +320,13 @@ export default function CargarFacturaOC({
       const d = json.data;
 
       // Auto-fill form
+      if (d.tipo_comprobante) {
+        const tc = d.tipo_comprobante.toUpperCase().trim();
+        if (tc === "A" || tc === "FACTURA A") setTipoComprobante("FC A");
+        else if (tc === "B" || tc === "FACTURA B") setTipoComprobante("FC B");
+        else if (tc === "C" || tc === "FACTURA C") setTipoComprobante("FC C");
+        else if (["FC A", "FC B", "FC C", "FC Manual", "ND A", "ND B", "NC A", "NC B", "Recibo"].includes(d.tipo_comprobante)) setTipoComprobante(d.tipo_comprobante);
+      }
       if (d.numero_factura) setNumeroFactura(d.numero_factura);
       if (d.fecha) setFecha(d.fecha);
       if (d.fecha_vencimiento) setFechaVencimiento(d.fecha_vencimiento);
@@ -426,6 +434,7 @@ export default function CargarFacturaOC({
       // Insert FC
       const insertData: Record<string, unknown> = {
         numero_factura: numeroFactura.trim(),
+        tipo_comprobante: tipoComprobante,
         proveedor_id: proveedorId,
         fecha,
         fecha_vencimiento: fechaVencimiento || null,
@@ -625,6 +634,24 @@ export default function CargarFacturaOC({
                     </button>
                   </>
                 )}
+              </div>
+
+              {/* Tipo de comprobante */}
+              <div>
+                <label className="block text-[10px] uppercase text-zinc-400 mb-1">Tipo</label>
+                <select value={tipoComprobante} onChange={e => setTipoComprobante(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
+                  <option value="FC A">FC A</option>
+                  <option value="FC B">FC B</option>
+                  <option value="FC C">FC C</option>
+                  <option value="FC Manual">FC Manual</option>
+                  <option value="ND A">ND A</option>
+                  <option value="ND B">ND B</option>
+                  <option value="NC A">NC A</option>
+                  <option value="NC B">NC B</option>
+                  <option value="Recibo">Recibo</option>
+                  <option value="Otro">Otro</option>
+                </select>
               </div>
 
               {/* N° Factura */}
