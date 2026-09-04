@@ -2292,118 +2292,94 @@ export default function OrdenesCompraPage() {
             : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-2xl"
           }>
             {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
-              <div>
-                <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-semibold font-mono dark:text-white">{detailOC.numero}</h2>
-                  <Badge variant={detailOC.pedido ? "success" : "outline"}>
-                    {detailOC.pedido ? "Pedido" : "No pedido"}
+            <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10 space-y-2">
+              {/* Row 1: Number + close/fullscreen */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <h2 className="text-lg font-semibold font-mono dark:text-white truncate">{detailOC.numero}</h2>
+                  <Badge variant={
+                    detailOC.estado === "recibida" ? "success"
+                    : detailOC.estado === "recibida_parcial" ? "info"
+                    : detailOC.estado === "cancelada" ? "danger"
+                    : detailOC.estado === "confirmada" ? "purple"
+                    : detailOC.estado === "enviada" ? "default"
+                    : "outline"
+                  }>
+                    {detailOC.estado === "borrador" ? "Borrador"
+                    : detailOC.estado === "enviada" ? "Activa"
+                    : detailOC.estado === "confirmada" ? "Confirmada"
+                    : detailOC.estado === "recibida_parcial" ? "Recibida parcial"
+                    : detailOC.estado === "recibida" ? "Recibida"
+                    : detailOC.estado === "cancelada" ? "Cancelada"
+                    : detailOC.estado}
                   </Badge>
                   {ocPagadaConTarjeta(detailOC)
-                    ? <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Pagada · Tarjeta</Badge>
+                    ? <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Tarjeta</Badge>
                     : ocPagada(detailOC)
-                      ? <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada</Badge>
-                      : <Badge variant="warning">Pago pendiente</Badge>}
-                  {(() => {
-                    const totalQty = detailOC.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
-                    const recibido = detailOC.orden_compra_items.reduce((a, i) => a + Number(i.cantidad_recibida), 0);
-                    const today = todayAR();
-                    const isLate = detailOC.fecha_entrega_estimada && detailOC.fecha_entrega_estimada < today && detailOC.estado !== "recibida" && detailOC.estado !== "cancelada";
-                    let dotColor = "bg-red-500";
-                    if (detailOC.estado === "recibida" || (totalQty > 0 && recibido >= totalQty)) dotColor = "bg-emerald-500";
-                    else if (recibido > 0 || detailOC.estado === "recibida_parcial") dotColor = "bg-amber-500";
-                    else if (isLate) dotColor = "bg-amber-500";
-                    if (detailOC.estado !== "cancelada") {
-                      return <span className={`inline-block h-3 w-3 rounded-full ${dotColor}`} title="Recepcion" />;
-                    }
-                    return null;
-                  })()}
+                      ? <Badge variant="success">Pagada</Badge>
+                      : null}
                 </div>
-                {detailOC.presupuesto_origen && (
-                  <p className="text-xs text-zinc-400 mt-0.5">
-                    Origen: <span className="font-mono text-blue-500">{(detailOC.presupuesto_origen as { numero: string }).numero}</span>
-                  </p>
-                )}
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
+                    <Maximize2 className="h-4 w-4" />
+                  </button>
+                  <button onClick={() => { setDetailOC(null); setEditMode(false); setPanelFullscreen(false); }} className="p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {editMode ? (
-                  <>
-                    <button
-                      onClick={handleSaveEdit}
-                      disabled={savingEdit}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50 transition-colors"
-                    >
-                      {savingEdit ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                      Guardar
-                    </button>
-                    <button
-                      onClick={() => setEditMode(false)}
-                      disabled={savingEdit}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                      Cancelar
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {canManageCompras && (
-                      <button
-                        onClick={startEditMode}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 transition-colors"
-                        title="Editar OC"
-                      >
-                        <Edit3 className="h-3.5 w-3.5" />
-                        Editar
+              {/* Row 2: Origin + action icons */}
+              <div className="flex items-center justify-between">
+                <div>
+                  {detailOC.presupuesto_origen && (
+                    <p className="text-xs text-zinc-400">
+                      Origen: <span className="font-mono text-blue-500">{(detailOC.presupuesto_origen as { numero: string }).numero}</span>
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1">
+                  {editMode ? (
+                    <>
+                      <button onClick={handleSaveEdit} disabled={savingEdit}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50 transition-colors">
+                        {savingEdit ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Guardar
                       </button>
-                    )}
-                    <button
-                      onClick={handleCopySummary}
-                      className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
-                      title="Copiar resumen"
-                    >
-                      {copiedSummary ? <Check className="h-4 w-4 text-emerald-500" /> : <ClipboardCopy className="h-4 w-4" />}
-                    </button>
-                    <button
-                      onClick={handleDownloadPDF}
-                      className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
-                      title="Descargar PDF"
-                    >
-                      <Download className="h-4 w-4" />
-                    </button>
-                    {canManageCompras && <button
-                      onClick={async () => {
-                        const oc = detailOC;
-                        const template = await loadEmailTemplate("orden_compra", sociedadActiva?.id || "");
-                        const vars = {
-                          numero: oc.numero,
-                          sociedad: sociedadActiva?.razonSocial || "Lazzari",
-                          total: formatCurrency(oc.total, oc.moneda as "ARS" | "USD"),
-                          fecha: formatDate(oc.fecha),
-                          proveedor: oc.proveedores?.razon_social || "",
-                        };
-                        setEmailModal({ open: true, id: oc.id, to: oc.proveedores?.email || "", subject: applyTemplateVars(template.asunto, vars), body: applyTemplateVars(template.cuerpo, vars), filename: `${oc.numero}.pdf` });
-                      }}
-                      className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
-                      title="Enviar por email"
-                    >
-                      <Mail className="h-4 w-4" />
-                    </button>}
-                    {canManageCompras && <button
-                      onClick={() => handleDeleteOC(detailOC)}
-                      className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
-                      title="Eliminar OC"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>}
-                  </>
-                )}
-                <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
-                  <Maximize2 className="h-4 w-4" />
-                </button>
-                <button onClick={() => { setDetailOC(null); setEditMode(false); setPanelFullscreen(false); }} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                  <X className="h-5 w-5" />
-                </button>
+                      <button onClick={() => setEditMode(false)} disabled={savingEdit}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                        <X className="h-3.5 w-3.5" /> Cancelar
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {canManageCompras && (
+                        <button onClick={startEditMode}
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 transition-colors" title="Editar OC">
+                          <Edit3 className="h-3.5 w-3.5" /> Editar
+                        </button>
+                      )}
+                      <button onClick={handleCopySummary} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Copiar resumen">
+                        {copiedSummary ? <Check className="h-4 w-4 text-emerald-500" /> : <ClipboardCopy className="h-4 w-4" />}
+                      </button>
+                      <button onClick={handleDownloadPDF} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Descargar PDF">
+                        <Download className="h-4 w-4" />
+                      </button>
+                      {canManageCompras && <button
+                        onClick={async () => {
+                          const oc = detailOC;
+                          const template = await loadEmailTemplate("orden_compra", sociedadActiva?.id || "");
+                          const vars = { numero: oc.numero, sociedad: sociedadActiva?.razonSocial || "Lazzari", total: formatCurrency(oc.total, oc.moneda as "ARS" | "USD"), fecha: formatDate(oc.fecha), proveedor: oc.proveedores?.razon_social || "" };
+                          setEmailModal({ open: true, id: oc.id, to: oc.proveedores?.email || "", subject: applyTemplateVars(template.asunto, vars), body: applyTemplateVars(template.cuerpo, vars), filename: `${oc.numero}.pdf` });
+                        }}
+                        className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Enviar por email">
+                        <Mail className="h-4 w-4" />
+                      </button>}
+                      {canManageCompras && <button onClick={() => handleDeleteOC(detailOC)}
+                        className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400" title="Eliminar OC">
+                        <Trash2 className="h-4 w-4" />
+                      </button>}
+                    </>
+                  )}
+                </div>
               </div>
             </div>
 
