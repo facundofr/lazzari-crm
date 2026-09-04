@@ -1383,10 +1383,11 @@ export default function FinanzasPage() {
     const selectedFCs = opFCPendientes.filter(f => f.selected);
     if (selectedFCs.length === 0 && !opForm.usar_monto_manual) { setOpError("Selecciona al menos una factura o ingresa un monto manual"); return; }
     if (opMontoBruto <= 0) { setOpError("El monto a pagar debe ser mayor a 0"); return; }
-    // Validate medios de pago total = neto a pagar
+    // Validate medios de pago total <= neto a pagar (permite pago parcial)
     const totalMediosVal = opMedios.reduce((s, m) => s + m.monto, 0);
-    const diff = Math.abs(opNetoAPagar - totalMediosVal);
-    if (diff > 1) { setOpError(`Los medios de pago ($${totalMediosVal.toLocaleString()}) no coinciden con el neto a pagar ($${opNetoAPagar.toLocaleString()})`); return; }
+    if (totalMediosVal <= 0) { setOpError("Ingresá al menos un medio de pago con monto mayor a 0"); return; }
+    if (totalMediosVal - opNetoAPagar > 1) { setOpError(`Los medios de pago ($${totalMediosVal.toLocaleString()}) superan el neto a pagar ($${opNetoAPagar.toLocaleString()})`); return; }
+    const esPagoParcial = opNetoAPagar - totalMediosVal > 1;
 
     setOpSaving(true);
     setOpError("");
@@ -1419,7 +1420,7 @@ export default function FinanzasPage() {
         medio_pago: opMedios[0]?.tipo || "transferencia",
         medios_pago: JSON.stringify(opMedios.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion, echeq_id: m.echeq_id }))),
         notas: opForm.notas,
-        estado: "pagada",
+        estado: esPagoParcial ? "pendiente" : "pagada",
       };
       if (profile?.id) insertData.created_by = profile.id;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
