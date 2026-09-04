@@ -240,7 +240,7 @@ const tipoGastoVariant: Record<string, "success" | "danger" | "warning" | "info"
 
 interface OpMedioPago {
   tempId: string;
-  tipo: "cheque" | "cheque_propio" | "deposito" | "transferencia" | "echeq" | "efectivo";
+  tipo: "cheque" | "cheque_propio" | "deposito" | "transferencia" | "echeq" | "efectivo" | "tarjeta";
   monto: number;
   fecha: string;
   banco: string;
@@ -3119,7 +3119,7 @@ export default function FinanzasPage() {
                   }},
                   { key: "neto", label: "Neto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.neto, row.moneda)}</span> },
                   { key: "medio_pago", label: "Medio", render: (row) => {
-                    const medioLabel = (t: string) => t === "transferencia" ? "Transf." : t === "cheque" ? "Cheque" : t === "cheque_propio" ? "Ch. propio" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "efectivo" ? "Efectivo" : t;
+                    const medioLabel = (t: string) => t === "transferencia" ? "Transf." : t === "cheque" ? "Cheque" : t === "cheque_propio" ? "Ch. propio" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "tarjeta" ? "Tarjeta" : t === "efectivo" ? "Efectivo" : t;
                     if (row.medios_pago && row.medios_pago.length > 1) {
                       return <div className="flex flex-wrap gap-1">{row.medios_pago.map((m, i) => <Badge key={i} variant="outline">{medioLabel(m.tipo)}</Badge>)}</div>;
                     }
@@ -4460,6 +4460,7 @@ export default function FinanzasPage() {
                           <option value="cheque_propio">Cheque propio</option>
                           <option value="echeq">E-Cheq</option>
                           <option value="efectivo">Efectivo</option>
+                          <option value="tarjeta">Tarjeta</option>
                         </select>
                         <input type="number" value={m.monto || ""} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, monto: Number(e.target.value) } : x))}
                           placeholder="Monto" className="w-28 rounded border border-zinc-200 px-2 py-1.5 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
@@ -5359,12 +5360,12 @@ export default function FinanzasPage() {
                     {selectedOP.medios_pago && selectedOP.medios_pago.length > 0 ? (
                       <div className="space-y-1 mt-1">
                         {selectedOP.medios_pago.map((m, i) => {
-                          const ml = m.tipo === "transferencia" ? "Transf." : m.tipo === "cheque" ? "Cheque" : m.tipo === "cheque_propio" ? "Ch. propio" : m.tipo === "echeq" ? "E-Cheq" : m.tipo === "deposito" ? "Depósito" : "Efectivo";
+                          const ml = m.tipo === "transferencia" ? "Transf." : m.tipo === "cheque" ? "Cheque" : m.tipo === "cheque_propio" ? "Ch. propio" : m.tipo === "echeq" ? "E-Cheq" : m.tipo === "deposito" ? "Depósito" : m.tipo === "tarjeta" ? "Tarjeta" : "Efectivo";
                           return <p key={i} className="text-sm dark:text-white">{ml}{m.banco ? ` — ${m.banco}` : ""} <span className="font-mono text-xs">{formatCurrency(m.monto, m.moneda || selectedOP.moneda)}</span></p>;
                         })}
                       </div>
                     ) : (
-                      <p className="font-medium dark:text-white">{selectedOP.medio_pago === "transferencia" ? "Transferencia" : selectedOP.medio_pago === "cheque" ? "Cheque tercero" : selectedOP.medio_pago === "cheque_propio" ? "Cheque propio" : selectedOP.medio_pago === "echeq" ? "E-Cheq" : selectedOP.medio_pago === "deposito" ? "Depósito" : "Efectivo"}</p>
+                      <p className="font-medium dark:text-white">{selectedOP.medio_pago === "transferencia" ? "Transferencia" : selectedOP.medio_pago === "cheque" ? "Cheque tercero" : selectedOP.medio_pago === "cheque_propio" ? "Cheque propio" : selectedOP.medio_pago === "echeq" ? "E-Cheq" : selectedOP.medio_pago === "deposito" ? "Depósito" : selectedOP.medio_pago === "tarjeta" ? "Tarjeta" : "Efectivo"}</p>
                     )}
                   </div>
                   <div>
