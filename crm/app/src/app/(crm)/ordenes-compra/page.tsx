@@ -21,7 +21,8 @@ import {
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useUser } from "@/lib/auth-context";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 
@@ -170,17 +171,36 @@ function ProveedorPicker({ value, options, onChange, placeholder = "Buscar prove
   const selected = options.find((option) => option.id === value);
   const [query, setQuery] = useState(selected?.razon_social || "");
   const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dropStyle, setDropStyle] = useState<React.CSSProperties>({});
   useEffect(() => { setQuery(selected?.razon_social || ""); }, [selected?.razon_social]);
   const filteredOptions = options.filter((option) => option.razon_social.toLowerCase().includes(query.toLowerCase())).slice(0, 30);
+
+  const updateDropPosition = () => {
+    if (!inputRef.current) return;
+    const rect = inputRef.current.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const dropUp = spaceBelow < 220 && rect.top > 220;
+    setDropStyle({
+      position: "fixed" as const,
+      left: rect.left,
+      width: Math.max(rect.width, 260),
+      zIndex: 9999,
+      ...(dropUp ? { bottom: window.innerHeight - rect.top + 4 } : { top: rect.bottom + 4 }),
+    });
+  };
+
   return <div className="relative" onClick={(event) => event.stopPropagation()}>
     <Search className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 ${compact ? "h-3 w-3" : "h-4 w-4"}`} />
-    <input value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setOpen(true); if (value) onChange(""); }} placeholder={placeholder} className={`w-full rounded-lg border border-zinc-300 bg-white pr-8 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white ${compact ? "py-1 pl-7 text-xs" : "py-2 pl-9 text-sm"}`} />
+    <input ref={inputRef} value={query} onFocus={() => { updateDropPosition(); setOpen(true); }} onChange={(event) => { setQuery(event.target.value); updateDropPosition(); setOpen(true); if (value) onChange(""); }} placeholder={placeholder} className={`w-full rounded-lg border border-zinc-300 bg-white pr-8 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white ${compact ? "py-1 pl-7 text-xs" : "py-2 pl-9 text-sm"}`} />
     {query && <button type="button" onClick={() => { setQuery(""); onChange(""); setOpen(true); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400"><X className="h-3.5 w-3.5" /></button>}
-    {open && <div className="absolute z-50 mt-1 max-h-52 w-full min-w-[260px] overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-800">
+    {open && createPortal(
+      <><div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)} /><div style={dropStyle} className="max-h-52 overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-800">
       <button type="button" onClick={() => { onChange(""); setQuery(""); setOpen(false); }} className="block w-full px-3 py-2 text-left text-xs italic text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700">Sin proveedor</button>
       {filteredOptions.map((option) => <button type="button" key={option.id} onClick={() => { onChange(option.id); setQuery(option.razon_social); setOpen(false); }} className="block w-full px-3 py-2 text-left text-sm hover:bg-orange-50 dark:hover:bg-zinc-700">{option.razon_social}</button>)}
       {filteredOptions.length === 0 && <p className="px-3 py-3 text-xs text-zinc-400">No se encontraron proveedores</p>}
-    </div>}
+    </div></>,
+    document.body)}
   </div>;
 }
 
@@ -452,7 +472,7 @@ export default function OrdenesCompraPage() {
         fecha_entrega_estimada: formData.fecha_entrega_estimada || null,
         moneda: formData.moneda,
         observaciones: formData.observaciones,
-        estado: "pendiente",
+        estado: "borrador",
         subtotal: Math.round(itemsSubtotal * 100) / 100,
         iva: itemsIva,
         total: Math.round((itemsSubtotal + itemsIva) * 100) / 100,
@@ -1178,7 +1198,7 @@ export default function OrdenesCompraPage() {
             proveedor_id: group.id,
             fecha: today,
             moneda: group.moneda,
-            estado: "pendiente",
+            estado: "borrador",
             subtotal: Math.round(subtotal * 100) / 100,
             iva,
             total: Math.round((subtotal + iva) * 100) / 100,
@@ -1435,7 +1455,7 @@ export default function OrdenesCompraPage() {
             fecha: detailOC.fecha || today,
             fecha_entrega_estimada: detailOC.fecha_entrega_estimada || null,
             moneda: detailOC.moneda,
-            estado: "pendiente",
+            estado: "borrador",
             subtotal: Math.round(subtotal * 100) / 100,
             iva,
             total: Math.round((subtotal + iva) * 100) / 100,
@@ -1665,7 +1685,7 @@ export default function OrdenesCompraPage() {
         {/* Filter tabs */}
         <div className="flex gap-2 overflow-x-auto pb-1">
           {(["todas", "pendiente", "recibida_parcial", "recibida", "pago_pendiente", "pagada", "cancelada"] as const).map((status) => {
-            const count = status === "todas" ? ordenes.length : ordenes.filter((oc) => status === "pendiente" ? ["pendiente", "enviada", "confirmada"].includes(oc.estado) : status === "pagada" ? ocPagada(oc) : status === "pago_pendiente" ? !ocPagada(oc) && oc.estado !== "cancelada" : oc.estado === status).length;
+            const count = status === "todas" ? ordenes.length : ordenes.filter((oc) => status === "pendiente" ? ["borrador", "pendiente", "enviada", "confirmada"].includes(oc.estado) : status === "pagada" ? ocPagada(oc) : status === "pago_pendiente" ? !ocPagada(oc) && oc.estado !== "cancelada" : oc.estado === status).length;
             if (status !== "todas" && count === 0) return null;
             return (
               <button
