@@ -2387,7 +2387,7 @@ export default function OrdenesCompraPage() {
               </div>
             </div>
 
-            <div className="px-6 py-5 space-y-6">
+            <div className="px-6 py-5 pb-40 space-y-6">
               {/* ── Action Buttons ─────────────────────────────────────── */}
               {canManageCompras && !["recibida", "cancelada"].includes(detailOC.estado) && (
                 <div className="flex flex-wrap gap-2">
