@@ -99,6 +99,7 @@ interface PresupuestoItem {
   cantidad: number;
   unidad: string;
   precio_costo: number;
+  costo_moneda?: string;
   markup_porcentaje: number;
   precio_venta: number;
   subtotal: number;
@@ -129,6 +130,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
       cantidad: it.cantidad,
       unidad: it.unidad,
       precioCosto: it.precio_costo,
+      costoMoneda: (it.costo_moneda || "ARS") as "ARS" | "USD",
       markupPorcentaje: it.markup_porcentaje,
       precioVenta: it.precio_venta,
       subtotal: it.subtotal,
@@ -704,6 +706,7 @@ export default function PresupuestosPage() {
             cantidad: it.cantidad,
             unidad: it.unidad,
             precioCosto: it.precio_costo,
+            costoMoneda: (it.costo_moneda || "ARS") as "ARS" | "USD",
             markupPorcentaje: it.markup_porcentaje,
             precioVenta: it.precio_venta,
             subtotal: it.subtotal,
@@ -2669,7 +2672,7 @@ export default function PresupuestosPage() {
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
                           <td className="px-3 py-2">{item.descripcion}</td>
                           <td className="px-3 py-2 text-right">{item.cantidad} {item.unidad}</td>
-                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">{formatCurrency(item.precioCosto, selected.moneda as "ARS" | "USD")}</td>
+                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">{formatCurrency(item.precioCosto, (item.costoMoneda || "ARS") as "ARS" | "USD")}</td>
                           <td className="px-3 py-2 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>
                           <td className={`px-3 py-2 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
                             <span className="inline-flex items-center gap-1">

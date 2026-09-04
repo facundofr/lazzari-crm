@@ -1915,7 +1915,7 @@ export default function ClientesPage() {
 
                   {/* Formulario agregar/editar contacto */}
                   {(addingContacto || editingContactoId) && (
-                    <div className="mb-4 rounded-lg border border-orange-200 bg-orange-50/50 dark:border-orange-900/40 dark:bg-orange-900/10 p-3 space-y-2">
+                    <div ref={(el) => { if (el) el.scrollIntoView({ behavior: "smooth", block: "nearest" }); }} className="mb-4 rounded-lg border border-orange-200 bg-orange-50/50 dark:border-orange-900/40 dark:bg-orange-900/10 p-3 space-y-2">
                       <p className="text-xs font-semibold text-orange-600 dark:text-orange-400">{editingContactoId ? "Editar contacto" : "Nuevo contacto"}</p>
                       <div className="grid grid-cols-2 gap-2">
                         <Input label="Nombre *" value={contactoForm.nombre} onChange={(e) => setContactoForm((p) => ({ ...p, nombre: e.target.value }))} />

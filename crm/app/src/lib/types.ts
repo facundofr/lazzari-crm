@@ -246,6 +246,7 @@ export interface PresupuestoItem {
   cantidad: number;
   unidad: string;
   precioCosto: number;
+  costoMoneda?: "ARS" | "USD";
   markupPorcentaje: number;
   precioVenta: number;
   subtotal: number;
