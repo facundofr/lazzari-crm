@@ -1805,18 +1805,10 @@ export default function OrdenesCompraPage() {
                 render: (row) => {
                   if (row.estado === "cancelada") return <span className="text-zinc-300">—</span>;
                   if (ocPagadaConTarjeta(row)) {
-                    return canManageCompras ? (
-                      <button onClick={(event) => handleTogglePagoTarjeta(row, event)} title="Quitar pago directo">
-                        <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Pagada · Tarjeta</Badge>
-                      </button>
-                    ) : <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Pagada · Tarjeta</Badge>;
+                    return <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Pagada · Tarjeta</Badge>;
                   }
                   if (ocPagada(row)) return <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada</Badge>;
-                  return canManageCompras ? (
-                    <button onClick={(event) => handleTogglePagoTarjeta(row, event)} title="Marcar pagada con tarjeta">
-                      <Badge variant="warning">Pendiente</Badge>
-                    </button>
-                  ) : <Badge variant="warning">Pendiente</Badge>;
+                  return <Badge variant="warning">Pendiente</Badge>;
                 },
               },
               {
@@ -1934,19 +1926,6 @@ export default function OrdenesCompraPage() {
                         <><ClipboardCopy className="h-3 w-3" /> Copiar</>
                       )}
                     </button>
-                  </div>
-                ),
-              },
-              {
-                key: "acciones",
-                label: "Acciones",
-                render: (row) => (
-                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    {canManageCompras && row.estado !== "recibida" && row.estado !== "cancelada" && (
-                      <button onClick={() => handleCancel(row)} className="px-2 py-1 rounded text-xs font-medium bg-red-50 text-red-500 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 transition-colors" title="Cancelar OC">
-                        Cancelar
-                      </button>
-                    )}
                   </div>
                 ),
               },
@@ -2387,14 +2366,6 @@ export default function OrdenesCompraPage() {
               {/* ── Action Buttons ─────────────────────────────────────── */}
               {canManageCompras && !["recibida", "cancelada"].includes(detailOC.estado) && (
                 <div className="flex flex-wrap gap-2">
-                  {detailOC.estado === "borrador" && (
-                    <button
-                      onClick={() => handleAdvanceEstado(detailOC, "enviada")}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
-                    >
-                      <Send className="h-4 w-4" /> Activar OC
-                    </button>
-                  )}
                   {["pendiente", "enviada", "confirmada", "recibida_parcial"].includes(detailOC.estado) && detailItems.length > 0 && (
                     <button
                       onClick={handleMarcarTodoRecibido}

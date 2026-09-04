@@ -47,6 +47,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     { module: "ordenes_compra", actions: ["read"] },
     { module: "stock", actions: ["read"] },
     { module: "reportes", actions: ["read"] },
+    { module: "transportes", actions: ["read", "create", "update"] },
     { module: "calendario", actions: ["read", "create", "update"] },
   ],
   administrativo: [
@@ -199,7 +200,7 @@ export interface Product {
 }
 
 // ── Presupuestos ─────────────────────────────────────────────────
-export type PRStatus = "solicitud" | "pendiente" | "aprobado" | "rechazado" | "postergado" | "vencido" | "remitido";
+export type PRStatus = "solicitud" | "pendiente" | "aprobado" | "rechazado" | "postergado" | "vencido" | "remitido" | "facturado";
 
 export interface Presupuesto {
   id: string;

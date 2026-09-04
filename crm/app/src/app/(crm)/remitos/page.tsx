@@ -123,7 +123,7 @@ export default function RemitosPage() {
     fecha: todayAR(),
     observaciones: "",
     presupuesto_id: "",
-    valor_declarado: "0",
+    valor_declarado: "",
   });
   const [createItems, setCreateItems] = useState<CreateItem[]>([]);
   const [clientes, setClientes] = useState<{ id: string; razon_social: string }[]>([]);
@@ -480,7 +480,7 @@ export default function RemitosPage() {
       fecha: todayAR(),
       observaciones: "",
       presupuesto_id: "",
-      valor_declarado: "0",
+      valor_declarado: "",
     });
     setCreateItems([]);
     setCreateError("");
@@ -1457,12 +1457,19 @@ export default function RemitosPage() {
                 <div>
                   <span className="text-zinc-400">Valor declarado ($)</span>
                   <input
-                    type="number"
-                    value={detailRemito.valor_declarado ?? 0}
-                    onChange={(e) => setDetailRemito({ ...detailRemito, valor_declarado: Number(e.target.value) })}
+                    type="text"
+                    inputMode="decimal"
+                    value={detailRemito.valor_declarado ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(",", ".");
+                      if (v === "" || v === "." || /^\d*\.?\d*$/.test(v)) {
+                        setDetailRemito({ ...detailRemito, valor_declarado: v === "" ? null : Number(v) || 0 });
+                      }
+                    }}
                     onBlur={async (e) => {
-                      const val = Number(e.target.value) || 0;
-                      await (supabase as any).from("remitos").update({ valor_declarado: val }).eq("id", detailRemito.id);
+                      const val = Number(e.target.value.replace(",", ".")) || 0;
+                      setDetailRemito({ ...detailRemito, valor_declarado: val || null });
+                      await (supabase as any).from("remitos").update({ valor_declarado: val || null }).eq("id", detailRemito.id);
                     }}
                     className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-mono font-medium text-zinc-600 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
                   />
@@ -1882,10 +1889,15 @@ export default function RemitosPage() {
                   Valor declarado ($) <span className="text-zinc-400 font-normal">(requerido para transporte)</span>
                 </label>
                 <input
-                  type="number"
-                  step="0.01"
+                  type="text"
+                  inputMode="decimal"
                   value={createForm.valor_declarado}
-                  onChange={(e) => setCreateForm({ ...createForm, valor_declarado: e.target.value })}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(",", ".");
+                    if (v === "" || v === "." || /^\d*\.?\d*$/.test(v)) {
+                      setCreateForm({ ...createForm, valor_declarado: v });
+                    }
+                  }}
                   className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   placeholder={valorDeclaradoSugerido ? `Sugerido: $${Number(valorDeclaradoSugerido).toLocaleString("es-AR", { minimumFractionDigits: 2 })}` : "Ingrese el valor declarado..."}
                 />

@@ -84,6 +84,8 @@ function ProveedorItemPicker({ value, stockPropio, options, onChange }: {
     });
   }, []);
 
+  useEffect(() => { if (open) updatePos(); }, [open, updatePos]);
+
   return (
     <div className="relative">
       {open ? (
@@ -249,6 +251,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     clienteCondicionIva: row.clientes?.condicion_iva ?? "",
     archivoUrl: row.archivo_url ?? null,
     archivoNombre: row.archivo_nombre ?? null,
+    listoParaFacturar: (row as any).listo_para_facturar ?? false,
   } as any;
 }
 
@@ -260,6 +263,7 @@ const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warn
   postergado: { label: "Postergado", variant: "purple", icon: PauseCircle },
   vencido: { label: "Vencido", variant: "danger", icon: Clock },
   remitido: { label: "Remitido", variant: "info", icon: Truck },
+  facturado: { label: "Facturado", variant: "purple" as const, icon: Receipt },
 };
 
 interface NewPRItem {
@@ -709,7 +713,7 @@ export default function PresupuestosPage() {
       // First try with items + vendedor profile
       let q = (supabase as any)
         .from("presupuestos")
-        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
+        .select(`*, listo_para_facturar, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       let res: { data: any; error: any } = await q;
@@ -1178,7 +1182,7 @@ export default function PresupuestosPage() {
         // Fetch the newly created PR with full joins before refreshing the list
         const { data: fullRow } = await (supabase as any)
           .from("presupuestos")
-          .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
+          .select(`*, listo_para_facturar, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
           .eq("id", newRow.id)
           .single();
         const createdPR = fullRow ? mapToPresupuesto(fullRow as any) : mapToPresupuesto(newRow as any);
@@ -2667,6 +2671,26 @@ export default function PresupuestosPage() {
                     </button>
                   )}
                 </div>
+                {selected.estado === "aprobado" && (
+                  <div className="col-span-2 flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950/30">
+                    <input
+                      type="checkbox"
+                      checked={!!(selected as any).listoParaFacturar}
+                      onChange={async (e) => {
+                        const val = e.target.checked;
+                        const { error } = await supabase.from("presupuestos").update({ listo_para_facturar: val } as any).eq("id", selected.id);
+                        if (error) { toast.error("Error al actualizar"); return; }
+                        setSelected({ ...selected, listoParaFacturar: val } as any);
+                        await fetchPresupuestos();
+                      }}
+                      className="h-5 w-5 accent-emerald-600 cursor-pointer"
+                    />
+                    <div>
+                      <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">Listo para facturar</p>
+                      <p className="text-xs text-emerald-600 dark:text-emerald-400">Marcar cuando el PR esta listo para ser facturado en Ventas</p>
+                    </div>
+                  </div>
+                )}
                 {selected.enviadoAt && (
                   <div>
                     <p className="text-xs text-zinc-500">Enviado</p>
@@ -2722,7 +2746,14 @@ export default function PresupuestosPage() {
               <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                 <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3">Items ({selected.items.length})</h3>
                 {(() => {
-                  const belowCostCount = selected.items.filter((item) => item.precioVenta < item.precioCosto).length;
+                  const belowCostCount = selected.items.filter((item) => {
+                    const costoConv = (item as any).costoMoneda === "USD" && selected.moneda === "ARS"
+                      ? item.precioCosto * (selected.tipoCambio || 1)
+                      : (item as any).costoMoneda === "ARS" && selected.moneda === "USD" && (selected.tipoCambio || 1) > 0
+                      ? item.precioCosto / (selected.tipoCambio || 1)
+                      : item.precioCosto;
+                    return item.precioVenta < costoConv;
+                  }).length;
                   return belowCostCount > 0 ? (
                     <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400 mb-3">
                       <AlertTriangle className="h-4 w-4 shrink-0" />
@@ -2745,7 +2776,12 @@ export default function PresupuestosPage() {
                     </thead>
                     <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                       {selected.items.map((item) => {
-                        const belowCost = item.precioVenta < item.precioCosto;
+                        const costoConv = (item as any).costoMoneda === "USD" && selected.moneda === "ARS"
+                          ? item.precioCosto * (selected.tipoCambio || 1)
+                          : (item as any).costoMoneda === "ARS" && selected.moneda === "USD" && (selected.tipoCambio || 1) > 0
+                          ? item.precioCosto / (selected.tipoCambio || 1)
+                          : item.precioCosto;
+                        const belowCost = item.precioVenta < costoConv;
                         return (
                         <tr key={item.id} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
@@ -3365,6 +3401,7 @@ export default function PresupuestosPage() {
                       <td className="px-2 py-1.5">
                         <NumInput value={item.markup_porcentaje} onChange={(n) => updateNewPRItem(idx, "markup_porcentaje", n)}
                           className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                        {item.markup_porcentaje > 999 && <span className="text-[9px] text-amber-500" title="Markup muy alto">!</span>}
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="relative">

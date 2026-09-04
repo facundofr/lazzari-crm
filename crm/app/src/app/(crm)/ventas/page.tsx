@@ -41,7 +41,8 @@ interface VentaPresupuesto {
   archivo_nombre: string | null;
   observaciones: string | null;
   vendedor_profile: { full_name: string; avatar_url: string | null } | null;
-  clientes: { razon_social: string; cuit: string; condicion_iva: string; forma_pago: string | null } | null;
+  listo_para_facturar?: boolean;
+  clientes: { razon_social: string; cuit: string; condicion_iva: string; forma_pago: string | null; dias_cuenta_corriente?: number | null } | null;
   presupuesto_items: {
     descripcion: string;
     cantidad: number;
@@ -250,12 +251,12 @@ export default function VentasPage() {
       let presupuestosQuery = supabase
         .from("presupuestos")
         .select(`
-          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id, modalidad_emision, oc_cliente, archivo_url, archivo_nombre, observaciones,
+          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id, modalidad_emision, oc_cliente, archivo_url, archivo_nombre, observaciones, listo_para_facturar,
           vendedor_profile:vendedor_id(full_name, avatar_url),
-          clientes(razon_social, cuit, condicion_iva, forma_pago),
+          clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente),
           presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total)
         `)
-        .eq("estado", "aprobado")
+        .in("estado" as any, ["aprobado", "facturado"])
         .order("fecha", { ascending: false });
       if (sociedadActiva?.id) presupuestosQuery = presupuestosQuery.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: presupuestos, error: pError } = await presupuestosQuery;
@@ -462,7 +463,8 @@ export default function VentasPage() {
     setEmitTipo(initialTipo);
     setEmitItems(items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]);
     const hoy = todayAR();
-    const condCliente = p.clientes?.forma_pago || "Contado";
+    const diasCC = p.clientes?.dias_cuenta_corriente;
+    const condCliente = p.clientes?.forma_pago || (diasCC && diasCC > 0 ? `${diasCC} dias` : "Contado");
 
     setEmitTipoCambio(p.tipo_cambio || 0);
     setEmitMoneda(p.moneda as "ARS" | "USD" || "ARS");
@@ -535,6 +537,8 @@ export default function VentasPage() {
       if (data.success) {
         setEmitSuccess(`${data.factura.comprobante} emitida - CAE: ${data.factura.cae}`);
         setEmitFacturaId(data.factura.id);
+        // Marcar PR como facturado
+        await supabase.from("presupuestos").update({ estado: "facturado" } as any).eq("id", p.id);
         await fetchData();
       } else {
         setEmitError(data.error || "Error al emitir factura");
@@ -638,6 +642,8 @@ export default function VentasPage() {
       const comp = `${tipoManual} ${String(pvManual).padStart(4, "0")}-${String(nextNumero).padStart(8, "0")}`;
       setEmitSuccess(`${comp} emitida (manual, sin CAE)`);
       setEmitFacturaId(facturaData.id);
+      // Marcar PR como facturado
+      await supabase.from("presupuestos").update({ estado: "facturado" } as any).eq("id", p.id);
       await fetchData();
     } catch (err) {
       setEmitError("Error al crear factura manual");
@@ -1119,14 +1125,20 @@ export default function VentasPage() {
                         <p className="text-sm text-zinc-500">Pendiente de facturación administrativa</p>
                       ) : (
                         <div className="space-y-3">
-                          <p className="text-sm text-zinc-500">Sin factura emitida</p>
-                          <button
-                            onClick={() => openEmitModal(selectedVenta)}
-                            className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
-                          >
-                            <Receipt className="h-4 w-4" />
-                            Facturar
-                          </button>
+                          {selectedVenta.presupuesto.listo_para_facturar ? (
+                            <>
+                              <p className="text-sm text-zinc-500">Sin factura emitida</p>
+                              <button
+                                onClick={() => openEmitModal(selectedVenta)}
+                                className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                              >
+                                <Receipt className="h-4 w-4" />
+                                Facturar
+                              </button>
+                            </>
+                          ) : (
+                            <p className="text-sm text-amber-600 dark:text-amber-400">El presupuesto no esta marcado como &ldquo;Listo para facturar&rdquo;. Marcalo desde Presupuestos.</p>
+                          )}
                         </div>
                       );
                     })()}
