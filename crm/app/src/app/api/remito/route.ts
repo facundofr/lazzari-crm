@@ -63,7 +63,7 @@ function buildArca(cfg: ArcaConfig) {
   else if (fs.existsSync(keyPath))  key  = fs.readFileSync(keyPath,  "utf-8");
   if (!cert || !key) throw new Error(`Certificado no disponible (${cfg.certB64Env}/${cfg.keyB64Env})`);
   const production = process.env.ARCA_PRODUCTION !== "false";
-  return new Arca({ cuit: cfg.cuit, cert, key, production });
+  return new Arca({ cuit: cfg.cuit, cert, key, production, requestTimeoutMs: 30_000, retries: 2, retryDelayMs: 750 });
 }
 
 // Códigos de unidad de medida AFIP (CodigoUnidadMedida)

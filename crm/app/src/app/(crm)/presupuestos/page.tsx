@@ -252,6 +252,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     archivoUrl: row.archivo_url ?? null,
     archivoNombre: row.archivo_nombre ?? null,
     listoParaFacturar: (row as any).listo_para_facturar ?? false,
+    eliminado: (row as any).eliminado ?? false,
   } as any;
 }
 
@@ -263,6 +264,7 @@ const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warn
   postergado: { label: "Postergado", variant: "purple", icon: PauseCircle },
   vencido: { label: "Vencido", variant: "danger", icon: Clock },
   remitido: { label: "Remitido", variant: "info", icon: Truck },
+  facturar: { label: "Facturar", variant: "info" as const, icon: Receipt },
   facturado: { label: "Facturado", variant: "purple" as const, icon: Receipt },
 };
 
@@ -347,10 +349,11 @@ export default function PresupuestosPage() {
   const { profile, sociedadActiva } = useUser();
   const { toast } = useToast();
   const canDeletePresupuestos = Boolean(profile);
-  const allEstados: (PRStatus | "facturado")[] = ["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido", "facturado"];
+  const allEstados: PRStatus[] = ["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido", "facturado"];
   const [selectedEstados, setSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [vistaSeguimiento, setVistaSeguimiento] = useState(false);
   const [search, setSearch] = useState("");
+  const [showPapelera, setShowPapelera] = useState(false);
   const [presupuestos, setPresupuestos] = useState<Presupuesto[]>([]);
   const [loading, setLoading] = useState(true);
   // IDs de presupuestos que tienen factura/remito asociado
@@ -713,7 +716,7 @@ export default function PresupuestosPage() {
       // First try with items + vendedor profile
       let q = (supabase as any)
         .from("presupuestos")
-        .select(`*, listo_para_facturar, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
+        .select(`*, listo_para_facturar, eliminado, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       let res: { data: any; error: any } = await q;
@@ -1235,6 +1238,10 @@ export default function PresupuestosPage() {
   const isAllSelected = selectedEstados.has("todos");
 
   const filtered = presupuestos.filter((pr) => {
+    // Papelera filter
+    const isEliminado = !!(pr as any).eliminado;
+    if (showPapelera) return isEliminado;
+    if (isEliminado) return false;
     // Estado filter (multi-select)
     if (!isAllSelected) {
       const prEsFacturado = facturadoIds.has(pr.id);
@@ -1562,20 +1569,43 @@ export default function PresupuestosPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("Seguro que queres eliminar este presupuesto?")) return;
+    if (!confirm("Seguro que queres eliminar este presupuesto? Se movera a la papelera.")) return;
+    try {
+      const { error } = await supabase.from("presupuestos").update({ eliminado: true } as any).eq("id", id);
+      if (error) throw new Error(error.message);
+      setSelected(null);
+      setPanelFullscreen(false);
+      setPresupuestos(prev => prev.filter(p => p.id !== id));
+      toast.success("Presupuesto movido a papelera");
+    } catch (err: unknown) {
+      console.error("Error deleting:", err);
+      const message = err instanceof Error ? err.message : "Error inesperado";
+      toast.error(`No se pudo eliminar: ${message}`);
+    }
+  }
+
+  async function handleRestore(id: string) {
+    try {
+      const { error } = await supabase.from("presupuestos").update({ eliminado: false } as any).eq("id", id);
+      if (error) throw new Error(error.message);
+      toast.success("Presupuesto restaurado");
+      await fetchPresupuestos();
+    } catch {
+      toast.error("Error al restaurar");
+    }
+  }
+
+  async function handleDeletePermanent(id: string) {
+    if (!confirm("Eliminar PERMANENTEMENTE? Esta accion no se puede deshacer.")) return;
     try {
       const { data: deletedId, error } = await (supabase as any).rpc("delete_presupuesto_safe", {
         p_presupuesto_id: id,
       });
       if (error) throw new Error(error.message);
       if (deletedId !== id) throw new Error("Supabase no confirmó la eliminación del presupuesto");
-      setSelected(null);
-      setPanelFullscreen(false);
-      setPresupuestos(prev => prev.filter(p => p.id !== id));
-      toast.success("Presupuesto eliminado");
+      toast.success("Presupuesto eliminado permanentemente");
       await fetchPresupuestos();
     } catch (err: unknown) {
-      console.error("Error deleting:", err);
       const message = err instanceof Error ? err.message : "Error inesperado";
       toast.error(`No se pudo eliminar: ${message}`);
     }
@@ -1992,9 +2022,9 @@ export default function PresupuestosPage() {
               </span>
             </button>
             {/* Botones por estado */}
-            {(["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as PRStatus[]).map((status) => {
+            {(["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido", "facturado"] as PRStatus[]).map((status) => {
               const active = !isAllSelected && selectedEstados.has(status);
-              const activeColor = status === "solicitud" ? "bg-blue-600 text-white shadow-sm" : "bg-orange-500 text-white shadow-sm";
+              const activeColor = status === "solicitud" ? "bg-blue-600 text-white shadow-sm" : status === "facturar" ? "bg-blue-500 text-white shadow-sm" : status === "facturado" ? "bg-purple-600 text-white shadow-sm" : "bg-orange-500 text-white shadow-sm";
               return (
                 <button
                   key={status}
@@ -2007,6 +2037,7 @@ export default function PresupuestosPage() {
                 >
                   {active && <Check className="h-3.5 w-3.5" />}
                   {status === "solicitud" && <Inbox className="h-3.5 w-3.5" />}
+                  {(status === "facturar" || status === "facturado") && <Receipt className="h-3.5 w-3.5" />}
                   {statusConfig[status].label}
                   <span className={`rounded-full px-1.5 py-0.5 text-xs ${
                     active && !vistaSeguimiento ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
@@ -2016,31 +2047,20 @@ export default function PresupuestosPage() {
                 </button>
               );
             })}
-            {/* Botón Facturados */}
-            {(() => {
-              const active = !isAllSelected && selectedEstados.has("facturado");
-              return (
-                <button
-                  onClick={() => toggleEstado("facturado")}
-                  className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                    active && !vistaSeguimiento
-                      ? "bg-blue-600 text-white shadow-sm"
-                      : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
-                  }`}
-                >
-                  {active && <Check className="h-3.5 w-3.5" />}
-                  <FileText className="h-3.5 w-3.5" />
-                  Facturados
-                  <span className={`rounded-full px-1.5 py-0.5 text-xs ${
-                    active && !vistaSeguimiento ? "bg-white/20 text-white" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"
-                  }`}>
-                    {counts.facturado || 0}
-                  </span>
-                </button>
-              );
-            })()}
           </div>
           <div className="h-6 w-px bg-zinc-200 dark:bg-zinc-700 shrink-0" />
+          <button
+            onClick={() => { setShowPapelera(!showPapelera); if (!showPapelera) setVistaSeguimiento(false); }}
+            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+              showPapelera
+                ? "bg-red-500 text-white shadow-sm"
+                : "bg-white text-zinc-400 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-400"
+            }`}
+            title="Papelera"
+          >
+            <Trash2 className="h-4 w-4" />
+            Papelera
+          </button>
           <button
             onClick={() => setVistaSeguimiento(!vistaSeguimiento)}
             className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
@@ -2228,7 +2248,7 @@ export default function PresupuestosPage() {
                               className="h-7 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-600 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                             >
                               <option value="">Cambiar estado...</option>
-                              {(["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as PRStatus[])
+                              {(["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"] as PRStatus[])
                                 .filter((s) => s !== pr.estado)
                                 .map((s) => {
                                   const cfg = statusConfig[s] || { label: s };
@@ -2396,54 +2416,67 @@ export default function PresupuestosPage() {
                 key: "actions", label: "", sortable: false,
                 render: (row) => (
                   <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                    <button onClick={() => setSelected(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Ver">
-                      <Eye className="h-4 w-4" />
-                    </button>
-                    {row.estado === "solicitud" ? (
-                      <button
-                        onClick={() => handleEditPR(row)}
-                        className="flex items-center gap-1 rounded-md bg-orange-50 px-2 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-100 dark:bg-orange-950/30 dark:text-orange-400"
-                        title="Convertir esta solicitud en presupuesto"
-                      >
-                        <ArrowRight className="h-3.5 w-3.5" />
-                        Convertir
-                      </button>
+                    {showPapelera ? (
+                      <>
+                        <button onClick={() => handleRestore(row.id)} className="flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-400" title="Restaurar">
+                          <ArrowRight className="h-3.5 w-3.5" /> Restaurar
+                        </button>
+                        <button onClick={() => handleDeletePermanent(row.id)} className="rounded p-1.5 text-red-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/40" title="Eliminar permanentemente">
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </>
                     ) : (
-                      <button onClick={() => handleDuplicate(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar presupuesto">
-                        <Copy className="h-4 w-4" />
-                      </button>
-                    )}
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        const newEstado = e.target.value as PRStatus;
-                        if (!newEstado) return;
-                        if (newEstado === "rechazado") {
-                          setRechazoModal(row.id);
-                          setMotivoRechazo("");
-                        } else {
-                          handleEstadoChange(row.id, newEstado);
-                        }
-                      }}
-                      className="h-7 rounded border border-zinc-200 bg-white px-1 text-xs text-zinc-600 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-                      title="Cambiar estado"
-                    >
-                      <option value="">Cambiar...</option>
-                      {(["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as PRStatus[])
-                        .filter((s) => s !== row.estado)
-                        .map((s) => {
-                          const cfg = statusConfig[s] || { label: s };
-                          return <option key={s} value={s}>{cfg.label}</option>;
-                        })}
-                    </select>
-                    {canDeletePresupuestos && (
-                      <button
-                        onClick={() => handleDelete(row.id)}
-                        className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40"
-                        title="Eliminar presupuesto"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      <>
+                        <button onClick={() => setSelected(row)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Ver">
+                          <Eye className="h-4 w-4" />
+                        </button>
+                        {row.estado === "solicitud" ? (
+                          <button
+                            onClick={() => handleEditPR(row)}
+                            className="flex items-center gap-1 rounded-md bg-orange-50 px-2 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-100 dark:bg-orange-950/30 dark:text-orange-400"
+                            title="Convertir esta solicitud en presupuesto"
+                          >
+                            <ArrowRight className="h-3.5 w-3.5" />
+                            Convertir
+                          </button>
+                        ) : (
+                          <button onClick={() => handleDuplicate(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar presupuesto">
+                            <Copy className="h-4 w-4" />
+                          </button>
+                        )}
+                        <select
+                          value=""
+                          onChange={(e) => {
+                            const newEstado = e.target.value as PRStatus;
+                            if (!newEstado) return;
+                            if (newEstado === "rechazado") {
+                              setRechazoModal(row.id);
+                              setMotivoRechazo("");
+                            } else {
+                              handleEstadoChange(row.id, newEstado);
+                            }
+                          }}
+                          className="h-7 rounded border border-zinc-200 bg-white px-1 text-xs text-zinc-600 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                          title="Cambiar estado"
+                        >
+                          <option value="">Cambiar...</option>
+                          {(["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"] as PRStatus[])
+                            .filter((s) => s !== row.estado)
+                            .map((s) => {
+                              const cfg = statusConfig[s] || { label: s };
+                              return <option key={s} value={s}>{cfg.label}</option>;
+                            })}
+                        </select>
+                        {canDeletePresupuestos && (
+                          <button
+                            onClick={() => handleDelete(row.id)}
+                            className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40"
+                            title="Eliminar presupuesto"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 ),
@@ -2554,7 +2587,7 @@ export default function PresupuestosPage() {
                     {selected.estado === "solicitud" ? "Convertir" : "Editar"}
                   </button>
                 )}
-                {(selected.estado === "aprobado" || selected.estado === "remitido") && remitidoStatus[selected.id] !== "total" && (
+                {(selected.estado === "aprobado" || selected.estado === "facturar" || selected.estado === "remitido") && remitidoStatus[selected.id] !== "total" && (
                   <button
                     onClick={() => openRemitarModal(selected)}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950/30 transition-colors"
@@ -2672,23 +2705,21 @@ export default function PresupuestosPage() {
                   )}
                 </div>
                 {selected.estado === "aprobado" && (
-                  <div className="col-span-2 flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950/30">
-                    <input
-                      type="checkbox"
-                      checked={!!(selected as any).listoParaFacturar}
-                      onChange={async (e) => {
-                        const val = e.target.checked;
-                        const { error } = await supabase.from("presupuestos").update({ listo_para_facturar: val } as any).eq("id", selected.id);
+                  <div className="col-span-2">
+                    <button
+                      onClick={async () => {
+                        const { error } = await supabase.from("presupuestos").update({ estado: "facturar", listo_para_facturar: true } as any).eq("id", selected.id);
                         if (error) { toast.error("Error al actualizar"); return; }
-                        setSelected({ ...selected, listoParaFacturar: val } as any);
+                        setSelected({ ...selected, estado: "facturar" as any, listoParaFacturar: true } as any);
                         await fetchPresupuestos();
+                        toast.success("PR marcado como listo para facturar");
                       }}
-                      className="h-5 w-5 accent-emerald-600 cursor-pointer"
-                    />
-                    <div>
-                      <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">Listo para facturar</p>
-                      <p className="text-xs text-emerald-600 dark:text-emerald-400">Marcar cuando el PR esta listo para ser facturado en Ventas</p>
-                    </div>
+                      className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors w-full justify-center"
+                    >
+                      <Receipt className="h-4 w-4" />
+                      Marcar listo para facturar
+                    </button>
+                    <p className="text-xs text-zinc-400 mt-1 text-center">El PR aparecera en Ventas con estado &ldquo;Facturar&rdquo;</p>
                   </div>
                 )}
                 {selected.enviadoAt && (
@@ -2873,7 +2904,7 @@ export default function PresupuestosPage() {
                   className="h-9 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                 >
                   <option value="">Seleccionar...</option>
-                  {(["solicitud", "pendiente", "aprobado", "rechazado", "postergado", "vencido"] as PRStatus[])
+                  {(["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"] as PRStatus[])
                     .filter((s) => s !== selected.estado)
                     .map((s) => {
                       const cfg = statusConfig[s] || { label: s };

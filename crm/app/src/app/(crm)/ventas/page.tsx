@@ -256,7 +256,7 @@ export default function VentasPage() {
           clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente),
           presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total)
         `)
-        .in("estado" as any, ["aprobado", "facturado"])
+        .in("estado" as any, ["facturar", "facturado"])
         .order("fecha", { ascending: false });
       if (sociedadActiva?.id) presupuestosQuery = presupuestosQuery.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: presupuestos, error: pError } = await presupuestosQuery;
@@ -1125,7 +1125,7 @@ export default function VentasPage() {
                         <p className="text-sm text-zinc-500">Pendiente de facturación administrativa</p>
                       ) : (
                         <div className="space-y-3">
-                          {selectedVenta.presupuesto.listo_para_facturar ? (
+                          {selectedVenta.presupuesto.estado === "facturar" ? (
                             <>
                               <p className="text-sm text-zinc-500">Sin factura emitida</p>
                               <button
