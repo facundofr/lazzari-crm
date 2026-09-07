@@ -388,7 +388,7 @@ export default function RemitosPage() {
           const parts = r.numero?.split("-");
           const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
           return n > max ? n : max;
-        }, 0);
+        }, 999);
         const newNumero = `R-0001-${String(maxNum + 1).padStart(8, "0")}`;
 
         const { data: newRemito, error: newErr } = await (supabase.from("remitos") as any).insert({
@@ -472,7 +472,7 @@ export default function RemitosPage() {
       const parts = r.numero?.split("-");
       const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
       return n > max ? n : max;
-    }, 0);
+    }, 999);
     const autoNumero = `R-0001-${String(maxNum + 1).padStart(8, "0")}`;
     setCreateForm({
       numero: autoNumero,
@@ -653,7 +653,7 @@ export default function RemitosPage() {
         const parts = r.numero?.split("-");
         const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
         return n > max ? n : max;
-      }, 0) + 1;
+      }, 999) + 1;
 
       const groupEntries = [...groups.entries()];
       for (let gi = 0; gi < groupEntries.length; gi++) {
@@ -780,7 +780,7 @@ export default function RemitosPage() {
         const parts = r.numero?.split("-");
         const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
         return n > max ? n : max;
-      }, 0) + 1;
+      }, 999) + 1;
       let createdCount = 0;
       const generationErrors: string[] = [];
 
@@ -956,7 +956,7 @@ export default function RemitosPage() {
         const parts = r.numero?.split("-");
         const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
         return n > max ? n : max;
-      }, 0) + 1;
+      }, 999) + 1;
 
       // Create new remitos for remaining groups
       const createdRemitos: string[] = [];
