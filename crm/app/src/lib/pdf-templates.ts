@@ -88,19 +88,19 @@ function baseStyles(color: string) {
     .header { display: flex; justify-content: space-between; align-items: flex-start; padding: 16px 0 14px; border-bottom: 2px solid #e0e0e0; margin-bottom: 18px; }
     .header-left {}
     .company-sub { font-size: 11px; color: #444; margin-top: 3px; font-weight: 600; }
-    .company-detail { font-size: 9px; color: #888; margin-top: 1px; }
+    .company-detail { font-size: 9px; color: #444; margin-top: 1px; }
     .header-right { text-align: right; }
-    .doc-title { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: #666; font-weight: 700; }
+    .doc-title { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: #333; font-weight: 700; }
     .doc-number { font-size: 15px; font-weight: 700; font-family: 'Courier New', Courier, monospace; color: #222; margin: 3px 0; }
-    .doc-badge { display: inline-block; padding: 2px 14px; border-radius: 10px; font-size: 9px; font-weight: 700; background: #f0f0f0; color: #555; text-transform: uppercase; letter-spacing: 0.5px; }
-    .doc-date { font-size: 10px; color: #888; margin-top: 5px; }
+    .doc-badge { display: inline-block; padding: 2px 14px; border-radius: 10px; font-size: 9px; font-weight: 700; background: #f0f0f0; color: #333; text-transform: uppercase; letter-spacing: 0.5px; }
+    .doc-date { font-size: 10px; color: #333; margin-top: 5px; }
 
     /* Info boxes */
     .info-grid { display: flex; gap: 16px; margin-bottom: 18px; }
     .info-box { flex: 1; border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px 14px; }
     .info-box-title { font-size: 8px; text-transform: uppercase; letter-spacing: 1.5px; color: ${color}; font-weight: 700; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #f0f0f0; }
     .info-row { margin-bottom: 4px; }
-    .info-label { font-size: 8px; text-transform: uppercase; letter-spacing: 0.5px; color: #999; font-weight: 600; }
+    .info-label { font-size: 8px; text-transform: uppercase; letter-spacing: 0.5px; color: #555; font-weight: 600; }
     .info-value { font-size: 11px; font-weight: 500; color: #333; }
     .info-value-lg { font-size: 13px; font-weight: 700; color: #222; }
 
@@ -112,9 +112,9 @@ function baseStyles(color: string) {
     .doc-header-logo { height: 43px; display: block; margin-bottom: 3px; }
     .doc-marker-cell { width: 76px; text-align: center !important; vertical-align: top; }
     .doc-marker { display: inline-flex; min-width: 46px; min-height: 46px; padding: 5px 8px; border: 2px solid ${color}; color: ${color}; align-items: center; justify-content: center; font-size: 28px; line-height: 1; font-weight: 900; }
-    .doc-marker-code { margin-top: 3px; color: #777; font-size: 7px; font-weight: 700; text-transform: uppercase; }
+    .doc-marker-code { margin-top: 3px; color: #333; font-size: 7px; font-weight: 700; text-transform: uppercase; }
     .doc-marker-overlay { position: absolute; left: 50%; top: 12px; z-index: 2; transform: translateX(-50%); text-align: center; }
-    .legal-banner { margin: 6px 0 12px; padding: 4px 8px; border: 1px solid #dedede; color: #555; text-align: center; font-size: 8px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; }
+    .legal-banner { margin: 6px 0 12px; padding: 4px 8px; border: 1px solid #dedede; color: #333; text-align: center; font-size: 8px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; }
     .compact-strip { width: 100%; margin-bottom: 14px; border-top: 1px solid #dedede; border-bottom: 1px solid #dedede; border-collapse: collapse; table-layout: fixed; }
     .compact-strip td { padding: 8px 10px; vertical-align: top; border: 0; background: transparent !important; }
     .compact-strip td + td { border-left: 1px solid #e5e5e5; }
@@ -123,12 +123,12 @@ function baseStyles(color: string) {
     .compact-line { margin-top: 2px; color: #444; font-size: 9px; line-height: 1.35; }
     .compact-line-aligned { display: grid; grid-template-columns: 76px minmax(0, 1fr); column-gap: 4px; align-items: baseline; }
     .compact-line-aligned .compact-label { margin-right: 0; }
-    .compact-label { color: #888; font-size: 7px; font-weight: 800; letter-spacing: .45px; text-transform: uppercase; margin-right: 4px; }
+    .compact-label { color: #444; font-size: 7px; font-weight: 800; letter-spacing: .45px; text-transform: uppercase; margin-right: 4px; }
 
     /* Items table */
     .items-title { font-size: 8px; text-transform: uppercase; letter-spacing: 1.5px; color: ${color}; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #f0f0f0; }
     table { width: 100%; border-collapse: collapse; }
-    thead th { background: #f7f7f7; padding: 8px 10px; text-align: left; font-size: 8px; text-transform: uppercase; letter-spacing: 0.8px; color: #666; font-weight: 700; border-bottom: 2px solid #e0e0e0; }
+    thead th { background: #f7f7f7; padding: 8px 10px; text-align: left; font-size: 8px; text-transform: uppercase; letter-spacing: 0.8px; color: #333; font-weight: 700; border-bottom: 2px solid #e0e0e0; }
     thead th.right { text-align: right; }
     thead th.center { text-align: center; }
     tbody td { padding: 7px 10px; font-size: 11px; border-bottom: 1px solid #f0f0f0; color: #333; }
@@ -142,19 +142,19 @@ function baseStyles(color: string) {
     /* Totals */
     .totals-wrap { display: flex; justify-content: flex-end; margin-top: 14px; }
     .totals-box { width: 260px; }
-    .total-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 11px; color: #555; }
+    .total-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 11px; color: #222; }
     .total-row .mono { color: #222; }
     .total-row-final { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; margin-top: 4px; border-top: 2px solid #222; font-size: 12px; font-weight: 700; color: #222; }
     .total-row-final .mono { font-size: 12px; }
 
     /* Observations */
     .obs-block { background: #f9f9f9; border: 1px solid #e8e8e8; border-radius: 6px; padding: 12px 14px; margin-top: 18px; }
-    .obs-title { font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #999; font-weight: 700; margin-bottom: 5px; }
-    .obs-text { font-size: 11px; color: #555; line-height: 1.5; white-space: pre-wrap; }
+    .obs-title { font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #444; font-weight: 700; margin-bottom: 5px; }
+    .obs-text { font-size: 11px; color: #222; line-height: 1.5; white-space: pre-wrap; }
 
     /* Footer */
-    .footer { margin-top: 24px; padding-top: 8px; border-top: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; font-size: 8px; color: #bbb; }
-    .footer-legal { text-align: center; font-size: 7px; color: #ccc; margin-top: 6px; }
+    .footer { margin-top: 24px; padding-top: 8px; border-top: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; font-size: 8px; color: #555; }
+    .footer-legal { text-align: center; font-size: 7px; color: #666; margin-top: 6px; }
 
     /* Signatures */
     .signatures { margin-top: 60px; display: flex; justify-content: space-between; }
@@ -251,12 +251,12 @@ function facturaStyles(color: string) {
 
     /* CAE section */
     .cae-section { margin-top: 20px; padding: 14px 16px; border: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
-    .cae-label { font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #888; font-weight: 700; }
+    .cae-label { font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #444; font-weight: 700; }
     .cae-value { font-size: 11px; font-weight: 700; font-family: 'Courier New', Courier, monospace; margin-top: 2px; color: #222; }
-    .cae-vto { font-size: 9px; color: #888; margin-top: 3px; }
+    .cae-vto { font-size: 9px; color: #333; margin-top: 3px; }
     .qr-box { text-align: center; }
     .qr-box img { width: 100px; height: 100px; }
-    .qr-text { font-size: 7px; color: #aaa; margin-top: 2px; }
+    .qr-text { font-size: 7px; color: #555; margin-top: 2px; }
   `;
 }
 
@@ -511,7 +511,7 @@ export function generateFacturaPDF(
       ${hideItemIva ? "" : `<td class="right">${it.iva_porcentaje}%</td>`}
       <td class="right mono bold">${formatCurrency(Number(it.subtotal), mon)}</td>
     </tr>`).join("")
-  : `<tr><td colspan="${hideItemIva ? 5 : 6}" style="text-align:center;color:#999;padding:20px;font-style:italic">Items detallados no disponibles</td></tr>`;
+  : `<tr><td colspan="${hideItemIva ? 5 : 6}" style="text-align:center;color:#444;padding:20px;font-style:italic">Items detallados no disponibles</td></tr>`;
 
   const trStyle = "font-size:11px;color:#555;padding:5px 0";
   const tdMonoR = "text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222";
@@ -587,7 +587,7 @@ ${documentHeader(soc, {
 
 <table style="width:100%;margin-top:14px;border-collapse:collapse">
   <tr><td></td><td style="width:260px">
-    ${isUSD ? `<div style="font-size:9px;color:#999;padding:5px 0">Operación en USD &mdash; TC: ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>` : ""}
+    ${isUSD ? `<div style="font-size:9px;color:#444;padding:5px 0">Operación en USD &mdash; TC: ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>` : ""}
     ${totalsHtml}
   </td></tr>
 </table>
@@ -596,13 +596,13 @@ ${f.cae ? `
 <table style="width:100%;margin-top:20px;padding:14px 16px;border:1px solid #ddd;border-collapse:collapse">
   <tr>
     <td style="vertical-align:top">
-      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1px;color:#888;font-weight:700">CAE N°</div>
+      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1px;color:#444;font-weight:700">CAE N°</div>
       <div style="font-size:11px;font-weight:700;font-family:'Courier New',monospace;margin-top:2px;color:#222">${f.cae}</div>
-      ${f.cae_vencimiento ? `<div style="font-size:9px;color:#888;margin-top:3px">Fecha de vto. de CAE: ${formatDate(f.cae_vencimiento)}</div>` : ""}
+      ${f.cae_vencimiento ? `<div style="font-size:9px;color:#444;margin-top:3px">Fecha de vto. de CAE: ${formatDate(f.cae_vencimiento)}</div>` : ""}
     </td>
     <td style="text-align:center;width:120px;vertical-align:top">
       <img src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(qrUrl)}" alt="QR ARCA" style="width:100px;height:100px" />
-      <div style="font-size:7px;color:#aaa;margin-top:2px">Comprobante autorizado</div>
+      <div style="font-size:7px;color:#555;margin-top:2px">Comprobante autorizado</div>
     </td>
   </tr>
 </table>` : ""}
@@ -664,7 +664,7 @@ export function generateRemitoPDF(
         <td class="right bold">${it.cantidad}</td>
         <td class="center">${it.unidad || "u"}</td>
       </tr>`).join("")
-    : `<tr><td colspan="4" style="text-align:center;color:#999;padding:24px;font-style:italic">Sin items</td></tr>`;
+    : `<tr><td colspan="4" style="text-align:center;color:#444;padding:24px;font-style:italic">Sin items</td></tr>`;
 
   // Delivery address logic
   const direccionEntrega = r.sucursal_nombre
@@ -705,7 +705,7 @@ ${documentHeader(soc, {
       ${r.transportes.length > 0 ? r.transportes.map(t => `
         <div class="compact-line"><span class="compact-label">Transportista</span>${t.transportista}</div>
         ${t.destino ? `<div class="compact-line"><span class="compact-label">Destino</span>${t.destino}</div>` : ""}
-      `).join("") : `<div class="compact-line" style="color:#999;font-style:italic">Sin transporte asignado</div>`}
+      `).join("") : `<div class="compact-line" style="color:#444;font-style:italic">Sin transporte asignado</div>`}
       ${r.cae ? `<div class="compact-line"><span class="compact-label">CAR</span>${r.cae}</div>` : `<div class="compact-line"><span class="compact-label">Autorización</span>Pendiente</div>`}
     </td>
   </tr>
@@ -983,7 +983,7 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
         <thead><tr><th class="center">Fecha</th><th>Comprobante</th><th class="right">Monto abonado</th></tr></thead>
         <tbody>${op.facturas_vinculadas.map(fc => `<tr><td class="center">${fechaDD(fc.fecha)}</td><td>${fc.numero}</td><td class="right mono">${formatCurrency(fc.monto, mon)}</td></tr>`).join("")}</tbody>
       </table>`
-    : `<p style="color:#999;font-size:11px;margin-top:6px">Sin documentos vinculados</p>`;
+    : `<p style="color:#444;font-size:11px;margin-top:6px">Sin documentos vinculados</p>`;
 
   // ── Cheques table ──
   const chequesHtml = cheques.length > 0 ? `
@@ -1079,15 +1079,15 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
         <tr>
           <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
             <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">A - Agente de retenci\u00F3n</div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Raz\u00F3n Social</div><div style="font-size:11px;font-weight:500;color:#333">${soc.razonSocial}</div></div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${soc.cuit}</div></div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${soc.domicilio}</div></div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">Raz\u00F3n Social</div><div style="font-size:11px;font-weight:500;color:#333">${soc.razonSocial}</div></div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${soc.cuit}</div></div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${soc.domicilio}</div></div>
           </td>
           <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
             <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">B - Sujeto retenido</div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Raz\u00F3n Social</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.razon_social}</div></div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.cuit ? fmtCuit(op.proveedor.cuit) : "\u2014"}</div></div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#999;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.direccion || "\u2014"}</div></div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">Raz\u00F3n Social</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.razon_social}</div></div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.cuit ? fmtCuit(op.proveedor.cuit) : "\u2014"}</div></div>
+            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.direccion || "\u2014"}</div></div>
           </td>
         </tr>
       </table>

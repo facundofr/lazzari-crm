@@ -716,7 +716,7 @@ export default function PresupuestosPage() {
       // First try with items + vendedor profile
       let q = (supabase as any)
         .from("presupuestos")
-        .select(`*, listo_para_facturar, eliminado, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
+        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       let res: { data: any; error: any } = await q;
@@ -3871,6 +3871,7 @@ export default function PresupuestosPage() {
         open={emailModal.open}
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="presupuesto"
+        sociedadId={sociedadActiva?.id}
         defaultTo={emailModal.to}
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}

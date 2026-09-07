@@ -13,12 +13,13 @@ import { Resend } from "resend";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { to, subject, bodyHtml, pdfBase64, pdfFilename } = body as {
+    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId } = body as {
       to: string[];
       subject: string;
       bodyHtml: string;
       pdfBase64: string;
       pdfFilename: string;
+      sociedadId?: string;
     };
 
     // Validate required fields
@@ -51,7 +52,15 @@ export async function POST(req: NextRequest) {
     }
 
     const resend = new Resend(resendKey);
-    const fromEmail = process.env.EMAIL_FROM || "Lazzari <notificaciones@lazzari.com.ar>";
+
+    // Per-sociedad email sender
+    const SOCIEDAD_EMAIL: Record<string, string> = {
+      "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021": "Lazzari Soluciones Industriales <ventas@lazzari.com.ar>",
+      "fee94607-747a-4e87-ba24-aff9032f7a56": "Grupo LA <ventas@grupola.com.ar>",
+    };
+    const fromEmail = (sociedadId && SOCIEDAD_EMAIL[sociedadId])
+      || process.env.EMAIL_FROM
+      || "Lazzari Soluciones Industriales <ventas@lazzari.com.ar>";
 
     const { data: emailResult, error: emailError } = await resend.emails.send({
       from: fromEmail,

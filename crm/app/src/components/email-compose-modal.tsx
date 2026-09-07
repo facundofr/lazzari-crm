@@ -21,6 +21,8 @@ interface EmailComposeModalProps {
   generatePdf: () => Promise<string>;
   /** Callback on successful send */
   onSuccess?: () => void | Promise<void>;
+  /** Sociedad ID for sender email selection */
+  sociedadId?: string;
 }
 
 const DOC_LABELS: Record<EmailDocumentType, string> = {
@@ -41,6 +43,7 @@ export function EmailComposeModal({
   pdfFilename = "",
   generatePdf,
   onSuccess,
+  sociedadId,
 }: EmailComposeModalProps) {
   const [to, setTo] = useState(defaultTo);
   const [subject, setSubject] = useState(defaultSubject);
@@ -99,6 +102,7 @@ export function EmailComposeModal({
           bodyHtml: `<div style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">${bodyHtml.replace(/\n/g, "<br/>")}</div>`,
           pdfBase64,
           pdfFilename: pdfFilename || `${DOC_LABELS[documentType]}.pdf`,
+          sociedadId,
         }),
       });
 

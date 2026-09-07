@@ -2331,6 +2331,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         open={emailModal.open}
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="factura"
+        sociedadId={sociedadActiva?.id}
         generatePdf={async () => {
           const f = facturas.find(ff => ff.id === emailModal.facturaId);
           if (!f || !sociedadActiva) throw new Error("Factura no encontrada");

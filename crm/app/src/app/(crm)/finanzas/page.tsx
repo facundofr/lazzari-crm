@@ -5840,6 +5840,7 @@ export default function FinanzasPage() {
         open={emailModal.open}
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="orden_pago"
+        sociedadId={sociedadActiva?.id}
         defaultTo={emailModal.to}
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}

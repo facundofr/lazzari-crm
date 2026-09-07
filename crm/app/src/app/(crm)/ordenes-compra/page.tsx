@@ -2876,6 +2876,7 @@ export default function OrdenesCompraPage() {
         open={emailModal.open}
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="orden_compra"
+        sociedadId={sociedadActiva?.id}
         defaultTo={emailModal.to}
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
