@@ -543,19 +543,19 @@ export default function FinanzasPage() {
 
   async function fetchExistingOCInvoices(ocId: string) {
     const [{ data: junctionLinks, error: junctionError }, { data: legacyInvoices, error: legacyError }] = await Promise.all([
-      (supabase as any).from("factura_compra_ocs").select("factura_compra_id, facturas_compra(id, estado, total, moneda)").eq("orden_compra_id", ocId),
-      (supabase as any).from("facturas_compra").select("id, estado, total, moneda").eq("orden_compra_id", ocId),
+      (supabase as any).from("factura_compra_ocs").select("factura_compra_id, facturas_compra(id, estado, total, percepciones, moneda)").eq("orden_compra_id", ocId),
+      (supabase as any).from("facturas_compra").select("id, estado, total, percepciones, moneda").eq("orden_compra_id", ocId),
     ]);
     if (junctionError || legacyError) throw new Error("No se pudo verificar lo ya facturado para la OC.");
     const byId = new Map<string, { total: number; moneda: string }>();
     for (const link of junctionLinks || []) {
       const raw = Array.isArray(link.facturas_compra) ? link.facturas_compra[0] : link.facturas_compra;
       if (!raw || raw.estado === "anulada" || byId.has(raw.id)) continue;
-      byId.set(raw.id, { total: Number(raw.total || 0), moneda: raw.moneda || "ARS" });
+      byId.set(raw.id, { total: Number(raw.total || 0) - Number(raw.percepciones || 0), moneda: raw.moneda || "ARS" });
     }
     for (const raw of legacyInvoices || []) {
       if (!raw || raw.estado === "anulada" || byId.has(raw.id)) continue;
-      byId.set(raw.id, { total: Number(raw.total || 0), moneda: raw.moneda || "ARS" });
+      byId.set(raw.id, { total: Number(raw.total || 0) - Number(raw.percepciones || 0), moneda: raw.moneda || "ARS" });
     }
     return Array.from(byId.values());
   }
@@ -1888,8 +1888,9 @@ export default function FinanzasPage() {
         }
         const previousTotal = previousInvoices.reduce((sum, invoice) => sum + invoice.total, 0);
         const remaining = Math.round((Number(freshOC.total || 0) - previousTotal) * 100) / 100;
-        if (fcTotal - remaining > 0.01) {
-          throw new Error(`El comprobante supera en ${formatCurrency(fcTotal - remaining, fcForm.moneda)} el saldo de la OC. Corregí precios, descuentos o IVA.`);
+        const fcSinPercepciones = fcForm.subtotal + fcIva;
+        if (fcSinPercepciones - remaining > 0.01) {
+          throw new Error(`El comprobante supera en ${formatCurrency(fcSinPercepciones - remaining, fcForm.moneda)} el saldo de la OC. Corregí precios, descuentos o IVA.`);
         }
       }
 
@@ -2159,7 +2160,8 @@ export default function FinanzasPage() {
   const fcOCRemaining = selectedFCOrder
     ? Math.round((Number(selectedFCOrder.total || 0) - fcOCPreviouslyInvoiced.total) * 100) / 100
     : 0;
-  const fcOCDifference = Math.round((fcOCRemaining - fcTotal) * 100) / 100;
+  const fcTotalSinPercepciones = fcForm.subtotal + fcIva;
+  const fcOCDifference = Math.round((fcOCRemaining - fcTotalSinPercepciones) * 100) / 100;
   const fcOCBlocked = Boolean(selectedFCOrder) && (
     !Number.isFinite(fcOCPreviouslyInvoiced.total)
     || selectedFCOrder?.moneda !== fcForm.moneda
