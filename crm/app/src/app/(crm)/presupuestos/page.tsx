@@ -1270,8 +1270,9 @@ export default function PresupuestosPage() {
     return true;
   });
 
-  const counts: Record<string, number> = { todos: presupuestos.length, facturado: 0 };
-  presupuestos.forEach((pr) => {
+  const activePRs = presupuestos.filter(pr => !(pr as any).eliminado);
+  const counts: Record<string, number> = { todos: activePRs.length, facturado: 0 };
+  activePRs.forEach((pr) => {
     counts[pr.estado] = (counts[pr.estado] || 0) + 1;
     if (facturadoIds.has(pr.id)) counts.facturado = (counts.facturado || 0) + 1;
   });
@@ -1575,7 +1576,7 @@ export default function PresupuestosPage() {
       if (error) throw new Error(error.message);
       setSelected(null);
       setPanelFullscreen(false);
-      setPresupuestos(prev => prev.filter(p => p.id !== id));
+      setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: true } as any : p));
       toast.success("Presupuesto movido a papelera");
     } catch (err: unknown) {
       console.error("Error deleting:", err);
@@ -1588,8 +1589,8 @@ export default function PresupuestosPage() {
     try {
       const { error } = await supabase.from("presupuestos").update({ eliminado: false } as any).eq("id", id);
       if (error) throw new Error(error.message);
+      setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: false } as any : p));
       toast.success("Presupuesto restaurado");
-      await fetchPresupuestos();
     } catch {
       toast.error("Error al restaurar");
     }
