@@ -195,6 +195,7 @@ export default function VentasPage() {
   const [filterVendedor, setFilterVendedor] = useState<string>("todos");
   const [filterCliente, setFilterCliente] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
+  const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
@@ -396,8 +397,12 @@ export default function VentasPage() {
       }
       if (q && !(v.presupuesto.clientes?.razon_social || "").toLowerCase().includes(q) && !v.presupuesto.numero.toLowerCase().includes(q)) return false;
       return true;
+    }).sort((a, b) => {
+      const da = a.presupuesto.fecha || "";
+      const db = b.presupuesto.fecha || "";
+      return sortOrder === "desc" ? db.localeCompare(da) : da.localeCompare(db);
     });
-  }, [ventas, filterVendedor, filterStatus, filterCliente]);
+  }, [ventas, filterVendedor, filterStatus, filterCliente, sortOrder]);
 
   // KPIs from filtered ventas (respecting vendedor filter, ignoring step filter)
   const kpis = useMemo(() => {
@@ -804,6 +809,14 @@ export default function VentasPage() {
               <option key={v.id} value={v.id}>{v.full_name}</option>
             ))}
           </select>
+          <button
+            onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
+            className="flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white hover:bg-zinc-50 dark:hover:bg-zinc-800"
+            title={sortOrder === "desc" ? "Más nuevos primero" : "Más viejos primero"}
+          >
+            <Clock className="h-3.5 w-3.5" />
+            {sortOrder === "desc" ? "Nuevos → Viejos" : "Viejos → Nuevos"}
+          </button>
           {filterStatus !== null && (
             <button
               onClick={() => setFilterStatus(null)}

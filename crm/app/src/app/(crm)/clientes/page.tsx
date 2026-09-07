@@ -67,6 +67,7 @@ interface ClienteRow {
   activo: boolean;
   assigned_to: string | null;
   markup_predeterminado?: number | null;
+  moneda_predeterminada?: string | null;
   email_facturacion?: string | null;
   envio_automatico?: boolean;
   flete?: string | null;
@@ -77,7 +78,7 @@ interface ClienteRow {
   cliente_sucursales: unknown[];
 }
 
-function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
+function mapRow(row: ClienteRow): Client & { vendedorNombre: string; monedaPredeterminada: string } {
   return {
     id: row.id,
     type: (row.type as Client["type"]) ?? "empresa",
@@ -99,6 +100,7 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
     activo: row.activo ?? true,
     assignedTo: row.assigned_to ?? undefined,
     markupPredeterminado: row.markup_predeterminado != null ? Number(row.markup_predeterminado) : null,
+    monedaPredeterminada: (row.moneda_predeterminada as string) ?? "ARS",
     emailFacturacion: row.email_facturacion ?? null,
     envioAutomatico: row.envio_automatico ?? true,
     flete: row.flete ?? "",
@@ -131,7 +133,7 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string } {
   };
 }
 
-type ClienteExt = Client & { vendedorNombre: string };
+type ClienteExt = Client & { vendedorNombre: string; monedaPredeterminada: string };
 
 interface ConsumoCategory {
   categoria: string;
@@ -201,6 +203,7 @@ const emptyForm = {
   limite_credito: 0,
   notas: "",
   markup_predeterminado: null as number | null,
+  moneda_predeterminada: "ARS",
   email_facturacion: "",
   envio_automatico: true,
   assigned_to: "" as string | null,
@@ -996,15 +999,15 @@ export default function ClientesPage() {
 
       if (error) {
         console.error("Error fetching clientes:", error);
-        setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—" })));
+        setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—", monedaPredeterminada: "ARS" })));
       } else if (data) {
         setClientes(data.map((row) => mapRow({ ...row, contactos: [] } as unknown as ClienteRow)));
       } else {
-        setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—" })));
+        setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—", monedaPredeterminada: "ARS" })));
       }
     } catch (err) {
       console.error("Error fetching clientes:", err);
-      setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—" })));
+      setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—", monedaPredeterminada: "ARS" })));
     } finally {
       setLoading(false);
     }
@@ -1091,6 +1094,7 @@ export default function ClientesPage() {
       limite_credito: c.limiteCredito,
       notas: c.notas,
       markup_predeterminado: (c as any).markupPredeterminado ?? null,
+      moneda_predeterminada: (c as any).monedaPredeterminada ?? "ARS",
       email_facturacion: c.emailFacturacion ?? "",
       envio_automatico: c.envioAutomatico ?? true,
       assigned_to: (c as any).assignedTo || null,
@@ -3127,6 +3131,17 @@ export default function ClientesPage() {
                 onChange={(e) => setForm({ ...form, markup_predeterminado: e.target.value ? Number(e.target.value) : null })}
                 placeholder="Ej: 30"
               />
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Moneda predeterminada</label>
+                <div className="flex gap-2">
+                  {["ARS", "USD"].map(m => (
+                    <button key={m} type="button" onClick={() => setForm({ ...form, moneda_predeterminada: m })}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${form.moneda_predeterminada === m ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="space-y-1.5">
                 <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Vendedor asignado</label>
                 <select

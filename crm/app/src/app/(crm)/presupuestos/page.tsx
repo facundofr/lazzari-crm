@@ -936,7 +936,7 @@ export default function PresupuestosPage() {
       try {
         let q = (supabase as any)
           .from("clientes")
-          .select("id, razon_social, markup_predeterminado, condicion_iva")
+          .select("id, razon_social, markup_predeterminado, moneda_predeterminada, condicion_iva")
           .eq("activo", true)
           .order("razon_social");
         if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
@@ -3002,9 +3002,9 @@ export default function PresupuestosPage() {
                   {filteredClientes.length === 0 ? (
                     <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
                   ) : filteredClientes.slice(0, 20).map((c) => (
-                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; const td = tipoDocPorCondicion(c.condicion_iva); setNewPR((p) => { const markup = mg ?? p.markup_general; return { ...p, cliente_id: c.id, markup_general: markup, ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number(((it.costo_moneda === "USD" ? it.precio_costo * (p.tipo_cambio || 1) : it.precio_costo) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); }}
+                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; const td = tipoDocPorCondicion(c.condicion_iva); const monedaCliente = (c as any).moneda_predeterminada || undefined; setNewPR((p) => { const markup = mg ?? p.markup_general; return { ...p, cliente_id: c.id, markup_general: markup, ...(monedaCliente ? { moneda: monedaCliente } : {}), ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number(((it.costo_moneda === "USD" ? it.precio_costo * (p.tipo_cambio || 1) : it.precio_costo) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); }}
                       className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${c.id === newPR.cliente_id ? "bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400" : "text-zinc-700 dark:text-zinc-300"}`}>
-                      {c.razon_social}{c.markup_predeterminado != null && <span className="ml-auto text-xs text-zinc-400">{c.markup_predeterminado}%</span>}
+                      {c.razon_social}{(c as any).moneda_predeterminada === "USD" && <span className="ml-1 text-[10px] text-blue-500">USD</span>}{c.markup_predeterminado != null && <span className="ml-auto text-xs text-zinc-400">{c.markup_predeterminado}%</span>}
                     </button>
                   ))}
                 </div>
