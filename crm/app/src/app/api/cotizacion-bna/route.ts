@@ -151,15 +151,18 @@ async function upsertCotiz(supabase: any, fecha: string, tipoDb: string, compra:
 export async function GET(req: NextRequest) {
   const modalidad = (req.nextUrl.searchParams.get("modalidad") || "divisas") as "divisas" | "billetes";
   const fechaParam = req.nextUrl.searchParams.get("fecha");
+  const forceRefresh = req.nextUrl.searchParams.get("force") === "1";
   const tipoDb = modalidad === "billetes" ? "oficial_billetes" : "oficial_divisas";
   const supabase = await createSupabaseServer();
 
   const hoy = todayAR();
   const targetFecha = fechaParam || hoy;
 
-  // -- Siempre buscar en DB primero --
-  const cached = await lookupDb(supabase as any, tipoDb, targetFecha);
-  if (cached) return buildResponse(cached, modalidad, tipoDb, true);
+  // -- Buscar en DB primero (skip si force) --
+  if (!forceRefresh) {
+    const cached = await lookupDb(supabase as any, tipoDb, targetFecha);
+    if (cached) return buildResponse(cached, modalidad, tipoDb, true);
+  }
 
   // -- BNA Cotizador (distingue divisas vs billetes) --
   const bna = await scrapeBna(modalidad, targetFecha);

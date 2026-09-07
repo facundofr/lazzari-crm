@@ -17,6 +17,7 @@ import { supabase } from "@/lib/supabase/client";
 import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
+import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -185,6 +186,9 @@ interface OCOption {
   proveedor_id: string;
   total: number;
   moneda: "ARS" | "USD";
+  estado?: string;
+  fecha?: string;
+  proveedores?: { razon_social: string } | null;
 }
 
 const emptyFCForm = {
@@ -982,10 +986,10 @@ export default function FinanzasPage() {
 
         // Fetch ordenes de compra for optional linking
         try {
-          let qOc = supabase.from("ordenes_compra").select("id, numero, proveedor_id, total, moneda").order("numero", { ascending: false });
+          let qOc = supabase.from("ordenes_compra").select("id, numero, proveedor_id, total, moneda, estado, fecha, proveedores(razon_social)").order("numero", { ascending: false });
           if (sociedadActiva?.id) qOc = qOc.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: ocData } = await qOc;
-          if (ocData) setOcOptions(ocData as OCOption[]);
+          if (ocData) setOcOptions(ocData as any[]);
         } catch { /* ignore */ }
 
         // Fetch echeqs
@@ -4637,466 +4641,23 @@ export default function FinanzasPage() {
 
       {/* Nueva factura de compra modal */}
       {fcModalOpen && (
-        <>
-          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setFcModalOpen(false)} />
-          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-2">
-                <Receipt className="h-5 w-5 text-orange-500" />
-                <h2 className="text-lg font-bold dark:text-white">Nueva Factura de Compra</h2>
-              </div>
-              <button onClick={() => setFcModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
-            </div>
-            {/* Import from PDF */}
-            <div className="mb-4">
-              <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-blue-300 bg-blue-50/50 dark:border-blue-700 dark:bg-blue-950/20 px-3 py-2.5 text-sm text-blue-600 dark:text-blue-400 hover:border-blue-400 hover:bg-blue-50 transition-colors">
-                {fcPdfParsing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {fcPdfParsing ? "Procesando PDF con IA..." : "Importar desde PDF"}
-                <input type="file" accept=".pdf,image/png,image/jpeg,image/webp" className="hidden" disabled={fcPdfParsing}
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleParseFCPdf(f); e.target.value = ""; }} />
-              </label>
-            </div>
-            {fcError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{fcError}</div>}
-            <div className="space-y-4">
-              {/* Tipo de factura selector — ninguno mueve stock (stock se mueve desde PR→OC→Recepción) */}
-              <div className="grid grid-cols-2 gap-3">
-                <button type="button" onClick={() => setFcForm({ ...fcForm, tipo_fc: "mercaderia", solo_iva: false })}
-                  className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-colors ${fcForm.tipo_fc === "mercaderia" ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
-                  <ShoppingCart className={`h-5 w-5 ${fcForm.tipo_fc === "mercaderia" ? "text-orange-500" : "text-zinc-400"}`} />
-                  <span className={`text-sm font-semibold ${fcForm.tipo_fc === "mercaderia" ? "text-orange-700 dark:text-orange-300" : "text-zinc-600 dark:text-zinc-300"}`}>Compra</span>
-                </button>
-                <button type="button" onClick={() => setFcForm({ ...fcForm, tipo_fc: "solo_iva", solo_iva: true })}
-                  className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 transition-colors ${fcForm.tipo_fc === "solo_iva" ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
-                  <FileText className={`h-5 w-5 ${fcForm.tipo_fc === "solo_iva" ? "text-blue-500" : "text-zinc-400"}`} />
-                  <span className={`text-sm font-semibold ${fcForm.tipo_fc === "solo_iva" ? "text-blue-700 dark:text-blue-300" : "text-zinc-600 dark:text-zinc-300"}`}>Solo IVA / contable</span>
-                </button>
-              </div>
-
-              {/* Tipo de comprobante */}
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Tipo de comprobante</label>
-                <div className="flex flex-wrap gap-1.5 mt-1">
-                  {["FC A", "FC B", "FC C", "FC M", "NC A", "NC B", "NC C", "ND A", "ND B"].map(tc => (
-                    <button key={tc} type="button" onClick={() => setFcForm({ ...fcForm, tipo_comprobante: tc })}
-                      className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${fcForm.tipo_comprobante === tc ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                      {tc}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Proveedor selector with search */}
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Proveedor *</label>
-                <div className="relative mt-1">
-                  <div className="flex items-center border border-zinc-200 rounded-lg dark:border-zinc-700 overflow-hidden">
-                    <Search className="h-4 w-4 text-zinc-400 ml-3 flex-shrink-0" />
-                    <input
-                      value={fcProvSearch}
-                      onChange={(e) => { setFcProvSearch(e.target.value); if (fcForm.proveedor_id) setFcForm({ ...fcForm, proveedor_id: "", orden_compra_id: "" }); }}
-                      onFocus={() => setFcProvFocused(true)}
-                      onBlur={() => setTimeout(() => setFcProvFocused(false), 150)}
-                      placeholder="Buscar proveedor..."
-                      className="w-full px-2 py-2 text-sm bg-transparent dark:text-white outline-none"
-                    />
-                  </div>
-                  {fcForm.proveedor_id && (
-                    <div className="mt-1 flex items-center gap-1">
-                      {fcForm.proveedor_id === "sin_proveedor"
-                        ? <Badge variant="warning">Sin proveedor</Badge>
-                        : <Badge variant="success">{proveedoresOptions.find(p => p.id === fcForm.proveedor_id)?.razon_social}</Badge>
-                      }
-                      <button onClick={() => { setFcForm({ ...fcForm, proveedor_id: "", orden_compra_id: "" }); setFcProvSearch(""); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
-                    </div>
-                  )}
-                  {!fcForm.proveedor_id && (fcProvFocused || fcProvSearch.trim()) && (
-                    <div className="absolute z-10 mt-1 w-full max-h-48 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
-                      {filteredProveedoresFC.slice(0, 8).map(p => (
-                        <button key={p.id} onClick={() => { setFcForm({ ...fcForm, proveedor_id: p.id, orden_compra_id: "" }); setFcProvSearch(p.razon_social); }}
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white">
-                          {p.razon_social}
-                        </button>
-                      ))}
-                      {fcProvSearch.trim() && filteredProveedoresFC.length === 0 && (
-                        <div className="p-3 space-y-2">
-                          <p className="text-xs text-zinc-400">No se encontró &quot;{fcProvSearch}&quot;</p>
-                          <div className="flex gap-2">
-                            <button onClick={() => { window.open("/proveedores?crear=" + encodeURIComponent(fcProvSearch), "_blank"); }}
-                              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-orange-500 text-white text-xs font-medium hover:bg-orange-600 transition-colors">
-                              <Plus className="h-3 w-3" /> Crear proveedor
-                            </button>
-                            <button onClick={() => { setFcForm({ ...fcForm, proveedor_id: "sin_proveedor", orden_compra_id: "" }); setFcProvFocused(false); }}
-                              className="px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
-                              Cargar sin proveedor
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Numero de factura */}
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Número de factura *</label>
-                <input value={fcForm.numero_factura} onChange={(e) => setFcForm({ ...fcForm, numero_factura: e.target.value })}
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: 0001-00012345" />
-              </div>
-
-              {/* Número + CAE */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">CAE (opcional)</label>
-                  <input value={fcForm.cae} onChange={(e) => setFcForm({ ...fcForm, cae: e.target.value })}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Número CAE del proveedor" />
-                </div>
-              </div>
-
-              {/* Fecha y fecha vencimiento */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Fecha</label>
-                  <input type="date" value={fcForm.fecha} onChange={(e) => setFcForm({ ...fcForm, fecha: e.target.value })}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Fecha vencimiento</label>
-                  <input type="date" value={fcForm.fecha_vencimiento} onChange={(e) => setFcForm({ ...fcForm, fecha_vencimiento: e.target.value })}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                </div>
-              </div>
-
-              {/* Subtotal + Moneda */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Subtotal (neto gravado) *</label>
-                  <input type="number" value={fcForm.subtotal || ""} onChange={(e) => setFcForm({ ...fcForm, subtotal: Number(e.target.value) })}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Moneda</label>
-                  <select value={fcForm.moneda} onChange={(e) => setFcForm({ ...fcForm, moneda: e.target.value as "ARS" | "USD" })}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                    <option value="ARS">ARS</option>
-                    <option value="USD">USD</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* IVA % + Percepciones */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">% IVA {fcItems.length > 0 ? <span className="text-zinc-400">(por defecto)</span> : ""}</label>
-                  <div className="flex items-center gap-2 mt-1">
-                    <input type="number" step="0.5" value={fcForm.iva_porcentaje || ""} onChange={(e) => setFcForm({ ...fcForm, iva_porcentaje: Number(e.target.value) })}
-                      className="w-20 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                    <span className="text-sm text-zinc-400">%</span>
-                    <div className="flex gap-1 ml-1">
-                      {[10.5, 21, 27].map(pct => (
-                        <button key={pct} type="button" onClick={() => setFcForm({ ...fcForm, iva_porcentaje: pct })}
-                          className={`rounded px-2 py-1 text-xs font-medium transition-colors ${fcForm.iva_porcentaje === pct ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                          {pct}%
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {fcItems.length > 0 && new Set(fcItems.map(it => it.iva_porcentaje)).size > 1 && (
-                    <p className="text-xs text-blue-500 mt-1">IVA se calcula por item (tasas mixtas detectadas)</p>
-                  )}
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Percepciones (total)</label>
-                  <input type="number" value={fcForm.percepciones || ""} onChange={(e) => setFcForm({ ...fcForm, percepciones: Number(e.target.value) })}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="0" />
-                </div>
-              </div>
-
-              {/* Percepciones desglose */}
-              {(fcForm.percepciones > 0 || fcForm.percepciones_detalle.length > 0) && (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-zinc-500">Detalle de percepciones</label>
-                    <button type="button"
-                      onClick={() => setFcForm({ ...fcForm, percepciones_detalle: [...fcForm.percepciones_detalle, { tipo: "iibb", monto: 0, localidad: "" }] })}
-                      className="text-xs text-orange-500 hover:text-orange-600 font-medium">+ Agregar línea</button>
-                  </div>
-                  <div className="space-y-2">
-                    {fcForm.percepciones_detalle.map((p, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
-                        <select value={p.tipo}
-                          onChange={(e) => { const d = [...fcForm.percepciones_detalle]; d[idx] = { ...d[idx], tipo: e.target.value as any }; setFcForm({ ...fcForm, percepciones_detalle: d }); }}
-                          className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                          <option value="iibb">IIBB</option>
-                          <option value="ganancias">Ganancias</option>
-                          <option value="iva">IVA</option>
-                          <option value="municipal">Municipal</option>
-                        </select>
-                        {p.tipo === "iibb" && (
-                          <input value={p.localidad || ""} placeholder="Provincia"
-                            onChange={(e) => { const d = [...fcForm.percepciones_detalle]; d[idx] = { ...d[idx], localidad: e.target.value }; setFcForm({ ...fcForm, percepciones_detalle: d }); }}
-                            className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                        )}
-                        <input type="number" step="0.01" value={p.monto || ""}
-                          onChange={(e) => {
-                            const d = [...fcForm.percepciones_detalle];
-                            d[idx] = { ...d[idx], monto: Number(e.target.value) };
-                            const total = d.reduce((s, x) => s + (x.monto || 0), 0);
-                            setFcForm({ ...fcForm, percepciones_detalle: d, percepciones: total });
-                          }}
-                          className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="$ monto" />
-                        <button type="button" onClick={() => {
-                          const d = fcForm.percepciones_detalle.filter((_, i) => i !== idx);
-                          const total = d.reduce((s, x) => s + (x.monto || 0), 0);
-                          setFcForm({ ...fcForm, percepciones_detalle: d, percepciones: total });
-                        }} className="text-zinc-400 hover:text-red-500"><X className="h-3 w-3" /></button>
-                      </div>
-                    ))}
-                    {fcForm.percepciones_detalle.length === 0 && (
-                      <p className="text-xs text-zinc-400">Podés desglosar las percepciones por tipo arriba.</p>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Calculated totals */}
-              {fcForm.subtotal > 0 && (
-                <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1.5">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-500">Subtotal</span>
-                    <span className="font-mono">{formatCurrency(fcForm.subtotal, fcForm.moneda)}</span>
-                  </div>
-                  {/* Per-rate IVA breakdown when items have mixed rates */}
-                  {fcItems.length > 0 && Object.keys(fcIvaByRate).length > 1 ? (
-                    <>
-                      {Object.entries(fcIvaByRate).sort(([a], [b]) => Number(a) - Number(b)).map(([rate, amount]) => {
-                        const rateSubtotal = fcItems.filter(it => (it.iva_porcentaje ?? 21) === Number(rate)).reduce((s, it) => s + fcItemNeto(it), 0);
-                        return (
-                          <div key={rate} className="flex items-center justify-between text-sm">
-                            <span className="text-zinc-500">
-                              IVA {rate}% <span className="text-zinc-400 text-xs">(s/ {formatCurrency(rateSubtotal, fcForm.moneda)})</span>
-                            </span>
-                            <span className="font-mono text-zinc-600">{formatCurrency(amount, fcForm.moneda)}</span>
-                          </div>
-                        );
-                      })}
-                      <div className="flex items-center justify-between text-sm border-t border-zinc-100 dark:border-zinc-700 pt-1">
-                        <span className="text-zinc-500 font-medium">IVA total</span>
-                        <span className="font-mono text-zinc-600 font-medium">{formatCurrency(fcIva, fcForm.moneda)}</span>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-500">IVA ({fcItems.length > 0 && Object.keys(fcIvaByRate).length === 1 ? Object.keys(fcIvaByRate)[0] : fcForm.iva_porcentaje}%)</span>
-                      <span className="font-mono text-zinc-600">{formatCurrency(fcIva, fcForm.moneda)}</span>
-                    </div>
-                  )}
-                  {fcForm.percepciones > 0 && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-500">Percepciones</span>
-                      <span className="font-mono text-zinc-600">{formatCurrency(fcForm.percepciones, fcForm.moneda)}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between text-sm font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1.5">
-                    <span className="text-zinc-700 dark:text-white">Total</span>
-                    <span className="font-mono text-red-600">{formatCurrency(fcTotal, fcForm.moneda)}</span>
-                  </div>
-                </div>
-              )}
-
-              {/* Costo real para solo_iva */}
-              {fcForm.tipo_fc === "solo_iva" && (
-                <div className="rounded-lg border border-blue-200 bg-blue-50/50 dark:border-blue-800 dark:bg-blue-950/20 p-3 space-y-2">
-                  <label className="text-xs font-semibold text-blue-700 dark:text-blue-300">Costo real pagado</label>
-                  <p className="text-xs text-blue-600/70 dark:text-blue-400/70">Indica cuanto pagaste realmente por esta factura de IVA</p>
-                  <input type="number" value={fcForm.costo_real || ""} onChange={(e) => setFcForm({ ...fcForm, costo_real: Number(e.target.value) })}
-                    placeholder="Monto pagado" className="w-full rounded-lg border border-blue-200 px-3 py-2 text-sm font-mono dark:border-blue-700 dark:bg-zinc-800 dark:text-white" />
-                  {fcForm.costo_real > 0 && fcTotal > 0 && (
-                    <p className="text-xs text-blue-600 dark:text-blue-400">
-                      Factura: <span className="font-mono font-medium">{formatCurrency(fcTotal, fcForm.moneda)}</span>
-                      {" — "}Pagaste: <span className="font-mono font-medium">{formatCurrency(fcForm.costo_real, fcForm.moneda)}</span>
-                      {" — "}Ahorro: <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400">{((1 - fcForm.costo_real / fcTotal) * 100).toFixed(1)}%</span>
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* Items de mercadería */}
-              {fcForm.tipo_fc === "mercaderia" && (
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-xs font-medium text-zinc-500">Items recibidos (para stock)</label>
-                    <button type="button"
-                      onClick={() => setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: "", codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, unidad: "UN", iva_porcentaje: fcForm.iva_porcentaje ?? 21 }])}
-                      className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium">
-                      <Plus className="h-3.5 w-3.5" /> Agregar item
-                    </button>
-                  </div>
-                  {/* Buscador de producto */}
-                  <div className="relative mb-2">
-                    <div className="flex items-center border border-dashed border-zinc-300 rounded-lg dark:border-zinc-600 overflow-hidden">
-                      <Search className="h-4 w-4 text-zinc-400 ml-3 flex-shrink-0" />
-                      <input value={fcProdSearch} onChange={(e) => setFcProdSearch(e.target.value)}
-                        onFocus={() => setFcProdFocused(true)} onBlur={() => setTimeout(() => setFcProdFocused(false), 150)}
-                        placeholder="Buscar producto del catálogo para agregar..."
-                        className="w-full px-2 py-2 text-xs bg-transparent dark:text-white outline-none" />
-                    </div>
-                    {(fcProdFocused || fcProdSearch.trim()) && (() => {
-                      const matches = fcProductos.filter((p) => (p.nombre + p.codigo).toLowerCase().includes(fcProdSearch.toLowerCase())).slice(0, 6);
-                      return matches.length > 0 ? (
-                        <div className="absolute z-10 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
-                          {matches.map((p) => (
-                            <button key={p.id} type="button" onClick={() => {
-                              setFcItems([...fcItems, { tempId: `${Date.now()}`, producto_id: p.id, codigo: p.codigo, descripcion: p.nombre, cantidad: 1, precio_unitario: Number(p.precio_costo), descuento_porcentaje: 0, unidad: p.unidad || "UN", iva_porcentaje: fcForm.iva_porcentaje ?? 21 }]);
-                              setFcProdSearch("");
-                            }} className="w-full text-left px-3 py-2 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex items-center justify-between">
-                              <span><span className="font-mono text-zinc-400 mr-2">{p.codigo}</span>{p.nombre}</span>
-                              <span className="text-zinc-400">Stock: {p.stock}</span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null;
-                    })()}
-                  </div>
-                  {fcItems.length > 0 ? (
-                    <div className="space-y-2">
-                      {fcItems.map((it, idx) => (
-                        <div key={it.tempId} className="grid grid-cols-12 gap-1.5 items-center rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-2">
-                          <input value={it.descripcion} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], descripcion: e.target.value }; setFcItems(n); }}
-                            placeholder="Descripción *" className="col-span-2 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
-                          <input type="number" value={it.cantidad || ""} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], cantidad: Number(e.target.value) }; setFcItems(n); }}
-                            placeholder="Cant." className="col-span-1 rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
-                          <input type="number" value={it.precio_unitario || ""} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], precio_unitario: Number(e.target.value) }; setFcItems(n); }}
-                            placeholder="$ unit." className="col-span-2 rounded border border-zinc-200 px-2 py-1 text-xs font-mono dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
-                          <input type="number" min="0" max="100" step="0.01" value={it.descuento_porcentaje || ""} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], descuento_porcentaje: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }; setFcItems(n); }}
-                            placeholder="Desc. %" title="Descuento porcentual" className="col-span-1 rounded border border-zinc-200 px-1 py-1 text-xs font-mono dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" />
-                          <select value={it.iva_porcentaje ?? 21} onChange={(e) => { const n = [...fcItems]; n[idx] = { ...n[idx], iva_porcentaje: Number(e.target.value) }; setFcItems(n); }}
-                            className="col-span-1 rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-800 dark:text-white">
-                            <option value={21}>21%</option>
-                            <option value={10.5}>10.5%</option>
-                            <option value={27}>27%</option>
-                            <option value={0}>0%</option>
-                          </select>
-                          <span className="col-span-1 text-center text-xs text-zinc-400">{it.unidad}</span>
-                          <span className="col-span-3 text-right text-xs font-mono text-zinc-500" title="Neto después del descuento">{formatCurrency(fcItemNeto(it), fcForm.moneda)}</span>
-                          <button type="button" onClick={() => setFcItems(fcItems.filter((_, i) => i !== idx))} className="col-span-1 text-zinc-400 hover:text-red-500 flex justify-center"><X className="h-3.5 w-3.5" /></button>
-                        </div>
-                      ))}
-                      <div className="text-right text-xs text-zinc-400 pr-1">
-                        {fcItems.length} item{fcItems.length !== 1 ? "s" : ""} — Neto con descuentos: {formatCurrency(fcItems.reduce((s, i) => s + fcItemNeto(i), 0), fcForm.moneda)}
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-zinc-400 text-center py-3 border border-dashed border-zinc-200 dark:border-zinc-700 rounded-lg">
-                      Opcional — agregá los artículos recibidos para actualizar el stock
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {/* OC opcional */}
-              {fcForm.tipo_fc === "mercaderia" && (
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Orden de compra (opcional)</label>
-                <select value={fcForm.orden_compra_id} onChange={(e) => setFcForm({ ...fcForm, orden_compra_id: e.target.value })}
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  <option value="">— Sin OC vinculada —</option>
-                  {filteredOCsForFC.map(oc => (
-                    <option key={oc.id} value={oc.id}>{oc.numero}</option>
-                  ))}
-                </select>
-                {fcForm.proveedor_id && filteredOCsForFC.length === 0 && (
-                  <p className="text-xs text-zinc-400 mt-1">No hay OCs para este proveedor</p>
-                )}
-                {selectedFCOrder && (
-                  <div className={`mt-2 rounded-lg border p-3 text-xs ${fcOCBlocked ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300" : Math.abs(fcOCDifference) <= 0.01 ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300" : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"}`}>
-                    {fcOCCheckLoading
-                      ? "Verificando importes ya facturados..."
-                      : fcOCBlocked
-                        ? (selectedFCOrder.moneda !== fcForm.moneda ? `La OC está en ${selectedFCOrder.moneda} y el comprobante en ${fcForm.moneda}.` : !Number.isFinite(fcOCPreviouslyInvoiced.total) ? "No se pudo verificar la OC; no se permitirá guardar." : `El comprobante supera el saldo de la OC en ${formatCurrency(Math.abs(fcOCDifference), fcForm.moneda)}.`)
-                        : Math.abs(fcOCDifference) <= 0.01
-                          ? "Importe conciliado: comprobante y OC coinciden."
-                          : `Factura parcial: quedarán ${formatCurrency(fcOCDifference, fcForm.moneda)} pendientes en la OC.`}
-                  </div>
-                )}
-              </div>
-              )}
-
-              {/* Adjuntar PDF */}
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Adjuntar factura (PDF)</label>
-                <div className="mt-1 flex items-center gap-2">
-                  <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-sm text-zinc-500 hover:border-orange-400 hover:text-orange-500 dark:border-zinc-600 dark:text-zinc-400 dark:hover:border-orange-500">
-                    <Upload className="h-4 w-4" />
-                    {fcFile ? fcFile.name : "Seleccionar PDF"}
-                    <input type="file" accept=".pdf" className="hidden" onChange={(e) => setFcFile(e.target.files?.[0] || null)} />
-                  </label>
-                  {fcFile && (
-                    <button onClick={() => setFcFile(null)} className="text-zinc-400 hover:text-red-500"><X className="h-4 w-4" /></button>
-                  )}
-                </div>
-              </div>
-
-              {/* Notas */}
-              <div>
-                <label className="text-xs font-medium text-zinc-500">Notas</label>
-                <textarea value={fcForm.notas} onChange={(e) => setFcForm({ ...fcForm, notas: e.target.value })}
-                  rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Observaciones, condiciones de pago..." />
-              </div>
-
-              {/* Nuevo artículo desde FC */}
-              {fcForm.proveedor_id && (
-                <div className="border border-dashed border-zinc-300 dark:border-zinc-600 rounded-lg overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setNewArticleOpen(!newArticleOpen)}
-                    className="w-full flex items-center justify-between px-3 py-2 text-sm text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors"
-                  >
-                    <span className="flex items-center gap-1.5"><Plus className="h-3.5 w-3.5" /> Nuevo artículo desde esta factura</span>
-                    <span className="text-xs text-zinc-400">{newArticleOpen ? "▲" : "▼"}</span>
-                  </button>
-                  {newArticleOpen && (
-                    <div className="px-3 pb-3 space-y-2 border-t border-zinc-200 dark:border-zinc-700 pt-3">
-                      <p className="text-xs text-zinc-400">Se agrega a la lista de precios del proveedor seleccionado</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <input value={newArticle.codigo} onChange={(e) => setNewArticle({ ...newArticle, codigo: e.target.value })}
-                          placeholder="Código *" className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                        <input value={newArticle.categoria} onChange={(e) => setNewArticle({ ...newArticle, categoria: e.target.value })}
-                          placeholder="Categoría" className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                      </div>
-                      <input value={newArticle.descripcion} onChange={(e) => setNewArticle({ ...newArticle, descripcion: e.target.value })}
-                        placeholder="Descripción *" className="w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                      <div className="grid grid-cols-3 gap-2">
-                        <select value={newArticle.unidad} onChange={(e) => setNewArticle({ ...newArticle, unidad: e.target.value })}
-                          className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                          <option value="UN">UN</option>
-                          <option value="MT">MT</option>
-                          <option value="KG">KG</option>
-                          <option value="LT">LT</option>
-                          <option value="JG">JG</option>
-                        </select>
-                        <input type="number" step="0.01" value={newArticle.precio || ""} onChange={(e) => setNewArticle({ ...newArticle, precio: Number(e.target.value) })}
-                          placeholder="Precio" className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                        <button onClick={handleCreateArticle} disabled={newArticleSaving || !newArticle.codigo.trim() || !newArticle.descripcion.trim()}
-                          className="flex items-center justify-center gap-1 rounded-lg bg-emerald-500 px-2 py-1.5 text-xs font-medium text-white hover:bg-emerald-600 disabled:opacity-50 transition-colors">
-                          {newArticleSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />} Crear
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
-              <button onClick={() => setFcModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
-              <button onClick={handleCreateFC} disabled={fcSaving || fcOCCheckLoading || fcOCBlocked || !fcForm.proveedor_id || !fcForm.numero_factura.trim() || fcForm.subtotal <= 0}
-                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
-                {fcSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                Crear factura
-              </button>
-            </div>
-          </div>
-        </>
+        <CargarFacturaOC
+          sociedadId={sociedadActiva?.id || ""}
+          profileId={profile?.id || null}
+          showTipoToggle
+          ordenes={ocOptions.filter(o => o.proveedor_id && !["borrador", "cancelada"].includes(o.estado || "")).map(o => ({
+            id: o.id,
+            numero: o.numero,
+            proveedor_id: o.proveedor_id,
+            proveedor_nombre: o.proveedores?.razon_social || "Sin proveedor",
+            total: o.total,
+            moneda: o.moneda,
+            estado: o.estado || "",
+            fecha: o.fecha || "",
+          }))}
+          onClose={() => setFcModalOpen(false)}
+          onSuccess={() => { setFcModalOpen(false); fetchData(); }}
+        />
       )}
 
       {/* ── FC Detail Panel ── */}

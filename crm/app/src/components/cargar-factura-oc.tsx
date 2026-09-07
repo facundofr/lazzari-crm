@@ -57,6 +57,7 @@ interface Props {
   profileId: string | null;
   ordenes: OCParaVincular[];
   preselectedOCId?: string;
+  showTipoToggle?: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -68,7 +69,7 @@ const itemNeto = (item: FCItem) => (
 );
 // ── Component ────────────────────────────────────────────
 export default function CargarFacturaOC({
-  sociedadId, profileId, ordenes, preselectedOCId, onClose, onSuccess,
+  sociedadId, profileId, ordenes, preselectedOCId, showTipoToggle, onClose, onSuccess,
 }: Props) {
   const initialOC = preselectedOCId ? ordenes.find((oc) => oc.id === preselectedOCId) : undefined;
   // ── Form state ──
@@ -91,6 +92,8 @@ export default function CargarFacturaOC({
   const [percepciones, setPercepciones] = useState(0);
   const [notas, setNotas] = useState("");
   const [items, setItems] = useState<FCItem[]>([]);
+  const [tipoFC, setTipoFC] = useState<"mercaderia" | "solo_iva">("mercaderia");
+  const [costoReal, setCostoReal] = useState(0);
 
   // ── OC selection ──
   const [selectedOCIds, setSelectedOCIds] = useState<Set<string>>(new Set(preselectedOCId ? [preselectedOCId] : []));
@@ -424,13 +427,15 @@ export default function CargarFacturaOC({
     if (!proveedorId) { setError("Seleccioná un proveedor"); return; }
     if (!numeroFactura.trim()) { setError("Ingresá el número de factura"); return; }
     if (subtotal <= 0) { setError("El subtotal debe ser mayor a 0"); return; }
-    if (selectedOCIds.size === 0) { setError("Seleccioná al menos una orden de compra"); return; }
+    if (tipoFC === "mercaderia" && selectedOCIds.size === 0) { setError("Seleccioná al menos una orden de compra"); return; }
 
     setSaving(true);
     setError("");
 
     try {
-      await validateOCAlignmentLive();
+      if (tipoFC === "mercaderia" && selectedOCIds.size > 0) {
+        await validateOCAlignmentLive();
+      }
 
       // Insert FC
       const insertData: Record<string, unknown> = {
@@ -446,8 +451,8 @@ export default function CargarFacturaOC({
         total,
         moneda,
         estado: pagadaSinOP ? "pagada" : "pendiente_aprobacion",
-        tipo: "mercaderia",
-        solo_iva: false,
+        tipo: tipoFC,
+        solo_iva: tipoFC === "solo_iva",
         notas: notas || null,
         cae: cae || null,
         sociedad_id: sociedadId,
@@ -481,7 +486,7 @@ export default function CargarFacturaOC({
       }
 
       // Insert OC links (junction table)
-      if (selectedOCIds.size > 0 && fcData?.id) {
+      if (tipoFC === "mercaderia" && selectedOCIds.size > 0 && fcData?.id) {
         const links = Array.from(selectedOCIds).map(ocId => ({
           factura_compra_id: fcData.id,
           orden_compra_id: ocId,
@@ -510,6 +515,23 @@ export default function CargarFacturaOC({
               .eq("id", fcData.id);
           }
         }
+      }
+
+      // Create gasto_manual for solo_iva with costo_real
+      if (tipoFC === "solo_iva" && costoReal > 0 && fcData?.id) {
+        await (supabase as any).from("gastos_manuales").insert({
+          descripcion: `Compra crédito fiscal IVA — FC ${numeroFactura.trim()}`,
+          categoria: "Impuestos",
+          monto: costoReal,
+          moneda,
+          fecha,
+          proveedor_id: proveedorId,
+          sociedad_id: sociedadId,
+          created_by: profileId,
+          tipo_recurrencia: "eventual",
+          tipo_gasto: "Compra IVA",
+          medio_pago: "efectivo",
+        });
       }
 
       alert(pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");
@@ -584,6 +606,20 @@ export default function CargarFacturaOC({
               </div>
             )}
           </section>
+
+          {/* ── Tipo toggle (solo si showTipoToggle) ── */}
+          {showTipoToggle && (
+            <div className="flex gap-3">
+              <button type="button" onClick={() => setTipoFC("mercaderia")}
+                className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 flex-1 transition-colors ${tipoFC === "mercaderia" ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
+                <span className={`text-sm font-semibold ${tipoFC === "mercaderia" ? "text-orange-700 dark:text-orange-300" : "text-zinc-600 dark:text-zinc-300"}`}>Compra</span>
+              </button>
+              <button type="button" onClick={() => setTipoFC("solo_iva")}
+                className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 flex-1 transition-colors ${tipoFC === "solo_iva" ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
+                <span className={`text-sm font-semibold ${tipoFC === "solo_iva" ? "text-blue-700 dark:text-blue-300" : "text-zinc-600 dark:text-zinc-300"}`}>Solo IVA / contable</span>
+              </button>
+            </div>
+          )}
 
           {/* ── 2. Datos de la factura ── */}
           <section>
@@ -767,8 +803,19 @@ export default function CargarFacturaOC({
             )}
           </section>
 
+          {/* ── Costo real (solo_iva) ── */}
+          {tipoFC === "solo_iva" && (
+            <section>
+              <label className="block text-[10px] uppercase text-zinc-400 mb-1">Costo real del crédito fiscal (opcional)</label>
+              <input type="number" step="0.01" value={costoReal || ""} onChange={e => setCostoReal(Number(e.target.value))}
+                placeholder="Monto real pagado por el crédito fiscal"
+                className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
+              <p className="text-xs text-zinc-400 mt-1">Si se ingresa, se crea un gasto manual asociado.</p>
+            </section>
+          )}
+
           {/* ── 3. Vincular OCs ── */}
-          <section>
+          {tipoFC === "mercaderia" && <section>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-bold uppercase tracking-wider text-orange-600">3. Vincular órdenes de compra</h3><div className="relative w-72 max-w-full"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" /><input value={ocSearch} onChange={(e) => setOcSearch(e.target.value)} placeholder="Buscar OC, proveedor o estado..." className="w-full rounded-lg border border-zinc-200 bg-transparent py-1.5 pl-8 pr-2 text-xs dark:border-zinc-700" /></div></div>
             {ocsFiltered.length === 0 ? (
               <p className="text-sm text-zinc-400 italic">
@@ -819,7 +866,7 @@ export default function CargarFacturaOC({
                 )}
               </div>
             )}
-          </section>
+          </section>}
 
           {/* ── Notas ── */}
           <section>

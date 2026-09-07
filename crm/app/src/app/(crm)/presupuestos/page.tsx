@@ -456,7 +456,7 @@ export default function PresupuestosPage() {
   async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas", fecha?: string) {
     setCotizBnaLoading(true);
     try {
-      const params = new URLSearchParams({ modalidad });
+      const params = new URLSearchParams({ modalidad, force: "1" });
       if (fecha) params.set("fecha", fecha);
       const res = await fetch(`/api/cotizacion-bna?${params}`);
       if (res.ok) {
