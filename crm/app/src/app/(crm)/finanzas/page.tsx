@@ -185,6 +185,7 @@ interface OCOption {
 
 const emptyFCForm = {
   tipo_fc: "solo_iva" as "mercaderia" | "solo_iva",
+  tipo_comprobante: "FC A",
   numero_factura: "",
   proveedor_id: "",
   orden_compra_id: "",
@@ -446,6 +447,7 @@ export default function FinanzasPage() {
   const [opFile, setOpFile] = useState<File | null>(null);
   const [opProvCondicion, setOpProvCondicion] = useState<string | null>(null);
   const [opCondicionLoading, setOpCondicionLoading] = useState(false);
+  const [opManualGanancias, setOpManualGanancias] = useState(false); // user manually toggled retención
   // FC pendientes del proveedor para vincular a la OP
   interface OpFCPendiente { id: string; numero: string; fecha: string; total: number; subtotal: number; iva: number; percepciones: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number }
   const [opFCPendientes, setOpFCPendientes] = useState<OpFCPendiente[]>([]);
@@ -1309,7 +1311,9 @@ export default function FinanzasPage() {
   })();
 
   // 3. Auto-calcular retención ganancias según RG 830
+  // Si el usuario activó/desactivó manualmente, no sobreescribir
   useEffect(() => {
+    if (opManualGanancias) return; // respect manual override
     if (opProvCondicion === null || opBaseSinIVA <= 0) return;
     let aplica_ganancias = false;
     let retencion_ganancias_pct = 0;
@@ -1325,7 +1329,7 @@ export default function FinanzasPage() {
       }
     }
     setOpForm(prev => ({ ...prev, aplica_ganancias, retencion_ganancias_pct }));
-  }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase, opForm.proveedor_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase, opForm.proveedor_id, opManualGanancias]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── OP handlers ──
   function openOPModal(preloadProveedorId?: string) {
@@ -1333,6 +1337,7 @@ export default function FinanzasPage() {
     setOpError("");
     setOpFile(null);
     setOpProvCondicion(null);
+    setOpManualGanancias(false);
     if (preloadProveedorId) {
       const prov = proveedoresOptions.find(p => p.id === preloadProveedorId);
       setProveedorSearch(prov?.razon_social || "");
@@ -1903,6 +1908,7 @@ export default function FinanzasPage() {
         estado: "pendiente",
         solo_iva: !isMercaderia,
         tipo: fcForm.tipo_fc,
+        tipo_comprobante: fcForm.tipo_comprobante,
       };
       if (fcForm.orden_compra_id && isMercaderia) insertData.orden_compra_id = fcForm.orden_compra_id;
       if (fcForm.fecha_vencimiento) insertData.fecha_vencimiento = fcForm.fecha_vencimiento;
@@ -4256,7 +4262,7 @@ export default function FinanzasPage() {
                     {opForm.proveedor_id && (
                       <div className="mt-1 flex items-center gap-2 flex-wrap">
                         <Badge variant="success">{proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social}</Badge>
-                        <button onClick={() => { setOpForm({ ...opForm, proveedor_id: "" }); setProveedorSearch(""); setOpProvCondicion(null); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
+                        <button onClick={() => { setOpForm({ ...opForm, proveedor_id: "" }); setProveedorSearch(""); setOpProvCondicion(null); setOpManualGanancias(false); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
                         {opCondicionLoading && <span className="flex items-center gap-1 text-xs text-zinc-400"><Loader2 className="h-3 w-3 animate-spin" />AFIP…</span>}
                         {!opCondicionLoading && opProvCondicion !== null && (
                           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${opProvCondicion === "RI" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"}`}>
@@ -4355,7 +4361,7 @@ export default function FinanzasPage() {
                   <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3">
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-semibold text-violet-700 dark:text-violet-300 flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" />Ret. Ganancias</label>
-                      <button type="button" onClick={() => { const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id); setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? (prov?.alicuota_ganancias ?? retencionConfig.tasa_ganancias_ri) : 0 }); }}
+                      <button type="button" onClick={() => { const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id); setOpManualGanancias(true); setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? (prov?.alicuota_ganancias ?? retencionConfig.tasa_ganancias_ri) : 0 }); }}
                         className={`relative inline-flex h-5 w-9 items-center rounded-full ${opForm.aplica_ganancias ? "bg-violet-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
                         <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${opForm.aplica_ganancias ? "translate-x-4.5" : "translate-x-0.5"}`} />
                       </button>
@@ -4577,6 +4583,19 @@ export default function FinanzasPage() {
                   <FileText className={`h-5 w-5 ${fcForm.tipo_fc === "solo_iva" ? "text-blue-500" : "text-zinc-400"}`} />
                   <span className={`text-sm font-semibold ${fcForm.tipo_fc === "solo_iva" ? "text-blue-700 dark:text-blue-300" : "text-zinc-600 dark:text-zinc-300"}`}>Solo IVA / contable</span>
                 </button>
+              </div>
+
+              {/* Tipo de comprobante */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Tipo de comprobante</label>
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {["FC A", "FC B", "FC C", "FC M", "NC A", "NC B", "NC C", "ND A", "ND B"].map(tc => (
+                    <button key={tc} type="button" onClick={() => setFcForm({ ...fcForm, tipo_comprobante: tc })}
+                      className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${fcForm.tipo_comprobante === tc ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                      {tc}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {/* Proveedor selector with search */}
