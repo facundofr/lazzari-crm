@@ -3873,6 +3873,7 @@ export default function PresupuestosPage() {
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="presupuesto"
         sociedadId={sociedadActiva?.id}
+        userEmail={profile?.email ? `${profile.full_name || "Lazzari"} <${profile.email}>` : undefined}
         defaultTo={emailModal.to}
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}

@@ -13,13 +13,15 @@ import { Resend } from "resend";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId } = body as {
+    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId, documentType, userEmail } = body as {
       to: string[];
       subject: string;
       bodyHtml: string;
       pdfBase64: string;
       pdfFilename: string;
       sociedadId?: string;
+      documentType?: string;
+      userEmail?: string;
     };
 
     // Validate required fields
@@ -53,14 +55,19 @@ export async function POST(req: NextRequest) {
 
     const resend = new Resend(resendKey);
 
-    // Per-sociedad email sender
-    const SOCIEDAD_EMAIL: Record<string, string> = {
-      "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021": "Lazzari Soluciones Industriales <ventas@lazzari.com.ar>",
-      "fee94607-747a-4e87-ba24-aff9032f7a56": "Grupo LA <ventas@grupola.com.ar>",
-    };
-    const fromEmail = (sociedadId && SOCIEDAD_EMAIL[sociedadId])
-      || process.env.EMAIL_FROM
-      || "Lazzari Soluciones Industriales <ventas@lazzari.com.ar>";
+    // Email sender routing:
+    // - Facturas & OP → administracion@lazzari.com.ar (fixed)
+    // - PR & Remitos & OC → user's email (personal sender)
+    const ADMIN_EMAIL = "Lazzari Soluciones Industriales <administracion@lazzari.com.ar>";
+    const isAdminDoc = documentType === "factura" || documentType === "orden_pago";
+    let fromEmail: string;
+    if (isAdminDoc) {
+      fromEmail = ADMIN_EMAIL;
+    } else if (userEmail) {
+      fromEmail = userEmail;
+    } else {
+      fromEmail = process.env.EMAIL_FROM || ADMIN_EMAIL;
+    }
 
     const { data: emailResult, error: emailError } = await resend.emails.send({
       from: fromEmail,

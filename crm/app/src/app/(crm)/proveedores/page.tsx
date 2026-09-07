@@ -79,7 +79,11 @@ function mapSupabaseProveedor(row: Record<string, unknown>): Proveedor {
     updatedAt: row.updated_at as string,
     conceptoRetencionGanancias: (row.concepto_retencion_ganancias as string) ?? "",
     alicuotaGanancias: row.alicuota_ganancias != null ? Number(row.alicuota_ganancias) : null,
-  } as Proveedor & { conceptoRetencionGanancias: string; alicuotaGanancias: number | null };
+    exclusionRetencion: (row.exclusion_retencion as boolean) ?? false,
+    exclusionRetencionDesde: (row.exclusion_retencion_desde as string) ?? null,
+    exclusionRetencionHasta: (row.exclusion_retencion_hasta as string) ?? null,
+    exclusionRetencionCert: (row.exclusion_retencion_cert as string) ?? null,
+  } as Proveedor & { conceptoRetencionGanancias: string; alicuotaGanancias: number | null; exclusionRetencion: boolean; exclusionRetencionDesde: string | null; exclusionRetencionHasta: string | null; exclusionRetencionCert: string | null };
 }
 
 function mapSupabaseLista(row: Record<string, unknown>): ListaPrecios {
@@ -144,6 +148,10 @@ const emptyForm = {
   clasificacion_nota: "",
   concepto_retencion_ganancias: "" as string,
   alicuota_ganancias: null as number | null,
+  exclusion_retencion: false,
+  exclusion_retencion_desde: null as string | null,
+  exclusion_retencion_hasta: null as string | null,
+  exclusion_retencion_cert: null as string | null,
 };
 
 export default function ProveedoresPage() {
@@ -391,6 +399,10 @@ export default function ProveedoresPage() {
       clasificacion_nota: p.clasificacionNota ?? "",
       concepto_retencion_ganancias: (p as any).conceptoRetencionGanancias ?? "",
       alicuota_ganancias: (p as any).alicuotaGanancias ?? null,
+      exclusion_retencion: (p as any).exclusionRetencion ?? false,
+      exclusion_retencion_desde: (p as any).exclusionRetencionDesde ?? null,
+      exclusion_retencion_hasta: (p as any).exclusionRetencionHasta ?? null,
+      exclusion_retencion_cert: (p as any).exclusionRetencionCert ?? null,
     });
     setFormError("");
     setModalOpen(true);
@@ -945,6 +957,35 @@ export default function ProveedoresPage() {
                     <p className="text-[10px] text-zinc-400 mt-0.5">Se auto-completa al consultar CUIT en ARCA</p>
                   </div>
                 </div>
+              </div>
+              {/* Exclusión de retención */}
+              <div className="col-span-2 flex items-start gap-4 mt-2">
+                <div className="flex items-center gap-2 pt-1">
+                  <button type="button" onClick={() => setForm({ ...form, exclusion_retencion: !form.exclusion_retencion })}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full ${form.exclusion_retencion ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
+                    <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${form.exclusion_retencion ? "translate-x-4.5" : "translate-x-0.5"}`} />
+                  </button>
+                  <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Excluido de retención</span>
+                </div>
+                {form.exclusion_retencion && (
+                  <div className="flex-1 grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[10px] font-medium text-zinc-500">Desde</label>
+                      <input type="date" value={form.exclusion_retencion_desde || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_desde: e.target.value || null })}
+                        className="mt-0.5 w-full rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-zinc-500">Hasta</label>
+                      <input type="date" value={form.exclusion_retencion_hasta || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_hasta: e.target.value || null })}
+                        className="mt-0.5 w-full rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-zinc-500">Nro. certificado</label>
+                      <input value={form.exclusion_retencion_cert || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_cert: e.target.value || null })}
+                        placeholder="Nro. cert." className="mt-0.5 w-full rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    </div>
+                  </div>
+                )}
               </div>
               {/* Clasificacion */}
               <div className="col-span-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">

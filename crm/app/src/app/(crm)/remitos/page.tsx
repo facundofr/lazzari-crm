@@ -2345,6 +2345,7 @@ export default function RemitosPage() {
         onClose={() => setEmailModalOpen(false)}
         documentType="remito"
         sociedadId={sociedadActiva?.id}
+        userEmail={profile?.email ? `${profile.full_name || "Lazzari"} <${profile.email}>` : undefined}
         defaultTo={emailModalData.to}
         defaultSubject={emailModalData.subject}
         defaultBody={emailModalData.body}

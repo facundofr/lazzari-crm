@@ -35,7 +35,7 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   retencion_suss: { label: "Ret. SUSS", variant: "warning", icon: Wallet },
 };
 
-type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion";
+type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones";
 
 // ── Echeq types ──
 interface EcheqRow {
@@ -101,6 +101,10 @@ interface ProveedorOption {
   condicion_iva?: string | null;
   alicuota_ganancias?: number | null;
   concepto_retencion_ganancias?: string | null;
+  exclusion_retencion?: boolean;
+  exclusion_retencion_desde?: string | null;
+  exclusion_retencion_hasta?: string | null;
+  exclusion_retencion_cert?: string | null;
 }
 
 interface OrdenPagoRow {
@@ -448,6 +452,7 @@ export default function FinanzasPage() {
   const [opProvCondicion, setOpProvCondicion] = useState<string | null>(null);
   const [opCondicionLoading, setOpCondicionLoading] = useState(false);
   const [opManualGanancias, setOpManualGanancias] = useState(false); // user manually toggled retención
+  const [opMontoRetencionManual, setOpMontoRetencionManual] = useState<number | null>(null); // manual override of retention amount
   // FC pendientes del proveedor para vincular a la OP
   interface OpFCPendiente { id: string; numero: string; fecha: string; total: number; subtotal: number; iva: number; percepciones: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number }
   const [opFCPendientes, setOpFCPendientes] = useState<OpFCPendiente[]>([]);
@@ -853,7 +858,7 @@ export default function FinanzasPage() {
 
         // Fetch proveedores list for OP/gastos selectors
         try {
-          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, alicuota_ganancias, concepto_retencion_ganancias" as any).order("razon_social");
+          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, alicuota_ganancias, concepto_retencion_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, exclusion_retencion_cert" as any).order("razon_social");
           if (sociedadActiva?.id) qProv = qProv.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: provData } = await qProv;
           if (provData) setProveedoresOptions(provData as unknown as ProveedorOption[]);
@@ -1317,6 +1322,16 @@ export default function FinanzasPage() {
     if (opProvCondicion === null || opBaseSinIVA <= 0) return;
     let aplica_ganancias = false;
     let retencion_ganancias_pct = 0;
+    const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
+    // Check exclusion certificate validity
+    const hoy = new Date().toISOString().slice(0, 10);
+    const excluido = prov?.exclusion_retencion
+      && (!prov.exclusion_retencion_desde || prov.exclusion_retencion_desde <= hoy)
+      && (!prov.exclusion_retencion_hasta || prov.exclusion_retencion_hasta >= hoy);
+    if (excluido) {
+      setOpForm(prev => ({ ...prev, aplica_ganancias: false, retencion_ganancias_pct: 0 }));
+      return;
+    }
     // RG 830: solo RI son sujetos de retención. Monotributo/Exento/CF = no retener.
     if (opProvCondicion === "RI" && retencionConfig.aplica_ganancias) {
       // Art. 26: acumular bases sin IVA del mes + esta OP
@@ -1324,7 +1339,6 @@ export default function FinanzasPage() {
       if (acumuladoMensual >= retencionConfig.minimo_ganancias) {
         aplica_ganancias = true;
         // Usar alícuota específica del proveedor (RG 830 por actividad), fallback a tasa global
-        const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
         retencion_ganancias_pct = prov?.alicuota_ganancias ?? retencionConfig.tasa_ganancias_ri;
       }
     }
@@ -1338,6 +1352,7 @@ export default function FinanzasPage() {
     setOpFile(null);
     setOpProvCondicion(null);
     setOpManualGanancias(false);
+    setOpMontoRetencionManual(null);
     if (preloadProveedorId) {
       const prov = proveedoresOptions.find(p => p.id === preloadProveedorId);
       setProveedorSearch(prov?.razon_social || "");
@@ -1376,9 +1391,12 @@ export default function FinanzasPage() {
   })();
 
   // Art. 29: si la retención es menor al mínimo, no retener
-  const opRetencionGanancias = opRetencionGananciaBruta < retencionConfig.minimo_retencion_ganancias
-    ? 0
-    : Math.round(opRetencionGananciaBruta * 100) / 100;
+  // Allow manual override of the final amount
+  const opRetencionGanancias = opMontoRetencionManual !== null
+    ? Math.round(opMontoRetencionManual * 100) / 100
+    : opRetencionGananciaBruta < retencionConfig.minimo_retencion_ganancias
+      ? 0
+      : Math.round(opRetencionGananciaBruta * 100) / 100;
   const opNetoAPagar = opMontoBruto - opRetencionGanancias;
   const opTotalMedios = opMedios.reduce((s, m) => s + m.monto, 0);
   const opDiferencia = opNetoAPagar - opTotalMedios;
@@ -2544,6 +2562,7 @@ export default function FinanzasPage() {
     { id: "lineas_credito", label: "Crédito" },
     // { id: "gastos_fijos", label: "G. Fijos" },  // OCULTO: funcionalidad en revisión
     { id: "objetivos", label: "Objetivos" },
+    { id: "retenciones", label: "Retenciones" },
   ];
 
   if (loading) {
@@ -4075,6 +4094,47 @@ export default function FinanzasPage() {
             </div>
           </>
         )}
+        {/* ── Retenciones tab ── */}
+        {tab === "retenciones" && (
+          <div className="space-y-4">
+            <Card>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-violet-500" /> Retenciones practicadas</h3>
+                <div className="flex items-center gap-2">
+                  <input type="month" id="sicore-desde" defaultValue={new Date().toISOString().slice(0, 7)}
+                    className="rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  <button onClick={() => {
+                    const mes = (document.getElementById("sicore-desde") as HTMLInputElement)?.value;
+                    if (!mes || !sociedadActiva?.id) return;
+                    const desde = `${mes}-01`;
+                    const y = Number(mes.split("-")[0]); const m = Number(mes.split("-")[1]);
+                    const hasta = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
+                    window.open(`/api/sicore?desde=${desde}&hasta=${hasta}&sociedad_id=${sociedadActiva.id}`, "_blank");
+                  }} className="flex items-center gap-1.5 rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-600 transition-colors">
+                    <Download className="h-3 w-3" /> Exportar SICORE
+                  </button>
+                </div>
+              </div>
+              <DataTable
+                data={ordenesPago.filter(op => (op as any).retencion_ganancias_monto > 0)}
+                columns={[
+                  { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-xs">{formatDate(row.fecha)}</span> },
+                  { key: "numero", label: "OP", sortable: true, render: (row) => <span className="font-mono text-xs font-medium">{row.numero}</span> },
+                  { key: "proveedor", label: "Proveedor", sortable: true, render: (row) => <span className="text-xs">{(row as any).proveedor_razon_social || row.proveedor_id}</span> },
+                  { key: "base_retencion_ganancias", label: "Base", sortable: true, render: (row) => <span className="font-mono text-xs">{formatCurrency((row as any).base_retencion_ganancias || 0, row.moneda as "ARS" | "USD")}</span> },
+                  { key: "retencion_ganancias_pct", label: "%", sortable: true, render: (row) => <span className="text-xs">{(row as any).retencion_ganancias_pct}%</span> },
+                  { key: "retencion_ganancias_monto", label: "Monto retenido", sortable: true, render: (row) => <span className="font-mono text-xs font-bold text-violet-600">{formatCurrency((row as any).retencion_ganancias_monto || 0, row.moneda as "ARS" | "USD")}</span> },
+                ]}
+              />
+              {ordenesPago.filter(op => (op as any).retencion_ganancias_monto > 0).length === 0 && (
+                <div className="text-center py-8">
+                  <ShieldCheck className="mx-auto h-8 w-8 text-zinc-300 dark:text-zinc-600" />
+                  <p className="mt-2 text-sm text-zinc-500">No hay retenciones practicadas</p>
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
         {/* ── Facturación (embedded) ── */}
         {tab === "facturacion" && (
           <Suspense fallback={<div className="flex items-center justify-center py-24"><Loader2 className="h-8 w-8 animate-spin text-zinc-400" /></div>}>
@@ -4347,40 +4407,65 @@ export default function FinanzasPage() {
                       <span className="font-mono font-bold text-orange-600">{formatCurrency(opMontoBruto, opForm.moneda)}</span>
                     </div>
                   )}
-                  {opMonthlyBase > 0 && opProvCondicion === "RI" && (
-                    <p className="text-xs text-violet-600 dark:text-violet-400 mt-1">
-                      Acumulado mes (base sin IVA): {formatCurrency(opMonthlyBase, opForm.moneda)} — Con esta OP: {formatCurrency(opMonthlyBase + opBaseSinIVA, opForm.moneda)}
-                      {(opMonthlyBase + opBaseSinIVA) >= retencionConfig.minimo_ganancias && " → Aplica retención"}
-                      {opMonthlyRetenido > 0 && ` (ya retenido: ${formatCurrency(opMonthlyRetenido, opForm.moneda)})`}
-                    </p>
-                  )}
                 </div>
               )}
 
               {/* ── Retención Ganancias ── */}
               {opMontoBruto > 0 && (
                 <div>
-                  <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3">
-                    <div className="flex items-center justify-between mb-1">
+                  <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
                       <label className="text-xs font-semibold text-violet-700 dark:text-violet-300 flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5" />Ret. Ganancias</label>
-                      <button type="button" onClick={() => { const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id); setOpManualGanancias(true); setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? (prov?.alicuota_ganancias ?? retencionConfig.tasa_ganancias_ri) : 0 }); }}
+                      <button type="button" onClick={() => { const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id); setOpManualGanancias(true); setOpMontoRetencionManual(null); setOpForm({ ...opForm, aplica_ganancias: !opForm.aplica_ganancias, retencion_ganancias_pct: !opForm.aplica_ganancias ? (prov?.alicuota_ganancias ?? retencionConfig.tasa_ganancias_ri) : 0 }); }}
                         className={`relative inline-flex h-5 w-9 items-center rounded-full ${opForm.aplica_ganancias ? "bg-violet-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
                         <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${opForm.aplica_ganancias ? "translate-x-4.5" : "translate-x-0.5"}`} />
                       </button>
                     </div>
+                    {/* Exclusion badge */}
+                    {(() => { const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
+                      const hoy = new Date().toISOString().slice(0, 10);
+                      const excluido = prov?.exclusion_retencion && (!prov.exclusion_retencion_desde || prov.exclusion_retencion_desde <= hoy) && (!prov.exclusion_retencion_hasta || prov.exclusion_retencion_hasta >= hoy);
+                      return excluido ? (
+                        <div className="flex items-center gap-1.5 rounded bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 px-2 py-1">
+                          <ShieldCheck className="h-3 w-3 text-emerald-500" />
+                          <span className="text-[10px] text-emerald-700 dark:text-emerald-300">Excluido de retención{prov.exclusion_retencion_hasta ? ` hasta ${prov.exclusion_retencion_hasta}` : ""}{prov.exclusion_retencion_cert ? ` — Cert: ${prov.exclusion_retencion_cert}` : ""}</span>
+                        </div>
+                      ) : null;
+                    })()}
+                    {/* Acumulado mensual */}
+                    {opProvCondicion === "RI" && retencionConfig.aplica_ganancias && (
+                      <div className="text-[10px] text-violet-600 dark:text-violet-400 space-y-0.5">
+                        <div className="flex justify-between"><span>Acumulado mes (base sin IVA):</span><span className="font-mono">{formatCurrency(opMonthlyBase, opForm.moneda)}</span></div>
+                        <div className="flex justify-between"><span>+ Esta OP:</span><span className="font-mono">{formatCurrency(opBaseSinIVA, opForm.moneda)}</span></div>
+                        <div className="flex justify-between font-semibold"><span>Total acumulado:</span><span className="font-mono">{formatCurrency(opMonthlyBase + opBaseSinIVA, opForm.moneda)}</span></div>
+                        <div className="flex justify-between"><span>Mínimo no imponible:</span><span className="font-mono">{formatCurrency(retencionConfig.minimo_ganancias, opForm.moneda)}</span></div>
+                        {opMonthlyRetenido > 0 && <div className="flex justify-between"><span>Ya retenido en el mes:</span><span className="font-mono">{formatCurrency(opMonthlyRetenido, opForm.moneda)}</span></div>}
+                      </div>
+                    )}
                     {opForm.aplica_ganancias && (
-                      <div>
+                      <div className="space-y-2">
                         <div className="flex items-center gap-2">
-                          <input type="number" step="0.5" value={opForm.retencion_ganancias_pct || ""} onChange={(e) => setOpForm({ ...opForm, retencion_ganancias_pct: Number(e.target.value) })}
+                          <input type="number" step="0.5" value={opForm.retencion_ganancias_pct || ""} onChange={(e) => { setOpForm({ ...opForm, retencion_ganancias_pct: Number(e.target.value) }); setOpMontoRetencionManual(null); }}
                             className="w-20 rounded border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                           <span className="text-xs text-zinc-400">%</span>
                           {[0.25, 2, 3, 6, 28].map(pct => (
-                            <button key={pct} type="button" onClick={() => setOpForm({ ...opForm, retencion_ganancias_pct: pct })}
+                            <button key={pct} type="button" onClick={() => { setOpForm({ ...opForm, retencion_ganancias_pct: pct }); setOpMontoRetencionManual(null); }}
                               className={`rounded px-1.5 py-0.5 text-xs font-medium ${opForm.retencion_ganancias_pct === pct ? "bg-violet-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>{pct}%</button>
                           ))}
                         </div>
+                        {/* Editable retention amount */}
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-zinc-500">Monto retención:</span>
+                          <input type="number" step="0.01"
+                            value={opMontoRetencionManual !== null ? opMontoRetencionManual : (opRetencionGananciaBruta < retencionConfig.minimo_retencion_ganancias ? 0 : Math.round(opRetencionGananciaBruta * 100) / 100)}
+                            onChange={(e) => setOpMontoRetencionManual(Number(e.target.value))}
+                            className="w-32 rounded border border-zinc-200 px-2 py-1.5 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          {opMontoRetencionManual !== null && (
+                            <button type="button" onClick={() => setOpMontoRetencionManual(null)} className="text-[10px] text-violet-500 hover:text-violet-700 underline">auto</button>
+                          )}
+                        </div>
                         {(() => { const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id); return prov?.concepto_retencion_ganancias ? (
-                          <p className="text-[10px] text-violet-500 mt-1">RG 830: {prov.concepto_retencion_ganancias.replace(/_/g, " ")} → {prov.alicuota_ganancias}% inscripto</p>
+                          <p className="text-[10px] text-violet-500">RG 830: {prov.concepto_retencion_ganancias.replace(/_/g, " ")} → {prov.alicuota_ganancias}% inscripto</p>
                         ) : null; })()}
                       </div>
                     )}

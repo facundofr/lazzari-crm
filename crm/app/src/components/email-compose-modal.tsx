@@ -23,6 +23,8 @@ interface EmailComposeModalProps {
   onSuccess?: () => void | Promise<void>;
   /** Sociedad ID for sender email selection */
   sociedadId?: string;
+  /** User email — used as sender for PR/remitos */
+  userEmail?: string;
 }
 
 const DOC_LABELS: Record<EmailDocumentType, string> = {
@@ -44,6 +46,7 @@ export function EmailComposeModal({
   generatePdf,
   onSuccess,
   sociedadId,
+  userEmail,
 }: EmailComposeModalProps) {
   const [to, setTo] = useState(defaultTo);
   const [subject, setSubject] = useState(defaultSubject);
@@ -103,6 +106,8 @@ export function EmailComposeModal({
           pdfBase64,
           pdfFilename: pdfFilename || `${DOC_LABELS[documentType]}.pdf`,
           sociedadId,
+          documentType,
+          userEmail,
         }),
       });
 
