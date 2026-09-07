@@ -120,6 +120,7 @@ export default function CargarFacturaOC({
     ), 0) * 100) / 100;
   }, [items, subtotal, ivaPorcentaje]);
   const total = useMemo(() => Math.round((subtotal + iva + percepciones) * 100) / 100, [subtotal, iva, percepciones]);
+  const totalSinPercepciones = useMemo(() => Math.round((subtotal + iva) * 100) / 100, [subtotal, iva]);
 
   // Filter OCs by selected proveedor
   const ocsFiltered = useMemo(() => {
@@ -146,7 +147,7 @@ export default function CargarFacturaOC({
   const ocTotal = useMemo(() => roundMoney(selectedOCs.reduce((sum, oc) => sum + Number(oc.total || 0), 0)), [selectedOCs]);
   const alreadyInvoiced = useMemo(() => roundMoney(linkedInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0)), [linkedInvoices]);
   const remainingOC = roundMoney(ocTotal - alreadyInvoiced);
-  const alignmentDifference = roundMoney(remainingOC - total);
+  const alignmentDifference = roundMoney(remainingOC - totalSinPercepciones);
   const alignmentBlocked = selectedOCs.length > 0 && (
     Boolean(alignmentError)
     || ocCurrencies.size !== 1
@@ -159,11 +160,11 @@ export default function CargarFacturaOC({
     const [{ data: junctionLinks, error: junctionError }, { data: legacyInvoices, error: legacyError }] = await Promise.all([
       (supabase as any)
         .from("factura_compra_ocs")
-        .select("factura_compra_id, facturas_compra(id, estado, total, moneda)")
+        .select("factura_compra_id, facturas_compra(id, estado, total, percepciones, moneda)")
         .in("orden_compra_id", ids),
       (supabase as any)
         .from("facturas_compra")
-        .select("id, estado, total, moneda")
+        .select("id, estado, total, percepciones, moneda")
         .in("orden_compra_id", ids),
     ]);
     if (junctionError || legacyError) {
@@ -174,11 +175,11 @@ export default function CargarFacturaOC({
     for (const link of junctionLinks || []) {
       const raw = Array.isArray(link.facturas_compra) ? link.facturas_compra[0] : link.facturas_compra;
       if (!raw || raw.estado === "anulada" || byId.has(raw.id)) continue;
-      byId.set(raw.id, { total: Number(raw.total || 0), moneda: raw.moneda || "ARS" });
+      byId.set(raw.id, { total: Number(raw.total || 0) - Number(raw.percepciones || 0), moneda: raw.moneda || "ARS" });
     }
     for (const raw of legacyInvoices || []) {
       if (!raw || raw.estado === "anulada" || byId.has(raw.id)) continue;
-      byId.set(raw.id, { total: Number(raw.total || 0), moneda: raw.moneda || "ARS" });
+      byId.set(raw.id, { total: Number(raw.total || 0) - Number(raw.percepciones || 0), moneda: raw.moneda || "ARS" });
     }
     return Array.from(byId.values());
   }
@@ -412,10 +413,10 @@ export default function CargarFacturaOC({
     const freshOCTotal = roundMoney(freshOCs.reduce((sum: number, oc: any) => sum + Number(oc.total || 0), 0));
     const previousTotal = roundMoney(previousInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0));
     const remaining = roundMoney(freshOCTotal - previousTotal);
-    if (total - remaining > 0.01) {
-      throw new Error(`El comprobante supera en ${formatCurrency(total - remaining, moneda)} el saldo de las OC. Corregí precios, descuentos o IVA antes de guardar.`);
+    if (totalSinPercepciones - remaining > 0.01) {
+      throw new Error(`El comprobante supera en ${formatCurrency(totalSinPercepciones - remaining, moneda)} el saldo de las OC. Corregí precios, descuentos o IVA antes de guardar.`);
     }
-    return { remaining, partial: remaining - total > 0.01 };
+    return { remaining, partial: remaining - totalSinPercepciones > 0.01 };
   }
 
   // ── Save ──
