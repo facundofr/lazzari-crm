@@ -468,14 +468,8 @@ export default function RemitosPage() {
   }
 
   async function openCreateModal() {
-    const maxNum = remitos.reduce((max, r) => {
-      const parts = r.numero?.split("-");
-      const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
-      return n > max ? n : max;
-    }, 999);
-    const autoNumero = `R-0001-${String(maxNum + 1).padStart(8, "0")}`;
     setCreateForm({
-      numero: autoNumero,
+      numero: "",
       cliente_id: "",
       fecha: todayAR(),
       observaciones: "",
@@ -514,7 +508,7 @@ export default function RemitosPage() {
         .from("presupuestos")
         .select("id, numero, subtotal, total, cliente_id, estado")
         .eq("cliente_id", clienteId)
-        .eq("estado", "aprobado")
+        .in("estado", ["aprobado", "facturar", "remitido"])
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id", sociedadActiva.id);
       const { data, error } = await prQ;
@@ -624,7 +618,6 @@ export default function RemitosPage() {
 
   async function handleCreateRemito() {
     setCreateError("");
-    if (!createForm.numero.trim()) { setCreateError("El número de remito es obligatorio"); return; }
     if (!createForm.cliente_id) { setCreateError("Seleccioná un cliente"); return; }
     if (!createForm.fecha) { setCreateError("La fecha es obligatoria"); return; }
 
@@ -648,26 +641,18 @@ export default function RemitosPage() {
         groups.set("__none", validItems);
       }
 
-      // Calculate next number
-      let nextNum = remitos.reduce((max, r) => {
-        const parts = r.numero?.split("-");
-        const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
-        return n > max ? n : max;
-      }, 999) + 1;
-
       const groupEntries = [...groups.entries()];
       for (let gi = 0; gi < groupEntries.length; gi++) {
         const [sucKey, groupItems] = groupEntries[gi];
         const sucursalId = sucKey === "__none" ? null : sucKey;
         const sucNombre = sucursalId ? clienteSucursales.find(s => s.id === sucursalId)?.nombre : null;
-        const numero = gi === 0 ? createForm.numero : `R-0001-${String(nextNum).padStart(8, "0")}`;
 
         const obs = groupEntries.length > 1 && sucNombre
           ? [createForm.observaciones, `Sucursal: ${sucNombre}`].filter(Boolean).join(" — ")
           : createForm.observaciones;
 
         const { data: remitoData, error } = await (supabase.from("remitos") as any).insert({
-          numero,
+          numero: createForm.numero.trim() || null,
           cliente_id: createForm.cliente_id,
           fecha: createForm.fecha,
           observaciones: obs,
@@ -698,7 +683,6 @@ export default function RemitosPage() {
           setCreateError(`No se pudieron guardar los items del remito: ${itemsErr.message}`);
           return;
         }
-        if (gi > 0) nextNum++;
       }
 
       setCreateModalOpen(false);
@@ -722,7 +706,7 @@ export default function RemitosPage() {
       let iaQ = (supabase as any)
         .from("presupuestos")
         .select("id, numero, cliente_id")
-        .eq("estado", "aprobado")
+        .in("estado", ["aprobado", "facturar", "remitido"])
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) iaQ = iaQ.eq("sociedad_id", sociedadActiva.id);
       const { data: headers, error: headersError } = await iaQ;
@@ -776,11 +760,6 @@ export default function RemitosPage() {
     setIaError("");
     setIaSuccess("");
     try {
-      let idx = remitos.reduce((max, r) => {
-        const parts = r.numero?.split("-");
-        const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
-        return n > max ? n : max;
-      }, 999) + 1;
       let createdCount = 0;
       const generationErrors: string[] = [];
 
@@ -795,9 +774,6 @@ export default function RemitosPage() {
       for (const pId of selectedPresupuestos) {
         const p = presupuestosIA.find((x) => x.id === pId);
         if (!p) continue;
-        const numero = `R-0001-${String(idx).padStart(8, "0")}`;
-        idx++;
-
         if (alreadyGenerated.has(p.id)) {
           generationErrors.push(`${p.numero}: ya tiene un remito generado`);
           continue;
@@ -820,7 +796,7 @@ export default function RemitosPage() {
         const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
 
         const { data: remitoData, error: rErr } = await (supabase.from("remitos") as any).insert({
-          numero,
+          numero: null,
           cliente_id: p.cliente_id,
           fecha: todayAR(),
           observaciones: `Generado desde presupuesto ${p.numero}`,
@@ -951,23 +927,15 @@ export default function RemitosPage() {
         await (supabase as any).from("remito_items").insert(keepRows);
       }
 
-      // Calculate next number
-      let nextNum = remitos.reduce((max, r) => {
-        const parts = r.numero?.split("-");
-        const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
-        return n > max ? n : max;
-      }, 999) + 1;
-
       // Create new remitos for remaining groups
       const createdRemitos: string[] = [];
       for (const [key, assignments] of groups) {
         if (key === keepKey) continue;
         const sucursalId = key === "__none" ? null : key;
         const sucNombre = splitSucursales.find(s => s.id === key)?.nombre || "";
-        const numero = `R-0001-${String(nextNum).padStart(8, "0")}`;
 
         const { data: newRemito, error: rErr } = await (supabase.from("remitos") as any).insert({
-          numero,
+          numero: null,
           cliente_id: detailRemito.cliente_id,
           fecha: detailRemito.fecha,
           observaciones: `Dividido de ${detailRemito.numero}${sucNombre ? ` — Suc: ${sucNombre}` : ""}`,
@@ -991,9 +959,10 @@ export default function RemitosPage() {
             presupuesto_item_id: a.presupuesto_item_id || null,
           }));
           await (supabase as any).from("remito_items").insert(newItems);
-          createdRemitos.push(numero);
+          // Fetch the auto-generated numero
+          const { data: created } = await (supabase as any).from("remitos").select("numero").eq("id", newRemito.id).single();
+          createdRemitos.push(created?.numero || newRemito.id);
         }
-        nextNum++;
       }
 
       setSplitModalOpen(false);

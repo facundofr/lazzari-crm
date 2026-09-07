@@ -1780,29 +1780,10 @@ export default function PresupuestosPage() {
         .single();
       const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
 
-      // Get next remito number — parse max numeric suffix across ALL formats
-      const { data: allRemitos } = await supabase
-        .from("remitos")
-        .select("numero")
-        .order("created_at", { ascending: false })
-        .limit(100);
-      let maxNum = 0;
-      if (allRemitos) {
-        for (const r of allRemitos) {
-          const parts = r.numero?.split("-");
-          if (parts) {
-            const lastPart = parseInt(parts[parts.length - 1]);
-            if (!isNaN(lastPart) && lastPart > maxNum) maxNum = lastPart;
-          }
-        }
-      }
-      const nextNum = maxNum + 1;
-      const numero = `R-0001-${String(nextNum).padStart(8, "0")}`;
-
       const { data: remitoData, error: remitoErr } = await (supabase as any)
         .from("remitos")
         .insert({
-          numero,
+          numero: null,
           cliente_id: pr.clienteId,
           fecha: todayAR(),
           observaciones: `Generado desde presupuesto ${pr.numero}`,
@@ -1813,7 +1794,7 @@ export default function PresupuestosPage() {
           oc_cliente: pr.ocCliente || null,
           valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
         })
-        .select("id")
+        .select("id, numero")
         .single();
 
       if (remitoErr || !remitoData) {
@@ -1847,7 +1828,7 @@ export default function PresupuestosPage() {
 
       setRemitidoIds((prev) => new Set([...prev, pr.id]));
       setRemitarModal(null);
-      toast.success(`Remito ${numero} creado con ${itemsToRemit.length} items`);
+      toast.success(`Remito ${remitoData.numero || ""} creado con ${itemsToRemit.length} items`);
       await fetchPresupuestos();
     } catch (err) {
       console.error("Error creating remito:", err);
