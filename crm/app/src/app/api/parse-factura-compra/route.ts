@@ -48,6 +48,7 @@ Reglas:
 - El número de factura debe incluir punto de venta si aparece (ej: 0001-00012345).
 - Si hay percepciones (IIBB, ganancias, IVA), sumalas en el campo "percepciones".
 - La moneda por defecto es "ARS" salvo que se indique lo contrario.
+- Si el documento es una NOTA DE PEDIDO, COTIZACIÓN, PRESUPUESTO o PROFORMA (no es factura fiscal), devolvé tipo_comprobante como "Nota de Pedido".
 - Devolvé SOLO el JSON, sin texto adicional ni markdown.`;
 
 export async function POST(request: NextRequest) {

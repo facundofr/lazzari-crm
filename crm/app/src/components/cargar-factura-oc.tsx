@@ -114,6 +114,7 @@ export default function CargarFacturaOC({
   const [linkedInvoices, setLinkedInvoices] = useState<{ total: number; moneda: string }[]>([]);
   const [alignmentLoading, setAlignmentLoading] = useState(false);
   const [alignmentError, setAlignmentError] = useState("");
+  const [overrideOC, setOverrideOC] = useState(false);
 
   // ── Computed ──
   const iva = useMemo(() => {
@@ -151,12 +152,12 @@ export default function CargarFacturaOC({
   const alreadyInvoiced = useMemo(() => roundMoney(linkedInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0)), [linkedInvoices]);
   const remainingOC = roundMoney(ocTotal - alreadyInvoiced);
   const alignmentDifference = roundMoney(remainingOC - totalSinPercepciones);
+  const currencyMismatch = ocCurrencies.size !== 1 || !ocCurrencies.has(moneda) || linkedInvoices.some((invoice) => invoice.moneda !== moneda);
+  const exceedsOC = alignmentDifference < -0.01;
   const alignmentBlocked = selectedOCs.length > 0 && (
     Boolean(alignmentError)
-    || ocCurrencies.size !== 1
-    || !ocCurrencies.has(moneda)
-    || linkedInvoices.some((invoice) => invoice.moneda !== moneda)
-    || alignmentDifference < -0.01
+    || currencyMismatch
+    || (exceedsOC && !overrideOC)
   );
 
   async function fetchLinkedInvoicesForOCs(ids: string[]) {
@@ -323,9 +324,15 @@ export default function CargarFacturaOC({
 
       const d = json.data;
 
+      // Detect nota de pedido → auto-set tipo manual + IVA 0%
+      const rawTipo = (d.tipo_comprobante || "").toUpperCase().trim();
+      const isNotaPedido = /NOTA\s*DE\s*PEDIDO|^NP$|^N\.?\s?P\.?$/.test(rawTipo) || (!d.cae && /PEDIDO|PRESUPUESTO|COTIZACI[OÓ]N|PROFORMA/.test(rawTipo));
+
       // Auto-fill form
-      if (d.tipo_comprobante) {
-        const tc = d.tipo_comprobante.toUpperCase().trim();
+      if (isNotaPedido) {
+        setTipoComprobante("FC Manual");
+      } else if (d.tipo_comprobante) {
+        const tc = rawTipo;
         if (tc === "A" || tc === "FACTURA A") setTipoComprobante("FC A");
         else if (tc === "B" || tc === "FACTURA B") setTipoComprobante("FC B");
         else if (tc === "C" || tc === "FACTURA C") setTipoComprobante("FC C");
@@ -337,8 +344,8 @@ export default function CargarFacturaOC({
       if (d.cae) setCae(d.cae);
       if (d.moneda) setMoneda(d.moneda === "USD" ? "USD" : "ARS");
       if (d.subtotal) setSubtotal(Number(d.subtotal) || 0);
-      if (d.iva_porcentaje != null) setIvaPorcentaje(Number(d.iva_porcentaje) || 21);
-      if (d.percepciones) setPercepciones(Number(d.percepciones) || 0);
+      setIvaPorcentaje(isNotaPedido ? 0 : (d.iva_porcentaje != null ? (Number(d.iva_porcentaje) || 0) : 21));
+      if (d.percepciones && !isNotaPedido) setPercepciones(Number(d.percepciones) || 0);
       if (d.notas) setNotas(d.notas);
 
       // Auto-fill items
@@ -349,7 +356,7 @@ export default function CargarFacturaOC({
           cantidad: Number(it.cantidad) || 1,
           precio_unitario: Number(it.precio_unitario) || 0,
           descuento_porcentaje: Math.max(0, Math.min(100, Number(it.descuento_porcentaje ?? d.descuento_general_porcentaje) || 0)),
-          iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
+          iva_porcentaje: isNotaPedido ? 0 : (it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21),
           unidad: it.unidad || "UN",
         })));
       }
@@ -416,10 +423,10 @@ export default function CargarFacturaOC({
     const freshOCTotal = roundMoney(freshOCs.reduce((sum: number, oc: any) => sum + Number(oc.total || 0), 0));
     const previousTotal = roundMoney(previousInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0));
     const remaining = roundMoney(freshOCTotal - previousTotal);
-    if (totalSinPercepciones - remaining > 0.01) {
+    if (totalSinPercepciones - remaining > 0.01 && !overrideOC) {
       throw new Error(`El comprobante supera en ${formatCurrency(totalSinPercepciones - remaining, moneda)} el saldo de las OC. Corregí precios, descuentos o IVA antes de guardar.`);
     }
-    return { remaining, partial: remaining - totalSinPercepciones > 0.01 };
+    return { remaining, partial: remaining - totalSinPercepciones > 0.01, freshOCs };
   }
 
   // ── Save ──
@@ -496,6 +503,102 @@ export default function CargarFacturaOC({
           .from("factura_compra_ocs")
           .insert(links);
         if (linkErr) throw new Error(linkErr.message);
+      }
+
+      // Override OC from FC: update OC items/totals/moneda, cascade to PR
+      if (isMercaderia && overrideOC && selectedOCIds.size > 0 && items.length > 0) {
+        for (const ocId of Array.from(selectedOCIds)) {
+          // Fetch current OC items to match against FC items
+          const { data: ocItems } = await supabase
+            .from("orden_compra_items")
+            .select("id, codigo, descripcion, precio_unitario, cantidad, unidad, orden")
+            .eq("orden_id", ocId)
+            .order("orden");
+
+          const existingOCItems = ocItems || [];
+          const matchedFCIndices = new Set<number>();
+
+          // Match FC items to OC items by descripcion (normalized)
+          for (const ocItem of existingOCItems) {
+            const ocDesc = (ocItem.descripcion || "").toLowerCase().trim();
+            const fcIdx = items.findIndex((fc, idx) => !matchedFCIndices.has(idx) && (fc.descripcion || "").toLowerCase().trim() === ocDesc);
+            if (fcIdx !== -1) {
+              matchedFCIndices.add(fcIdx);
+              const fcItem = items[fcIdx];
+              // Update OC item with FC values
+              await supabase
+                .from("orden_compra_items")
+                .update({
+                  precio_unitario: fcItem.precio_unitario,
+                  cantidad: fcItem.cantidad,
+                  unidad: fcItem.unidad,
+                } as any)
+                .eq("id", ocItem.id);
+            }
+          }
+
+          // Add unmatched FC items (e.g. envío) to OC
+          const maxOrden = existingOCItems.reduce((max, it) => Math.max(max, it.orden || 0), 0);
+          let newOrden = maxOrden + 1;
+          for (let i = 0; i < items.length; i++) {
+            if (matchedFCIndices.has(i)) continue;
+            const fcItem = items[i];
+            await supabase.from("orden_compra_items").insert({
+              orden_id: ocId,
+              codigo: "",
+              descripcion: fcItem.descripcion,
+              cantidad: fcItem.cantidad,
+              precio_unitario: fcItem.precio_unitario,
+              unidad: fcItem.unidad,
+              iva_porcentaje: fcItem.iva_porcentaje,
+              orden: newOrden++,
+              cantidad_recibida: 0,
+            } as any);
+          }
+
+          // Update OC header totals + moneda
+          await (supabase as any)
+            .from("ordenes_compra")
+            .update({ subtotal, iva, total: subtotal + iva, moneda })
+            .eq("id", ocId);
+
+          // Cascade to presupuesto: update precio_costo for matched items
+          const { data: ocRow } = await supabase
+            .from("ordenes_compra")
+            .select("presupuesto_origen_id")
+            .eq("id", ocId)
+            .single();
+
+          if (ocRow?.presupuesto_origen_id) {
+            const prId = ocRow.presupuesto_origen_id;
+            const { data: prItems } = await supabase
+              .from("presupuesto_items")
+              .select("id, codigo, descripcion, precio_costo")
+              .eq("presupuesto_id", prId);
+
+            if (prItems) {
+              // Only update matched items (not new ones like envío)
+              for (const ocItem of existingOCItems) {
+                const ocDesc = (ocItem.descripcion || "").toLowerCase().trim();
+                const fcIdx = items.findIndex((fc, idx2) => {
+                  // Re-check match
+                  return (fc.descripcion || "").toLowerCase().trim() === ocDesc;
+                });
+                if (fcIdx === -1) continue;
+                const fcItem = items[fcIdx];
+
+                // Find matching PR item
+                const prItem = prItems.find((pr) => (pr.descripcion || "").toLowerCase().trim() === ocDesc);
+                if (prItem && prItem.precio_costo !== fcItem.precio_unitario) {
+                  await supabase
+                    .from("presupuesto_items")
+                    .update({ precio_costo: fcItem.precio_unitario } as any)
+                    .eq("id", prItem.id);
+                }
+              }
+            }
+          }
+        }
       }
 
       // Upload file
@@ -857,10 +960,21 @@ export default function CargarFacturaOC({
                 </p>
                 {alignmentLoading ? (
                   <div className="flex items-center gap-2 rounded-lg bg-zinc-50 p-3 text-xs text-zinc-500 dark:bg-zinc-800"><Loader2 size={14} className="animate-spin" />Verificando importes ya facturados...</div>
-                ) : alignmentBlocked ? (
-                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
-                    <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-                    <span>{alignmentError || (ocCurrencies.size !== 1 || !ocCurrencies.has(moneda) || linkedInvoices.some((invoice) => invoice.moneda !== moneda) ? "La moneda del comprobante no coincide con la de las OC." : `El comprobante supera el saldo de las OC en ${formatCurrency(Math.abs(alignmentDifference), moneda)}. Corregí precios, descuentos o IVA.`)}</span>
+                ) : (alignmentBlocked || (exceedsOC && overrideOC)) ? (
+                  <div className="space-y-2">
+                    <div className={`flex items-start gap-2 rounded-lg border p-3 text-xs ${overrideOC ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300" : "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"}`}>
+                      <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                      <span>{alignmentError || (currencyMismatch ? "La moneda del comprobante no coincide con la de las OC." : `El comprobante supera el saldo de las OC en ${formatCurrency(Math.abs(alignmentDifference), moneda)}.`)}</span>
+                    </div>
+                    {exceedsOC && !currencyMismatch && !alignmentError && (
+                      <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 p-3 text-xs dark:border-orange-800 dark:bg-orange-950/30">
+                        <input type="checkbox" checked={overrideOC} onChange={(e) => setOverrideOC(e.target.checked)} className="mt-0.5 accent-orange-600" />
+                        <span>
+                          <strong className="text-orange-700 dark:text-orange-300">Actualizar OC desde esta factura</strong>
+                          <span className="block text-zinc-500 mt-0.5">Se actualizarán los items y totales de la OC para que coincidan con la factura. Los items que matcheen también actualizarán el precio de costo en el presupuesto.</span>
+                        </span>
+                      </label>
+                    )}
                   </div>
                 ) : Math.abs(alignmentDifference) <= 0.01 ? (
                   <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"><Check size={15} />Importe conciliado: comprobante y OC coinciden.</div>
