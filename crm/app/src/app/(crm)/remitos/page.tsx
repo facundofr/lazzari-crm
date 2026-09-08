@@ -737,8 +737,9 @@ export default function RemitosPage() {
         clientes: { razon_social: clienteMap.get(p.cliente_id) || "Cliente sin acceso" },
         presupuesto_items: itemsByPR.get(p.id) || [],
       })));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Error desconocido";
+    } catch (err: any) {
+      console.error("Error cargando PR aprobados:", err);
+      const message = err?.message || err?.details || (typeof err === "string" ? err : JSON.stringify(err));
       setIaError(`No se pudieron cargar los presupuestos aprobados: ${message}`);
     } finally {
       setLoadingIA(false);
