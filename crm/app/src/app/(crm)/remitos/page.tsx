@@ -117,6 +117,7 @@ export default function RemitosPage() {
 
   // Create remito modal state
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createTipoRemito, setCreateTipoRemito] = useState<"interno" | "electronico">("interno");
   const [createForm, setCreateForm] = useState({
     numero: "",
     cliente_id: "",
@@ -467,9 +468,19 @@ export default function RemitosPage() {
     }
   }
 
+  function getNextInternoNumero() {
+    const maxNum = remitos.reduce((max, r) => {
+      const parts = r.numero?.split("-");
+      const n = parts?.length === 3 ? parseInt(parts[2]) : 0;
+      return n > max ? n : max;
+    }, 999); // Start from 1000
+    return `R-0001-${String(maxNum + 1).padStart(8, "0")}`;
+  }
+
   async function openCreateModal() {
+    setCreateTipoRemito("interno");
     setCreateForm({
-      numero: "",
+      numero: getNextInternoNumero(),
       cliente_id: "",
       fecha: todayAR(),
       observaciones: "",
@@ -1676,6 +1687,21 @@ export default function RemitosPage() {
               </button>
             </div>
             <div className="space-y-3">
+              {/* Tipo de remito */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo de remito</label>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => { setCreateTipoRemito("interno"); setCreateForm(f => ({ ...f, numero: getNextInternoNumero() })); }}
+                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${createTipoRemito === "interno" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                    Interno (numeración propia)
+                  </button>
+                  <button type="button" disabled
+                    className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-zinc-100 text-zinc-400 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-500"
+                    title="Remitos electrónicos AFIP próximamente">
+                    Electrónico (AFIP) — Próx.
+                  </button>
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Numero</label>
@@ -1684,7 +1710,7 @@ export default function RemitosPage() {
                     value={createForm.numero}
                     onChange={(e) => setCreateForm({ ...createForm, numero: e.target.value })}
                     className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                    placeholder="R-0001-00000012"
+                    placeholder="R-0001-00001000"
                   />
                 </div>
                 <div>
@@ -1925,6 +1951,19 @@ export default function RemitosPage() {
               <button onClick={() => setIaModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
                 <X className="h-5 w-5" />
               </button>
+            </div>
+
+            {/* Tipo de remito */}
+            <div>
+              <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tipo de remito</label>
+              <div className="flex gap-2">
+                <div className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-orange-500 text-white text-center">
+                  Interno (numeración propia)
+                </div>
+                <div className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-zinc-100 text-zinc-400 text-center cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-500" title="Próximamente">
+                  Electrónico (AFIP) — Próx.
+                </div>
+              </div>
             </div>
 
             {iaError && (

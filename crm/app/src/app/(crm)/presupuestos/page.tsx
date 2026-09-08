@@ -3787,6 +3787,18 @@ export default function PresupuestosPage() {
               <button onClick={() => setRemitarModal(null)} className="rounded p-1 text-zinc-400 hover:text-zinc-600"><X className="h-4 w-4" /></button>
             </div>
             <div className="p-5 space-y-3 overflow-y-auto flex-1">
+              {/* Tipo de remito */}
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tipo de remito</label>
+                <div className="flex gap-2">
+                  <div className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-orange-500 text-white text-center">
+                    Interno (numeración propia)
+                  </div>
+                  <div className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-zinc-100 text-zinc-400 text-center cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-500" title="Próximamente">
+                    Electrónico (AFIP) — Próx.
+                  </div>
+                </div>
+              </div>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">Ingresá las cantidades a incluir en este remito. Los items con cantidad 0 no se incluyen.</p>
               <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 {remitarModal.items.map((item, idx) => (
