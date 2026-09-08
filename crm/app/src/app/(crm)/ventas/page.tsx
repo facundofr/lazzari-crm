@@ -1127,19 +1127,23 @@ export default function VentasPage() {
                           </div>
                         );
                       }
+                      const tieneNcTotal = selectedVenta.facturas.some(f => f.estado === "anulada");
                       return role === "vendedor" ? (
                         <p className="text-sm text-zinc-500">Pendiente de facturación administrativa</p>
                       ) : (
                         <div className="space-y-3">
+                          {tieneNcTotal && (
+                            <p className="text-sm text-amber-600 dark:text-amber-400">Factura anterior anulada por Nota de Crédito</p>
+                          )}
                           {selectedVenta.presupuesto.estado === "facturar" ? (
                             <>
-                              <p className="text-sm text-zinc-500">Sin factura emitida</p>
+                              <p className="text-sm text-zinc-500">{tieneNcTotal ? "Podés volver a facturar" : "Sin factura emitida"}</p>
                               <button
                                 onClick={() => openEmitModal(selectedVenta)}
                                 className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
                               >
                                 <Receipt className="h-4 w-4" />
-                                Facturar
+                                {tieneNcTotal ? "Re-facturar" : "Facturar"}
                               </button>
                             </>
                           ) : (

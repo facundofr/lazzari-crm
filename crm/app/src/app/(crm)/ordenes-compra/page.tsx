@@ -1792,6 +1792,16 @@ export default function OrdenesCompraPage() {
                 ),
               },
               {
+                key: "presupuesto_origen_id",
+                label: "PR origen",
+                render: (row) =>
+                  row.presupuesto_origen ? (
+                    <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{(row.presupuesto_origen as { numero: string }).numero}</span>
+                  ) : (
+                    <span className="text-zinc-300">{"\u2014"}</span>
+                  ),
+              },
+              {
                 key: "proveedores",
                 label: "Proveedor",
                 sortable: true,
@@ -1938,17 +1948,18 @@ export default function OrdenesCompraPage() {
                 },
               },
               {
-                key: "presupuesto_origen_id",
-                label: "PR origen",
-                render: (row) =>
-                  row.presupuesto_origen ? (
-                    <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{(row.presupuesto_origen as { numero: string }).numero}</span>
-                  ) : (
-                    <span className="text-zinc-300">{"\u2014"}</span>
-                  ),
+                key: "observaciones",
+                label: "FC",
+                render: (row) => {
+                  const fcs = (row.facturas_vinculadas || []).filter(f => f.estado !== "anulada");
+                  if (row.estado === "cancelada") return <span className="text-zinc-300">{"\u2014"}</span>;
+                  return fcs.length > 0
+                    ? <span title="Factura compra cargada" className="text-emerald-500"><Check className="h-4 w-4" /></span>
+                    : <span title="Sin factura compra" className="text-zinc-300"><X className="h-3.5 w-3.5" /></span>;
+                },
               },
               {
-                key: "observaciones",
+                key: "created_at" as any,
                 label: "Enviar",
                 render: (row) => (
                   <div onClick={(e) => e.stopPropagation()}>

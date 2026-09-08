@@ -279,10 +279,18 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         if (!data.success) throw new Error(data.error || "Error al emitir NC");
 
         // Actualizar total_acreditado en la factura original
+        const newAcreditado = (Number(ncFactura.total_acreditado) || 0) + ncTotals.total;
+        const ncCobreTotal = newAcreditado >= Number(ncFactura.total) - 0.01;
         const { error: acredArcaErr } = await (supabase as any).from("facturas").update({
-          total_acreditado: (Number(ncFactura.total_acreditado) || 0) + ncTotals.total,
+          total_acreditado: newAcreditado,
+          ...(ncCobreTotal ? { estado: "anulada" } : {}),
         }).eq("id", ncFactura.id);
         if (acredArcaErr) console.error("Error actualizando total_acreditado:", acredArcaErr.message);
+
+        // Si la NC cubre el total, permitir re-facturar el PR
+        if (ncCobreTotal && ncFactura.presupuesto_id) {
+          await supabase.from("presupuestos").update({ estado: "facturar" } as any).eq("id", ncFactura.presupuesto_id);
+        }
 
         setNcResult(data.factura.comprobante + (data.factura.cae ? ` — CAE: ${data.factura.cae}` : ""));
       } else {
@@ -321,10 +329,18 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           if (ncItemsErr) throw new Error("Error al guardar items NC: " + ncItemsErr.message);
         }
 
+        const newAcreditadoManual = (Number(ncFactura.total_acreditado) || 0) + ncTotals.total;
+        const ncCobreTotalManual = newAcreditadoManual >= Number(ncFactura.total) - 0.01;
         const { error: acredErr } = await (supabase as any).from("facturas").update({
-          total_acreditado: (Number(ncFactura.total_acreditado) || 0) + ncTotals.total,
+          total_acreditado: newAcreditadoManual,
+          ...(ncCobreTotalManual ? { estado: "anulada" } : {}),
         }).eq("id", ncFactura.id);
         if (acredErr) throw new Error("Error al actualizar total_acreditado: " + acredErr.message);
+
+        // Si la NC cubre el total, permitir re-facturar el PR
+        if (ncCobreTotalManual && ncFactura.presupuesto_id) {
+          await supabase.from("presupuestos").update({ estado: "facturar" } as any).eq("id", ncFactura.presupuesto_id);
+        }
 
         setNcResult(formatComprobante(ncTipo, emisorData.ptoVta, Number(ncNumero)) + " (manual)");
       }
