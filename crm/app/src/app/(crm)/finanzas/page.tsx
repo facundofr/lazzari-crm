@@ -611,6 +611,15 @@ export default function FinanzasPage() {
   const [echeqProvSearch, setEcheqProvSearch] = useState("");
   const [echeqFilterEstado, setEcheqFilterEstado] = useState("");
 
+  // Sync selectedEcheq after data reload
+  useEffect(() => {
+    if (selectedEcheq) {
+      const updated = echeqs.find(e => e.id === selectedEcheq.id);
+      if (updated) setSelectedEcheq(updated);
+      else setSelectedEcheq(null);
+    }
+  }, [echeqs, selectedEcheq?.id]);
+
   // Balance projection
   interface BalanceBand { banda: string; moneda: string; total: number }
   const [balanceData, setBalanceData] = useState<{ cobrar: BalanceBand[]; pagar: BalanceBand[]; echeqs: BalanceBand[] } | null>(null);
@@ -3514,42 +3523,98 @@ export default function FinanzasPage() {
                 <Plus className="h-4 w-4" /> Registrar cheque
               </button>
             </div>
-            <Card className="p-0 overflow-hidden">
-              <DataTable<EcheqRow>
-                columns={[
-                  { key: "tipo_cheque" as any, label: "Tipo", sortable: true, render: (row) => (
-                    <Badge variant={row.tipo_cheque === "echeq" ? "info" : "outline"}>
-                      {row.tipo_cheque === "echeq" ? "E-Cheq" : "Físico"}
-                    </Badge>
-                  )},
-                  { key: "numero", label: "Número", sortable: true, render: (row) => <span className="font-mono font-medium">{row.numero}</span> },
-                  { key: "banco_emisor", label: "Banco", sortable: true, render: (row) => <span className="text-zinc-500">{row.banco_emisor || "—"}</span> },
-                  { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.monto, row.moneda)}</span> },
-                  { key: "fecha_pago", label: "Fecha pago", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha_pago)}</span> },
-                  { key: "estado", label: "Estado", sortable: true, render: (row) => {
-                    const cfg = echeqEstadoConfig[row.estado] || { label: row.estado, variant: "outline" as const };
-                    return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
-                  }},
-                  { key: "origen_nombre", label: "Origen", render: (row) => <span className="text-sm">{row.origen_nombre || "—"}</span> },
-                  { key: "destino_nombre", label: "Destino", render: (row) => <span className="text-sm">{row.destino_nombre || "—"}</span> },
-                  { key: "actions", label: "", sortable: false, render: (row) => (
-                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                      {row.estado === "en_cartera" && (
-                        <>
-                          <button onClick={() => { setSelectedEcheq(row); setEcheqActionModal("endosar"); }} className="rounded p-1.5 text-zinc-400 hover:bg-purple-100 hover:text-purple-600" title="Endosar"><ArrowUpRight className="h-3.5 w-3.5" /></button>
-                          <button onClick={() => { setSelectedEcheq(row); setEcheqActionModal("depositar"); }} className="rounded p-1.5 text-zinc-400 hover:bg-amber-100 hover:text-amber-600" title="Depositar"><Landmark className="h-3.5 w-3.5" /></button>
-                          <button onClick={() => handleEcheqAction("cobrar", row)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Marcar cobrado"><CheckCircle2 className="h-3.5 w-3.5" /></button>
-                          <button onClick={() => handleEcheqAction("rechazar", row)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Rechazar"><Ban className="h-3.5 w-3.5" /></button>
-                        </>
-                      )}
-                      <button onClick={() => handleDeleteEcheq(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar"><Trash2 className="h-3.5 w-3.5" /></button>
+            <div className="flex gap-6">
+              <div className={`transition-all ${selectedEcheq && !echeqActionModal ? "w-3/5" : "w-full"}`}>
+                <Card className="p-0 overflow-hidden">
+                  <DataTable<EcheqRow>
+                    columns={[
+                      { key: "tipo_cheque" as any, label: "Tipo", sortable: true, render: (row) => (
+                        <Badge variant={row.tipo_cheque === "echeq" ? "info" : "outline"}>
+                          {row.tipo_cheque === "echeq" ? "E-Cheq" : "Físico"}
+                        </Badge>
+                      )},
+                      { key: "numero", label: "Número", sortable: true, render: (row) => <span className="font-mono font-medium">{row.numero}</span> },
+                      { key: "banco_emisor", label: "Banco", sortable: true, render: (row) => <span className="text-zinc-500">{row.banco_emisor || "—"}</span> },
+                      { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.monto, row.moneda)}</span> },
+                      { key: "fecha_pago", label: "Fecha pago", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha_pago)}</span> },
+                      { key: "estado", label: "Estado", sortable: true, render: (row) => {
+                        const cfg = echeqEstadoConfig[row.estado] || { label: row.estado, variant: "outline" as const };
+                        return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+                      }},
+                      { key: "origen_nombre", label: "Origen", render: (row) => <span className="text-sm">{row.origen_nombre || "—"}</span> },
+                    ]}
+                    data={filteredEcheqs}
+                    onRowClick={(row) => setSelectedEcheq(selectedEcheq?.id === row.id ? null : row)}
+                    emptyMessage="No hay cheques registrados"
+                  />
+                </Card>
+              </div>
+
+              {/* Panel detalle cheque */}
+              {selectedEcheq && !echeqActionModal && (
+                <div className="w-2/5">
+                  <Card className="sticky top-6">
+                    <div className="flex items-center justify-between border-b border-zinc-200 p-4 dark:border-zinc-700">
+                      <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Cheque #{selectedEcheq.numero}</h3>
+                      <button onClick={() => setSelectedEcheq(null)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"><X className="h-5 w-5" /></button>
                     </div>
-                  )},
-                ]}
-                data={filteredEcheqs}
-                emptyMessage="No hay cheques registrados"
-              />
-            </Card>
+                    <div className="p-4 space-y-4">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant={selectedEcheq.tipo_cheque === "echeq" ? "info" : "outline"}>
+                          {selectedEcheq.tipo_cheque === "echeq" ? "E-Cheq" : "Físico"}
+                        </Badge>
+                        {(() => { const cfg = echeqEstadoConfig[selectedEcheq.estado] || { label: selectedEcheq.estado, variant: "outline" as const }; return <Badge variant={cfg.variant}>{cfg.label}</Badge>; })()}
+                      </div>
+                      <div className="text-center py-3">
+                        <p className="text-3xl font-bold text-zinc-900 dark:text-white font-mono">{formatCurrency(selectedEcheq.monto, selectedEcheq.moneda)}</p>
+                      </div>
+                      <div className="space-y-2.5 text-sm">
+                        <div className="flex justify-between"><span className="text-zinc-500">Banco emisor</span><span className="font-medium text-zinc-900 dark:text-white">{selectedEcheq.banco_emisor || "—"}</span></div>
+                        {selectedEcheq.cuit_emisor && <div className="flex justify-between"><span className="text-zinc-500">CUIT emisor</span><span className="font-mono text-zinc-900 dark:text-white">{selectedEcheq.cuit_emisor}</span></div>}
+                        {selectedEcheq.fecha_emision && <div className="flex justify-between"><span className="text-zinc-500">Fecha emisión</span><span className="text-zinc-900 dark:text-white">{formatDate(selectedEcheq.fecha_emision)}</span></div>}
+                        <div className="flex justify-between"><span className="text-zinc-500">Fecha pago</span><span className="font-medium text-zinc-900 dark:text-white">{formatDate(selectedEcheq.fecha_pago)}</span></div>
+                        <div className="flex justify-between"><span className="text-zinc-500">Origen</span><span className="text-zinc-900 dark:text-white">{selectedEcheq.origen_nombre || "—"}</span></div>
+                        {selectedEcheq.destino_nombre && <div className="flex justify-between"><span className="text-zinc-500">Destino</span><span className="text-zinc-900 dark:text-white">{selectedEcheq.destino_nombre}</span></div>}
+                        {selectedEcheq.fecha_endoso && <div className="flex justify-between"><span className="text-zinc-500">Fecha endoso</span><span className="text-zinc-900 dark:text-white">{formatDate(selectedEcheq.fecha_endoso)}</span></div>}
+                        {selectedEcheq.fecha_deposito && <div className="flex justify-between"><span className="text-zinc-500">Fecha depósito</span><span className="text-zinc-900 dark:text-white">{formatDate(selectedEcheq.fecha_deposito)}</span></div>}
+                        {selectedEcheq.observaciones && (
+                          <div className="pt-2 border-t border-zinc-100 dark:border-zinc-700">
+                            <p className="text-xs text-zinc-500 mb-1">Observaciones</p>
+                            <p className="text-zinc-700 dark:text-zinc-300">{selectedEcheq.observaciones}</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Acciones */}
+                      {selectedEcheq.estado === "en_cartera" && (
+                        <div className="pt-3 border-t border-zinc-100 dark:border-zinc-700">
+                          <p className="text-xs font-medium text-zinc-500 mb-2 uppercase">Acciones</p>
+                          <div className="flex flex-wrap gap-2">
+                            <button onClick={() => setEcheqActionModal("endosar")} className="flex items-center gap-1.5 rounded-lg bg-purple-50 px-3 py-2 text-sm font-medium text-purple-700 hover:bg-purple-100 dark:bg-purple-950/30 dark:text-purple-400">
+                              <ArrowUpRight className="h-3.5 w-3.5" /> Endosar
+                            </button>
+                            <button onClick={() => setEcheqActionModal("depositar")} className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-400">
+                              <Landmark className="h-3.5 w-3.5" /> Depositar
+                            </button>
+                            <button onClick={() => handleEcheqAction("cobrar")} className="flex items-center gap-1.5 rounded-lg bg-green-50 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-100 dark:bg-green-950/30 dark:text-green-400">
+                              <CheckCircle2 className="h-3.5 w-3.5" /> Cobrado
+                            </button>
+                            <button onClick={() => handleEcheqAction("rechazar")} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-400">
+                              <Ban className="h-3.5 w-3.5" /> Rechazar
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      <div className="pt-3 border-t border-zinc-100 dark:border-zinc-700 flex justify-end">
+                        <button onClick={() => handleDeleteEcheq(selectedEcheq.id)} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400">
+                          <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                        </button>
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+              )}
+            </div>
           </>
         )}
 

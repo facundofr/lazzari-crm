@@ -12,7 +12,7 @@ import {
   ToggleLeft, ToggleRight, Package,
   ChevronRight, Calendar, DollarSign, Hash, Upload, Receipt,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
@@ -138,6 +138,36 @@ export default function TransportesPage() {
     moneda: "ARS",
     detalle: "",
   });
+
+  // ─── AI parse factura ───
+  const [facturaParsing, setFacturaParsing] = useState(false);
+  const facturaParseRef = useRef<HTMLInputElement>(null);
+
+  async function handleParseFactura(file: File) {
+    setFacturaParsing(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/parse-cobro", { method: "POST", body: formData });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "Error al leer comprobante");
+      const d = json.data;
+      setFacturaForm((f) => ({
+        ...f,
+        numero_factura: d.referencia || f.numero_factura,
+        fecha: d.fecha || f.fecha,
+        total: d.monto ? String(d.monto) : f.total,
+        moneda: d.moneda === "USD" ? "USD" : f.moneda,
+      }));
+      // Also set the file as attachment
+      setFacturaFile(file);
+      toast.success("Datos extraídos del comprobante");
+    } catch (e: any) {
+      toast.error(e.message || "No se pudo leer el comprobante");
+    } finally {
+      setFacturaParsing(false);
+    }
+  }
 
   // ─── Nuevo viaje form ───
   const [formViaje, setFormViaje] = useState({
@@ -837,12 +867,13 @@ export default function TransportesPage() {
                       facturaId: rows[0]?.factura_compra_id || null,
                       rows,
                       costo: rows[0]?.costo ?? 0,
+                      moneda: (rows[0]?.moneda || "ARS") as "ARS" | "USD",
                       factura: rows[0]?.facturas_compra || null,
                     };
                   })
                   .sort((a, b) => b.fecha.localeCompare(a.fecha));
 
-                const handleAddInterno = async (fecha: string, conductor: string, costo: number) => {
+                const handleAddInterno = async (fecha: string, conductor: string, costo: number, moneda: "ARS" | "USD" = "ARS") => {
                   try {
                     const { error } = await (supabase as any).from("transportes").insert({
                       sociedad_id: socId,
@@ -855,7 +886,7 @@ export default function TransportesPage() {
                       destino: "Interno",
                       origen: null,
                       costo: costo || null,
-                      moneda: "ARS",
+                      moneda,
                       bultos: null,
                       descripcion_carga: null,
                       notas: null,
@@ -944,7 +975,7 @@ export default function TransportesPage() {
                                   </button>
                                   <span className="font-semibold text-zinc-900 dark:text-white min-w-[24px] text-center">{g.rows.length}</span>
                                   <button
-                                    onClick={() => handleAddInterno(g.fecha, g.conductor, g.costo)}
+                                    onClick={() => handleAddInterno(g.fecha, g.conductor, g.costo, g.moneda)}
                                     disabled={Boolean(g.facturaId)}
                                     className="rounded-md p-1 text-zinc-500 hover:bg-green-100 hover:text-green-600 dark:hover:bg-green-900/30 dark:hover:text-green-400 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
                                     title="Agregar viaje"
@@ -971,7 +1002,7 @@ export default function TransportesPage() {
                                 />
                               </td>
                               <td className="px-4 py-2.5 text-right font-medium text-zinc-900 dark:text-white">
-                                {formatCurrency(g.rows.length * (g.costo || 0), "ARS")}
+                                {formatCurrency(g.rows.length * (g.costo || 0), g.moneda)}
                               </td>
                               <td className="px-4 py-2.5 text-right">
                                 {g.facturaId ? (
@@ -1588,16 +1619,26 @@ export default function TransportesPage() {
 
               <div>
                 <label className={labelClass}>Factura adjunta *</label>
-                <label className="flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-zinc-300 px-3 py-3 text-sm text-zinc-600 hover:border-orange-400 hover:bg-orange-50/50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-orange-950/20">
-                  <Upload size={18} className="text-orange-500" />
-                  <span className="min-w-0 flex-1 truncate">{facturaFile?.name || "Seleccionar PDF o imagen"}</span>
-                  <input
-                    type="file"
-                    accept=".pdf,image/png,image/jpeg,image/webp"
-                    className="hidden"
-                    onChange={(e) => setFacturaFile(e.target.files?.[0] || null)}
-                  />
-                </label>
+                <div className="flex gap-2">
+                  <label className="flex-1 flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-zinc-300 px-3 py-3 text-sm text-zinc-600 hover:border-orange-400 hover:bg-orange-50/50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-orange-950/20">
+                    <Upload size={18} className="text-orange-500" />
+                    <span className="min-w-0 flex-1 truncate">{facturaFile?.name || "Seleccionar PDF o imagen"}</span>
+                    <input
+                      type="file"
+                      accept=".pdf,image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      onChange={(e) => setFacturaFile(e.target.files?.[0] || null)}
+                    />
+                  </label>
+                  <input ref={facturaParseRef} type="file" accept=".pdf,image/png,image/jpeg,image/webp" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleParseFactura(f); e.target.value = ""; }} />
+                  <button type="button" onClick={() => facturaParseRef.current?.click()} disabled={facturaParsing}
+                    className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    title="Leer datos automáticamente de la factura">
+                    {facturaParsing ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+                    Leer
+                  </button>
+                </div>
               </div>
             </div>
 
