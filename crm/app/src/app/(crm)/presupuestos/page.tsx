@@ -1323,12 +1323,13 @@ export default function PresupuestosPage() {
       // Get presupuesto header for numero and sociedad_id
       const { data: prHeader } = await (supabase as any)
         .from("presupuestos")
-        .select("numero, sociedad_id, modalidad_emision")
+        .select("numero, sociedad_id, modalidad_emision, iva")
         .eq("id", prId)
         .single();
       const prNumero = prHeader?.numero ?? "";
       const sociedadId = prHeader?.sociedad_id ?? sociedadActiva?.id ?? null;
-      const compraSinIva = prHeader?.modalidad_emision === "manual";
+      // PR manual = sin IVA. Doble chequeo: modalidad_emision O iva encabezado = 0
+      const compraSinIva = prHeader?.modalidad_emision === "manual" || Number(prHeader?.iva) === 0;
 
       // Check if OCs already exist for this PR (avoid duplicates on re-approval)
       const { data: existingOCs } = await supabase
@@ -1376,7 +1377,7 @@ export default function PresupuestosPage() {
 
         // Determine OC moneda from items' costo_moneda (cost currency), NOT from PR sale moneda
         // If items have mixed cost currencies, default to ARS
-        const costoMonedas = new Set(provItems.map((it: any) => it.costo_moneda || "ARS"));
+        const costoMonedas = new Set(provItems.map((it: any) => (it.costo_moneda || "ARS").startsWith("USD") ? "USD" : "ARS"));
         const ocMoneda = costoMonedas.size === 1 ? [...costoMonedas][0] : "ARS";
 
         const { data: ocRow, error: ocErr } = await supabase
@@ -1428,7 +1429,7 @@ export default function PresupuestosPage() {
       if (sinProvItems.length > 0) {
         const subtotalSP = sinProvItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
         const ivaSP = compraSinIva ? 0 : sinProvItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
-        const costoMonedasSP = new Set(sinProvItems.map((it: any) => it.costo_moneda || "ARS"));
+        const costoMonedasSP = new Set(sinProvItems.map((it: any) => (it.costo_moneda || "ARS").startsWith("USD") ? "USD" : "ARS"));
         const ocMonedaSP = costoMonedasSP.size === 1 ? [...costoMonedasSP][0] : "ARS";
 
         const { data: ocRow, error: ocErr } = await supabase
