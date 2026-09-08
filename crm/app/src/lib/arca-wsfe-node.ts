@@ -30,6 +30,7 @@ type InvoiceDetail = {
   CondicionIVAReceptorId: number;
   CanMisMonExt?: "S" | "N";
   Iva?: IvaItem[];
+  CbtesAsoc?: { Tipo: number; PtoVta: number; Nro: number; Cuit: number; CbteFch: string }[];
 };
 
 const parser = new XMLParser({
@@ -143,7 +144,10 @@ export async function crearFacturaWsfeNode(args: {
     ? `<Iva>${inv.Iva.map((iva) => `<AlicIva><Id>${iva.Id}</Id><BaseImp>${money(iva.BaseImp)}</BaseImp><Importe>${money(iva.Importe)}</Importe></AlicIva>`).join("")}</Iva>`
     : "";
   const foreignCurrency = inv.CanMisMonExt ? `<CanMisMonExt>${inv.CanMisMonExt}</CanMisMonExt>` : "";
-  const detail = `<FECAEDetRequest><Concepto>${inv.Concepto}</Concepto><DocTipo>${inv.DocTipo}</DocTipo><DocNro>${inv.DocNro}</DocNro><CbteDesde>${nextNumber}</CbteDesde><CbteHasta>${nextNumber}</CbteHasta><CbteFch>${inv.CbteFch}</CbteFch><ImpTotal>${money(inv.ImpTotal)}</ImpTotal><ImpTotConc>${money(inv.ImpTotConc)}</ImpTotConc><ImpNeto>${money(inv.ImpNeto)}</ImpNeto><ImpOpEx>${money(inv.ImpOpEx)}</ImpOpEx><ImpTrib>${money(inv.ImpTrib)}</ImpTrib><ImpIVA>${money(inv.ImpIVA)}</ImpIVA><MonId>${escapeXml(inv.MonId)}</MonId><MonCotiz>${money(inv.MonCotiz)}</MonCotiz><CondicionIVAReceptorId>${inv.CondicionIVAReceptorId}</CondicionIVAReceptorId>${foreignCurrency}${ivaXml}</FECAEDetRequest>`;
+  const cbtesAsocXml = inv.CbtesAsoc?.length
+    ? `<CbtesAsoc>${inv.CbtesAsoc.map((a) => `<CbteAsoc><Tipo>${a.Tipo}</Tipo><PtoVta>${a.PtoVta}</PtoVta><Nro>${a.Nro}</Nro><Cuit>${a.Cuit}</Cuit><CbteFch>${a.CbteFch}</CbteFch></CbteAsoc>`).join("")}</CbtesAsoc>`
+    : "";
+  const detail = `<FECAEDetRequest><Concepto>${inv.Concepto}</Concepto><DocTipo>${inv.DocTipo}</DocTipo><DocNro>${inv.DocNro}</DocNro><CbteDesde>${nextNumber}</CbteDesde><CbteHasta>${nextNumber}</CbteHasta><CbteFch>${inv.CbteFch}</CbteFch><ImpTotal>${money(inv.ImpTotal)}</ImpTotal><ImpTotConc>${money(inv.ImpTotConc)}</ImpTotConc><ImpNeto>${money(inv.ImpNeto)}</ImpNeto><ImpOpEx>${money(inv.ImpOpEx)}</ImpOpEx><ImpTrib>${money(inv.ImpTrib)}</ImpTrib><ImpIVA>${money(inv.ImpIVA)}</ImpIVA><MonId>${escapeXml(inv.MonId)}</MonId><MonCotiz>${money(inv.MonCotiz)}</MonCotiz><CondicionIVAReceptorId>${inv.CondicionIVAReceptorId}</CondicionIVAReceptorId>${foreignCurrency}${cbtesAsocXml}${ivaXml}</FECAEDetRequest>`;
   const requestBody = `${authXml(args.auth)}<FeCAEReq><FeCabReq><CantReg>1</CantReg><PtoVta>${args.ptoVta}</PtoVta><CbteTipo>${args.cbteTipo}</CbteTipo></FeCabReq><FeDetReq>${detail}</FeDetReq></FeCAEReq>`;
   return postSoap(endpoint, "FECAESolicitar", requestBody);
 }

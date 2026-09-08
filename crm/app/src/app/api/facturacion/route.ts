@@ -136,6 +136,7 @@ export async function POST(req: NextRequest) {
       manual,         // optional boolean — skip ARCA, use numero_manual
       numero_manual,  // optional number — invoice number for manual mode
       fecha,          // optional date string YYYY-MM-DD — custom invoice date (defaults to today)
+      factura_origen_id, // optional UUID — original invoice for NC/ND (CbtesAsoc)
     } = body;
 
     const authHeader = req.headers.get("authorization");
@@ -388,6 +389,29 @@ export async function POST(req: NextRequest) {
 
     const today = fecha ? fecha.replace(/-/g, "") : new Date().toISOString().slice(0, 10).replace(/-/g, "");
 
+    // Build CbtesAsoc for NC/ND (required by ARCA)
+    const isNCND = ["NCA", "NCB", "NCEA", "NCEB", "NDA", "NDB"].includes(tipo);
+    let cbtesAsoc: { Tipo: number; PtoVta: number; Nro: number; Cuit: number; CbteFch: string }[] | undefined;
+    if (isNCND && factura_origen_id) {
+      const { data: origen } = await (supabase as any)
+        .from("facturas")
+        .select("tipo, punto_venta, numero, fecha")
+        .eq("id", factura_origen_id)
+        .single();
+      if (origen) {
+        const origenTipo = CBTE_TIPO_MAP[origen.tipo];
+        if (origenTipo) {
+          cbtesAsoc = [{
+            Tipo: origenTipo,
+            PtoVta: Number(origen.punto_venta),
+            Nro: Number(origen.numero),
+            Cuit: arcaConfig.cuit,
+            CbteFch: String(origen.fecha).replace(/-/g, ""),
+          }];
+        }
+      }
+    }
+
     // El ticket WSAA se obtiene con el SDK. Para WSFE usamos node:https con IPv4
     // y reintentos: evita los fallos intermitentes de fetch/undici observados en Vercel.
     const auth = await arca.getAuth("wsfe");
@@ -413,6 +437,7 @@ export async function POST(req: NextRequest) {
       CondicionIVAReceptorId: cliente_id === "consumidor_final" ? 5 : condicionIvaArca(cliente?.condicion_iva),
       ...(isUSD ? { CanMisMonExt: "N" as const } : {}),
       Iva: ivaArray,
+      ...(cbtesAsoc ? { CbtesAsoc: cbtesAsoc } : {}),
       },
     });
 
