@@ -3362,7 +3362,8 @@ export default function PresupuestosPage() {
               </thead>
               <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                 {newPR.items.map((item, idx) => {
-                  const belowCost = item.precio_venta > 0 && item.precio_venta < item.precio_costo;
+                  const costoConvForm = convertCosto(item.precio_costo, item.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas);
+                  const belowCost = item.precio_venta > 0 && item.precio_venta < costoConvForm;
                   return (
                     <tr
                       key={idx}
