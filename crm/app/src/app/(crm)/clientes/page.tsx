@@ -3134,7 +3134,7 @@ export default function ClientesPage() {
               <div className="space-y-1.5">
                 <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Moneda predeterminada</label>
                 <div className="flex gap-2">
-                  {["ARS", "USD"].map(m => (
+                  {["ARS", "USD", "USD Divisa"].map(m => (
                     <button key={m} type="button" onClick={() => setForm({ ...form, moneda_predeterminada: m })}
                       className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${form.moneda_predeterminada === m ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
                       {m}

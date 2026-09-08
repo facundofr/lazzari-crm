@@ -131,10 +131,10 @@ function baseStyles(color: string) {
     thead th { background: #f7f7f7; padding: 8px 10px; text-align: left; font-size: 8px; text-transform: uppercase; letter-spacing: 0.8px; color: #333; font-weight: 700; border-bottom: 2px solid #e0e0e0; }
     thead th.right { text-align: right; }
     thead th.center { text-align: center; }
-    tbody td { padding: 7px 10px; font-size: 11px; border-bottom: 1px solid #f0f0f0; color: #333; }
+    tbody td { padding: 7px 10px; font-size: 11px; border-bottom: 1px solid #f0f0f0; color: #111; }
     tbody tr:nth-child(even) td { background: #fafafa; }
     tbody tr:last-child td { border-bottom: 2px solid #e0e0e0; }
-    .mono { font-family: 'Courier New', Courier, monospace; font-size: 10px; }
+    .mono { font-family: 'Courier New', Courier, monospace; font-size: 10px; font-weight: 600; }
     .right { text-align: right; }
     .center { text-align: center; }
     .bold { font-weight: 700; }
@@ -392,7 +392,7 @@ ${documentHeader(soc, {
         <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(manualTotal, mon)}</td></tr>
       </table>` : isB ? `
       <table style="width:100%;border-collapse:collapse">
-        <tr><td style="font-size:11px;color:#555;padding:5px 0">Subtotal (IVA incluido)</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.total, mon)}</td></tr>
+        <tr><td style="font-size:11px;color:#333;padding:5px 0">Subtotal (IVA incluido)</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(pr.total, mon)}</td></tr>
         <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
       </table>
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid #bbb">
@@ -400,8 +400,8 @@ ${documentHeader(soc, {
         <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:#444"><span>IVA contenido</span><span style="font-family:'Courier New',monospace;font-weight:700">${formatCurrency(pr.iva, mon)}</span></div>
       </div>` : `
       <table style="width:100%;border-collapse:collapse">
-        <tr><td style="font-size:11px;color:#555;padding:5px 0">Subtotal</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.subtotal, mon)}</td></tr>
-        <tr><td style="font-size:11px;color:#555;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(pr.iva, mon)}</td></tr>
+        <tr><td style="font-size:11px;color:#333;padding:5px 0">Subtotal</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(pr.subtotal, mon)}</td></tr>
+        <tr><td style="font-size:11px;color:#333;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(pr.iva, mon)}</td></tr>
         <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
       </table>`}
   </td></tr>
@@ -513,8 +513,8 @@ export function generateFacturaPDF(
     </tr>`).join("")
   : `<tr><td colspan="${hideItemIva ? 5 : 6}" style="text-align:center;color:#444;padding:20px;font-style:italic">Items detallados no disponibles</td></tr>`;
 
-  const trStyle = "font-size:11px;color:#555;padding:5px 0";
-  const tdMonoR = "text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222";
+  const trStyle = "font-size:11px;color:#333;padding:5px 0";
+  const tdMonoR = "text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111";
   const trFinal = "font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222";
   const tdFinalR = "text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700";
 
@@ -847,8 +847,8 @@ ${documentHeader(soc, {
 <table style="width:100%;margin-top:14px;border-collapse:collapse">
   <tr><td></td><td style="width:260px">
     <table style="width:100%;border-collapse:collapse">
-      <tr><td style="font-size:11px;color:#555;padding:5px 0">Subtotal</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(Number(oc.subtotal), mon)}</td></tr>
-      <tr><td style="font-size:11px;color:#555;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(Number(oc.iva), mon)}</td></tr>
+      <tr><td style="font-size:11px;color:#333;padding:5px 0">Subtotal</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(Number(oc.subtotal), mon)}</td></tr>
+      <tr><td style="font-size:11px;color:#333;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(Number(oc.iva), mon)}</td></tr>
       <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(Number(oc.total), mon)}</td></tr>
     </table>
   </td></tr>
@@ -1046,9 +1046,9 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
     <table style="width:100%;margin-top:24px;border-collapse:collapse">
       <tr><td></td><td style="width:260px">
         <table style="width:100%;border-collapse:collapse">
-          ${totalCheques > 0 ? `<tr><td style="font-size:11px;color:#555;padding:5px 0">Total Cheques</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(totalCheques, mon)}</td></tr>` : ""}
-          ${totalDepositos > 0 ? `<tr><td style="font-size:11px;color:#555;padding:5px 0">Total Dep\u00F3sitos / Transf.</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(totalDepositos, mon)}</td></tr>` : ""}
-          ${totalRetenciones > 0 ? `<tr><td style="font-size:11px;color:#555;padding:5px 0">Total Retenciones</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:10px;color:#222">${formatCurrency(totalRetenciones, mon)}</td></tr>` : ""}
+          ${totalCheques > 0 ? `<tr><td style="font-size:11px;color:#333;padding:5px 0">Total Cheques</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(totalCheques, mon)}</td></tr>` : ""}
+          ${totalDepositos > 0 ? `<tr><td style="font-size:11px;color:#333;padding:5px 0">Total Dep\u00F3sitos / Transf.</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(totalDepositos, mon)}</td></tr>` : ""}
+          ${totalRetenciones > 0 ? `<tr><td style="font-size:11px;color:#333;padding:5px 0">Total Retenciones</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(totalRetenciones, mon)}</td></tr>` : ""}
           <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalGeneral, mon)}</td></tr>
         </table>
       </td></tr>
