@@ -1168,6 +1168,9 @@ export default function PresupuestosPage() {
           if (itemsError) throw new Error("Error al guardar items: " + itemsError.message);
         }
 
+        // Sync existing OCs with updated PR items
+        await syncOCsFromPR(editingPRId, newPR.modalidad_emision === "manual");
+
         setShowNewPR(false);
         setEsSolicitud(false);
         setEditingPRId(null);
@@ -1318,6 +1321,63 @@ export default function PresupuestosPage() {
     if (!totals.todos) totals.todos = { ARS: 0, USD: 0 };
     totals.todos[pr.moneda === "USD" ? "USD" : "ARS"] += pr.total;
   });
+
+  // Sync existing OCs when PR items change
+  async function syncOCsFromPR(prId: string, isManual: boolean) {
+    try {
+      // Get active OCs linked to this PR
+      const { data: ocs } = await supabase
+        .from("ordenes_compra")
+        .select("id, proveedor_id, moneda")
+        .eq("presupuesto_origen_id", prId)
+        .not("estado", "eq", "cancelada");
+      if (!ocs || ocs.length === 0) return;
+
+      // Get fresh PR items
+      const { data: prItems } = await supabase
+        .from("presupuesto_items")
+        .select("*")
+        .eq("presupuesto_id", prId);
+      if (!prItems) return;
+
+      for (const oc of ocs) {
+        // Match PR items to this OC by proveedor_id
+        const matchingItems = prItems.filter((it: any) => it.proveedor_id === oc.proveedor_id && !it.stock_propio);
+        if (matchingItems.length === 0) continue;
+
+        // Delete old OC items and recreate from PR
+        await supabase.from("orden_compra_items").delete().eq("orden_id", oc.id);
+
+        const ocItems = matchingItems.map((it: any, idx: number) => ({
+          orden_id: oc.id,
+          codigo: it.codigo || "",
+          descripcion: it.descripcion || "Sin descripción",
+          cantidad: Number(it.cantidad) || 1,
+          unidad: it.unidad || "u",
+          precio_unitario: Number(it.precio_costo) || 0,
+          iva_porcentaje: isManual ? 0 : Number(it.iva_porcentaje ?? 21),
+          orden: idx + 1,
+          cantidad_recibida: 0,
+        }));
+        await supabase.from("orden_compra_items").insert(ocItems as any);
+
+        // Recalculate OC totals
+        const ocSubtotal = ocItems.reduce((sum, it) => sum + it.precio_unitario * it.cantidad, 0);
+        const ocIva = isManual ? 0 : ocItems.reduce((sum, it) => sum + it.precio_unitario * it.cantidad * (it.iva_porcentaje / 100), 0);
+
+        // Determine moneda from items
+        const costoMonedas = new Set(matchingItems.map((it: any) => (it.costo_moneda || "ARS").startsWith("USD") ? "USD" : "ARS"));
+        const ocMoneda = costoMonedas.size === 1 ? [...costoMonedas][0] : "ARS";
+
+        await (supabase as any)
+          .from("ordenes_compra")
+          .update({ subtotal: ocSubtotal, iva: ocIva, total: ocSubtotal + ocIva, moneda: ocMoneda })
+          .eq("id", oc.id);
+      }
+    } catch (err) {
+      console.error("Error syncing OCs from PR:", err);
+    }
+  }
 
   async function generateOCsFromPresupuesto(prId: string) {
     try {

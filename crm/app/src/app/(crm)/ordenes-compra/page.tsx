@@ -875,6 +875,35 @@ export default function OrdenesCompraPage() {
         .eq("id", detailOC.id)
         .single();
       if (freshOC) setDetailOC(freshOC as unknown as OCRow);
+
+      // Cascade OC item changes to PR (update precio_costo for matching items)
+      if (detailOC.presupuesto_origen_id) {
+        try {
+          const { data: freshItems } = await supabase
+            .from("orden_compra_items")
+            .select("descripcion, precio_unitario")
+            .eq("orden_id", detailOC.id);
+          const { data: prItems } = await supabase
+            .from("presupuesto_items")
+            .select("id, descripcion, precio_costo")
+            .eq("presupuesto_id", detailOC.presupuesto_origen_id);
+          if (freshItems && prItems) {
+            for (const ocIt of freshItems) {
+              const ocDesc = (ocIt.descripcion || "").toLowerCase().trim();
+              const prIt = prItems.find((p: any) => (p.descripcion || "").toLowerCase().trim() === ocDesc);
+              if (prIt && Number(prIt.precio_costo) !== Number(ocIt.precio_unitario)) {
+                await supabase
+                  .from("presupuesto_items")
+                  .update({ precio_costo: Number(ocIt.precio_unitario) } as any)
+                  .eq("id", prIt.id);
+              }
+            }
+          }
+        } catch (cascadeErr) {
+          console.error("Error cascading OC changes to PR:", cascadeErr);
+        }
+      }
+
       setEditMode(false);
       await fetchData();
     } catch (err: any) {
