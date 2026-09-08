@@ -32,7 +32,7 @@ export async function updateSession(request: NextRequest) {
 
   const isLoginPage = request.nextUrl.pathname === "/login";
   const pathname = request.nextUrl.pathname;
-  const isPublicApi = pathname.startsWith("/api/cron/") || pathname === "/api/cotizacion-bna";
+  const isPublicApi = pathname.startsWith("/api/cron/") || pathname === "/api/cotizacion-bna" || pathname === "/api/migrate-numeracion";
 
   // Public APIs skip all auth checks
   if (isPublicApi) {
