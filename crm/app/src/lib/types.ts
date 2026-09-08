@@ -218,6 +218,7 @@ export interface Presupuesto {
   total: number;
   moneda: "USD" | "ARS";
   tipoCambio?: number | null;
+  tipoCambioDivisas?: number | null;
   cotizacionModalidad?: "divisas" | "billetes";
   observaciones: string;
   notasInternas: string;
@@ -247,7 +248,7 @@ export interface PresupuestoItem {
   cantidad: number;
   unidad: string;
   precioCosto: number;
-  costoMoneda?: "ARS" | "USD";
+  costoMoneda?: "ARS" | "USD" | "USD Divisa";
   markupPorcentaje: number;
   precioVenta: number;
   subtotal: number;

@@ -147,6 +147,7 @@ interface SupabasePresupuesto {
   total: number;
   moneda: "USD" | "ARS";
   tipo_cambio: number | null;
+  tipo_cambio_divisas?: number | null;
   cotizacion_modalidad?: "divisas" | "billetes" | null;
   observaciones: string;
   notas_internas: string;
@@ -211,7 +212,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
       cantidad: it.cantidad,
       unidad: it.unidad,
       precioCosto: it.precio_costo,
-      costoMoneda: (it.costo_moneda || "ARS") as "ARS" | "USD",
+      costoMoneda: (it.costo_moneda || "ARS") as "ARS" | "USD" | "USD Divisa",
       markupPorcentaje: it.markup_porcentaje,
       precioVenta: it.precio_venta,
       subtotal: it.subtotal,
@@ -224,6 +225,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     total: row.total,
     moneda: row.moneda,
     tipoCambio: row.tipo_cambio ?? null,
+    tipoCambioDivisas: row.tipo_cambio_divisas ?? null,
     cotizacionModalidad: row.cotizacion_modalidad ?? "divisas",
     observaciones: row.observaciones ?? "",
     notasInternas: row.notas_internas ?? "",
@@ -282,7 +284,7 @@ interface NewPRItem {
   proveedor_id: string;
   stock_propio: boolean;
   lista_item_id: string;
-  costo_moneda: "ARS" | "USD";
+  costo_moneda: "ARS" | "USD" | "USD Divisa";
 }
 
 // Autocomplete result from lista_precios_items
@@ -336,11 +338,23 @@ const emptyItem: NewPRItem = {
   proveedor_nombre: "", proveedor_id: "", stock_propio: false, lista_item_id: "", costo_moneda: "USD",
 };
 
+const COSTO_MONEDAS = ["ARS", "USD", "USD Divisa"] as const;
+function nextCostoMoneda(current: string): string {
+  const idx = COSTO_MONEDAS.indexOf(current as typeof COSTO_MONEDAS[number]);
+  return COSTO_MONEDAS[(idx + 1) % COSTO_MONEDAS.length];
+}
+
 /** Convierte precio_costo a la moneda del presupuesto */
-function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, tc: number): number {
-  if (!tc || tc <= 0 || costoMoneda === prMoneda) return costoBase;
-  // USD→ARS: multiplicar, ARS→USD: dividir
-  if (costoMoneda === "USD" && prMoneda === "ARS") return costoBase * tc;
+function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, tc: number, tcDivisas?: number): number {
+  const isUSD = costoMoneda === "USD" || costoMoneda === "USD Divisa";
+  const tcToUse = costoMoneda === "USD Divisa" ? (tcDivisas || tc) : tc;
+  if (!tcToUse || tcToUse <= 0) {
+    if (isUSD && prMoneda === "ARS") return costoBase;
+    if (costoMoneda === "ARS" && prMoneda === "USD") return costoBase;
+    return costoBase;
+  }
+  if (isUSD && prMoneda === "ARS") return costoBase * tcToUse;
+  if (isUSD && prMoneda === "USD") return costoBase; // same base
   if (costoMoneda === "ARS" && prMoneda === "USD") return costoBase / tc;
   return costoBase;
 }
@@ -462,7 +476,23 @@ export default function PresupuestosPage() {
       if (res.ok) {
         const data = await res.json();
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
-        setNewPR((p) => ({ ...p, tipo_cambio: data.valor_venta, cotizacion_modalidad: modalidad }));
+        if (modalidad === "divisas") {
+          setNewPR((p) => {
+            const items = p.items.map(it => {
+              const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, data.valor_venta);
+              return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+            });
+            return { ...p, tipo_cambio_divisas: data.valor_venta, cotizacion_modalidad: modalidad, items };
+          });
+        } else {
+          setNewPR((p) => {
+            const items = p.items.map(it => {
+              const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, data.valor_venta, p.tipo_cambio_divisas);
+              return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+            });
+            return { ...p, tipo_cambio: data.valor_venta, cotizacion_modalidad: modalidad, items };
+          });
+        }
       }
     } catch { /* silencioso */ } finally {
       setCotizBnaLoading(false);
@@ -488,6 +518,7 @@ export default function PresupuestosPage() {
     contacto_id: "",
     moneda: "USD" as "USD" | "ARS",
     tipo_cambio: 0,
+    tipo_cambio_divisas: 0,
     cotizacion_modalidad: "divisas" as "divisas" | "billetes",
     markup_general: 30,
     observaciones: "",
@@ -599,7 +630,7 @@ export default function PresupuestosPage() {
       const items = [...prev.items];
       const markup = items[idx].markup_porcentaje || prev.markup_general;
       const costoMoneda = (suggestion.moneda || "USD") as "ARS" | "USD";
-      const costoConv = convertCosto(suggestion.precio_neto, costoMoneda, prev.moneda, prev.tipo_cambio);
+      const costoConv = convertCosto(suggestion.precio_neto, costoMoneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
       const precioVenta = Number((costoConv * (1 + markup / 100)).toFixed(2));
       items[idx] = {
         ...items[idx],
@@ -676,7 +707,7 @@ export default function PresupuestosPage() {
             cantidad: Number(item.cantidad) || 1,
             unidad: item.unidad || "UN",
             precio_costo: precioCosto,
-            costo_moneda: (item.moneda || "USD") as "ARS" | "USD",
+            costo_moneda: (item.moneda || "USD") as "ARS" | "USD" | "USD Divisa",
             markup_porcentaje: markup,
             precio_venta: precioVenta,
             iva_porcentaje: 21,
@@ -792,7 +823,7 @@ export default function PresupuestosPage() {
             cantidad: it.cantidad,
             unidad: it.unidad,
             precioCosto: it.precio_costo,
-            costoMoneda: (it.costo_moneda || "ARS") as "ARS" | "USD",
+            costoMoneda: (it.costo_moneda || "ARS") as "ARS" | "USD" | "USD Divisa",
             markupPorcentaje: it.markup_porcentaje,
             precioVenta: it.precio_venta,
             subtotal: it.subtotal,
@@ -971,7 +1002,7 @@ export default function PresupuestosPage() {
           if (matchingTier && matchingTier.precio_neto !== item.precio_costo) {
             item.precio_costo = matchingTier.precio_neto;
             item.lista_item_id = matchingTier.lista_item_id;
-            const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio);
+            const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
             item.precio_venta = Number((costoConv * (1 + item.markup_porcentaje / 100)).toFixed(2));
             // Notificar el cambio de escalon (via setTimeout para salir del setState)
             setTimeout(() => toast.success(`Precio actualizado: ${matchingTier.variante}`), 0);
@@ -981,13 +1012,13 @@ export default function PresupuestosPage() {
 
       // Auto-calc precio_venta when costo, markup, or costo_moneda change
       if (field === "precio_costo" || field === "markup_porcentaje" || field === "costo_moneda") {
-        const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio);
+        const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
         item.precio_venta = Number((costoConv * (1 + item.markup_porcentaje / 100)).toFixed(2));
       }
 
       // Auto-calc markup when precio_venta changes manually
       if (field === "precio_venta") {
-        const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio);
+        const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
         if (costoConv > 0) {
           item.markup_porcentaje = Number((((Number(value) / costoConv) - 1) * 100).toFixed(2));
         }
@@ -1109,6 +1140,7 @@ export default function PresupuestosPage() {
             total: subtotal + ivaTotal,
             moneda: newPR.moneda,
             tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
+            tipo_cambio_divisas: newPR.moneda === "USD" && newPR.tipo_cambio_divisas > 0 ? newPR.tipo_cambio_divisas : null,
             cotizacion_modalidad: newPR.moneda === "USD" ? newPR.cotizacion_modalidad : null,
             observaciones: newPR.observaciones,
             notas_internas: newPR.notas_internas,
@@ -1137,7 +1169,7 @@ export default function PresupuestosPage() {
         setShowNewPR(false);
         setEsSolicitud(false);
         setEditingPRId(null);
-        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
+        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
         await fetchPresupuestos();
         toast.success("Presupuesto actualizado");
       } else {
@@ -1163,6 +1195,7 @@ export default function PresupuestosPage() {
             total: subtotal + ivaTotal,
             moneda: newPR.moneda,
             tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
+            tipo_cambio_divisas: newPR.moneda === "USD" && newPR.tipo_cambio_divisas > 0 ? newPR.tipo_cambio_divisas : null,
             cotizacion_modalidad: newPR.moneda === "USD" ? newPR.cotizacion_modalidad : null,
             observaciones: newPR.observaciones,
             notas_internas: newPR.notas_internas,
@@ -1181,7 +1214,7 @@ export default function PresupuestosPage() {
 
         setShowNewPR(false);
         setEsSolicitud(false);
-        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
+        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
 
         // Fetch the newly created PR with full joins before refreshing the list
         const { data: fullRow } = await (supabase as any)
@@ -1633,7 +1666,8 @@ export default function PresupuestosPage() {
           let markup = Number(it.markup_porcentaje) || 0;
           // Back-calculate markup if DB has null/0 but precio_venta and precio_costo exist
           if (!markup && costo > 0 && pv > 0) {
-            const costoConv = convertCosto(costo, it.costo_moneda || "ARS", prMoneda, prTc);
+            const prTcDivisas = Number(fullPR.tipo_cambio_divisas) || 0;
+            const costoConv = convertCosto(costo, it.costo_moneda || "ARS", prMoneda, prTc, prTcDivisas);
             if (costoConv > 0) {
               markup = Number((((pv / costoConv) - 1) * 100).toFixed(2));
             }
@@ -1652,7 +1686,7 @@ export default function PresupuestosPage() {
           proveedor_id: it.proveedor_id || "",
           stock_propio: Boolean(it.stock_propio),
           lista_item_id: it.lista_item_id || "",
-          costo_moneda: (it.costo_moneda || "ARS") as "ARS" | "USD",
+          costo_moneda: (it.costo_moneda || "ARS") as "ARS" | "USD" | "USD Divisa",
         };
         });
 
@@ -1663,6 +1697,7 @@ export default function PresupuestosPage() {
         contacto_id: fullPR.contacto_id || "",
         moneda: fullPR.moneda || "USD",
         tipo_cambio: Number(fullPR.tipo_cambio) || 0,
+        tipo_cambio_divisas: Number(fullPR.tipo_cambio_divisas) || 0,
         cotizacion_modalidad: (fullPR.cotizacion_modalidad || "divisas") as "divisas" | "billetes",
         markup_general: Number(fullPR.markup_general) || 30,
         observaciones: fullPR.observaciones || "",
@@ -2761,11 +2796,7 @@ export default function PresupuestosPage() {
                 <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3">Items ({selected.items.length})</h3>
                 {(() => {
                   const belowCostCount = selected.items.filter((item) => {
-                    const costoConv = (item as any).costoMoneda === "USD" && selected.moneda === "ARS"
-                      ? item.precioCosto * (selected.tipoCambio || 1)
-                      : (item as any).costoMoneda === "ARS" && selected.moneda === "USD" && (selected.tipoCambio || 1) > 0
-                      ? item.precioCosto / (selected.tipoCambio || 1)
-                      : item.precioCosto;
+                    const costoConv = convertCosto(item.precioCosto, (item as any).costoMoneda || "ARS", selected.moneda, selected.tipoCambio || 0, (selected as any).tipoCambioDivisas || 0);
                     return item.precioVenta < costoConv;
                   }).length;
                   return belowCostCount > 0 ? (
@@ -2790,18 +2821,14 @@ export default function PresupuestosPage() {
                     </thead>
                     <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
                       {selected.items.map((item) => {
-                        const costoConv = (item as any).costoMoneda === "USD" && selected.moneda === "ARS"
-                          ? item.precioCosto * (selected.tipoCambio || 1)
-                          : (item as any).costoMoneda === "ARS" && selected.moneda === "USD" && (selected.tipoCambio || 1) > 0
-                          ? item.precioCosto / (selected.tipoCambio || 1)
-                          : item.precioCosto;
+                        const costoConv = convertCosto(item.precioCosto, (item as any).costoMoneda || "ARS", selected.moneda, selected.tipoCambio || 0, (selected as any).tipoCambioDivisas || 0);
                         const belowCost = item.precioVenta < costoConv;
                         return (
                         <tr key={item.id} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
                           <td className="px-3 py-2">{item.descripcion}</td>
                           <td className="px-3 py-2 text-right">{item.cantidad} {item.unidad}</td>
-                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">{formatCurrency(item.precioCosto, (item.costoMoneda || "ARS") as "ARS" | "USD")}</td>
+                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">{formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")}{item.costoMoneda === "USD Divisa" ? " D" : ""}</td>
                           <td className="px-3 py-2 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>
                           <td className={`px-3 py-2 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
                             <span className="inline-flex items-center gap-1">
@@ -2903,7 +2930,7 @@ export default function PresupuestosPage() {
       {/* ==================== NUEVO PR MODAL ==================== */}
       <Modal
         open={showNewPR}
-        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
+        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
         title={editingPRId && esSolicitud ? "Convertir Solicitud en Presupuesto" : editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
         description={editingPRId && esSolicitud ? "Completa la cotización. La solicitud se convertirá en PR sin crear un registro duplicado." : editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="xl"
@@ -2911,7 +2938,7 @@ export default function PresupuestosPage() {
         footer={
           <>
             <button
-              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
+              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
               className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
             >
               Cancelar
@@ -2984,7 +3011,7 @@ export default function PresupuestosPage() {
                   {filteredClientes.length === 0 ? (
                     <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
                   ) : filteredClientes.slice(0, 20).map((c) => (
-                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; const td = tipoDocPorCondicion(c.condicion_iva); const monedaCliente = (c as any).moneda_predeterminada || undefined; setNewPR((p) => { const markup = mg ?? p.markup_general; return { ...p, cliente_id: c.id, markup_general: markup, ...(monedaCliente ? { moneda: monedaCliente } : {}), ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number(((it.costo_moneda === "USD" ? it.precio_costo * (p.tipo_cambio || 1) : it.precio_costo) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); }}
+                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; const td = tipoDocPorCondicion(c.condicion_iva); const monedaCliente = (c as any).moneda_predeterminada || undefined; setNewPR((p) => { const markup = mg ?? p.markup_general; return { ...p, cliente_id: c.id, markup_general: markup, ...(monedaCliente ? { moneda: monedaCliente } : {}), ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number((convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, p.tipo_cambio_divisas) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); }}
                       className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${c.id === newPR.cliente_id ? "bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400" : "text-zinc-700 dark:text-zinc-300"}`}>
                       {c.razon_social}{(c as any).moneda_predeterminada === "USD" && <span className="ml-1 text-[10px] text-blue-500">USD</span>}{c.markup_predeterminado != null && <span className="ml-auto text-xs text-zinc-400">{c.markup_predeterminado}%</span>}
                     </button>
@@ -3066,7 +3093,7 @@ export default function PresupuestosPage() {
                         const td = tipoDocPorCondicion(c.condicion_iva);
                         setNewPR((p) => {
                           const markup = mg ?? p.markup_general;
-                          return { ...p, cliente_id: c.id, markup_general: markup, ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number(((it.costo_moneda === "USD" ? it.precio_costo * (p.tipo_cambio || 1) : it.precio_costo) * (1 + markup / 100)).toFixed(2)) })) };
+                          return { ...p, cliente_id: c.id, markup_general: markup, ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number((convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, p.tipo_cambio_divisas) * (1 + markup / 100)).toFixed(2)) })) };
                         });
                         setClientSearch(c.razon_social);
                         setClientDropdownOpen(false);
@@ -3117,7 +3144,7 @@ export default function PresupuestosPage() {
               const mon = e.target.value as "USD" | "ARS";
               setNewPR((p) => {
                 const items = p.items.map(it => {
-                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio);
+                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio, p.tipo_cambio_divisas);
                   return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
                 });
                 return { ...p, moneda: mon, items };
@@ -3126,23 +3153,40 @@ export default function PresupuestosPage() {
             }}
             options={[{ value: "ARS", label: "ARS — Pesos" }, { value: "USD", label: "USD — Dolares" }]}
           />
-          <div>
+          <div className="grid grid-cols-2 gap-2">
             <Input
-              label="Tipo de cambio"
+              label="TC Billetes"
               type="number"
               step="0.01"
               value={newPR.tipo_cambio || ""}
               onChange={(e) => setNewPR((p) => {
                 const tc = Number(e.target.value);
                 const items = p.items.map(it => {
-                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc);
+                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc, p.tipo_cambio_divisas);
                   return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
                 });
                 return { ...p, tipo_cambio: tc, items };
               })}
-              placeholder="Solo si costo esta en otra moneda"
+              placeholder="Billetes"
             />
-            <div className="mt-1 flex items-center gap-2 flex-wrap">
+            <Input
+              label="TC Divisas"
+              type="number"
+              step="0.01"
+              value={newPR.tipo_cambio_divisas || ""}
+              onChange={(e) => setNewPR((p) => {
+                const tcD = Number(e.target.value);
+                const items = p.items.map(it => {
+                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, tcD);
+                  return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+                });
+                return { ...p, tipo_cambio_divisas: tcD, items };
+              })}
+              placeholder="Divisas"
+            />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs text-zinc-400">BNA:</span>
               <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
                 {cotizBnaLoading ? "…" : "Divisas"}
@@ -3166,7 +3210,7 @@ export default function PresupuestosPage() {
             onChange={(e) => setNewPR((p) => {
               const mg = Number(e.target.value);
               const items = p.items.map(it => {
-                const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio);
+                const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, p.tipo_cambio_divisas);
                 return { ...it, markup_porcentaje: mg, precio_venta: Number((costoConv * (1 + mg / 100)).toFixed(2)) };
               });
               return { ...p, markup_general: mg, items };
@@ -3401,12 +3445,14 @@ export default function PresupuestosPage() {
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1">
-                          <button type="button" onClick={() => updateNewPRItem(idx, "costo_moneda", item.costo_moneda === "USD" ? "ARS" : "USD")} title="Click para cambiar moneda" className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border cursor-pointer hover:opacity-80 transition-opacity ${
+                          <button type="button" onClick={() => updateNewPRItem(idx, "costo_moneda", nextCostoMoneda(item.costo_moneda))} title="Click para cambiar moneda (ARS / USD / USD Divisa)" className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border cursor-pointer hover:opacity-80 transition-opacity ${
                             item.costo_moneda === "USD"
                               ? "border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
-                              : "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                              : item.costo_moneda === "USD Divisa"
+                                ? "border-purple-200 bg-purple-50 text-purple-600 dark:border-purple-800 dark:bg-purple-900/30 dark:text-purple-400"
+                                : "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
                           }`}>
-                            {item.costo_moneda === "USD" ? "US$" : "AR$"}
+                            {item.costo_moneda === "USD" ? "US$" : item.costo_moneda === "USD Divisa" ? "Div" : "AR$"}
                           </button>
                           <NumInput value={item.precio_costo} onChange={(n) => updateNewPRItem(idx, "precio_costo", n)}
                             className="w-full min-w-0 rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
@@ -3485,8 +3531,11 @@ export default function PresupuestosPage() {
                 <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(newPRIva, newPR.moneda)}</span></div>
               </>}
               <div className="flex justify-between font-bold border-t border-zinc-200 pt-1 dark:border-zinc-700"><span>Total</span><span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(newPRSub + newPRIva, newPR.moneda)}</span></div>
-              {newPR.tipo_cambio > 0 && (
-                <div className="text-xs text-zinc-400 text-right pt-1">TC aplicado: {newPR.tipo_cambio.toLocaleString("es-AR")}</div>
+              {(newPR.tipo_cambio > 0 || newPR.tipo_cambio_divisas > 0) && (
+                <div className="text-xs text-zinc-400 text-right pt-1 space-x-2">
+                  {newPR.tipo_cambio > 0 && <span>TC Billetes: {newPR.tipo_cambio.toLocaleString("es-AR")}</span>}
+                  {newPR.tipo_cambio_divisas > 0 && <span>TC Divisas: {newPR.tipo_cambio_divisas.toLocaleString("es-AR")}</span>}
+                </div>
               )}
             </div>
           </div>
