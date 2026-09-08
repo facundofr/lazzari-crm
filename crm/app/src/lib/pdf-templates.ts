@@ -1197,11 +1197,15 @@ export async function openPDFWindow(html: string, filename?: string) {
 export async function htmlToPdfBase64(html: string): Promise<string> {
   const html2pdf = (await import("html2pdf.js")).default;
 
-  // White overlay so the user doesn't see the rendering
+  // Prevent body scroll shift while rendering
+  const prevOverflow = document.body.style.overflow;
+  document.body.style.overflow = "hidden";
+
+  // Offscreen container for html2canvas — must be in DOM and "visible" (not display:none).
+  // Position at top-left with z-index:-9999 so it's behind everything. Body overflow:hidden
+  // prevents any scroll shift the user could see.
   const overlay = document.createElement("div");
-  // Must be visible (not opacity:0 or display:none) for html2canvas to capture.
-  // Position behind viewport with clip to prevent user seeing it.
-  overlay.style.cssText = "position:fixed;left:-10000px;top:0;z-index:0;background:#fff;width:794px;overflow:visible;pointer-events:none;contain:layout style;";
+  overlay.style.cssText = "position:fixed;left:0;top:0;z-index:-9999;background:#fff;width:794px;overflow:hidden;pointer-events:none;";
 
   // Extract <style> blocks and <body> content from full HTML document
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
@@ -1269,5 +1273,6 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
     });
   } finally {
     document.body.removeChild(overlay);
+    document.body.style.overflow = prevOverflow;
   }
 }

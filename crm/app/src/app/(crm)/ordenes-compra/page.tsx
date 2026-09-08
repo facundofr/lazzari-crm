@@ -312,6 +312,47 @@ export default function OrdenesCompraPage() {
   // Edit mode
   const [editMode, setEditMode] = useState(false);
   const [editItems, setEditItems] = useState<DetailItem[]>([]);
+  const [importingOC, setImportingOC] = useState(false);
+  const importOCRef = useRef<HTMLInputElement>(null);
+
+  async function handleImportCotizacion(file: File) {
+    setImportingOC(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/parse-oc", { method: "POST", body: formData });
+      const json = await res.json();
+      if (!json.success || !json.data) { alert(json.error || "No se pudo leer el archivo"); return; }
+      const d = json.data;
+      const newItems: DetailItem[] = (d.items || []).map((it: any, idx: number) => ({
+        id: `new_${Date.now()}_${idx}`,
+        codigo: it.codigo || "",
+        descripcion: it.descripcion || "",
+        cantidad: Number(it.cantidad) || 1,
+        cantidad_recibida: 0,
+        unidad: it.unidad || "u",
+        precio_unitario: Number(it.precio_unitario) || 0,
+        subtotal: (Number(it.cantidad) || 1) * (Number(it.precio_unitario) || 0),
+        producto_id: null,
+        iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
+        proveedor_id: null,
+      }));
+      if (newItems.length > 0) {
+        setEditItems(prev => [...prev, ...newItems]);
+        if (d.moneda && d.moneda !== detailOC?.moneda) {
+          alert(`Nota: la cotización está en ${d.moneda} pero la OC está en ${detailOC?.moneda || "ARS"}`);
+        }
+      } else {
+        alert("No se encontraron items en el archivo");
+      }
+    } catch (e) {
+      alert("Error al procesar el archivo");
+      console.error(e);
+    } finally {
+      setImportingOC(false);
+      if (importOCRef.current) importOCRef.current.value = "";
+    }
+  }
   const [editOC, setEditOC] = useState<{ proveedor_id: string; fecha_entrega_estimada: string; observaciones: string; pagada_con_tarjeta: boolean }>({ proveedor_id: "", fecha_entrega_estimada: "", observaciones: "", pagada_con_tarjeta: false });
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -2610,10 +2651,18 @@ export default function OrdenesCompraPage() {
                   <h3 className="text-sm font-semibold">Items ({(editMode ? editItems : detailItems).length})</h3>
                   <div className="flex items-center gap-2">
                     {editMode && (
-                      <button onClick={() => setEditItems(prev => [...prev, { id: `new_${Date.now()}`, codigo: "", descripcion: "", cantidad: 1, cantidad_recibida: 0, unidad: "u", precio_unitario: 0, subtotal: 0, producto_id: null, iva_porcentaje: ocCompraSinIva(detailOC) ? 0 : 21, proveedor_id: null }])}
-                        className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
-                        <Plus className="h-3 w-3" /> Agregar item
-                      </button>
+                      <>
+                        <input ref={importOCRef} type="file" accept=".html,.htm,.pdf,image/*" className="hidden"
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportCotizacion(f); }} />
+                        <button onClick={() => importOCRef.current?.click()} disabled={importingOC}
+                          className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-700 font-medium disabled:opacity-50">
+                          {importingOC ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />} {importingOC ? "Leyendo..." : "Importar cotización"}
+                        </button>
+                        <button onClick={() => setEditItems(prev => [...prev, { id: `new_${Date.now()}`, codigo: "", descripcion: "", cantidad: 1, cantidad_recibida: 0, unidad: "u", precio_unitario: 0, subtotal: 0, producto_id: null, iva_porcentaje: ocCompraSinIva(detailOC) ? 0 : 21, proveedor_id: null }])}
+                          className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
+                          <Plus className="h-3 w-3" /> Agregar item
+                        </button>
+                      </>
                     )}
                     {detailItems.length > 0 && !editMode && (
                       <CopyButton

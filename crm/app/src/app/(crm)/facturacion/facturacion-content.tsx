@@ -18,9 +18,9 @@ import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
   ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, MailCheck, FileText, Search, Scissors,
-  Maximize2, Pencil, Trash2,
+  Maximize2, Pencil, Trash2, Upload,
 } from "lucide-react";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
 const estadoConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" | "orange" }> = {
   emitida: { label: "Emitida", variant: "info" },
@@ -715,6 +715,38 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [cobroCotiz, setCobroCotiz] = useState("");
   const [cobroCotizModalidad, setCobroCotizModalidad] = useState<"divisas" | "billetes">("divisas");
   const [cobroCotizFetching, setCobroCotizFetching] = useState(false);
+  const [cobroParsing, setCobroParsing] = useState(false);
+  const cobroFileRef = useRef<HTMLInputElement>(null);
+
+  async function handleParseComprobante(file: File) {
+    setCobroParsing(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/parse-cobro", { method: "POST", body: formData });
+      const json = await res.json();
+      if (!json.success || !json.data) { alert(json.error || "No se pudo leer el comprobante"); return; }
+      const d = json.data;
+      const tipo = d.tipo === "deposito" ? "efectivo" : d.tipo === "transferencia" ? "transferencia" : d.tipo === "cheque" ? "cheque_recibido" : "transferencia";
+      const monto = d.monto ? String(d.monto) : "";
+      const desc = [d.referencia, d.banco, d.ordenante, d.concepto].filter(Boolean).join(" — ");
+      if (d.fecha) setCobroFecha(d.fecha);
+      setCobroLineas(prev => {
+        const firstEmpty = prev.findIndex(l => !l.monto || l.monto === "0");
+        if (firstEmpty >= 0) {
+          return prev.map((l, i) => i === firstEmpty ? { ...l, tipo: tipo as any, monto, descripcion: desc } : l);
+        }
+        return [...prev, { tipo: tipo as any, monto, descripcion: desc }];
+      });
+    } catch (e) {
+      alert("Error al procesar el comprobante");
+      console.error(e);
+    } finally {
+      setCobroParsing(false);
+      if (cobroFileRef.current) cobroFileRef.current.value = "";
+    }
+  }
+
   async function fetchCobroCotizBNA(modalidad: "divisas" | "billetes") {
     setCobroCotizFetching(true);
     try {
@@ -1887,6 +1919,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                       <button onClick={() => setCobroLineas(prev => [...prev, { tipo: "transferencia", monto: "", descripcion: "" }])}
                         className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
                         <Plus className="h-3 w-3" /> Agregar medio
+                      </button>
+                      <input ref={cobroFileRef} type="file" accept="image/*,.pdf" className="hidden"
+                        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleParseComprobante(f); }} />
+                      <button onClick={() => cobroFileRef.current?.click()} disabled={cobroParsing}
+                        className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-700 font-medium disabled:opacity-50">
+                        {cobroParsing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />} {cobroParsing ? "Leyendo..." : "Leer comprobante"}
                       </button>
                     </div>
                   </div>
