@@ -1308,9 +1308,15 @@ export default function PresupuestosPage() {
 
   const activePRs = presupuestos.filter(pr => !(pr as any).eliminado);
   const counts: Record<string, number> = { todos: activePRs.length, facturado: 0 };
+  const totals: Record<string, { ARS: number; USD: number }> = {};
   activePRs.forEach((pr) => {
+    const estado = (facturadoIds.has(pr.id) || pr.estado === "facturado") ? "facturado" : pr.estado;
     if (pr.estado !== "facturado") counts[pr.estado] = (counts[pr.estado] || 0) + 1;
-    if (facturadoIds.has(pr.id) || pr.estado === "facturado") counts.facturado = (counts.facturado || 0) + 1;
+    if (estado === "facturado") counts.facturado = (counts.facturado || 0) + 1;
+    if (!totals[estado]) totals[estado] = { ARS: 0, USD: 0 };
+    totals[estado][pr.moneda === "USD" ? "USD" : "ARS"] += pr.total;
+    if (!totals.todos) totals.todos = { ARS: 0, USD: 0 };
+    totals.todos[pr.moneda === "USD" ? "USD" : "ARS"] += pr.total;
   });
 
   async function generateOCsFromPresupuesto(prId: string) {
@@ -2098,6 +2104,30 @@ export default function PresupuestosPage() {
             presupuestoOptions={presupuestos.map((p) => ({ id: p.id, numero: p.numero }))}
           />
         </div>
+
+        {/* Totals by estado */}
+        {!showPapelera && !vistaSeguimiento && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">
+            {(isAllSelected
+              ? ["pendiente", "aprobado", "facturar", "facturado"] as const
+              : [...selectedEstados].filter(s => s !== "todos") as string[]
+            ).map((estado) => {
+              const t = totals[estado];
+              if (!t) return null;
+              const cfg = statusConfig[estado as PRStatus] || { label: estado, variant: "outline" as const };
+              return (
+                <div key={estado} className="rounded-lg border border-zinc-200 bg-white px-3 py-2.5 dark:border-zinc-800 dark:bg-zinc-900">
+                  <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">{cfg.label} ({counts[estado] || 0})</p>
+                  <div className="mt-1 space-y-0.5">
+                    {t.USD > 0 && <p className="text-sm font-bold font-mono text-zinc-900 dark:text-white">{formatCurrency(t.USD, "USD")}</p>}
+                    {t.ARS > 0 && <p className={`${t.USD > 0 ? "text-xs text-zinc-500" : "text-sm font-bold"} font-mono dark:text-zinc-${t.USD > 0 ? "400" : "100"}`}>{formatCurrency(t.ARS, "ARS")}</p>}
+                    {t.USD === 0 && t.ARS === 0 && <p className="text-sm font-mono text-zinc-300 dark:text-zinc-600">—</p>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {/* Search + Vendedor + Operador + Fecha filters */}
         <div className="flex flex-wrap items-center gap-3">
