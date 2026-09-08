@@ -780,12 +780,12 @@ export default function CargarFacturaOC({
                   <table className="w-full min-w-[780px] text-xs">
                     <thead>
                       <tr className="bg-zinc-50 dark:bg-zinc-800 text-zinc-500">
-                        <th className="px-2 py-1 text-left">Descripción</th>
-                        <th className="px-2 py-1 text-right">Cant.</th>
-                        <th className="px-2 py-1 text-right">P. Unit.</th>
-                        <th className="px-2 py-1 text-right">Desc. %</th>
-                        <th className="px-2 py-1 text-right">IVA</th>
-                        <th className="px-2 py-1 text-right">Neto</th>
+                        <th className="px-1 py-1 text-left">Descripción</th>
+                        <th className="px-1 py-1 text-right w-20">Cant.</th>
+                        <th className="px-1 py-1 text-right w-28">P. Unit.</th>
+                        <th className="px-1 py-1 text-right w-20">Desc. %</th>
+                        <th className="px-1 py-1 text-right w-[70px]">IVA</th>
+                        <th className="px-2 py-1 text-right w-28">Neto</th>
                         <th className="w-8"></th>
                       </tr>
                     </thead>
