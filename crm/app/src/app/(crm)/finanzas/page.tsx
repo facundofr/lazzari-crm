@@ -166,7 +166,7 @@ interface FacturaCompraRow {
   total: number;
   moneda: "ARS" | "USD";
   estado: "pendiente" | "pagada" | "anulada" | "recibida" | "pendiente_aprobacion";
-  tipo: "mercaderia" | "solo_iva";
+  tipo: "mercaderia" | "solo_iva" | "transporte";
   tipo_comprobante?: string;
   notas: string;
   costo_real?: number;
@@ -974,7 +974,7 @@ export default function FinanzasPage() {
               iva: Number(r.iva), percepciones: Number(r.percepciones ?? 0),
               total: Number(r.total), moneda: (r.moneda as "ARS" | "USD") ?? "ARS",
               estado: r.estado ?? "pendiente", notas: r.notas ?? "",
-              tipo: (r.tipo as "mercaderia" | "solo_iva") ?? (r.solo_iva ? "solo_iva" : "mercaderia"),
+              tipo: (r.tipo as "mercaderia" | "solo_iva" | "transporte") ?? (r.solo_iva ? "solo_iva" : "mercaderia"),
               tipo_comprobante: r.tipo_comprobante ?? "FC A",
               created_at: r.created_at,
               costo_real: Number(r.costo_real ?? 0),
@@ -3049,7 +3049,7 @@ export default function FinanzasPage() {
                       {row.ocs_vinculadas && row.ocs_vinculadas.length > 0 && !row.oc_numero && (
                         <p className="text-xs text-zinc-400">OC: {row.ocs_vinculadas.map(o => o.numero).join(", ")}</p>
                       )}
-                      {row.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : <Badge variant="info">Mercadería</Badge>}
+                      {row.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : row.tipo === "transporte" ? <Badge variant="success">Transporte</Badge> : <Badge variant="info">Mercadería</Badge>}
                       {row.tipo === "solo_iva" && (row.costo_real ?? 0) > 0 && (
                         <p className="text-xs text-blue-500 mt-0.5">Costo real: {formatCurrency(row.costo_real!, row.moneda)}</p>
                       )}
@@ -4841,7 +4841,7 @@ export default function FinanzasPage() {
                 </div>
                 <div>
                   <p className="text-xs font-medium text-zinc-500">Tipo</p>
-                  {selectedFC.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : <Badge variant="info">Mercadería</Badge>}
+                  {selectedFC.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : selectedFC.tipo === "transporte" ? <Badge variant="success">Transporte</Badge> : <Badge variant="info">Mercadería</Badge>}
                 </div>
                 {(selectedFC.oc_numero || (selectedFC.ocs_vinculadas && selectedFC.ocs_vinculadas.length > 0)) && (
                   <div>

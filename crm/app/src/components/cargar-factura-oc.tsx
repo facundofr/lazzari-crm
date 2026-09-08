@@ -92,7 +92,7 @@ export default function CargarFacturaOC({
   const [percepciones, setPercepciones] = useState(0);
   const [notas, setNotas] = useState("");
   const [items, setItems] = useState<FCItem[]>([]);
-  const [tipoFC, setTipoFC] = useState<"mercaderia" | "solo_iva">("mercaderia");
+  const [tipoFC, setTipoFC] = useState<"mercaderia" | "solo_iva" | "transporte">("mercaderia");
   const [costoReal, setCostoReal] = useState(0);
 
   // ── OC selection ──
@@ -428,12 +428,13 @@ export default function CargarFacturaOC({
     if (!numeroFactura.trim()) { setError("Ingresá el número de factura"); return; }
     if (subtotal <= 0) { setError("El subtotal debe ser mayor a 0"); return; }
     if (tipoFC === "mercaderia" && selectedOCIds.size === 0) { setError("Seleccioná al menos una orden de compra"); return; }
+    const isMercaderia = tipoFC === "mercaderia";
 
     setSaving(true);
     setError("");
 
     try {
-      if (tipoFC === "mercaderia" && selectedOCIds.size > 0) {
+      if (isMercaderia && selectedOCIds.size > 0) {
         await validateOCAlignmentLive();
       }
 
@@ -452,7 +453,7 @@ export default function CargarFacturaOC({
         moneda,
         estado: pagadaSinOP ? "pagada" : "pendiente_aprobacion",
         tipo: tipoFC,
-        solo_iva: tipoFC === "solo_iva",
+        solo_iva: tipoFC !== "mercaderia",
         notas: notas || null,
         cae: cae || null,
         sociedad_id: sociedadId,
@@ -486,7 +487,7 @@ export default function CargarFacturaOC({
       }
 
       // Insert OC links (junction table)
-      if (tipoFC === "mercaderia" && selectedOCIds.size > 0 && fcData?.id) {
+      if (isMercaderia && selectedOCIds.size > 0 && fcData?.id) {
         const links = Array.from(selectedOCIds).map(ocId => ({
           factura_compra_id: fcData.id,
           orden_compra_id: ocId,
@@ -613,6 +614,10 @@ export default function CargarFacturaOC({
               <button type="button" onClick={() => setTipoFC("mercaderia")}
                 className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 flex-1 transition-colors ${tipoFC === "mercaderia" ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
                 <span className={`text-sm font-semibold ${tipoFC === "mercaderia" ? "text-orange-700 dark:text-orange-300" : "text-zinc-600 dark:text-zinc-300"}`}>Compra</span>
+              </button>
+              <button type="button" onClick={() => setTipoFC("transporte")}
+                className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 flex-1 transition-colors ${tipoFC === "transporte" ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
+                <span className={`text-sm font-semibold ${tipoFC === "transporte" ? "text-emerald-700 dark:text-emerald-300" : "text-zinc-600 dark:text-zinc-300"}`}>Transporte</span>
               </button>
               <button type="button" onClick={() => setTipoFC("solo_iva")}
                 className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 flex-1 transition-colors ${tipoFC === "solo_iva" ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
