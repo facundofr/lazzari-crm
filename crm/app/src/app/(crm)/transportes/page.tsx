@@ -139,6 +139,12 @@ export default function TransportesPage() {
     detalle: "",
   });
 
+  // ─── Internos month filter ───
+  const [internosMes, setInternosMes] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
+
   // ─── AI parse factura ───
   const [facturaParsing, setFacturaParsing] = useState(false);
   const facturaParseRef = useRef<HTMLInputElement>(null);
@@ -857,7 +863,7 @@ export default function TransportesPage() {
                   groupMap.set(key, arr);
                 });
 
-                const groups = Array.from(groupMap.entries())
+                const allGroups = Array.from(groupMap.entries())
                   .map(([key, rows]) => {
                     const [fecha, conductor, facturaKey] = key.split("||");
                     return {
@@ -872,6 +878,17 @@ export default function TransportesPage() {
                     };
                   })
                   .sort((a, b) => b.fecha.localeCompare(a.fecha));
+
+                // Filter by selected month
+                const groups = allGroups.filter((g) => g.fecha.startsWith(internosMes));
+
+                // Available months for selector
+                const mesesDisponibles = [...new Set(allGroups.map((g) => g.fecha.slice(0, 7)))].sort().reverse();
+
+                // Pending groups (no factura) for bulk action
+                const pendingGroups = groups.filter((g) => !g.facturaId);
+                const totalPendiente = pendingGroups.reduce((s, g) => s + g.rows.length * (g.costo || 0), 0);
+                const pendingMoneda = pendingGroups[0]?.moneda || "ARS";
 
                 const handleAddInterno = async (fecha: string, conductor: string, costo: number, moneda: "ARS" | "USD" = "ARS") => {
                   try {
@@ -941,10 +958,29 @@ export default function TransportesPage() {
 
                 return (
                   <Card className="mt-6 p-0">
-                    <div className="border-b border-zinc-200 dark:border-zinc-700 px-4 py-3">
+                    <div className="border-b border-zinc-200 dark:border-zinc-700 px-4 py-3 flex items-center justify-between flex-wrap gap-2">
                       <h3 className="text-sm font-semibold text-zinc-900 dark:text-white flex items-center gap-2">
                         <Truck size={16} className="text-green-600" /> Viajes internos
                       </h3>
+                      <div className="flex items-center gap-2">
+                        <select value={internosMes} onChange={(e) => setInternosMes(e.target.value)}
+                          className="rounded-lg border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                          {mesesDisponibles.map((m) => (
+                            <option key={m} value={m}>{new Date(m + "-15").toLocaleDateString("es-AR", { month: "long", year: "numeric" })}</option>
+                          ))}
+                        </select>
+                        {pendingGroups.length > 0 && (
+                          <button
+                            onClick={() => {
+                              const allRows = pendingGroups.flatMap((g) => g.rows);
+                              openFacturaParaPagos(allRows);
+                            }}
+                            className="flex items-center gap-1.5 rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-100 dark:bg-orange-950/30 dark:text-orange-400"
+                          >
+                            <Receipt size={14} /> Facturar mes ({formatCurrency(totalPendiente, pendingMoneda)})
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full text-sm">

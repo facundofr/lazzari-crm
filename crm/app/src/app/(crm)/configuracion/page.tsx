@@ -104,6 +104,14 @@ export default function ConfiguracionPage() {
   // Email templates state
   const [templates, setTemplates] = useState<Record<TemplateTipo, EmailTemplate>>({ ...DEFAULT_TEMPLATES });
   const [changingRoleUserId, setChangingRoleUserId] = useState<string | null>(null);
+
+  // Invite user state
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteForm, setInviteForm] = useState({ email: "", nombre: "", role: "vendedor" as Role });
+  const [inviteSaving, setInviteSaving] = useState(false);
+  const [sociedades, setSociedades] = useState<{ id: string; nombre: string }[]>([]);
+  const [inviteSociedadIds, setInviteSociedadIds] = useState<string[]>([]);
+
   const [templateSaving, setTemplateSaving] = useState<TemplateTipo | null>(null);
   const [templateSaved, setTemplateSaved] = useState<TemplateTipo | null>(null);
 
@@ -173,7 +181,52 @@ export default function ConfiguracionPage() {
       setUsersLoading(false);
     }
     fetchUsers();
+
+    // Fetch sociedades for invite modal
+    (supabase as any).from("sociedades").select("id, nombre").order("nombre").then(({ data }: any) => {
+      if (data) setSociedades(data);
+    });
   }, []);
+
+  async function handleInviteUser() {
+    if (!inviteForm.email.trim()) return;
+    if (!inviteForm.nombre.trim()) return;
+    setInviteSaving(true);
+    try {
+      const res = await fetch("/api/invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: inviteForm.email.trim(),
+          nombre: inviteForm.nombre.trim(),
+          role: inviteForm.role,
+          sociedad_ids: inviteSociedadIds,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Error al invitar");
+      setShowInviteModal(false);
+      setInviteForm({ email: "", nombre: "", role: "vendedor" });
+      setInviteSociedadIds([]);
+      // Refresh users list
+      const { data: profiles } = await supabase
+        .from("profiles")
+        .select("id, full_name, email, role, active, created_at")
+        .order("created_at", { ascending: false });
+      if (profiles) {
+        setDbUsers(profiles.map((p: any) => ({
+          id: p.id, name: p.full_name || p.email || "—", email: p.email || "",
+          role: p.role || "viewer", active: p.active ?? true,
+          createdAt: p.created_at ? new Date(p.created_at).toLocaleDateString("es-AR") : "—",
+        })));
+      }
+      alert("Usuario invitado correctamente. Recibirá un email para acceder.");
+    } catch (e: any) {
+      alert(e.message || "Error al invitar usuario");
+    } finally {
+      setInviteSaving(false);
+    }
+  }
 
   // Fetch empresa config scoped to sociedadActiva
   useEffect(() => {
@@ -567,9 +620,15 @@ export default function ConfiguracionPage() {
                 <h3 className="font-semibold text-zinc-900 dark:text-white">Usuarios del sistema</h3>
                 <p className="text-sm text-zinc-500">{dbUsers.length} usuarios registrados</p>
               </div>
-              <button disabled className="rounded-lg bg-zinc-300 px-4 py-2 text-sm font-medium text-zinc-500 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400" title="Próximamente">
-                Invitar usuario
-              </button>
+              {profile?.role === "super_admin" || profile?.role === "admin" ? (
+                <button onClick={() => setShowInviteModal(true)} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
+                  <Plus className="h-4 w-4" /> Invitar usuario
+                </button>
+              ) : (
+                <button disabled className="rounded-lg bg-zinc-300 px-4 py-2 text-sm font-medium text-zinc-500 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400" title="Solo admins">
+                  Invitar usuario
+                </button>
+              )}
             </div>
             <Card className="p-0 overflow-hidden">
               <DataTable<User>
@@ -1243,6 +1302,63 @@ export default function ConfiguracionPage() {
           </div>
         )}
       </div>
+
+      {/* ── Modal: Invitar usuario ── */}
+      {showInviteModal && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setShowInviteModal(false)} />
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-lg font-bold dark:text-white">Invitar usuario</h2>
+              <button onClick={() => setShowInviteModal(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Nombre completo *</label>
+                <input value={inviteForm.nombre} onChange={(e) => setInviteForm({ ...inviteForm, nombre: e.target.value })}
+                  placeholder="Ej: Juan Pérez"
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Email *</label>
+                <input type="email" value={inviteForm.email} onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
+                  placeholder="usuario@empresa.com"
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">Rol</label>
+                <select value={inviteForm.role} onChange={(e) => setInviteForm({ ...inviteForm, role: e.target.value as Role })}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  {(Object.entries(ROLE_LABELS) as [Role, string][]).map(([r, l]) => <option key={r} value={r}>{l}</option>)}
+                </select>
+              </div>
+              {sociedades.length > 0 && (
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Sociedades</label>
+                  <div className="mt-1 space-y-1.5">
+                    {sociedades.map((s) => (
+                      <label key={s.id} className="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                        <input type="checkbox" checked={inviteSociedadIds.includes(s.id)}
+                          onChange={(e) => setInviteSociedadIds(e.target.checked ? [...inviteSociedadIds, s.id] : inviteSociedadIds.filter(id => id !== s.id))}
+                          className="rounded border-zinc-300 text-orange-500 focus:ring-orange-500" />
+                        {s.nombre}
+                      </label>
+                    ))}
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-400">Si no seleccionás ninguna, tendrá acceso a todas.</p>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
+              <button onClick={() => setShowInviteModal(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
+              <button onClick={handleInviteUser} disabled={inviteSaving || !inviteForm.email.trim() || !inviteForm.nombre.trim()}
+                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                {inviteSaving && <Loader2 className="h-4 w-4 animate-spin" />} Invitar
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </>
   );
 }
