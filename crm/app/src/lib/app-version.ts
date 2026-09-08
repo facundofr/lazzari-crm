@@ -1,3 +1,3 @@
 // Incrementar el último número en cada cambio que se publique en producción.
-export const APP_VERSION = "1.1.191";
+export const APP_VERSION = "1.1.192";
 export const APP_VERSION_LABEL = `V${APP_VERSION}`;

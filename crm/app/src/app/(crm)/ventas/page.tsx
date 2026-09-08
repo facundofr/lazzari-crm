@@ -137,13 +137,11 @@ function getVentaStatus(v: Venta): VentaStatus {
 }
 
 // Asigna cada venta a UN SOLO bucket del pipeline (mutuamente exclusivos)
-type VentaStage = "pend_entrega" | "pend_factura" | "facturadas" | "cobradas";
+type VentaStage = "pend_factura" | "facturadas";
 function getVentaStage(v: Venta): VentaStage {
   const s = getVentaStatus(v);
-  if (s.cobrado) return "cobradas";
   if (s.facturado) return "facturadas";
-  if (s.entregado) return "pend_factura";
-  return "pend_entrega";
+  return "pend_factura";
 }
 
 // Keep getVentaStep for KPI filtering compatibility
@@ -410,13 +408,10 @@ export default function VentasPage() {
       filterVendedor === "todos" || v.presupuesto.vendedor_id === filterVendedor
     );
     const total = base.length;
-    // Pipeline secuencial mutuamente exclusivo via getVentaStage
-    const pendEntrega = base.filter(v => getVentaStage(v) === "pend_entrega").length;
     const pendFactura = base.filter(v => getVentaStage(v) === "pend_factura").length;
     const facturadas = base.filter(v => getVentaStage(v) === "facturadas").length;
-    const cobradas = base.filter(v => getVentaStage(v) === "cobradas").length;
     const montoTotal = base.reduce((sum, v) => sum + (v.presupuesto.total || 0), 0);
-    return { total, pendEntrega, pendFactura, facturadas, cobradas, montoTotal };
+    return { total, pendFactura, facturadas, montoTotal };
   }, [ventas, filterVendedor]);
 
   const selectedVenta = useMemo(() => {
@@ -764,13 +759,11 @@ export default function VentasPage() {
         ) : (
         <>
         {/* KPI Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-3 gap-4">
           {[
             { label: "Total", value: kpis.total, color: "text-zinc-900 dark:text-white", key: null },
-            { label: "Pend. entrega", value: kpis.pendEntrega, color: "text-amber-600", key: "pend_entrega" },
             { label: "Pend. factura", value: kpis.pendFactura, color: "text-red-600", key: "pend_factura" },
             { label: "Facturadas", value: kpis.facturadas, color: "text-blue-600", key: "facturadas" },
-            { label: "Cobradas", value: kpis.cobradas, color: "text-green-600", key: "cobradas" },
           ].map(kpi => (
             <button
               key={kpi.label}
@@ -822,7 +815,7 @@ export default function VentasPage() {
               onClick={() => setFilterStatus(null)}
               className="flex items-center gap-1 rounded-lg bg-orange-100 px-3 py-2 text-sm font-medium text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
             >
-              {{ pend_entrega: "Pend. entrega", pend_factura: "Pend. factura", facturadas: "Facturadas", cobradas: "Cobradas" }[filterStatus]}
+              {{ pend_factura: "Pend. factura", facturadas: "Facturadas" }[filterStatus]}
               <X className="h-3.5 w-3.5" />
             </button>
           )}
