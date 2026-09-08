@@ -348,14 +348,16 @@ function nextCostoMoneda(current: string): string {
 function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, tc: number, tcDivisas?: number): number {
   const isUSD = costoMoneda === "USD" || costoMoneda === "USD Divisa";
   const tcToUse = costoMoneda === "USD Divisa" ? (tcDivisas || tc) : tc;
-  if (!tcToUse || tcToUse <= 0) {
-    if (isUSD && prMoneda === "ARS") return costoBase;
-    if (costoMoneda === "ARS" && prMoneda === "USD") return costoBase;
-    return costoBase;
+  // Para ARS→USD: usar el TC que esté disponible (billetes preferido, sino divisas)
+  const tcForArs = tc > 0 ? tc : (tcDivisas || 0);
+  if (isUSD && prMoneda === "ARS") {
+    return tcToUse > 0 ? costoBase * tcToUse : costoBase;
   }
-  if (isUSD && prMoneda === "ARS") return costoBase * tcToUse;
-  if (isUSD && prMoneda === "USD") return costoBase; // same base
-  if (costoMoneda === "ARS" && prMoneda === "USD") return costoBase / tc;
+  if (isUSD && prMoneda === "USD") return costoBase;
+  if (costoMoneda === "ARS" && prMoneda === "USD") {
+    return tcForArs > 0 ? costoBase / tcForArs : costoBase;
+  }
+  if (costoMoneda === "ARS" && prMoneda === "ARS") return costoBase;
   return costoBase;
 }
 
