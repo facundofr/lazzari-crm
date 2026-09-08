@@ -1898,6 +1898,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                             className="flex-1 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-sm dark:text-white">
                             <option value="transferencia">Transferencia</option>
                             <option value="efectivo">Efectivo</option>
+                            <option value="tarjeta">Tarjeta</option>
                             <option value="cheque_recibido">Cheque</option>
                             <option value="echeq">Echeq</option>
                             <option value="retencion_iibb">Ret. IIBB</option>

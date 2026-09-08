@@ -838,7 +838,8 @@ export default function PresupuestosPage() {
         let fq = supabase
           .from("facturas")
           .select("presupuesto_id")
-          .not("presupuesto_id", "is", null);
+          .not("presupuesto_id", "is", null)
+          .neq("estado" as any, "anulada");
         if (sociedadActiva?.id) fq = fq.eq("sociedad_id" as any, sociedadActiva.id);
         const { data } = await fq;
         if (data) {
@@ -1273,8 +1274,8 @@ export default function PresupuestosPage() {
   const activePRs = presupuestos.filter(pr => !(pr as any).eliminado);
   const counts: Record<string, number> = { todos: activePRs.length, facturado: 0 };
   activePRs.forEach((pr) => {
-    counts[pr.estado] = (counts[pr.estado] || 0) + 1;
-    if (facturadoIds.has(pr.id)) counts.facturado = (counts.facturado || 0) + 1;
+    if (pr.estado !== "facturado") counts[pr.estado] = (counts[pr.estado] || 0) + 1;
+    if (facturadoIds.has(pr.id) || pr.estado === "facturado") counts.facturado = (counts.facturado || 0) + 1;
   });
 
   async function generateOCsFromPresupuesto(prId: string) {
