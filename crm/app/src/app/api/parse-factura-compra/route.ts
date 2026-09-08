@@ -36,6 +36,8 @@ Te voy a pasar un PDF o imagen de una factura de compra o nota de pedido de prov
 }
 
 Reglas:
+- IMPORTANTE: El "proveedor" es SIEMPRE el EMISOR de la factura (quien la emite/vende). NUNCA el receptor/comprador. En facturas argentinas el emisor aparece arriba con su razón social, CUIT, domicilio fiscal. El receptor/comprador (nuestro cliente) aparece más abajo como "Señor(es)", "Cliente", "Razón Social" del destinatario. Ignorá los datos del receptor — solo extraé los del emisor como proveedor.
+- Nombres como "Lazzari", "Grupo LA", "Augusto Lazzari" son NUESTROS (el comprador) — NUNCA deben aparecer como proveedor.
 - Extraé todos los items/líneas de la factura.
 - El precio_unitario debe ser el precio de lista antes del descuento. Extraé el descuento de cada renglón en descuento_porcentaje.
 - Si el documento aplica un único descuento general, devolvelo en descuento_general_porcentaje y repetilo en cada item que no tenga un descuento propio.

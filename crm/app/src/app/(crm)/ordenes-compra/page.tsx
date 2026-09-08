@@ -15,7 +15,7 @@ import {
   X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
   PackageCheck, MessageSquare, Edit3, Plus, Minus,
-  Maximize2, Upload, Trash2,
+  Maximize2, Upload, Trash2, RefreshCw,
   Search, CreditCard,
 } from "lucide-react";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
@@ -353,7 +353,7 @@ export default function OrdenesCompraPage() {
       if (importOCRef.current) importOCRef.current.value = "";
     }
   }
-  const [editOC, setEditOC] = useState<{ proveedor_id: string; fecha_entrega_estimada: string; observaciones: string; pagada_con_tarjeta: boolean }>({ proveedor_id: "", fecha_entrega_estimada: "", observaciones: "", pagada_con_tarjeta: false });
+  const [editOC, setEditOC] = useState<{ proveedor_id: string; fecha_entrega_estimada: string; observaciones: string; pagada_con_tarjeta: boolean; moneda: string }>({ proveedor_id: "", fecha_entrega_estimada: "", observaciones: "", pagada_con_tarjeta: false, moneda: "ARS" });
   const [savingEdit, setSavingEdit] = useState(false);
 
   // ── Fetch main data ──────────────────────────────────────────────
@@ -733,6 +733,7 @@ export default function OrdenesCompraPage() {
       fecha_entrega_estimada: detailOC.fecha_entrega_estimada || "",
       observaciones: detailOC.observaciones || "",
       pagada_con_tarjeta: ocPagadaConTarjeta(detailOC),
+      moneda: detailOC.moneda || "ARS",
     });
     fetchProveedores();
     setEditMode(true);
@@ -852,6 +853,7 @@ export default function OrdenesCompraPage() {
         .from("ordenes_compra")
         .update({
           proveedor_id: editOC.proveedor_id || null,
+          moneda: editOC.moneda || "ARS",
           subtotal: newSubtotal,
           iva: newIva,
           total: newTotal,
@@ -879,6 +881,46 @@ export default function OrdenesCompraPage() {
       alert(err.message || "Error al guardar cambios");
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  const handleSyncFromFC = async (oc: OCRow) => {
+    try {
+      // Buscar FC vinculada a esta OC
+      const { data: links } = await (supabase as any)
+        .from("factura_compra_ocs")
+        .select("facturas_compra(id, moneda, subtotal, iva, total, estado)")
+        .eq("orden_compra_id", oc.id);
+      const fcs = (links || [])
+        .map((l: any) => (Array.isArray(l.facturas_compra) ? l.facturas_compra[0] : l.facturas_compra))
+        .filter((fc: any) => fc && fc.estado !== "anulada");
+      if (fcs.length === 0) {
+        // Try legacy column
+        const { data: legacyFCs } = await (supabase as any)
+          .from("facturas_compra")
+          .select("id, moneda, subtotal, iva, total, estado")
+          .eq("orden_compra_id", oc.id)
+          .neq("estado", "anulada");
+        if (!legacyFCs || legacyFCs.length === 0) { alert("No se encontró factura de compra vinculada a esta OC"); return; }
+        fcs.push(...legacyFCs);
+      }
+      const fc = fcs[0];
+      if (!confirm(`¿Actualizar la OC a moneda ${fc.moneda}?`)) return;
+      const { error } = await supabase
+        .from("ordenes_compra")
+        .update({ moneda: fc.moneda } as any)
+        .eq("id", oc.id);
+      if (error) throw error;
+      // Refresh
+      const { data: freshOC } = await supabase
+        .from("ordenes_compra")
+        .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
+        .eq("id", oc.id)
+        .single();
+      if (freshOC) setDetailOC(freshOC as unknown as OCRow);
+      await fetchData();
+    } catch (err: any) {
+      alert(err.message || "Error al sincronizar moneda");
     }
   };
 
@@ -2436,6 +2478,18 @@ export default function OrdenesCompraPage() {
                       <Upload className="h-4 w-4" /> Cargar factura de esta OC
                     </button>
                   )}
+                  {(() => {
+                    const fcs = (detailOC.facturas_vinculadas || []).filter(f => f.estado !== "anulada");
+                    const fcMonedaDiff = fcs.length > 0 && fcs.some(f => f.moneda !== detailOC.moneda);
+                    return fcMonedaDiff ? (
+                      <button
+                        onClick={() => handleSyncFromFC(detailOC)}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                      >
+                        <RefreshCw className="h-4 w-4" /> Actualizar moneda desde FC
+                      </button>
+                    ) : null;
+                  })()}
                   <button
                     onClick={(event) => handleTogglePagoTarjeta(detailOC, event)}
                     className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${ocPagadaConTarjeta(detailOC) ? "border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950/20" : "border-orange-300 text-orange-600 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-950/20"}`}
@@ -2475,6 +2529,17 @@ export default function OrdenesCompraPage() {
                       <input type="checkbox" checked={editOC.pagada_con_tarjeta} onChange={(event) => setEditOC((prev) => ({ ...prev, pagada_con_tarjeta: event.target.checked }))} className="h-4 w-4 accent-orange-600" />
                       Pagada con tarjeta
                     </label>
+                    <div className="pt-2">
+                      <label className="block text-xs font-medium uppercase tracking-wide text-zinc-400 mb-1">Moneda</label>
+                      <select
+                        value={editOC.moneda}
+                        onChange={(e) => setEditOC((prev) => ({ ...prev, moneda: e.target.value }))}
+                        className="h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      >
+                        <option value="ARS">ARS — Pesos</option>
+                        <option value="USD">USD — Dólares</option>
+                      </select>
+                    </div>
                   </div>
                 ) : detailOC.proveedores ? (
                   <div className="space-y-2 text-sm">
