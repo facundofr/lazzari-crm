@@ -154,22 +154,23 @@ export default function TransportesPage() {
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const res = await fetch("/api/parse-cobro", { method: "POST", body: formData });
+      const res = await fetch("/api/parse-factura-compra", { method: "POST", body: formData });
       const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error || "Error al leer comprobante");
+      if (!res.ok || !json.success) throw new Error(json.error || "Error al leer factura");
       const d = json.data;
       setFacturaForm((f) => ({
         ...f,
-        numero_factura: d.referencia || f.numero_factura,
+        numero_factura: d.numero_factura || f.numero_factura,
         fecha: d.fecha || f.fecha,
-        total: d.monto ? String(d.monto) : f.total,
+        total: d.total ? String(d.total) : f.total,
+        iva_porcentaje: d.iva_porcentaje != null ? String(d.iva_porcentaje) : f.iva_porcentaje,
         moneda: d.moneda === "USD" ? "USD" : f.moneda,
       }));
       // Also set the file as attachment
       setFacturaFile(file);
-      toast.success("Datos extraídos del comprobante");
+      toast.success("Datos extraídos de la factura");
     } catch (e: any) {
-      toast.error(e.message || "No se pudo leer el comprobante");
+      toast.error(e.message || "No se pudo leer la factura");
     } finally {
       setFacturaParsing(false);
     }
@@ -879,16 +880,23 @@ export default function TransportesPage() {
                   })
                   .sort((a, b) => b.fecha.localeCompare(a.fecha));
 
-                // Filter by selected month
-                const groups = allGroups.filter((g) => g.fecha.startsWith(internosMes));
-
                 // Available months for selector
                 const mesesDisponibles = [...new Set(allGroups.map((g) => g.fecha.slice(0, 7)))].sort().reverse();
 
-                // Pending groups (no factura) for bulk action
+                // Auto-select first available month if current selection has no data
+                const mesActivo = mesesDisponibles.includes(internosMes) ? internosMes : (mesesDisponibles[0] || internosMes);
+
+                // Filter by selected month
+                const groups = allGroups.filter((g) => g.fecha.startsWith(mesActivo));
+
+                // Pending groups (no factura) for bulk action — grouped by moneda
                 const pendingGroups = groups.filter((g) => !g.facturaId);
-                const totalPendiente = pendingGroups.reduce((s, g) => s + g.rows.length * (g.costo || 0), 0);
-                const pendingMoneda = pendingGroups[0]?.moneda || "ARS";
+                const pendingByMoneda = new Map<"ARS" | "USD", typeof pendingGroups>();
+                pendingGroups.forEach((g) => {
+                  const arr = pendingByMoneda.get(g.moneda) || [];
+                  arr.push(g);
+                  pendingByMoneda.set(g.moneda, arr);
+                });
 
                 const handleAddInterno = async (fecha: string, conductor: string, costo: number, moneda: "ARS" | "USD" = "ARS") => {
                   try {
@@ -963,23 +971,23 @@ export default function TransportesPage() {
                         <Truck size={16} className="text-green-600" /> Viajes internos
                       </h3>
                       <div className="flex items-center gap-2">
-                        <select value={internosMes} onChange={(e) => setInternosMes(e.target.value)}
+                        <select value={mesActivo} onChange={(e) => setInternosMes(e.target.value)}
                           className="rounded-lg border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                           {mesesDisponibles.map((m) => (
                             <option key={m} value={m}>{new Date(m + "-15").toLocaleDateString("es-AR", { month: "long", year: "numeric" })}</option>
                           ))}
                         </select>
-                        {pendingGroups.length > 0 && (
-                          <button
-                            onClick={() => {
-                              const allRows = pendingGroups.flatMap((g) => g.rows);
-                              openFacturaParaPagos(allRows);
-                            }}
-                            className="flex items-center gap-1.5 rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-100 dark:bg-orange-950/30 dark:text-orange-400"
-                          >
-                            <Receipt size={14} /> Facturar mes ({formatCurrency(totalPendiente, pendingMoneda)})
-                          </button>
-                        )}
+                        {[...pendingByMoneda.entries()].map(([moneda, grps]) => {
+                          const total = grps.reduce((s, g) => s + g.rows.length * (g.costo || 0), 0);
+                          return (
+                            <button key={moneda}
+                              onClick={() => openFacturaParaPagos(grps.flatMap((g) => g.rows))}
+                              className="flex items-center gap-1.5 rounded-lg bg-orange-50 px-2.5 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-100 dark:bg-orange-950/30 dark:text-orange-400"
+                            >
+                              <Receipt size={14} /> Facturar mes ({formatCurrency(total, moneda)})
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                     <div className="overflow-x-auto">

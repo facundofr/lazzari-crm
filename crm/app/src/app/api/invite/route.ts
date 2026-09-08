@@ -2,6 +2,8 @@ import { createClient } from "@supabase/supabase-js";
 import { NextRequest } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
+const VALID_ROLES = ["super_admin", "admin", "vendedor", "administrativo", "viewer"];
+
 export async function POST(request: NextRequest) {
   try {
     // Verify the caller is admin/super_admin
@@ -27,18 +29,24 @@ export async function POST(request: NextRequest) {
     if (!email?.trim()) return Response.json({ error: "Email es obligatorio" }, { status: 400 });
     if (!nombre?.trim()) return Response.json({ error: "Nombre es obligatorio" }, { status: 400 });
 
+    // Validate role
+    const validRole = VALID_ROLES.includes(role) ? role : "vendedor";
+    // Only super_admin can create super_admin users
+    if (validRole === "super_admin" && profile.role !== "super_admin") {
+      return Response.json({ error: "Solo super_admin puede crear usuarios super_admin" }, { status: 403 });
+    }
+
     const supabaseAdmin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       serviceKey,
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    // Create user with Supabase Admin API
-    const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
-      email: email.trim(),
-      email_confirm: true,
-      user_metadata: { nombre: nombre.trim() },
-    });
+    // Invite user — this sends an email with a magic link automatically
+    const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
+      email.trim(),
+      { data: { full_name: nombre.trim() } }
+    );
 
     if (createError) {
       if (createError.message?.includes("already been registered")) {
@@ -49,12 +57,21 @@ export async function POST(request: NextRequest) {
 
     if (!newUser.user) throw new Error("No se pudo crear el usuario");
 
-    // Update profile with role and name
-    const { error: profileError } = await supabaseAdmin
-      .from("profiles")
-      .update({ role: role || "vendedor", nombre: nombre.trim() })
-      .eq("id", newUser.user.id);
-    if (profileError) console.error("Error updating profile:", profileError);
+    // Update profile with role and name (trigger creates profile row on user creation)
+    // Retry a few times since the trigger may not have fired yet
+    let profileUpdated = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { error: profileError } = await supabaseAdmin
+        .from("profiles")
+        .update({ role: validRole, full_name: nombre.trim() } as any)
+        .eq("id", newUser.user.id);
+      if (!profileError) { profileUpdated = true; break; }
+      // Wait for trigger to create the profile row
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!profileUpdated) {
+      console.error("Could not update profile for new user", newUser.user.id);
+    }
 
     // Assign sociedades if provided
     if (sociedad_ids?.length) {
@@ -62,15 +79,9 @@ export async function POST(request: NextRequest) {
         user_id: newUser.user!.id,
         sociedad_id: sid,
       }));
-      await supabaseAdmin.from("user_sociedades").insert(rows);
+      const { error: socError } = await (supabaseAdmin as any).from("user_sociedades").insert(rows);
+      if (socError) console.error("Error assigning sociedades:", socError);
     }
-
-    // Send password reset email so the user can set their password
-    const { error: resetError } = await supabaseAdmin.auth.admin.generateLink({
-      type: "magiclink",
-      email: email.trim(),
-    });
-    if (resetError) console.error("Error sending reset link:", resetError);
 
     return Response.json({
       success: true,
