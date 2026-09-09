@@ -56,7 +56,7 @@ interface FacturaRow {
   recibida_cliente?: boolean;
   email_enviado_at?: string | null;
   email_enviado_a?: string | null;
-  clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string; dias_cuenta_corriente?: number | null } | null;
+  clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; email_facturacion?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string; dias_cuenta_corriente?: number | null } | null;
   _clienteNombre?: string;
   _fechaVencCalc?: string;
   _prNumero?: string;
@@ -408,7 +408,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     try {
       let query = supabase
         .from("facturas")
-        .select(`*, clientes(razon_social, cuit, condicion_iva, email, telefono, direccion, localidad, provincia, dias_cuenta_corriente), presupuestos:presupuesto_id(numero)`)
+        .select(`*, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia, dias_cuenta_corriente), presupuestos:presupuesto_id(numero)`)
         .order("created_at", { ascending: false });
 
       if (sociedadActiva?.id) {
@@ -1326,7 +1326,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 <div
                   onClick={(e) => { e.stopPropagation(); handleEmailFactura(r); }}
                   className="flex justify-center cursor-pointer"
-                  title={r.email_enviado_at ? `Enviada por email el ${formatDateTime(r.email_enviado_at)}${r.email_enviado_a ? ` a ${r.email_enviado_a}` : r.clientes?.email ? ` a ${r.clientes.email}` : ""}` : `Enviar por email${r.clientes?.email ? ` (${r.clientes.email})` : ""}`}
+                  title={(() => {
+                    const emailDest = r.email_enviado_a || r.clientes?.email_facturacion || r.clientes?.email || "";
+                    return r.email_enviado_at
+                      ? `Enviada por email el ${formatDateTime(r.email_enviado_at)}${emailDest ? ` a ${emailDest}` : ""}`
+                      : `Enviar por email${emailDest ? ` (${emailDest})` : ""}`;
+                  })()}
                 >
                   {r.email_enviado_at
                     ? <MailCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
