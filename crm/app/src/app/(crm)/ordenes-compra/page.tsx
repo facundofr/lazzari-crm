@@ -252,6 +252,62 @@ export default function OrdenesCompraPage() {
   const [formLoading, setFormLoading] = useState(false);
   const [formError, setFormError] = useState("");
 
+  // Items for the create modal (used when NOT linked to a PR)
+  interface CreateItem {
+    _key: string;
+    codigo: string;
+    descripcion: string;
+    cantidad: number;
+    precio_unitario: number;
+    unidad: string;
+    iva_porcentaje: number;
+  }
+  const [createItems, setCreateItems] = useState<CreateItem[]>([]);
+  const [importingCreateOC, setImportingCreateOC] = useState(false);
+  const importCreateOCRef = useRef<HTMLInputElement>(null);
+
+  async function handleImportCreateCotizacion(file: File) {
+    setImportingCreateOC(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/parse-oc", { method: "POST", body: fd });
+      const json = await res.json();
+      if (!json.success || !json.data) { alert(json.error || "No se pudo leer el archivo"); return; }
+      const d = json.data;
+      const newItems: CreateItem[] = (d.items || []).map((it: any, idx: number) => ({
+        _key: `ci_${Date.now()}_${idx}`,
+        codigo: it.codigo || "",
+        descripcion: it.descripcion || "",
+        cantidad: Number(it.cantidad) || 1,
+        precio_unitario: Number(it.precio_unitario) || 0,
+        unidad: it.unidad || "u",
+        iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
+      }));
+      if (newItems.length > 0) {
+        setCreateItems(prev => [...prev, ...newItems]);
+        if (d.moneda && d.moneda !== formData.moneda) {
+          alert(`Nota: la cotización está en ${d.moneda} pero la OC está en ${formData.moneda}`);
+        }
+      } else {
+        alert("No se encontraron items en el archivo");
+      }
+    } catch (e) {
+      alert("Error al procesar el archivo");
+      console.error(e);
+    } finally {
+      setImportingCreateOC(false);
+      if (importCreateOCRef.current) importCreateOCRef.current.value = "";
+    }
+  }
+
+  const createItemsSubtotal = createItems.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0);
+  const createItemsIva = createItems.reduce((sum, it) => {
+    const line = it.cantidad * it.precio_unitario;
+    return sum + Math.round(line * (it.iva_porcentaje / 100) * 100) / 100;
+  }, 0);
+  const createItemsTotal = Math.round((createItemsSubtotal + createItemsIva) * 100) / 100;
+
   // Consolidation modal
   interface PendingItem {
     pr_id: string;
@@ -459,6 +515,7 @@ export default function OrdenesCompraPage() {
   // ── Handlers ─────────────────────────────────────────────────────
   const openCreateModal = () => {
     setFormData({ proveedor_id: "", fecha: new Date().toISOString().slice(0, 10), fecha_entrega_estimada: "", moneda: "ARS", observaciones: "", presupuesto_origen_id: "", pagada_con_tarjeta: false });
+    setCreateItems([]);
     setFormError("");
     setCreateOpen(true);
     fetchProveedores();
@@ -504,22 +561,33 @@ export default function OrdenesCompraPage() {
         }
       }
 
-      const itemsSubtotal = prItems.reduce((sum, it) => sum + (Number(it.precio_costo) || 0) * (Number(it.cantidad) || 0), 0);
+      // Determine totals depending on source: PR items or manual createItems
+      let finalSubtotal: number;
+      let finalIva: number;
       let linkedPRManual = false;
-      if (formData.presupuesto_origen_id) {
-        const { data: linkedPR } = await (supabase as any)
-          .from("presupuestos")
-          .select("modalidad_emision")
-          .eq("id", formData.presupuesto_origen_id)
-          .single();
-        linkedPRManual = linkedPR?.modalidad_emision === "manual";
+
+      if (prItems.length > 0) {
+        // Totals from PR items
+        finalSubtotal = prItems.reduce((sum, it) => sum + (Number(it.precio_costo) || 0) * (Number(it.cantidad) || 0), 0);
+        if (formData.presupuesto_origen_id) {
+          const { data: linkedPR } = await (supabase as any)
+            .from("presupuestos")
+            .select("modalidad_emision")
+            .eq("id", formData.presupuesto_origen_id)
+            .single();
+          linkedPRManual = linkedPR?.modalidad_emision === "manual";
+        }
+        finalIva = prItems.reduce((sum, it) => {
+          if (linkedPRManual) return sum;
+          const lineSubtotal = (Number(it.precio_costo) || 0) * (Number(it.cantidad) || 0);
+          const ivaPct = Number(it.iva_porcentaje ?? 21) / 100;
+          return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
+        }, 0);
+      } else {
+        // Totals from manually added createItems
+        finalSubtotal = createItemsSubtotal;
+        finalIva = createItemsIva;
       }
-      const itemsIva = prItems.reduce((sum, it) => {
-        if (linkedPRManual) return sum;
-        const lineSubtotal = (Number(it.precio_costo) || 0) * (Number(it.cantidad) || 0);
-        const ivaPct = Number(it.iva_porcentaje ?? 21) / 100;
-        return sum + Math.round(lineSubtotal * ivaPct * 100) / 100;
-      }, 0);
 
       const { data: ocRow, error } = await supabase.from("ordenes_compra").insert({
         proveedor_id: formData.proveedor_id || null,
@@ -528,9 +596,9 @@ export default function OrdenesCompraPage() {
         moneda: formData.moneda,
         observaciones: formData.observaciones,
         estado: "enviada",
-        subtotal: Math.round(itemsSubtotal * 100) / 100,
-        iva: itemsIva,
-        total: Math.round((itemsSubtotal + itemsIva) * 100) / 100,
+        subtotal: Math.round(finalSubtotal * 100) / 100,
+        iva: Math.round(finalIva * 100) / 100,
+        total: Math.round((finalSubtotal + finalIva) * 100) / 100,
         sociedad_id: sociedadActiva?.id || null,
         presupuesto_origen_id: formData.presupuesto_origen_id || null,
         created_by: profile?.id || null,
@@ -540,7 +608,7 @@ export default function OrdenesCompraPage() {
       } as any).select("id").single();
       if (error) throw error;
 
-      // Insert PR items as OC items
+      // Insert items: from PR or from manual createItems
       if (ocRow && prItems.length > 0) {
         const ocItems = prItems.map((it, idx) => ({
           orden_id: ocRow.id,
@@ -552,6 +620,24 @@ export default function OrdenesCompraPage() {
           precio_unitario: Number(it.precio_costo) || 0,
           producto_id: it.producto_id || null,
           iva_porcentaje: linkedPRManual ? 0 : Number(it.iva_porcentaje ?? 21),
+          orden: idx,
+        }));
+        const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
+        if (itemsErr) {
+          console.error("Error al insertar items de OC:", itemsErr);
+          alert(`OC creada pero error al insertar items: ${itemsErr.message}`);
+        }
+      } else if (ocRow && createItems.length > 0) {
+        const ocItems = createItems.map((it, idx) => ({
+          orden_id: ocRow.id,
+          codigo: it.codigo || "",
+          descripcion: it.descripcion || "",
+          cantidad: it.cantidad,
+          cantidad_recibida: 0,
+          unidad: it.unidad || "u",
+          precio_unitario: it.precio_unitario,
+          producto_id: null,
+          iva_porcentaje: it.iva_porcentaje,
           orden: idx,
         }));
         const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
@@ -2100,14 +2186,14 @@ export default function OrdenesCompraPage() {
       {/* ── Create OC Modal ─────────────────────────────────────────── */}
       {createOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-lg mx-4">
+          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-3xl mx-4 max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
               <h2 className="text-lg font-semibold dark:text-white">Nueva Orden de Compra</h2>
               <button onClick={() => setCreateOpen(false)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
                 <X className="h-5 w-5" />
               </button>
             </div>
-            <div className="px-6 py-5 space-y-4">
+            <div className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
               {formError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{formError}</div>}
               <div>
                 <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Proveedor *</label>
@@ -2148,6 +2234,98 @@ export default function OrdenesCompraPage() {
                   <span className="mt-0.5 block text-xs font-normal text-zinc-500">Queda pagada desde la OC, sin generar una orden de pago.</span>
                 </span>
               </label>
+              {/* ── Items section (only when NOT linked to a PR) ──── */}
+              {!formData.presupuesto_origen_id && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium dark:text-zinc-300">Items</label>
+                    <div className="flex items-center gap-2">
+                      <input ref={importCreateOCRef} type="file" accept=".html,.htm,.pdf,image/*" className="hidden"
+                        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportCreateCotizacion(f); }} />
+                      <button type="button" onClick={() => importCreateOCRef.current?.click()} disabled={importingCreateOC}
+                        className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-700 font-medium disabled:opacity-50">
+                        {importingCreateOC ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />} {importingCreateOC ? "Leyendo..." : "Importar cotización"}
+                      </button>
+                      <button type="button" onClick={() => setCreateItems(prev => [...prev, { _key: `ci_${Date.now()}`, codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, unidad: "u", iva_porcentaje: 21 }])}
+                        className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
+                        <Plus className="h-3 w-3" /> Agregar item
+                      </button>
+                    </div>
+                  </div>
+                  {createItems.length > 0 ? (
+                    <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-zinc-50 dark:bg-zinc-800 text-left text-xs text-zinc-500 uppercase">
+                            <th className="px-2 py-1.5">Código</th>
+                            <th className="px-2 py-1.5">Descripción</th>
+                            <th className="px-2 py-1.5 text-right">Cant.</th>
+                            <th className="px-2 py-1.5 text-right">P. Unit.</th>
+                            <th className="px-2 py-1.5 text-right">IVA %</th>
+                            <th className="px-2 py-1.5 text-right">Subtotal</th>
+                            <th className="px-2 py-1.5 w-8"></th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                          {createItems.map((item, idx) => (
+                            <tr key={item._key} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                              <td className="px-2 py-1.5">
+                                <input type="text" value={item.codigo}
+                                  onChange={(e) => setCreateItems(prev => prev.map((it, i) => i === idx ? { ...it, codigo: e.target.value } : it))}
+                                  placeholder="Código" className="w-20 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-1.5 py-1 text-xs font-mono dark:text-white" />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input type="text" value={item.descripcion}
+                                  onChange={(e) => setCreateItems(prev => prev.map((it, i) => i === idx ? { ...it, descripcion: e.target.value } : it))}
+                                  placeholder="Descripción" className="w-full rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-1.5 py-1 text-xs dark:text-white" />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input type="number" step="any" min={0} value={item.cantidad}
+                                  onChange={(e) => setCreateItems(prev => prev.map((it, i) => i === idx ? { ...it, cantidad: Number(e.target.value) || 0 } : it))}
+                                  className="w-16 text-right rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-1.5 py-1 text-xs dark:text-white" />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input type="number" step="any" min={0} value={item.precio_unitario}
+                                  onChange={(e) => setCreateItems(prev => prev.map((it, i) => i === idx ? { ...it, precio_unitario: Number(e.target.value) || 0 } : it))}
+                                  className="w-24 text-right rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-1.5 py-1 text-xs font-mono dark:text-white" />
+                              </td>
+                              <td className="px-2 py-1.5">
+                                <input type="number" step="any" min={0} value={item.iva_porcentaje}
+                                  onChange={(e) => setCreateItems(prev => prev.map((it, i) => i === idx ? { ...it, iva_porcentaje: Number(e.target.value) || 0 } : it))}
+                                  className="w-14 text-right rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-1.5 py-1 text-xs dark:text-white" />
+                              </td>
+                              <td className="px-2 py-1.5 text-right font-mono text-xs">
+                                {formatCurrency(item.cantidad * item.precio_unitario, formData.moneda)}
+                              </td>
+                              <td className="px-2 py-1.5 text-center">
+                                <button type="button" onClick={() => setCreateItems(prev => prev.filter((_, i) => i !== idx))}
+                                  className="text-red-400 hover:text-red-600">
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {/* Totals */}
+                      <div className="border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 text-sm">
+                        <div className="flex justify-end gap-6">
+                          <span className="text-zinc-500">Subtotal: <span className="font-mono font-semibold text-zinc-800 dark:text-zinc-200">{formatCurrency(createItemsSubtotal, formData.moneda)}</span></span>
+                          <span className="text-zinc-500">IVA: <span className="font-mono font-semibold text-zinc-800 dark:text-zinc-200">{formatCurrency(createItemsIva, formData.moneda)}</span></span>
+                          <span className="text-zinc-500">Total: <span className="font-mono font-bold text-orange-600">{formatCurrency(createItemsTotal, formData.moneda)}</span></span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-zinc-400 text-center py-3 border border-dashed border-zinc-300 dark:border-zinc-700 rounded-lg">
+                      Sin items — agregá items manualmente o importá una cotización
+                    </p>
+                  )}
+                </div>
+              )}
+              {formData.presupuesto_origen_id && (
+                <p className="text-xs text-zinc-400 italic">Los items se importarán automáticamente del presupuesto vinculado.</p>
+              )}
               <div className="sm:col-span-2">
                 <label className="block text-sm font-semibold mb-1 text-amber-700 dark:text-amber-400">
                   <span className="flex items-center gap-1.5">

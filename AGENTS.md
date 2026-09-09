@@ -1,0 +1,170 @@
+# AGENTS.md
+
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+
+## Project Overview
+
+Lazzari Soluciones Industriales — CRM/management system for an industrial solutions company (valves, pipes, industrial equipment) based in Argentina.
+
+## Commands
+
+All commands run from `crm/app/`:
+
+```bash
+cd crm/app
+npm run dev      # Dev server (Next.js on localhost:3000)
+npm run build    # Production build (ESLint errors ignored via next.config.ts)
+npm run lint     # ESLint
+```
+
+No test framework is configured yet.
+
+## Architecture
+
+### CRM App (`crm/app/`)
+
+- **Framework:** Next.js 15 (App Router) + React 18 + TypeScript + Tailwind CSS 4
+- **Backend:** Supabase (Auth, Postgres, Storage, Realtime, Edge Functions)
+- **Deployment:** Vercel (root directory: `crm/app`)
+- **Key deps:** Recharts (charts), Lucide React (icons), date-fns, @anthropic-ai/sdk (AI widget)
+- **UI utilities:** clsx, tailwind-merge, class-variance-authority (CVA)
+
+### Key Directories
+
+```
+crm/app/src/
+  app/(crm)/              # Route group — 14 CRM modules behind auth
+  app/api/ai/             # AI agent API route (Codex + Supabase tool use)
+  app/api/ai-presupuesto/ # AI route: sugiere items de presupuesto desde listas_precios vigentes
+  app/api/parse-lista-precios/ # PDF price list parser (streaming, Codex-haiku-4-5, max_tokens 32000)
+  app/api/remito/         # Autoriza remitos electrónicos via AFIP WSREMHOM
+  components/layout/      # Sidebar, Header, AIWidget
+  components/ui/          # Badge, Card, StatCard, DataTable, SmartFilters, Modal, Toast, Input, EmptyState
+  lib/supabase/queries/   # Data access layer — one file per module
+  lib/auth-context.tsx    # UserProvider context (profile, role, sidebar state)
+  lib/theme-context.tsx   # ThemeProvider for dark/light mode toggle
+  lib/types.ts            # TypeScript interfaces, Role type, ROLE_PERMISSIONS map
+  lib/mock-data.ts        # Fallback mock data used when Supabase queries fail
+  lib/utils.ts            # cn(), formatCurrency(), formatDate(), formatDateTime(), getInitials()
+```
+
+### CRM Modules (routes under `app/(crm)/`)
+
+dashboard, clientes, proveedores, presupuestos, ordenes-compra, stock, facturacion, remitos, finanzas, reportes, configuracion, transportes, ventas, calendario
+
+### Auth & Session Flow
+
+1. Middleware (`src/middleware.ts` → `lib/supabase/middleware.ts`) checks session on every request via `supabase.auth.getUser()`
+2. Unauthenticated → `/login`; authenticated on `/login` → `/dashboard`
+3. `(crm)/layout.tsx` wraps all CRM pages in `<UserProvider>` which fetches profile from `profiles` table
+4. **Server components:** use `createSupabaseServer()` from `lib/supabase/server.ts` (async, reads cookies)
+5. **Client components:** use the singleton `supabase` from `lib/supabase/client.ts` (browser client)
+6. **Query files** (`lib/supabase/queries/*`) currently use the browser client directly — they run client-side
+
+### Data Fetching Pattern
+
+All pages use a **hybrid fallback approach**: attempt Supabase query → fall back to mock data on error. Some pages (like presupuestos) have progressive degradation: try with joins → try without joins → try minimal select → mock. When adding new features, maintain this pattern.
+
+Each page defines its own `*Row` interface for the raw Supabase response and a `mapTo*()` function to convert snake_case DB rows to camelCase TypeScript interfaces. Example from clientes:
+
+```
+interface ClienteRow { id: string; razon_social: string; ... }  // raw DB shape
+function mapToClient(row: ClienteRow): Client { ... }            // defined in the page file
+```
+
+### AI Agent (`api/ai/route.ts`)
+
+Server-side API route that uses Codex with Supabase tool use. The AI can run SELECT/INSERT/UPDATE queries against the database, with role-based write permissions enforced via `TABLE_ACCESS` and `ROLE_HIERARCHY` maps. The floating `AIWidget` component (`components/layout/ai-widget.tsx`) provides the chat UI.
+
+**`api/parse-lista-precios`:** MUST use `client.messages.stream()` + `stream.finalMessage()` (NOT `.create()`) — the Anthropic SDK requires streaming when `max_tokens` ≥ 32000. Uses `Codex-haiku-4-5-20251001` with a 300s client timeout. Default validity when not in the PDF: today → +2 months.
+
+### Role System
+
+Five roles defined in `lib/types.ts`: `super_admin`, `admin`, `vendedor`, `administrativo`, `viewer`. Permissions enforced client-side via `ROLE_PERMISSIONS` map and server-side via Supabase RLS policies on `profiles.role`.
+
+### Multi-Sociedad Architecture
+
+The app operates under two legal entities (sociedades), selectable via `sociedadActiva` from `useUser()`:
+
+- **Lazzari** — id `eee2a3c8-fe6c-494d-bd2f-7a5d8067d021`, color `#FF4500`, punto de venta 15, CUIT 20379309128
+- **Grupo LA** — id `fee94607-747a-4e87-ba24-aff9032f7a56`, color `#2563EB`, punto de venta 10, CUIT 30719396042
+
+Every query that reads/writes data must filter by `sociedad_id`. User access is scoped via `user_sociedades` table (some users can only see one sociedad).
+
+### ARCA / AFIP Integration (`app/api/facturacion/route.ts`, `app/api/cuit-lookup/route.ts`)
+
+- Certificates stored in `crm/certs/` locally; on Vercel loaded from env vars as base64 (`ARCA_CERT_B64`/`ARCA_KEY_B64` for Lazzari, `ARCA_GRUPOLA_CERT_B64`/`ARCA_GRUPOLA_KEY_B64` for Grupo LA).
+- CUIT lookup chain: ARCA Lazzari cert → ARCA Grupo LA cert → scraping cuitonline.com. Uses raw SOAP fetch (not `@ramiidv/arca-facturacion` which has a namespace bug in padrón).
+- Status check: cert validation (no network) → AFIP connectivity test. `certOk=true` + `connected=false` is normal on Vercel (IP blocking); WSFE still works for invoicing.
+- Factura A: IVA discriminado. Factura B: IVA incluido (never discriminate per-item in PDF).
+
+### Database
+
+Supabase project ID: `ycuzszzskqatlegtbgbq`. Full schema plan in `SUPABASE_PLAN.md` (27 tables across 9 layers). Key design decisions:
+
+- `profiles` table linked to `auth.users` via trigger (no custom users table)
+- Prices frozen at presupuesto creation time (not FK references)
+- Auto-numbering via PG function `generate_document_number()` (e.g., `PR-2026-0049`)
+- RLS enabled on all tables; role-based access from `profiles`
+- Some FK joins (e.g., `created_by`) may be null — avoid inner joins on nullable FKs
+- Polymorphic contacts table: `contactos` with columns: `id, entity_type (cliente|proveedor), entity_id, nombre, cargo, email, telefono, principal, fecha_cumpleanos, notas, sucursal_id, whatsapp, vendedor_id`
+- `cliente_sucursales` columns: `id, cliente_id, nombre, direccion, localidad, provincia, cp, telefono, email, principal, activo, notas`
+- `clientes` has `email_facturacion` (text) and `envio_automatico` (boolean NOT NULL) — no `transporte_definido` column
+- Tables not in generated types (use `(supabase as any).from("table")`): `pendientes`, `notification_preferences`, `facturas_compra`, `comision_reglas`, `ordenes_pago`, `gastos_manuales`, `email_templates`, `contactos`, `user_sociedades`, `eventos`, `echeqs`, `fichas_relevamiento`, `cliente_sucursales`, `retencion_config`, `facturas_compra_items`
+- `retencion_config` columns: `sociedad_id` (UNIQUE), `aplica_iva`, `minimo_iva`, `tasa_iva_ri`, `aplica_ganancias`, `minimo_ganancias`, `tasa_ganancias_ri`, `tasa_ganancias_no_inscripto`
+- `facturas_compra` extra columns: `tipo` ("mercaderia"|"solo_iva"), `cae` (text nullable)
+- `facturas_compra_items` columns: `id, factura_compra_id, producto_id (nullable FK), codigo, descripcion, cantidad, precio_unitario, unidad, sociedad_id, created_at`
+- `lista_precios_items` has `variante` (text nullable): used for sizes/talles AND quantity price tiers (e.g. "1-9 un", "10-49 un", "50+"). Multiple rows with same `codigo` = same product with different variants/tiers.
+- `productos` stock column is `stock` (integer), NOT `stock_actual`
+
+### Storage Buckets
+
+`certificados`, `comprobantes`, `facturas-compra`, `presupuestos`
+
+### Environment Variables
+
+```
+NEXT_PUBLIC_SUPABASE_URL      # Supabase project URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY # Supabase anonymous key
+ANTHROPIC_API_KEY             # Server-side only, used by api/ai route
+ARCA_CERT_B64 / ARCA_KEY_B64                      # Lazzari AFIP cert (base64)
+ARCA_GRUPOLA_CERT_B64 / ARCA_GRUPOLA_KEY_B64      # Grupo LA AFIP cert (base64)
+```
+
+### Path Alias
+
+`@/*` maps to `./src/*` (configured in `tsconfig.json`).
+
+## Conventions
+
+- **Language:** All UI text, labels, and user-facing content in Spanish (Argentina)
+- **Styling:** Tailwind utility classes; dark mode supported via `dark:` prefix and `ThemeProvider`
+- **Color palette:** Orange `#FF4500` (primary), zinc scale for neutrals
+- **Components:** CVA for variant-based component styling (see `badge.tsx`, `card.tsx`)
+- **Data queries:** One file per module in `lib/supabase/queries/`, using the Supabase JS client. Pattern: query, throw on error, return data.
+- **Page structure:** Each page is `"use client"`, fetches data in `useEffect`, maps DB rows to TS interfaces, renders with `DataTable` + detail side panel
+- **Currency:** Dual currency support (USD/ARS) throughout. `formatCurrency()` from `lib/utils.ts`
+- **Dates:** `formatDate()` / `formatDateTime()` from `lib/utils.ts` using `Intl.DateTimeFormat("es-AR")`
+- **Next.js version warning:** This is Next.js 15 — APIs may differ from training data. Read docs in `node_modules/next/dist/docs/` before using new APIs (see `crm/app/AGENTS.md`).
+- **Badge variants:** `default | success | warning | danger | info | purple | orange | outline` — never use `"destructive"` or `"secondary"`.
+- **statusConfig lookups:** always include a fallback: `statusConfig[x] || { label: x, variant: "outline" }`
+- **Untyped tables:** use `(supabase as any).from("tableName")` and `.eq("col" as any, val)` for columns not in generated types.
+- **useEffect deps:** use `selectedItem?.id` (primitive) not the full object to avoid infinite refetch loops.
+- **Mutations:** always destructure `{ error }` from Supabase mutations and throw/alert on failure.
+- **Mock data fallback:** check `if (error)` to fall back, not `if (!data.length)` — an empty table is valid data.
+- **Large page files** (clientes/page.tsx is 2500+ lines): use targeted Edit tool calls with sufficient context to ensure uniqueness, or Python patch scripts for multi-hunk changes.
+- **Finanzas tabs:** wrap in `<div className="w-full overflow-x-auto">` + inner `<div className="flex ... w-max">` for horizontal scroll on small screens.
+- **Precios escalonados:** `parseQuantityRange(variante)` detecta rangos en variante. `priceTiersMap` en presupuestos guarda tiers por índice de item. `updateNewPRItem` auto-aplica precio correcto al cambiar cantidad.
+- **BNA cotización:** `GET /api/cotizacion-bna?modalidad=divisas|billetes`. Cachea en `cotizaciones_dolar` por tipo (`oficial_divisas`/`oficial_billetes`). Siempre presentar ambos botones en UIs que usen tipo de cambio.
+
+## Key Files
+
+- `SUPABASE_PLAN.md` — Complete database schema, RLS policies, triggers, views, indexes, and migration plan
+- `PROJECT.md` — Full project scope, modules, and timeline
+- `crm/app/src/lib/types.ts` — All roles, permissions, and TypeScript interfaces
+- `crm/app/src/lib/auth-context.tsx` — User/profile context provider used by all CRM pages
+- `crm/app/src/lib/mock-data.ts` — Comprehensive mock dataset (5 clients, 8 products, 6 suppliers, etc.)
+- `crm/app/src/components/ui/data-table.tsx` — Generic sortable/paginated table used by all pages
+- `crm/app/src/components/ui/smart-filters.tsx` — Reusable filter bar (select, date-range, number-range)
+- `crm/app/src/app/api/ai/route.ts` — AI agent with Codex tool use + Supabase DB access
+- `crm/app/AGENTS.md` — Next.js 15 warning: read `node_modules/next/dist/docs/` before using new APIs

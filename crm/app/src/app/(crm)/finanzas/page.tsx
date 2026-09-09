@@ -3813,7 +3813,7 @@ export default function FinanzasPage() {
         )}
 
         {/* ── Extractos bancarios ── */}
-        {tab === "extractos" && extracto && (
+        {tab === "extractos" && (
           <>
             <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-white p-6 text-center dark:border-zinc-600 dark:bg-zinc-900">
               <Upload className="mx-auto h-8 w-8 text-zinc-300" />
@@ -3822,41 +3822,49 @@ export default function FinanzasPage() {
               <button className="mt-3 rounded-lg bg-orange-500 px-5 py-2 text-sm font-medium text-white hover:bg-orange-600">Seleccionar archivo</button>
             </div>
 
-            <Card>
-              <CardHeader>
-                <div><CardTitle>{extracto.banco} — {extracto.cuenta}</CardTitle><p className="text-sm text-zinc-500 mt-1">{extracto.periodo}</p></div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="success">Matcheados: {extracto.extracto_movimientos.filter(m => m.estado === "matcheado").length}</Badge>
-                  <Badge variant="warning">Pendientes: {extracto.extracto_movimientos.filter(m => m.estado === "pendiente").length}</Badge>
+            {extracto ? (
+              <Card>
+                <CardHeader>
+                  <div><CardTitle>{extracto.banco} — {extracto.cuenta}</CardTitle><p className="text-sm text-zinc-500 mt-1">{extracto.periodo}</p></div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="success">Matcheados: {extracto.extracto_movimientos.filter(m => m.estado === "matcheado").length}</Badge>
+                    <Badge variant="warning">Pendientes: {extracto.extracto_movimientos.filter(m => m.estado === "pendiente").length}</Badge>
+                  </div>
+                </CardHeader>
+
+                <div className="flex gap-2 mb-4">
+                  {(["todos", "matcheado", "pendiente"] as const).map((f) => {
+                    const count = f === "todos" ? extracto.extracto_movimientos.length : extracto.extracto_movimientos.filter(m => m.estado === f).length;
+                    return (<button key={f} onClick={() => setFilterExtracto(f)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filterExtracto === f ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"}`}>{f === "todos" ? "Todos" : f === "matcheado" ? "Matcheados" : "Pendientes"} ({count})</button>);
+                  })}
                 </div>
-              </CardHeader>
 
-              <div className="flex gap-2 mb-4">
-                {(["todos", "matcheado", "pendiente"] as const).map((f) => {
-                  const count = f === "todos" ? extracto.extracto_movimientos.length : extracto.extracto_movimientos.filter(m => m.estado === f).length;
-                  return (<button key={f} onClick={() => setFilterExtracto(f)} className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${filterExtracto === f ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"}`}>{f === "todos" ? "Todos" : f === "matcheado" ? "Matcheados" : "Pendientes"} ({count})</button>);
-                })}
-              </div>
-
-              <DataTable<ExtractoMovimientoRow>
-                columns={[
-                  { key: "fecha", label: "Fecha", render: (row) => <span className="text-zinc-500">{row.fecha}</span> },
-                  { key: "descripcion", label: "Descripcion", render: (row) => <span className="font-medium text-xs">{row.descripcion}</span> },
-                  { key: "referencia", label: "Ref.", render: (row) => <span className="font-mono text-xs text-zinc-400">{row.referencia}</span> },
-                  { key: "monto", label: "Monto", className: "text-right", render: (row) => (
-                    <div className="flex items-center justify-end gap-1.5">
-                      {row.tipo === "credito" ? <ArrowDownLeft className="h-3.5 w-3.5 text-emerald-500" /> : <ArrowUpRight className="h-3.5 w-3.5 text-red-500" />}
-                      <span className={`font-mono font-semibold ${row.tipo === "credito" ? "text-emerald-600" : "text-red-600"}`}>{row.tipo === "credito" ? "+" : "-"}{formatCurrency(row.monto)}</span>
-                    </div>
-                  )},
-                  { key: "estado", label: "Match", render: (row) => row.estado === "matcheado"
-                    ? <div className="flex items-center gap-1.5"><Link2 className="h-3.5 w-3.5 text-emerald-500" /><Badge variant="success">Match</Badge></div>
-                    : <div className="flex items-center gap-2"><Badge variant="warning">Pendiente</Badge><button className="rounded bg-orange-500 px-2 py-1 text-xs font-medium text-white hover:bg-orange-600">Matchear</button></div>
-                  },
-                ]}
-                data={movsFiltrados}
-              />
-            </Card>
+                <DataTable<ExtractoMovimientoRow>
+                  columns={[
+                    { key: "fecha", label: "Fecha", render: (row) => <span className="text-zinc-500">{row.fecha}</span> },
+                    { key: "descripcion", label: "Descripcion", render: (row) => <span className="font-medium text-xs">{row.descripcion}</span> },
+                    { key: "referencia", label: "Ref.", render: (row) => <span className="font-mono text-xs text-zinc-400">{row.referencia}</span> },
+                    { key: "monto", label: "Monto", className: "text-right", render: (row) => (
+                      <div className="flex items-center justify-end gap-1.5">
+                        {row.tipo === "credito" ? <ArrowDownLeft className="h-3.5 w-3.5 text-emerald-500" /> : <ArrowUpRight className="h-3.5 w-3.5 text-red-500" />}
+                        <span className={`font-mono font-semibold ${row.tipo === "credito" ? "text-emerald-600" : "text-red-600"}`}>{row.tipo === "credito" ? "+" : "-"}{formatCurrency(row.monto)}</span>
+                      </div>
+                    )},
+                    { key: "estado", label: "Match", render: (row) => row.estado === "matcheado"
+                      ? <div className="flex items-center gap-1.5"><Link2 className="h-3.5 w-3.5 text-emerald-500" /><Badge variant="success">Match</Badge></div>
+                      : <div className="flex items-center gap-2"><Badge variant="warning">Pendiente</Badge><button className="rounded bg-orange-500 px-2 py-1 text-xs font-medium text-white hover:bg-orange-600">Matchear</button></div>
+                    },
+                  ]}
+                  data={movsFiltrados}
+                />
+              </Card>
+            ) : (
+              <Card className="text-center py-12">
+                <Landmark className="mx-auto h-10 w-10 text-zinc-300 dark:text-zinc-600" />
+                <p className="mt-3 text-sm text-zinc-500">No hay extractos bancarios cargados</p>
+                <p className="text-xs text-zinc-400 mt-1">Subi un archivo para comenzar la conciliacion</p>
+              </Card>
+            )}
           </>
         )}
 
@@ -3869,43 +3877,50 @@ export default function FinanzasPage() {
               <div className="mt-2 flex justify-between text-xs text-zinc-400"><span>Utilizado: {formatCurrency(totalUtilizadoCredito)}</span><span>Disponible: {formatCurrency(totalDisponibleCredito)}</span></div>
             </Card>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {lineasCredito.map((lc) => {
-                const pctUsado = lc.monto_total > 0 ? Math.round((lc.monto_utilizado / lc.monto_total) * 100) : 0;
-                const isAgotada = lc.monto_disponible === 0;
-                return (
-                  <Card key={lc.id} className={isAgotada ? "border-red-200" : ""}>
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className={`rounded-lg p-2.5 ${lc.tipo === "bancaria" ? "bg-blue-50 text-blue-600" : "bg-violet-50 text-violet-600"}`}>
-                          {lc.tipo === "bancaria" ? <Landmark className="h-5 w-5" /> : <Factory className="h-5 w-5" />}
-                        </div>
-                        <div>
-                          <h3 className="font-semibold text-zinc-900 dark:text-white">{lc.entidad}</h3>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <Badge variant={lc.estado === "activa" ? "success" : "danger"}>{lc.estado}</Badge>
-                            <Badge variant="outline">{lc.tipo === "bancaria" ? "Bancaria" : "Proveedor"}</Badge>
-                            {lc.tasa && <span className="text-xs text-zinc-400">TNA {lc.tasa}%</span>}
+            {lineasCredito.length > 0 ? (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {lineasCredito.map((lc) => {
+                  const pctUsado = lc.monto_total > 0 ? Math.round((lc.monto_utilizado / lc.monto_total) * 100) : 0;
+                  const isAgotada = lc.monto_disponible === 0;
+                  return (
+                    <Card key={lc.id} className={isAgotada ? "border-red-200" : ""}>
+                      <div className="flex items-start justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className={`rounded-lg p-2.5 ${lc.tipo === "bancaria" ? "bg-blue-50 text-blue-600" : "bg-violet-50 text-violet-600"}`}>
+                            {lc.tipo === "bancaria" ? <Landmark className="h-5 w-5" /> : <Factory className="h-5 w-5" />}
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-zinc-900 dark:text-white">{lc.entidad}</h3>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <Badge variant={lc.estado === "activa" ? "success" : "danger"}>{lc.estado}</Badge>
+                              <Badge variant="outline">{lc.tipo === "bancaria" ? "Bancaria" : "Proveedor"}</Badge>
+                              {lc.tasa && <span className="text-xs text-zinc-400">TNA {lc.tasa}%</span>}
+                            </div>
                           </div>
                         </div>
+                        {isAgotada && <AlertTriangle className="h-5 w-5 text-red-500" />}
                       </div>
-                      {isAgotada && <AlertTriangle className="h-5 w-5 text-red-500" />}
-                    </div>
-                    <div className="mt-4 space-y-3">
-                      <div>
-                        <div className="flex items-center justify-between text-xs mb-1.5"><span className="text-zinc-500">{pctUsado}% utilizado</span><span className="font-mono text-zinc-600 dark:text-zinc-300">{formatCurrency(lc.monto_utilizado)} / {formatCurrency(lc.monto_total)}</span></div>
-                        <div className="h-2.5 rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-2.5 rounded-full ${pctUsado >= 100 ? "bg-red-500" : pctUsado >= 80 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pctUsado, 100)}%` }} /></div>
+                      <div className="mt-4 space-y-3">
+                        <div>
+                          <div className="flex items-center justify-between text-xs mb-1.5"><span className="text-zinc-500">{pctUsado}% utilizado</span><span className="font-mono text-zinc-600 dark:text-zinc-300">{formatCurrency(lc.monto_utilizado)} / {formatCurrency(lc.monto_total)}</span></div>
+                          <div className="h-2.5 rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-2.5 rounded-full ${pctUsado >= 100 ? "bg-red-500" : pctUsado >= 80 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pctUsado, 100)}%` }} /></div>
+                        </div>
+                        <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-700">
+                          <div><p className="text-xs text-zinc-400">Disponible</p><p className={`font-mono font-bold text-lg ${isAgotada ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(lc.monto_disponible)}</p></div>
+                          <div className="text-right"><p className="text-xs text-zinc-400">Vencimiento</p><p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">{lc.vencimiento}</p></div>
+                        </div>
+                        {lc.notas && <p className="text-xs text-zinc-400 pt-2 border-t border-zinc-100">{lc.notas}</p>}
                       </div>
-                      <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-700">
-                        <div><p className="text-xs text-zinc-400">Disponible</p><p className={`font-mono font-bold text-lg ${isAgotada ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(lc.monto_disponible)}</p></div>
-                        <div className="text-right"><p className="text-xs text-zinc-400">Vencimiento</p><p className="text-sm font-medium text-zinc-600 dark:text-zinc-300">{lc.vencimiento}</p></div>
-                      </div>
-                      {lc.notas && <p className="text-xs text-zinc-400 pt-2 border-t border-zinc-100">{lc.notas}</p>}
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            ) : (
+              <Card className="text-center py-12">
+                <CreditCard className="mx-auto h-10 w-10 text-zinc-300 dark:text-zinc-600" />
+                <p className="mt-3 text-sm text-zinc-500">No hay lineas de credito configuradas</p>
+              </Card>
+            )}
           </>
         )}
 
@@ -4233,7 +4248,7 @@ export default function FinanzasPage() {
                 columns={[
                   { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-xs">{formatDate(row.fecha)}</span> },
                   { key: "numero", label: "OP", sortable: true, render: (row) => <span className="font-mono text-xs font-medium">{row.numero}</span> },
-                  { key: "proveedor", label: "Proveedor", sortable: true, render: (row) => <span className="text-xs">{(row as any).proveedor_razon_social || row.proveedor_id}</span> },
+                  { key: "proveedor_nombre", label: "Proveedor", sortable: true, render: (row) => <span className="text-xs">{row.proveedor_nombre}</span> },
                   { key: "base_retencion_ganancias", label: "Base", sortable: true, render: (row) => <span className="font-mono text-xs">{formatCurrency((row as any).base_retencion_ganancias || 0, row.moneda as "ARS" | "USD")}</span> },
                   { key: "retencion_ganancias_pct", label: "%", sortable: true, render: (row) => <span className="text-xs">{(row as any).retencion_ganancias_pct}%</span> },
                   { key: "retencion_ganancias_monto", label: "Monto retenido", sortable: true, render: (row) => <span className="font-mono text-xs font-bold text-violet-600">{formatCurrency((row as any).retencion_ganancias_monto || 0, row.moneda as "ARS" | "USD")}</span> },

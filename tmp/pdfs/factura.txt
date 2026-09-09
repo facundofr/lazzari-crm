@@ -1,0 +1,104 @@
+A
+
+FACTURA
+Original
+
+Nº 0015-00000142
+
+001
+
+Fecha: 27/08/2026
+C.U.I.T.: 20-37930912-8
+Ingresos brutos Nº 20-37930912-8
+Inicio de actividad 01/09/2017
+
+LAZZARI SOLUCIONES INDUSTRIALES
+Responsable Inscripto | Pueyrredón 653, Pergamino, Buenos Aires
+administracion@lazzari.com.ar
+
+SR/ES: Industrias del Centro S.A. C.U.I.T.: 30-71234567-9 - Responsable
+
+Condición de venta: Cuenta corriente 30 días
+
+inscripto
+
+Jurisdicción: Buenos Aires
+
+Dirección: Ruta 8 km 225, Pergamino, Buenos Aires
+
+Vencimiento: 26/09/2026
+Moneda: PESOS ARGENTINOS
+OC Cliente: OC-8891
+
+#
+
+D E S CRIPCIÓN
+
+C A N TIDAD
+
+P. U NITARIO
+
+IVA %
+
+S U B TOTAL
+
+1
+
+Válvula esférica de acero inoxidable 2 pulgadas
+
+4
+
+$ 125.000,00
+
+21%
+
+$ 500.000,00
+
+2
+
+Brida ANSI 150 de acero al carbono
+
+8
+
+$ 48.500,00
+
+21%
+
+$ 388.000,00
+
+3
+
+Servicio de puesta en marcha y asistencia técnica
+
+1
+
+$ 180.000,00
+
+21%
+
+$ 180.000,00
+
+Neto gravado
+
+$ 1.068.000,00
+
+IVA 21%
+
+$ 224.280,00
+
+TOTAL
+
+$ 1.292.280,00
+
+CAE N°
+
+74123456789012
+Fecha de vto. de CAE: 06/09/2026
+
+Comprobante autorizado
+
+Lazzari Soluciones Industriales
+
+FACTURA A N° 0015-00000142
+
+
