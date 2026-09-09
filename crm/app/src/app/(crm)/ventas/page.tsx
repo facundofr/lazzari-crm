@@ -12,7 +12,7 @@ import {
   FileText, Receipt, Truck, CheckCircle2,
   Loader2, X, ChevronRight, ChevronDown,
   Plus, Minus, DollarSign, Eye, AlertCircle,
-  ArrowRight, Clock, Package, ClipboardList, Search, Download,
+  ArrowRight, Clock, Package, ClipboardList, Search, Download, Mail, MailCheck,
 } from "lucide-react";
 import { FichasRelevamiento } from "@/components/ventas/fichas-relevamiento";
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -70,6 +70,7 @@ interface VentaFactura {
   fecha_vencimiento?: string | null;
   condicion_venta?: string | null;
   oc_cliente?: string | null;
+  email_enviado_at?: string | null;
 }
 
 interface VentaRemito {
@@ -195,6 +196,7 @@ export default function VentasPage() {
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [filterMoneda, setFilterMoneda] = useState<string>("todas");
+  const [filterEnviado, setFilterEnviado] = useState<string>("todos");
   const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
@@ -275,7 +277,7 @@ export default function VentasPage() {
       const [facturasRes, remitosRes] = await Promise.all([
         pIds.length > 0
           ? (() => {
-              let q = (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, cae_vencimiento, subtotal, iva, total, moneda, tipo_cambio, estado, presupuesto_id, fecha_vencimiento, condicion_venta, oc_cliente").in("presupuesto_id", pIds);
+              let q = (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, cae_vencimiento, subtotal, iva, total, moneda, tipo_cambio, estado, presupuesto_id, fecha_vencimiento, condicion_venta, oc_cliente, email_enviado_at").in("presupuesto_id", pIds);
               if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
               return q;
             })()
@@ -396,13 +398,19 @@ export default function VentasPage() {
       }
       if (q && !(v.presupuesto.clientes?.razon_social || "").toLowerCase().includes(q) && !v.presupuesto.numero.toLowerCase().includes(q)) return false;
       if (filterMoneda !== "todas" && v.presupuesto.moneda !== filterMoneda) return false;
+      if (filterEnviado !== "todos") {
+        const factActiva = v.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
+        const enviada = !!factActiva?.email_enviado_at;
+        if (filterEnviado === "enviado" && !enviada) return false;
+        if (filterEnviado === "no_enviado" && enviada) return false;
+      }
       return true;
     }).sort((a, b) => {
       const da = a.presupuesto.fecha || "";
       const db = b.presupuesto.fecha || "";
       return sortOrder === "desc" ? db.localeCompare(da) : da.localeCompare(db);
     });
-  }, [ventas, filterVendedor, filterStatus, filterCliente, sortOrder, filterMoneda]);
+  }, [ventas, filterVendedor, filterStatus, filterCliente, sortOrder, filterMoneda, filterEnviado]);
 
   // KPIs from filtered ventas (respecting vendedor filter, ignoring step filter)
   const kpis = useMemo(() => {
@@ -813,6 +821,15 @@ export default function VentasPage() {
             <option value="ARS">ARS</option>
             <option value="USD">USD</option>
           </select>
+          <select
+            value={filterEnviado}
+            onChange={e => setFilterEnviado(e.target.value)}
+            className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+          >
+            <option value="todos">Todas (envío)</option>
+            <option value="enviado">Enviadas</option>
+            <option value="no_enviado">No enviadas</option>
+          </select>
           <button
             onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
             className="flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white hover:bg-zinc-50 dark:hover:bg-zinc-800"
@@ -923,6 +940,14 @@ export default function VentasPage() {
                                 </span>
                               </div>
                             );
+                          })()}
+                          {/* Email enviado */}
+                          {(() => {
+                            const factActiva = v.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
+                            if (!factActiva) return null;
+                            return factActiva.email_enviado_at
+                              ? <div className="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400" title={`Enviada ${formatDate(factActiva.email_enviado_at)}`}><MailCheck className="h-3 w-3" /></div>
+                              : <div className="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500" title="No enviada por email"><Mail className="h-3 w-3" /></div>;
                           })()}
                           {/* Cobro */}
                           {st.facturado && (

@@ -1393,11 +1393,12 @@ export default function PresupuestosPage() {
       // Get presupuesto header for numero and sociedad_id
       const { data: prHeader } = await (supabase as any)
         .from("presupuestos")
-        .select("numero, sociedad_id, modalidad_emision, iva")
+        .select("numero, sociedad_id, modalidad_emision, iva, created_by")
         .eq("id", prId)
         .single();
       const prNumero = prHeader?.numero ?? "";
       const sociedadId = prHeader?.sociedad_id ?? sociedadActiva?.id ?? null;
+      const prCreatedBy = prHeader?.created_by ?? null;
       // PR manual = sin IVA. Doble chequeo: modalidad_emision O iva encabezado = 0
       const compraSinIva = prHeader?.modalidad_emision === "manual" || Number(prHeader?.iva) === 0;
 
@@ -1463,7 +1464,7 @@ export default function PresupuestosPage() {
             iva,
             total: subtotal + iva,
             observaciones: `Generada automáticamente desde ${prNumero}`,
-            created_by: profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
+            created_by: prCreatedBy ?? profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
           } as any)
           .select()
           .single();
@@ -1515,7 +1516,7 @@ export default function PresupuestosPage() {
             iva: ivaSP,
             total: subtotalSP + ivaSP,
             observaciones: `Generada desde ${prNumero} — asignar proveedor`,
-            created_by: profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
+            created_by: prCreatedBy ?? profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
           } as any)
           .select()
           .single();
@@ -2779,6 +2780,8 @@ export default function PresupuestosPage() {
                       const newOpId = e.target.value || null;
                       const { error } = await supabase.from("presupuestos").update({ created_by: newOpId } as any).eq("id", selected.id);
                       if (error) { toast.error("Error al cambiar operador"); return; }
+                      // Also update linked OCs
+                      await supabase.from("ordenes_compra").update({ created_by: newOpId } as any).eq("presupuesto_origen_id", selected.id).not("estado", "eq", "cancelada");
                       const v = vendedores.find(v => v.id === newOpId);
                       setSelected({ ...selected, creadoPorId: newOpId || "", creadoPor: v?.full_name || "" } as any);
                       await fetchPresupuestos();

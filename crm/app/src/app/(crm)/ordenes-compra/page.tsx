@@ -161,12 +161,13 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
   );
 }
 
-function ProveedorPicker({ value, options, onChange, placeholder = "Buscar proveedor...", compact = false }: {
+function ProveedorPicker({ value, options, onChange, placeholder = "Buscar proveedor...", compact = false, disabled = false }: {
   value: string;
   options: ProveedorOption[];
   onChange: (id: string) => void;
   placeholder?: string;
   compact?: boolean;
+  disabled?: boolean;
 }) {
   const selected = options.find((option) => option.id === value);
   const [query, setQuery] = useState(selected?.razon_social || "");
@@ -192,7 +193,7 @@ function ProveedorPicker({ value, options, onChange, placeholder = "Buscar prove
 
   return <div className="relative" onClick={(event) => event.stopPropagation()}>
     <Search className={`absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400 ${compact ? "h-3 w-3" : "h-4 w-4"}`} />
-    <input ref={inputRef} value={query} onFocus={() => { updateDropPosition(); setOpen(true); }} onChange={(event) => { setQuery(event.target.value); updateDropPosition(); setOpen(true); if (value) onChange(""); }} placeholder={placeholder} className={`w-full rounded-lg border border-zinc-300 bg-white pr-8 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white ${compact ? "py-1 pl-7 text-xs" : "py-2 pl-9 text-sm"}`} />
+    <input ref={inputRef} value={query} disabled={disabled} onFocus={() => { if (disabled) return; updateDropPosition(); setOpen(true); }} onChange={(event) => { if (disabled) return; setQuery(event.target.value); updateDropPosition(); setOpen(true); if (value) onChange(""); }} placeholder={placeholder} className={`w-full rounded-lg border border-zinc-300 bg-white pr-8 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white ${compact ? "py-1 pl-7 text-xs" : "py-2 pl-9 text-sm"} ${disabled ? "opacity-50 cursor-not-allowed" : ""}`} />
     {query && <button type="button" onClick={() => { setQuery(""); onChange(""); setOpen(true); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400"><X className="h-3.5 w-3.5" /></button>}
     {open && createPortal(
       <><div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)} /><div style={dropStyle} className="max-h-52 overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-800">
@@ -1470,16 +1471,26 @@ export default function OrdenesCompraPage() {
   };
 
   const handleAsignarProveedores = async () => {
-    const toUpdate = sinProveedorItems.filter(it => it.proveedor_id);
+    const toUpdate = sinProveedorItems.filter(it => it.proveedor_id || (it as any)._stockPropio);
     if (toUpdate.length === 0) return;
     setSinProveedorSaving(true);
     try {
       // Get proveedor names
-      const provIds = [...new Set(toUpdate.map(it => it.proveedor_id))];
+      const provIds = [...new Set(toUpdate.filter(it => it.proveedor_id).map(it => it.proveedor_id))];
       const provNameMap = new Map(sinProveedorProvs.map(p => [p.id, p.razon_social]));
 
       let updated = 0;
       for (const item of toUpdate) {
+        // Stock propio: mark on presupuesto_items
+        if ((item as any)._stockPropio && item.origen === "presupuesto") {
+          const { error } = await (supabase as any)
+            .from("presupuesto_items")
+            .update({ stock_propio: true })
+            .eq("id", item.item_id);
+          if (error) throw new Error(`No se pudo marcar stock propio en ${item.descripcion}: ${error.message}`);
+          updated++;
+          continue;
+        }
         const tabla = item.origen === "orden_compra" ? "orden_compra_items" : "presupuesto_items";
         const payload = item.origen === "orden_compra"
           ? { proveedor_id: item.proveedor_id }
@@ -2324,15 +2335,37 @@ export default function OrdenesCompraPage() {
                             )}
                           </div>
                         </div>
-                        <div className="min-w-[220px]"><ProveedorPicker
-                          value={item.proveedor_id}
-                          options={sinProveedorProvs}
-                          onChange={(val) => {
-                            setSinProveedorItems(prev => prev.map(it =>
-                              it.item_id === item.item_id ? { ...it, proveedor_id: val } : it
-                            ));
-                          }}
-                        /></div>
+                        <div className="flex items-center gap-2">
+                          <div className="min-w-[180px]"><ProveedorPicker
+                            value={(item as any)._stockPropio ? "" : item.proveedor_id}
+                            options={sinProveedorProvs}
+                            onChange={(val) => {
+                              setSinProveedorItems(prev => prev.map(it =>
+                                it.item_id === item.item_id ? { ...it, proveedor_id: val, _stockPropio: false } as any : it
+                              ));
+                            }}
+                            disabled={(item as any)._stockPropio}
+                          /></div>
+                          {item.origen === "presupuesto" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSinProveedorItems(prev => prev.map(it =>
+                                  it.item_id === item.item_id ? { ...it, _stockPropio: !(it as any)._stockPropio, proveedor_id: "" } as any : it
+                                ));
+                              }}
+                              className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-xs font-medium border transition-colors ${
+                                (item as any)._stockPropio
+                                  ? "bg-purple-100 text-purple-700 border-purple-300 dark:bg-purple-900/40 dark:text-purple-400 dark:border-purple-700"
+                                  : "bg-zinc-50 text-zinc-500 border-zinc-200 hover:bg-purple-50 hover:text-purple-600 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700"
+                              }`}
+                              title="Marcar como stock propio (no genera OC)"
+                            >
+                              <Package className="h-3 w-3 inline mr-1" />
+                              Stock propio
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -2343,7 +2376,7 @@ export default function OrdenesCompraPage() {
             {sinProveedorItems.length > 0 && !sinProveedorLoading && (
               <div className="flex items-center justify-between px-6 py-4 border-t border-zinc-200 dark:border-zinc-700">
                 <p className="text-sm text-zinc-500">
-                  {sinProveedorItems.filter(it => it.proveedor_id).length} de {sinProveedorItems.length} items con proveedor asignado
+                  {sinProveedorItems.filter(it => it.proveedor_id || (it as any)._stockPropio).length} de {sinProveedorItems.length} items asignados
                 </p>
                 <div className="flex gap-3">
                   <button onClick={() => setSinProveedorOpen(false)} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">
@@ -2351,7 +2384,7 @@ export default function OrdenesCompraPage() {
                   </button>
                   <button
                     onClick={handleAsignarProveedores}
-                    disabled={sinProveedorSaving || sinProveedorItems.every(it => !it.proveedor_id)}
+                    disabled={sinProveedorSaving || sinProveedorItems.every(it => !it.proveedor_id && !(it as any)._stockPropio)}
                     className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
                   >
                     {sinProveedorSaving && <Loader2 className="h-4 w-4 animate-spin" />}
