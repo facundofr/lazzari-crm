@@ -434,7 +434,7 @@ export default function CargarFacturaOC({
     if (!proveedorId) { setError("Seleccioná un proveedor"); return; }
     if (!numeroFactura.trim()) { setError("Ingresá el número de factura"); return; }
     if (subtotal <= 0) { setError("El subtotal debe ser mayor a 0"); return; }
-    if (tipoFC === "mercaderia" && selectedOCIds.size === 0) { setError("Seleccioná al menos una orden de compra"); return; }
+    if (tipoFC === "mercaderia" && selectedOCIds.size === 0 && ocsFiltered.length > 0) { setError("Seleccioná al menos una orden de compra"); return; }
     const isMercaderia = tipoFC === "mercaderia";
 
     setSaving(true);
@@ -606,6 +606,15 @@ export default function CargarFacturaOC({
           tipo_gasto: "Compra IVA",
           medio_pago: "efectivo",
         });
+      }
+
+      // If pagadaSinOP, mark linked OCs as completadas
+      if (pagadaSinOP && selectedOCIds.size > 0) {
+        for (const ocId of Array.from(selectedOCIds)) {
+          await (supabase as any).from("ordenes_compra")
+            .update({ estado: "completada", pago: "tarjeta" })
+            .eq("id", ocId);
+        }
       }
 
       alert(pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");

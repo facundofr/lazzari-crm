@@ -338,18 +338,20 @@ const emptyItem: NewPRItem = {
   proveedor_nombre: "", proveedor_id: "", stock_propio: false, lista_item_id: "", costo_moneda: "USD",
 };
 
-const COSTO_MONEDAS = ["ARS", "USD", "USD Divisa"] as const;
+const COSTO_MONEDAS = ["ARS", "USD"] as const;
 function nextCostoMoneda(current: string): string {
-  const idx = COSTO_MONEDAS.indexOf(current as typeof COSTO_MONEDAS[number]);
+  // Normalize legacy "USD Divisa" to "USD"
+  const normalized = current === "USD Divisa" ? "USD" : current;
+  const idx = COSTO_MONEDAS.indexOf(normalized as typeof COSTO_MONEDAS[number]);
   return COSTO_MONEDAS[(idx + 1) % COSTO_MONEDAS.length];
 }
 
 /** Convierte precio_costo a la moneda del presupuesto */
 function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, tc: number, tcDivisas?: number): number {
   const isUSD = costoMoneda === "USD" || costoMoneda === "USD Divisa";
-  const tcToUse = costoMoneda === "USD Divisa" ? (tcDivisas || tc) : tc;
+  const tcToUse = tc > 0 ? tc : (tcDivisas || 0);
   // Para ARS→USD: usar el TC que esté disponible (billetes preferido, sino divisas)
-  const tcForArs = tc > 0 ? tc : (tcDivisas || 0);
+  const tcForArs = tcToUse;
   if (isUSD && prMoneda === "ARS") {
     return tcToUse > 0 ? costoBase * tcToUse : costoBase;
   }
@@ -2925,7 +2927,7 @@ export default function PresupuestosPage() {
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
                           <td className="px-3 py-2">{item.descripcion}</td>
                           <td className="px-3 py-2 text-right">{item.cantidad} {item.unidad}</td>
-                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">{formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")}{item.costoMoneda === "USD Divisa" ? " D" : ""}</td>
+                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">{formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")}</td>
                           <td className="px-3 py-2 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>
                           <td className={`px-3 py-2 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
                             <span className="inline-flex items-center gap-1">
@@ -3545,14 +3547,12 @@ export default function PresupuestosPage() {
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1">
-                          <button type="button" onClick={() => updateNewPRItem(idx, "costo_moneda", nextCostoMoneda(item.costo_moneda))} title="Click para cambiar moneda (ARS / USD / USD Divisa)" className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border cursor-pointer hover:opacity-80 transition-opacity ${
-                            item.costo_moneda === "USD"
+                          <button type="button" onClick={() => updateNewPRItem(idx, "costo_moneda", nextCostoMoneda(item.costo_moneda))} title="Click para cambiar moneda (ARS / USD)" className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border cursor-pointer hover:opacity-80 transition-opacity ${
+                            item.costo_moneda === "USD" || item.costo_moneda === "USD Divisa"
                               ? "border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
-                              : item.costo_moneda === "USD Divisa"
-                                ? "border-purple-200 bg-purple-50 text-purple-600 dark:border-purple-800 dark:bg-purple-900/30 dark:text-purple-400"
-                                : "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
+                              : "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
                           }`}>
-                            {item.costo_moneda === "USD" ? "US$" : item.costo_moneda === "USD Divisa" ? "Div" : "AR$"}
+                            {item.costo_moneda === "USD" || item.costo_moneda === "USD Divisa" ? "US$" : "AR$"}
                           </button>
                           <NumInput value={item.precio_costo} onChange={(n) => updateNewPRItem(idx, "precio_costo", n)}
                             className="w-full min-w-0 rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
