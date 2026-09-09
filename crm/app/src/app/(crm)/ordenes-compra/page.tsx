@@ -72,7 +72,7 @@ interface OCRow {
   created_by_profile: { full_name: string } | null;
   presupuesto_origen: { numero: string; modalidad_emision?: string | null } | null;
   orden_compra_items: { codigo: string | null; descripcion: string | null; cantidad: number; cantidad_recibida: number }[];
-  facturas_vinculadas?: { estado: string; total: number; moneda: string }[];
+  facturas_vinculadas?: { id: string; numero: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null }[];
 }
 
 const ocPagada = (oc: OCRow) => {
@@ -232,6 +232,9 @@ export default function OrdenesCompraPage() {
   // Email modal
   const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
 
+  // All profiles for operator dropdown
+  const [allProfiles, setAllProfiles] = useState<{ id: string; full_name: string }[]>([]);
+
   // Create modal
   const [createOpen, setCreateOpen] = useState(false);
   const [proveedores, setProveedores] = useState<ProveedorOption[]>([]);
@@ -378,11 +381,11 @@ export default function OrdenesCompraPage() {
       if (!error && data) {
         const rows = data as unknown as OCRow[];
         const ids = rows.map((row) => row.id);
-        const linksByOC = new Map<string, { estado: string; total: number; moneda: string }[]>();
+        const linksByOC = new Map<string, { id: string; numero: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null }[]>();
         if (ids.length > 0) {
           const { data: links } = await (supabase as any)
             .from("factura_compra_ocs")
-            .select("orden_compra_id, facturas_compra(estado, total, moneda)")
+            .select("orden_compra_id, facturas_compra(id, numero, tipo_comprobante, estado, total, moneda, archivo_url)")
             .in("orden_compra_id", ids);
           for (const link of links || []) {
             const factura = link.facturas_compra;
@@ -404,6 +407,16 @@ export default function OrdenesCompraPage() {
   }, [sociedadActiva]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // ── Fetch profiles for operator dropdown ──────────────────────────
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await supabase.from("profiles").select("id, full_name").order("full_name");
+        if (data) setAllProfiles((data as any[]).filter(p => p.full_name));
+      } catch { /* ignore */ }
+    })();
+  }, []);
 
   // ── Fetch proveedores for the create modal ───────────────────────
   const fetchProveedores = useCallback(async () => {
@@ -874,7 +887,7 @@ export default function OrdenesCompraPage() {
         .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
         .eq("id", detailOC.id)
         .single();
-      if (freshOC) setDetailOC(freshOC as unknown as OCRow);
+      if (freshOC) setDetailOC(prev => ({ ...(freshOC as unknown as OCRow), facturas_vinculadas: prev?.facturas_vinculadas || [] }));
 
       // Cascade OC item changes to PR (update precio_costo for matching items)
       if (detailOC.presupuesto_origen_id) {
@@ -910,6 +923,20 @@ export default function OrdenesCompraPage() {
       alert(err.message || "Error al guardar cambios");
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  const handleChangeOperador = async (ocId: string, newCreatedBy: string) => {
+    try {
+      const { error } = await supabase.from("ordenes_compra").update({ created_by: newCreatedBy || null } as any).eq("id", ocId);
+      if (error) throw error;
+      if (detailOC?.id === ocId) {
+        const prof = operadores.find(o => o.id === newCreatedBy);
+        setDetailOC({ ...detailOC, created_by: newCreatedBy || null, created_by_profile: prof ? { full_name: prof.nombre } : null });
+      }
+      await fetchData();
+    } catch (err: any) {
+      alert("Error al cambiar operador: " + (err.message || "desconocido"));
     }
   };
 
@@ -2682,6 +2709,21 @@ export default function OrdenesCompraPage() {
                     ) : "\u2014"}
                   </p>
                 </div>
+                <div className="col-span-2 sm:col-span-4">
+                  <span className="text-zinc-400">Operador</span>
+                  {canManageCompras ? (
+                    <select
+                      value={detailOC.created_by || ""}
+                      onChange={(e) => handleChangeOperador(detailOC.id, e.target.value)}
+                      className="mt-0.5 w-full max-w-xs rounded border border-zinc-200 bg-white px-2 py-1 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    >
+                      <option value="">Sin asignar</option>
+                      {allProfiles.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                    </select>
+                  ) : (
+                    <p className="font-medium dark:text-white">{detailOC.created_by_profile?.full_name || "\u2014"}</p>
+                  )}
+                </div>
               </div>
 
               {/* Observaciones / Comentarios */}
@@ -2749,6 +2791,34 @@ export default function OrdenesCompraPage() {
                   </div>
                 </div>
               </div>
+
+              {/* ── Facturas de compra vinculadas ──────────────────── */}
+              {(detailOC.facturas_vinculadas || []).length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-zinc-400" /> Facturas de compra vinculadas
+                  </h3>
+                  <div className="space-y-2">
+                    {(detailOC.facturas_vinculadas || []).map((fc, idx) => (
+                      <div key={fc.id || idx} className="flex items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Badge variant={fc.estado === "pagada" ? "success" : fc.estado === "anulada" ? "danger" : "warning"}>
+                            {fc.estado === "pagada" ? "Pagada" : fc.estado === "anulada" ? "Anulada" : "Pendiente"}
+                          </Badge>
+                          <span className="font-medium dark:text-white truncate">{fc.tipo_comprobante || ""} {fc.numero || `FC #${idx + 1}`}</span>
+                          <span className="font-mono text-zinc-500">{formatCurrency(fc.total, fc.moneda as "ARS" | "USD")}</span>
+                        </div>
+                        {fc.archivo_url && (
+                          <a href={fc.archivo_url} target="_blank" rel="noopener noreferrer"
+                            className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 font-medium shrink-0">
+                            <Download className="h-3.5 w-3.5" /> Ver comprobante
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* ── Items table ─────────────────────────────────────── */}
               <div>

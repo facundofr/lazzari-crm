@@ -519,7 +519,7 @@ export default function RemitosPage() {
         .from("presupuestos")
         .select("id, numero, subtotal, total, cliente_id, estado")
         .eq("cliente_id", clienteId)
-        .in("estado", ["aprobado", "facturar", "remitido"])
+        .in("estado", ["aprobado", "facturar", "facturado"])
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id", sociedadActiva.id);
       const { data, error } = await prQ;
@@ -717,7 +717,7 @@ export default function RemitosPage() {
       let iaQ = (supabase as any)
         .from("presupuestos")
         .select("id, numero, cliente_id")
-        .in("estado", ["aprobado", "facturar", "remitido"])
+        .in("estado", ["aprobado", "facturar", "facturado"])
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) iaQ = iaQ.eq("sociedad_id", sociedadActiva.id);
       const { data: headers, error: headersError } = await iaQ;
