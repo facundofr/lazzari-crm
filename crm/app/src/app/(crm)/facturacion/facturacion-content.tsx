@@ -784,10 +784,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       if (firstFecha) setCobroFecha(firstFecha);
 
       setCobroLineas(prev => {
-        // If only one empty line, replace it with parsed results
-        if (prev.length === 1 && (!prev[0].monto || prev[0].monto === "0")) {
-          return newLineas;
-        }
+        // If only one default line (untouched by user), replace entirely with AI results
+        const isDefault = prev.length === 1 && !prev[0].descripcion && (prev[0].tipo === "transferencia" || prev[0].tipo === "efectivo");
+        if (isDefault) return newLineas;
         // Otherwise append
         return [...prev, ...newLineas];
       });
