@@ -892,6 +892,27 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       });
       if (rpcErr) throw rpcErr;
 
+      // Auto-create echeqs for cheque/echeq lines
+      const chequeLineas = lineasValidas.filter(l => l.tipo === "cheque_recibido" || l.tipo === "echeq");
+      for (const cl of chequeLineas) {
+        const echeqRow: Record<string, unknown> = {
+          tipo_cheque: cl.tipo === "echeq" ? "echeq" : "fisico",
+          numero: cl.cheque_numero || `CHQ-${Date.now()}`,
+          banco_emisor: cl.cheque_banco || null,
+          monto: Number(cl.monto),
+          moneda: factura.moneda === "USD" && cotizNum > 0 ? "ARS" : factura.moneda,
+          fecha_pago: cl.cheque_fecha || cobroFecha,
+          estado: "en_cartera",
+          origen_tipo: "cliente",
+          origen_nombre: factura.clientes?.razon_social || factura._clienteNombre || "",
+          observaciones: cl.descripcion || null,
+        };
+        if (cl.cheque_id_digital) (echeqRow as any).echeq_id_digital = cl.cheque_id_digital;
+        if (sociedadActiva?.id) echeqRow.sociedad_id = sociedadActiva.id;
+        if (userId) echeqRow.user_id = userId;
+        await (supabase as any).from("echeqs").insert(echeqRow);
+      }
+
       setCobroModalId(null);
       await fetchData();
       if (detailFactura?.id === cobroModalId) {
