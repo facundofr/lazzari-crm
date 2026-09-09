@@ -3240,11 +3240,13 @@ export default function PresupuestosPage() {
             onChange={(e) => {
               const mon = e.target.value as "USD" | "ARS";
               setNewPR((p) => {
+                const tc = mon === "ARS" ? 0 : p.tipo_cambio;
+                const tcD = mon === "ARS" ? 0 : p.tipo_cambio_divisas;
                 const items = p.items.map(it => {
-                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio, p.tipo_cambio_divisas);
+                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, mon, tc, tcD);
                   return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
                 });
-                return { ...p, moneda: mon, items };
+                return { ...p, moneda: mon, tipo_cambio: tc, tipo_cambio_divisas: tcD, items };
               });
               if (mon === "USD") fetchCotizBna("divisas");
             }}
@@ -3629,7 +3631,7 @@ export default function PresupuestosPage() {
                 <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(newPRIva, newPR.moneda)}</span></div>
               </>}
               <div className="flex justify-between font-bold border-t border-zinc-200 pt-1 dark:border-zinc-700"><span>Total</span><span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(newPRSub + newPRIva, newPR.moneda)}</span></div>
-              {(newPR.tipo_cambio > 0 || newPR.tipo_cambio_divisas > 0) && (
+              {newPR.moneda === "USD" && (newPR.tipo_cambio > 0 || newPR.tipo_cambio_divisas > 0) && (
                 <div className="text-xs text-zinc-400 text-right pt-1 space-x-2">
                   {newPR.tipo_cambio > 0 && <span>TC Billetes: {newPR.tipo_cambio.toLocaleString("es-AR")}</span>}
                   {newPR.tipo_cambio_divisas > 0 && <span>TC Divisas: {newPR.tipo_cambio_divisas.toLocaleString("es-AR")}</span>}
