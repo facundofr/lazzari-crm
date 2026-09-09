@@ -55,6 +55,7 @@ interface FacturaRow {
   modalidad_emision?: string | null;
   recibida_cliente?: boolean;
   email_enviado_at?: string | null;
+  email_enviado_a?: string | null;
   clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string; dias_cuenta_corriente?: number | null } | null;
   _clienteNombre?: string;
   _fechaVencCalc?: string;
@@ -1325,7 +1326,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 <div
                   onClick={(e) => { e.stopPropagation(); handleEmailFactura(r); }}
                   className="flex justify-center cursor-pointer"
-                  title={r.email_enviado_at ? `Enviada por email el ${formatDateTime(r.email_enviado_at)}` : "Enviar por email"}
+                  title={r.email_enviado_at ? `Enviada por email el ${formatDateTime(r.email_enviado_at)}${r.email_enviado_a ? ` a ${r.email_enviado_a}` : r.clientes?.email ? ` a ${r.clientes.email}` : ""}` : "Enviar por email"}
                 >
                   {r.email_enviado_at
                     ? <MailCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
@@ -2568,7 +2569,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           const facturaId = emailModal.facturaId;
           const { error } = await (supabase as any)
             .from("facturas")
-            .update({ email_enviado_at: sentAt })
+            .update({ email_enviado_at: sentAt, email_enviado_a: emailModal.to || null })
             .eq("id", facturaId);
           if (error) {
             alert(`El email se envió, pero no se pudo guardar la marca de envío: ${error.message}`);
