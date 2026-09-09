@@ -478,7 +478,7 @@ export default function FinanzasPage() {
   const [editingOP, setEditingOP] = useState(false);
   const [editOPForm, setEditOPForm] = useState<{ fecha: string; moneda: "ARS" | "USD"; notas: string }>({ fecha: "", moneda: "ARS", notas: "" });
   const [savingOP, setSavingOP] = useState(false);
-  const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
+  const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string; suggestedEmails: { email: string; label?: string }[] }>({ open: false, id: "", to: "", subject: "", body: "", filename: "", suggestedEmails: [] });
 
   // Gastos manuales state
   const [gastosManuales, setGastosManuales] = useState<GastoManualRow[]>([]);
@@ -1685,6 +1685,21 @@ export default function FinanzasPage() {
       || proveedoresOptions.find((proveedor) => proveedor.id === op.proveedor_id)?.email
       || "";
 
+    // Fetch proveedor + contactos emails
+    const suggested: { email: string; label?: string }[] = [];
+    try {
+      const { data: provData } = await supabase.from("proveedores").select("email").eq("id", op.proveedor_id).single();
+      if (provData?.email) suggested.push({ email: provData.email, label: "Proveedor" });
+      const { data: contactos } = await (supabase as any).from("contactos").select("nombre, email").eq("entity_type", "proveedor").eq("entity_id", op.proveedor_id);
+      if (contactos) {
+        for (const c of contactos) {
+          if (c.email && !suggested.some(s => s.email === c.email)) {
+            suggested.push({ email: c.email, label: c.nombre || "Contacto" });
+          }
+        }
+      }
+    } catch { /* ignore */ }
+
     setEmailModal({
       open: true,
       id: op.id,
@@ -1692,6 +1707,7 @@ export default function FinanzasPage() {
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
       filename: `OP-${op.numero || op.id.slice(0, 8)}.pdf`,
+      suggestedEmails: suggested,
     });
   }
 
@@ -5610,6 +5626,7 @@ export default function FinanzasPage() {
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
+        suggestedEmails={emailModal.suggestedEmails}
         onSuccess={async () => {
           const sentAt = new Date().toISOString();
           const ordenPagoId = emailModal.id;

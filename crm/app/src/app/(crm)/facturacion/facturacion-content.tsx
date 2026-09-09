@@ -110,7 +110,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
   const [detailItems, setDetailItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number; subtotal: number }[]>([]);
   const [panelFullscreen, setPanelFullscreen] = useState(false);
-  const [emailModal, setEmailModal] = useState<{ open: boolean; facturaId: string; to: string; subject: string; body: string; filename: string }>({ open: false, facturaId: "", to: "", subject: "", body: "", filename: "" });
+  const [emailModal, setEmailModal] = useState<{ open: boolean; facturaId: string; to: string; subject: string; body: string; filename: string; suggestedEmails: { email: string; label?: string }[] }>({ open: false, facturaId: "", to: "", subject: "", body: "", filename: "", suggestedEmails: [] });
   const [editingFechaPago, setEditingFechaPago] = useState<string | null>(null);
 
   async function saveFechaPago(id: string, newDate: string) {
@@ -1062,6 +1062,20 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       fecha: formatDate(f.fecha),
       cliente: f.clientes?.razon_social || "",
     };
+    // Fetch client emails + contactos
+    const suggested: { email: string; label?: string }[] = [];
+    try {
+      if (f.clientes?.email) suggested.push({ email: f.clientes.email, label: "Cliente" });
+      const { data: contactos } = await (supabase as any).from("contactos").select("nombre, email").eq("entity_type", "cliente").eq("entity_id", f.cliente_id);
+      if (contactos) {
+        for (const c of contactos) {
+          if (c.email && !suggested.some(s => s.email === c.email)) {
+            suggested.push({ email: c.email, label: c.nombre || "Contacto" });
+          }
+        }
+      }
+    } catch { /* ignore */ }
+
     setEmailModal({
       open: true,
       facturaId: f.id,
@@ -1069,6 +1083,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
       filename: `${f.tipo}-${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}.pdf`,
+      suggestedEmails: suggested,
     });
   }
 
@@ -2444,6 +2459,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         onClose={() => setEmailModal(prev => ({ ...prev, open: false }))}
         documentType="factura"
         sociedadId={sociedadActiva?.id}
+        suggestedEmails={emailModal.suggestedEmails}
         generatePdf={async () => {
           const f = facturas.find(ff => ff.id === emailModal.facturaId);
           if (!f || !sociedadActiva) throw new Error("Factura no encontrada");

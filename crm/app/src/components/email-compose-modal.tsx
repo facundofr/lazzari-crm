@@ -25,6 +25,8 @@ interface EmailComposeModalProps {
   sociedadId?: string;
   /** User email — used as sender for PR/remitos */
   userEmail?: string;
+  /** Suggested emails from client/proveedor/contactos to show as clickable chips */
+  suggestedEmails?: { email: string; label?: string }[];
 }
 
 const DOC_LABELS: Record<EmailDocumentType, string> = {
@@ -47,6 +49,7 @@ export function EmailComposeModal({
   onSuccess,
   sociedadId,
   userEmail,
+  suggestedEmails = [],
 }: EmailComposeModalProps) {
   const [to, setTo] = useState(defaultTo);
   const [subject, setSubject] = useState(defaultSubject);
@@ -165,6 +168,36 @@ export function EmailComposeModal({
               placeholder="email@ejemplo.com (separar con comas)"
               className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
             />
+            {suggestedEmails.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                {suggestedEmails.map((s, i) => {
+                  const currentEmails = to.split(/[,;]\s*/).map(e => e.trim()).filter(Boolean);
+                  const isAdded = currentEmails.includes(s.email);
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => {
+                        if (isAdded) {
+                          setTo(currentEmails.filter(e => e !== s.email).join(", "));
+                        } else {
+                          setTo(to.trim() ? `${to.trim()}, ${s.email}` : s.email);
+                        }
+                      }}
+                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+                        isAdded
+                          ? "bg-orange-100 text-orange-700 border border-orange-300 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-700"
+                          : "bg-zinc-100 text-zinc-600 border border-zinc-200 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700 dark:hover:bg-orange-950/30"
+                      }`}
+                      title={isAdded ? "Click para quitar" : "Click para agregar"}
+                    >
+                      {isAdded && <CheckCircle2 className="h-3 w-3" />}
+                      {s.label ? `${s.label} (${s.email})` : s.email}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Subject */}
