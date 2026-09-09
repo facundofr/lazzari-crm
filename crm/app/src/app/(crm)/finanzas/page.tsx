@@ -453,6 +453,7 @@ export default function FinanzasPage() {
   const [opSaving, setOpSaving] = useState(false);
   const [opError, setOpError] = useState("");
   const [opFile, setOpFile] = useState<File | null>(null);
+  const [opParsingFile, setOpParsingFile] = useState(false);
   const [opProvCondicion, setOpProvCondicion] = useState<string | null>(null);
   const [opCondicionLoading, setOpCondicionLoading] = useState(false);
   const [opManualGanancias, setOpManualGanancias] = useState(false); // user manually toggled retención
@@ -1413,6 +1414,28 @@ export default function FinanzasPage() {
   const opNetoAPagar = opMontoBruto - opRetencionGanancias;
   const opTotalMedios = opMedios.reduce((s, m) => s + m.monto, 0);
   const opDiferencia = opNetoAPagar - opTotalMedios;
+
+  async function handleParseComprobante(f: File) {
+    setOpFile(f);
+    setOpParsingFile(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", f);
+      const res = await fetch("/api/parse-cobro", { method: "POST", body: formData });
+      const json = await res.json();
+      if (!res.ok || !json.success) return;
+      const d = json.data;
+      const tipo = d.tipo === "deposito" ? "deposito" : d.tipo === "cheque" ? "cheque" : d.tipo === "efectivo" ? "efectivo" : "transferencia";
+      setOpMedios([{
+        ...makeOpMedio(opForm.moneda),
+        tipo: tipo as OpMedioPago["tipo"],
+        monto: Number(d.monto) || 0,
+        fecha: d.fecha || opMedios[0]?.fecha || todayAR(),
+        banco: d.banco || "",
+      }]);
+    } catch { /* noop */ }
+    setOpParsingFile(false);
+  }
 
   async function handleCreateOP() {
     if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
@@ -4681,13 +4704,18 @@ export default function FinanzasPage() {
                     rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Observaciones..." />
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-zinc-500">Comprobante (PDF)</label>
+                  <label className="text-xs font-medium text-zinc-500">Comprobante (PDF) — <span className="text-orange-500">IA autocompleta medios</span></label>
                   <div className="mt-1">
-                    <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-sm text-zinc-500 hover:border-orange-400 dark:border-zinc-600">
-                      <Upload className="h-4 w-4" />{opFile ? opFile.name : "Adjuntar"}
-                      <input type="file" accept=".pdf,.jpg,.png" className="hidden" onChange={(e) => setOpFile(e.target.files?.[0] || null)} />
+                    <label className={`flex items-center gap-2 cursor-pointer rounded-lg border border-dashed px-3 py-2 text-sm hover:border-orange-400 ${opParsingFile ? "border-orange-300 bg-orange-50/50 text-orange-600" : "border-zinc-300 text-zinc-500 dark:border-zinc-600"}`}>
+                      {opParsingFile ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-orange-500" />}
+                      {opParsingFile ? "Procesando con IA..." : opFile ? opFile.name : "Adjuntar comprobante"}
+                      <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={opParsingFile} onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) handleParseComprobante(f);
+                        e.target.value = "";
+                      }} />
                     </label>
-                    {opFile && <button onClick={() => setOpFile(null)} className="text-xs text-red-400 mt-1">Quitar</button>}
+                    {opFile && !opParsingFile && <button onClick={() => setOpFile(null)} className="text-xs text-red-400 mt-1">Quitar</button>}
                   </div>
                 </div>
               </div>
