@@ -505,56 +505,32 @@ export default function CargarFacturaOC({
         if (linkErr) throw new Error(linkErr.message);
       }
 
-      // Override OC from FC: update OC items/totals/moneda, cascade to PR
+      // Override OC from FC: REPLACE OC items with FC items, update totals/moneda, cascade to PR
       if (isMercaderia && overrideOC && selectedOCIds.size > 0 && items.length > 0) {
         for (const ocId of Array.from(selectedOCIds)) {
-          // Fetch current OC items to match against FC items
-          const { data: ocItems } = await supabase
+          // Save old OC items for PR cascade matching by position
+          const { data: oldOCItems } = await supabase
             .from("orden_compra_items")
-            .select("id, codigo, descripcion, precio_unitario, cantidad, unidad, orden")
+            .select("id, descripcion, precio_unitario")
             .eq("orden_id", ocId)
             .order("orden");
 
-          const existingOCItems = ocItems || [];
-          const matchedFCIndices = new Set<number>();
+          // Delete ALL old OC items
+          await supabase.from("orden_compra_items").delete().eq("orden_id", ocId);
 
-          // Match FC items to OC items by descripcion (normalized)
-          for (const ocItem of existingOCItems) {
-            const ocDesc = (ocItem.descripcion || "").toLowerCase().trim();
-            const fcIdx = items.findIndex((fc, idx) => !matchedFCIndices.has(idx) && (fc.descripcion || "").toLowerCase().trim() === ocDesc);
-            if (fcIdx !== -1) {
-              matchedFCIndices.add(fcIdx);
-              const fcItem = items[fcIdx];
-              // Update OC item with FC values
-              await supabase
-                .from("orden_compra_items")
-                .update({
-                  precio_unitario: fcItem.precio_unitario,
-                  cantidad: fcItem.cantidad,
-                  unidad: fcItem.unidad,
-                } as any)
-                .eq("id", ocItem.id);
-            }
-          }
-
-          // Add unmatched FC items (e.g. envío) to OC
-          const maxOrden = existingOCItems.reduce((max, it) => Math.max(max, it.orden || 0), 0);
-          let newOrden = maxOrden + 1;
-          for (let i = 0; i < items.length; i++) {
-            if (matchedFCIndices.has(i)) continue;
-            const fcItem = items[i];
-            await supabase.from("orden_compra_items").insert({
-              orden_id: ocId,
-              codigo: "",
-              descripcion: fcItem.descripcion,
-              cantidad: fcItem.cantidad,
-              precio_unitario: fcItem.precio_unitario,
-              unidad: fcItem.unidad,
-              iva_porcentaje: fcItem.iva_porcentaje,
-              orden: newOrden++,
-              cantidad_recibida: 0,
-            } as any);
-          }
+          // Insert ALL FC items as new OC items
+          const newOCItems = items.map((fcItem, idx) => ({
+            orden_id: ocId,
+            codigo: "",
+            descripcion: fcItem.descripcion,
+            cantidad: fcItem.cantidad,
+            precio_unitario: fcItem.precio_unitario,
+            unidad: fcItem.unidad,
+            iva_porcentaje: fcItem.iva_porcentaje,
+            orden: idx + 1,
+            cantidad_recibida: 0,
+          }));
+          await supabase.from("orden_compra_items").insert(newOCItems as any);
 
           // Update OC header totals + moneda
           await (supabase as any)
@@ -562,7 +538,7 @@ export default function CargarFacturaOC({
             .update({ subtotal, iva, total: subtotal + iva, moneda })
             .eq("id", ocId);
 
-          // Cascade to presupuesto: update precio_costo for matched items
+          // Cascade to presupuesto: update precio_costo by position
           const { data: ocRow } = await supabase
             .from("ordenes_compra")
             .select("presupuesto_origen_id")
@@ -573,26 +549,20 @@ export default function CargarFacturaOC({
             const prId = ocRow.presupuesto_origen_id;
             const { data: prItems } = await supabase
               .from("presupuesto_items")
-              .select("id, codigo, descripcion, precio_costo")
-              .eq("presupuesto_id", prId);
+              .select("id, descripcion, precio_costo, orden")
+              .eq("presupuesto_id", prId)
+              .order("orden");
 
-            if (prItems) {
-              // Only update matched items (not new ones like envío)
-              for (const ocItem of existingOCItems) {
-                const ocDesc = (ocItem.descripcion || "").toLowerCase().trim();
-                const fcIdx = items.findIndex((fc, idx2) => {
-                  // Re-check match
-                  return (fc.descripcion || "").toLowerCase().trim() === ocDesc;
-                });
-                if (fcIdx === -1) continue;
-                const fcItem = items[fcIdx];
-
-                // Find matching PR item
-                const prItem = prItems.find((pr) => (pr.descripcion || "").toLowerCase().trim() === ocDesc);
-                if (prItem && prItem.precio_costo !== fcItem.precio_unitario) {
+            if (prItems && oldOCItems) {
+              // Match old OC items to PR items by description, then update PR with FC price + moneda
+              const oldItems = oldOCItems || [];
+              for (let i = 0; i < oldItems.length && i < items.length; i++) {
+                const oldDesc = (oldItems[i].descripcion || "").toLowerCase().trim();
+                const prItem = prItems.find((pr: any) => (pr.descripcion || "").toLowerCase().trim() === oldDesc);
+                if (prItem) {
                   await supabase
                     .from("presupuesto_items")
-                    .update({ precio_costo: fcItem.precio_unitario } as any)
+                    .update({ precio_costo: items[i].precio_unitario, costo_moneda: moneda } as any)
                     .eq("id", prItem.id);
                 }
               }
