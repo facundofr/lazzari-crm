@@ -7,7 +7,7 @@ import { DataTable } from "@/components/ui/data-table";
 
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, formatDateTime, todayAR } from "@/lib/utils";
-import { generateFacturaPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
+import { generateFacturaPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64, documentFilename } from "@/lib/pdf-templates";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { EmailComposeModal, type EmailDocumentType } from "@/components/email-compose-modal";
 import { useUser } from "@/lib/auth-context";
@@ -1097,7 +1097,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       to: f.clientes?.email || "",
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
-      filename: `${f.tipo}-${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}.pdf`,
+      filename: documentFilename(f.tipo, f.punto_venta, f.numero, f.clientes?.razon_social),
       suggestedEmails: suggested,
     });
   }
@@ -1151,7 +1151,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       if (data) setDetailItems(data.map(d => ({ ...d, subtotal: d.subtotal ?? 0 })));
     }
     const html = buildFacturaHTML(f);
-    if (html) openPDFWindow(html, `Factura-${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}.pdf`);
+    if (html) openPDFWindow(html, documentFilename(f.tipo, f.punto_venta, f.numero, f.clientes?.razon_social));
   }
 
   // ── KPIs ───────────────────────────────────────────────────────

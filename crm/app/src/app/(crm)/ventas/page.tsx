@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate, getInitials, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
-import { generateFacturaPDF, getSociedadPDF, openPDFWindow } from "@/lib/pdf-templates";
+import { generateFacturaPDF, getSociedadPDF, openPDFWindow, documentFilename } from "@/lib/pdf-templates";
 import Link from "next/link";
 import {
   FileText, Receipt, Truck, CheckCircle2,
@@ -376,8 +376,7 @@ export default function VentasPage() {
         domicilio: soc.domicilio,
         ptoVta: factura.punto_venta,
       }, soc);
-      const filename = `${factura.tipo}-${String(factura.punto_venta).padStart(4, "0")}-${String(factura.numero).padStart(8, "0")}.pdf`;
-      await openPDFWindow(html, filename, preview);
+      await openPDFWindow(html, documentFilename(factura.tipo, factura.punto_venta, factura.numero, cli?.razon_social), preview);
     } catch (error) {
       console.error("Error descargando factura:", error);
       alert("No se pudo descargar la factura. Intentá nuevamente.");

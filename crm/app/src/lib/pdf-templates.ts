@@ -1169,6 +1169,21 @@ ${certHtml}
 </body></html>`;
 }
 
+// ── Document filename helper ────────────────────────────────────
+const DOC_TYPE_NAMES: Record<string, string> = {
+  FA: "Factura-A", FB: "Factura-B", FCEA: "FacturaDeCreditoElectronica-A", FCEB: "FacturaDeCreditoElectronica-B",
+  NCA: "NotaDeCredito-A", NCB: "NotaDeCredito-B", NCEA: "NotaDeCreditoElectronica-A", NCEB: "NotaDeCreditoElectronica-B",
+  NDA: "NotaDeDebito-A", NDB: "NotaDeDebito-B", X: "Factura-X",
+};
+
+export function documentFilename(tipo: string, pv: number, numero: number, razonSocial?: string): string {
+  const tipoName = DOC_TYPE_NAMES[tipo] || tipo;
+  const pvStr = String(pv).padStart(4, "0");
+  const numStr = String(numero).padStart(8, "0");
+  const cliente = (razonSocial || "").replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ ]/g, "").replace(/\s+/g, "").slice(0, 40);
+  return `${tipoName}-${pvStr}-${numStr}${cliente ? `-${cliente}` : ""}.pdf`;
+}
+
 // ── Helper to generate and download the actual PDF ──────────────
 export async function openPDFWindow(html: string, filename?: string, preview?: boolean) {
   try {
