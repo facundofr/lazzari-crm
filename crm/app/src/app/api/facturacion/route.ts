@@ -536,7 +536,7 @@ export async function POST(req: NextRequest) {
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const errStack = err instanceof Error ? err.stack : "";
-    console.error(`Error emitiendo factura ARCA [sociedad=${sociedad_id}, tipo=${tipo}, cuit=${arcaConfig?.cuit}]:`, errMsg, errStack);
+    console.error("Error emitiendo factura ARCA:", errMsg, errStack);
     return NextResponse.json({ error: errMsg || "Error desconocido al emitir factura" }, { status: 500 });
   }
 }
