@@ -1326,7 +1326,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 <div
                   onClick={(e) => { e.stopPropagation(); handleEmailFactura(r); }}
                   className="flex justify-center cursor-pointer"
-                  title={r.email_enviado_at ? `Enviada por email el ${formatDateTime(r.email_enviado_at)}${r.email_enviado_a ? ` a ${r.email_enviado_a}` : r.clientes?.email ? ` a ${r.clientes.email}` : ""}` : "Enviar por email"}
+                  title={r.email_enviado_at ? `Enviada por email el ${formatDateTime(r.email_enviado_at)}${r.email_enviado_a ? ` a ${r.email_enviado_a}` : r.clientes?.email ? ` a ${r.clientes.email}` : ""}` : `Enviar por email${r.clientes?.email ? ` (${r.clientes.email})` : ""}`}
                 >
                   {r.email_enviado_at
                     ? <MailCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
@@ -2575,11 +2575,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             alert(`El email se envió, pero no se pudo guardar la marca de envío: ${error.message}`);
             return;
           }
+          const sentTo = emailModal.to || null;
           setFacturas((prev) => prev.map((factura) =>
-            factura.id === facturaId ? { ...factura, email_enviado_at: sentAt } : factura
+            factura.id === facturaId ? { ...factura, email_enviado_at: sentAt, email_enviado_a: sentTo } : factura
           ));
           setDetailFactura((prev) =>
-            prev?.id === facturaId ? { ...prev, email_enviado_at: sentAt } : prev
+            prev?.id === facturaId ? { ...prev, email_enviado_at: sentAt, email_enviado_a: sentTo } : prev
           );
         }}
       />
