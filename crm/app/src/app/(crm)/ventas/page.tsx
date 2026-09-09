@@ -539,6 +539,7 @@ export default function VentasPage() {
           condicion_venta: emitCondVenta || null,
           fecha_vencimiento: emitFechaVenc || null,
           observaciones: emitObservaciones || null,
+          oc_cliente: p.oc_cliente || null,
         }),
       });
 
