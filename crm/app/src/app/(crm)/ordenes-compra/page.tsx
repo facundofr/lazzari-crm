@@ -675,6 +675,21 @@ export default function OrdenesCompraPage() {
   };
 
   const handleDeleteOC = async (oc: OCRow) => {
+    try {
+      // Check linked FC — block deletion if any non-anulada FC exists
+      const { data: linkedFCs } = await (supabase as any)
+        .from("factura_compra_ocs")
+        .select("facturas_compra(id, estado)")
+        .eq("orden_compra_id", oc.id);
+      const activeFCs = (linkedFCs || []).filter((l: any) => {
+        const fc = Array.isArray(l.facturas_compra) ? l.facturas_compra[0] : l.facturas_compra;
+        return fc && fc.estado !== "anulada";
+      });
+      if (activeFCs.length > 0) {
+        alert("No se puede eliminar esta OC porque tiene facturas de compra vinculadas. Anulá las facturas primero.");
+        return;
+      }
+    } catch {}
     if (!confirm(`¿Eliminar la OC ${oc.numero}? Esta acción no se puede deshacer.`)) return;
     try {
       // 1. Delete orden_compra_items

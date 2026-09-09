@@ -129,6 +129,10 @@ interface OrdenPagoRow {
   estado: "pendiente" | "pagada" | "anulada";
   comprobante_url?: string;
   certificado_retencion_url?: string;
+  archivo_url?: string;
+  archivo_nombre?: string;
+  archivos?: { url: string; nombre: string }[];
+  sobre_verde?: boolean;
   email_enviado_at?: string | null;
   created_at: string;
 }
@@ -280,6 +284,7 @@ const emptyOPForm = {
   monto_manual: 0,
   usar_monto_manual: false,
   iva_manual_pct: 21 as number,
+  sobre_verde: false,
 };
 
 const emptyGastoManualForm = {
@@ -452,7 +457,7 @@ export default function FinanzasPage() {
   const [opForm, setOpForm] = useState(emptyOPForm);
   const [opSaving, setOpSaving] = useState(false);
   const [opError, setOpError] = useState("");
-  const [opFile, setOpFile] = useState<File | null>(null);
+  const [opFiles, setOpFiles] = useState<File[]>([]);
   const [opParsingFile, setOpParsingFile] = useState(false);
   const [opProvCondicion, setOpProvCondicion] = useState<string | null>(null);
   const [opCondicionLoading, setOpCondicionLoading] = useState(false);
@@ -935,6 +940,10 @@ export default function FinanzasPage() {
               estado: r.estado ?? "pendiente",
               comprobante_url: r.comprobante_url ?? undefined,
               certificado_retencion_url: r.certificado_retencion_url ?? undefined,
+              archivo_url: r.archivo_url ?? undefined,
+              archivo_nombre: r.archivo_nombre ?? undefined,
+              archivos: r.archivos ? (typeof r.archivos === "string" ? JSON.parse(r.archivos) : r.archivos) : undefined,
+              sobre_verde: !!r.sobre_verde,
               email_enviado_at: r.email_enviado_at ?? null,
               created_at: r.created_at,
             })));
@@ -1363,7 +1372,7 @@ export default function FinanzasPage() {
   function openOPModal(preloadProveedorId?: string) {
     setOpForm(preloadProveedorId ? { ...emptyOPForm, proveedor_id: preloadProveedorId } : emptyOPForm);
     setOpError("");
-    setOpFile(null);
+    setOpFiles([]);
     setOpProvCondicion(null);
     setOpManualGanancias(false);
     setOpMontoRetencionManual(null);
@@ -1416,7 +1425,7 @@ export default function FinanzasPage() {
   const opDiferencia = opNetoAPagar - opTotalMedios;
 
   async function handleParseComprobante(f: File) {
-    setOpFile(f);
+    setOpFiles(prev => [...prev, f]);
     setOpParsingFile(true);
     try {
       const formData = new FormData();
@@ -1485,6 +1494,7 @@ export default function FinanzasPage() {
         medios_pago: JSON.stringify(opMedios.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion, echeq_id: m.echeq_id }))),
         notas: opForm.notas,
         estado: esPagoParcial ? "pendiente" : "pagada",
+        sobre_verde: opForm.sobre_verde || false,
       };
       if (profile?.id) insertData.created_by = profile.id;
       if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
@@ -1492,17 +1502,26 @@ export default function FinanzasPage() {
       const { data: opData, error } = await (supabase as any).from("ordenes_pago").insert(insertData).select("id").single();
       if (error) throw error;
 
-      // Upload comprobante
-      if (opFile && opData?.id) {
-        const ext = opFile.name.split(".").pop() || "pdf";
-        const filePath = `${sociedadActiva?.id || "default"}/op-${opData.id}/comprobante.${ext}`;
-        const { error: upErr } = await supabase.storage.from("comprobantes").upload(filePath, opFile, { upsert: true });
-        if (!upErr) {
-          const { data: urlData } = supabase.storage.from("comprobantes").getPublicUrl(filePath);
-          await (supabase as any).from("ordenes_pago").update({ archivo_url: urlData.publicUrl, archivo_nombre: opFile.name }).eq("id", opData.id);
+      // Upload comprobantes (multiple files)
+      if (opFiles.length > 0 && opData?.id) {
+        const archivosArr: { url: string; nombre: string }[] = [];
+        for (let fi = 0; fi < opFiles.length; fi++) {
+          const file = opFiles[fi];
+          const ext = file.name.split(".").pop() || "pdf";
+          const filePath = `${sociedadActiva?.id || "default"}/op-${opData.id}/comprobante-${fi}.${ext}`;
+          const { error: upErr } = await supabase.storage.from("comprobantes").upload(filePath, file, { upsert: true });
+          if (!upErr) {
+            const { data: urlData } = supabase.storage.from("comprobantes").getPublicUrl(filePath);
+            archivosArr.push({ url: urlData.publicUrl, nombre: file.name });
+          }
+        }
+        if (archivosArr.length > 0) {
+          const updateData: Record<string, unknown> = { archivo_url: archivosArr[0].url, archivo_nombre: archivosArr[0].nombre };
+          if (archivosArr.length > 1) updateData.archivos = JSON.stringify(archivosArr);
+          await (supabase as any).from("ordenes_pago").update(updateData).eq("id", opData.id);
         }
       }
-      setOpFile(null);
+      setOpFiles([]);
 
       // Link FCs + update saldo
       if (opData?.id && selectedFCs.length > 0) {
@@ -3217,8 +3236,14 @@ export default function FinanzasPage() {
                       <Badge variant={row.estado === "pagada" ? "success" : row.estado === "anulada" ? "danger" : "warning"}>
                         {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : "Pendiente"}
                       </Badge>
+                      {row.sobre_verde && (
+                        <span title="Sobre verde (efectivo)" className="text-emerald-500"><Mail className="h-3.5 w-3.5" /></span>
+                      )}
                       {row.certificado_retencion_url && (
                         <span title="Certificado de retención adjunto" className="text-violet-500"><Paperclip className="h-3.5 w-3.5" /></span>
+                      )}
+                      {(row.archivo_url || (row.archivos && row.archivos.length > 0)) && (
+                        <span title="Comprobante adjunto" className="text-orange-500"><Paperclip className="h-3.5 w-3.5" /></span>
                       )}
                     </div>
                   )},
@@ -4738,20 +4763,35 @@ export default function FinanzasPage() {
                   <label className="text-xs font-medium text-zinc-500">Notas</label>
                   <textarea value={opForm.notas} onChange={(e) => setOpForm({ ...opForm, notas: e.target.value })}
                     rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Observaciones..." />
+                  <label className="flex items-center gap-2 mt-2 cursor-pointer">
+                    <input type="checkbox" checked={!!(opForm as any).sobre_verde} onChange={(e) => setOpForm({ ...opForm, sobre_verde: e.target.checked } as any)}
+                      className="rounded border-zinc-300" />
+                    <span className="text-xs text-emerald-600 font-medium flex items-center gap-1"><Mail className="h-3 w-3" /> Sobre verde</span>
+                  </label>
                 </div>
                 <div>
-                  <label className="text-xs font-medium text-zinc-500">Comprobante (PDF) — <span className="text-orange-500">IA autocompleta medios</span></label>
-                  <div className="mt-1">
+                  <label className="text-xs font-medium text-zinc-500">Comprobantes — <span className="text-orange-500">IA autocompleta medios</span></label>
+                  <div className="mt-1 space-y-1">
                     <label className={`flex items-center gap-2 cursor-pointer rounded-lg border border-dashed px-3 py-2 text-sm hover:border-orange-400 ${opParsingFile ? "border-orange-300 bg-orange-50/50 text-orange-600" : "border-zinc-300 text-zinc-500 dark:border-zinc-600"}`}>
                       {opParsingFile ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4 text-orange-500" />}
-                      {opParsingFile ? "Procesando con IA..." : opFile ? opFile.name : "Adjuntar comprobante"}
-                      <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={opParsingFile} onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) handleParseComprobante(f);
+                      {opParsingFile ? "Procesando con IA..." : opFiles.length > 0 ? `+ Agregar otro archivo` : "Adjuntar comprobante"}
+                      <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" multiple className="hidden" disabled={opParsingFile} onChange={(e) => {
+                        const files = e.target.files;
+                        if (files) { for (const f of Array.from(files)) handleParseComprobante(f); }
                         e.target.value = "";
                       }} />
                     </label>
-                    {opFile && !opParsingFile && <button onClick={() => setOpFile(null)} className="text-xs text-red-400 mt-1">Quitar</button>}
+                    {opFiles.length > 0 && !opParsingFile && (
+                      <div className="space-y-1">
+                        {opFiles.map((f, i) => (
+                          <div key={i} className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+                            <Paperclip className="h-3 w-3 flex-shrink-0" />
+                            <span className="truncate flex-1">{f.name}</span>
+                            <button onClick={() => setOpFiles(prev => prev.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-500"><X className="h-3 w-3" /></button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -5178,6 +5218,12 @@ export default function FinanzasPage() {
                     <p className="text-sm text-zinc-600 dark:text-zinc-400">{selectedOP.notas}</p>
                   </div>
                 )}
+                {selectedOP.sobre_verde && (
+                  <div className="flex items-center gap-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 px-3 py-2">
+                    <Mail className="h-4 w-4 text-emerald-500" />
+                    <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Sobre verde (efectivo)</span>
+                  </div>
+                )}
               </div>
 
               {/* Desglose de importes */}
@@ -5217,7 +5263,7 @@ export default function FinanzasPage() {
                 <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
                   <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Comprobante de pago</p>
                 </div>
-                <div className="p-4">
+                <div className="p-4 space-y-2">
                   <button
                     onClick={() => handleGenerarComprobante(selectedOP)}
                     className="w-full flex items-center justify-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-4 py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
@@ -5225,6 +5271,27 @@ export default function FinanzasPage() {
                     <Printer className="h-4 w-4" />
                     Generar comprobante
                   </button>
+                  {/* Archivos adjuntos */}
+                  {(() => {
+                    const allFiles = selectedOP.archivos && selectedOP.archivos.length > 0
+                      ? selectedOP.archivos
+                      : selectedOP.archivo_url
+                        ? [{ url: selectedOP.archivo_url, nombre: selectedOP.archivo_nombre || "Archivo adjunto" }]
+                        : [];
+                    if (allFiles.length === 0) return null;
+                    return (
+                      <div className="space-y-1 pt-2 border-t border-zinc-100 dark:border-zinc-700">
+                        <p className="text-[10px] uppercase text-zinc-400 font-medium">Archivos adjuntos</p>
+                        {allFiles.map((af, i) => (
+                          <a key={i} href={af.url} target="_blank" rel="noopener noreferrer"
+                            className="flex items-center gap-2 text-sm text-orange-500 hover:text-orange-600">
+                            <Paperclip className="h-3.5 w-3.5 flex-shrink-0" />
+                            <span className="truncate">{af.nombre}</span>
+                          </a>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
 

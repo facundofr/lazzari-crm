@@ -737,7 +737,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   // ── Copy & PDF ─────────────────────────────────────────────────
   // Cobro modal
   const [cobroModalId, setCobroModalId] = useState<string | null>(null);
-  type CobroLinea = { tipo: "cobro" | "transferencia" | "efectivo" | "cheque_recibido" | "echeq" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva"; monto: string; descripcion: string; cheque_numero?: string; cheque_banco?: string; cheque_fecha?: string; cheque_id_digital?: string };
+  type CobroLinea = { tipo: "cobro" | "transferencia" | "efectivo" | "tarjeta" | "cheque_recibido" | "echeq" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva"; monto: string; descripcion: string; cheque_numero?: string; cheque_banco?: string; cheque_fecha?: string; cheque_id_digital?: string };
   const [cobroLineas, setCobroLineas] = useState<CobroLinea[]>([{ tipo: "transferencia", monto: "", descripcion: "" }]);
   const [cobroFecha, setCobroFecha] = useState(todayAR());
   const [cobroSaving, setCobroSaving] = useState(false);
