@@ -12,7 +12,7 @@ import {
   FileText, Receipt, Truck, CheckCircle2,
   Loader2, X, ChevronRight, ChevronDown,
   Plus, Minus, DollarSign, Eye, AlertCircle,
-  ArrowRight, Clock, Package, ClipboardList, Search, Download, Mail, MailCheck,
+  ArrowRight, Clock, Package, ClipboardList, Search, Download, Mail, MailCheck, Maximize2, Minimize2,
 } from "lucide-react";
 import { FichasRelevamiento } from "@/components/ventas/fichas-relevamiento";
 import { useState, useEffect, useCallback, useMemo } from "react";
@@ -201,6 +201,7 @@ export default function VentasPage() {
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
   // Emit modal state
+  const [emitFullscreen, setEmitFullscreen] = useState(false);
   const [emitModalOpen, setEmitModalOpen] = useState(false);
   const [emitVenta, setEmitVenta] = useState<Venta | null>(null);
   const [emitTipo, setEmitTipo] = useState<EmitTipo>("FB");
@@ -1262,14 +1263,19 @@ export default function VentasPage() {
       {/* Emit Modal */}
       {emitModalOpen && emitVenta && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => !emitting && setEmitModalOpen(false)}>
-          <Card className="w-full max-w-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <Card className={`p-6 space-y-4 overflow-y-auto ${emitFullscreen ? "fixed inset-2 max-w-none max-h-none" : "w-full max-w-2xl max-h-[90vh]"}`} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold dark:text-white">
                 Emitir factura — {emitVenta.presupuesto.numero}
               </h2>
-              <button onClick={() => !emitting && setEmitModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
-                <X className="h-5 w-5" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setEmitFullscreen(f => !f)} className="text-zinc-400 hover:text-zinc-600 p-1" title={emitFullscreen ? "Restaurar" : "Maximizar"}>
+                  {emitFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                </button>
+                <button onClick={() => !emitting && setEmitModalOpen(false)} className="text-zinc-400 hover:text-zinc-600 p-1">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
             </div>
 
             {emitSuccess ? (

@@ -18,7 +18,7 @@ import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
   ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, MailCheck, FileText, Search, Scissors,
-  Maximize2, Pencil, Trash2, Upload, Sparkles, Eye,
+  Maximize2, Minimize2, Pencil, Trash2, Upload, Sparkles, Eye,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
@@ -137,6 +137,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   // Emit modal
   const [emitOpen, setEmitOpen] = useState(false);
+  const [emitFullscreen, setEmitFullscreen] = useState(false);
   const [emitStep, setEmitStep] = useState<"form" | "emitting" | "success" | "error">("form");
   const [emitResult, setEmitResult] = useState<any>(null);
   const [emitError, setEmitError] = useState("");
@@ -1407,15 +1408,20 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       {/* ── Emit Modal ──────────────────────────────────────────────── */}
       {emitOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+          <div className={`bg-white dark:bg-zinc-900 rounded-xl shadow-2xl overflow-y-auto ${emitFullscreen ? "fixed inset-2 max-w-none max-h-none mx-0" : "w-full max-w-2xl mx-4 max-h-[90vh]"}`}>
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
               <div>
                 <h2 className="text-lg font-bold dark:text-white">{emitManual ? "Factura manual" : "Emitir factura ARCA"}</h2>
                 <p className="text-sm text-zinc-400">{emitManual ? "Se guarda sin autorizar en ARCA (sin CAE)" : "Se autorizara en tiempo real con ARCA"}</p>
               </div>
-              <button onClick={() => setEmitOpen(false)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                <X className="h-5 w-5" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setEmitFullscreen(f => !f)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400" title={emitFullscreen ? "Restaurar" : "Maximizar"}>
+                  {emitFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                </button>
+                <button onClick={() => setEmitOpen(false)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
             </div>
 
             {emitStep === "form" && (
