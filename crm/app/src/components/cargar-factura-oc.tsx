@@ -152,12 +152,12 @@ export default function CargarFacturaOC({
   const alreadyInvoiced = useMemo(() => roundMoney(linkedInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0)), [linkedInvoices]);
   const remainingOC = roundMoney(ocTotal - alreadyInvoiced);
   const alignmentDifference = roundMoney(remainingOC - totalSinPercepciones);
-  const currencyMismatch = ocCurrencies.size !== 1 || !ocCurrencies.has(moneda) || linkedInvoices.some((invoice) => invoice.moneda !== moneda);
+  const currencyMismatch = (ocCurrencies.size > 0 && !ocCurrencies.has(moneda)) || linkedInvoices.some((invoice) => invoice.moneda !== moneda);
   const exceedsOC = alignmentDifference < -0.01;
+  const needsOverride = exceedsOC || currencyMismatch;
   const alignmentBlocked = selectedOCs.length > 0 && (
     Boolean(alignmentError)
-    || currencyMismatch
-    || (exceedsOC && !overrideOC)
+    || (needsOverride && !overrideOC)
   );
 
   async function fetchLinkedInvoicesForOCs(ids: string[]) {
@@ -411,12 +411,12 @@ export default function CargarFacturaOC({
     }
 
     const currencies = new Set(freshOCs.map((oc: any) => oc.moneda));
-    if (currencies.size !== 1 || !currencies.has(moneda)) {
+    if (!overrideOC && (currencies.size !== 1 || !currencies.has(moneda))) {
       throw new Error(`La factura está en ${moneda} y las OC seleccionadas están en otra moneda.`);
     }
 
     const previousInvoices = await fetchLinkedInvoicesForOCs(ids);
-    if (previousInvoices.some((invoice) => invoice.moneda !== moneda)) {
+    if (!overrideOC && previousInvoices.some((invoice) => invoice.moneda !== moneda)) {
       throw new Error("Hay facturas anteriores vinculadas en otra moneda. Revisá la OC antes de continuar.");
     }
 
@@ -960,18 +960,18 @@ export default function CargarFacturaOC({
                 </p>
                 {alignmentLoading ? (
                   <div className="flex items-center gap-2 rounded-lg bg-zinc-50 p-3 text-xs text-zinc-500 dark:bg-zinc-800"><Loader2 size={14} className="animate-spin" />Verificando importes ya facturados...</div>
-                ) : (alignmentBlocked || (exceedsOC && overrideOC)) ? (
+                ) : (alignmentBlocked || (needsOverride && overrideOC)) ? (
                   <div className="space-y-2">
                     <div className={`flex items-start gap-2 rounded-lg border p-3 text-xs ${overrideOC ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300" : "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"}`}>
                       <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-                      <span>{alignmentError || (currencyMismatch ? "La moneda del comprobante no coincide con la de las OC." : `El comprobante supera el saldo de las OC en ${formatCurrency(Math.abs(alignmentDifference), moneda)}.`)}</span>
+                      <span>{alignmentError || (currencyMismatch ? `La factura está en ${moneda} y la OC en ${[...ocCurrencies].join("/")}. Activá la opción de abajo para actualizar la OC.` : `El comprobante supera el saldo de las OC en ${formatCurrency(Math.abs(alignmentDifference), moneda)}.`)}</span>
                     </div>
-                    {exceedsOC && !currencyMismatch && !alignmentError && (
+                    {needsOverride && !alignmentError && (
                       <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 p-3 text-xs dark:border-orange-800 dark:bg-orange-950/30">
                         <input type="checkbox" checked={overrideOC} onChange={(e) => setOverrideOC(e.target.checked)} className="mt-0.5 accent-orange-600" />
                         <span>
                           <strong className="text-orange-700 dark:text-orange-300">Actualizar OC desde esta factura</strong>
-                          <span className="block text-zinc-500 mt-0.5">Se actualizarán los items y totales de la OC para que coincidan con la factura. Los items que matcheen también actualizarán el precio de costo en el presupuesto.</span>
+                          <span className="block text-zinc-500 mt-0.5">Se actualizarán los items, totales{currencyMismatch ? ` y moneda (→ ${moneda})` : ""} de la OC. Los items que matcheen también actualizarán el precio de costo en el presupuesto.</span>
                         </span>
                       </label>
                     )}
