@@ -18,7 +18,7 @@ import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
   ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, MailCheck, FileText, Search, Scissors,
-  Maximize2, Pencil, Trash2, Upload,
+  Maximize2, Pencil, Trash2, Upload, Sparkles,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
@@ -734,25 +734,62 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [cobroParsing, setCobroParsing] = useState(false);
   const cobroFileRef = useRef<HTMLInputElement>(null);
 
-  async function handleParseComprobante(file: File) {
+  async function handleParseComprobante(files: FileList | File[]) {
     setCobroParsing(true);
     try {
       const formData = new FormData();
-      formData.append("file", file);
+      for (const file of Array.from(files)) formData.append("file", file);
       const res = await fetch("/api/parse-cobro", { method: "POST", body: formData });
       const json = await res.json();
       if (!json.success || !json.data) { alert(json.error || "No se pudo leer el comprobante"); return; }
-      const d = json.data;
-      const tipo = d.tipo === "deposito" ? "efectivo" : d.tipo === "transferencia" ? "transferencia" : d.tipo === "cheque" ? "cheque_recibido" : "transferencia";
-      const monto = d.monto ? String(d.monto) : "";
-      const desc = [d.referencia, d.banco, d.ordenante, d.concepto].filter(Boolean).join(" — ");
-      if (d.fecha) setCobroFecha(d.fecha);
-      setCobroLineas(prev => {
-        const firstEmpty = prev.findIndex(l => !l.monto || l.monto === "0");
-        if (firstEmpty >= 0) {
-          return prev.map((l, i) => i === firstEmpty ? { ...l, tipo: tipo as any, monto, descripcion: desc } : l);
+      const pagos: any[] = json.data.pagos || (json.data.tipo ? [json.data] : []);
+      if (pagos.length === 0) { alert("No se detectaron pagos en el comprobante"); return; }
+
+      // Map API tipo → CobroLinea tipo
+      function mapTipo(t: string): CobroLinea["tipo"] {
+        if (t === "deposito") return "efectivo";
+        if (t === "cheque") return "cheque_recibido";
+        if (t === "echeq") return "echeq";
+        if (t === "retencion_iibb" || t === "retencion_ganancias" || t === "retencion_iva") return t;
+        if (t === "efectivo") return "efectivo";
+        return "transferencia";
+      }
+
+      const newLineas: CobroLinea[] = pagos.map((p, idx) => {
+        const tipo = mapTipo(p.tipo);
+        const descParts: string[] = [];
+        if (tipo === "cheque_recibido" || tipo === "echeq") {
+          if (p.banco) descParts.push(p.banco);
+          if (p.cheque_numero) descParts.push(`N° ${p.cheque_numero}`);
+          if (p.ordenante) descParts.push(p.ordenante);
+        } else {
+          if (p.referencia) descParts.push(p.referencia);
+          if (p.banco) descParts.push(p.banco);
+          if (p.ordenante) descParts.push(p.ordenante);
+          if (p.concepto) descParts.push(p.concepto);
         }
-        return [...prev, { tipo: tipo as any, monto, descripcion: desc }];
+        return {
+          tipo,
+          monto: p.monto ? String(p.monto) : "",
+          descripcion: descParts.join(" — "),
+          cheque_numero: p.cheque_numero || "",
+          cheque_banco: p.banco || "",
+          cheque_fecha: p.cheque_fecha || "",
+          cheque_id_digital: p.cheque_id_digital || "",
+        };
+      });
+
+      // Use fecha from first pago
+      const firstFecha = pagos.find(p => p.fecha)?.fecha;
+      if (firstFecha) setCobroFecha(firstFecha);
+
+      setCobroLineas(prev => {
+        // If only one empty line, replace it with parsed results
+        if (prev.length === 1 && (!prev[0].monto || prev[0].monto === "0")) {
+          return newLineas;
+        }
+        // Otherwise append
+        return [...prev, ...newLineas];
       });
     } catch (e) {
       alert("Error al procesar el comprobante");
@@ -1936,11 +1973,11 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                         className="flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700 font-medium">
                         <Plus className="h-3 w-3" /> Agregar medio
                       </button>
-                      <input ref={cobroFileRef} type="file" accept="image/*,.pdf" className="hidden"
-                        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleParseComprobante(f); }} />
+                      <input ref={cobroFileRef} type="file" accept="image/*,.pdf" multiple className="hidden"
+                        onChange={(e) => { const fl = e.target.files; if (fl && fl.length > 0) handleParseComprobante(fl); }} />
                       <button onClick={() => cobroFileRef.current?.click()} disabled={cobroParsing}
                         className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-700 font-medium disabled:opacity-50">
-                        {cobroParsing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />} {cobroParsing ? "Leyendo..." : "Leer comprobante"}
+                        {cobroParsing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} {cobroParsing ? "Leyendo..." : "Leer comprobantes"}
                       </button>
                     </div>
                   </div>

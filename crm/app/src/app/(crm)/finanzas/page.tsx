@@ -1424,15 +1424,20 @@ export default function FinanzasPage() {
       const res = await fetch("/api/parse-cobro", { method: "POST", body: formData });
       const json = await res.json();
       if (!res.ok || !json.success) return;
-      const d = json.data;
-      const tipo = d.tipo === "deposito" ? "deposito" : d.tipo === "cheque" ? "cheque" : d.tipo === "efectivo" ? "efectivo" : "transferencia";
-      setOpMedios([{
-        ...makeOpMedio(opForm.moneda),
-        tipo: tipo as OpMedioPago["tipo"],
-        monto: Number(d.monto) || 0,
-        fecha: d.fecha || opMedios[0]?.fecha || todayAR(),
-        banco: d.banco || "",
-      }]);
+      const pagos: any[] = json.data.pagos || (json.data.tipo ? [json.data] : []);
+      if (pagos.length === 0) return;
+      const mapped: OpMedioPago[] = pagos.map(d => {
+        const tipo = d.tipo === "deposito" ? "deposito" : d.tipo === "cheque" ? "cheque" : d.tipo === "echeq" ? "echeq" : d.tipo === "efectivo" ? "efectivo" : "transferencia";
+        return {
+          ...makeOpMedio(opForm.moneda),
+          tipo: tipo as OpMedioPago["tipo"],
+          monto: Number(d.monto) || 0,
+          fecha: d.fecha || opMedios[0]?.fecha || todayAR(),
+          banco: d.banco || "",
+          numero_cheque: d.cheque_numero || "",
+        };
+      });
+      setOpMedios(mapped);
     } catch { /* noop */ }
     setOpParsingFile(false);
   }
