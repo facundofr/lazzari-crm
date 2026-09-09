@@ -194,6 +194,7 @@ export default function VentasPage() {
   const [filterCliente, setFilterCliente] = useState("");
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
+  const [filterMoneda, setFilterMoneda] = useState<string>("todas");
   const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
@@ -315,7 +316,7 @@ export default function VentasPage() {
     }
   }, [sociedadActiva]);
 
-  async function downloadFactura(facturaId: string) {
+  async function downloadFactura(facturaId: string, preview?: boolean) {
     if (!sociedadActiva || downloadingFacturaId) return;
     setDownloadingFacturaId(facturaId);
     try {
@@ -373,7 +374,7 @@ export default function VentasPage() {
         ptoVta: factura.punto_venta,
       }, soc);
       const filename = `${factura.tipo}-${String(factura.punto_venta).padStart(4, "0")}-${String(factura.numero).padStart(8, "0")}.pdf`;
-      await openPDFWindow(html, filename);
+      await openPDFWindow(html, filename, preview);
     } catch (error) {
       console.error("Error descargando factura:", error);
       alert("No se pudo descargar la factura. Intentá nuevamente.");
@@ -394,13 +395,14 @@ export default function VentasPage() {
         if (getVentaStage(v) !== filterStatus) return false;
       }
       if (q && !(v.presupuesto.clientes?.razon_social || "").toLowerCase().includes(q) && !v.presupuesto.numero.toLowerCase().includes(q)) return false;
+      if (filterMoneda !== "todas" && v.presupuesto.moneda !== filterMoneda) return false;
       return true;
     }).sort((a, b) => {
       const da = a.presupuesto.fecha || "";
       const db = b.presupuesto.fecha || "";
       return sortOrder === "desc" ? db.localeCompare(da) : da.localeCompare(db);
     });
-  }, [ventas, filterVendedor, filterStatus, filterCliente, sortOrder]);
+  }, [ventas, filterVendedor, filterStatus, filterCliente, sortOrder, filterMoneda]);
 
   // KPIs from filtered ventas (respecting vendedor filter, ignoring step filter)
   const kpis = useMemo(() => {
@@ -802,6 +804,15 @@ export default function VentasPage() {
               <option key={v.id} value={v.id}>{v.full_name}</option>
             ))}
           </select>
+          <select
+            value={filterMoneda}
+            onChange={e => setFilterMoneda(e.target.value)}
+            className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+          >
+            <option value="todas">Todas las monedas</option>
+            <option value="ARS">ARS</option>
+            <option value="USD">USD</option>
+          </select>
           <button
             onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
             className="flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white hover:bg-zinc-50 dark:hover:bg-zinc-800"
@@ -1115,7 +1126,14 @@ export default function VentasPage() {
                                 className="inline-flex items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-2 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-60"
                               >
                                 {downloadingFacturaId === facturaActiva.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-                                Descargar PDF
+                                PDF
+                              </button>
+                              <button
+                                onClick={() => downloadFactura(facturaActiva.id, true)}
+                                disabled={downloadingFacturaId === facturaActiva.id}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-60"
+                              >
+                                <Eye className="h-3.5 w-3.5" /> Ver
                               </button>
                               <Link
                                 href={`/finanzas?factura=${facturaActiva.id}`}

@@ -18,7 +18,7 @@ import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
   ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, MailCheck, FileText, Search, Scissors,
-  Maximize2, Pencil, Trash2, Upload, Sparkles,
+  Maximize2, Pencil, Trash2, Upload, Sparkles, Eye,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
@@ -58,6 +58,8 @@ interface FacturaRow {
   clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string; dias_cuenta_corriente?: number | null } | null;
   _clienteNombre?: string;
   _fechaVencCalc?: string;
+  _prNumero?: string;
+  presupuestos?: { numero: string } | null;
 }
 
 type NcItem = { descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number };
@@ -140,6 +142,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [emitError, setEmitError] = useState("");
   const [clientes, setClientes] = useState<ClienteOption[]>([]);
   const [emitManual, setEmitManual] = useState(false);
+  const [emitClienteSearch, setEmitClienteSearch] = useState("");
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
   const [cotizFecha, setCotizFecha] = useState("");
@@ -403,7 +406,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     try {
       let query = supabase
         .from("facturas")
-        .select(`*, clientes(razon_social, cuit, condicion_iva, email, telefono, direccion, localidad, provincia, dias_cuenta_corriente)`)
+        .select(`*, clientes(razon_social, cuit, condicion_iva, email, telefono, direccion, localidad, provincia, dias_cuenta_corriente), presupuestos:presupuesto_id(numero)`)
         .order("created_at", { ascending: false });
 
       if (sociedadActiva?.id) {
@@ -424,7 +427,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             if (fv && fv < hoy) estado = "vencida";
             else estado = "pendiente";
           }
-          return { ...f, estado, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "" };
+          return { ...f, estado, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "", _prNumero: (f as any).presupuestos?.numero || "" };
         }));
       } else if (error) {
         setFacturas(mockFacturas.map((f) => ({
@@ -512,6 +515,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     setEmitStep("form");
     setEmitError("");
     setEmitResult(null);
+    setEmitClienteSearch("");
     setEmitOpen(true);
     // Fetch clientes
     const q = supabase.from("clientes").select("id, razon_social, cuit, condicion_iva").eq("activo", true).order("razon_social");
@@ -537,6 +541,15 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       items: p.items.map((it, i) => i === idx ? { ...it, [field]: value } : it),
     }));
   };
+
+  const emitFilteredClientes = useMemo(() => {
+    const term = emitClienteSearch.trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    if (!term) return clientes;
+    return clientes.filter(c =>
+      c.razon_social.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().includes(term) ||
+      (c.cuit || "").includes(term)
+    );
+  }, [clientes, emitClienteSearch]);
 
   const isFacturaA = emitData.tipo === "FA" || emitData.tipo === "NCA" || emitData.tipo === "NDA" || emitData.tipo === "FCEA" || emitData.tipo === "NCEA";
 
@@ -1087,20 +1100,11 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     });
   }
 
-  async function handlePrintFactura(f: FacturaRow) {
-    if (!sociedadActiva) return;
-    // Ensure items are loaded before generating PDF
-    let pdfItems = detailItems;
-    if (pdfItems.length === 0) {
-      const { data } = await supabase.from("factura_items")
-        .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal")
-        .eq("factura_id", f.id).order("orden");
-      pdfItems = (data || []).map(d => ({ ...d, subtotal: d.subtotal ?? 0 }));
-    }
-
+  function buildFacturaHTML(f: FacturaRow): string | null {
+    if (!sociedadActiva) return null;
     const soc = getSociedadPDF(sociedadActiva);
     const cli = f.clientes;
-    const html = generateFacturaPDF({
+    return generateFacturaPDF({
       tipo: f.tipo,
       punto_venta: f.punto_venta,
       numero: f.numero,
@@ -1125,7 +1129,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         email: cli.email,
         telefono: cli.telefono,
       } : null,
-      items: pdfItems.map(it => ({
+      items: detailItems.map(it => ({
         descripcion: it.descripcion,
         cantidad: it.cantidad,
         precio_unitario: Number(it.precio_unitario),
@@ -1133,7 +1137,19 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         subtotal: Number(it.subtotal),
       })),
     }, emisorData, soc);
-    openPDFWindow(html, `Factura-${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}.pdf`);
+  }
+
+  async function handlePrintFactura(f: FacturaRow) {
+    if (!sociedadActiva) return;
+    // Ensure items are loaded before generating PDF
+    if (detailItems.length === 0) {
+      const { data } = await supabase.from("factura_items")
+        .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal")
+        .eq("factura_id", f.id).order("orden");
+      if (data) setDetailItems(data.map(d => ({ ...d, subtotal: d.subtotal ?? 0 })));
+    }
+    const html = buildFacturaHTML(f);
+    if (html) openPDFWindow(html, `Factura-${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}.pdf`);
   }
 
   // ── KPIs ───────────────────────────────────────────────────────
@@ -1251,7 +1267,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               { key: "numero", label: "Comprobante", sortable: true, render: (r) => (
                 <div className="flex items-center gap-2">
                   <Receipt className="h-4 w-4 text-zinc-400" />
-                  <span className="font-mono text-xs font-bold">{formatComprobante(r.tipo, r.punto_venta, r.numero)}</span>
+                  <div>
+                    <span className="font-mono text-xs font-bold">{formatComprobante(r.tipo, r.punto_venta, r.numero)}</span>
+                    {r._prNumero && <p className="font-mono text-[10px] text-blue-500">{r._prNumero}</p>}
+                  </div>
                 </div>
               )},
               { key: "clientes", label: "Cliente", sortable: true, sortKey: "_clienteNombre", render: (r) => <span className="font-medium">{r.clientes?.razon_social || "\u2014"}</span> },
@@ -1475,13 +1494,50 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                       </>)}
                     </select>
                   </div>
-                  <div className="col-span-7">
+                  <div className="col-span-7 relative">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cliente *</label>
-                    <select value={emitData.cliente_id} onChange={(e) => setEmitData((p) => ({ ...p, cliente_id: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
-                      <option value="">Seleccionar cliente...</option>
-                      {(!isFacturaA || emitData.tipo === "X") && <option value="consumidor_final">Consumidor Final</option>}
-                      {clientes.map((c) => <option key={c.id} value={c.id}>{c.razon_social} — {c.cuit || "Sin CUIT"}</option>)}
-                    </select>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 pointer-events-none" />
+                      <input
+                        value={emitData.cliente_id
+                          ? (emitData.cliente_id === "consumidor_final" ? "Consumidor Final" : clientes.find(c => c.id === emitData.cliente_id)?.razon_social || "")
+                          : emitClienteSearch}
+                        onChange={(e) => {
+                          setEmitClienteSearch(e.target.value);
+                          if (emitData.cliente_id) setEmitData(p => ({ ...p, cliente_id: "" }));
+                        }}
+                        onFocus={() => { if (emitData.cliente_id) { setEmitClienteSearch(""); setEmitData(p => ({ ...p, cliente_id: "" })); } }}
+                        placeholder="Buscar cliente por nombre o CUIT..."
+                        autoComplete="off"
+                        className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 pl-9 pr-8 py-2 text-sm dark:text-white"
+                      />
+                      {emitData.cliente_id && (
+                        <button onClick={() => { setEmitData(p => ({ ...p, cliente_id: "" })); setEmitClienteSearch(""); }}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600">
+                          <X className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                    {!emitData.cliente_id && emitClienteSearch.trim() && (
+                      <div className="mt-1 border rounded-lg dark:border-zinc-700 max-h-40 overflow-y-auto bg-white dark:bg-zinc-800 shadow-lg absolute z-20 left-0 right-0">
+                        {(!isFacturaA || emitData.tipo === "X") && (
+                          <button onClick={() => { setEmitData(p => ({ ...p, cliente_id: "consumidor_final" })); setEmitClienteSearch(""); }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white font-medium text-orange-600">
+                            Consumidor Final
+                          </button>
+                        )}
+                        {emitFilteredClientes.slice(0, 12).map(c => (
+                          <button key={c.id} onClick={() => { setEmitData(p => ({ ...p, cliente_id: c.id })); setEmitClienteSearch(""); }}
+                            className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex justify-between">
+                            <span>{c.razon_social}</span>
+                            <span className="text-xs text-zinc-400">{c.cuit || "Sin CUIT"}</span>
+                          </button>
+                        ))}
+                        {emitFilteredClientes.length === 0 && (
+                          <p className="px-3 py-2 text-sm text-zinc-400">No se encontraron clientes</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="col-span-2">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">PV</label>
@@ -1760,6 +1816,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 </button>
                 <button onClick={() => handlePrintFactura(detailFactura)} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
                   <Download className="h-3.5 w-3.5" /> PDF
+                </button>
+                <button onClick={async () => {
+                  const html = buildFacturaHTML(detailFactura);
+                  if (html) await openPDFWindow(html, undefined, true);
+                }} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" title="Ver factura online">
+                  <Eye className="h-3.5 w-3.5" /> Ver
                 </button>
                 <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
                   <Maximize2 className="h-4 w-4" />

@@ -1170,7 +1170,7 @@ ${certHtml}
 }
 
 // ── Helper to generate and download the actual PDF ──────────────
-export async function openPDFWindow(html: string, filename?: string) {
+export async function openPDFWindow(html: string, filename?: string, preview?: boolean) {
   try {
     const base64 = await htmlToPdfBase64(html);
     const binary = window.atob(base64);
@@ -1178,15 +1178,19 @@ export async function openPDFWindow(html: string, filename?: string) {
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     const blob = new Blob([bytes], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
-    const title = html.match(/<title>([^<]+)<\/title>/i)?.[1] || "documento";
-    const safeName = (filename || `${title}.pdf`).replace(/[\\/:*?"<>|]+/g, "-");
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = safeName.toLowerCase().endsWith(".pdf") ? safeName : `${safeName}.pdf`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (preview) {
+      window.open(url, "_blank");
+    } else {
+      const title = html.match(/<title>([^<]+)<\/title>/i)?.[1] || "documento";
+      const safeName = (filename || `${title}.pdf`).replace(/[\\/:*?"<>|]+/g, "-");
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = safeName.toLowerCase().endsWith(".pdf") ? safeName : `${safeName}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
   } catch (error) {
     console.error("No se pudo generar el PDF:", error);
     window.alert("No se pudo descargar el PDF. Intentá nuevamente.");
