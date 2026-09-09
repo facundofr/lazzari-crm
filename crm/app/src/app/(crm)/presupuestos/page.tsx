@@ -1677,10 +1677,12 @@ export default function PresupuestosPage() {
     try {
       const { error } = await supabase.from("presupuestos").update({ eliminado: true } as any).eq("id", id);
       if (error) throw new Error(error.message);
+      // Cancel linked OCs
+      await supabase.from("ordenes_compra").update({ estado: "cancelada" } as any).eq("presupuesto_origen_id", id).not("estado", "eq", "cancelada");
       setSelected(null);
       setPanelFullscreen(false);
       setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: true } as any : p));
-      toast.success("Presupuesto movido a papelera");
+      toast.success("Presupuesto movido a papelera (OCs canceladas)");
     } catch (err: unknown) {
       console.error("Error deleting:", err);
       const message = err instanceof Error ? err.message : "Error inesperado";
@@ -1693,7 +1695,9 @@ export default function PresupuestosPage() {
       const { error } = await supabase.from("presupuestos").update({ eliminado: false } as any).eq("id", id);
       if (error) throw new Error(error.message);
       setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: false } as any : p));
-      toast.success("Presupuesto restaurado");
+      // Regenerate OCs for restored PR
+      await generateOCsFromPresupuesto(id);
+      toast.success("Presupuesto restaurado (OCs regeneradas)");
     } catch {
       toast.error("Error al restaurar");
     }
@@ -3246,7 +3250,7 @@ export default function PresupuestosPage() {
             }}
             options={[{ value: "ARS", label: "ARS — Pesos" }, { value: "USD", label: "USD — Dolares" }]}
           />
-          <div className="grid grid-cols-2 gap-2">
+          {newPR.moneda === "USD" && <div className="grid grid-cols-2 gap-2">
             <Input
               label="TC Billetes"
               type="number"
@@ -3255,10 +3259,10 @@ export default function PresupuestosPage() {
               onChange={(e) => setNewPR((p) => {
                 const tc = Number(e.target.value);
                 const items = p.items.map(it => {
-                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc, p.tipo_cambio_divisas);
+                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc, 0);
                   return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
                 });
-                return { ...p, tipo_cambio: tc, items };
+                return { ...p, tipo_cambio: tc, tipo_cambio_divisas: 0, cotizacion_modalidad: "billetes" as const, items };
               })}
               placeholder="Billetes"
             />
@@ -3270,15 +3274,15 @@ export default function PresupuestosPage() {
               onChange={(e) => setNewPR((p) => {
                 const tcD = Number(e.target.value);
                 const items = p.items.map(it => {
-                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, tcD);
+                  const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, 0, tcD);
                   return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
                 });
-                return { ...p, tipo_cambio_divisas: tcD, items };
+                return { ...p, tipo_cambio_divisas: tcD, tipo_cambio: 0, cotizacion_modalidad: "divisas" as const, items };
               })}
               placeholder="Divisas"
             />
-          </div>
-          <div>
+          </div>}
+          {newPR.moneda === "USD" && <div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs text-zinc-400">BNA:</span>
               <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
@@ -3295,7 +3299,7 @@ export default function PresupuestosPage() {
                 </span>
               )}
             </div>
-          </div>
+          </div>}
           <Input
             label="Markup general %"
             type="number"

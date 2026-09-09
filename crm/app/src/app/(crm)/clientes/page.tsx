@@ -1710,12 +1710,12 @@ export default function ClientesPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {filtered.map((client) => (
               <Card key={client.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => { setSelectedCliente(client); setDetailTab("datos"); }}>
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
+                <div className="flex items-start justify-between gap-2 overflow-hidden">
+                  <div className="flex items-center gap-3 min-w-0">
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-sm dark:bg-orange-900/30 dark:text-orange-400">
                       {getInitials(client.razonSocial)}
                     </div>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <p className="font-semibold text-zinc-900 dark:text-white truncate">{client.razonSocial}</p>
                       <p className="text-xs text-zinc-400">{client.cuit ? (client.cuit.replace(/\D/g, "").length <= 8 ? `DNI ${client.cuit}` : client.cuit) : "Sin CUIT/DNI"}</p>
                     </div>
