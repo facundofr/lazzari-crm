@@ -2786,13 +2786,11 @@ export default function OrdenesCompraPage() {
                       </button>
                     ) : null;
                   })()}
-                  <button
-                    onClick={(event) => handleTogglePagoTarjeta(detailOC, event)}
-                    className={`flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${ocPagadaConTarjeta(detailOC) ? "border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950/20" : "border-orange-300 text-orange-600 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-400 dark:hover:bg-orange-950/20"}`}
-                  >
-                    <CreditCard className="h-4 w-4" />
-                    {ocPagadaConTarjeta(detailOC) ? "Pagada con tarjeta" : "Marcar pagada con tarjeta"}
-                  </button>
+                  {ocPagadaConTarjeta(detailOC) && (
+                    <div className="flex items-center gap-2 rounded-lg border border-emerald-300 px-4 py-2 text-sm font-medium text-emerald-700 dark:border-emerald-700 dark:text-emerald-400">
+                      <CreditCard className="h-4 w-4" /> Pagada con tarjeta
+                    </div>
+                  )}
                   <button
                     onClick={() => handleCancel(detailOC)}
                     className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors"

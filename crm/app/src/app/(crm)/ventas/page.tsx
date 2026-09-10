@@ -82,10 +82,22 @@ interface VentaRemito {
   presupuesto_id: string | null;
 }
 
+interface VentaOC {
+  id: string;
+  numero: string;
+  fecha: string;
+  estado: string;
+  total: number;
+  moneda: string;
+  pago: string | null;
+  presupuesto_origen_id: string;
+}
+
 interface Venta {
   presupuesto: VentaPresupuesto;
   facturas: VentaFactura[];
   remitos: VentaRemito[];
+  ordenesCompra: VentaOC[];
 }
 
 type EmitTipo = "FA" | "FB" | "FCEA" | "FCEB" | "X";
@@ -275,8 +287,8 @@ export default function VentasPage() {
       // Get all presupuesto IDs
       const pIds = presupuestos.map((p: any) => p.id);
 
-      // Fetch related facturas and remitos in parallel
-      const [facturasRes, remitosRes] = await Promise.all([
+      // Fetch related facturas, remitos and OC in parallel
+      const [facturasRes, remitosRes, ocRes] = await Promise.all([
         pIds.length > 0
           ? (() => {
               let q = (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, cae_vencimiento, subtotal, iva, total, moneda, tipo_cambio, estado, presupuesto_id, fecha_vencimiento, condicion_venta, oc_cliente, email_enviado_at, email_enviado_a").in("presupuesto_id", pIds);
@@ -291,16 +303,25 @@ export default function VentasPage() {
               return q;
             })()
           : { data: [], error: null },
+        pIds.length > 0
+          ? (() => {
+              let q = (supabase as any).from("ordenes_compra").select("id, numero, fecha, estado, total, moneda, pago, presupuesto_origen_id").in("presupuesto_origen_id", pIds);
+              if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
+              return q;
+            })()
+          : { data: [], error: null },
       ]);
 
       const facturas = (facturasRes.data || []) as VentaFactura[];
       const remitos = (remitosRes.data || []) as VentaRemito[];
+      const ocs = (ocRes.data || []) as VentaOC[];
 
       // Build ventas array
       const ventasArr: Venta[] = presupuestos.map((p: any) => ({
         presupuesto: p as VentaPresupuesto,
         facturas: facturas.filter(f => f.presupuesto_id === p.id),
         remitos: remitos.filter(r => r.presupuesto_id === p.id),
+        ordenesCompra: ocs.filter(oc => oc.presupuesto_origen_id === p.id),
       }));
 
       setVentas(ventasArr);
@@ -963,6 +984,19 @@ export default function VentasPage() {
                               <span className="hidden sm:inline">{st.cobrado ? "Cobrado" : "Pend. cobro"}</span>
                             </div>
                           )}
+                          {/* OC */}
+                          {v.ordenesCompra.length > 0 && (
+                            <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
+                              v.ordenesCompra.some(oc => oc.pago === "tarjeta")
+                                ? "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400"
+                                : "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400"
+                            }`} title={v.ordenesCompra.map(oc => `${oc.numero} — ${formatDate(oc.fecha)}`).join("\n")}>
+                              <ClipboardList className="h-3 w-3" />
+                              <span className="hidden sm:inline">
+                                {v.ordenesCompra.length === 1 ? v.ordenesCompra[0].numero : `${v.ordenesCompra.length} OC`}
+                              </span>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
@@ -1102,6 +1136,45 @@ export default function VentasPage() {
                       </div>
                     )}
                   </DetailSection>
+
+                  {/* OC vinculadas */}
+                  {selectedVenta.ordenesCompra.length > 0 && (
+                    <DetailSection
+                      title={`Órdenes de compra (${selectedVenta.ordenesCompra.length})`}
+                      icon={ClipboardList}
+                      status={selectedVenta.ordenesCompra.every(oc => oc.estado === "completada" || oc.estado === "cancelada") ? "done" : "in-progress"}
+                      expanded={expandedSection === "oc"}
+                      onToggle={() => setExpandedSection(expandedSection === "oc" ? null : "oc")}
+                    >
+                      <div className="space-y-2">
+                        {selectedVenta.ordenesCompra.map(oc => (
+                          <div key={oc.id} className="flex items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
+                            <div>
+                              <span className="font-mono text-xs font-bold">{oc.numero}</span>
+                              <span className="text-xs text-zinc-400 ml-2">{formatDate(oc.fecha)}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">{formatCurrency(oc.total, (oc.moneda || "ARS") as "ARS" | "USD")}</span>
+                              <Badge variant={
+                                oc.estado === "completada" ? "success"
+                                : oc.estado === "cancelada" ? "danger"
+                                : oc.pago === "tarjeta" ? "purple"
+                                : "warning"
+                              }>
+                                {oc.pago === "tarjeta" ? "Pagada tarjeta" : oc.estado}
+                              </Badge>
+                            </div>
+                          </div>
+                        ))}
+                        <Link
+                          href="/ordenes-compra"
+                          className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700"
+                        >
+                          Ver en órdenes de compra <ArrowRight className="h-3 w-3" />
+                        </Link>
+                      </div>
+                    </DetailSection>
+                  )}
 
                   {/* Step 3: Factura */}
                   <DetailSection
