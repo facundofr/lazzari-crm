@@ -72,7 +72,7 @@ interface OCRow {
   created_by_profile: { full_name: string } | null;
   presupuesto_origen: { numero: string; modalidad_emision?: string | null } | null;
   orden_compra_items: { codigo: string | null; descripcion: string | null; cantidad: number; cantidad_recibida: number }[];
-  facturas_vinculadas?: { id: string; numero: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null }[];
+  facturas_vinculadas?: { id: string; numero_factura: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null }[];
 }
 
 const ocPagada = (oc: OCRow) => {
@@ -438,11 +438,11 @@ export default function OrdenesCompraPage() {
       if (!error && data) {
         const rows = data as unknown as OCRow[];
         const ids = rows.map((row) => row.id);
-        const linksByOC = new Map<string, { id: string; numero: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null }[]>();
+        const linksByOC = new Map<string, { id: string; numero_factura: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null }[]>();
         if (ids.length > 0) {
           const { data: links } = await (supabase as any)
             .from("factura_compra_ocs")
-            .select("orden_compra_id, facturas_compra(id, numero, tipo_comprobante, estado, total, moneda, archivo_url)")
+            .select("orden_compra_id, facturas_compra(id, numero_factura, tipo_comprobante, estado, total, moneda, archivo_url)")
             .in("orden_compra_id", ids);
           for (const link of links || []) {
             const factura = link.facturas_compra;
@@ -3033,30 +3033,38 @@ export default function OrdenesCompraPage() {
               </div>
 
               {/* ── Facturas de compra vinculadas ──────────────────── */}
-              {(detailOC.facturas_vinculadas || []).length > 0 && (
+              {detailOC.estado !== "cancelada" && (
                 <div>
                   <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-zinc-400" /> Facturas de compra vinculadas
+                    <FileText className="h-4 w-4 text-zinc-400" /> Facturas de compra
+                    {(detailOC.facturas_vinculadas || []).filter(f => f.estado !== "anulada").length > 0
+                      ? <Badge variant="success">{(detailOC.facturas_vinculadas || []).filter(f => f.estado !== "anulada").length} cargada{(detailOC.facturas_vinculadas || []).filter(f => f.estado !== "anulada").length > 1 ? "s" : ""}</Badge>
+                      : <Badge variant="outline">Sin factura</Badge>
+                    }
                   </h3>
-                  <div className="space-y-2">
-                    {(detailOC.facturas_vinculadas || []).map((fc, idx) => (
-                      <div key={fc.id || idx} className="flex items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Badge variant={fc.estado === "pagada" ? "success" : fc.estado === "anulada" ? "danger" : "warning"}>
-                            {fc.estado === "pagada" ? "Pagada" : fc.estado === "anulada" ? "Anulada" : "Pendiente"}
-                          </Badge>
-                          <span className="font-medium dark:text-white truncate">{fc.tipo_comprobante || ""} {fc.numero || `FC #${idx + 1}`}</span>
-                          <span className="font-mono text-zinc-500">{formatCurrency(fc.total, fc.moneda as "ARS" | "USD")}</span>
+                  {(detailOC.facturas_vinculadas || []).length > 0 ? (
+                    <div className="space-y-2">
+                      {(detailOC.facturas_vinculadas || []).map((fc, idx) => (
+                        <div key={fc.id || idx} className="flex items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Badge variant={fc.estado === "pagada" ? "success" : fc.estado === "anulada" ? "danger" : "warning"}>
+                              {fc.estado === "pagada" ? "Pagada" : fc.estado === "anulada" ? "Anulada" : "Pendiente"}
+                            </Badge>
+                            <span className="font-medium dark:text-white truncate">{fc.tipo_comprobante || ""} {fc.numero_factura || `FC #${idx + 1}`}</span>
+                            <span className="font-mono text-zinc-500">{formatCurrency(fc.total, fc.moneda as "ARS" | "USD")}</span>
+                          </div>
+                          {fc.archivo_url && (
+                            <a href={fc.archivo_url} target="_blank" rel="noopener noreferrer"
+                              className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 font-medium shrink-0">
+                              <Download className="h-3.5 w-3.5" /> Ver comprobante
+                            </a>
+                          )}
                         </div>
-                        {fc.archivo_url && (
-                          <a href={fc.archivo_url} target="_blank" rel="noopener noreferrer"
-                            className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 font-medium shrink-0">
-                            <Download className="h-3.5 w-3.5" /> Ver comprobante
-                          </a>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-zinc-400 italic">No hay facturas de compra cargadas para esta OC.</p>
+                  )}
                 </div>
               )}
 
