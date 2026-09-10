@@ -3258,7 +3258,7 @@ export default function FinanzasPage() {
                       <button
                         onClick={() => openOrdenPagoEmail(row)}
                         className={`rounded p-1.5 transition-colors ${row.email_enviado_at ? "text-emerald-600 hover:bg-emerald-100" : "text-zinc-400 hover:bg-orange-100 hover:text-orange-600"}`}
-                        title={row.email_enviado_at ? `Enviada por email el ${formatDateTime(row.email_enviado_at)}` : "Enviar por email"}
+                        title={row.email_enviado_at ? `Enviada por email el ${formatDateTime(row.email_enviado_at)}${row.proveedor_email ? ` a ${row.proveedor_email}` : ""}` : `Enviar por email${row.proveedor_email ? ` (${row.proveedor_email})` : ""}`}
                       >
                         {row.email_enviado_at ? <MailCheck className="h-3.5 w-3.5" /> : <Mail className="h-3.5 w-3.5" />}
                       </button>
@@ -5360,7 +5360,7 @@ export default function FinanzasPage() {
                 <button
                   onClick={() => openOrdenPagoEmail(selectedOP)}
                   className={`flex items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${selectedOP.email_enviado_at ? "border-emerald-200 text-emerald-600 hover:bg-emerald-50 dark:border-emerald-800 dark:hover:bg-emerald-950/20" : "border-zinc-300 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-400 dark:hover:bg-zinc-800"}`}
-                  title={selectedOP.email_enviado_at ? `Enviada por email el ${formatDateTime(selectedOP.email_enviado_at)}` : "Enviar por email"}
+                  title={selectedOP.email_enviado_at ? `Enviada por email el ${formatDateTime(selectedOP.email_enviado_at)}${selectedOP.proveedor_email ? ` a ${selectedOP.proveedor_email}` : ""}` : `Enviar por email${selectedOP.proveedor_email ? ` (${selectedOP.proveedor_email})` : ""}`}
                 >
                   {selectedOP.email_enviado_at ? <MailCheck className="h-4 w-4" /> : <Mail className="h-4 w-4" />}
                   {selectedOP.email_enviado_at ? "Enviada" : "Enviar"}

@@ -42,7 +42,7 @@ interface VentaPresupuesto {
   observaciones: string | null;
   vendedor_profile: { full_name: string; avatar_url: string | null } | null;
   listo_para_facturar?: boolean;
-  clientes: { razon_social: string; cuit: string; condicion_iva: string; forma_pago: string | null; dias_cuenta_corriente?: number | null } | null;
+  clientes: { razon_social: string; cuit: string; condicion_iva: string; forma_pago: string | null; dias_cuenta_corriente?: number | null; email?: string | null; email_facturacion?: string | null } | null;
   presupuesto_items: {
     descripcion: string;
     cantidad: number;
@@ -71,6 +71,7 @@ interface VentaFactura {
   condicion_venta?: string | null;
   oc_cliente?: string | null;
   email_enviado_at?: string | null;
+  email_enviado_a?: string | null;
 }
 
 interface VentaRemito {
@@ -256,7 +257,7 @@ export default function VentasPage() {
         .select(`
           id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id, modalidad_emision, oc_cliente, archivo_url, archivo_nombre, observaciones, listo_para_facturar,
           vendedor_profile:vendedor_id(full_name, avatar_url),
-          clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente),
+          clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, email, email_facturacion),
           presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total)
         `)
         .in("estado" as any, ["aprobado", "facturar", "facturado"])
@@ -278,7 +279,7 @@ export default function VentasPage() {
       const [facturasRes, remitosRes] = await Promise.all([
         pIds.length > 0
           ? (() => {
-              let q = (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, cae_vencimiento, subtotal, iva, total, moneda, tipo_cambio, estado, presupuesto_id, fecha_vencimiento, condicion_venta, oc_cliente, email_enviado_at").in("presupuesto_id", pIds);
+              let q = (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, cae_vencimiento, subtotal, iva, total, moneda, tipo_cambio, estado, presupuesto_id, fecha_vencimiento, condicion_venta, oc_cliente, email_enviado_at, email_enviado_a").in("presupuesto_id", pIds);
               if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
               return q;
             })()
@@ -946,8 +947,9 @@ export default function VentasPage() {
                           {(() => {
                             const factActiva = v.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
                             if (!factActiva) return null;
+                            const emailDest = factActiva.email_enviado_a || v.presupuesto.clientes?.email_facturacion || v.presupuesto.clientes?.email || "";
                             return factActiva.email_enviado_at
-                              ? <div className="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400" title={`Enviada ${formatDate(factActiva.email_enviado_at)}`}><MailCheck className="h-3 w-3" /></div>
+                              ? <div className="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400" title={`Enviada ${formatDate(factActiva.email_enviado_at)}${emailDest ? ` a ${emailDest}` : ""}`}><MailCheck className="h-3 w-3" /></div>
                               : <div className="flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500" title="No enviada por email"><Mail className="h-3 w-3" /></div>;
                           })()}
                           {/* Cobro */}

@@ -115,6 +115,10 @@ export default function StockPage() {
   const [adjustAmount, setAdjustAmount] = useState(0);
   const [adjustMode, setAdjustMode] = useState<"add" | "set">("add");
 
+  // Proveedor search
+  const [provSearchText, setProvSearchText] = useState("");
+  const [showProvDropdown, setShowProvDropdown] = useState(false);
+
   // Price history
   const [precioHistorial, setPrecioHistorial] = useState<PrecioHistorialRow[]>([]);
   const [loadingHistorial, setLoadingHistorial] = useState(false);
@@ -303,6 +307,8 @@ export default function StockPage() {
     setEditingId(null);
     setForm(emptyForm);
     setFormError("");
+    setProvSearchText("");
+    setShowProvDropdown(false);
     setModalOpen(true);
     setSelectedProduct(null);
   }
@@ -322,6 +328,8 @@ export default function StockPage() {
       stock: p.stock,
       stock_minimo: p.stock_minimo,
     });
+    setProvSearchText(p.proveedores?.razon_social || "");
+    setShowProvDropdown(false);
     setFormError("");
     setModalOpen(true);
   }
@@ -715,14 +723,34 @@ export default function StockPage() {
                   ))}
                 </select>
               </div>
-              <div className="col-span-2">
+              <div className="col-span-2 relative">
                 <label className="text-xs font-medium text-zinc-500">Proveedor</label>
-                <select value={form.proveedor_id} onChange={(e) => setForm({ ...form, proveedor_id: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  <option value="">Sin proveedor</option>
-                  {proveedoresList.map((prov) => (
-                    <option key={prov.id} value={prov.id}>{prov.razon_social}</option>
-                  ))}
-                </select>
+                <input
+                  type="text"
+                  value={provSearchText}
+                  onChange={(e) => { setProvSearchText(e.target.value); setShowProvDropdown(true); }}
+                  onFocus={() => setShowProvDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowProvDropdown(false), 150)}
+                  placeholder="Buscar proveedor..."
+                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                />
+                {form.proveedor_id && (
+                  <button type="button" onClick={() => { setForm({ ...form, proveedor_id: "" }); setProvSearchText(""); }} className="absolute right-2 top-7 text-zinc-400 hover:text-zinc-600">
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+                {showProvDropdown && (
+                  <div className="absolute z-50 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                    {proveedoresList.filter(p => p.razon_social.toLowerCase().includes(provSearchText.toLowerCase())).slice(0, 20).map((prov) => (
+                      <button key={prov.id} type="button" onClick={() => { setForm({ ...form, proveedor_id: prov.id }); setProvSearchText(prov.razon_social); setShowProvDropdown(false); }} className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 dark:hover:bg-zinc-700">
+                        {prov.razon_social}
+                      </button>
+                    ))}
+                    {proveedoresList.filter(p => p.razon_social.toLowerCase().includes(provSearchText.toLowerCase())).length === 0 && (
+                      <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
+                    )}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="text-xs font-medium text-zinc-500">Precio costo</label>
