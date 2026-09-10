@@ -11,6 +11,7 @@ export interface Column<T> {
   render?: (row: T) => React.ReactNode;
   sortable?: boolean;
   sortKey?: string;
+  sortValue?: (row: T) => string | number | null;
 }
 
 interface DataTableProps<T> {
@@ -47,18 +48,27 @@ export function DataTable<T extends { id: string }>({
 
   const sorted = useMemo(() => {
     if (!sortKey) return data;
+    const col = columns.find(c => (c.sortKey || c.key) === sortKey);
     return [...data].sort((a, b) => {
-      const aVal = (a as Record<string, unknown>)[sortKey];
-      const bVal = (b as Record<string, unknown>)[sortKey];
+      let aVal: unknown, bVal: unknown;
+      if (col?.sortValue) {
+        aVal = col.sortValue(a);
+        bVal = col.sortValue(b);
+      } else {
+        aVal = (a as Record<string, unknown>)[sortKey];
+        bVal = (b as Record<string, unknown>)[sortKey];
+      }
       let cmp = 0;
-      if (typeof aVal === "number" && typeof bVal === "number") {
-        cmp = aVal - bVal;
+      const aNum = typeof aVal === "number" ? aVal : (typeof aVal === "string" && !isNaN(Number(aVal)) ? Number(aVal) : null);
+      const bNum = typeof bVal === "number" ? bVal : (typeof bVal === "string" && !isNaN(Number(bVal)) ? Number(bVal) : null);
+      if (aNum !== null && bNum !== null) {
+        cmp = aNum - bNum;
       } else {
         cmp = String(aVal ?? "").localeCompare(String(bVal ?? ""), "es");
       }
       return sortDir === "asc" ? cmp : -cmp;
     });
-  }, [data, sortKey, sortDir]);
+  }, [data, sortKey, sortDir, columns]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const safePage = Math.min(page, totalPages - 1);

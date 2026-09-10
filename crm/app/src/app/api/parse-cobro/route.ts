@@ -11,7 +11,7 @@ Te voy a pasar una o varias imágenes/PDFs de comprobantes de pago (transferenci
       "tipo": "transferencia" | "deposito" | "cheque" | "echeq" | "efectivo" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva" | "otro",
       "monto": 123456.78,
       "moneda": "ARS" | "USD",
-      "fecha": "YYYY-MM-DD",
+      "fecha": "YYYY-MM-DD (IMPORTANTE: usar la fecha de COBRO/ACREDITACIÓN/PAGO, NO la fecha de emisión del comprobante. Si hay ambas, usar la de cobro/acreditación)",
       "referencia": "número de operación, CBU, o referencia bancaria",
       "banco": "nombre del banco si aparece",
       "ordenante": "nombre del pagador/ordenante si aparece",

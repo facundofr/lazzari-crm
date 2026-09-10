@@ -209,7 +209,7 @@ function ProveedorPicker({ value, options, onChange, placeholder = "Buscar prove
 export default function OrdenesCompraPage() {
   const { sociedadActiva, profile } = useUser();
   const canManageCompras = profile?.role === "super_admin" || profile?.role === "admin" || profile?.role === "administrativo" || profile?.role === "vendedor";
-  const [filter, setFilter] = useState<OCStatus | "todas" | "pago_pendiente" | "pagada">("todas");
+  const [filter, setFilter] = useState<OCStatus | "todas" | "pago_pendiente" | "pagada" | "recibida_parcial" | "cancelada">("todas");
   const [search, setSearch] = useState("");
   const [operadorFilter, setOperadorFilter] = useState("");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
@@ -1844,8 +1844,6 @@ export default function OrdenesCompraPage() {
         if (!ocPagada(oc)) return false;
       } else if (filter === "pago_pendiente") {
         if (ocPagada(oc) || oc.estado === "cancelada") return false;
-      } else if (filter === "pendiente") {
-        if (!["pendiente", "enviada", "confirmada"].includes(oc.estado)) return false;
       } else if (oc.estado !== filter) return false;
     }
     if (search.trim()) {
@@ -1980,8 +1978,8 @@ export default function OrdenesCompraPage() {
 
         {/* Filter tabs */}
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {(["todas", "pendiente", "recibida_parcial", "recibida", "pago_pendiente", "pagada", "cancelada"] as const).map((status) => {
-            const count = status === "todas" ? ordenes.length : ordenes.filter((oc) => status === "pendiente" ? ["borrador", "pendiente", "enviada", "confirmada"].includes(oc.estado) : status === "pagada" ? ocPagada(oc) : status === "pago_pendiente" ? !ocPagada(oc) && oc.estado !== "cancelada" : oc.estado === status).length;
+          {(["todas", "recibida_parcial", "recibida", "pago_pendiente", "pagada", "cancelada"] as const).map((status) => {
+            const count = status === "todas" ? ordenes.length : ordenes.filter((oc) => status === "pagada" ? ocPagada(oc) : status === "pago_pendiente" ? !ocPagada(oc) && oc.estado !== "cancelada" : oc.estado === status).length;
             if (status !== "todas" && count === 0) return null;
             return (
               <button
@@ -2060,6 +2058,7 @@ export default function OrdenesCompraPage() {
                 key: "proveedores",
                 label: "Proveedor",
                 sortable: true,
+                sortValue: (row) => row.proveedores?.razon_social || "",
                 render: (row) => (
                   <div>
                     <span className={`font-medium ${!row.proveedores?.razon_social ? "text-amber-500 italic" : ""}`}>{row.proveedores?.razon_social || "Sin proveedor"}</span>
@@ -2092,12 +2091,14 @@ export default function OrdenesCompraPage() {
                 key: "created_by",
                 label: "Operador",
                 sortable: true,
+                sortValue: (row) => row.created_by_profile?.full_name || "",
                 render: (row) => <span className="font-medium">{row.created_by_profile?.full_name || "—"}</span>,
               },
               {
                 key: "total",
                 label: "Total",
                 sortable: true,
+                sortValue: (row) => Number(row.total),
                 className: "text-right",
                 render: (row) => (
                   <span className="font-mono font-semibold block text-right">

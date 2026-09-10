@@ -1289,12 +1289,15 @@ export default function FinanzasPage() {
         if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
         const { data } = await q;
 
-        // Pagos parciales previos: sumar montos ya pagados por FC via op_facturas_compra
+        // Pagos parciales previos: sumar montos ya pagados por FC via op_facturas_compra (excluir OPs anuladas)
         const fcIds = (data || []).map((fc: any) => fc.id);
         let pagadoPorFC: Record<string, number> = {};
         if (fcIds.length > 0) {
-          const { data: opfcData } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto").in("factura_compra_id", fcIds);
-          (opfcData || []).forEach((r: any) => { pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto); });
+          const { data: opfcData } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto, ordenes_pago(estado)").in("factura_compra_id", fcIds);
+          (opfcData || []).forEach((r: any) => {
+            if (r.ordenes_pago?.estado === "anulada") return; // Skip anulada OPs
+            pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto);
+          });
         }
 
         setOpFCPendientes((data || []).map((fc: any) => {
@@ -4712,8 +4715,11 @@ export default function FinanzasPage() {
                           <option value="efectivo">Efectivo</option>
                           <option value="tarjeta">Tarjeta</option>
                         </select>
-                        <input type="number" value={m.monto || ""} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, monto: Number(e.target.value) } : x))}
-                          placeholder="Monto" className="w-28 rounded border border-zinc-200 px-2 py-1.5 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                        <div className="relative w-28">
+                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-zinc-400 font-mono">$</span>
+                          <input type="number" value={m.monto || ""} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, monto: Number(e.target.value) } : x))}
+                            placeholder="Monto" className="w-full rounded border border-zinc-200 pl-5 pr-2 py-1.5 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                        </div>
                         <input type="date" value={m.fecha} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, fecha: e.target.value } : x))}
                           className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                         {(m.tipo === "cheque" || m.tipo === "cheque_propio" || m.tipo === "echeq") && (
