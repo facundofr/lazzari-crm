@@ -5088,9 +5088,8 @@ export default function FinanzasPage() {
                   <button onClick={async () => {
                     const { error } = await (supabase as any).from("facturas_compra").update({ estado: "pendiente" }).eq("id", selectedFC.id);
                     if (error) { alert("Error al aprobar: " + error.message); return; }
-                    alert("Factura aprobada");
-                    setSelectedFC(null);
-                    fetchData();
+                    setSelectedFC({ ...selectedFC, estado: "pendiente" });
+                    setFacturasCompra(prev => prev.map(f => f.id === selectedFC.id ? { ...f, estado: "pendiente" } : f));
                   }}
                     className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
                     <CheckCircle2 className="h-4 w-4" /> Aprobar

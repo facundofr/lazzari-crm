@@ -126,15 +126,16 @@ export default function CargarFacturaOC({
   const total = useMemo(() => Math.round((subtotal + iva + percepciones) * 100) / 100, [subtotal, iva, percepciones]);
   const totalSinPercepciones = useMemo(() => Math.round((subtotal + iva) * 100) / 100, [subtotal, iva]);
 
-  // Filter OCs by selected proveedor
+  // Filter OCs by selected proveedor (unless showAllOCs is enabled)
+  const [showAllOCs, setShowAllOCs] = useState(false);
   const ocsFiltered = useMemo(() => {
     const q = ocSearch.trim().toLowerCase();
     return ordenes.filter((oc) => {
-      if (proveedorId && oc.proveedor_id !== proveedorId) return false;
+      if (!showAllOCs && proveedorId && oc.proveedor_id !== proveedorId) return false;
       if (q && !`${oc.numero} ${oc.proveedor_nombre} ${oc.estado}`.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [ordenes, proveedorId, ocSearch]);
+  }, [ordenes, proveedorId, ocSearch, showAllOCs]);
 
   const filteredProveedores = useMemo(() => {
     if (!proveedorSearch.trim()) return proveedores.slice(0, 20);
@@ -903,13 +904,32 @@ export default function CargarFacturaOC({
 
           {/* ── 3. Vincular OCs ── */}
           {tipoFC === "mercaderia" && <section>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-bold uppercase tracking-wider text-orange-600">3. Vincular órdenes de compra</h3><div className="relative w-72 max-w-full"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" /><input value={ocSearch} onChange={(e) => setOcSearch(e.target.value)} placeholder="Buscar OC, proveedor o estado..." className="w-full rounded-lg border border-zinc-200 bg-transparent py-1.5 pl-8 pr-2 text-xs dark:border-zinc-700" /></div></div>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-3">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600">3. Vincular órdenes de compra</h3>
+                {proveedorId && (
+                  <label className="flex items-center gap-1.5 cursor-pointer text-xs text-zinc-500">
+                    <input type="checkbox" checked={showAllOCs} onChange={(e) => setShowAllOCs(e.target.checked)} className="accent-orange-600 h-3 w-3" />
+                    Ver todas
+                  </label>
+                )}
+              </div>
+              <div className="relative w-72 max-w-full"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" /><input value={ocSearch} onChange={(e) => setOcSearch(e.target.value)} placeholder="Buscar OC, proveedor o estado..." className="w-full rounded-lg border border-zinc-200 bg-transparent py-1.5 pl-8 pr-2 text-xs dark:border-zinc-700" /></div>
+            </div>
             {ocsFiltered.length === 0 ? (
-              <p className="text-sm text-zinc-400 italic">
-                {proveedorId
-                  ? "No hay ordenes de compra activas para este proveedor"
-                  : "Seleccioná un proveedor para filtrar las OCs"}
-              </p>
+              <div className="space-y-2">
+                <p className="text-sm text-zinc-400 italic">
+                  {proveedorId
+                    ? "No hay ordenes de compra activas para este proveedor"
+                    : "Seleccioná un proveedor para filtrar las OCs"}
+                </p>
+                {proveedorId && !showAllOCs && ordenes.length > 0 && (
+                  <button type="button" onClick={() => setShowAllOCs(true)}
+                    className="text-xs font-medium text-orange-600 hover:text-orange-700 underline">
+                    Ver todas las OCs ({ordenes.length})
+                  </button>
+                )}
+              </div>
             ) : (
               <div className="space-y-1 max-h-48 overflow-y-auto">
                 {ocsFiltered.map(oc => {
