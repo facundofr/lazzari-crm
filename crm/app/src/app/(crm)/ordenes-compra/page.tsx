@@ -465,6 +465,14 @@ export default function OrdenesCompraPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // Sync detailOC with ordenes when list refreshes (e.g. after FC load)
+  useEffect(() => {
+    if (detailOC) {
+      const updated = ordenes.find(o => o.id === detailOC.id);
+      if (updated) setDetailOC(updated);
+    }
+  }, [ordenes]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Fetch profiles for operator dropdown ──────────────────────────
   useEffect(() => {
     (async () => {
@@ -2305,9 +2313,14 @@ export default function OrdenesCompraPage() {
                                   className="w-24 text-right rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-1.5 py-1 text-xs font-mono dark:text-white" />
                               </td>
                               <td className="px-2 py-1.5">
-                                <input type="number" step="any" min={0} value={item.iva_porcentaje}
-                                  onChange={(e) => setCreateItems(prev => prev.map((it, i) => i === idx ? { ...it, iva_porcentaje: Number(e.target.value) || 0 } : it))}
-                                  className="w-14 text-right rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-1.5 py-1 text-xs dark:text-white" />
+                                <select value={item.iva_porcentaje}
+                                  onChange={(e) => setCreateItems(prev => prev.map((it, i) => i === idx ? { ...it, iva_porcentaje: Number(e.target.value) } : it))}
+                                  className="w-16 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-1 py-1 text-xs dark:text-white">
+                                  <option value={0}>0%</option>
+                                  <option value={10.5}>10,5%</option>
+                                  <option value={21}>21%</option>
+                                  <option value={27}>27%</option>
+                                </select>
                               </td>
                               <td className="px-2 py-1.5 text-right font-mono text-xs">
                                 {formatCurrency(item.cantidad * item.precio_unitario, formData.moneda)}
