@@ -458,7 +458,8 @@ export default function FinanzasPage() {
   const [opSaving, setOpSaving] = useState(false);
   const [opError, setOpError] = useState("");
   const [opFiles, setOpFiles] = useState<File[]>([]);
-  const [opParsingFile, setOpParsingFile] = useState(false);
+  const [opParsingCount, setOpParsingCount] = useState(0);
+  const opParsingFile = opParsingCount > 0;
   const [opProvCondicion, setOpProvCondicion] = useState<string | null>(null);
   const [opCondicionLoading, setOpCondicionLoading] = useState(false);
   const [opManualGanancias, setOpManualGanancias] = useState(false); // user manually toggled retención
@@ -1426,7 +1427,7 @@ export default function FinanzasPage() {
 
   async function handleParseComprobante(f: File) {
     setOpFiles(prev => [...prev, f]);
-    setOpParsingFile(true);
+    setOpParsingCount(prev => prev + 1);
     try {
       const formData = new FormData();
       formData.append("file", f);
@@ -1446,9 +1447,9 @@ export default function FinanzasPage() {
           numero_cheque: d.cheque_numero || "",
         };
       });
-      setOpMedios(mapped);
+      setOpMedios(prev => [...prev, ...mapped]);
     } catch { /* noop */ }
-    setOpParsingFile(false);
+    setOpParsingCount(prev => prev - 1);
   }
 
   async function handleCreateOP() {
@@ -4763,11 +4764,6 @@ export default function FinanzasPage() {
                   <label className="text-xs font-medium text-zinc-500">Notas</label>
                   <textarea value={opForm.notas} onChange={(e) => setOpForm({ ...opForm, notas: e.target.value })}
                     rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Observaciones..." />
-                  <label className="flex items-center gap-2 mt-2 cursor-pointer">
-                    <input type="checkbox" checked={!!(opForm as any).sobre_verde} onChange={(e) => setOpForm({ ...opForm, sobre_verde: e.target.checked } as any)}
-                      className="rounded border-zinc-300" />
-                    <span className="text-xs text-emerald-600 font-medium flex items-center gap-1"><Mail className="h-3 w-3" /> Sobre verde</span>
-                  </label>
                 </div>
                 <div>
                   <label className="text-xs font-medium text-zinc-500">Comprobantes — <span className="text-orange-500">IA autocompleta medios</span></label>
@@ -5217,12 +5213,17 @@ export default function FinanzasPage() {
                     <p className="text-sm text-zinc-600 dark:text-zinc-400">{selectedOP.notas}</p>
                   </div>
                 )}
-                {selectedOP.sobre_verde && (
-                  <div className="flex items-center gap-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 px-3 py-2">
-                    <Mail className="h-4 w-4 text-emerald-500" />
-                    <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Sobre verde (efectivo)</span>
-                  </div>
-                )}
+                <label className={`flex items-center gap-2 cursor-pointer rounded-lg px-3 py-2 border ${selectedOP.sobre_verde ? "bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800" : "border-zinc-200 dark:border-zinc-700"}`}>
+                  <input type="checkbox" checked={!!selectedOP.sobre_verde} onChange={async (e) => {
+                    const val = e.target.checked;
+                    const { error } = await (supabase as any).from("ordenes_pago").update({ sobre_verde: val }).eq("id", selectedOP.id);
+                    if (error) return;
+                    setSelectedOP({ ...selectedOP, sobre_verde: val });
+                    setOrdenesPago(prev => prev.map(op => op.id === selectedOP.id ? { ...op, sobre_verde: val } : op));
+                  }} className="rounded border-zinc-300 accent-emerald-600" />
+                  <Mail className={`h-4 w-4 ${selectedOP.sobre_verde ? "text-emerald-500" : "text-zinc-400"}`} />
+                  <span className={`text-sm font-medium ${selectedOP.sobre_verde ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-500"}`}>Sobre verde</span>
+                </label>
               </div>
 
               {/* Desglose de importes */}
