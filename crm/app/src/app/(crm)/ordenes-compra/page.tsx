@@ -1038,15 +1038,16 @@ export default function OrdenesCompraPage() {
 
   const handleChangeOperador = async (ocId: string, newCreatedBy: string) => {
     try {
-      const { error } = await supabase.from("ordenes_compra").update({ created_by: newCreatedBy || null } as any).eq("id", ocId);
+      const { error } = await (supabase as any).from("ordenes_compra").update({ created_by: newCreatedBy || null }).eq("id", ocId);
       if (error) throw error;
       if (detailOC?.id === ocId) {
-        const prof = operadores.find(o => o.id === newCreatedBy);
-        setDetailOC({ ...detailOC, created_by: newCreatedBy || null, created_by_profile: prof ? { full_name: prof.nombre } : null });
+        const prof = allProfiles.find(p => p.id === newCreatedBy);
+        setDetailOC({ ...detailOC, created_by: newCreatedBy || null, created_by_profile: prof ? { full_name: prof.full_name } : null });
       }
       await fetchData();
     } catch (err: any) {
-      alert("Error al cambiar operador: " + (err.message || "desconocido"));
+      console.error("Error al cambiar operador:", err);
+      alert("Error al cambiar operador: " + (err.message || err.code || "error de red, intentá de nuevo"));
     }
   };
 
