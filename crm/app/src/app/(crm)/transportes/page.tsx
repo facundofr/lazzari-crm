@@ -207,6 +207,12 @@ export default function TransportesPage() {
     observaciones: "",
   });
 
+  // Search states for viaje cliente & factura proveedor
+  const [viajeClienteSearch, setViajeClienteSearch] = useState("");
+  const [viajeClienteDropdown, setViajeClienteDropdown] = useState(false);
+  const [facturaProvSearch, setFacturaProvSearch] = useState("");
+  const [facturaProvDropdown, setFacturaProvDropdown] = useState(false);
+
   const socId = sociedadActiva?.id;
 
   // ── Fetch viajes ────────────────────────────────────────────────────
@@ -309,6 +315,8 @@ export default function TransportesPage() {
       descripcion_carga: "",
       notas: "",
     });
+    setViajeClienteSearch("");
+    setViajeClienteDropdown(false);
   };
 
   const handleSaveViaje = async () => {
@@ -423,6 +431,9 @@ export default function TransportesPage() {
       descripcion_carga: v.descripcion_carga || "",
       notas: v.notas || "",
     });
+    const clienteNombre = v.cliente_id ? clientes.find(c => c.id === v.cliente_id)?.razon_social || "" : "";
+    setViajeClienteSearch(clienteNombre);
+    setViajeClienteDropdown(false);
     setEditingViaje(true);
     setShowNuevoViaje(true);
   };
@@ -591,6 +602,8 @@ export default function TransportesPage() {
         ? `${rows.length} viajes internos del ${formatDate(first.fecha)} — ${first.transportista}`
         : `Viaje del ${formatDate(first.fecha)} — ${first.transportista}`,
     });
+    setFacturaProvSearch(proveedorSugerido?.razon_social || "");
+    setFacturaProvDropdown(false);
     setShowFacturaViaje(true);
   };
 
@@ -1405,18 +1418,34 @@ export default function TransportesPage() {
                   {formViaje.tipo === "externo" && (
                     <>
                       {/* Cliente */}
-                      <div>
+                      <div className="relative">
                         <label className={labelClass}>Cliente</label>
-                        <select
-                          value={formViaje.cliente_id}
-                          onChange={(e) => setFormViaje((f) => ({ ...f, cliente_id: e.target.value }))}
+                        <input
+                          type="text"
+                          value={viajeClienteSearch}
+                          onChange={(e) => { setViajeClienteSearch(e.target.value); setViajeClienteDropdown(true); if (formViaje.cliente_id) setFormViaje((f) => ({ ...f, cliente_id: "" })); }}
+                          onFocus={() => setViajeClienteDropdown(true)}
+                          onBlur={() => setTimeout(() => setViajeClienteDropdown(false), 150)}
+                          placeholder="Buscar cliente..."
                           className={inputClass}
-                        >
-                          <option value="">Sin cliente</option>
-                          {clientes.map((c) => (
-                            <option key={c.id} value={c.id}>{c.razon_social}</option>
-                          ))}
-                        </select>
+                        />
+                        {formViaje.cliente_id && (
+                          <button type="button" onClick={() => { setFormViaje((f) => ({ ...f, cliente_id: "" })); setViajeClienteSearch(""); }} className="absolute right-2 top-7 text-zinc-400 hover:text-zinc-600">
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                        {viajeClienteDropdown && (
+                          <div className="absolute z-50 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                            {clientes.filter(c => c.razon_social.toLowerCase().includes(viajeClienteSearch.toLowerCase())).slice(0, 20).map((c) => (
+                              <button key={c.id} type="button" onClick={() => { setFormViaje((f) => ({ ...f, cliente_id: c.id })); setViajeClienteSearch(c.razon_social); setViajeClienteDropdown(false); }} className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 dark:hover:bg-zinc-700">
+                                {c.razon_social}
+                              </button>
+                            ))}
+                            {clientes.filter(c => c.razon_social.toLowerCase().includes(viajeClienteSearch.toLowerCase())).length === 0 && (
+                              <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Remito */}
@@ -1577,16 +1606,34 @@ export default function TransportesPage() {
 
               <div>
                 <label className={labelClass}>Proveedor que va a cobrar *</label>
-                <select
-                  value={facturaForm.proveedor_id}
-                  onChange={(e) => setFacturaForm((form) => ({ ...form, proveedor_id: e.target.value }))}
-                  className={inputClass}
-                >
-                  <option value="">Seleccionar proveedor...</option>
-                  {proveedores.map((proveedor) => (
-                    <option key={proveedor.id} value={proveedor.id}>{proveedor.razon_social}</option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={facturaProvSearch}
+                    onChange={(e) => { setFacturaProvSearch(e.target.value); setFacturaProvDropdown(true); if (facturaForm.proveedor_id) setFacturaForm((form) => ({ ...form, proveedor_id: "" })); }}
+                    onFocus={() => setFacturaProvDropdown(true)}
+                    onBlur={() => setTimeout(() => setFacturaProvDropdown(false), 150)}
+                    placeholder="Buscar proveedor..."
+                    className={inputClass}
+                  />
+                  {facturaForm.proveedor_id && (
+                    <button type="button" onClick={() => { setFacturaForm((form) => ({ ...form, proveedor_id: "" })); setFacturaProvSearch(""); }} className="absolute right-2 top-2.5 text-zinc-400 hover:text-zinc-600">
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                  {facturaProvDropdown && (
+                    <div className="absolute z-50 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+                      {proveedores.filter(p => p.razon_social.toLowerCase().includes(facturaProvSearch.toLowerCase())).slice(0, 20).map((p) => (
+                        <button key={p.id} type="button" onClick={() => { setFacturaForm((form) => ({ ...form, proveedor_id: p.id })); setFacturaProvSearch(p.razon_social); setFacturaProvDropdown(false); }} className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 dark:hover:bg-zinc-700">
+                          {p.razon_social}
+                        </button>
+                      ))}
+                      {proveedores.filter(p => p.razon_social.toLowerCase().includes(facturaProvSearch.toLowerCase())).length === 0 && (
+                        <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <p className="mt-1 text-xs text-zinc-400">Es quien aparecerá después para generar la orden de pago.</p>
               </div>
 
