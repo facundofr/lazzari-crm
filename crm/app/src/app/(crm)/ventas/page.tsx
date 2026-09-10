@@ -209,7 +209,7 @@ export default function VentasPage() {
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [filterMoneda, setFilterMoneda] = useState<string>("todas");
-  const filterEnviado = "todos";
+  const [filterFacturacion, setFilterFacturacion] = useState<"todas" | "pend" | "facturada">("todas");
   const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
@@ -420,11 +420,10 @@ export default function VentasPage() {
       }
       if (q && !(v.presupuesto.clientes?.razon_social || "").toLowerCase().includes(q) && !v.presupuesto.numero.toLowerCase().includes(q)) return false;
       if (filterMoneda !== "todas" && v.presupuesto.moneda !== filterMoneda) return false;
-      if (filterEnviado !== "todos") {
-        const factActiva = v.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
-        const enviada = !!factActiva?.email_enviado_at;
-        if (filterEnviado === "enviado" && !enviada) return false;
-        if (filterEnviado === "no_enviado" && enviada) return false;
+      if (filterFacturacion !== "todas") {
+        const st = getVentaStatus(v);
+        if (filterFacturacion === "pend" && st.facturado) return false;
+        if (filterFacturacion === "facturada" && !st.facturado) return false;
       }
       return true;
     }).sort((a, b) => {
@@ -432,7 +431,7 @@ export default function VentasPage() {
       const db = b.presupuesto.fecha || "";
       return sortOrder === "desc" ? db.localeCompare(da) : da.localeCompare(db);
     });
-  }, [ventas, filterVendedor, filterStatus, filterCliente, sortOrder, filterMoneda, filterEnviado]);
+  }, [ventas, filterVendedor, filterStatus, filterCliente, sortOrder, filterMoneda, filterFacturacion]);
 
   // KPIs from filtered ventas (respecting vendedor filter, ignoring step filter)
   const kpis = useMemo(() => {
@@ -843,6 +842,15 @@ export default function VentasPage() {
             <option value="todas">Todas las monedas</option>
             <option value="ARS">ARS</option>
             <option value="USD">USD</option>
+          </select>
+          <select
+            value={filterFacturacion}
+            onChange={e => setFilterFacturacion(e.target.value as any)}
+            className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+          >
+            <option value="todas">Todas</option>
+            <option value="pend">Pend. factura</option>
+            <option value="facturada">Facturadas</option>
           </select>
           <button
             onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
