@@ -2588,6 +2588,21 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             prev?.id === facturaId ? { ...prev, email_enviado_at: sentAt, email_enviado_a: sentTo } : prev
           );
         }}
+        onMarkSent={async () => {
+          const sentAt = new Date().toISOString();
+          const facturaId = emailModal.facturaId;
+          const { error } = await (supabase as any)
+            .from("facturas")
+            .update({ email_enviado_at: sentAt, email_enviado_a: "enviada por fuera" })
+            .eq("id", facturaId);
+          if (error) return;
+          setFacturas((prev) => prev.map((factura) =>
+            factura.id === facturaId ? { ...factura, email_enviado_at: sentAt, email_enviado_a: "enviada por fuera" } : factura
+          ));
+          setDetailFactura((prev) =>
+            prev?.id === facturaId ? { ...prev, email_enviado_at: sentAt, email_enviado_a: "enviada por fuera" } : prev
+          );
+        }}
       />
     </>
   );

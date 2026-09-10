@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { X, Send, Loader2, Paperclip, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { X, Send, Loader2, Paperclip, AlertTriangle, CheckCircle2, CheckCheck } from "lucide-react";
 
 export type EmailDocumentType = "presupuesto" | "factura" | "remito" | "orden_compra" | "orden_pago";
 
@@ -27,6 +27,8 @@ interface EmailComposeModalProps {
   userEmail?: string;
   /** Suggested emails from client/proveedor/contactos to show as clickable chips */
   suggestedEmails?: { email: string; label?: string }[];
+  /** If provided, shows a "Marcar como enviada" button (for when sent outside the system) */
+  onMarkSent?: () => void | Promise<void>;
 }
 
 const DOC_LABELS: Record<EmailDocumentType, string> = {
@@ -50,6 +52,7 @@ export function EmailComposeModal({
   sociedadId,
   userEmail,
   suggestedEmails = [],
+  onMarkSent,
 }: EmailComposeModalProps) {
   const [to, setTo] = useState(defaultTo);
   const [subject, setSubject] = useState(defaultSubject);
@@ -248,6 +251,19 @@ export function EmailComposeModal({
                 <><Send className="h-4 w-4" /> Enviar email</>
               )}
             </button>
+            {onMarkSent && !result?.success && (
+              <button
+                onClick={async () => {
+                  await onMarkSent();
+                  setResult({ success: true, message: "Marcada como enviada" });
+                }}
+                disabled={sending}
+                className="flex items-center justify-center gap-2 rounded-lg border border-emerald-300 dark:border-emerald-700 px-3 py-2.5 text-sm font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 disabled:opacity-50 transition-colors"
+                title="Marcar como enviada sin enviar email (ej: ya la mandaste por WhatsApp)"
+              >
+                <CheckCheck className="h-4 w-4" /> Enviada por fuera
+              </button>
+            )}
             <button
               onClick={onClose}
               className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
