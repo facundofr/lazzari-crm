@@ -7,6 +7,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { generateOrdenCompraPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase/client";
 import { mockOrdenesCompra } from "@/lib/mock-data";
 import type { OCStatus } from "@/lib/types";
@@ -373,7 +374,42 @@ export default function OrdenesCompraPage() {
   const [editMode, setEditMode] = useState(false);
   const [editItems, setEditItems] = useState<DetailItem[]>([]);
   const [importingOC, setImportingOC] = useState(false);
+  const [assignPROpen, setAssignPROpen] = useState(false);
+  const [assignPRSearch, setAssignPRSearch] = useState("");
+  const [assignPROptions, setAssignPROptions] = useState<{ id: string; numero: string; cliente: string }[]>([]);
+  const [assignPRLoading, setAssignPRLoading] = useState(false);
   const importOCRef = useRef<HTMLInputElement>(null);
+
+  async function handleOpenAssignPR() {
+    setAssignPROpen(true);
+    setAssignPRSearch("");
+    setAssignPRLoading(true);
+    try {
+      let q = supabase.from("presupuestos").select("id, numero, clientes(razon_social)").in("estado" as any, ["aprobado", "facturar", "facturado"]).order("created_at", { ascending: false }).limit(50);
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data } = await q;
+      setAssignPROptions((data || []).map((p: any) => ({ id: p.id, numero: p.numero, cliente: p.clientes?.razon_social || "" })));
+    } catch { /* noop */ }
+    setAssignPRLoading(false);
+  }
+
+  async function handleAssignPR(prId: string) {
+    if (!detailOC) return;
+    const { error } = await supabase.from("ordenes_compra").update({ presupuesto_origen_id: prId } as any).eq("id", detailOC.id);
+    if (error) { alert("Error al asignar PR: " + error.message); return; }
+    const pr = assignPROptions.find(p => p.id === prId);
+    setDetailOC({ ...detailOC, presupuesto_origen_id: prId, presupuesto_origen: pr ? { numero: pr.numero } : null });
+    setOrdenes(prev => prev.map(o => o.id === detailOC.id ? { ...o, presupuesto_origen_id: prId, presupuesto_origen: pr ? { numero: pr.numero } : null } : o));
+    setAssignPROpen(false);
+  }
+
+  async function handleUnassignPR() {
+    if (!detailOC) return;
+    const { error } = await supabase.from("ordenes_compra").update({ presupuesto_origen_id: null } as any).eq("id", detailOC.id);
+    if (error) { alert("Error al desasignar PR: " + error.message); return; }
+    setDetailOC({ ...detailOC, presupuesto_origen_id: null, presupuesto_origen: null });
+    setOrdenes(prev => prev.map(o => o.id === detailOC.id ? { ...o, presupuesto_origen_id: null, presupuesto_origen: null } : o));
+  }
 
   async function handleImportCotizacion(file: File) {
     setImportingOC(true);
@@ -2939,13 +2975,50 @@ export default function OrdenesCompraPage() {
                   <span className="text-zinc-400">Moneda</span>
                   <p className="font-medium dark:text-white">{detailOC.moneda}</p>
                 </div>
-                <div>
+                <div className="relative">
                   <span className="text-zinc-400">PR origen</span>
-                  <p className="font-medium dark:text-white">
-                    {detailOC.presupuesto_origen ? (
-                      <span className="font-mono text-blue-500">{(detailOC.presupuesto_origen as { numero: string }).numero}</span>
-                    ) : "\u2014"}
-                  </p>
+                  {detailOC.presupuesto_origen ? (
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <Link href={`/presupuestos?selected=${detailOC.presupuesto_origen_id}`} className="font-mono text-blue-500 hover:text-blue-600 text-sm font-medium">
+                        {(detailOC.presupuesto_origen as { numero: string }).numero}
+                      </Link>
+                      {canManageCompras && (
+                        <button onClick={handleUnassignPR} className="text-zinc-300 hover:text-red-400" title="Quitar PR"><X className="h-3 w-3" /></button>
+                      )}
+                    </div>
+                  ) : canManageCompras ? (
+                    <div>
+                      <button onClick={handleOpenAssignPR} className="text-xs text-orange-500 hover:text-orange-600 font-medium mt-0.5">+ Asignar PR</button>
+                      {assignPROpen && (
+                        <div className="absolute z-20 mt-1 w-64 rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-800 p-2">
+                          <input
+                            autoFocus
+                            value={assignPRSearch}
+                            onChange={e => setAssignPRSearch(e.target.value)}
+                            placeholder="Buscar PR o cliente..."
+                            className="w-full rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-white mb-1"
+                          />
+                          <div className="max-h-40 overflow-y-auto space-y-0.5">
+                            {assignPRLoading ? (
+                              <p className="text-xs text-zinc-400 p-2 text-center">Cargando...</p>
+                            ) : assignPROptions.filter(p => {
+                              const q = assignPRSearch.toLowerCase();
+                              return !q || p.numero.toLowerCase().includes(q) || p.cliente.toLowerCase().includes(q);
+                            }).slice(0, 15).map(pr => (
+                              <button key={pr.id} onClick={() => handleAssignPR(pr.id)}
+                                className="w-full text-left rounded px-2 py-1.5 text-xs hover:bg-orange-50 dark:hover:bg-zinc-700 flex items-center justify-between">
+                                <span className="font-mono font-bold">{pr.numero}</span>
+                                <span className="text-zinc-400 truncate ml-2">{pr.cliente}</span>
+                              </button>
+                            ))}
+                          </div>
+                          <button onClick={() => setAssignPROpen(false)} className="w-full mt-1 text-xs text-zinc-400 hover:text-zinc-600 py-1">Cancelar</button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="font-medium dark:text-white">{"\u2014"}</p>
+                  )}
                 </div>
                 <div className="col-span-2 sm:col-span-4">
                   <span className="text-zinc-400">Operador</span>
