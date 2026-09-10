@@ -372,6 +372,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [fvSelectedEstados, setFvSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [fvTipoFilter, setFvTipoFilter] = useState("");
   const [clienteSearch, setClienteSearch] = useState("");
+  const [fvEnvioFilter, setFvEnvioFilter] = useState<"todos" | "enviada" | "no_enviada">("todos");
   const fvIsAll = fvSelectedEstados.has("todos");
 
   function fvToggleEstado(estado: string) {
@@ -400,6 +401,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       const nombre = (f.clientes?.razon_social || "").toLowerCase();
       if (!nombre.includes(clienteSearch.trim().toLowerCase())) return false;
     }
+    if (fvEnvioFilter === "enviada" && !f.email_enviado_at) return false;
+    if (fvEnvioFilter === "no_enviada" && f.email_enviado_at) return false;
     return true;
   });
 
@@ -1245,7 +1248,13 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             <option value="NCEA">NCEA</option>
             <option value="NCEB">NCEB</option>
           </select>
-          {(clienteSearch || !fvIsAll || fvTipoFilter) && (
+          <select value={fvEnvioFilter} onChange={(e) => setFvEnvioFilter(e.target.value as any)}
+            className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+            <option value="todos">Envío: todas</option>
+            <option value="enviada">Enviadas</option>
+            <option value="no_enviada">No enviadas</option>
+          </select>
+          {(clienteSearch || !fvIsAll || fvTipoFilter || fvEnvioFilter !== "todos") && (
             <span className="text-xs text-zinc-500">{filteredFacturas.length} de {facturas.length}</span>
           )}
         </div>

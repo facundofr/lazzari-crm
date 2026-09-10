@@ -209,7 +209,7 @@ export default function VentasPage() {
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [filterMoneda, setFilterMoneda] = useState<string>("todas");
-  const [filterEnviado, setFilterEnviado] = useState<string>("todos");
+  const filterEnviado = "todos";
   const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
@@ -844,15 +844,6 @@ export default function VentasPage() {
             <option value="ARS">ARS</option>
             <option value="USD">USD</option>
           </select>
-          <select
-            value={filterEnviado}
-            onChange={e => setFilterEnviado(e.target.value)}
-            className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-          >
-            <option value="todos">Todas (envío)</option>
-            <option value="enviado">Enviadas</option>
-            <option value="no_enviado">No enviadas</option>
-          </select>
           <button
             onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
             className="flex items-center gap-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white hover:bg-zinc-50 dark:hover:bg-zinc-800"
@@ -1442,7 +1433,7 @@ export default function VentasPage() {
                 </div>
 
                 {/* Info adicional del PR */}
-                {(emitVenta.presupuesto.oc_cliente || emitVenta.presupuesto.archivo_url || emitVenta.presupuesto.observaciones) && (
+                {(emitVenta.presupuesto.oc_cliente || emitVenta.presupuesto.archivo_url || emitVenta.presupuesto.observaciones || emitVenta.ordenesCompra.length > 0) && (
                   <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1">
                     {emitVenta.presupuesto.oc_cliente && (
                       <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -1453,6 +1444,16 @@ export default function VentasPage() {
                     )}
                     {!emitVenta.presupuesto.oc_cliente && emitVenta.presupuesto.archivo_url && (
                       <a href={emitVenta.presupuesto.archivo_url} target="_blank" rel="noreferrer" className="inline-flex rounded border border-orange-200 bg-white px-2 py-1 text-xs font-semibold text-orange-600 hover:bg-orange-50 dark:border-orange-800 dark:bg-zinc-900">Abrir OC adjunta del cliente</a>
+                    )}
+                    {emitVenta.ordenesCompra.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
+                        <span className="text-zinc-500 font-medium">OC proveedor:</span>
+                        {emitVenta.ordenesCompra.map(oc => (
+                          <span key={oc.id} className="inline-flex items-center gap-1 rounded border border-blue-200 dark:border-blue-800 bg-white dark:bg-zinc-900 px-2 py-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400">
+                            {oc.numero} <span className="font-normal text-zinc-400">({formatDate(oc.fecha)})</span>
+                          </span>
+                        ))}
+                      </div>
                     )}
                     {emitVenta.presupuesto.observaciones && (
                       <div className="text-sm">
