@@ -63,6 +63,12 @@ export async function GET(req: NextRequest) {
   if (!desde || !hasta || !sociedadId) {
     return NextResponse.json({ error: "Parámetros requeridos: desde, hasta, sociedad_id" }, { status: 400 });
   }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(desde) || !/^\d{4}-\d{2}-\d{2}$/.test(hasta)) {
+    return NextResponse.json({ error: "Las fechas deben tener formato YYYY-MM-DD" }, { status: 400 });
+  }
+  if (desde > hasta) {
+    return NextResponse.json({ error: "La fecha desde no puede ser posterior a la fecha hasta" }, { status: 400 });
+  }
 
   const supabase = createClient(supabaseUrl, supabaseKey);
 
@@ -106,7 +112,7 @@ export async function GET(req: NextRequest) {
   const provIds = [...new Set([
     ...(ops || []).map(op => op.proveedor_id),
     ...(directMovements || []).map(mov => mov.proveedor_id),
-  ])];
+  ].filter(Boolean))];
   const { data: provs } = await supabase
     .from("proveedores")
     .select("id, cuit, razon_social, condicion_iva, concepto_retencion_ganancias")
@@ -114,6 +120,20 @@ export async function GET(req: NextRequest) {
     .eq("sociedad_id", sociedadId);
 
   const provMap = new Map((provs || []).map(p => [p.id, p]));
+
+  // No omitir silenciosamente una retención: un archivo SICORE incompleto es
+  // peor que un error visible que permita corregir el proveedor/CUIT antes de
+  // presentarlo.
+  const missingCuit = [...new Set([
+    ...(ops || []).map(op => op.proveedor_id),
+    ...(directMovements || []).map(mov => mov.proveedor_id),
+  ].filter((id): id is string => !!id && !provMap.get(id)?.cuit))];
+  if (missingCuit.length > 0) {
+    return NextResponse.json({
+      error: "No se puede generar SICORE: hay retenciones con proveedor sin CUIT",
+      proveedor_ids: missingCuit,
+    }, { status: 422 });
+  }
 
   // Build SICORE lines
   // Format per RG 2233: fixed-width text

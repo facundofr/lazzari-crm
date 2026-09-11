@@ -368,6 +368,55 @@ interface ExtractoRow {
   extracto_movimientos: ExtractoMovimientoRow[];
 }
 
+function parseExtractoCsv(text: string) {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) throw new Error("El CSV no contiene movimientos");
+  const delimiter = (lines[0].match(/;/g) || []).length > (lines[0].match(/,/g) || []).length ? ";" : ",";
+  const split = (line: string) => {
+    const cells: string[] = [];
+    let value = "";
+    let quoted = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"' && line[i + 1] === '"') { value += '"'; i++; continue; }
+      if (ch === '"') { quoted = !quoted; continue; }
+      if (ch === delimiter && !quoted) { cells.push(value.trim()); value = ""; } else value += ch;
+    }
+    cells.push(value.trim());
+    return cells;
+  };
+  const headers = split(lines[0]).map((h) => h.toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, ""));
+  const index = (...names: string[]) => headers.findIndex((h) => names.some((name) => h.includes(name)));
+  const dateIdx = index("fecha", "date");
+  const descIdx = index("descripcion", "concepto", "detalle", "description");
+  const refIdx = index("referencia", "referencia", "comprobante", "nro");
+  const creditIdx = index("credito", "credit", "ingreso");
+  const debitIdx = index("debito", "debit", "egreso");
+  const amountIdx = index("importe", "monto", "amount", "saldo");
+  if (dateIdx < 0 || (amountIdx < 0 && creditIdx < 0 && debitIdx < 0)) {
+    throw new Error("El CSV debe tener columnas Fecha e Importe (o Crédito/Débito)");
+  }
+  const number = (value: string) => {
+    const clean = String(value || "").replace(/\s/g, "").replace(/\.(?=\d{3}(?:\D|$))/g, "").replace(",", ".");
+    const n = Number(clean.replace(/[^\d.-]/g, ""));
+    return Number.isFinite(n) ? Math.abs(n) : 0;
+  };
+  const date = (value: string) => {
+    const raw = String(value || "").trim();
+    const m = raw.match(/^(\d{1,2})[\\/-](\d{1,2})[\\/-](\d{2,4})$/);
+    if (m) return `${m[3].length === 2 ? `20${m[3]}` : m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : new Date(raw).toISOString().slice(0, 10);
+  };
+  return lines.slice(1).map((line) => {
+    const cells = split(line);
+    const credit = creditIdx >= 0 ? number(cells[creditIdx]) : 0;
+    const debit = debitIdx >= 0 ? number(cells[debitIdx]) : 0;
+    const amount = amountIdx >= 0 ? number(cells[amountIdx]) : Math.max(credit, debit);
+    if (!amount) return null;
+    return { fecha: date(cells[dateIdx]), descripcion: cells[descIdx] || "Movimiento bancario", referencia: refIdx >= 0 ? cells[refIdx] : "", monto: amount, tipo: (credit > 0 || (creditIdx < 0 && debit <= 0)) ? "credito" as const : "debito" as const };
+  }).filter((item): item is NonNullable<typeof item> => Boolean(item));
+}
+
 interface LineaCreditoRow {
   id: string;
   entidad: string;
@@ -449,9 +498,55 @@ export default function FinanzasPage() {
   const [movClienteSearch, setMovClienteSearch] = useState("");
   const [movProvSearch, setMovProvSearch] = useState("");
   const [extractos, setExtractos] = useState<ExtractoRow[]>([]);
+  const [extractoUploading, setExtractoUploading] = useState(false);
+  const [extractoUploadError, setExtractoUploadError] = useState("");
   const [lineasCredito, setLineasCredito] = useState<LineaCreditoRow[]>([]);
   const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>([]);
   const [objetivos, setObjetivos] = useState<Objetivo[]>([]);
+
+  const handleExtractoUpload = useCallback(async (file: File) => {
+    if (!sociedadActiva?.id || !profile?.id) {
+      setExtractoUploadError("Seleccioná una sociedad antes de cargar el extracto.");
+      return;
+    }
+    setExtractoUploading(true);
+    setExtractoUploadError("");
+    try {
+      if (!file.name.toLocaleLowerCase().endsWith(".csv")) throw new Error("Por ahora la carga automática admite CSV. Exportá el extracto bancario como CSV e intentá nuevamente.");
+      const movements = parseExtractoCsv(await file.text());
+      const credits = movements.filter((m) => m.tipo === "credito").reduce((sum, m) => sum + m.monto, 0);
+      const debits = movements.filter((m) => m.tipo === "debito").reduce((sum, m) => sum + m.monto, 0);
+      const period = movements.length ? movements.map((m) => m.fecha).sort()[0].slice(0, 7) : new Date().toISOString().slice(0, 7);
+      let archivo: string | null = null;
+      const storagePath = `${sociedadActiva.id}/extractos/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const upload = await (supabase as any).storage.from("comprobantes").upload(storagePath, file, { upsert: false });
+      if (!upload.error) archivo = storagePath;
+      const { data: extracto, error } = await (supabase as any).from("extractos_bancarios").insert({
+        sociedad_id: sociedadActiva.id,
+        banco: file.name.replace(/\.[^.]+$/, "") || "Banco",
+        cuenta: "—",
+        periodo: period,
+        fecha_upload: new Date().toISOString(),
+        archivo,
+        total_creditos: credits,
+        total_debitos: debits,
+        estado: "parcial",
+        created_by: profile.id,
+      }).select("*, extracto_movimientos(*)").single();
+      if (error || !extracto) throw new Error(error?.message || "No se pudo guardar el extracto");
+      const { error: rowsError } = await (supabase as any).from("extracto_movimientos").insert(movements.map((m) => ({ ...m, extracto_id: extracto.id, estado: "pendiente" })));
+      if (rowsError) {
+        await (supabase as any).from("extractos_bancarios").delete().eq("id", extracto.id).eq("sociedad_id", sociedadActiva.id);
+        throw new Error(rowsError.message);
+      }
+      const { data: complete } = await (supabase as any).from("extractos_bancarios").select("*, extracto_movimientos(*)").eq("id", extracto.id).eq("sociedad_id", sociedadActiva.id).single();
+      if (complete) setExtractos((prev) => [complete as ExtractoRow, ...prev]);
+    } catch (error) {
+      setExtractoUploadError(error instanceof Error ? error.message : "No se pudo cargar el extracto");
+    } finally {
+      setExtractoUploading(false);
+    }
+  }, [profile?.id, sociedadActiva?.id]);
 
   // Saldos de caja
   const [saldosCaja, setSaldosCaja] = useState<{ id?: string; moneda: string; monto: number }[]>([]);
@@ -1387,7 +1482,8 @@ export default function FinanzasPage() {
 
         // Acumulado mensual de PAGOS (OPs) a este proveedor — Art. 26 RG 830
         // Se acumulan las bases sin IVA de OPs previas + retenciones ya practicadas
-        const mesActual = new Date().toISOString().slice(0, 7); // YYYY-MM
+        // El acumulado de RG 830 corresponde al mes de la fecha de la OP.
+        const mesActual = (opForm.fecha || new Date().toISOString().slice(0, 10)).slice(0, 7); // YYYY-MM
         let qMensualOP = (supabase as any).from("ordenes_pago").select("base_retencion_ganancias, retencion_ganancias_monto")
           .eq("proveedor_id", opForm.proveedor_id)
           .gte("fecha", `${mesActual}-01`)
@@ -1401,7 +1497,7 @@ export default function FinanzasPage() {
       } catch { setOpFCPendientes([]); }
       finally { setOpFCLoading(false); }
     })();
-  }, [opForm.proveedor_id, opModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [opForm.proveedor_id, opForm.fecha, opModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 2. Base sin IVA de esta OP (Art. 23 RG 830: IVA se excluye de la base de retención)
   const opMontoBrutoFC = opFCPendientes.filter(f => f.selected).reduce((s, f) => s + f.monto_a_pagar, 0);
@@ -1431,7 +1527,8 @@ export default function FinanzasPage() {
     let retencion_ganancias_pct = 0;
     const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
     // Check exclusion certificate validity
-    const hoy = new Date().toISOString().slice(0, 10);
+    // La vigencia se evalúa contra la fecha real del pago, no contra hoy.
+    const hoy = opForm.fecha || new Date().toISOString().slice(0, 10);
     const excluido = prov?.exclusion_retencion
       && (!prov.exclusion_retencion_desde || prov.exclusion_retencion_desde <= hoy)
       && (!prov.exclusion_retencion_hasta || prov.exclusion_retencion_hasta >= hoy);
@@ -4223,8 +4320,13 @@ export default function FinanzasPage() {
             <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-white p-6 text-center dark:border-zinc-600 dark:bg-zinc-900">
               <Upload className="mx-auto h-8 w-8 text-zinc-300" />
               <p className="mt-2 font-medium text-zinc-700 dark:text-zinc-300">Arrastra un extracto o hace click para subir</p>
-              <p className="text-sm text-zinc-400">Formatos: .xlsx, .xls, .csv, .pdf</p>
-              <button className="mt-3 rounded-lg bg-orange-500 px-5 py-2 text-sm font-medium text-white hover:bg-orange-600">Seleccionar archivo</button>
+              <p className="text-sm text-zinc-400">Formato admitido para carga automática: .csv</p>
+              <label className={`mt-3 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-orange-500 px-5 py-2 text-sm font-medium text-white hover:bg-orange-600 ${extractoUploading ? "pointer-events-none opacity-60" : ""}`}>
+                {extractoUploading && <Loader2 className="h-4 w-4 animate-spin" />}
+                {extractoUploading ? "Procesando…" : "Seleccionar archivo"}
+                <input type="file" accept=".csv,text/csv" className="sr-only" disabled={extractoUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleExtractoUpload(file); e.currentTarget.value = ""; }} />
+              </label>
+              {extractoUploadError && <p className="mt-3 text-sm text-red-600 dark:text-red-400">{extractoUploadError}</p>}
             </div>
 
             {extracto ? (
