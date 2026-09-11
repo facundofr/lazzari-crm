@@ -2225,19 +2225,74 @@ export default function FinanzasPage() {
     setOpError("");
     try {
       const { data: fresh, error: freshError } = await (supabase as any).from("facturas_compra")
-        .select("id, proveedor_id, total, moneda, numero_factura, estado")
+        .select("id, proveedor_id, total, subtotal, percepciones, moneda, numero_factura, estado")
         .eq("id", fc.id).eq("sociedad_id", sociedadActiva.id).single();
       if (freshError || !fresh) throw new Error("No se pudo verificar la factura de compra");
       if (fresh.proveedor_id !== opForm.proveedor_id) throw new Error("La factura no pertenece al proveedor seleccionado");
+      // Un pago directo sigue siendo un pago a efectos de RG 830. El importe
+      // ingresado es el neto que sale de caja; resolver el bruto en dos pasadas
+      // permite practicar la retención también cuando no se genera una OP.
+      const { data: provFiscal } = await (supabase as any).from("proveedores")
+        .select("condicion_iva, alicuota_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta")
+        .eq("id", fresh.proveedor_id).eq("sociedad_id", sociedadActiva.id).single();
+      const condicion = String(provFiscal?.condicion_iva || opProvCondicion || "").trim().toUpperCase();
+      const esRI = condicion === "RI" || condicion === "RESPONSABLE INSCRIPTO" || condicion === "RESPONSABLE INSCRIPTO IVA";
+      const fechaPago = opForm.fecha || todayAR();
+      const excluido = !!provFiscal?.exclusion_retencion
+        && (!provFiscal.exclusion_retencion_desde || provFiscal.exclusion_retencion_desde <= fechaPago)
+        && (!provFiscal.exclusion_retencion_hasta || provFiscal.exclusion_retencion_hasta >= fechaPago);
+      const ratioSinIVA = Number(fresh.total) > 0
+        ? (Number(fc.subtotal || 0) + Number(fc.percepciones || 0)) / Number(fresh.total)
+        : 0;
+      const pctGanancias = Number(provFiscal?.alicuota_ganancias ?? retencionConfig.tasa_ganancias_ri);
+      const mesInicio = `${fechaPago.slice(0, 7)}-01`;
+      const mesFin = new Date(`${mesInicio}T00:00:00`);
+      mesFin.setMonth(mesFin.getMonth() + 1);
+      let qMensual = (supabase as any).from("movimientos")
+        .select("base_retencion_ganancias, retencion_ganancias_monto, anulado")
+        .eq("proveedor_id", fresh.proveedor_id).eq("sociedad_id", sociedadActiva.id)
+        .eq("tipo", "pago").gte("fecha", mesInicio).lt("fecha", mesFin.toISOString().slice(0, 10));
+      const { data: movimientosMes } = await qMensual;
+      const baseMensualDirecta = (movimientosMes || []).filter((m: any) => !m.anulado)
+        .reduce((sum: number, m: any) => sum + Number(m.base_retencion_ganancias || 0), 0);
+      const retenidoMensualDirecto = (movimientosMes || []).filter((m: any) => !m.anulado)
+        .reduce((sum: number, m: any) => sum + Number(m.retencion_ganancias_monto || 0), 0);
+      let qOPMensual = (supabase as any).from("ordenes_pago")
+        .select("base_retencion_ganancias, retencion_ganancias_monto, estado")
+        .eq("proveedor_id", fresh.proveedor_id).eq("sociedad_id", sociedadActiva.id)
+        .gte("fecha", mesInicio).lt("fecha", mesFin.toISOString().slice(0, 10)).neq("estado", "anulada");
+      const { data: opMensual } = await qOPMensual;
+      const baseMensualOP = (opMensual || []).reduce((sum: number, op: any) => sum + Number(op.base_retencion_ganancias || 0), 0);
+      const retenidoMensualOP = (opMensual || []).reduce((sum: number, op: any) => sum + Number(op.retencion_ganancias_monto || 0), 0);
+      const baseMensual = baseMensualDirecta + baseMensualOP;
+      const retenidoMensual = retenidoMensualDirecto + retenidoMensualOP;
+      let retencion = 0;
+      let bruto = total;
+      if (esRI && !excluido && retencionConfig.aplica_ganancias && ratioSinIVA > 0) {
+        const calcular = (importeBruto: number) => {
+          const base = importeBruto * ratioSinIVA;
+          const acumulada = Math.max(0, baseMensual + base - retencionConfig.minimo_ganancias) * (pctGanancias / 100);
+          const importe = Math.max(0, acumulada - retenidoMensual);
+          return { base, importe: importe >= retencionConfig.minimo_retencion_ganancias ? importe : 0 };
+        };
+        const primera = calcular(total);
+        bruto = total + primera.importe;
+        const segunda = calcular(bruto);
+        retencion = Math.round(segunda.importe * 100) / 100;
+        bruto = total + retencion;
+      }
       const { data: existing } = await (supabase as any).from("movimientos")
         .select("monto, anulado").eq("factura_compra_id", fresh.id).eq("tipo", "pago").eq("sociedad_id", sociedadActiva.id);
       const pagado = (existing || []).filter((p: any) => !p.anulado).reduce((sum: number, p: any) => sum + Number(p.monto || 0), 0);
-      if (pagado + total >= Number(fresh.total) - 0.01) throw new Error("El importe completa la factura; generá una OP para cancelar el saldo");
+      if (pagado + bruto >= Number(fresh.total) - 0.01) throw new Error("El importe completa la factura; generá una OP para cancelar el saldo");
       const { error } = await (supabase as any).from("movimientos").insert({
         tipo: "pago",
         proveedor_id: fresh.proveedor_id,
         factura_compra_id: fresh.id,
         monto: total,
+        base_retencion_ganancias: bruto * ratioSinIVA,
+        retencion_ganancias_pct: pctGanancias,
+        retencion_ganancias_monto: retencion,
         moneda: fresh.moneda || opForm.moneda,
         fecha: opForm.fecha,
         descripcion: `Pago parcial directo — ${fresh.numero_factura || "FC"} — ${opMedios.map((m) => m.tipo).join(" + ")}`,
@@ -2246,6 +2301,17 @@ export default function FinanzasPage() {
         created_by: profile?.id || null,
       });
       if (error) throw error;
+      if (retencion > 0) {
+        const { error: retError } = await (supabase as any).from("movimientos").insert({
+          tipo: "retencion_ganancias", proveedor_id: fresh.proveedor_id, factura_compra_id: fresh.id,
+          monto: retencion, moneda: fresh.moneda || opForm.moneda, fecha: opForm.fecha,
+          descripcion: `Pago parcial directo — Ret. Ganancias — ${fresh.numero_factura || "FC"}`,
+          base_retencion_ganancias: bruto * ratioSinIVA, retencion_ganancias_pct: pctGanancias,
+          retencion_ganancias_monto: retencion, conciliado: true, sociedad_id: sociedadActiva.id,
+          created_by: profile?.id || null,
+        });
+        if (retError) throw retError;
+      }
       setOpModalOpen(false);
       setPagoParcialDirecto(false);
       setPagoParcialFCId(null);
@@ -4661,7 +4727,7 @@ export default function FinanzasPage() {
               <button onClick={() => setOpModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
             </div>
             {opError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}
-            {pagoParcialDirecto && <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300">Este pago se registra como movimiento directo contra una sola factura y no crea una Orden de Pago. Las retenciones se calculan y documentan al generar la OP correspondiente.</div>}
+            {pagoParcialDirecto && <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300">Este pago se registra como movimiento directo contra una sola factura y no crea una Orden de Pago. Si corresponde, la retención RG 830 se calcula sobre este pago y queda registrada junto al movimiento.</div>}
             <div className="space-y-4">
               {/* Proveedor + Fecha */}
               <div className="grid grid-cols-3 gap-4">

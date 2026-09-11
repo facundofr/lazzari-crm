@@ -44,10 +44,10 @@ const transporteEstadoConfig: Record<string, { label: string; variant: "success"
   cancelado: { label: "Cancelado", variant: "danger" },
 };
 
-function remitoRequiereARCA(remito: Pick<RemitoRow, "observaciones" | "cae">) {
+function remitoRequiereARCA(remito: Pick<RemitoRow, "observaciones" | "cae" | "tipo_remito">) {
   // Los remitos de muestras y los internos son constancias manuales. Solo se
   // ofrece autorización electrónica cuando el usuario eligió expresamente ARCA.
-  return !remito.cae && /Emisión:\s*ARCA/i.test(remito.observaciones || "");
+  return !remito.cae && (remito.tipo_remito === "electronico" || /Emisión:\s*ARCA/i.test(remito.observaciones || ""));
 }
 
 interface RemitoRow {
@@ -59,6 +59,7 @@ interface RemitoRow {
   cae: string | null;
   car_vencimiento: string | null;
   nro_remito_afip: string | null;
+  tipo_remito?: "interno" | "muestra" | "electronico" | null;
   estado: string;
   observaciones: string;
   valor_declarado: number | null;
@@ -288,7 +289,7 @@ export default function RemitosPage() {
             id: r.id, numero: r.numero, cliente_id: r.clienteId,
             presupuesto_id: r.presupuestoId || null, fecha: r.fecha,
             cae: r.cae || null, car_vencimiento: null, nro_remito_afip: null, estado: r.estado, observaciones: r.observaciones,
-            valor_declarado: null,
+            tipo_remito: null, valor_declarado: null,
             clientes: { razon_social: r.clienteNombre },
             clienteNombre: r.clienteNombre,
             remito_items: r.items.map((i) => ({ id: i.id })),
@@ -299,7 +300,7 @@ export default function RemitosPage() {
           id: r.id, numero: r.numero, cliente_id: r.clienteId,
           presupuesto_id: r.presupuestoId || null, fecha: r.fecha,
           cae: r.cae || null, car_vencimiento: null, nro_remito_afip: null, estado: r.estado, observaciones: r.observaciones,
-          valor_declarado: null,
+          tipo_remito: null, valor_declarado: null,
           clientes: { razon_social: r.clienteNombre },
           clienteNombre: r.clienteNombre,
           remito_items: r.items.map((i) => ({ id: i.id })),
@@ -680,18 +681,25 @@ export default function RemitosPage() {
           ? [obsBase, `Sucursal: ${sucNombre}`].filter(Boolean).join(" — ")
           : obsBase;
 
-        const { data: remitoData, error } = await (supabase.from("remitos") as any).insert({
+        const remitoInsert = {
           numero: createForm.numero.trim() || null,
           cliente_id: createForm.cliente_id,
           fecha: createForm.fecha,
           observaciones: obs,
+          tipo_remito: createTipoRemito,
           presupuesto_id: createForm.presupuesto_id || null,
           estado: "pendiente",
           valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : (valorDeclaradoSugerido ? Number(valorDeclaradoSugerido) : null),
           sociedad_id: sociedadActiva?.id || null,
           sucursal_id: sucursalId,
           created_by: profile?.id || null,
-        }).select("id").single();
+        };
+        let { data: remitoData, error } = await (supabase.from("remitos") as any).insert(remitoInsert).select("id").single();
+        // Compatibilidad transitoria con una base que todavía no aplicó la migración.
+        if (error && /tipo_remito|column/i.test(error.message || "")) {
+          const { tipo_remito: _tipo, ...legacyInsert } = remitoInsert;
+          ({ data: remitoData, error } = await (supabase.from("remitos") as any).insert(legacyInsert).select("id").single());
+        }
 
         if (error || !remitoData) {
           setCreateError("Error al crear remito: " + (error?.message || "sin datos"));

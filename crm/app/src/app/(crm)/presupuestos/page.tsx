@@ -994,6 +994,16 @@ export default function PresupuestosPage() {
     fetchProveedoresForPR();
   }, [showNewPR, sociedadActiva]);
 
+  // En un presupuesto nuevo, sugerir automáticamente al usuario logueado como
+  // vendedor. El campo sigue siendo editable y no se pisa una selección manual.
+  useEffect(() => {
+    if (!showNewPR || editingPRId || esSolicitud || newPR.vendedor_id || !profile?.id) return;
+    const loggedInVendedor = vendedores.find((v) => v.id === profile.id);
+    if (loggedInVendedor) {
+      setNewPR((prev) => prev.vendedor_id ? prev : { ...prev, vendedor_id: loggedInVendedor.id });
+    }
+  }, [showNewPR, editingPRId, esSolicitud, newPR.vendedor_id, profile?.id, vendedores]);
+
   function updateNewPRItem(index: number, field: keyof NewPRItem | "costo_moneda", value: string | number) {
     setNewPR((prev) => {
       const items = [...prev.items];
@@ -2805,7 +2815,9 @@ export default function PresupuestosPage() {
                     value={(selected as any).vendedorId || ""}
                     onChange={async (e) => {
                       const newVendedorId = e.target.value || null;
-                      const { error } = await supabase.from("presupuestos").update({ vendedor_id: newVendedorId } as any).eq("id", selected.id);
+                      let updateQuery = supabase.from("presupuestos").update({ vendedor_id: newVendedorId } as any).eq("id", selected.id);
+                      if (sociedadActiva?.id) updateQuery = updateQuery.eq("sociedad_id" as any, sociedadActiva.id);
+                      const { error } = await updateQuery;
                       if (error) { toast.error("Error al cambiar vendedor"); return; }
                       const v = vendedores.find(v => v.id === newVendedorId);
                       setSelected({ ...selected, vendedorId: newVendedorId, vendedorNombre: v?.full_name || "" } as any);
