@@ -718,6 +718,13 @@ export default function FinanzasPage() {
   const fetchData = useCallback(async () => {
       setLoading(true);
       setLoadingTimedOut(false);
+      // Nunca consultar Finanzas sin sociedad: además de ser inseguro, deja la
+      // pantalla esperando si el contexto de usuario todavía no terminó de cargar.
+      if (!sociedadActiva?.id) {
+        setLoading(false);
+        setLoadingTimedOut(true);
+        return;
+      }
       try {
         let qMov = supabase
           .from("movimientos")
