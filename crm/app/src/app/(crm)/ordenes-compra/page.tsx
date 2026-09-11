@@ -17,7 +17,7 @@ import {
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
   PackageCheck, MessageSquare, Edit3, Plus, Minus,
   Maximize2, Upload, Trash2, RefreshCw,
-  Search, CreditCard,
+  Search, CreditCard, Lock,
 } from "lucide-react";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import { EmailComposeModal } from "@/components/email-compose-modal";
@@ -73,7 +73,7 @@ interface OCRow {
   created_by_profile: { full_name: string } | null;
   presupuesto_origen: { numero: string; modalidad_emision?: string | null } | null;
   orden_compra_items: { codigo: string | null; descripcion: string | null; cantidad: number; cantidad_recibida: number }[];
-  facturas_vinculadas?: { id: string; numero_factura: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null }[];
+  facturas_vinculadas?: { id: string; numero_factura: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null; archivo_nombre?: string | null }[];
 }
 
 const ocPagada = (oc: OCRow) => {
@@ -83,6 +83,11 @@ const ocPagada = (oc: OCRow) => {
 };
 
 const ocPagadaConTarjeta = (oc: OCRow) => oc.estado_pago === "pagada" && oc.medio_pago === "tarjeta";
+
+// Una factura que ya fue aprobada por Finanzas no permite modificar la OC
+// vinculada: conserva la trazabilidad entre el comprobante aprobado y el costo.
+const ocTieneFacturaAprobada = (oc: OCRow) =>
+  (oc.facturas_vinculadas || []).some((factura) => ["pendiente", "recibida", "pagada"].includes(factura.estado));
 
 // Una OC originada en un PR manual debe conservarse sin IVA durante todo su ciclo
 // (creacion, edicion y division por proveedor). El chequeo del encabezado cubre
@@ -474,11 +479,11 @@ export default function OrdenesCompraPage() {
       if (!error && data) {
         const rows = data as unknown as OCRow[];
         const ids = rows.map((row) => row.id);
-        const linksByOC = new Map<string, { id: string; numero_factura: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null }[]>();
+        const linksByOC = new Map<string, { id: string; numero_factura: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null; archivo_nombre?: string | null }[]>();
         if (ids.length > 0) {
           const { data: links } = await (supabase as any)
             .from("factura_compra_ocs")
-            .select("orden_compra_id, facturas_compra(id, numero_factura, tipo_comprobante, estado, total, moneda, archivo_url)")
+            .select("orden_compra_id, facturas_compra(id, numero_factura, tipo_comprobante, estado, total, moneda, archivo_url, archivo_nombre)")
             .in("orden_compra_id", ids);
           for (const link of links || []) {
             const factura = link.facturas_compra;
@@ -886,6 +891,10 @@ export default function OrdenesCompraPage() {
 
   const startEditMode = () => {
     if (!detailOC) return;
+    if (ocTieneFacturaAprobada(detailOC)) {
+      alert("Esta OC no se puede editar porque tiene una factura aprobada por Finanzas. Anulá la factura o corregila desde Finanzas antes de modificarla.");
+      return;
+    }
     setEditItems(detailItems.map((it) => ({ ...it })));
     setEditOC({
       proveedor_id: detailOC.proveedor_id || "",
@@ -2031,12 +2040,14 @@ export default function OrdenesCompraPage() {
                 key: "fecha",
                 label: "Fecha",
                 sortable: true,
+                sortValue: (row) => row.fecha || "",
                 render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span>,
               },
               {
                 key: "numero",
                 label: "Orden de compra",
                 sortable: true,
+                sortValue: (row) => row.numero || "",
                 render: (row) => (
                   <div className="flex items-center gap-2">
                     <ShoppingCart className="h-4 w-4 text-zinc-400" />
@@ -2047,6 +2058,8 @@ export default function OrdenesCompraPage() {
               {
                 key: "presupuesto_origen_id",
                 label: "PR origen",
+                sortable: true,
+                sortValue: (row) => row.presupuesto_origen?.numero || "",
                 render: (row) =>
                   row.presupuesto_origen ? (
                     <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{(row.presupuesto_origen as { numero: string }).numero}</span>
@@ -2071,6 +2084,8 @@ export default function OrdenesCompraPage() {
               {
                 key: "orden_compra_items",
                 label: "Detalle",
+                sortable: true,
+                sortValue: (row) => row.orden_compra_items.map((item) => item.descripcion || item.codigo || "").join(" "),
                 render: (row) => {
                   const descripciones = row.orden_compra_items.map((item) => item.descripcion || item.codigo).filter(Boolean) as string[];
                   const detalle = descripciones.length > 0 ? descripciones.slice(0, 2).join(", ") : `${row.orden_compra_items.length} items`;
@@ -2109,6 +2124,8 @@ export default function OrdenesCompraPage() {
               {
                 key: "facturas_vinculadas" as any,
                 label: "Pago",
+                sortable: true,
+                sortValue: (row) => ocPagadaConTarjeta(row) ? "2 tarjeta" : ocPagada(row) ? "1 pagada" : "0 pendiente",
                 render: (row) => {
                   if (row.estado === "cancelada") return <span className="text-zinc-300">—</span>;
                   if (ocPagadaConTarjeta(row)) {
@@ -2122,6 +2139,7 @@ export default function OrdenesCompraPage() {
                 key: "estado",
                 label: "Pedido",
                 sortable: true,
+                sortValue: (row) => row.pedido ? 1 : 0,
                 render: (row) => {
                   const isPedido = row.pedido ?? false;
                   if (!canManageCompras) {
@@ -2157,6 +2175,12 @@ export default function OrdenesCompraPage() {
               {
                 key: "id",
                 label: "Recepcion",
+                sortable: true,
+                sortValue: (row) => {
+                  const totalQty = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
+                  const recibido = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad_recibida), 0);
+                  return totalQty > 0 ? recibido / totalQty : 0;
+                },
                 render: (row) => {
                   const totalQty = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
                   const recibido = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad_recibida), 0);
@@ -2206,6 +2230,8 @@ export default function OrdenesCompraPage() {
               {
                 key: "observaciones",
                 label: "FC",
+                sortable: true,
+                sortValue: (row) => (row.facturas_vinculadas || []).filter(f => f.estado !== "anulada").length,
                 render: (row) => {
                   const fcs = (row.facturas_vinculadas || []).filter(f => f.estado !== "anulada");
                   if (row.estado === "cancelada") return <span className="text-zinc-300">{"\u2014"}</span>;
@@ -2757,11 +2783,16 @@ export default function OrdenesCompraPage() {
                     </>
                   ) : (
                     <>
-                      {canManageCompras && (
+                      {canManageCompras && !ocTieneFacturaAprobada(detailOC) && (
                         <button onClick={startEditMode}
                           className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 transition-colors" title="Editar OC">
                           <Edit3 className="h-3.5 w-3.5" /> Editar
                         </button>
+                      )}
+                      {canManageCompras && ocTieneFacturaAprobada(detailOC) && (
+                        <span className="flex items-center gap-1 rounded-lg border border-amber-200 px-2 py-1 text-[11px] text-amber-600 dark:border-amber-900/50 dark:text-amber-400" title="La edición está bloqueada por una factura aprobada por Finanzas">
+                          <Lock className="h-3 w-3" /> Edición bloqueada
+                        </span>
                       )}
                       <button onClick={handleCopySummary} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Copiar resumen">
                         {copiedSummary ? <Check className="h-4 w-4 text-emerald-500" /> : <ClipboardCopy className="h-4 w-4" />}
@@ -3133,11 +3164,15 @@ export default function OrdenesCompraPage() {
                             <span className="font-medium dark:text-white truncate">{fc.tipo_comprobante || ""} {fc.numero_factura || `FC #${idx + 1}`}</span>
                             <span className="font-mono text-zinc-500">{formatCurrency(fc.total, fc.moneda as "ARS" | "USD")}</span>
                           </div>
-                          {fc.archivo_url && (
+                          {fc.archivo_url ? (
                             <a href={fc.archivo_url} target="_blank" rel="noopener noreferrer"
                               className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 font-medium shrink-0">
-                              <Download className="h-3.5 w-3.5" /> Ver comprobante
+                              <Download className="h-3.5 w-3.5" /> {fc.archivo_nombre || "Ver comprobante"}
                             </a>
+                          ) : (
+                            <span className="flex items-center gap-1 text-xs text-amber-500 shrink-0" title="La factura está vinculada, pero no tiene archivo adjunto">
+                              <AlertTriangle className="h-3.5 w-3.5" /> Sin archivo adjunto
+                            </span>
                           )}
                         </div>
                       ))}

@@ -34,8 +34,10 @@ export async function POST(request: NextRequest) {
       .eq("listas_precios.estado", "vigente");
 
     if (liError) {
-      console.error("Error fetching lista items:", liError);
-      return Response.json({ error: "Error al buscar productos" }, { status: 500 });
+      // La lectura del catálogo no debe impedir armar un presupuesto desde un
+      // mensaje o una captura. En instalaciones con RLS/configuración parcial
+      // dejamos que la IA extraiga los productos y los marque para verificar.
+      console.error("Error fetching lista items; continuing without catalog:", liError);
     }
 
     // 2. Get client info if provided
@@ -93,6 +95,7 @@ Tu tarea: dado un mensaje o imagen de un cliente pidiendo productos, buscá los 
 ${clienteInfo}
 Moneda del presupuesto: ${moneda || "USD"}
 
+CATEGORÍA DEL CATÁLOGO: ${catalogItems.length > 0 ? "hay productos para buscar" : "no disponible; extraé igualmente el pedido y marcá los items para verificar"}
 CATALOGO DE LISTAS DE PRECIOS (proveedores):
 ${JSON.stringify(catalogItems, null, 0)}
 

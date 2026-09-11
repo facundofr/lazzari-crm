@@ -117,7 +117,7 @@ function ProveedorItemPicker({ value, stockPropio, options, onChange }: {
           </button>
           <button type="button" onMouseDown={e => { e.preventDefault(); onChange("", "Stock propio", true); setOpen(false); }}
             className="w-full text-left px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30">
-            Stock propio — no genera OC
+            Stock propio — genera OC interna
           </button>
           {filtered.map(p => (
             <button key={p.id} type="button" onMouseDown={e => { e.preventDefault(); onChange(p.id, p.razon_social, false); setOpen(false); }}
@@ -1330,7 +1330,7 @@ export default function PresupuestosPage() {
       // Get active OCs linked to this PR
       const { data: ocs } = await supabase
         .from("ordenes_compra")
-        .select("id, proveedor_id, moneda")
+        .select("id, proveedor_id, moneda, observaciones")
         .eq("presupuesto_origen_id", prId)
         .not("estado", "eq", "cancelada");
       if (!ocs || ocs.length === 0) return;
@@ -1344,7 +1344,10 @@ export default function PresupuestosPage() {
 
       for (const oc of ocs) {
         // Match PR items to this OC by proveedor_id
-        const matchingItems = prItems.filter((it: any) => it.proveedor_id === oc.proveedor_id && !it.stock_propio);
+        const isStockOwnOC = !oc.proveedor_id && String((oc as any).observaciones || "").includes("Stock propio");
+        const matchingItems = prItems.filter((it: any) => isStockOwnOC
+          ? Boolean(it.stock_propio)
+          : it.proveedor_id === oc.proveedor_id && !it.stock_propio);
         if (matchingItems.length === 0) continue;
 
         // Delete old OC items and recreate from PR
@@ -1413,8 +1416,11 @@ export default function PresupuestosPage() {
         return;
       }
 
-      // Los items de stock propio conservan su costo para el margen, pero no requieren compra.
+      // Los items de stock propio conservan su costo para el margen y ahora generan
+      // una OC interna real, para que también puedan pasar por recepción y dejar
+      // trazabilidad del ingreso al circuito de compras.
       const stockItemsCount = items.filter((item: any) => Boolean(item.stock_propio)).length;
+      const stockItems = items.filter((item: any) => Boolean(item.stock_propio));
       const itemsAComprar = items.filter((item: any) => !item.stock_propio);
 
       // Group purchasable items by proveedor_id (items sin proveedor van a key "__sin_proveedor__")
@@ -1429,11 +1435,8 @@ export default function PresupuestosPage() {
       const sinProveedorCount = (byProveedor["__sin_proveedor__"] || []).length;
       const conProveedorIds = Object.keys(byProveedor).filter(k => k !== "__sin_proveedor__");
 
-      if (conProveedorIds.length === 0 && sinProveedorCount === 0) {
-        toast.info(stockItemsCount > 0
-          ? `PR aprobado. ${stockItemsCount} item(s) salen de stock propio; no se generó OC.`
-          : "PR aprobado. No se generaron OC (sin items)."
-        );
+      if (conProveedorIds.length === 0 && sinProveedorCount === 0 && stockItemsCount === 0) {
+        toast.info("PR aprobado. No se generaron OC (sin items).");
         return;
       }
 
@@ -1495,6 +1498,55 @@ export default function PresupuestosPage() {
         ocsCreated++;
       }
 
+      // Stock propio no tiene proveedor externo, pero sí una OC interna real.
+      // Se deja en borrador para que el usuario pueda activarla y recibirla
+      // normalmente desde el módulo de Compras.
+      if (stockItems.length > 0) {
+        const subtotalSP = stockItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
+        const ivaSP = compraSinIva ? 0 : stockItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad) * (Number(it.iva_porcentaje ?? 21) / 100), 0);
+        const costoMonedasSP = new Set(stockItems.map((it: any) => (it.costo_moneda || "ARS").startsWith("USD") ? "USD" : "ARS"));
+        const ocMonedaSP = costoMonedasSP.size === 1 ? [...costoMonedasSP][0] : "ARS";
+        const { data: stockOC, error: stockOCErr } = await supabase
+          .from("ordenes_compra")
+          .insert({
+            proveedor_id: null,
+            presupuesto_origen_id: prId,
+            sociedad_id: sociedadId,
+            fecha: today,
+            moneda: ocMonedaSP,
+            estado: "borrador",
+            subtotal: subtotalSP,
+            iva: ivaSP,
+            total: subtotalSP + ivaSP,
+            observaciones: `Stock propio — OC interna generada desde ${prNumero}`,
+            created_by: prCreatedBy ?? profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
+          } as any)
+          .select()
+          .single();
+        if (stockOCErr || !stockOC) {
+          console.error("Error creating internal stock OC:", JSON.stringify(stockOCErr));
+          toast.error(`No se pudo crear la OC interna de stock propio: ${stockOCErr?.message ?? "sin datos"}`);
+        } else {
+          const stockOCItems = stockItems.map((it: any, idx: number) => ({
+            orden_id: stockOC.id,
+            codigo: it.codigo || "",
+            descripcion: it.descripcion || "Sin descripción",
+            cantidad: Number(it.cantidad) || 1,
+            unidad: it.unidad || "u",
+            precio_unitario: Number(it.precio_costo) || 0,
+            iva_porcentaje: compraSinIva ? 0 : Number(it.iva_porcentaje ?? 21),
+            orden: idx + 1,
+            cantidad_recibida: 0,
+          }));
+          const { error: stockItemsErr } = await supabase.from("orden_compra_items").insert(stockOCItems as any);
+          if (stockItemsErr) {
+            toast.error(`OC interna ${stockOC.numero ?? ""} creada pero falló la carga de items: ${stockItemsErr.message}`);
+          } else {
+            ocsCreated++;
+          }
+        }
+      }
+
       // Also generate OC for items WITHOUT proveedor (so user can assign later)
       const sinProvItems = byProveedor["__sin_proveedor__"] || [];
       if (sinProvItems.length > 0) {
@@ -1546,9 +1598,7 @@ export default function PresupuestosPage() {
       if (sinProveedorCount > 0 && sinProvItems.length > 0) {
         toast.info(`${sinProveedorCount} item(s) sin proveedor — OC creada en borrador para asignar proveedor`);
       }
-      if (stockItemsCount > 0) {
-        toast.info(`${stockItemsCount} item(s) de stock propio excluidos de las órdenes de compra`);
-      }
+      if (stockItemsCount > 0) toast.info(`${stockItemsCount} item(s) de stock propio: OC interna creada en borrador para recibirla por el circuito normal`);
     } catch (err) {
       console.error("Error generating OCs:", err);
       toast.warning("PR aprobado pero hubo un error al generar las OC");
