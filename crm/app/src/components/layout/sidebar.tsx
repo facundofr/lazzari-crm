@@ -13,6 +13,7 @@ import {
   Wallet,
   BarChart3,
   Settings,
+  Trash2,
   LogOut,
   ChevronLeft,
   Factory,
@@ -49,6 +50,7 @@ const navigation = [
   { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes" },
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
   { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
+  { name: "Papelera", href: "/papelera", icon: Trash2, module: "presupuestos" },
 ];
 
 function hasModuleAccess(role: Role, module: string): boolean {

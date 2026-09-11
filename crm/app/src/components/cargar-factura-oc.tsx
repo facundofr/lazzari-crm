@@ -158,7 +158,9 @@ export default function CargarFacturaOC({
   const alignmentDifference = roundMoney(remainingOC - totalSinPercepciones);
   const currencyMismatch = (ocCurrencies.size > 0 && !ocCurrencies.has(moneda)) || linkedInvoices.some((invoice) => invoice.moneda !== moneda);
   const exceedsOC = alignmentDifference < -0.01;
-  const needsOverride = exceedsOC || currencyMismatch;
+  // Un excedente genera una OC abierta al guardar; solo una diferencia de
+  // moneda requiere confirmación explícita para tocar la OC vinculada.
+  const needsOverride = currencyMismatch;
   const alignmentBlocked = selectedOCs.length > 0 && (
     Boolean(alignmentError)
     || (needsOverride && !overrideOC)
@@ -435,9 +437,8 @@ export default function CargarFacturaOC({
     const freshOCTotal = roundMoney(freshOCs.reduce((sum: number, oc: any) => sum + Number(oc.total || 0), 0));
     const previousTotal = roundMoney(previousInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0));
     const remaining = roundMoney(freshOCTotal - previousTotal);
-    if (totalSinPercepciones - remaining > 0.01 && !overrideOC) {
-      throw new Error(`El comprobante supera en ${formatCurrency(totalSinPercepciones - remaining, moneda)} el saldo de las OC. Corregí precios, descuentos o IVA antes de guardar.`);
-    }
+    // Un excedente se registra en una OC abierta separada al guardar. No se
+    // modifica la OC original ni se permite que el importe desaparezca.
     return { remaining, partial: remaining - totalSinPercepciones > 0.01, freshOCs };
   }
 
@@ -453,8 +454,9 @@ export default function CargarFacturaOC({
     setError("");
 
     try {
+      let alignmentResult: { remaining: number; partial: boolean; freshOCs: any[] } | null = null;
       if (isMercaderia && selectedOCIds.size > 0) {
-        await validateOCAlignmentLive();
+        alignmentResult = await validateOCAlignmentLive();
       }
 
       // Insert FC
@@ -515,6 +517,46 @@ export default function CargarFacturaOC({
           .from("factura_compra_ocs")
           .insert(links);
         if (linkErr) throw new Error(linkErr.message);
+      }
+
+      // Si el comprobante supera el saldo de la OC, la diferencia no se
+      // fuerza sobre la OC original ni sobre el presupuesto: queda como una
+      // OC abierta independiente para que Compras la revise y la asocie si
+      // corresponde. Esto evita perder el excedente o duplicar costos.
+      if (isMercaderia && alignmentResult && alignmentResult.remaining < totalSinPercepciones - 0.01) {
+        const excedente = roundMoney(totalSinPercepciones - alignmentResult.remaining);
+        const { data: extraOc, error: extraOcError } = await (supabase as any)
+          .from("ordenes_compra")
+          .insert({
+            proveedor_id: proveedorId,
+            fecha: todayAR(),
+            moneda,
+            estado: "pendiente",
+            subtotal: excedente,
+            iva: 0,
+            total: excedente,
+            observaciones: `OC abierta generada por excedente de FC ${numeroFactura.trim()}. Revisar y asociar manualmente si corresponde.`,
+            sociedad_id: sociedadId,
+            presupuesto_origen_id: null,
+            created_by: profileId,
+          })
+          .select("id")
+          .single();
+        if (extraOcError || !extraOc) throw new Error(extraOcError?.message || "No se pudo generar la OC abierta por excedente");
+        const { error: extraItemError } = await (supabase as any)
+          .from("orden_compra_items")
+          .insert({
+            orden_id: extraOc.id,
+            codigo: "",
+            descripcion: `Excedente FC ${numeroFactura.trim()} (revisión pendiente)`,
+            cantidad: 1,
+            cantidad_recibida: 0,
+            unidad: "UN",
+            precio_unitario: excedente,
+            iva_porcentaje: 0,
+            orden: 1,
+          });
+        if (extraItemError) throw new Error(extraItemError.message);
       }
 
       // Override OC from FC: REPLACE OC items with FC items, update totals/moneda, cascade to PR

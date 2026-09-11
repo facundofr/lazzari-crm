@@ -22,7 +22,10 @@ const sizeClasses = {
   xl: "max-w-4xl",
 };
 
-export function Modal({ open, onClose, title, description, children, footer, size = "md", allowFullscreen = false }: ModalProps) {
+// Todos los modales pueden ampliarse: algunos formularios (contactos, facturas,
+// configuraciones) necesitan más espacio y antes quedaban encerrados en una
+// ventana pequeña sin alternativa para el usuario.
+export function Modal({ open, onClose, title, description, children, footer, size = "md", allowFullscreen = true }: ModalProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const handleEscape = useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") onClose();

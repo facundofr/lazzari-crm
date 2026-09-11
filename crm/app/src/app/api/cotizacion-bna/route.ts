@@ -14,6 +14,15 @@ import { createSupabaseServer } from "@/lib/supabase/server";
 const todayAR = () =>
   new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires" });
 
+// Cuando el usuario no indica una fecha, la cotización aplicable a una
+// factura es la del día hábil anterior (el formulario permite editarla).
+const previousBusinessDay = (iso: string) => {
+  const d = new Date(`${iso}T12:00:00-03:00`);
+  d.setDate(d.getDate() - 1);
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
 const toddmmyyyy = (isoDate: string) => {
   const [y, m, d] = isoDate.split("-");
   return `${d}/${m}/${y}`;
@@ -156,7 +165,7 @@ export async function GET(req: NextRequest) {
   const supabase = await createSupabaseServer();
 
   const hoy = todayAR();
-  const targetFecha = fechaParam || hoy;
+  const targetFecha = fechaParam || previousBusinessDay(hoy);
 
   // -- Buscar en DB primero (skip si force) --
   if (!forceRefresh) {

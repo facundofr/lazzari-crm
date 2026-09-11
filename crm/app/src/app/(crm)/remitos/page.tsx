@@ -44,6 +44,12 @@ const transporteEstadoConfig: Record<string, { label: string; variant: "success"
   cancelado: { label: "Cancelado", variant: "danger" },
 };
 
+function remitoRequiereARCA(remito: Pick<RemitoRow, "observaciones" | "cae">) {
+  // Los remitos de muestras y los internos son constancias manuales. Solo se
+  // ofrece autorización electrónica cuando el usuario eligió expresamente ARCA.
+  return !remito.cae && /Emisión:\s*ARCA/i.test(remito.observaciones || "");
+}
+
 interface RemitoRow {
   id: string;
   numero: string;
@@ -119,7 +125,9 @@ export default function RemitosPage() {
 
   // Create remito modal state
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [createTipoRemito, setCreateTipoRemito] = useState<"interno" | "electronico">("interno");
+  // El tipo se guarda en observaciones para mantener compatibilidad con instalaciones
+  // anteriores que todavía no tienen una columna tipo_remito.
+  const [createTipoRemito, setCreateTipoRemito] = useState<"interno" | "muestra" | "electronico">("interno");
   const [createForm, setCreateForm] = useState({
     numero: "",
     cliente_id: "",
@@ -665,9 +673,12 @@ export default function RemitosPage() {
         const sucursalId = sucKey === "__none" ? null : sucKey;
         const sucNombre = sucursalId ? clienteSucursales.find(s => s.id === sucursalId)?.nombre : null;
 
+        const typeLabel = createTipoRemito === "muestra" ? "Muestra" : createTipoRemito === "electronico" ? "Electrónico ARCA" : "Interno";
+        const obsBase = [`Tipo: ${typeLabel}`, `Emisión: ${createTipoRemito === "electronico" ? "ARCA" : "Manual"}`, createForm.observaciones]
+          .filter(Boolean).join(" — ");
         const obs = groupEntries.length > 1 && sucNombre
-          ? [createForm.observaciones, `Sucursal: ${sucNombre}`].filter(Boolean).join(" — ")
-          : createForm.observaciones;
+          ? [obsBase, `Sucursal: ${sucNombre}`].filter(Boolean).join(" — ")
+          : obsBase;
 
         const { data: remitoData, error } = await (supabase.from("remitos") as any).insert({
           numero: createForm.numero.trim() || null,
@@ -1436,7 +1447,7 @@ export default function RemitosPage() {
                       {detailRemito.nro_remito_afip && <span>Comp: {detailRemito.nro_remito_afip}</span>}
                     </div>
                   </div>
-                ) : (
+                ) : remitoRequiereARCA(detailRemito) ? (
                   <div>
                     <button
                       onClick={handleAutorizarAFIP}
@@ -1447,6 +1458,12 @@ export default function RemitosPage() {
                       {autorizandoAFIP ? "Autorizando..." : "Autorizar ARCA"}
                     </button>
                     {afipError && <p className="text-xs text-red-500 mt-1">{afipError}</p>}
+                  </div>
+                ) : (
+                  <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                    <span className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 dark:bg-zinc-800">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-zinc-400" /> Emisión manual
+                    </span>
                   </div>
                 )}
                 <div>
@@ -1709,10 +1726,13 @@ export default function RemitosPage() {
                     className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${createTipoRemito === "interno" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
                     Interno (numeración propia)
                   </button>
-                  <button type="button" disabled
-                    className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-zinc-100 text-zinc-400 cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-500"
-                    title="Remitos electrónicos AFIP próximamente">
-                    Electrónico (AFIP) — Próx.
+                  <button type="button" onClick={() => { setCreateTipoRemito("muestra"); setCreateForm(f => ({ ...f, numero: getNextInternoNumero() })); }}
+                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${createTipoRemito === "muestra" ? "bg-violet-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                    Muestras (manual)
+                  </button>
+                  <button type="button" onClick={() => setCreateTipoRemito("electronico")}
+                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${createTipoRemito === "electronico" ? "bg-emerald-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                    Electrónico (ARCA)
                   </button>
                 </div>
               </div>

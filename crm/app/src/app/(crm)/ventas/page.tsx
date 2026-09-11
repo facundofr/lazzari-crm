@@ -209,7 +209,7 @@ export default function VentasPage() {
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [filterMoneda, setFilterMoneda] = useState<string>("todas");
-  const [filterFacturacion, setFilterFacturacion] = useState<"todas" | "pend" | "facturada">("todas");
+  const [filterFacturacion, setFilterFacturacion] = useState<"todas" | "pend" | "lista" | "facturada">("todas");
   const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
@@ -423,6 +423,7 @@ export default function VentasPage() {
       if (filterFacturacion !== "todas") {
         const st = getVentaStatus(v);
         if (filterFacturacion === "pend" && st.facturado) return false;
+        if (filterFacturacion === "lista" && (!v.presupuesto.listo_para_facturar || st.facturado)) return false;
         if (filterFacturacion === "facturada" && !st.facturado) return false;
       }
       return true;
@@ -850,6 +851,7 @@ export default function VentasPage() {
           >
             <option value="todas">Todas</option>
             <option value="pend">Pend. factura</option>
+            <option value="lista">Lista para facturar</option>
             <option value="facturada">Facturadas</option>
           </select>
           <button
