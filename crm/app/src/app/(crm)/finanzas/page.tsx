@@ -3102,25 +3102,8 @@ export default function FinanzasPage() {
     { id: "retenciones", label: "Retenciones" },
   ];
 
-  if (loading) {
-    return (
-      <>
-        <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => {} }} />
-        <div className="flex items-center justify-center p-24">
-          <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
-          <span className="ml-3 text-zinc-500">Cargando datos financieros...</span>
-        </div>
-      </>
-    );
-  }
-
-  const cargaLentaAviso = loadingTimedOut ? (
-    <div className="mx-6 mt-4 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
-      <span>La carga está tardando más de lo esperado. Podés reintentar sin perder datos guardados.</span>
-      <button type="button" onClick={() => fetchData()} className="rounded-md border border-amber-300 px-3 py-1.5 text-xs font-medium hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900/40">Reintentar</button>
-    </div>
-  ) : null;
-
+  // Este hook debe ejecutarse también durante el estado de carga; dejarlo
+  // debajo del return condicional rompe el orden de hooks de React.
   const retencionesTabla = useMemo(() => [
     ...ordenesPago
       .filter((op) => op.estado !== "anulada" && op.retencion_ganancias_monto > 0)
@@ -3149,6 +3132,25 @@ export default function FinanzasPage() {
         origen: "Pago parcial",
       })),
   ], [ordenesPago, movimientos]);
+
+  if (loading) {
+    return (
+      <>
+        <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => {} }} />
+        <div className="flex items-center justify-center p-24">
+          <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
+          <span className="ml-3 text-zinc-500">Cargando datos financieros...</span>
+        </div>
+      </>
+    );
+  }
+
+  const cargaLentaAviso = loadingTimedOut ? (
+    <div className="mx-6 mt-4 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+      <span>La carga está tardando más de lo esperado. Podés reintentar sin perder datos guardados.</span>
+      <button type="button" onClick={() => fetchData()} className="rounded-md border border-amber-300 px-3 py-1.5 text-xs font-medium hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900/40">Reintentar</button>
+    </div>
+  ) : null;
 
   return (
     <>
