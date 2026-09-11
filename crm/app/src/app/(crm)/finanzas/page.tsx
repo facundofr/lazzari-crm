@@ -2935,6 +2935,35 @@ export default function FinanzasPage() {
     );
   }
 
+  const retencionesTabla = useMemo(() => [
+    ...ordenesPago
+      .filter((op) => op.estado !== "anulada" && op.retencion_ganancias_monto > 0)
+      .map((op) => ({
+        id: op.id,
+        fecha: op.fecha,
+        numero: op.numero || "—",
+        proveedor_nombre: op.proveedor_nombre,
+        base_retencion_ganancias: (op as any).base_retencion_ganancias || 0,
+        retencion_ganancias_pct: op.retencion_ganancias_pct,
+        retencion_ganancias_monto: op.retencion_ganancias_monto,
+        moneda: op.moneda,
+        origen: "OP",
+      })),
+    ...movimientos
+      .filter((mov) => mov.tipo === "pago" && !mov.anulado && Number((mov as any).retencion_ganancias_monto || 0) > 0)
+      .map((mov) => ({
+        id: `mov-${mov.id}`,
+        fecha: mov.fecha,
+        numero: "Pago directo",
+        proveedor_nombre: mov.proveedores?.razon_social || "—",
+        base_retencion_ganancias: Number((mov as any).base_retencion_ganancias || 0),
+        retencion_ganancias_pct: Number((mov as any).retencion_ganancias_pct || 0),
+        retencion_ganancias_monto: Number((mov as any).retencion_ganancias_monto || 0),
+        moneda: (mov.moneda || "ARS") as "ARS" | "USD",
+        origen: "Pago parcial",
+      })),
+  ], [ordenesPago, movimientos]);
+
   return (
     <>
       <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setEditingMovId(null); setMovForm(emptyMovForm); setMovClienteSearch(""); setMovProvSearch(""); setFormError(""); setModalOpen(true); } }} />
@@ -4567,17 +4596,17 @@ export default function FinanzasPage() {
                 </div>
               </div>
               <DataTable
-                data={ordenesPago.filter(op => (op as any).retencion_ganancias_monto > 0)}
+                data={retencionesTabla}
                 columns={[
                   { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-xs">{formatDate(row.fecha)}</span> },
-                  { key: "numero", label: "OP", sortable: true, render: (row) => <span className="font-mono text-xs font-medium">{row.numero}</span> },
+                  { key: "numero", label: "OP / origen", sortable: true, render: (row) => <span className="font-mono text-xs font-medium">{row.numero}</span> },
                   { key: "proveedor_nombre", label: "Proveedor", sortable: true, render: (row) => <span className="text-xs">{row.proveedor_nombre}</span> },
                   { key: "base_retencion_ganancias", label: "Base", sortable: true, render: (row) => <span className="font-mono text-xs">{formatCurrency((row as any).base_retencion_ganancias || 0, row.moneda as "ARS" | "USD")}</span> },
                   { key: "retencion_ganancias_pct", label: "%", sortable: true, render: (row) => <span className="text-xs">{(row as any).retencion_ganancias_pct}%</span> },
                   { key: "retencion_ganancias_monto", label: "Monto retenido", sortable: true, render: (row) => <span className="font-mono text-xs font-bold text-violet-600">{formatCurrency((row as any).retencion_ganancias_monto || 0, row.moneda as "ARS" | "USD")}</span> },
                 ]}
               />
-              {ordenesPago.filter(op => (op as any).retencion_ganancias_monto > 0).length === 0 && (
+              {retencionesTabla.length === 0 && (
                 <div className="text-center py-8">
                   <ShieldCheck className="mx-auto h-8 w-8 text-zinc-300 dark:text-zinc-600" />
                   <p className="mt-2 text-sm text-zinc-500">No hay retenciones practicadas</p>
