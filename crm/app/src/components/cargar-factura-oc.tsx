@@ -170,11 +170,12 @@ export default function CargarFacturaOC({
     const [{ data: junctionLinks, error: junctionError }, { data: legacyInvoices, error: legacyError }] = await Promise.all([
       (supabase as any)
         .from("factura_compra_ocs")
-        .select("factura_compra_id, facturas_compra(id, estado, total, percepciones, moneda)")
+        .select("factura_compra_id, facturas_compra(id, estado, total, percepciones, moneda, sociedad_id)")
         .in("orden_compra_id", ids),
       (supabase as any)
         .from("facturas_compra")
-        .select("id, estado, total, percepciones, moneda")
+        .select("id, estado, total, percepciones, moneda, sociedad_id")
+        .eq("sociedad_id", sociedadId)
         .in("orden_compra_id", ids),
     ]);
     if (junctionError || legacyError) {
@@ -184,7 +185,7 @@ export default function CargarFacturaOC({
     const byId = new Map<string, { total: number; moneda: string }>();
     for (const link of junctionLinks || []) {
       const raw = Array.isArray(link.facturas_compra) ? link.facturas_compra[0] : link.facturas_compra;
-      if (!raw || raw.estado === "anulada" || byId.has(raw.id)) continue;
+      if (!raw || raw.sociedad_id !== sociedadId || raw.estado === "anulada" || byId.has(raw.id)) continue;
       byId.set(raw.id, { total: Number(raw.total || 0) - Number(raw.percepciones || 0), moneda: raw.moneda || "ARS" });
     }
     for (const raw of legacyInvoices || []) {
@@ -418,7 +419,8 @@ export default function CargarFacturaOC({
     const ids = Array.from(selectedOCIds);
     const { data: freshOCs, error: ocError } = await (supabase as any)
       .from("ordenes_compra")
-      .select("id, numero, total, moneda")
+      .select("id, numero, total, moneda, sociedad_id, proveedor_id")
+      .eq("sociedad_id", sociedadId)
       .in("id", ids);
     if (ocError || !freshOCs || freshOCs.length !== ids.length) {
       throw new Error("No se pudieron verificar los importes actuales de las OC. No se guardó nada.");

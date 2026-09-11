@@ -149,12 +149,22 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
   const [cotizFecha, setCotizFecha] = useState("");
+  const [latestFacturaDate, setLatestFacturaDate] = useState("");
+
+  function previousBusinessDay(iso: string): string {
+    const d = new Date(`${iso || todayAR()}T12:00:00`);
+    d.setDate(d.getDate() - 1);
+    while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  }
 
   async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas", fecha?: string) {
     setCotizBnaLoading(true);
     try {
       const params = new URLSearchParams({ modalidad });
-      if (fecha) params.set("fecha", fecha);
+      // Por defecto se usa el día hábil anterior a la fecha de la factura.
+      // Solo un valor explícito en el selector permite cambiar esta regla.
+      params.set("fecha", fecha || cotizFecha || previousBusinessDay(emitData.fecha));
       const res = await fetch(`/api/cotizacion-bna?${params}`);
       if (res.ok) {
         const data = await res.json();
@@ -193,8 +203,22 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const minFecha = useMemo(() => {
     const d = new Date();
     d.setDate(d.getDate() - 5);
-    return d.toISOString().slice(0, 10);
-  }, []);
+    const fallback = d.toISOString().slice(0, 10);
+    return latestFacturaDate && latestFacturaDate > fallback ? latestFacturaDate : fallback;
+  }, [latestFacturaDate]);
+
+  useEffect(() => {
+    if (!emitOpen || !sociedadActiva?.id || !emitData.tipo) return;
+    (async () => {
+      const { data } = await (supabase as any).from("facturas")
+        .select("fecha")
+        .eq("sociedad_id", sociedadActiva.id)
+        .eq("tipo", emitManual ? "X" : emitData.tipo)
+        .eq("punto_venta", emitData.punto_venta)
+        .order("fecha", { ascending: false }).limit(1).maybeSingle();
+      setLatestFacturaDate(data?.fecha || "");
+    })();
+  }, [emitOpen, emitManual, emitData.tipo, emitData.punto_venta, sociedadActiva?.id]);
 
   // ── NC (Nota de Crédito) modal ────────────────────────────────
   const [ncOpen, setNcOpen] = useState(false);
@@ -582,6 +606,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   const handleEmit = async () => {
     if (!emitData.cliente_id) { setEmitError("Selecciona un cliente"); return; }
+    if (emitData.fecha < minFecha) { setEmitError(`La fecha no puede ser anterior a la última factura (${minFecha})`); return; }
     if (emitData.items.some((it) => !it.descripcion || it.precio_unitario <= 0)) {
       setEmitError("Completa todos los items con descripcion y precio"); return;
     }
@@ -633,6 +658,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   const handleEmitManual = async () => {
     if (!emitData.cliente_id) { setEmitError("Selecciona un cliente"); return; }
+    if (emitData.fecha < minFecha) { setEmitError(`La fecha no puede ser anterior a la última factura (${minFecha})`); return; }
     if (emitData.items.some((it) => !it.descripcion || it.precio_unitario <= 0)) {
       setEmitError("Completa todos los items con descripcion y precio"); return;
     }
@@ -646,55 +672,38 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
     try {
       const cliente = clientes.find(c => c.id === emitData.cliente_id);
-
-      // Insert factura directly without ARCA
-      const { data: newFactura, error: facturaErr } = await (supabase as any)
-        .from("facturas")
-        .insert({
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch("/api/facturacion", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({
+          manual: true,
           tipo: "X",
+          numero_manual: numManual,
           punto_venta: emitData.punto_venta,
-          numero: numManual,
-          cliente_id: emitData.cliente_id === "consumidor_final" ? null : emitData.cliente_id,
+          cliente_id: emitData.cliente_id,
           fecha: emitData.fecha || todayAR(),
           fecha_vencimiento: emitData.fecha_vencimiento || null,
           condicion_venta: emitData.condicion_venta || null,
-          cae: null,
-          cae_vencimiento: null,
-          subtotal: emitTotals.total,
-          iva: 0,
-          total: emitTotals.total,
           moneda: emitData.moneda,
-          tipo_cambio: emitData.moneda === "USD" && emitData.tipo_cambio > 0 ? emitData.tipo_cambio : null,
+          tipo_cambio: emitData.moneda === "USD" ? emitData.tipo_cambio : null,
           cotizacion_modalidad: emitData.moneda === "USD" ? (cotizBna?.modalidad === "billetes" ? "billetes" : "divisas") : null,
-          estado: "emitida",
-          sociedad_id: sociedadActiva?.id || null,
-          created_by: profile?.id || null,
-        })
-        .select("id")
-        .single();
-
-      if (facturaErr) throw new Error(facturaErr.message);
-
-      // Insert items
-      if (newFactura) {
-        const itemRows = emitData.items.map((it, idx) => ({
-            factura_id: newFactura.id,
-            descripcion: it.descripcion,
-            cantidad: it.cantidad,
-            precio_unitario: it.precio_unitario,
-            iva_porcentaje: 0,
-            orden: idx,
-          }));
-        const { error: itemsErr } = await (supabase as any).from("factura_items").insert(itemRows);
-        if (itemsErr) throw new Error("Error al guardar items: " + itemsErr.message);
-      }
+          items: emitData.items,
+          sociedad_id: sociedadActiva?.id,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Error al guardar factura manual");
 
       const comp = formatComprobante("X", emitData.punto_venta, numManual);
       setEmitResult({
         comprobante: comp,
         cae: null,
         cae_vencimiento: null,
-        total: emitTotals.total,
+        total: data.factura?.total ?? emitTotals.total,
         manual: true,
         cliente: cliente?.razon_social || "Consumidor Final",
       });

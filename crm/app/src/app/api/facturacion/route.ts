@@ -112,6 +112,51 @@ function getSupabase(authHeader?: string | null) {
   );
 }
 
+const SUPPORTED_MANUAL_TYPES = new Set(["X", ...Object.keys(CBTE_TIPO_MAP)]);
+
+/** Validaciones comunes para evitar comprobantes manuales inconsistentes o fechas retroactivas. */
+async function validateFacturaInput(
+  supabase: any,
+  params: { sociedadId: string; tipo: string; puntoVenta: number; fecha: string; numero?: number; clienteId?: string }
+) {
+  const config = getArcaConfigBySociedad(params.sociedadId);
+  if (!Number.isInteger(params.puntoVenta) || !config.ptoVtaPermitidos.includes(params.puntoVenta)) {
+    throw new Error(`Punto de venta ${params.puntoVenta} no está permitido para esta sociedad (permitidos: ${config.ptoVtaPermitidos.join(", ")})`);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(params.fecha) || Number.isNaN(new Date(`${params.fecha}T12:00:00`).getTime())) {
+    throw new Error("La fecha de factura no es válida");
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  if (params.fecha > today) throw new Error("La fecha de factura no puede ser futura");
+
+  if (params.clienteId && params.clienteId !== "consumidor_final") {
+    const { data: cliente, error } = await supabase
+      .from("clientes").select("id, sociedad_id").eq("id", params.clienteId).maybeSingle();
+    if (error || !cliente) throw new Error("Cliente no encontrado");
+    if (cliente.sociedad_id !== params.sociedadId) throw new Error("El cliente no pertenece a la sociedad seleccionada");
+  }
+
+  // La fecha no puede retroceder respecto del último comprobante del mismo talonario.
+  const { data: ultima, error: lastError } = await supabase
+    .from("facturas")
+    .select("numero, fecha")
+    .eq("sociedad_id", params.sociedadId)
+    .eq("tipo", params.tipo)
+    .eq("punto_venta", params.puntoVenta)
+    .order("fecha", { ascending: false })
+    .order("numero", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (lastError) throw new Error(`No se pudo validar la correlatividad: ${lastError.message}`);
+  if (ultima?.fecha && params.fecha < ultima.fecha) {
+    throw new Error(`La fecha ${params.fecha} es anterior a la última factura emitida (${ultima.fecha}) para este punto de venta`);
+  }
+  if (params.numero != null && ultima?.numero != null && Number(params.numero) <= Number(ultima.numero)) {
+    throw new Error(`El número manual debe ser mayor al último comprobante (${ultima.numero}) del talonario`);
+  }
+  return config;
+}
+
 // POST /api/facturacion — Emitir factura via ARCA
 export async function POST(req: NextRequest) {
   try {
@@ -151,10 +196,20 @@ export async function POST(req: NextRequest) {
       if (!tipo || !cliente_id || !items?.length) {
         return NextResponse.json({ error: "Faltan campos requeridos: tipo, cliente_id, items" }, { status: 400 });
       }
+      const sociedadId = sociedad_id || DEFAULT_ARCA_CONFIG.id;
+      if (!SUPPORTED_MANUAL_TYPES.has(tipo)) {
+        return NextResponse.json({ error: `Tipo de comprobante manual no válido: ${tipo}` }, { status: 400 });
+      }
 
       const isFacturaA = tipo.endsWith("A");
       const isUSD = moneda === "USD";
       const tc = Number(tipo_cambio) || 0;
+      if (isUSD && tc <= 0) {
+        return NextResponse.json({ error: "Factura manual en USD requiere tipo de cambio" }, { status: 400 });
+      }
+      if (items.some((item: any) => !item.descripcion || Number(item.cantidad) <= 0 || !Number.isFinite(Number(item.precio_unitario)) || Number(item.precio_unitario) <= 0)) {
+        return NextResponse.json({ error: "Todos los ítems deben tener descripción, cantidad y precio válidos" }, { status: 400 });
+      }
 
       // Calculate totals
       let totalNeto = 0;
@@ -180,6 +235,14 @@ export async function POST(req: NextRequest) {
 
       const ptoVta = Number(punto_venta) || 0;
       const fechaFactura = fecha || new Date().toISOString().slice(0, 10);
+      try {
+        await validateFacturaInput(supabase, {
+          sociedadId, tipo, puntoVenta: ptoVta, fecha: fechaFactura,
+          numero: Number(numero_manual), clienteId: cliente_id,
+        });
+      } catch (validationError: unknown) {
+        return NextResponse.json({ error: validationError instanceof Error ? validationError.message : "Datos de factura inválidos" }, { status: 400 });
+      }
 
       const { data: factura, error: insertError } = await supabase
         .from("facturas")
@@ -199,7 +262,7 @@ export async function POST(req: NextRequest) {
           tipo_cambio: isUSD ? tc : null,
           cotizacion_modalidad: isUSD ? (cotizacion_modalidad === "billetes" ? "billetes" : "divisas") : null,
           estado: "emitida",
-          sociedad_id: sociedad_id || ARCA_CONFIGS[0].id,
+          sociedad_id: sociedadId,
           oc_cliente: oc_cliente || null,
           solicitado_por: solicitado_por || null,
           observaciones: observaciones || null,
@@ -268,6 +331,15 @@ export async function POST(req: NextRequest) {
         { error: "Faltan campos requeridos: tipo, cliente_id, punto_venta, items" },
         { status: 400 }
       );
+    }
+
+    const fechaFacturaInput = fecha || new Date().toISOString().slice(0, 10);
+    try {
+      await validateFacturaInput(supabase, {
+        sociedadId: arcaConfig.id, tipo, puntoVenta: Number(punto_venta), fecha: fechaFacturaInput, clienteId: cliente_id,
+      });
+    } catch (validationError: unknown) {
+      return NextResponse.json({ error: validationError instanceof Error ? validationError.message : "Datos de factura inválidos" }, { status: 400 });
     }
 
     // Validate punto_venta is allowed for this sociedad
@@ -462,7 +534,7 @@ export async function POST(req: NextRequest) {
     // Convert YYYYMMDD → YYYY-MM-DD for DB date column
     const caeFchVto = `${rawFchVto.slice(0, 4)}-${rawFchVto.slice(4, 6)}-${rawFchVto.slice(6, 8)}`;
     const cbteNro = Number(firstDet.CbteDesde);
-    const fechaFactura = fecha || new Date().toISOString().slice(0, 10);
+    const fechaFactura = fechaFacturaInput;
 
     // Save factura to database
     const { data: factura, error: insertError } = await supabase

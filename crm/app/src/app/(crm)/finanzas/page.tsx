@@ -1298,8 +1298,9 @@ export default function FinanzasPage() {
         const fcIds = (data || []).map((fc: any) => fc.id);
         let pagadoPorFC: Record<string, number> = {};
         if (fcIds.length > 0) {
-          const { data: opfcData } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto, ordenes_pago(estado)").in("factura_compra_id", fcIds);
+          const { data: opfcData } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto, ordenes_pago(id, estado, sociedad_id)").in("factura_compra_id", fcIds);
           (opfcData || []).forEach((r: any) => {
+            if (sociedadActiva?.id && r.ordenes_pago?.sociedad_id !== sociedadActiva.id) return;
             if (r.ordenes_pago?.estado === "anulada") return; // Skip anulada OPs
             pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto);
           });
@@ -1316,7 +1317,8 @@ export default function FinanzasPage() {
         const mesActual = new Date().toISOString().slice(0, 7); // YYYY-MM
         let qMensualOP = (supabase as any).from("ordenes_pago").select("base_retencion_ganancias, retencion_ganancias_monto")
           .eq("proveedor_id", opForm.proveedor_id)
-          .gte("fecha", `${mesActual}-01`);
+          .gte("fecha", `${mesActual}-01`)
+          .neq("estado", "anulada");
         if (sociedadActiva?.id) qMensualOP = qMensualOP.eq("sociedad_id", sociedadActiva.id);
         const { data: mensualOPData } = await qMensualOP;
         const basesMes = (mensualOPData || []).reduce((s: number, r: any) => s + Number(r.base_retencion_ganancias || 0), 0);
@@ -1364,8 +1366,14 @@ export default function FinanzasPage() {
       setOpForm(prev => ({ ...prev, aplica_ganancias: false, retencion_ganancias_pct: 0 }));
       return;
     }
-    // RG 830: solo RI son sujetos de retención. Monotributo/Exento/CF = no retener.
-    if (opProvCondicion === "RI" && retencionConfig.aplica_ganancias) {
+    // AFIP puede devolver "RI" o la descripción completa. Normalizamos para
+    // no dejar pasar una retención por diferencias de formato; Monotributo,
+    // Exento y Consumidor Final no son sujetos en este circuito.
+    const condicionNormalizada = String(opProvCondicion || "").trim().toUpperCase();
+    const esResponsableInscripto = condicionNormalizada === "RI"
+      || condicionNormalizada === "RESPONSABLE INSCRIPTO"
+      || condicionNormalizada === "RESPONSABLE INSCRIPTO IVA";
+    if (esResponsableInscripto && retencionConfig.aplica_ganancias) {
       // Art. 26: acumular bases sin IVA del mes + esta OP
       const acumuladoMensual = opMonthlyBase + opBaseSinIVA;
       if (acumuladoMensual >= retencionConfig.minimo_ganancias) {
@@ -1470,6 +1478,19 @@ export default function FinanzasPage() {
     if (totalMediosVal <= 0) { setOpError("Ingresá al menos un medio de pago con monto mayor a 0"); return; }
     if (totalMediosVal - opNetoAPagar > 1) { setOpError(`Los medios de pago ($${totalMediosVal.toLocaleString()}) superan el neto a pagar ($${opNetoAPagar.toLocaleString()})`); return; }
     const esPagoParcial = opNetoAPagar - totalMediosVal > 1;
+    // En un pago parcial la OP debe representar lo efectivamente cancelado,
+    // no el total seleccionado en las facturas. Conservamos la proporción de
+    // retención y distribuimos el bruto efectivamente pagado en los vínculos.
+    const tasaRetencionEfectiva = opMontoBruto > 0 ? opRetencionGanancias / opMontoBruto : 0;
+    const montoBrutoEfectivo = esPagoParcial && tasaRetencionEfectiva < 1
+      ? totalMediosVal / (1 - tasaRetencionEfectiva)
+      : opMontoBruto;
+    const retencionEfectiva = esPagoParcial
+      ? Math.max(0, montoBrutoEfectivo - totalMediosVal)
+      : opRetencionGanancias;
+    const baseRetencionEfectiva = opMontoBruto > 0
+      ? opBaseSinIVA * (montoBrutoEfectivo / opMontoBruto)
+      : 0;
 
     setOpSaving(true);
     setOpError("");
@@ -1491,13 +1512,13 @@ export default function FinanzasPage() {
         numero: opNumero,
         fecha: opForm.fecha,
         proveedor_id: opForm.proveedor_id,
-        monto_bruto: opMontoBruto,
-        base_retencion_ganancias: opBaseSinIVA, // Base sin IVA para acumulado mensual futuro
+        monto_bruto: montoBrutoEfectivo,
+        base_retencion_ganancias: baseRetencionEfectiva, // Base efectivamente pagada para acumulado mensual futuro
         retencion_porcentaje: 0,
         retencion_monto: 0,
         retencion_ganancias_pct: opForm.aplica_ganancias ? opForm.retencion_ganancias_pct : 0,
-        retencion_ganancias_monto: opRetencionGanancias,
-        neto_a_pagar: opNetoAPagar,
+        retencion_ganancias_monto: retencionEfectiva,
+        neto_a_pagar: totalMediosVal,
         moneda: opForm.moneda,
         medio_pago: opMedios[0]?.tipo || "transferencia",
         medios_pago: JSON.stringify(opMedios.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion, echeq_id: m.echeq_id }))),
@@ -1534,17 +1555,21 @@ export default function FinanzasPage() {
 
       // Link FCs + update saldo
       if (opData?.id && selectedFCs.length > 0) {
-        const links = selectedFCs.map(fc => ({
-          orden_pago_id: opData.id,
-          factura_compra_id: fc.id,
-          monto: fc.monto_a_pagar,
-        }));
+        let saldoAAsignar = montoBrutoEfectivo;
+        const links = selectedFCs.map(fc => {
+          const monto = Math.min(fc.monto_a_pagar, Math.max(0, saldoAAsignar));
+          saldoAAsignar -= monto;
+          return { orden_pago_id: opData.id, factura_compra_id: fc.id, monto };
+        }).filter((link: { monto: number }) => link.monto > 0);
         const { error: linkErr } = await (supabase as any).from("op_facturas_compra").insert(links);
         if (linkErr) throw new Error("Error al vincular FCs: " + linkErr.message);
         // If monto_a_pagar == saldo_pendiente → pagada; else stays as está
         for (const fc of selectedFCs) {
-          if (Math.abs(fc.monto_a_pagar - fc.saldo_pendiente) < 1) {
-            await (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", fc.id);
+          const linked = links.find((link: { factura_compra_id: string }) => link.factura_compra_id === fc.id);
+          if (linked && Math.abs(linked.monto - fc.saldo_pendiente) < 1) {
+            let fcUpdate = (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", fc.id);
+            if (sociedadActiva?.id) fcUpdate = fcUpdate.eq("sociedad_id", sociedadActiva.id);
+            await fcUpdate;
           }
         }
       }
@@ -1560,19 +1585,21 @@ export default function FinanzasPage() {
       if (sociedadActiva?.id) (movBase as any).sociedad_id = sociedadActiva.id;
 
       // Movimiento principal (neto a pagar)
-      const { error: movErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "pago", descripcion: `${opNumero} — ${provNombre}`, monto: opNetoAPagar } as any);
+      const { error: movErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "pago", descripcion: `${opNumero} — ${provNombre}`, monto: totalMediosVal } as any);
       if (movErr) throw new Error("Error al crear movimiento: " + movErr.message);
 
       // Movimiento retención ganancias
-      if (opRetencionGanancias > 0) {
-        const { error: retErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "retencion_ganancias", descripcion: `${opNumero} — Ret. Ganancias — ${provNombre}`, monto: opRetencionGanancias } as any);
+      if (retencionEfectiva > 0) {
+        const { error: retErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "retencion_ganancias", descripcion: `${opNumero} — Ret. Ganancias — ${provNombre}`, monto: retencionEfectiva } as any);
         if (retErr) throw new Error("Error al crear movimiento retención: " + retErr.message);
       }
 
       // Mark echeqs used as endosado
       for (const m of opMedios) {
         if (m.echeq_id) {
-          await (supabase as any).from("echeqs").update({ estado: "endosado", destino_nombre: provNombre }).eq("id", m.echeq_id);
+          let echeqUpdate = (supabase as any).from("echeqs").update({ estado: "endosado", destino_nombre: provNombre }).eq("id", m.echeq_id);
+          if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
+          await echeqUpdate;
         }
       }
 
@@ -1597,11 +1624,27 @@ export default function FinanzasPage() {
       const { error } = await opUpdate;
       if (error) throw error;
 
-      // Delete movimientos created by this OP (match by description prefix + proveedor)
+      // No borrar movimientos: la anulación debe conservar el rastro contable.
+      // Se marcan como anulados para excluirlos de saldos y conciliaciones.
       if (opRow?.numero && opRow?.proveedor_id) {
-        let movDelete = supabase.from("movimientos").delete().like("descripcion" as any, `${opRow.numero} — %`).eq("proveedor_id" as any, opRow.proveedor_id);
-        if (sociedadActiva?.id) movDelete = movDelete.eq("sociedad_id" as any, sociedadActiva.id);
-        await movDelete;
+        let movUpdate = supabase.from("movimientos").update({ anulado: true, anulado_at: new Date().toISOString() } as any)
+          .like("descripcion" as any, `${opRow.numero} — %`).eq("proveedor_id" as any, opRow.proveedor_id);
+        if (sociedadActiva?.id) movUpdate = movUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+        const { error: movError } = await movUpdate;
+        if (movError) throw movError;
+      }
+
+      // Un e-cheq endosado por esta OP vuelve a estar disponible en cartera.
+      let opMediosQuery = (supabase as any).from("ordenes_pago").select("medios_pago").eq("id", id);
+      if (sociedadActiva?.id) opMediosQuery = opMediosQuery.eq("sociedad_id", sociedadActiva.id);
+      const { data: opMediosRow } = await opMediosQuery.single();
+      let mediosAnulados: any[] = [];
+      try { mediosAnulados = typeof opMediosRow?.medios_pago === "string" ? JSON.parse(opMediosRow.medios_pago) : (opMediosRow?.medios_pago || []); } catch { mediosAnulados = []; }
+      for (const medio of mediosAnulados) {
+        if (!medio?.echeq_id) continue;
+        let echeqUpdate = (supabase as any).from("echeqs").update({ estado: "en_cartera", destino_nombre: null }).eq("id", medio.echeq_id);
+        if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
+        await echeqUpdate;
       }
 
       // Revertir FCs vinculadas a pendiente si quedaron como pagadas
@@ -1612,12 +1655,17 @@ export default function FinanzasPage() {
             .from("op_facturas_compra").select("monto, orden_pago_id")
             .eq("factura_compra_id", link.factura_compra_id);
           const { data: anuladas } = await (supabase as any)
-            .from("ordenes_pago").select("id").in("id", (allPayments || []).map((p: any) => p.orden_pago_id)).eq("estado", "anulada");
-          const anuladasSet = new Set((anuladas || []).map((a: any) => a.id));
+            .from("ordenes_pago").select("id, sociedad_id").in("id", (allPayments || []).map((p: any) => p.orden_pago_id)).eq("estado", "anulada");
+          const anuladasSociedad = sociedadActiva?.id ? (anuladas || []).filter((a: any) => a.sociedad_id === sociedadActiva.id) : (anuladas || []);
+          const anuladasSet = new Set(anuladasSociedad.map((a: any) => a.id));
           const totalVigente = (allPayments || []).filter((p: any) => !anuladasSet.has(p.orden_pago_id)).reduce((s: number, p: any) => s + Number(p.monto), 0);
-          const { data: fc } = await (supabase as any).from("facturas_compra").select("total, estado").eq("id", link.factura_compra_id).single();
+          let fcQuery = (supabase as any).from("facturas_compra").select("total, estado").eq("id", link.factura_compra_id);
+          if (sociedadActiva?.id) fcQuery = fcQuery.eq("sociedad_id", sociedadActiva.id);
+          const { data: fc } = await fcQuery.single();
           if (fc && fc.estado === "pagada" && totalVigente < Number(fc.total) - 1) {
-            await (supabase as any).from("facturas_compra").update({ estado: "pendiente" }).eq("id", link.factura_compra_id);
+            let fcUpdate = (supabase as any).from("facturas_compra").update({ estado: "pendiente" }).eq("id", link.factura_compra_id);
+            if (sociedadActiva?.id) fcUpdate = fcUpdate.eq("sociedad_id", sociedadActiva.id);
+            await fcUpdate;
           }
         }
       }
@@ -1628,7 +1676,9 @@ export default function FinanzasPage() {
 
   async function handlePagarOP(id: string) {
     try {
-      const { error } = await (supabase as any).from("ordenes_pago").update({ estado: "pagada" }).eq("id", id);
+      let opUpdate = (supabase as any).from("ordenes_pago").update({ estado: "pagada" }).eq("id", id);
+      if (sociedadActiva?.id) opUpdate = opUpdate.eq("sociedad_id", sociedadActiva.id);
+      const { error } = await opUpdate;
       if (error) throw error;
 
       // Marcar FCs vinculadas como pagadas si el monto cubre el saldo
@@ -1641,9 +1691,13 @@ export default function FinanzasPage() {
           const { data: opsActivas } = await (supabase as any).from("ordenes_pago").select("id").in("id", opIds).neq("estado", "anulada");
           const activasSet = new Set((opsActivas || []).map((o: any) => o.id));
           const totalPagado = (allPayments || []).filter((p: any) => activasSet.has(p.orden_pago_id)).reduce((s: number, p: any) => s + Number(p.monto), 0);
-          const { data: fc } = await (supabase as any).from("facturas_compra").select("total").eq("id", link.factura_compra_id).single();
+          let fcQuery = (supabase as any).from("facturas_compra").select("total").eq("id", link.factura_compra_id);
+          if (sociedadActiva?.id) fcQuery = fcQuery.eq("sociedad_id", sociedadActiva.id);
+          const { data: fc } = await fcQuery.single();
           if (fc && Math.abs(totalPagado - Number(fc.total)) < 1) {
-            await (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", link.factura_compra_id);
+            let fcUpdate = (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", link.factura_compra_id);
+            if (sociedadActiva?.id) fcUpdate = fcUpdate.eq("sociedad_id", sociedadActiva.id);
+            await fcUpdate;
           }
         }
       }
