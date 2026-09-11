@@ -180,7 +180,7 @@ interface FacturaCompraRow {
   solo_iva?: boolean;
   cae?: string;
   percepciones_detalle?: { tipo: string; monto: number; localidad?: string }[];
-  op_vinculada?: { id: string; numero: string; estado: string; fecha: string } | null;
+  op_vinculada?: { id: string; numero: string; estado: string; fecha: string; sobre_verde?: boolean } | null;
   ocs_vinculadas?: { numero: string }[];
 }
 
@@ -263,6 +263,11 @@ interface OpMedioPago {
   cotizacion: number;
   echeq_id?: string; // if selecting from cartera
 }
+const BANCOS_ARGENTINA = [
+  "Banco Galicia", "Banco Nación", "Banco Provincia", "Banco Santander",
+  "BBVA", "HSBC", "ICBC", "Banco Macro", "Banco Credicoop", "Banco Galicia",
+  "Brubank", "Mercado Pago", "Ualá", "Otro",
+];
 const makeOpMedio = (moneda: "ARS" | "USD" = "ARS"): OpMedioPago => ({
   tempId: Math.random().toString(36).slice(2),
   tipo: "transferencia",
@@ -972,7 +977,7 @@ export default function FinanzasPage() {
 
         // Fetch facturas de compra
         try {
-          let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero), op_facturas_compra(orden_pago_id, monto, ordenes_pago(id, numero, estado, fecha)), factura_compra_ocs(orden_compra_id, ordenes_compra(numero))").order("fecha", { ascending: false });
+          let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero), op_facturas_compra(orden_pago_id, monto, ordenes_pago(id, numero, estado, fecha, sobre_verde)), factura_compra_ocs(orden_compra_id, ordenes_compra(numero))").order("fecha", { ascending: false });
           if (sociedadActiva?.id) qFc = qFc.eq("sociedad_id", sociedadActiva.id);
           const { data: fcData } = await qFc;
           if (fcData) {
@@ -995,7 +1000,7 @@ export default function FinanzasPage() {
               cae: r.cae ?? undefined,
               percepciones_detalle: r.percepciones_detalle ? (typeof r.percepciones_detalle === "string" ? JSON.parse(r.percepciones_detalle) : r.percepciones_detalle) : undefined,
               op_vinculada: r.op_facturas_compra?.length > 0 && r.op_facturas_compra[0]?.ordenes_pago
-                ? { id: r.op_facturas_compra[0].ordenes_pago.id, numero: r.op_facturas_compra[0].ordenes_pago.numero, estado: r.op_facturas_compra[0].ordenes_pago.estado, fecha: r.op_facturas_compra[0].ordenes_pago.fecha }
+                ? { id: r.op_facturas_compra[0].ordenes_pago.id, numero: r.op_facturas_compra[0].ordenes_pago.numero, estado: r.op_facturas_compra[0].ordenes_pago.estado, fecha: r.op_facturas_compra[0].ordenes_pago.fecha, sobre_verde: !!r.op_facturas_compra[0].ordenes_pago.sobre_verde }
                 : null,
               ocs_vinculadas: (r.factura_compra_ocs || []).map((link: any) => ({ numero: link.ordenes_compra?.numero || "—" })).filter((o: any) => o.numero !== "—"),
             })));
@@ -1584,13 +1589,19 @@ export default function FinanzasPage() {
     if (!confirm("¿Seguro que queres anular esta orden de pago?")) return;
     try {
       // Get OP details for movimiento cleanup
-      const { data: opRow } = await (supabase as any).from("ordenes_pago").select("numero, proveedor_id").eq("id", id).single();
-      const { error } = await (supabase as any).from("ordenes_pago").update({ estado: "anulada" }).eq("id", id);
+      let opQuery = (supabase as any).from("ordenes_pago").select("numero, proveedor_id").eq("id", id);
+      if (sociedadActiva?.id) opQuery = opQuery.eq("sociedad_id", sociedadActiva.id);
+      const { data: opRow } = await opQuery.single();
+      let opUpdate = (supabase as any).from("ordenes_pago").update({ estado: "anulada" }).eq("id", id);
+      if (sociedadActiva?.id) opUpdate = opUpdate.eq("sociedad_id", sociedadActiva.id);
+      const { error } = await opUpdate;
       if (error) throw error;
 
       // Delete movimientos created by this OP (match by description prefix + proveedor)
       if (opRow?.numero && opRow?.proveedor_id) {
-        await supabase.from("movimientos").delete().like("descripcion" as any, `${opRow.numero} — %`).eq("proveedor_id" as any, opRow.proveedor_id);
+        let movDelete = supabase.from("movimientos").delete().like("descripcion" as any, `${opRow.numero} — %`).eq("proveedor_id" as any, opRow.proveedor_id);
+        if (sociedadActiva?.id) movDelete = movDelete.eq("sociedad_id" as any, sociedadActiva.id);
+        await movDelete;
       }
 
       // Revertir FCs vinculadas a pendiente si quedaron como pagadas
@@ -2633,7 +2644,7 @@ export default function FinanzasPage() {
     { id: "movimientos", label: "Movimientos" },
     { id: "facturacion", label: "Fact. Ventas" },
     { id: "facturas_compra", label: "Fact. Compra" },
-    // { id: "ordenes_pago", label: "OP" },  // OCULTO: OP se accede desde FC compra
+    { id: "ordenes_pago", label: "Órdenes de pago" },
     { id: "gastos_manuales", label: "Gastos" },
     { id: "echeqs", label: "Cheques" },
     { id: "cc_clientes", label: "CC Clientes" },
@@ -3157,6 +3168,9 @@ export default function FinanzasPage() {
                       )}
                     </div>
                   )},
+                  { key: "sobre_verde" as any, label: "Sobre", sortable: false, render: (row) => row.op_vinculada?.sobre_verde ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600" title="Sobre verde asociado a la OP"><Mail className="h-3.5 w-3.5" /> Verde</span>
+                  ) : <span className="text-zinc-300 text-xs">—</span> },
                   { key: "actions", label: "", sortable: false, render: (row) => (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       {row.archivo_url && (
@@ -4724,8 +4738,14 @@ export default function FinanzasPage() {
                           className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                         {(m.tipo === "cheque" || m.tipo === "cheque_propio" || m.tipo === "echeq") && (
                           <>
-                            <input value={m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value } : x))}
-                              placeholder="Banco" className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                            <select value={m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value } : x))}
+                              className="w-32 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                              <option value="">Banco…</option>
+                              {m.banco && !BANCOS_ARGENTINA.includes(m.banco) && <option value={m.banco}>{m.banco}</option>}
+                              {BANCOS_ARGENTINA.filter((b, i, a) => a.indexOf(b) === i).map(b => <option key={b} value={b}>{b}</option>)}
+                            </select>
+                            {m.banco === "Otro" && <input value={m.banco === "Otro" ? "" : m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value } : x))}
+                              placeholder="Nombre del banco" className="w-28 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />}
                             <input value={m.numero_cheque} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, numero_cheque: e.target.value } : x))}
                               placeholder="N° cheque" className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                           </>

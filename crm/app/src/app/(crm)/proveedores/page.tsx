@@ -24,6 +24,14 @@ const CLASIFICACION_TAGS = [
   "Buena calidad", "Stock permanente", "Importador", "Nacional",
 ] as const;
 
+const PROVINCIAS_ARGENTINA = [
+  "Buenos Aires", "CABA", "Catamarca", "Chaco", "Chubut", "Córdoba",
+  "Corrientes", "Entre Ríos", "Formosa", "Jujuy", "La Pampa", "La Rioja",
+  "Mendoza", "Misiones", "Neuquén", "Río Negro", "Salta", "San Juan",
+  "San Luis", "Santa Cruz", "Santa Fe", "Santiago del Estero",
+  "Tierra del Fuego", "Tucumán",
+];
+
 const TAG_COLORS: Record<string, string> = {
   "Buen precio": "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-400",
   "Entrega rapida": "bg-green-50 text-green-700 ring-1 ring-green-200 dark:bg-green-950 dark:text-green-400",
@@ -920,13 +928,18 @@ export default function ProveedoresPage() {
               <div><label className="text-xs font-medium text-zinc-500">Telefono</label><input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Direccion</label><input value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Localidad</label><input value={form.localidad} onChange={(e) => setForm({ ...form, localidad: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div><label className="text-xs font-medium text-zinc-500">Provincia</label><input value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div><label className="text-xs font-medium text-zinc-500">Provincia</label>
+                <select value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
+                  <option value="">Seleccionar...</option>
+                  {PROVINCIAS_ARGENTINA.map((provincia) => <option key={provincia} value={provincia}>{provincia}</option>)}
+                </select>
+              </div>
               <div><label className="text-xs font-medium text-zinc-500">Forma de pago</label>
                 <select value={form.forma_pago} onChange={(e) => setForm({ ...form, forma_pago: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
                   <option value="Transferencia">Transferencia</option><option value="Tarjeta">Tarjeta</option><option value="Cheque">Cheque</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option>
                 </select>
               </div>
-              <div><label className="text-xs font-medium text-zinc-500">Dias CC</label><input type="number" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div><label className="text-xs font-medium text-zinc-500">Tiempo de pago (días)</label><input type="number" list="tiempos-pago-proveedor" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /><datalist id="tiempos-pago-proveedor"><option value="0" /><option value="15" /><option value="30" /><option value="45" /><option value="60" /></datalist></div>
               <div><label className="text-xs font-medium text-zinc-500">Limite credito</label><input type="number" value={form.limite_credito} onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div className="col-span-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
                 <h3 className="text-sm font-semibold">Datos bancarios <span className="font-normal text-zinc-400">(opcionales)</span></h3>

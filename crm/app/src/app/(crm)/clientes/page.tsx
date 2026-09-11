@@ -1840,7 +1840,7 @@ export default function ClientesPage() {
                     </div>
                   </div>
 
-                  {/* Email facturacion & envio automatico */}
+                  {/* Email de facturacion */}
                   <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3 flex items-center gap-1.5">
                       <Send className="h-3.5 w-3.5" /> Facturacion electronica
@@ -1865,17 +1865,6 @@ export default function ClientesPage() {
                           </button>
                         </div>
                       </div>
-                      <div>
-                        <p className="text-xs text-zinc-500 dark:text-zinc-400">Envio automatico</p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <div className={`flex h-5 w-5 items-center justify-center rounded ${selectedCliente.envioAutomatico !== false ? "bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"}`}>
-                            {selectedCliente.envioAutomatico !== false && <Check className="h-3 w-3" />}
-                          </div>
-                          <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                            {selectedCliente.envioAutomatico !== false ? "Enviar documentos automaticamente" : "Envio manual"}
-                          </span>
-                        </div>
-                      </div>
                     </div>
                   </div>
 
@@ -1888,6 +1877,11 @@ export default function ClientesPage() {
                       <InfoField label="Dias CC" value={String(selectedCliente.diasCuentaCorriente)} />
                       <InfoField label="Limite credito" value={formatCurrency(selectedCliente.limiteCredito)} />
                       <InfoField label="Saldo CC" value={formatCurrency(selectedCliente.saldoCuentaCorriente)} highlight />
+                      {selectedCliente.limiteCredito > 0 && selectedCliente.saldoCuentaCorriente >= selectedCliente.limiteCredito && (
+                        <div className="col-span-2 sm:col-span-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
+                          Aviso de límite de crédito: el saldo alcanzó o superó el límite configurado.
+                        </div>
+                      )}
                       {(selectedCliente as any).flete && <InfoField label="Flete" value={(selectedCliente as any).flete} />}
                       {(selectedCliente as any).vendedorNombre && (selectedCliente as any).vendedorNombre !== "—" && <InfoField label="Vendedor asignado" value={(selectedCliente as any).vendedorNombre} />}
                     </div>
@@ -3032,17 +3026,6 @@ export default function ClientesPage() {
                 onChange={(e) => setForm({ ...form, email_facturacion: e.target.value })}
                 placeholder="Dejar vacio para usar el email principal"
               />
-              <div className="flex items-end pb-1">
-                <label className="flex items-center gap-2.5 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={form.envio_automatico}
-                    onChange={(e) => setForm({ ...form, envio_automatico: e.target.checked })}
-                    className="h-4 w-4 rounded border-zinc-300 text-orange-500 focus:ring-orange-500 dark:border-zinc-600 dark:bg-zinc-800"
-                  />
-                  <span className="text-sm text-zinc-700 dark:text-zinc-300">Enviar documentos automaticamente</span>
-                </label>
-              </div>
             </div>
           </div>
 
@@ -3113,11 +3096,13 @@ export default function ClientesPage() {
                 ]}
               />
               <Input
-                label="Dias cuenta corriente"
+                label="Tiempo de pago (días)"
                 type="number"
+                list="tiempos-pago"
                 value={String(form.dias_cuenta_corriente)}
                 onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })}
               />
+              <datalist id="tiempos-pago"><option value="0" /><option value="15" /><option value="30" /><option value="45" /><option value="60" /></datalist>
               <Input
                 label="Limite de credito"
                 type="number"
