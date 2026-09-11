@@ -314,7 +314,9 @@ export default function RemitosPage() {
 
   async function handleEstadoChange(id: string, estado: "pendiente" | "entregado" | "parcial") {
     try {
-      const { error } = await supabase.from("remitos").update({ estado }).eq("id", id);
+      let remitoUpdate = supabase.from("remitos").update({ estado }).eq("id", id);
+      if (sociedadActiva?.id) remitoUpdate = remitoUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await remitoUpdate;
       if (error) {
         alert("Error al actualizar estado: " + error.message);
         return;
@@ -330,7 +332,9 @@ export default function RemitosPage() {
     try {
       const { error: itemsErr } = await (supabase as any).from("remito_items").delete().eq("remito_id", id);
       if (itemsErr) throw itemsErr;
-      const { error: remErr } = await supabase.from("remitos").delete().eq("id", id);
+      let remitoDelete = supabase.from("remitos").delete().eq("id", id);
+      if (sociedadActiva?.id) remitoDelete = remitoDelete.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error: remErr } = await remitoDelete;
       if (remErr) throw remErr;
       setDetailRemito(null);
       setPanelFullscreen(false);
@@ -380,18 +384,20 @@ export default function RemitosPage() {
         const { error } = await supabase
           .from("remito_items")
           .update({ cantidad: item.cantidadEntregada })
-          .eq("id", item.id);
+          .eq("id", item.id).eq("remito_id", parcialRemito.id);
         if (error) { alert("Error al actualizar item: " + error.message); return; }
       }
 
       // Remove items with 0 delivered
       const ceroItems = parcialItems.filter(it => it.cantidadEntregada === 0);
       for (const item of ceroItems) {
-        await supabase.from("remito_items").delete().eq("id", item.id);
+        await supabase.from("remito_items").delete().eq("id", item.id).eq("remito_id", parcialRemito.id);
       }
 
       // Mark current remito as parcial
-      const { error: statusErr } = await supabase.from("remitos").update({ estado: "parcial" }).eq("id", parcialRemito.id);
+      let parcialUpdate = supabase.from("remitos").update({ estado: "parcial" }).eq("id", parcialRemito.id);
+      if (sociedadActiva?.id) parcialUpdate = parcialUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error: statusErr } = await parcialUpdate;
       if (statusErr) { alert("Error al actualizar estado: " + statusErr.message); return; }
 
       // If there are pending quantities, create a new remito for the remainder
@@ -716,7 +722,9 @@ export default function RemitosPage() {
         }));
         const { error: itemsErr } = await (supabase as any).from("remito_items").insert(remitoItems);
         if (itemsErr) {
-          await (supabase as any).from("remitos").delete().eq("id", remitoData.id);
+          let rollbackRemito = (supabase as any).from("remitos").delete().eq("id", remitoData.id);
+          if (sociedadActiva?.id) rollbackRemito = rollbackRemito.eq("sociedad_id", sociedadActiva.id);
+          await rollbackRemito;
           setCreateError(`No se pudieron guardar los items del remito: ${itemsErr.message}`);
           return;
         }
@@ -861,7 +869,9 @@ export default function RemitosPage() {
           }));
           const { error: itemsErr } = await (supabase.from("remito_items") as any).insert(items);
           if (itemsErr) {
-            await (supabase as any).from("remitos").delete().eq("id", remitoData.id);
+            let rollbackRemito = (supabase as any).from("remitos").delete().eq("id", remitoData.id);
+            if (sociedadActiva?.id) rollbackRemito = rollbackRemito.eq("sociedad_id", sociedadActiva.id);
+            await rollbackRemito;
             generationErrors.push(`${p.numero}: no se pudieron guardar los items (${itemsErr.message})`);
             continue;
           }

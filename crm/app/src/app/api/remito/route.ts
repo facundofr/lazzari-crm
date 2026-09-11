@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { remito_id, sociedad_id } = body;
 
-    if (!remito_id) return NextResponse.json({ error: "remito_id requerido" }, { status: 400 });
+    if (!remito_id || !sociedad_id) return NextResponse.json({ error: "remito_id y sociedad_id son requeridos" }, { status: 400 });
 
     const authHeader = req.headers.get("authorization");
     const supabase = getSupabase(authHeader);
@@ -112,6 +112,7 @@ export async function POST(req: NextRequest) {
       .from("remitos")
       .select("id, numero, fecha, cliente_id, valor_declarado, cae, sociedad_id, clientes(razon_social, cuit, condicion_iva, direccion, localidad, provincia, cp)")
       .eq("id", remito_id)
+      .eq("sociedad_id", sociedad_id)
       .single();
 
     if (rErr || !remito) return NextResponse.json({ error: "Remito no encontrado" }, { status: 404 });
@@ -126,7 +127,7 @@ export async function POST(req: NextRequest) {
 
     if (iErr || !items?.length) return NextResponse.json({ error: "El remito no tiene items para autorizar" }, { status: 400 });
 
-    const sid = sociedad_id || remito.sociedad_id;
+    const sid = remito.sociedad_id;
     const cfg = getConfig(sid);
 
     // Obtener token WSAA para wsfe (mismo servicio que facturas)

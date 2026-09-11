@@ -718,7 +718,9 @@ export default function OrdenesCompraPage() {
   const handleCancel = async (oc: OCRow) => {
     if (!confirm(`¿Cancelar la OC ${oc.numero}?`)) return;
     try {
-      const { error } = await supabase.from("ordenes_compra").update({ estado: "cancelada" } as any).eq("id", oc.id);
+      let cancelQuery = supabase.from("ordenes_compra").update({ estado: "cancelada" } as any).eq("id", oc.id);
+      if (sociedadActiva?.id) cancelQuery = cancelQuery.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await cancelQuery;
       if (error) throw error;
       await fetchData();
       if (detailOC?.id === oc.id) { setDetailOC(null); setPanelFullscreen(false); }
@@ -752,10 +754,12 @@ export default function OrdenesCompraPage() {
         .eq("orden_id", oc.id);
       if (itemsErr) throw itemsErr;
       // 2. Delete the OC itself
-      const { error: ocErr } = await supabase
+      let ocDelete = supabase
         .from("ordenes_compra")
         .delete()
         .eq("id", oc.id);
+      if (sociedadActiva?.id) ocDelete = ocDelete.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error: ocErr } = await ocDelete;
       if (ocErr) throw ocErr;
       // 3. Refresh and close panel
       await fetchData();
@@ -832,7 +836,9 @@ export default function OrdenesCompraPage() {
       else if (someReceived) newEstado = "recibida_parcial";
 
       if (newEstado !== detailOC.estado) {
-        const { error: estadoErr } = await supabase.from("ordenes_compra").update({ estado: newEstado } as any).eq("id", detailOC.id);
+        let estadoQuery = supabase.from("ordenes_compra").update({ estado: newEstado } as any).eq("id", detailOC.id);
+        if (sociedadActiva?.id) estadoQuery = estadoQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        const { error: estadoErr } = await estadoQuery;
         if (estadoErr) {
           alert(`Error al actualizar estado de la OC: ${estadoErr.message}`);
           throw estadoErr;

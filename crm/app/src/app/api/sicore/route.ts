@@ -90,7 +90,8 @@ export async function GET(req: NextRequest) {
   const { data: provs } = await supabase
     .from("proveedores")
     .select("id, cuit, razon_social, condicion_iva, concepto_retencion_ganancias")
-    .in("id", provIds);
+    .in("id", provIds)
+    .eq("sociedad_id", sociedadId);
 
   const provMap = new Map((provs || []).map(p => [p.id, p]));
 

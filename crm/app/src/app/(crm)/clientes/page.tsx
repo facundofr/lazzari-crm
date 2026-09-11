@@ -526,7 +526,9 @@ export default function ClientesPage() {
         actualizado_at: new Date().toISOString(),
       };
       if (relevEditingId) {
-        const { error } = await (supabase as any).from("fichas_relevamiento").update(payload).eq("id", relevEditingId);
+        let relevQuery = (supabase as any).from("fichas_relevamiento").update(payload).eq("id", relevEditingId);
+        if (sociedadActiva?.id) relevQuery = relevQuery.eq("sociedad_id", sociedadActiva.id);
+        const { error } = await relevQuery;
         if (error) throw error;
         toast.success("Relevamiento actualizado");
       } else {
@@ -1201,10 +1203,12 @@ export default function ClientesPage() {
         payload.sociedad_id = sociedadActiva.id;
       }
       if (editingId) {
-        const { error } = await supabase
+        let clienteUpdate = supabase
           .from("clientes")
           .update(payload as any)
           .eq("id", editingId);
+        if (sociedadActiva?.id) clienteUpdate = clienteUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+        const { error } = await clienteUpdate;
         if (error) throw error;
 
         // Save sucursales changes
@@ -1213,7 +1217,8 @@ export default function ClientesPage() {
           const { error: sucErr } = await (supabase as any)
             .from("cliente_sucursales")
             .update({ activo: false })
-            .eq("id", id);
+            .eq("id", id)
+            .eq("cliente_id", editingId);
           if (sucErr) throw sucErr;
         }
         // Insert new sucursales
@@ -1230,13 +1235,14 @@ export default function ClientesPage() {
           const { error: sucErr } = await (supabase as any)
             .from("cliente_sucursales")
             .update({ nombre: s.nombre, direccion: s.direccion || null, localidad: s.localidad || null, provincia: s.provincia || null, cp: s.cp || null, telefono: s.telefono || null, email: s.email || null })
-            .eq("id", s.id);
+            .eq("id", s.id)
+            .eq("cliente_id", editingId);
           if (sucErr) throw sucErr;
         }
 
         // Save contact changes
         for (const id of removedContactoIds) {
-          await (supabase as any).from("contactos").delete().eq("id", id);
+          await (supabase as any).from("contactos").delete().eq("id", id).eq("entity_type", "cliente").eq("entity_id", editingId);
         }
         const newContsEdit = formContactos.filter((ct) => ct.isNew);
         for (const ct of newContsEdit) {
@@ -1255,7 +1261,7 @@ export default function ClientesPage() {
             email: ct.email || null, telefono: ct.telefono || null,
             whatsapp: ct.whatsapp || null, sucursal_id: ct.sucursal_id || null,
             principal: ct.principal, notas: ct.notas || null,
-          }).eq("id", ct.id!);
+          }).eq("id", ct.id!).eq("entity_type", "cliente").eq("entity_id", editingId);
         }
         toast.success("Cliente actualizado correctamente");
       } else {
@@ -1320,7 +1326,9 @@ export default function ClientesPage() {
 
   async function handleToggleActivo(c: ClienteExt) {
     try {
-      const { error } = await supabase.from("clientes").update({ activo: !c.activo }).eq("id", c.id);
+      let clienteToggle = supabase.from("clientes").update({ activo: !c.activo }).eq("id", c.id);
+      if (sociedadActiva?.id) clienteToggle = clienteToggle.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await clienteToggle;
       if (error) throw error;
       toast.info(c.activo ? "Cliente desactivado" : "Cliente activado");
       await fetchClientes();
@@ -1334,9 +1342,9 @@ export default function ClientesPage() {
     try {
       // Check for associated documents before deleting
       const [{ count: presCount }, { count: factCount }, { count: remCount }] = await Promise.all([
-        supabase.from("presupuestos").select("id", { count: "exact", head: true }).eq("cliente_id", id),
-        supabase.from("facturas").select("id", { count: "exact", head: true }).eq("cliente_id", id),
-        (supabase as any).from("remitos").select("id", { count: "exact", head: true }).eq("cliente_id", id),
+        (() => { let q = supabase.from("presupuestos").select("id", { count: "exact", head: true }).eq("cliente_id", id); if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id); return q; })(),
+        (() => { let q = supabase.from("facturas").select("id", { count: "exact", head: true }).eq("cliente_id", id); if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id); return q; })(),
+        (() => { let q = (supabase as any).from("remitos").select("id", { count: "exact", head: true }).eq("cliente_id", id); if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id); return q; })(),
       ]);
       const docs: string[] = [];
       if ((presCount ?? 0) > 0) docs.push(`${presCount} presupuesto${presCount !== 1 ? "s" : ""}`);
@@ -1347,7 +1355,9 @@ export default function ClientesPage() {
         return;
       }
       if (!confirm("¿Seguro que queres eliminar este cliente? Esta accion no se puede deshacer.")) return;
-      const { error } = await supabase.from("clientes").delete().eq("id", id);
+      let clienteDelete = supabase.from("clientes").delete().eq("id", id);
+      if (sociedadActiva?.id) clienteDelete = clienteDelete.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await clienteDelete;
       if (error) throw error;
       setSelectedCliente(null);
       setPanelFullscreen(false);
@@ -1454,7 +1464,7 @@ export default function ClientesPage() {
       const { error } = await (supabase as any)
         .from("contactos")
         .update({ vendedor_id: vendedorId })
-        .eq("id", contactoId);
+        .eq("id", contactoId).eq("entity_type", "cliente").eq("entity_id", selectedCliente?.id);
       if (error) {
         toast.error("Error al asignar vendedor");
         return;
@@ -1492,7 +1502,7 @@ export default function ClientesPage() {
         principal: sucursalDetailForm.principal,
       };
       if (editingSucursalId) {
-        const { error } = await (supabase as any).from("cliente_sucursales").update(sucursalPayload).eq("id", editingSucursalId);
+        const { error } = await (supabase as any).from("cliente_sucursales").update(sucursalPayload).eq("id", editingSucursalId).eq("cliente_id", selectedCliente.id);
         if (error) throw error;
         // Si se marcó como principal, desmarcar las demás
         if (sucursalDetailForm.principal) {
@@ -1528,7 +1538,7 @@ export default function ClientesPage() {
   async function handleDeleteSucursalDetail(sucursalId: string) {
     if (!selectedCliente) return;
     try {
-      const { error } = await (supabase as any).from("cliente_sucursales").update({ activo: false }).eq("id", sucursalId);
+      const { error } = await (supabase as any).from("cliente_sucursales").update({ activo: false }).eq("id", sucursalId).eq("cliente_id", selectedCliente.id);
       if (error) throw error;
       setSelectedCliente((prev) => prev ? { ...prev, sucursales: (prev.sucursales || []).filter((s) => s.id !== sucursalId) } : prev);
       toast.success("Sucursal eliminada");
@@ -1551,7 +1561,7 @@ export default function ClientesPage() {
           sucursal_id: contactoForm.sucursal_id || null,
           principal: contactoForm.principal,
           notas: contactoForm.notas || null,
-        }).eq("id", editingContactoId);
+        }).eq("id", editingContactoId).eq("entity_type", "cliente").eq("entity_id", selectedCliente.id);
         if (error) throw error;
         toast.success("Contacto actualizado");
       } else {
@@ -1588,7 +1598,7 @@ export default function ClientesPage() {
   async function handleDeleteContacto(contactoId: string) {
     if (!selectedCliente) return;
     try {
-      const { error } = await (supabase as any).from("contactos").delete().eq("id", contactoId);
+      const { error } = await (supabase as any).from("contactos").delete().eq("id", contactoId).eq("entity_type", "cliente").eq("entity_id", selectedCliente.id);
       if (error) throw error;
       setSelectedCliente((prev) => prev ? { ...prev, contactos: prev.contactos.filter((c) => c.id !== contactoId) } : prev);
       toast.success("Contacto eliminado");
