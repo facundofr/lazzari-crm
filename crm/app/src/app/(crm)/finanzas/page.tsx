@@ -406,6 +406,7 @@ export default function FinanzasPage() {
   });
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
   const [loading, setLoading] = useState(true);
+  const [loadingTimedOut, setLoadingTimedOut] = useState(false);
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -716,6 +717,7 @@ export default function FinanzasPage() {
 
   const fetchData = useCallback(async () => {
       setLoading(true);
+      setLoadingTimedOut(false);
       try {
         let qMov = supabase
           .from("movimientos")
@@ -1090,7 +1092,15 @@ export default function FinanzasPage() {
   }, [sociedadActiva]);
 
   useEffect(() => {
-    fetchData();
+    let active = true;
+    const timeout = window.setTimeout(() => {
+      if (active) {
+        setLoading(false);
+        setLoadingTimedOut(true);
+      }
+    }, 20000);
+    fetchData().finally(() => window.clearTimeout(timeout));
+    return () => { active = false; window.clearTimeout(timeout); };
   }, [fetchData]);
 
   // Fetch FC items when detail panel opens
@@ -2958,6 +2968,13 @@ export default function FinanzasPage() {
     );
   }
 
+  const cargaLentaAviso = loadingTimedOut ? (
+    <div className="mx-6 mt-4 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+      <span>La carga está tardando más de lo esperado. Podés reintentar sin perder datos guardados.</span>
+      <button type="button" onClick={() => fetchData()} className="rounded-md border border-amber-300 px-3 py-1.5 text-xs font-medium hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900/40">Reintentar</button>
+    </div>
+  ) : null;
+
   const retencionesTabla = useMemo(() => [
     ...ordenesPago
       .filter((op) => op.estado !== "anulada" && op.retencion_ganancias_monto > 0)
@@ -2991,6 +3008,7 @@ export default function FinanzasPage() {
     <>
       <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setEditingMovId(null); setMovForm(emptyMovForm); setMovClienteSearch(""); setMovProvSearch(""); setFormError(""); setModalOpen(true); } }} />
       <div className="p-4 sm:p-8 space-y-6">
+        {cargaLentaAviso}
         {/* ── Resumen de Caja ── */}
         <Card className="p-4">
           <div className="flex items-center justify-between mb-3">
