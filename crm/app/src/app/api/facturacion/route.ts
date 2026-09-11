@@ -47,6 +47,11 @@ const ARCA_CONFIGS: ArcaConfig[] = [
 
 const DEFAULT_ARCA_CONFIG = ARCA_CONFIGS[0]; // Lazzari
 
+// Reutiliza el cache WSAA del SDK durante la vida de una instancia warm de
+// Node/Vercel. La clave incluye la sociedad y se invalida si cambia el PEM;
+// nunca se comparte un ticket entre sociedades.
+const arcaInstances = new Map<string, { cert: string; key: string; instance: any }>();
+
 function getArcaConfigBySociedad(sociedadId?: string): ArcaConfig {
   if (!sociedadId) return DEFAULT_ARCA_CONFIG;
   const config = ARCA_CONFIGS.find((c) => c.id === sociedadId);
@@ -81,7 +86,13 @@ function getArcaInstance(config: ArcaConfig = DEFAULT_ARCA_CONFIG) {
 
   const production = process.env.ARCA_PRODUCTION !== "false";
 
-  return new Arca({ cuit: config.cuit, cert, key, production, requestTimeoutMs: 30_000, retries: 2, retryDelayMs: 750 });
+  const cacheKey = `${config.id}:${production ? "production" : "testing"}`;
+  const cached = arcaInstances.get(cacheKey);
+  if (cached && cached.cert === cert && cached.key === key) return cached.instance;
+
+  const instance = new Arca({ cuit: config.cuit, cert, key, production, requestTimeoutMs: 30_000, retries: 2, retryDelayMs: 750 });
+  arcaInstances.set(cacheKey, { cert, key, instance });
+  return instance;
 }
 
 // Vercel puede conservar el valor como base64, PEM plano o PEM con saltos

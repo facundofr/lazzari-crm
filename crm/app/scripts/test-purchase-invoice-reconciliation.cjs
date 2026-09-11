@@ -1,0 +1,56 @@
+const ts = require('typescript');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const { test } = require('node:test');
+const source = fs.readFileSync(path.join(__dirname, '../src/lib/purchase-invoice-reconciliation.ts'), 'utf8');
+const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+const context = { exports: {} }; vm.runInNewContext(js, context);
+const reconcile = context.exports.reconcilePurchaseLines;
+const { assertCompleteInvoiceOrderSelection, canMarkPurchaseOrdersPaid } = context.exports;
+test('Duplicados normalizan ceros, espacios y separador de punto de venta', () => {
+  assert.equal(context.exports.canonicalPurchaseInvoiceNumber(' 1 / 123 '), context.exports.canonicalPurchaseInvoiceNumber('00001-00000123'));
+});
+const a = { id: 'a', orden_id: 'oc', codigo: 'A', descripcion: 'Válvula A', cantidad: 10, precio_unitario: 100, iva_porcentaje: 21 };
+const b = { id: 'b', orden_id: 'oc', codigo: 'B', descripcion: 'Válvula B', cantidad: 2, precio_unitario: 200, iva_porcentaje: 21 };
+test('Líneas reordenadas conservan la identidad de artículo', () => {
+  const r = reconcile([a,b], [{...b,cantidad:1,precio_unitario:250}, {...a,cantidad:4,precio_unitario:120}]);
+  assert.equal(r.extras.length, 0); assert.equal(r.costs.find(x=>x.line.id==='a').cost,120); assert.equal(r.costs.find(x=>x.line.id==='b').cost,250);
+});
+test('Solo la cantidad adicional genera OC extra, a costo neto real', () => {
+  const r = reconcile([a], [{...a,cantidad:12,precio_unitario:150}]);
+  assert.equal(r.extras.length,1); assert.equal(r.extras[0].cantidad,2); assert.equal(r.extras[0].precio_unitario,150);
+});
+test('Facturas anteriores consumen cantidad pendiente', () => {
+  const r = reconcile([a], [{...a,cantidad:4}], [{...a,cantidad:8}]); assert.equal(r.extras[0].cantidad,2);
+});
+test('Una diferencia de precio no crea artículos adicionales', () => {
+  assert.equal(reconcile([a], [{...a,cantidad:2,precio_unitario:1000}]).extras.length,0);
+});
+test('Descuentos se reflejan en costo neto', () => {
+  assert.equal(reconcile([a], [{...a,cantidad:2,descuento_porcentaje:10}]).costs[0].cost,90);
+});
+test('Descripción ambigua entre códigos diferentes requiere revisión', () => {
+  assert.throws(()=>reconcile([a,{...a,id:'z',codigo:'Z'}],[{...a,codigo:null}]),/varios códigos/);
+});
+test('Cantidades inválidas se rechazan', () => { assert.throws(()=>reconcile([a],[{...a,cantidad:-1}]),/inválido/); });
+test('Dos códigos distintos nunca se sustituyen por descripción igual', () => {
+  const r=reconcile([a],[{...a,codigo:'Z',cantidad:1}]); assert.equal(r.costs.length,0); assert.equal(r.extras.length,1);
+});
+test('Costo inconsistente del mismo artículo se rechaza', () => {
+  assert.throws(()=>reconcile([a],[{...a,cantidad:1,precio_unitario:100},{...a,cantidad:1,precio_unitario:200}]),/dos costos/);
+});
+test('Factura anterior compartida A+B no puede consumir toda su cantidad solamente en B', () => {
+  assert.throws(() => assertCompleteInvoiceOrderSelection(['B'], [{ orden_compra_id: 'A', numero: 'OC-A' }, { orden_compra_id: 'B', numero: 'OC-B' }]), /Agregá también OC-A/);
+});
+test('La selección completa A+B permite conciliar cantidades acumuladas', () => {
+  assertCompleteInvoiceOrderSelection(['A','B'], [{ orden_compra_id: 'A' }, { orden_compra_id: 'B' }]);
+  const r = reconcile([{...a,id:'a',orden_id:'A',cantidad:10},{...a,id:'b',orden_id:'B',cantidad:10}], [{...a,cantidad:5}], [{...a,cantidad:15}]);
+  assert.equal(r.extras.length,0);
+});
+test('Factura anterior pendiente 80 + nueva pagada 20 no marca OC pagada', () => {
+  assert.equal(canMarkPurchaseOrdersPaid([{estado:'pendiente_aprobacion'}],20,20),false);
+  assert.equal(canMarkPurchaseOrdersPaid([{estado:'pagada'}],20,20),true);
+  assert.equal(canMarkPurchaseOrdersPaid([{estado:'pagada'}],40,20),false);
+});

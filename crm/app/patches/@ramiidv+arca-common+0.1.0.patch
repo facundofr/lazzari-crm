@@ -1,8 +1,66 @@
 diff --git a/node_modules/@ramiidv/arca-common/dist/soap-client.js b/node_modules/@ramiidv/arca-common/dist/soap-client.js
-index f8796dd..045745e 100644
+index f8796dd..47d1ad5 100644
 --- a/node_modules/@ramiidv/arca-common/dist/soap-client.js
 +++ b/node_modules/@ramiidv/arca-common/dist/soap-client.js
-@@ -92,7 +92,7 @@ export async function soapCall(endpoint, bodyContent, opts) {
+@@ -28,6 +28,57 @@ const xmlBuilder = new XMLBuilder({
+ export function parseXml(xml) {
+     return xmlParser.parse(xml);
+ }
++/** Extract only the human-readable SOAP fault text from an error response. */
++function extractSoapFaultMessage(xml) {
++    try {
++        const parsed = parseXml(xml);
++        const seen = new Set();
++        const visit = (value, depth = 0) => {
++            if (!value || depth > 12 || typeof value !== 'object' || seen.has(value))
++                return undefined;
++            seen.add(value);
++            for (const [key, child] of Object.entries(value)) {
++                const local = key.split(':').pop()?.toLowerCase();
++                if (local === 'fault' && child && typeof child === 'object') {
++                    const fault = child;
++                    const findText = (node, depth = 0) => {
++                        if (depth > 4 || node === null || node === undefined)
++                            return undefined;
++                        if (typeof node === 'string' || typeof node === 'number')
++                            return String(node);
++                        if (typeof node !== 'object')
++                            return undefined;
++                        for (const [childKey, childValue] of Object.entries(node)) {
++                            const childLocal = childKey.split(':').pop()?.toLowerCase();
++                            if (childLocal === 'text' || childLocal === '#text') {
++                                const text = typeof childValue === 'object' ? childValue?.['#text'] : childValue;
++                                if (text !== undefined)
++                                    return String(text);
++                            }
++                            const nested = findText(childValue, depth + 1);
++                            if (nested)
++                                return nested;
++                        }
++                        return undefined;
++                    };
++                    const raw = fault.faultstring ?? fault.faultString ?? findText(fault);
++                    if (raw !== undefined) {
++                        const text = typeof raw === 'string' ? raw : raw?.['#text'] ?? String(raw);
++                        return String(text).replace(/\s+/g, ' ').replace(/(token|sign|firma|clave\s+privada|private\s*key)\s*[:=]\s*[^,;\s]+/gi, '$1=[redacted]').trim().slice(0, 500);
++                    }
++                }
++                const result = visit(child, depth + 1);
++                if (result)
++                    return result;
++            }
++            return undefined;
++        };
++        return visit(parsed);
++    }
++    catch {
++        return undefined;
++    }
++}
+ /**
+  * Construye XML desde un objeto JS.
+  */
+@@ -92,7 +143,7 @@ export async function soapCall(endpoint, bodyContent, opts) {
      const headers = {
          'Content-Type': 'text/xml; charset=utf-8',
      };
@@ -11,3 +69,25 @@ index f8796dd..045745e 100644
          headers['SOAPAction'] = `"${opts.soapAction}"`;
      }
      let lastError;
+@@ -123,11 +174,18 @@ export async function soapCall(endpoint, bodyContent, opts) {
+             const durationMs = Date.now() - startTime;
+             const responseText = await response.text();
+             if (!response.ok) {
+-                if (isRetryable(undefined, response.status) && attempt < maxRetries) {
+-                    lastError = new ArcaSoapError(`HTTP ${response.status}: ${response.statusText}`, response.status);
++                const faultMessage = extractSoapFaultMessage(responseText);
++                const errorMessage = faultMessage
++                    ? `HTTP ${response.status}: SOAP Fault: ${faultMessage}`
++                    : `HTTP ${response.status}: ${response.statusText}`;
++                // A SOAP Fault is an application/authentication response, not a
++                // transient transport failure: retrying can create duplicate
++                // WSAA requests and hides the actionable ARCA message.
++                if (!faultMessage && isRetryable(undefined, response.status) && attempt < maxRetries) {
++                    lastError = new ArcaSoapError(errorMessage, response.status);
+                     continue;
+                 }
+-                const err = new ArcaSoapError(`HTTP ${response.status}: ${response.statusText}`, response.status);
++                const err = new ArcaSoapError(errorMessage, response.status);
+                 onEvent?.({ type: 'request:error', endpoint, method: methodName, error: err });
+                 throw err;
+             }

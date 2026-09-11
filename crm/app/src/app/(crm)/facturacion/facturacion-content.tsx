@@ -153,6 +153,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [emitClienteSearch, setEmitClienteSearch] = useState("");
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
+  const [cotizError, setCotizError] = useState("");
+  const cotizRequest = useRef(0);
+  const [cotizModalidad, setCotizModalidad] = useState<"divisas" | "billetes">("divisas");
   const [cotizFecha, setCotizFecha] = useState("");
   const [latestFacturaDate, setLatestFacturaDate] = useState("");
 
@@ -185,20 +188,30 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   }
 
   async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas", fecha?: string) {
+    const requestId = ++cotizRequest.current;
+    setCotizModalidad(modalidad);
     setCotizBnaLoading(true);
+    setCotizError("");
+    setCotizBna(null);
+    setEmitData(p => ({ ...p, tipo_cambio: 0 }));
     try {
       const params = new URLSearchParams({ modalidad });
       // Por defecto se usa el día hábil anterior a la fecha de la factura.
       // Solo un valor explícito en el selector permite cambiar esta regla.
       params.set("fecha", fecha || cotizFecha || previousBusinessDay(emitData.fecha));
       const res = await fetch(`/api/cotizacion-bna?${params}`);
-      if (res.ok) {
-        const data = await res.json();
+      const data = await res.json();
+      if (requestId !== cotizRequest.current) return;
+      if (!res.ok) throw new Error(data.error || "No se pudo consultar la cotización.");
+      if (data.stale || data.fecha !== params.get("fecha")) {
+        throw new Error(`La cotización disponible es del ${data.fecha}, no del ${params.get("fecha")}. No se aplicó; ingresá el valor correcto manualmente.`);
+      }
+      if (Number(data.valor_venta) > 0) {
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
         setEmitData((p) => ({ ...p, tipo_cambio: data.valor_venta }));
-      }
-    } catch { /* silencioso */ } finally {
-      setCotizBnaLoading(false);
+      } else throw new Error("La cotización recibida no es válida. Ingresá el valor correcto manualmente.");
+    } catch (error) { if (requestId === cotizRequest.current) setCotizError(error instanceof Error ? error.message : "No se pudo consultar la cotización. Ingresala manualmente."); } finally {
+      if (requestId === cotizRequest.current) setCotizBnaLoading(false);
     }
   }
   const [emitData, setEmitData] = useState({
@@ -213,6 +226,14 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     fecha_vencimiento: "",
     items: [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] as EmitItem[],
   });
+
+  useEffect(() => {
+    if (!emitOpen || emitData.moneda !== "USD") return;
+    void fetchCotizBna(cotizModalidad, previousBusinessDay(emitData.fecha));
+    return () => { cotizRequest.current += 1; };
+    // La edición manual de tipo_cambio no dispara otra consulta.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [emitOpen, emitData.moneda, emitData.fecha]);
 
   function calcFechaVencFC(condVenta: string, fechaBase: string): string {
     const diasMap: Record<string, number> = {
@@ -562,6 +583,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     const forceManual = arcaStatus !== null && arcaStatus.certOk === false;
     setEmitManual(forceManual);
     setCotizBna(null);
+    setCotizFecha("");
+    setCotizError("");
+    setCotizModalidad("divisas");
     const tipoInicial = forceManual ? "X" : (prefill?.tipo || "FB");
     const hoy = todayAR();
     setEmitData({
@@ -589,7 +613,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     (async () => {
       try {
         const pvInicial = forceManual ? 0 : emisorData.ptoVta;
-        const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, tipoInicial).eq("punto_venta" as any, pvInicial).order("numero", { ascending: false }).limit(1);
+        if (!sociedadActiva?.id) return;
+        const { data: last } = await supabase.from("facturas").select("numero").eq("sociedad_id" as any, sociedadActiva.id).eq("tipo" as any, tipoInicial).eq("punto_venta" as any, pvInicial).order("numero", { ascending: false }).limit(1);
         if (last && last.length > 0) {
           setEmitData(prev => ({ ...prev, numero_manual: String(Number(last[0].numero) + 1) }));
         }
@@ -774,7 +799,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           punto_venta: emitData.punto_venta,
           moneda: emitData.moneda,
           tipo_cambio: isUSD ? tc : null,
-          cotizacion_modalidad: isUSD ? (cotizBna?.modalidad === "billetes" ? "billetes" : "divisas") : null,
+          cotizacion_modalidad: isUSD ? cotizModalidad : null,
           fecha: emitData.fecha || null,
           condicion_venta: emitData.condicion_venta || null,
           fecha_vencimiento: emitData.fecha_vencimiento || null,
@@ -833,7 +858,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           condicion_venta: emitData.condicion_venta || null,
           moneda: emitData.moneda,
           tipo_cambio: emitData.moneda === "USD" ? emitData.tipo_cambio : null,
-          cotizacion_modalidad: emitData.moneda === "USD" ? (cotizBna?.modalidad === "billetes" ? "billetes" : "divisas") : null,
+          cotizacion_modalidad: emitData.moneda === "USD" ? cotizModalidad : null,
           items: emitData.items,
           sociedad_id: sociedadActiva?.id,
         }),
@@ -1653,7 +1678,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                         const manualPv = 0;
                         setEmitData((p) => ({ ...p, tipo: newTipo, punto_venta: manualPv }));
                         try {
-                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, newTipo).eq("punto_venta" as any, manualPv).order("numero", { ascending: false }).limit(1);
+                          if (!sociedadActiva?.id) return;
+                          const { data: last } = await supabase.from("facturas").select("numero").eq("sociedad_id" as any, sociedadActiva.id).eq("tipo" as any, newTipo).eq("punto_venta" as any, manualPv).order("numero", { ascending: false }).limit(1);
                           setEmitData(prev => ({ ...prev, numero_manual: last && last.length > 0 ? String(Number(last[0].numero) + 1) : "1" }));
                         } catch { /* ignore */ }
                       }}
@@ -1679,7 +1705,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                       // Auto-update correlative number for new tipo
                       (async () => {
                         try {
-                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, newTipo).eq("punto_venta" as any, emitData.punto_venta).order("numero", { ascending: false }).limit(1);
+                          if (!sociedadActiva?.id) return;
+                          const { data: last } = await supabase.from("facturas").select("numero").eq("sociedad_id" as any, sociedadActiva.id).eq("tipo" as any, newTipo).eq("punto_venta" as any, emitData.punto_venta).order("numero", { ascending: false }).limit(1);
                           if (last && last.length > 0) {
                             setEmitData(prev => ({ ...prev, numero_manual: String(Number(last[0].numero) + 1) }));
                           } else {
@@ -1760,7 +1787,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                         const newPv = Number(e.target.value);
                         setEmitData((p) => ({ ...p, punto_venta: newPv }));
                         try {
-                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, emitData.tipo).eq("punto_venta" as any, newPv).order("numero", { ascending: false }).limit(1);
+                          if (!sociedadActiva?.id) return;
+                          const { data: last } = await supabase.from("facturas").select("numero").eq("sociedad_id" as any, sociedadActiva.id).eq("tipo" as any, emitData.tipo).eq("punto_venta" as any, newPv).order("numero", { ascending: false }).limit(1);
                           setEmitData(prev => ({ ...prev, numero_manual: last && last.length > 0 ? String(Number(last[0].numero) + 1) : "1" }));
                         } catch { /* ignore */ }
                       }} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
@@ -1771,7 +1799,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                           const newPv = Number(e.target.value);
                           setEmitData((p) => ({ ...p, punto_venta: newPv }));
                           // Fetch next number for this PV
-                          const { data: last } = await supabase.from("facturas").select("numero").eq("tipo" as any, emitData.tipo).eq("punto_venta" as any, newPv).order("numero", { ascending: false }).limit(1);
+                          if (!sociedadActiva?.id) return;
+                          const { data: last } = await supabase.from("facturas").select("numero").eq("sociedad_id" as any, sociedadActiva.id).eq("tipo" as any, emitData.tipo).eq("punto_venta" as any, newPv).order("numero", { ascending: false }).limit(1);
                           const nextNum = last && last.length > 0 ? (last[0] as any).numero + 1 : 1;
                           setEmitData((p) => ({ ...p, punto_venta: newPv, numero_manual: String(nextNum) }));
                         }}
@@ -1813,7 +1842,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                   {isUSD && (
                     <div className="col-span-8">
                       <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cotizacion USD/ARS {emitManual ? "" : "*"}</label>
-                      <input type="number" step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) }))} placeholder="Ej: 1450.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                      <input type="number" step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => { cotizRequest.current += 1; setCotizBnaLoading(false); setCotizBna(null); setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) })); }} placeholder="Ej: 1450.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
                       <div className="mt-1 flex items-center gap-2 flex-wrap">
                         <span className="text-xs text-zinc-400">BNA:</span>
                         <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
@@ -1823,9 +1852,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                         <button type="button" onClick={() => fetchCotizBna("billetes", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
                           {cotizBnaLoading ? "…" : "Billetes"}
                         </button>
-                        <input type="date" value={cotizFecha} onChange={e => setCotizFecha(e.target.value)} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
+                        <input type="date" value={cotizFecha} onChange={e => { cotizRequest.current += 1; setCotizFecha(e.target.value); setCotizBnaLoading(false); setCotizBna(null); setCotizError(""); setEmitData(p => ({ ...p, tipo_cambio: 0 })); }} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
                         {cotizBna && <span className="text-xs text-zinc-400">→ Venta {cotizBna.modalidad}: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})</span>}
                       </div>
+                      {cotizError && <p role="alert" className="mt-1 text-xs text-amber-700 dark:text-amber-400">{cotizError}</p>}
                     </div>
                   )}
                 </div>
@@ -2060,6 +2090,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 <div>
                   <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">OC Cliente</h4>
                   <p className="font-mono text-sm font-medium text-blue-600 dark:text-blue-400">{detailFactura.oc_cliente}</p>
+                  <p className="mt-1 text-xs text-zinc-500">Fecha de la OC: {detailFactura.oc_cliente_fecha ? formatDate(detailFactura.oc_cliente_fecha) : "Sin informar"}</p>
                 </div>
               )}
 

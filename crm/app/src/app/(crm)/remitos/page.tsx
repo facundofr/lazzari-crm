@@ -1485,15 +1485,8 @@ export default function RemitosPage() {
                   </div>
                 ) : remitoRequiereARCA(detailRemito) ? (
                   <div>
-                    <button
-                      onClick={handleAutorizarAFIP}
-                      disabled={autorizandoAFIP}
-                      className="flex items-center gap-2 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-md text-xs font-medium disabled:opacity-50 transition-colors"
-                    >
-                      {autorizandoAFIP ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-                      {autorizandoAFIP ? "Autorizando..." : "Autorizar ARCA"}
-                    </button>
-                    {afipError && <p className="text-xs text-red-500 mt-1">{afipError}</p>}
+                    <p className="text-sm font-medium text-amber-700 dark:text-amber-400">Autorización fiscal pendiente de configuración</p>
+                    <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">El circuito de remitos requiere validar CAI/autoimpresión. No se solicitará un CAE de factura para este documento.</p>
                   </div>
                 ) : (
                   <div className="text-xs text-zinc-500 dark:text-zinc-400">

@@ -1385,6 +1385,7 @@ export default function OrdenesCompraPage() {
 
   // ── Consolidation logic ─────────────────────────────────────────
   const openConsolidateModal = async () => {
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad"); return; }
     setConsolidateOpen(true);
     setConsolidateLoading(true);
     try {
@@ -1394,7 +1395,8 @@ export default function OrdenesCompraPage() {
         .select("id, numero, cliente_id, moneda, modalidad_emision, clientes(razon_social)")
         .eq("estado", "aprobado");
       if (sociedadActiva?.id) prQuery = prQuery.eq("sociedad_id" as any, sociedadActiva.id);
-      const { data: prs } = await prQuery;
+      const { data: prs, error: prsError } = await prQuery;
+      if (prsError) throw prsError;
 
       if (!prs || prs.length === 0) {
         setConsolidateGroups([]);
@@ -1404,11 +1406,12 @@ export default function OrdenesCompraPage() {
 
       // Get all presupuesto items with proveedor
       const prIds = prs.map((p: any) => p.id);
-      const { data: items } = await supabase
+      const { data: items, error: pendingItemsError } = await (supabase as any)
         .from("presupuesto_items")
         .select("id, presupuesto_id, codigo, descripcion, cantidad, precio_costo, unidad, proveedor_id, proveedor_nombre, iva_porcentaje, costo_moneda")
         .in("presupuesto_id", prIds)
-        .not("proveedor_id", "is", null) as { data: any[] | null };
+        .not("proveedor_id", "is", null);
+      if (pendingItemsError) throw pendingItemsError;
 
       if (!items || items.length === 0) {
         setConsolidateGroups([]);
@@ -1419,19 +1422,20 @@ export default function OrdenesCompraPage() {
       // Get existing non-cancelled OCs with presupuesto_origen_id to know which PR+proveedor combos already have OC
       let existingOCsQuery = supabase
         .from("ordenes_compra")
-        .select("presupuesto_origen_id, proveedor_id")
-        .not("presupuesto_origen_id", "is", null)
+        .select("presupuesto_origen_id, proveedor_id, observaciones")
         .not("estado", "eq", "cancelada");
       if (sociedadActiva?.id) existingOCsQuery = existingOCsQuery.eq("sociedad_id" as any, sociedadActiva.id);
-      const { data: existingOCs } = await existingOCsQuery;
+      const { data: existingOCs, error: existingError } = await existingOCsQuery;
+      if (existingError) throw existingError;
+      const consolidatedIds = new Set((existingOCs || []).flatMap((oc: any) => String(oc.observaciones || "").match(/\[PR_ITEMS:([^\]]+)\]/)?.[1].split(",") || []));
       // Build a set of "presupuesto_id|proveedor_id" keys that already have an OC
       const ocCoveredKeys = new Set(
-        (existingOCs || []).map((oc: any) => `${oc.presupuesto_origen_id}|${oc.proveedor_id}`)
+        (existingOCs || []).filter((oc: any) => !String(oc.observaciones || "").includes("[PR_ITEMS:")).map((oc: any) => `${oc.presupuesto_origen_id}|${oc.proveedor_id}`)
       );
 
       // Filter out items that already have an OC for their presupuesto+proveedor combo
       const pendingItems = items.filter(
-        (item: any) => !ocCoveredKeys.has(`${item.presupuesto_id}|${item.proveedor_id}`)
+        (item: any) => !consolidatedIds.has(item.id) && !ocCoveredKeys.has(`${item.presupuesto_id}|${item.proveedor_id}`)
       );
 
       if (pendingItems.length === 0) {
@@ -1449,16 +1453,17 @@ export default function OrdenesCompraPage() {
         if (!pr || !item.proveedor_id) continue;
         const provId = item.proveedor_id as string;
         const itemCostoMoneda = (item.costo_moneda as string) || "ARS";
-        if (!groups[provId]) {
-          groups[provId] = {
-            id: provId,
+        const groupKey = `${provId}|${itemCostoMoneda}`;
+        if (!groups[groupKey]) {
+          groups[groupKey] = {
+            id: groupKey,
             nombre: (item.proveedor_nombre as string) || "Sin nombre",
             moneda: itemCostoMoneda,
             items: [],
             expanded: true,
           };
         }
-        groups[provId].items.push({
+        groups[groupKey].items.push({
           pr_id: pr.id,
           pr_numero: pr.numero || "",
           cliente_nombre: (pr.clientes as any)?.razon_social || "",
@@ -1516,6 +1521,19 @@ export default function OrdenesCompraPage() {
         const selectedItems = group.items.filter(it => it.selected);
         if (selectedItems.length === 0) continue;
 
+        const { data: currentOrders, error: currentError } = await (supabase as any).from("ordenes_compra")
+          .select("presupuesto_origen_id, observaciones").eq("sociedad_id", sociedadActiva.id)
+          .eq("proveedor_id", selectedItems[0].proveedor_id).neq("estado", "cancelada");
+        if (currentError) throw currentError;
+        const coveredIds = new Set((currentOrders || []).flatMap((oc: any) => String(oc.observaciones || "").match(/\[PR_ITEMS:([^\]]+)\]/)?.[1].split(",") || []));
+        const coveredPRs = new Set((currentOrders || []).filter((oc: any) => !String(oc.observaciones || "").includes("[PR_ITEMS:")).map((oc: any) => oc.presupuesto_origen_id));
+        if (selectedItems.some(it => coveredIds.has(it.item_id) || coveredPRs.has(it.pr_id))) {
+          throw new Error("Algún artículo ya tiene una OC. Se actualizó la lista para evitar repetir la compra.");
+        }
+        if (selectedItems.some(it => !Number.isFinite(Number(it.cantidad)) || Number(it.cantidad) <= 0 || !Number.isFinite(Number(it.precio_costo)) || Number(it.precio_costo) < 0)) {
+          throw new Error("Revisá cantidades y costos de los artículos antes de consolidar.");
+        }
+
         const subtotal = selectedItems.reduce((sum, it) => sum + it.precio_costo * it.cantidad, 0);
         const iva = selectedItems.reduce((sum, it) => {
           const lineSubtotal = it.precio_costo * it.cantidad;
@@ -1526,12 +1544,12 @@ export default function OrdenesCompraPage() {
         // Get unique PR IDs for observaciones and origin linking
         const prNums = [...new Set(selectedItems.map(it => it.pr_numero))];
         const prIds = [...new Set(selectedItems.map(it => it.pr_id))];
-        const obs = `Consolidado de ${prNums.length} presupuesto(s): ${prNums.join(", ")}`;
+        const obs = `Consolidado de ${prNums.length} presupuesto(s): ${prNums.join(", ")} [PR_ITEMS:${selectedItems.map(it => it.item_id).join(",")}]`;
 
         const { data: ocRow, error: ocErr } = await supabase
           .from("ordenes_compra")
           .insert({
-            proveedor_id: group.id,
+            proveedor_id: selectedItems[0].proveedor_id,
             fecha: today,
             moneda: group.moneda,
             estado: "enviada",
@@ -1546,7 +1564,7 @@ export default function OrdenesCompraPage() {
           .select("id")
           .single();
 
-        if (ocErr || !ocRow) continue;
+        if (ocErr || !ocRow) throw new Error(ocErr?.message || `No se pudo crear la OC de ${group.nombre}`);
 
         // Insert items
         const ocItems = selectedItems.map((it, idx) => ({
@@ -1564,7 +1582,8 @@ export default function OrdenesCompraPage() {
         const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
         if (itemsErr) {
           console.error("Error al insertar items de OC consolidada:", itemsErr);
-          alert(`Error al insertar items para proveedor ${group.nombre}: ${itemsErr.message}`);
+          const { error: cleanupError } = await (supabase as any).from("ordenes_compra").delete().eq("id", ocRow.id).eq("sociedad_id", sociedadActiva.id);
+          throw new Error(`No se guardaron los artículos de ${group.nombre}: ${itemsErr.message}${cleanupError ? ". Revisar OC incompleta: " + ocRow.id : ""}`);
         }
         created++;
       }
@@ -1573,7 +1592,9 @@ export default function OrdenesCompraPage() {
       await fetchData();
       if (created > 0) setConsolidateSuccessMsg(`Se crearon ${created} OC(s) consolidada(s)`);
     } catch (err) {
-      alert("Error al crear OCs consolidadas");
+      await fetchData();
+      await openConsolidateModal();
+      alert("Error al crear OCs consolidadas: " + (err instanceof Error ? err.message : String(err)));
       console.error(err);
     } finally {
       setConsolidateCreating(false);

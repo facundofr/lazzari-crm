@@ -7,6 +7,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { formatCurrency, formatDate, formatDateTime, todayAR } from "@/lib/utils";
+import { canMatchBankMovement } from "@/lib/extracto-match";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
@@ -368,7 +369,7 @@ interface ExtractoRow {
   extracto_movimientos: ExtractoMovimientoRow[];
 }
 
-function parseExtractoCsv(text: string) {
+function parseExtractoCsv(text: string, moneda?: "ARS" | "USD") {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   if (lines.length < 2) throw new Error("El CSV no contiene movimientos");
   const delimiter = (lines[0].match(/;/g) || []).length > (lines[0].match(/,/g) || []).length ? ";" : ",";
@@ -392,29 +393,51 @@ function parseExtractoCsv(text: string) {
   const refIdx = index("referencia", "referencia", "comprobante", "nro");
   const creditIdx = index("credito", "credit", "ingreso");
   const debitIdx = index("debito", "debit", "egreso");
-  const amountIdx = index("importe", "monto", "amount", "saldo");
+  // Saldo is a running balance, never the amount of a bank movement.
+  const amountIdx = index("importe", "monto", "amount");
   if (dateIdx < 0 || (amountIdx < 0 && creditIdx < 0 && debitIdx < 0)) {
     throw new Error("El CSV debe tener columnas Fecha e Importe (o Crédito/Débito)");
   }
   const number = (value: string) => {
-    const clean = String(value || "").replace(/\s/g, "").replace(/\.(?=\d{3}(?:\D|$))/g, "").replace(",", ".");
-    const n = Number(clean.replace(/[^\d.-]/g, ""));
-    return Number.isFinite(n) ? Math.abs(n) : 0;
+    const explicitCurrency = String(value || "").trim().match(/^(ARS|USD)\s*/i)?.[1]?.toUpperCase();
+    if (explicitCurrency && moneda && explicitCurrency !== moneda) throw new Error(`El archivo contiene importes en ${explicitCurrency}, pero la cuenta se indicó en ${moneda}`);
+    let clean = String(value || "").trim().replace(/\s/g, "").replace(/^(?:ARS|USD|\$)/i, "");
+    if (!clean || clean === "-") return 0;
+    if (/^\(.+\)$/.test(clean)) clean = `-${clean.slice(1, -1)}`;
+    if (clean.includes(",") && clean.includes(".")) {
+      clean = clean.lastIndexOf(",") > clean.lastIndexOf(".")
+        ? clean.replace(/\./g, "").replace(",", ".")
+        : clean.replace(/,/g, "");
+    } else if (clean.includes(",")) clean = clean.replace(",", ".");
+    if (!/^-?\d+(?:\.\d{1,2})?$/.test(clean)) throw new Error(`Importe inválido o ambiguo: ${value}`);
+    const n = Number(clean);
+    if (!Number.isFinite(n)) throw new Error(`Importe inválido: ${value}`);
+    return n;
   };
   const date = (value: string) => {
     const raw = String(value || "").trim();
     const m = raw.match(/^(\d{1,2})[\\/-](\d{1,2})[\\/-](\d{2,4})$/);
-    if (m) return `${m[3].length === 2 ? `20${m[3]}` : m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
-    return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : new Date(raw).toISOString().slice(0, 10);
+    const iso = m ? `${m[3].length === 2 ? `20${m[3]}` : m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : raw;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) throw new Error(`Fecha inválida: ${raw}. Usá DD/MM/AAAA o AAAA-MM-DD.`);
+    const parsed = new Date(`${iso}T12:00:00Z`);
+    if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== iso) throw new Error(`Fecha inválida: ${raw}`);
+    return iso;
   };
-  return lines.slice(1).map((line) => {
+  const movements = lines.slice(1).map((line, rowIndex) => {
     const cells = split(line);
+    if (cells.length !== headers.length) throw new Error(`Fila ${rowIndex + 2}: cantidad de columnas inválida`);
     const credit = creditIdx >= 0 ? number(cells[creditIdx]) : 0;
     const debit = debitIdx >= 0 ? number(cells[debitIdx]) : 0;
-    const amount = amountIdx >= 0 ? number(cells[amountIdx]) : Math.max(credit, debit);
+    if (credit !== 0 && debit !== 0) throw new Error(`Fila ${rowIndex + 2}: crédito y débito simultáneos; revisá el archivo`);
+    const hasSides = creditIdx >= 0 || debitIdx >= 0;
+    const signed = amountIdx >= 0 ? number(cells[amountIdx]) : 0;
+    const amount = hasSides ? Math.abs(credit || debit) : Math.abs(signed);
     if (!amount) return null;
-    return { fecha: date(cells[dateIdx]), descripcion: cells[descIdx] || "Movimiento bancario", referencia: refIdx >= 0 ? cells[refIdx] : "", monto: amount, tipo: (credit > 0 || (creditIdx < 0 && debit <= 0)) ? "credito" as const : "debito" as const };
+    const isCredit = hasSides ? (credit !== 0 ? credit > 0 : debit < 0) : signed > 0;
+    return { fecha: date(cells[dateIdx]), descripcion: cells[descIdx] || "Movimiento bancario", referencia: refIdx >= 0 ? cells[refIdx] : "", monto: amount, tipo: isCredit ? "credito" as const : "debito" as const };
   }).filter((item): item is NonNullable<typeof item> => Boolean(item));
+  if (!movements.length) throw new Error("El CSV no contiene movimientos con importe");
+  return movements;
 }
 
 interface LineaCreditoRow {
@@ -500,6 +523,7 @@ export default function FinanzasPage() {
   const [extractos, setExtractos] = useState<ExtractoRow[]>([]);
   const [extractoUploading, setExtractoUploading] = useState(false);
   const [extractoUploadError, setExtractoUploadError] = useState("");
+  const [extractoMoneda, setExtractoMoneda] = useState<"ARS" | "USD" | "">("");
   const [lineasCredito, setLineasCredito] = useState<LineaCreditoRow[]>([]);
   const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>([]);
   const [objetivos, setObjetivos] = useState<Objetivo[]>([]);
@@ -512,19 +536,22 @@ export default function FinanzasPage() {
     setExtractoUploading(true);
     setExtractoUploadError("");
     try {
+      if (!extractoMoneda) throw new Error("Indicá la moneda de la cuenta bancaria antes de cargar el extracto.");
       if (!file.name.toLocaleLowerCase().endsWith(".csv")) throw new Error("Por ahora la carga automática admite CSV. Exportá el extracto bancario como CSV e intentá nuevamente.");
-      const movements = parseExtractoCsv(await file.text());
+      const movements = parseExtractoCsv(await file.text(), extractoMoneda);
       const credits = movements.filter((m) => m.tipo === "credito").reduce((sum, m) => sum + m.monto, 0);
       const debits = movements.filter((m) => m.tipo === "debito").reduce((sum, m) => sum + m.monto, 0);
       const period = movements.length ? movements.map((m) => m.fecha).sort()[0].slice(0, 7) : new Date().toISOString().slice(0, 7);
       let archivo: string | null = null;
       const storagePath = `${sociedadActiva.id}/extractos/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
       const upload = await (supabase as any).storage.from("comprobantes").upload(storagePath, file, { upsert: false });
-      if (!upload.error) archivo = storagePath;
+      if (upload.error) throw new Error(`No se pudo guardar el archivo del extracto: ${upload.error.message}`);
+      archivo = storagePath;
       const { data: extracto, error } = await (supabase as any).from("extractos_bancarios").insert({
         sociedad_id: sociedadActiva.id,
         banco: file.name.replace(/\.[^.]+$/, "") || "Banco",
         cuenta: "—",
+        moneda: extractoMoneda,
         periodo: period,
         fecha_upload: new Date().toISOString(),
         archivo,
@@ -546,7 +573,7 @@ export default function FinanzasPage() {
     } finally {
       setExtractoUploading(false);
     }
-  }, [profile?.id, sociedadActiva?.id]);
+  }, [profile?.id, sociedadActiva?.id, extractoMoneda]);
 
   // Saldos de caja
   const [saldosCaja, setSaldosCaja] = useState<{ id?: string; moneda: string; monto: number }[]>([]);
@@ -579,6 +606,7 @@ export default function FinanzasPage() {
   const [opFCPendientes, setOpFCPendientes] = useState<OpFCPendiente[]>([]);
   const [opMedios, setOpMedios] = useState<OpMedioPago[]>([makeOpMedio()]);
   const [opMonthlyBase, setOpMonthlyBase] = useState(0); // Acumulado mensual de bases sin IVA (de OPs previas)
+  const [opDatosError, setOpDatosError] = useState("");
   const [opMonthlyRetenido, setOpMonthlyRetenido] = useState(0); // Retenciones ya practicadas en el mes
   const [opFCLoading, setOpFCLoading] = useState(false);
   const [retencionConfig, setRetencionConfig] = useState({
@@ -1308,39 +1336,32 @@ export default function FinanzasPage() {
 
   async function handleMatchExtracto(row: ExtractoMovimientoRow) {
     if (!sociedadActiva?.id || !extracto) { alert("No se pudo determinar la sociedad activa"); return; }
-    const tipos = row.tipo === "credito"
-      ? ["cobro", "transferencia", "deposito"]
-      : ["pago", "transferencia", "cheque_emitido", "efectivo"];
-    const target = movimientos.filter((m) => {
-      if (m.anulado || m.conciliado || !tipos.includes(m.tipo)) return false;
-      if (Math.abs(Number(m.monto) - Number(row.monto)) > 0.01) return false;
-      const delta = Math.abs(new Date(m.fecha).getTime() - new Date(row.fecha).getTime()) / 86400000;
-      return delta <= 3;
-    });
+    if (row.estado !== "pendiente") return;
+    const moneda = (extracto as ExtractoRow & { moneda?: string }).moneda
+      || window.prompt("Este extracto no tiene moneda registrada. Indicá ARS o USD según la cuenta bancaria:")?.trim().toUpperCase();
+    if (!moneda) return;
+    if (!["ARS", "USD"].includes(moneda)) { alert("La moneda debe ser ARS o USD."); return; }
+    const target = movimientos.filter((m) => canMatchBankMovement(row, m, moneda));
     if (target.length !== 1) {
-      alert(target.length === 0 ? "No encontramos un movimiento único para matchear." : "Hay más de un movimiento posible; conciliá desde Movimientos para evitar una asociación incorrecta.");
+      alert(target.length === 0 ? "No encontramos un movimiento compatible en moneda, importe, sentido y fecha. Las transferencias sin origen/destino identificado requieren revisión." : "Hay más de un movimiento posible. Revisá sus referencias antes de conciliar; no se realizó ninguna asociación.");
       return;
     }
     const match = target[0];
-    const { error } = await (supabase as any).from("extracto_movimientos").update({
-      estado: "matcheado",
-      match_cliente_id: match.cliente_id || null,
-      match_proveedor_id: match.proveedor_id || null,
-      match_factura_id: match.factura_id || match.factura_compra_id || null,
-    }).eq("id", row.id).eq("extracto_id", extracto.id);
-    if (error) { alert("No se pudo guardar el match: " + error.message); return; }
-    const { error: movementError } = await supabase.from("movimientos").update({ conciliado: true }).eq("id", match.id).eq("sociedad_id" as any, sociedadActiva.id);
-    if (movementError) { alert("El match se guardó, pero no se pudo marcar el movimiento como conciliado: " + movementError.message); }
-    setExtractos((prev) => prev.map((item) => item.id !== extracto.id ? item : {
-      ...item,
-      extracto_movimientos: item.extracto_movimientos.map((movement) => movement.id === row.id ? {
-        ...movement,
-        estado: "matcheado",
-        match_cliente_id: match.cliente_id,
-        match_proveedor_id: match.proveedor_id,
-        match_factura_id: match.factura_id || match.factura_compra_id,
-      } : movement),
-    }));
+    if (!window.confirm(`¿Conciliar esta línea del extracto con ${match.descripcion || match.tipo} del ${formatDate(match.fecha)}, por ${formatCurrency(Number(match.monto), moneda as "ARS" | "USD")}? Verificá que corresponda a la misma operación bancaria.`)) return;
+    try {
+      const { error } = await (supabase as any).rpc("conciliar_extracto_movimiento", {
+        p_sociedad_id: sociedadActiva.id,
+        p_extracto_id: extracto.id,
+        p_extracto_movimiento_id: row.id,
+        p_movimiento_id: match.id,
+        p_moneda: moneda,
+      });
+      if (error) throw error;
+      await fetchData();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : (error as { message?: string })?.message || "Error desconocido";
+      alert(`No se pudo conciliar el extracto: ${message}`);
+    }
   }
 
   function openGastoModal(gasto?: GastoFijo) {
@@ -1464,6 +1485,9 @@ export default function FinanzasPage() {
   useEffect(() => {
     if (!opModalOpen) return;
     if (!opForm.proveedor_id) { setOpProvCondicion(null); setOpFCPendientes([]); return; }
+    let cancelled = false;
+    setOpDatosError("");
+    setOpCondicionLoading(false);
     const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
     // Usar condicion_iva de la DB directamente (fuente de verdad)
     if (prov?.condicion_iva) {
@@ -1475,9 +1499,9 @@ export default function FinanzasPage() {
       setOpProvCondicion(null);
       fetch(`/api/cuit-lookup?cuit=${cuit}`)
         .then(r => r.json())
-        .then(data => { setOpProvCondicion(data.condicion_iva ?? ""); })
-        .catch(() => { setOpProvCondicion(null); })
-        .finally(() => setOpCondicionLoading(false));
+        .then(data => { if (!cancelled) setOpProvCondicion(data.condicion_iva ?? ""); })
+        .catch(() => { if (!cancelled) setOpProvCondicion(null); })
+        .finally(() => { if (!cancelled) setOpCondicionLoading(false); });
     } else {
       setOpProvCondicion(null);
     }
@@ -1489,27 +1513,31 @@ export default function FinanzasPage() {
         let q = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, subtotal, iva, percepciones, total, moneda")
           .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"]);
         if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
-        const { data } = await q;
+        const { data, error: fcLoadError } = await q;
+        if (fcLoadError) throw fcLoadError;
 
         // Pagos parciales previos: sumar montos ya pagados por FC via op_facturas_compra (excluir OPs anuladas)
         const fcIds = (data || []).map((fc: any) => fc.id);
         let pagadoPorFC: Record<string, number> = {};
         if (fcIds.length > 0) {
-          const { data: opfcData } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto, ordenes_pago(id, estado, sociedad_id)").in("factura_compra_id", fcIds);
+          const { data: opfcData, error: linkedLoadError } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto, ordenes_pago(id, estado, sociedad_id)").in("factura_compra_id", fcIds);
+          if (linkedLoadError) throw linkedLoadError;
           (opfcData || []).forEach((r: any) => {
             if (sociedadActiva?.id && r.ordenes_pago?.sociedad_id !== sociedadActiva.id) return;
             if (r.ordenes_pago?.estado === "anulada") return; // Skip anulada OPs
             pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto);
           });
-          let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, anulado")
+          let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado")
             .in("factura_compra_id", fcIds).eq("tipo", "pago");
           if (sociedadActiva?.id) qDirect = qDirect.eq("sociedad_id", sociedadActiva.id);
-          const { data: directData } = await qDirect;
+          const { data: directData, error: directLoadError } = await qDirect;
+          if (directLoadError) throw directLoadError;
           (directData || []).forEach((r: any) => {
-            if (!r.anulado) pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto || 0);
+            if (!r.anulado) pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto || 0) + Number(r.retencion_ganancias_monto || 0);
           });
         }
 
+        if (cancelled) return;
         setOpFCPendientes((data || []).map((fc: any) => {
           const pagado = pagadoPorFC[fc.id] || 0;
           const saldo = Math.max(0, Number(fc.total) - pagado);
@@ -1521,20 +1549,39 @@ export default function FinanzasPage() {
         // Se acumulan las bases sin IVA de OPs previas + retenciones ya practicadas
         // El acumulado de RG 830 corresponde al mes de la fecha de la OP.
         const mesActual = (opForm.fecha || new Date().toISOString().slice(0, 10)).slice(0, 7); // YYYY-MM
-        let qMensualOP = (supabase as any).from("ordenes_pago").select("base_retencion_ganancias, retencion_ganancias_monto")
+        const [year, month] = mesActual.split("-").map(Number);
+        const mesSiguiente = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+        let qMensualOP = (supabase as any).from("ordenes_pago").select("base_retencion_ganancias, retencion_ganancias_monto, moneda")
           .eq("proveedor_id", opForm.proveedor_id)
           .gte("fecha", `${mesActual}-01`)
+          .lt("fecha", mesSiguiente)
           .neq("estado", "anulada");
         if (sociedadActiva?.id) qMensualOP = qMensualOP.eq("sociedad_id", sociedadActiva.id);
-        const { data: mensualOPData } = await qMensualOP;
-        const basesMes = (mensualOPData || []).reduce((s: number, r: any) => s + Number(r.base_retencion_ganancias || 0), 0);
-        const retenidoMes = (mensualOPData || []).reduce((s: number, r: any) => s + Number(r.retencion_ganancias_monto || 0), 0);
+        const { data: mensualOPData, error: monthlyLoadError } = await qMensualOP;
+        if (monthlyLoadError) throw monthlyLoadError;
+        const { data: directMonthly, error: directMonthlyError } = await (supabase as any).from("movimientos")
+          .select("base_retencion_ganancias, retencion_ganancias_monto, moneda, anulado")
+          .eq("sociedad_id", sociedadActiva?.id).eq("proveedor_id", opForm.proveedor_id)
+          .eq("tipo", "pago").not("factura_compra_id", "is", null)
+          .gte("fecha", `${mesActual}-01`).lt("fecha", mesSiguiente);
+        if (directMonthlyError) throw directMonthlyError;
+        const monthPayments = [...(mensualOPData || []), ...(directMonthly || []).filter((m: any) => !m.anulado)];
+        if (monthPayments.some((m: any) => m.moneda !== "ARS")) throw new Error("El proveedor tiene pagos en otra moneda este mes: falta conciliar su base fiscal en pesos antes de calcular la retención.");
+        const basesMes = monthPayments.reduce((s: number, r: any) => s + Number(r.base_retencion_ganancias || 0), 0);
+        const retenidoMes = monthPayments.reduce((s: number, r: any) => s + Number(r.retencion_ganancias_monto || 0), 0);
+        if (cancelled) return;
         setOpMonthlyBase(basesMes);
         setOpMonthlyRetenido(retenidoMes);
-      } catch { setOpFCPendientes([]); }
-      finally { setOpFCLoading(false); }
+      } catch (error) {
+        if (!cancelled) {
+          setOpFCPendientes([]);
+          setOpDatosError("No se pudieron verificar saldos y retenciones anteriores. Cerrá y volvé a abrir la OP. " + (error instanceof Error ? error.message : "Revisá la conexión."));
+        }
+      }
+      finally { if (!cancelled) setOpFCLoading(false); }
     })();
-  }, [opForm.proveedor_id, opForm.fecha, opModalOpen]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; };
+  }, [opForm.proveedor_id, opForm.fecha, opModalOpen, sociedadActiva?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 2. Base sin IVA de esta OP (Art. 23 RG 830: IVA se excluye de la base de retención)
   const opMontoBrutoFC = opFCPendientes.filter(f => f.selected).reduce((s, f) => s + f.monto_a_pagar, 0);
@@ -1658,7 +1705,7 @@ export default function FinanzasPage() {
       formData.append("file", f);
       const res = await fetch("/api/parse-cobro", { method: "POST", body: formData });
       const json = await res.json();
-      if (!res.ok || !json.success) return;
+      if (!res.ok || !json.success) throw new Error(json.error || "No se pudo leer el comprobante. Podés completar los medios de pago manualmente.");
       const pagos: any[] = json.data.pagos || (json.data.tipo ? [json.data] : []);
       if (pagos.length === 0) return;
       const mapped: OpMedioPago[] = pagos.map(d => {
@@ -1674,38 +1721,61 @@ export default function FinanzasPage() {
         };
       });
       setOpMedios(prev => [...prev, ...mapped]);
-    } catch { /* noop */ }
-    setOpParsingCount(prev => prev - 1);
+    } catch (error) {
+      setOpError(error instanceof Error ? error.message : "No se pudo leer el comprobante. Completá los datos manualmente.");
+    } finally {
+      setOpParsingCount(prev => Math.max(0, prev - 1));
+    }
   }
 
   async function handleCreateOP() {
     if (!sociedadActiva?.id) { setOpError("No se pudo determinar la sociedad activa"); return; }
     if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
     const selectedFCs = opFCPendientes.filter(f => f.selected);
+    if (opDatosError) { setOpError(opDatosError); return; }
+    if (opFCLoading || opCondicionLoading || opParsingCount > 0) { setOpError("Esperá a que termine la carga de facturas, condición fiscal y comprobantes antes de generar la OP."); return; }
+    if (!opProvCondicion) { setOpError("Falta verificar la condición fiscal del proveedor. Completala en su ficha antes de generar la OP."); return; }
+    if (!["RI", "RESPONSABLE INSCRIPTO", "RESPONSABLE INSCRIPTO IVA", "MONOTRIBUTISTA", "MT", "EXENTO", "EX", "CONSUMIDOR FINAL", "CF", "NO RESPONSABLE"].includes(opProvCondicion.trim().toUpperCase())) {
+      setOpError("La condición fiscal del proveedor no está reconocida. Revisá su ficha antes de generar la OP."); return;
+    }
+    if (selectedFCs.some(f => f.moneda !== opForm.moneda) || opMedios.some(m => m.moneda !== opForm.moneda)) {
+      setOpError("Hay documentos o medios en otra moneda. No se puede sumar pesos y dólares sin conversión: esta OP debe tener todos sus importes en la misma moneda."); return;
+    }
+    if (selectedFCs.some(f => !Number.isFinite(f.monto_a_pagar) || f.monto_a_pagar <= 0 || f.monto_a_pagar > f.saldo_pendiente + 0.005)) {
+      setOpError("Revisá el importe a pagar de cada factura: debe ser positivo y no superar su saldo."); return;
+    }
     if (selectedFCs.length === 0 && !opForm.usar_monto_manual) { setOpError("Selecciona al menos una factura o ingresa un monto manual"); return; }
     if (opMontoBruto <= 0) { setOpError("El monto a pagar debe ser mayor a 0"); return; }
-    // Validate medios de pago total <= neto a pagar (permite pago parcial)
+    // Partial payments are selected per invoice BEFORE calculating retention.
+    // Never prorate the final retention: monthly thresholds are not linear.
     const totalMediosVal = opMedios.reduce((s, m) => s + m.monto, 0);
+    const selectedEcheqIds = opMedios.map(m => m.echeq_id).filter((id): id is string => Boolean(id));
+    if (new Set(selectedEcheqIds).size !== selectedEcheqIds.length) { setOpError("Un mismo e-cheq no puede usarse en dos medios de la OP"); return; }
+    if (opMedios.some(m => !Number.isFinite(m.monto) || m.monto < 0)) { setOpError("Los medios de pago no pueden tener importes negativos o inválidos"); return; }
     if (totalMediosVal <= 0) { setOpError("Ingresá al menos un medio de pago con monto mayor a 0"); return; }
-    if (totalMediosVal - opNetoAPagar > 1) { setOpError(`Los medios de pago ($${totalMediosVal.toLocaleString()}) superan el neto a pagar ($${opNetoAPagar.toLocaleString()})`); return; }
-    const esPagoParcial = opNetoAPagar - totalMediosVal > 1;
-    // En un pago parcial la OP debe representar lo efectivamente cancelado,
-    // no el total seleccionado en las facturas. Conservamos la proporción de
-    // retención y distribuimos el bruto efectivamente pagado en los vínculos.
-    const tasaRetencionEfectiva = opMontoBruto > 0 ? opRetencionGanancias / opMontoBruto : 0;
-    const montoBrutoEfectivo = esPagoParcial && tasaRetencionEfectiva < 1
-      ? totalMediosVal / (1 - tasaRetencionEfectiva)
-      : opMontoBruto;
-    const retencionEfectiva = esPagoParcial
-      ? Math.max(0, montoBrutoEfectivo - totalMediosVal)
-      : opRetencionGanancias;
-    const baseRetencionEfectiva = opMontoBruto > 0
-      ? opBaseSinIVA * (montoBrutoEfectivo / opMontoBruto)
-      : 0;
+    if (!Number.isFinite(opRetencionGanancias) || opRetencionGanancias < 0 || opRetencionGanancias > opMontoBruto) { setOpError("La retención debe estar entre cero y el importe bruto a pagar"); return; }
+    if (Math.round(totalMediosVal * 100) !== Math.round(opNetoAPagar * 100)) {
+      setOpError("Los medios deben sumar exactamente el neto a pagar. Para un pago parcial, modificá primero «A pagar» en cada factura; así se recalcula la retención sobre lo que realmente cancelás."); return;
+    }
+    const montoBrutoEfectivo = opMontoBruto;
+    const retencionEfectiva = opRetencionGanancias;
+    const baseRetencionEfectiva = opBaseSinIVA;
 
     setOpSaving(true);
     setOpError("");
+    let registeredOP: string | null = null;
     try {
+      if (selectedEcheqIds.length) {
+        const { data: availableEcheqs, error: echeqLoadError } = await (supabase as any).from("echeqs")
+          .select("id, estado, monto, moneda").eq("sociedad_id", sociedadActiva.id).in("id", selectedEcheqIds);
+        if (echeqLoadError) throw new Error(`No se pudo verificar la cartera de e-cheqs: ${echeqLoadError.message}`);
+        for (const medio of opMedios.filter(m => m.echeq_id)) {
+          const cheque = (availableEcheqs || []).find((item: any) => item.id === medio.echeq_id);
+          if (!cheque || cheque.estado !== "en_cartera" || cheque.moneda !== medio.moneda || Math.round(Number(cheque.monto) * 100) !== Math.round(medio.monto * 100)) {
+            throw new Error("Un e-cheq ya no está disponible o no coincide con el importe y moneda del medio. Actualizá la cartera antes de generar la OP");
+          }
+        }
+      }
       const provNombre = proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social ?? "";
       // Generate OP number
       let qLastOP = (supabase as any).from("ordenes_pago").select("numero").order("created_at", { ascending: false }).limit(1);
@@ -1734,7 +1804,9 @@ export default function FinanzasPage() {
         medio_pago: opMedios[0]?.tipo || "transferencia",
         medios_pago: JSON.stringify(opMedios.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco === "Otro" ? (m.banco_otro?.trim() || "Otro") : m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion, echeq_id: m.echeq_id }))),
         notas: opForm.notas,
-        estado: esPagoParcial ? "pendiente" : "pagada",
+        // The OP is paid in full for the chosen amount. Its invoices may still
+        // have a balance; marking the OP pending would allow paying it twice.
+        estado: "pagada",
         sobre_verde: opForm.sobre_verde || false,
       };
       if (profile?.id) insertData.created_by = profile.id;
@@ -1742,6 +1814,8 @@ export default function FinanzasPage() {
 
       const { data: opData, error } = await (supabase as any).from("ordenes_pago").insert(insertData).select("id").single();
       if (error) throw error;
+      registeredOP = opNumero;
+      const attachmentWarnings: string[] = [];
 
       // Upload comprobantes (multiple files)
       if (opFiles.length > 0 && opData?.id) {
@@ -1754,25 +1828,17 @@ export default function FinanzasPage() {
           if (!upErr) {
             const { data: urlData } = supabase.storage.from("comprobantes").getPublicUrl(filePath);
             archivosArr.push({ url: urlData.publicUrl, nombre: file.name });
-          }
+          } else attachmentWarnings.push(`${file.name}: ${upErr.message}`);
         }
         if (archivosArr.length > 0) {
           const updateData: Record<string, unknown> = { archivo_url: archivosArr[0].url, archivo_nombre: archivosArr[0].nombre };
-          if (archivosArr.length > 1) updateData.archivos = JSON.stringify(archivosArr);
-          // Keep the comprobante next to the payment medium it documents.
-          // The legacy OP-level fields remain populated for backwards compatibility.
-          const mediosConArchivo = opMedios.map((medio, index) => ({
-            tipo: medio.tipo, monto: medio.monto, fecha: medio.fecha,
-            banco: medio.banco === "Otro" ? (medio.banco_otro?.trim() || "Otro") : medio.banco,
-            numero_cheque: medio.numero_cheque, moneda: medio.moneda,
-            cotizacion: medio.cotizacion, echeq_id: medio.echeq_id,
-            comprobante_url: archivosArr[index]?.url,
-            comprobante_nombre: archivosArr[index]?.nombre,
-          }));
-          updateData.medios_pago = JSON.stringify(mediosConArchivo);
+          updateData.archivos = JSON.stringify(archivosArr);
+          // El formulario carga archivos de la OP sin asignación explícita a
+          // un medio. No inventar vínculos por posición ni tras fallos de carga.
           let opDocUpdate = (supabase as any).from("ordenes_pago").update(updateData).eq("id", opData.id);
           if (sociedadActiva?.id) opDocUpdate = opDocUpdate.eq("sociedad_id", sociedadActiva.id);
-          await opDocUpdate;
+          const { error: attachmentError } = await opDocUpdate;
+          if (attachmentError) attachmentWarnings.push(`No se pudo guardar la referencia de los archivos: ${attachmentError.message}`);
         }
       }
       setOpFiles([]);
@@ -1821,16 +1887,19 @@ export default function FinanzasPage() {
       // Mark echeqs used as endosado
       for (const m of opMedios) {
         if (m.echeq_id) {
-          let echeqUpdate = (supabase as any).from("echeqs").update({ estado: "endosado", destino_nombre: provNombre }).eq("id", m.echeq_id);
+          let echeqUpdate = (supabase as any).from("echeqs").update({ estado: "endosado", destino_nombre: provNombre }).eq("id", m.echeq_id).eq("estado", "en_cartera");
           if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
-          await echeqUpdate;
+          const { data: claimedEcheq, error: echeqError } = await echeqUpdate.select("id");
+          if (echeqError || claimedEcheq?.length !== 1) throw new Error(`No se pudo reservar el e-cheq ${m.numero_cheque || m.echeq_id}: ${echeqError?.message || "otro usuario cambió su estado"}. Revisá esta OP antes de entregarlo`);
         }
       }
 
       setOpModalOpen(false);
       await fetchData();
+      if (attachmentWarnings.length) alert(`${opNumero} registrada. Quedaron comprobantes pendientes de adjuntar desde el detalle de la OP:\n${attachmentWarnings.join("\n")}`);
     } catch (err: unknown) {
-      setOpError(err instanceof Error ? err.message : "Error al crear la OP");
+      const message = err instanceof Error ? err.message : "Error al crear la OP";
+      setOpError(registeredOP ? `${registeredOP} ya está registrada y necesita revisión: ${message}. No vuelvas a generar el pago.` : message);
     } finally {
       setOpSaving(false);
     }
@@ -2410,11 +2479,23 @@ export default function FinanzasPage() {
   async function handleRegistrarPagoParcialDirecto() {
     const selected = opFCPendientes.filter(f => f.selected);
     const fc = selected.length === 1 ? selected[0] : null;
-    const total = opMedios.reduce((sum, medio) => sum + Number(medio.monto || 0), 0);
+    const total = opMedios.reduce((sum, medio) => sum + Number(medio.monto), 0);
     if (!fc) { setOpError("Seleccioná una sola factura para registrar el pago parcial directo"); return; }
-    if (total <= 0) { setOpError("Ingresá un medio de pago con monto mayor a cero"); return; }
-    if (total >= fc.saldo_pendiente - 0.01) { setOpError("Este flujo es solo para un pago parcial; para cancelar el saldo usá Generar OP"); return; }
     if (!sociedadActiva?.id) { setOpError("No se pudo determinar la sociedad activa"); return; }
+    if (opDatosError) { setOpError(opDatosError); return; }
+    if (opFCLoading || opCondicionLoading || opParsingCount > 0) { setOpError("Esperá a que terminen de verificarse facturas, condición fiscal y comprobantes"); return; }
+    if (!opProvCondicion || !opForm.proveedor_id) { setOpError("Falta verificar la condición fiscal del proveedor"); return; }
+    const knownConditions = ["RI", "RESPONSABLE INSCRIPTO", "RESPONSABLE INSCRIPTO IVA", "MONOTRIBUTISTA", "MT", "EXENTO", "EX", "CONSUMIDOR FINAL", "CF", "NO RESPONSABLE"];
+    if (!knownConditions.includes(String(opProvCondicion).trim().toUpperCase())) { setOpError("La condición fiscal del proveedor no está reconocida. Revisá su ficha antes de registrar el pago"); return; }
+    if (opForm.moneda !== "ARS") { setOpError("El pago en dólares requiere registrar su conversión a pesos antes de calcular las retenciones"); return; }
+    if (opForm.usar_monto_manual) { setOpError("Para un pago parcial directo indicá el importe bruto en «A pagar» de la factura"); return; }
+    if (fc.moneda !== opForm.moneda || opMedios.some(m => m.moneda !== opForm.moneda)) { setOpError("La factura y todos los medios deben estar en la misma moneda"); return; }
+    const bruto = Number(fc.monto_a_pagar);
+    const retencion = Number(opRetencionGanancias);
+    if (!Number.isFinite(bruto) || bruto <= 0 || bruto >= fc.saldo_pendiente - 0.005) { setOpError("El importe bruto debe ser positivo y menor al saldo pendiente; para cancelarlo usá Generar OP"); return; }
+    if (!Number.isFinite(retencion) || retencion < 0 || retencion > bruto) { setOpError("La retención debe estar entre cero y el bruto a pagar"); return; }
+    if (opMedios.some(m => !Number.isFinite(Number(m.monto)) || Number(m.monto) < 0) || total <= 0) { setOpError("Ingresá medios de pago válidos, sin importes negativos"); return; }
+    if (Math.round(total * 100) !== Math.round((bruto - retencion) * 100)) { setOpError("Los medios deben sumar el neto: importe bruto «A pagar» menos la retención calculada"); return; }
     setOpSaving(true);
     setOpError("");
     try {
@@ -2423,68 +2504,35 @@ export default function FinanzasPage() {
         .eq("id", fc.id).eq("sociedad_id", sociedadActiva.id).single();
       if (freshError || !fresh) throw new Error("No se pudo verificar la factura de compra");
       if (fresh.proveedor_id !== opForm.proveedor_id) throw new Error("La factura no pertenece al proveedor seleccionado");
-      // Un pago directo sigue siendo un pago a efectos de RG 830. El importe
-      // ingresado es el neto que sale de caja; resolver el bruto en dos pasadas
-      // permite practicar la retención también cuando no se genera una OP.
-      const { data: provFiscal } = await (supabase as any).from("proveedores")
-        .select("condicion_iva, alicuota_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta")
-        .eq("id", fresh.proveedor_id).eq("sociedad_id", sociedadActiva.id).single();
-      const condicion = String(provFiscal?.condicion_iva || opProvCondicion || "").trim().toUpperCase();
-      const esRI = condicion === "RI" || condicion === "RESPONSABLE INSCRIPTO" || condicion === "RESPONSABLE INSCRIPTO IVA";
-      const fechaPago = opForm.fecha || todayAR();
-      const excluido = !!provFiscal?.exclusion_retencion
-        && (!provFiscal.exclusion_retencion_desde || provFiscal.exclusion_retencion_desde <= fechaPago)
-        && (!provFiscal.exclusion_retencion_hasta || provFiscal.exclusion_retencion_hasta >= fechaPago);
+      if (!["pendiente", "recibida"].includes(fresh.estado)) throw new Error("La factura cambió de estado. Reabrí el pago para verificar su saldo");
+      if (fresh.moneda !== opForm.moneda) throw new Error("La moneda de la factura cambió. Reabrí el pago");
       const ratioSinIVA = Number(fresh.total) > 0
-        ? (Number(fc.subtotal || 0) + Number(fc.percepciones || 0)) / Number(fresh.total)
-        : 0;
-      const pctGanancias = Number(provFiscal?.alicuota_ganancias ?? retencionConfig.tasa_ganancias_ri);
-      const mesInicio = `${fechaPago.slice(0, 7)}-01`;
-      const mesFin = new Date(`${mesInicio}T00:00:00`);
-      mesFin.setMonth(mesFin.getMonth() + 1);
-      let qMensual = (supabase as any).from("movimientos")
-        .select("base_retencion_ganancias, retencion_ganancias_monto, anulado")
-        .eq("proveedor_id", fresh.proveedor_id).eq("sociedad_id", sociedadActiva.id)
-        .eq("tipo", "pago").gte("fecha", mesInicio).lt("fecha", mesFin.toISOString().slice(0, 10));
-      const { data: movimientosMes } = await qMensual;
-      const baseMensualDirecta = (movimientosMes || []).filter((m: any) => !m.anulado)
-        .reduce((sum: number, m: any) => sum + Number(m.base_retencion_ganancias || 0), 0);
-      const retenidoMensualDirecto = (movimientosMes || []).filter((m: any) => !m.anulado)
-        .reduce((sum: number, m: any) => sum + Number(m.retencion_ganancias_monto || 0), 0);
-      let qOPMensual = (supabase as any).from("ordenes_pago")
-        .select("base_retencion_ganancias, retencion_ganancias_monto, estado")
-        .eq("proveedor_id", fresh.proveedor_id).eq("sociedad_id", sociedadActiva.id)
-        .gte("fecha", mesInicio).lt("fecha", mesFin.toISOString().slice(0, 10)).neq("estado", "anulada");
-      const { data: opMensual } = await qOPMensual;
-      const baseMensualOP = (opMensual || []).reduce((sum: number, op: any) => sum + Number(op.base_retencion_ganancias || 0), 0);
-      const retenidoMensualOP = (opMensual || []).reduce((sum: number, op: any) => sum + Number(op.retencion_ganancias_monto || 0), 0);
-      const baseMensual = baseMensualDirecta + baseMensualOP;
-      const retenidoMensual = retenidoMensualDirecto + retenidoMensualOP;
-      let retencion = 0;
-      let bruto = total;
-      if (esRI && !excluido && retencionConfig.aplica_ganancias && ratioSinIVA > 0) {
-        const calcular = (importeBruto: number) => {
-          const base = importeBruto * ratioSinIVA;
-          const acumulada = Math.max(0, baseMensual + base - retencionConfig.minimo_ganancias) * (pctGanancias / 100);
-          const importe = Math.max(0, acumulada - retenidoMensual);
-          return { base, importe: importe >= retencionConfig.minimo_retencion_ganancias ? importe : 0 };
-        };
-        const primera = calcular(total);
-        bruto = total + primera.importe;
-        const segunda = calcular(bruto);
-        retencion = Math.round(segunda.importe * 100) / 100;
-        bruto = total + retencion;
-      }
-      const { data: existing } = await (supabase as any).from("movimientos")
-        .select("monto, anulado").eq("factura_compra_id", fresh.id).eq("tipo", "pago").eq("sociedad_id", sociedadActiva.id);
-      const pagado = (existing || []).filter((p: any) => !p.anulado).reduce((sum: number, p: any) => sum + Number(p.monto || 0), 0);
-      if (pagado + bruto >= Number(fresh.total) - 0.01) throw new Error("El importe completa la factura; generá una OP para cancelar el saldo");
-      const { error } = await (supabase as any).from("movimientos").insert({
+        ? (Number(fresh.subtotal || 0) + Number(fresh.percepciones || 0)) / Number(fresh.total) : 0;
+      const base = Math.round(bruto * ratioSinIVA * 100) / 100;
+      if (!Number.isFinite(base) || Math.abs(base - opBaseSinIVA) > 0.005) throw new Error("La base de la factura cambió. Reabrí el pago para recalcular la retención");
+      const pctGanancias = opForm.aplica_ganancias ? Number(opForm.retencion_ganancias_pct) : 0;
+      const [{ data: existing, error: existingError }, { data: links, error: linksError }] = await Promise.all([
+        (supabase as any).from("movimientos").select("monto, retencion_ganancias_monto, anulado")
+          .eq("factura_compra_id", fresh.id).eq("tipo", "pago").eq("sociedad_id", sociedadActiva.id),
+        (supabase as any).from("op_facturas_compra").select("monto, ordenes_pago(id, estado, sociedad_id)")
+          .eq("factura_compra_id", fresh.id),
+      ]);
+      if (existingError || linksError) throw new Error("No se pudieron verificar los pagos previos. No se registró ningún pago");
+      // El movimiento directo guarda neto + retención en la misma fila. La
+      // fila separada de retención NO se suma otra vez; OP usa su vínculo bruto.
+      const pagadoDirecto = (existing || []).filter((p: any) => !p.anulado)
+        .reduce((sum: number, p: any) => sum + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0), 0);
+      if ((links || []).some((link: any) => !link.ordenes_pago || link.ordenes_pago.sociedad_id !== sociedadActiva.id)) throw new Error("No se pudo verificar la OP vinculada. Revisá el historial de la factura");
+      const pagadoOP = (links || []).filter((p: any) => p.ordenes_pago.estado !== "anulada")
+        .reduce((sum: number, p: any) => sum + Number(p.monto || 0), 0);
+      const saldoActual = Number(fresh.total) - pagadoDirecto - pagadoOP;
+      if (!Number.isFinite(saldoActual) || bruto >= saldoActual - 0.005) throw new Error("El importe completa o supera el saldo actual; reabrí la factura y generá una OP para cancelarlo");
+      const paymentRows: Record<string, unknown>[] = [{
         tipo: "pago",
         proveedor_id: fresh.proveedor_id,
         factura_compra_id: fresh.id,
         monto: total,
-        base_retencion_ganancias: bruto * ratioSinIVA,
+        base_retencion_ganancias: base,
         retencion_ganancias_pct: pctGanancias,
         retencion_ganancias_monto: retencion,
         moneda: fresh.moneda || opForm.moneda,
@@ -2493,19 +2541,20 @@ export default function FinanzasPage() {
         conciliado: true,
         sociedad_id: sociedadActiva.id,
         created_by: profile?.id || null,
-      });
-      if (error) throw error;
+      }];
       if (retencion > 0) {
-        const { error: retError } = await (supabase as any).from("movimientos").insert({
+        paymentRows.push({
           tipo: "retencion_ganancias", proveedor_id: fresh.proveedor_id, factura_compra_id: fresh.id,
           monto: retencion, moneda: fresh.moneda || opForm.moneda, fecha: opForm.fecha,
           descripcion: `Pago parcial directo — Ret. Ganancias — ${fresh.numero_factura || "FC"}`,
-          base_retencion_ganancias: bruto * ratioSinIVA, retencion_ganancias_pct: pctGanancias,
+          base_retencion_ganancias: base, retencion_ganancias_pct: pctGanancias,
           retencion_ganancias_monto: retencion, conciliado: true, sociedad_id: sociedadActiva.id,
           created_by: profile?.id || null,
         });
-        if (retError) throw retError;
       }
+      // Un INSERT con ambas filas es atómico: nunca queda solo pago o retención.
+      const { error } = await (supabase as any).from("movimientos").insert(paymentRows);
+      if (error) throw error;
       setOpModalOpen(false);
       setPagoParcialDirecto(false);
       setPagoParcialFCId(null);
@@ -4360,6 +4409,13 @@ export default function FinanzasPage() {
               <Upload className="mx-auto h-8 w-8 text-zinc-300" />
               <p className="mt-2 font-medium text-zinc-700 dark:text-zinc-300">Arrastra un extracto o hace click para subir</p>
               <p className="text-sm text-zinc-400">Formato admitido para carga automática: .csv</p>
+              <label className="mt-3 flex justify-center items-center gap-2 text-sm text-zinc-700 dark:text-zinc-300">
+                Moneda de la cuenta
+                <select value={extractoMoneda} disabled={extractoUploading} onChange={e => setExtractoMoneda(e.target.value as "ARS" | "USD" | "")}
+                  className="rounded-lg border border-zinc-300 bg-white px-3 py-2 dark:border-zinc-600 dark:bg-zinc-800">
+                  <option value="">Seleccionar…</option><option value="ARS">Pesos (ARS)</option><option value="USD">Dólares (USD)</option>
+                </select>
+              </label>
               <label className={`mt-3 inline-flex cursor-pointer items-center gap-2 rounded-lg bg-orange-500 px-5 py-2 text-sm font-medium text-white hover:bg-orange-600 ${extractoUploading ? "pointer-events-none opacity-60" : ""}`}>
                 {extractoUploading && <Loader2 className="h-4 w-4 animate-spin" />}
                 {extractoUploading ? "Procesando…" : "Seleccionar archivo"}
@@ -4983,6 +5039,7 @@ export default function FinanzasPage() {
               <button onClick={() => setOpModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
             </div>
             {opError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}
+            {opDatosError && <div role="alert" className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300">{opDatosError}</div>}
             {pagoParcialDirecto && <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300">Este pago se registra como movimiento directo contra una sola factura y no crea una Orden de Pago. Si corresponde, la retención RG 830 se calcula sobre este pago y queda registrada junto al movimiento.</div>}
             <div className="space-y-4">
               {/* Proveedor + Fecha */}
@@ -5087,7 +5144,7 @@ export default function FinanzasPage() {
               )}
 
               {/* ── Retención Ganancias ── */}
-              {!pagoParcialDirecto && opMontoBruto > 0 && (
+              {opMontoBruto > 0 && (
                 <div>
                   <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3 space-y-2">
                     <div className="flex items-center justify-between">

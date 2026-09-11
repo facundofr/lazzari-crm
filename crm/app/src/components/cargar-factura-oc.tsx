@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { X, Loader2, Sparkles, Check, Search, Plus, Trash2, Maximize2, Minimize2, AlertTriangle } from "lucide-react";
 import { formatCurrency, todayAR } from "@/lib/utils";
+import { reconcilePurchaseLines, purchaseLineKey, canonicalPurchaseInvoiceNumber, assertCompleteInvoiceOrderSelection, canMarkPurchaseOrdersPaid, type PurchaseLine } from "@/lib/purchase-invoice-reconciliation";
 import { supabase } from "@/lib/supabase/client";
 
 // ── Types ────────────────────────────────────────────────
@@ -24,6 +25,7 @@ interface ProveedorOption {
 }
 
 interface FCItem {
+  codigo?: string;
   tempId: string;
   descripcion: string;
   cantidad: number;
@@ -57,6 +59,7 @@ interface Props {
   profileId: string | null;
   ordenes: OCParaVincular[];
   preselectedOCId?: string;
+  initialImport?: { data: any; file: File };
   showTipoToggle?: boolean;
   onClose: () => void;
   onSuccess: () => void;
@@ -69,7 +72,7 @@ const itemNeto = (item: FCItem) => (
 );
 // ── Component ────────────────────────────────────────────
 export default function CargarFacturaOC({
-  sociedadId, profileId, ordenes, preselectedOCId, showTipoToggle, onClose, onSuccess,
+  sociedadId, profileId, ordenes, preselectedOCId, initialImport, showTipoToggle, onClose, onSuccess,
 }: Props) {
   const initialOC = preselectedOCId ? ordenes.find((oc) => oc.id === preselectedOCId) : undefined;
   // ── Form state ──
@@ -163,7 +166,7 @@ export default function CargarFacturaOC({
   const needsOverride = currencyMismatch;
   const alignmentBlocked = selectedOCs.length > 0 && (
     Boolean(alignmentError)
-    || (needsOverride && !overrideOC)
+    || currencyMismatch
   );
 
   async function fetchLinkedInvoicesForOCs(ids: string[]) {
@@ -182,15 +185,15 @@ export default function CargarFacturaOC({
       throw new Error("No se pudo verificar lo ya facturado para estas OC.");
     }
 
-    const byId = new Map<string, { total: number; moneda: string }>();
+    const byId = new Map<string, { id: string; estado: string; total: number; moneda: string }>();
     for (const link of junctionLinks || []) {
       const raw = Array.isArray(link.facturas_compra) ? link.facturas_compra[0] : link.facturas_compra;
       if (!raw || raw.sociedad_id !== sociedadId || raw.estado === "anulada" || byId.has(raw.id)) continue;
-      byId.set(raw.id, { total: Number(raw.total || 0) - Number(raw.percepciones || 0), moneda: raw.moneda || "ARS" });
+      byId.set(raw.id, { id: raw.id, estado: raw.estado, total: Number(raw.total || 0) - Number(raw.percepciones || 0), moneda: raw.moneda || "ARS" });
     }
     for (const raw of legacyInvoices || []) {
       if (!raw || raw.estado === "anulada" || byId.has(raw.id)) continue;
-      byId.set(raw.id, { total: Number(raw.total || 0) - Number(raw.percepciones || 0), moneda: raw.moneda || "ARS" });
+      byId.set(raw.id, { id: raw.id, estado: raw.estado, total: Number(raw.total || 0) - Number(raw.percepciones || 0), moneda: raw.moneda || "ARS" });
     }
     return Array.from(byId.values());
   }
@@ -336,6 +339,16 @@ export default function CargarFacturaOC({
 
       const d = json.data;
 
+      await applyImportedData(d);
+      setParsed(true);
+    } catch (err: any) {
+      setParseError(err.message || "Error al procesar");
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  async function applyImportedData(d: any) {
       // Detect nota de pedido → auto-set tipo manual + IVA 0%
       const rawTipo = (d.tipo_comprobante || "").toUpperCase().trim();
       const isNotaPedido = /NOTA\s*DE\s*PEDIDO|^NP$|^N\.?\s?P\.?$/.test(rawTipo) || (!d.cae && /PEDIDO|PRESUPUESTO|COTIZACI[OÓ]N|PROFORMA/.test(rawTipo));
@@ -367,6 +380,7 @@ export default function CargarFacturaOC({
       if (d.items && Array.isArray(d.items) && d.items.length > 0) {
         setItems(d.items.map((it: any, idx: number) => ({
           tempId: `ai-${Date.now()}-${idx}`,
+          codigo: it.codigo || "",
           descripcion: it.descripcion || "",
           cantidad: Number(it.cantidad) || 1,
           precio_unitario: Number(it.precio_unitario) || 0,
@@ -397,13 +411,13 @@ export default function CargarFacturaOC({
         }
       }
 
-      setParsed(true);
-    } catch (err: any) {
-      setParseError(err.message || "Error al procesar");
-    } finally {
-      setParsing(false);
-    }
+
   }
+  useEffect(() => {
+    if (!initialImport) return;
+    setFile(initialImport.file);
+    void applyImportedData(initialImport.data).then(() => setParsed(true)).catch(e => setParseError(e.message || "Error al importar"));
+  }, [initialImport?.file]);
 
   // ── Toggle OC ──
   function toggleOC(ocId: string) {
@@ -419,20 +433,23 @@ export default function CargarFacturaOC({
     const ids = Array.from(selectedOCIds);
     const { data: freshOCs, error: ocError } = await (supabase as any)
       .from("ordenes_compra")
-      .select("id, numero, total, moneda, sociedad_id, proveedor_id")
+      .select("id, numero, subtotal, iva, total, moneda, sociedad_id, proveedor_id, estado, observaciones, presupuesto_origen_id, orden_compra_items(id, orden_id, codigo, descripcion, cantidad, precio_unitario, iva_porcentaje, unidad)")
       .eq("sociedad_id", sociedadId)
       .in("id", ids);
     if (ocError || !freshOCs || freshOCs.length !== ids.length) {
       throw new Error("No se pudieron verificar los importes actuales de las OC. No se guardó nada.");
     }
 
+    if (freshOCs.some((oc: any) => oc.proveedor_id !== proveedorId || ["cancelada", "borrador"].includes(oc.estado))) {
+      throw new Error("Las OC deben estar activas y pertenecer al proveedor de la factura.");
+    }
     const currencies = new Set(freshOCs.map((oc: any) => oc.moneda));
-    if (!overrideOC && (currencies.size !== 1 || !currencies.has(moneda))) {
+    if (currencies.size !== 1 || !currencies.has(moneda)) {
       throw new Error(`La factura está en ${moneda} y las OC seleccionadas están en otra moneda.`);
     }
 
     const previousInvoices = await fetchLinkedInvoicesForOCs(ids);
-    if (!overrideOC && previousInvoices.some((invoice) => invoice.moneda !== moneda)) {
+    if (previousInvoices.some((invoice) => invoice.moneda !== moneda)) {
       throw new Error("Hay facturas anteriores vinculadas en otra moneda. Revisá la OC antes de continuar.");
     }
 
@@ -441,11 +458,12 @@ export default function CargarFacturaOC({
     const remaining = roundMoney(freshOCTotal - previousTotal);
     // Un excedente se registra en una OC abierta separada al guardar. No se
     // modifica la OC original ni se permite que el importe desaparezca.
-    return { remaining, partial: remaining - totalSinPercepciones > 0.01, freshOCs };
+    return { remaining, partial: remaining - totalSinPercepciones > 0.01, freshOCs, previousInvoices };
   }
 
   // ── Save ──
   async function handleSave() {
+    if (!sociedadId) { setError("Seleccioná una sociedad"); return; }
     if (!proveedorId) { setError("Seleccioná un proveedor"); return; }
     if (!numeroFactura.trim()) { setError("Ingresá el número de factura"); return; }
     if (subtotal <= 0) { setError("El subtotal debe ser mayor a 0"); return; }
@@ -454,26 +472,78 @@ export default function CargarFacturaOC({
 
     setSaving(true);
     setError("");
+    let savedFacturaId: string | null = null;
 
     try {
       // Evitar duplicar una factura del mismo proveedor y número dentro de la
       // sociedad antes de insertar y generar saldos/pagos duplicados.
       const normalizedNumero = numeroFactura.trim();
-      const { data: duplicateFactura, error: duplicateError } = await (supabase as any)
-        .from("facturas_compra")
-        .select("id, numero_factura, estado")
-        .eq("sociedad_id", sociedadId)
-        .eq("proveedor_id", proveedorId)
-        .eq("numero_factura", normalizedNumero)
-        .limit(1);
-      if (duplicateError) throw new Error(`No se pudo validar duplicados: ${duplicateError.message}`);
+      let duplicateFactura: any[] = [];
+      for (let offset = 0; ; offset += 500) {
+        const { data: providerFacturas, error: duplicateError } = await (supabase as any)
+          .from("facturas_compra").select("id, numero_factura, estado")
+          .eq("sociedad_id", sociedadId).eq("proveedor_id", proveedorId)
+          .order("id").range(offset, offset + 499);
+        if (duplicateError) throw new Error(`No se pudo validar duplicados: ${duplicateError.message}`);
+        duplicateFactura = (providerFacturas || []).filter((invoice: any) => canonicalPurchaseInvoiceNumber(invoice.numero_factura || "") === canonicalPurchaseInvoiceNumber(normalizedNumero));
+        if (duplicateFactura.length || (providerFacturas || []).length < 500) break;
+      }
       if (duplicateFactura?.length) {
         throw new Error(`La factura ${normalizedNumero} de este proveedor ya está cargada (estado ${duplicateFactura[0].estado || "registrada"}). Revisá antes de continuar.`);
       }
 
-      let alignmentResult: { remaining: number; partial: boolean; freshOCs: any[] } | null = null;
+      let alignmentResult: Awaited<ReturnType<typeof validateOCAlignmentLive>> | null = null;
       if (isMercaderia && selectedOCIds.size > 0) {
         alignmentResult = await validateOCAlignmentLive();
+      }
+
+      let reconciliation: ReturnType<typeof reconcilePurchaseLines> | null = null;
+      const verifiedPresupuestos = new Map<string, any>();
+      if (alignmentResult) {
+        const previousInvoices = await fetchLinkedInvoicesForOCs(Array.from(selectedOCIds));
+        let previousItems: PurchaseLine[] = [];
+        if (previousInvoices.length) {
+          const { data: previousOrders, error: previousOrdersError } = await (supabase as any).from("facturas_compra")
+            .select("id, numero_factura, orden_compra_id, ordenes_compra(numero), factura_compra_ocs(orden_compra_id, ordenes_compra(numero))")
+            .eq("sociedad_id", sociedadId).in("id", previousInvoices.map(i => i.id));
+          if (previousOrdersError) throw previousOrdersError;
+          assertCompleteInvoiceOrderSelection(Array.from(selectedOCIds), (previousOrders || []).flatMap((invoice: any) => [
+            { orden_compra_id: invoice.orden_compra_id, numero: invoice.ordenes_compra?.numero },
+            ...(invoice.factura_compra_ocs || []).map((link: any) => ({ orden_compra_id: link.orden_compra_id, numero: link.ordenes_compra?.numero })),
+          ]));
+          const { data, error: priorError } = await (supabase as any).from("facturas_compra_items")
+            .select("factura_compra_id, codigo, descripcion, cantidad, precio_unitario")
+            .eq("sociedad_id", sociedadId).in("factura_compra_id", previousInvoices.map(i => i.id));
+          if (priorError) throw priorError;
+          if (items.length > 0) {
+            const invoicesWithItems = new Set((data || []).map((it: any) => it.factura_compra_id));
+            const withoutItems = (previousOrders || []).filter((invoice: any) => !invoicesWithItems.has(invoice.id));
+            if (withoutItems.length) throw new Error(`Las facturas anteriores ${withoutItems.map((invoice: any) => invoice.numero_factura).join(", ")} no tienen detalle de artículos. Completá ese detalle antes de conciliar cantidades y generar una OC adicional. No se guardó nada.`);
+          }
+          previousItems = data || [];
+        }
+        reconciliation = reconcilePurchaseLines(alignmentResult.freshOCs.flatMap((oc: any) => oc.orden_compra_items || []), items, previousItems);
+        for (const oc of alignmentResult.freshOCs) {
+          const costChanges = reconciliation.costs.filter(change => change.line.orden_id === oc.id && Math.abs(Number(change.line.precio_unitario) - change.cost) >= 0.005);
+          if (!costChanges.length) continue;
+          if (!oc.presupuesto_origen_id && /Consolidado de|\[PR_ITEMS:/i.test(oc.observaciones || "")) {
+            throw new Error(`La OC ${oc.numero} consolida varios presupuestos y la factura modifica sus costos. Falta la distribución automática por presupuesto: conciliá primero los costos de esta OC y de sus PR de origen, y después cargá la factura. Esta factura no se guardó.`);
+          }
+          if (!oc.presupuesto_origen_id) continue;
+          const { data: pr, error: prError } = await (supabase as any).from("presupuestos")
+            .select("id, observaciones, presupuesto_items(id, codigo, descripcion, cantidad, precio_costo)")
+            .eq("id", oc.presupuesto_origen_id).eq("sociedad_id", sociedadId).single();
+          if (prError || !pr) throw new Error(`No se pudo comprobar el presupuesto de la OC ${oc.numero}. No se guardó la factura.`);
+          for (const change of costChanges) {
+            const matching = (pr.presupuesto_items || []).filter((it: PurchaseLine) => purchaseLineKey(it) === purchaseLineKey(change.line) || ((!it.codigo || !change.line.codigo) && purchaseLineKey({ ...it, codigo: null }) === purchaseLineKey({ ...change.line, codigo: null })));
+            if (matching.length !== 1) throw new Error(`El artículo «${change.line.descripcion}» no tiene una correspondencia única en el presupuesto de ${oc.numero}. Corregí el código o la vinculación antes de guardar la factura.`);
+          }
+          verifiedPresupuestos.set(pr.id, pr);
+        }
+        if (reconciliation.extras.length) {
+          const detail = reconciliation.extras.map(it => `${it.cantidad} ${it.unidad || "UN"} · ${it.descripcion}`).join("\n");
+          if (!window.confirm(`Estos artículos/cantidades no están pendientes en las OC seleccionadas y crearán una OC adicional sin presupuesto:\n\n${detail}\n\nConfirmá que la identificación de los artículos es correcta.`)) return;
+        }
       }
 
       // Insert FC
@@ -505,13 +575,14 @@ export default function CargarFacturaOC({
         .single();
 
       if (fcErr) throw new Error(fcErr.message);
+      savedFacturaId = fcData?.id || null;
 
       // Insert items
       if (items.length > 0 && fcData?.id) {
         const itemsInsert = items.map(it => ({
           factura_compra_id: fcData.id,
           producto_id: null,
-          codigo: null,
+          codigo: it.codigo || null,
           descripcion: it.descripcion,
           cantidad: it.cantidad,
           precio_unitario: it.precio_unitario,
@@ -536,172 +607,66 @@ export default function CargarFacturaOC({
         if (linkErr) throw new Error(linkErr.message);
       }
 
-      // Si el comprobante supera el saldo de la OC, la diferencia no se
-      // fuerza sobre la OC original ni sobre el presupuesto: queda como una
-      // OC abierta independiente para que Compras la revise y la asocie si
-      // corresponde. Esto evita perder el excedente o duplicar costos.
-      if (isMercaderia && alignmentResult && alignmentResult.remaining < totalSinPercepciones - 0.01) {
-        const excedente = roundMoney(totalSinPercepciones - alignmentResult.remaining);
-        const { data: extraOc, error: extraOcError } = await (supabase as any)
-          .from("ordenes_compra")
-          .insert({
-            proveedor_id: proveedorId,
-            fecha: todayAR(),
-            moneda,
-            estado: "pendiente",
-            subtotal: excedente,
-            iva: 0,
-            total: excedente,
-            observaciones: `OC abierta generada por excedente de FC ${numeroFactura.trim()}. Revisar y asociar manualmente si corresponde.`,
-            sociedad_id: sociedadId,
-            presupuesto_origen_id: null,
-            created_by: profileId,
-          })
-          .select("id")
-          .single();
-        if (extraOcError || !extraOc) throw new Error(extraOcError?.message || "No se pudo generar la OC abierta por excedente");
-        const { error: extraItemError } = await (supabase as any)
-          .from("orden_compra_items")
-          .insert({
-            orden_id: extraOc.id,
-            codigo: "",
-            descripcion: `Excedente FC ${numeroFactura.trim()} (revisión pendiente)`,
-            cantidad: 1,
-            cantidad_recibida: 0,
-            unidad: "UN",
-            precio_unitario: excedente,
-            iva_porcentaje: 0,
-            orden: 1,
+      // Los excedentes son artículos/cantidades reales, no diferencias de precio.
+      if (reconciliation?.extras.length && fcData?.id) {
+        const extraSubtotal = roundMoney(reconciliation.extras.reduce((sum, it) => sum + it.cantidad * it.precio_unitario, 0));
+        const extraIva = roundMoney(reconciliation.extras.reduce((sum, it) => sum + it.cantidad * it.precio_unitario * Number(it.iva_porcentaje ?? 21) / 100, 0));
+        const { data: extraOc, error: extraError } = await (supabase as any).from("ordenes_compra").insert({
+          proveedor_id: proveedorId, fecha, moneda, estado: "enviada", subtotal: extraSubtotal, iva: extraIva,
+          total: roundMoney(extraSubtotal + extraIva), sociedad_id: sociedadId, presupuesto_origen_id: null,
+          created_by: profileId, observaciones: `Artículos adicionales de FC ${numeroFactura.trim()}. Sin presupuesto asociado.`,
+        }).select("id").single();
+        if (extraError || !extraOc) throw new Error(extraError?.message || "No se pudo crear la OC adicional");
+        const { error: extraItemsError } = await (supabase as any).from("orden_compra_items").insert(
+          reconciliation.extras.map((it, index) => ({
+            orden_id: extraOc.id, codigo: it.codigo || null, descripcion: it.descripcion, cantidad: it.cantidad,
+            cantidad_recibida: 0, unidad: it.unidad || "UN", precio_unitario: it.precio_unitario,
+            iva_porcentaje: it.iva_porcentaje ?? 21, orden: index,
+          }))
+        );
+        if (extraItemsError) throw extraItemsError;
+        const { error: extraLinkError } = await (supabase as any).from("factura_compra_ocs")
+          .insert({ factura_compra_id: fcData.id, orden_compra_id: extraOc.id });
+        if (extraLinkError) throw extraLinkError;
+      }
+
+      // Actualizar costos por identidad de artículo, conservando cantidades y recepciones.
+      if (reconciliation && alignmentResult) {
+        for (const oc of alignmentResult.freshOCs) {
+          const changes = reconciliation.costs.filter(c => c.line.orden_id === oc.id);
+          if (!changes.length) continue;
+          const history: string[] = [];
+          for (const change of changes) {
+            if (Math.abs(Number(change.line.precio_unitario) - change.cost) < 0.005 && Number(change.line.iva_porcentaje ?? 21) === change.vat) continue;
+            const { error: updateError } = await (supabase as any).from("orden_compra_items")
+              .update({ precio_unitario: change.cost, iva_porcentaje: change.vat }).eq("id", change.line.id).eq("orden_id", oc.id);
+            if (updateError) throw updateError;
+            history.push(`${change.line.descripcion}: ${change.line.precio_unitario} → ${change.cost} ${moneda}`);
+          }
+          const orderItems = (oc.orden_compra_items || []).map((it: any) => {
+            const change = changes.find(c => c.line.id === it.id);
+            return change ? { ...it, precio_unitario: change.cost, iva_porcentaje: change.vat } : it;
           });
-        if (extraItemError) throw new Error(extraItemError.message);
-      }
-
-      // Override OC from FC: REPLACE OC items with FC items, update totals/moneda, cascade to PR
-      if (isMercaderia && overrideOC && selectedOCIds.size > 0 && items.length > 0) {
-        for (const ocId of Array.from(selectedOCIds)) {
-          // Save old OC items for PR cascade matching by position
-          const { data: oldOCItems } = await supabase
-            .from("orden_compra_items")
-            .select("id, descripcion, precio_unitario")
-            .eq("orden_id", ocId)
-            .order("orden");
-
-          // Delete ALL old OC items
-          await supabase.from("orden_compra_items").delete().eq("orden_id", ocId);
-
-          // Insert ALL FC items as new OC items
-          const newOCItems = items.map((fcItem, idx) => ({
-            orden_id: ocId,
-            codigo: "",
-            descripcion: fcItem.descripcion,
-            cantidad: fcItem.cantidad,
-            precio_unitario: fcItem.precio_unitario,
-            unidad: fcItem.unidad,
-            iva_porcentaje: fcItem.iva_porcentaje,
-            orden: idx + 1,
-            cantidad_recibida: 0,
-          }));
-          await supabase.from("orden_compra_items").insert(newOCItems as any);
-
-          // Update OC header totals + moneda
-          await (supabase as any)
-            .from("ordenes_compra")
-            .update({ subtotal, iva, total: subtotal + iva, moneda })
-            .eq("id", ocId);
-
-          // Cascade to presupuesto: update precio_costo by position
-          const { data: ocRow } = await supabase
-            .from("ordenes_compra")
-            .select("presupuesto_origen_id")
-            .eq("id", ocId)
-            .single();
-
-          if (ocRow?.presupuesto_origen_id) {
-            const prId = ocRow.presupuesto_origen_id;
-            const { data: prItems } = await supabase
-              .from("presupuesto_items")
-              .select("id, descripcion, precio_costo, orden")
-              .eq("presupuesto_id", prId)
-              .order("orden");
-
-            if (prItems && oldOCItems) {
-              // Match old OC items to PR items by description, then update PR with FC price + moneda
-              const oldItems = oldOCItems || [];
-              for (let i = 0; i < oldItems.length && i < items.length; i++) {
-                const oldDesc = (oldItems[i].descripcion || "").toLowerCase().trim();
-                const prItem = prItems.find((pr: any) => (pr.descripcion || "").toLowerCase().trim() === oldDesc);
-                if (prItem) {
-                  await supabase
-                    .from("presupuesto_items")
-                    .update({ precio_costo: items[i].precio_unitario, costo_moneda: moneda } as any)
-                    .eq("id", prItem.id);
-                }
-              }
+          const orderNet = roundMoney(orderItems.reduce((sum: number, it: any) => sum + Number(it.cantidad) * Number(it.precio_unitario), 0));
+          const orderVat = roundMoney(orderItems.reduce((sum: number, it: any) => sum + Number(it.cantidad) * Number(it.precio_unitario) * Number(it.iva_porcentaje ?? 21) / 100, 0));
+          const historyText = history.length ? `\n[${new Date().toLocaleString("es-AR")}] FC ${numeroFactura.trim()}: ${history.join("; ")}` : "";
+          const { error: headerError } = await (supabase as any).from("ordenes_compra")
+            .update({ subtotal: orderNet, iva: orderVat, total: roundMoney(orderNet + orderVat), observaciones: `${oc.observaciones || ""}${historyText}` })
+            .eq("id", oc.id).eq("sociedad_id", sociedadId);
+          if (headerError) throw headerError;
+          if (oc.presupuesto_origen_id && history.length) {
+            const pr = verifiedPresupuestos.get(oc.presupuesto_origen_id);
+            if (!pr) continue;
+            for (const change of changes) {
+              const matching = (pr?.presupuesto_items || []).filter((it: PurchaseLine) => purchaseLineKey(it) === purchaseLineKey(change.line) || ((!it.codigo || !change.line.codigo) && purchaseLineKey({ ...it, codigo: null }) === purchaseLineKey({ ...change.line, codigo: null })));
+              if (matching.length !== 1) continue;
+              const { error: costError } = await (supabase as any).from("presupuesto_items")
+                .update({ precio_costo: change.cost, costo_moneda: moneda }).eq("id", matching[0].id).eq("presupuesto_id", pr.id);
+              if (costError) throw costError;
             }
-          }
-        }
-      }
-
-      // Si la factura trae costos distintos, actualizar el costo de la OC y del
-      // PR asociado sin tocar el precio de venta. Se conserva cantidad/recepción
-      // de la OC; el detalle del cambio queda visible en observaciones.
-      if (isMercaderia && !overrideOC && selectedOCIds.size > 0 && items.length > 0) {
-        const stamp = new Date().toLocaleString("es-AR");
-        for (const ocId of Array.from(selectedOCIds)) {
-          const { data: ocRow, error: ocLoadError } = await (supabase as any)
-            .from("ordenes_compra")
-            .select("id, subtotal, iva, total, moneda, observaciones, presupuesto_origen_id")
-            .eq("id", ocId).single();
-          if (ocLoadError || !ocRow) throw new Error(ocLoadError?.message || "No se pudo leer la OC vinculada");
-          const { data: ocItems, error: itemsLoadError } = await (supabase as any)
-            .from("orden_compra_items")
-            .select("id, descripcion, precio_unitario, cantidad")
-            .eq("orden_id", ocId).order("orden");
-          if (itemsLoadError) throw new Error(itemsLoadError.message);
-          const changed: string[] = [];
-          for (let i = 0; i < Math.min((ocItems || []).length, items.length); i++) {
-            const oldItem = ocItems[i];
-            const newCost = roundMoney(Number(items[i].precio_unitario || 0));
-            if (Math.abs(Number(oldItem.precio_unitario || 0) - newCost) < 0.005) continue;
-            const { error: itemUpdateError } = await (supabase as any)
-              .from("orden_compra_items").update({ precio_unitario: newCost }).eq("id", oldItem.id);
-            if (itemUpdateError) throw new Error(itemUpdateError.message);
-            changed.push(`${oldItem.descripcion || `item ${i + 1}`}: ${oldItem.precio_unitario} → ${newCost} ${moneda}`);
-          }
-          // Para una sola OC, sus totales deben reflejar el comprobante. En
-          // facturas divididas se dejan los totales originales y se actualiza el
-          // costo de cada línea, evitando asignar todo el total a cada OC.
-          if (selectedOCIds.size === 1) {
-            const { error: headerUpdateError } = await (supabase as any)
-              .from("ordenes_compra").update({ subtotal, iva, total, moneda }).eq("id", ocId);
-            if (headerUpdateError) throw new Error(headerUpdateError.message);
-          }
-          if (changed.length > 0) {
-            const history = `\n[${stamp}] Costo actualizado desde FC ${numeroFactura.trim()}: ${changed.join("; ")}`;
-            const { error: ocHistoryError } = await (supabase as any)
-              .from("ordenes_compra").update({ observaciones: `${ocRow.observaciones || ""}${history}` }).eq("id", ocId);
-            if (ocHistoryError) throw new Error(ocHistoryError.message);
-
-            if (ocRow.presupuesto_origen_id) {
-              const { data: prRow } = await (supabase as any).from("presupuestos")
-                .select("observaciones").eq("id", ocRow.presupuesto_origen_id).single();
-              const { data: prItems } = await (supabase as any).from("presupuesto_items")
-                .select("id, descripcion, precio_costo").eq("presupuesto_id", ocRow.presupuesto_origen_id).order("orden");
-              for (let i = 0; i < Math.min((ocItems || []).length, items.length); i++) {
-                const oldItem = ocItems[i];
-                const prItem = (prItems || []).find((pr: any) =>
-                  String(pr.descripcion || "").trim().toLowerCase() === String(oldItem.descripcion || "").trim().toLowerCase()
-                ) || (prItems || [])[i];
-                if (!prItem) continue;
-                const { error: prCostError } = await (supabase as any).from("presupuesto_items")
-                  .update({ precio_costo: roundMoney(Number(items[i].precio_unitario || 0)), costo_moneda: moneda })
-                  .eq("id", prItem.id);
-                if (prCostError) throw new Error(prCostError.message);
-              }
-              await (supabase as any).from("presupuestos").update({
-                observaciones: `${prRow?.observaciones || ""}${history}`,
-              }).eq("id", ocRow.presupuesto_origen_id);
-            }
+            const { error: historyError } = await (supabase as any).from("presupuestos")
+              .update({ observaciones: `${pr.observaciones || ""}${historyText}` }).eq("id", pr.id).eq("sociedad_id", sociedadId);
+            if (historyError) throw historyError;
           }
         }
       }
@@ -714,14 +679,16 @@ export default function CargarFacturaOC({
           .from("facturas-compra")
           .upload(filePath, file, { upsert: true });
 
+        if (upErr) throw new Error(`No se pudo adjuntar el archivo: ${upErr.message}`);
         if (!upErr) {
           const { data: urlData } = supabase.storage
             .from("facturas-compra")
             .getPublicUrl(filePath);
           if (urlData?.publicUrl) {
-            await (supabase as any).from("facturas_compra")
+            const { error: attachmentError } = await (supabase as any).from("facturas_compra")
               .update({ archivo_url: urlData.publicUrl, archivo_nombre: file.name })
-              .eq("id", fcData.id);
+              .eq("id", fcData.id).eq("sociedad_id", sociedadId);
+            if (attachmentError) throw attachmentError;
           }
         }
       }
@@ -744,18 +711,24 @@ export default function CargarFacturaOC({
       }
 
       // If pagadaSinOP, mark linked OCs as completadas
-      if (pagadaSinOP && selectedOCIds.size > 0) {
+      const reconciledOrdersTotal = roundMoney((alignmentResult?.freshOCs || []).flatMap((oc: any) => oc.orden_compra_items || []).reduce((sum: number, it: any) => {
+        const change = reconciliation?.costs.find(c => c.line.id === it.id);
+        return sum + Number(it.cantidad) * (change?.cost ?? Number(it.precio_unitario)) * (1 + (change?.vat ?? Number(it.iva_porcentaje ?? 21)) / 100);
+      }, 0));
+      const previouslyInvoicedTotal = alignmentResult?.previousInvoices.reduce((sum, invoice) => sum + invoice.total, 0) || 0;
+      if (pagadaSinOP && selectedOCIds.size > 0 && alignmentResult && reconciliation?.allQuantitiesBilled && !reconciliation.extras.length && canMarkPurchaseOrdersPaid(alignmentResult.previousInvoices, roundMoney(reconciledOrdersTotal - previouslyInvoicedTotal), totalSinPercepciones)) {
         for (const ocId of Array.from(selectedOCIds)) {
-          await (supabase as any).from("ordenes_compra")
-            .update({ estado: "completada", pago: "tarjeta" })
-            .eq("id", ocId);
+          const { error: paymentError } = await (supabase as any).from("ordenes_compra")
+            .update({ estado_pago: "pagada", pago: "tarjeta" })
+            .eq("id", ocId).eq("sociedad_id", sociedadId);
+          if (paymentError) throw paymentError;
         }
       }
 
       alert(pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");
       onSuccess();
     } catch (err: any) {
-      setError(err.message || "Error al guardar");
+      setError(savedFacturaId ? `La factura ${numeroFactura} quedó registrada, pero falta completar una operación: ${err.message || "Error"}. Abrila desde Facturas de compra para revisarla; no vuelvas a cargarla.` : err.message || "Error al guardar");
     } finally {
       setSaving(false);
     }
@@ -1093,27 +1066,19 @@ export default function CargarFacturaOC({
                 </p>
                 {alignmentLoading ? (
                   <div className="flex items-center gap-2 rounded-lg bg-zinc-50 p-3 text-xs text-zinc-500 dark:bg-zinc-800"><Loader2 size={14} className="animate-spin" />Verificando importes ya facturados...</div>
-                ) : (alignmentBlocked || (needsOverride && overrideOC)) ? (
+                ) : alignmentBlocked ? (
                   <div className="space-y-2">
                     <div className={`flex items-start gap-2 rounded-lg border p-3 text-xs ${overrideOC ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300" : "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"}`}>
                       <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-                      <span>{alignmentError || (currencyMismatch ? `La factura está en ${moneda} y la OC en ${[...ocCurrencies].join("/")}. Activá la opción de abajo para actualizar la OC.` : `El comprobante supera el saldo de las OC en ${formatCurrency(Math.abs(alignmentDifference), moneda)}.`)}</span>
+                      <span>{alignmentError || (currencyMismatch ? `La factura está en ${moneda} y la OC en ${[...ocCurrencies].join("/")}. Corregí la moneda de la factura o de la OC antes de continuar.` : `El comprobante supera el saldo de las OC en ${formatCurrency(Math.abs(alignmentDifference), moneda)}.`)}</span>
                     </div>
-                    {needsOverride && !alignmentError && (
-                      <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 p-3 text-xs dark:border-orange-800 dark:bg-orange-950/30">
-                        <input type="checkbox" checked={overrideOC} onChange={(e) => setOverrideOC(e.target.checked)} className="mt-0.5 accent-orange-600" />
-                        <span>
-                          <strong className="text-orange-700 dark:text-orange-300">Actualizar OC desde esta factura</strong>
-                          <span className="block text-zinc-500 mt-0.5">Se actualizarán los items, totales{currencyMismatch ? ` y moneda (→ ${moneda})` : ""} de la OC. Los items que matcheen también actualizarán el precio de costo en el presupuesto.</span>
-                        </span>
-                      </label>
-                    )}
+
                   </div>
                 ) : Math.abs(alignmentDifference) <= 0.01 ? (
                   <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"><Check size={15} />Importe conciliado: comprobante y OC coinciden.</div>
                 ) : (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
-                    Factura parcial: después de guardarla quedarán {formatCurrency(alignmentDifference, moneda)} pendientes en la OC. Ya facturado: {formatCurrency(alreadyInvoiced, moneda)}.
+                    {alignmentDifference < 0 ? "El comprobante supera el importe actual de las OC. Se actualizarán los costos de artículos coincidentes; las cantidades adicionales crearán una OC independiente sin PR." : `Factura parcial: saldo estimado ${formatCurrency(alignmentDifference, moneda)}. Los costos finales se concilian al confirmar.`}
                   </div>
                 )}
               </div>

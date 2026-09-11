@@ -123,11 +123,12 @@ async function lookupDb(supabase: any, tipoDb: string, fecha: string) {
   return data;
 }
 
-async function lookupLatest(supabase: any, tipoDb: string) {
+async function lookupLatest(supabase: any, tipoDb: string, targetFecha: string) {
   const { data } = await supabase
     .from("cotizaciones_dolar")
     .select("fecha, tipo, valor_compra, valor_venta, fuente, es_manual")
     .eq("tipo", tipoDb)
+    .lte("fecha", targetFecha)
     .order("fecha", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -166,6 +167,12 @@ export async function GET(req: NextRequest) {
 
   const hoy = todayAR();
   const targetFecha = fechaParam || previousBusinessDay(hoy);
+  const validFecha = /^\d{4}-\d{2}-\d{2}$/.test(targetFecha)
+    && Number.isFinite(Date.parse(`${targetFecha}T12:00:00Z`))
+    && new Date(`${targetFecha}T12:00:00Z`).toISOString().slice(0, 10) === targetFecha;
+  if (!["divisas", "billetes"].includes(modalidad) || !validFecha || targetFecha > hoy) {
+    return NextResponse.json({ error: "Modalidad o fecha de cotización inválida." }, { status: 400 });
+  }
 
   // -- Buscar en DB primero (skip si force) --
   if (!forceRefresh) {
@@ -176,15 +183,20 @@ export async function GET(req: NextRequest) {
   // -- BNA Cotizador (distingue divisas vs billetes) --
   const bna = await scrapeBna(modalidad, targetFecha);
   if (bna) {
-    await upsertCotiz(supabase as any, targetFecha, tipoDb, bna.compra, bna.venta, "BNA");
-    return buildResponse(
-      { fecha: targetFecha, valor_compra: bna.compra, valor_venta: bna.venta, fuente: "BNA", es_manual: false },
-      modalidad, tipoDb, false
-    );
+    const fechaMatch = bna.fechaBna.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    const fechaReal = fechaMatch ? `${fechaMatch[3]}-${fechaMatch[2]}-${fechaMatch[1]}` : null;
+    // Nunca etiquetar como histórica una cotización que BNA devolvió para otro día.
+    if (fechaReal && fechaReal <= targetFecha) {
+      await upsertCotiz(supabase as any, fechaReal, tipoDb, bna.compra, bna.venta, "BNA");
+      return buildResponse(
+        { fecha: fechaReal, valor_compra: bna.compra, valor_venta: bna.venta, fuente: "BNA", es_manual: false },
+        modalidad, tipoDb, false, fechaReal !== targetFecha
+      );
+    }
   }
 
   // -- Fallback: DolarAPI / Bluelytics (solo para fecha actual, no distinguen divisas/billetes) --
-  if (targetFecha === hoy) {
+  if (targetFecha === hoy && modalidad === "billetes") {
     let fuente = "dolarapi";
     let fallback = await fetchDolarApi();
     if (!fallback) { fallback = await fetchBluelytics(); fuente = "bluelytics"; }
@@ -198,7 +210,7 @@ export async function GET(req: NextRequest) {
   }
 
   // -- Último valor en DB (stale) --
-  const ultimo = await lookupLatest(supabase as any, tipoDb);
+  const ultimo = await lookupLatest(supabase as any, tipoDb, targetFecha);
   if (ultimo) return buildResponse(ultimo, modalidad, tipoDb, true, true);
 
   return NextResponse.json(

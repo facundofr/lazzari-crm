@@ -1,0 +1,28 @@
+import fs from "node:fs";
+import vm from "node:vm";
+import assert from "node:assert/strict";
+import ts from "typescript";
+
+const source = fs.readFileSync(new URL("../src/lib/extracto-match.ts", import.meta.url), "utf8");
+const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } });
+const exports = {};
+vm.runInNewContext(compiled.outputText, { exports });
+const { canMatchBankMovement: match, bankMovementDirection: direction } = exports;
+const row = { tipo: "credito", monto: 100, fecha: "2026-09-11" };
+const movement = { tipo: "cobro", monto: 100, fecha: "2026-09-10", moneda: "ARS" };
+assert.equal(match(row, movement, "ARS"), true);
+assert.equal(match(row, { ...movement, moneda: "USD" }, "ARS"), false);
+assert.equal(match(row, { ...movement, moneda: undefined }, "ARS"), false);
+assert.equal(match(row, { ...movement, monto: 100.01 }, "ARS"), false);
+assert.equal(match(row, { ...movement, fecha: "2026-09-07" }, "ARS"), false);
+assert.equal(match(row, { ...movement, fecha: "invalid" }, "ARS"), false);
+assert.equal(match(row, { ...movement, anulado: true }, "ARS"), false);
+assert.equal(match(row, { ...movement, conciliado: true }, "ARS"), false);
+assert.equal(match(row, { ...movement, tipo: "pago" }, "ARS"), false);
+assert.equal(direction({ ...movement, tipo: "transferencia" }), null);
+assert.equal(direction({ ...movement, tipo: "transferencia", cliente_id: "client" }), "credito");
+assert.equal(direction({ ...movement, tipo: "transferencia", factura_compra_id: "purchase" }), "debito");
+assert.equal(direction({ ...movement, tipo: "transferencia", cliente_id: "client", proveedor_id: "supplier" }), null);
+assert.equal(direction({ ...movement, tipo: "efectivo" }), null);
+assert.equal(match({ ...row, tipo: "debito" }, { ...movement, tipo: "pago", factura_compra_id: "purchase" }, "ARS"), true);
+console.log("PASS: 15 extracto matching cases (currency, direction, amount, dates, void/reconciled and ambiguous transfers)");
