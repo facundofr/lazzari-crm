@@ -1169,7 +1169,9 @@ export default function FinanzasPage() {
 
   async function handleConciliar(id: string) {
     try {
-      const { error } = await supabase.from("movimientos").update({ conciliado: true }).eq("id", id);
+      let q = supabase.from("movimientos").update({ conciliado: true }).eq("id", id);
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await q;
       if (error) throw error;
       await fetchData();
     } catch (err) {
@@ -1196,7 +1198,7 @@ export default function FinanzasPage() {
         const { error } = await supabase.from("gastos_fijos").update({
           descripcion: gastoForm.descripcion, categoria: gastoForm.categoria,
           monto: gastoForm.monto, moneda: gastoForm.moneda, notas: gastoForm.notas,
-        } as any).eq("id", editingGasto.id);
+        } as any).eq("id", editingGasto.id).eq("sociedad_id" as any, sociedadActiva?.id);
         if (error) throw error;
       } else {
         const { error } = await supabase.from("gastos_fijos").insert({
@@ -1218,7 +1220,9 @@ export default function FinanzasPage() {
 
   async function handleToggleGasto(id: string, activo: boolean) {
     try {
-      const { error } = await supabase.from("gastos_fijos").update({ activo: !activo } as any).eq("id", id);
+      let q = supabase.from("gastos_fijos").update({ activo: !activo } as any).eq("id", id);
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await q;
       if (error) throw error;
       await fetchData();
     } catch (err) {
@@ -1229,7 +1233,9 @@ export default function FinanzasPage() {
   async function handleDeleteGasto(id: string) {
     if (!confirm("Seguro que queres eliminar este gasto fijo?")) return;
     try {
-      const { error } = await supabase.from("gastos_fijos").delete().eq("id", id);
+      let q = supabase.from("gastos_fijos").delete().eq("id", id);
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await q;
       if (error) throw error;
       await fetchData();
     } catch (err) {
@@ -1593,7 +1599,9 @@ export default function FinanzasPage() {
             comprobante_nombre: archivosArr[index]?.nombre,
           }));
           updateData.medios_pago = JSON.stringify(mediosConArchivo);
-          await (supabase as any).from("ordenes_pago").update(updateData).eq("id", opData.id);
+          let opDocUpdate = (supabase as any).from("ordenes_pago").update(updateData).eq("id", opData.id);
+          if (sociedadActiva?.id) opDocUpdate = opDocUpdate.eq("sociedad_id", sociedadActiva.id);
+          await opDocUpdate;
         }
       }
       setOpFiles([]);
@@ -1854,7 +1862,9 @@ export default function FinanzasPage() {
       const { data: urlData } = supabase.storage.from("certificados").getPublicUrl(path);
       const publicUrl = urlData?.publicUrl;
       if (publicUrl) {
-        await (supabase as any).from("ordenes_pago").update({ certificado_retencion_url: publicUrl }).eq("id", opId);
+        let certUpdate = (supabase as any).from("ordenes_pago").update({ certificado_retencion_url: publicUrl }).eq("id", opId);
+        if (sociedadActiva?.id) certUpdate = certUpdate.eq("sociedad_id", sociedadActiva.id);
+        await certUpdate;
         // Update local state
         setOrdenesPago(prev => prev.map(o => o.id === opId ? { ...o, certificado_retencion_url: publicUrl } : o));
         if (selectedOP?.id === opId) setSelectedOP(prev => prev ? { ...prev, certificado_retencion_url: publicUrl } : null);
@@ -1932,7 +1942,9 @@ export default function FinanzasPage() {
 
       if (gmEditingId) {
         // Update existing gasto
-        const { error } = await (supabase as any).from("gastos_manuales").update(payload).eq("id", gmEditingId);
+        let gmUpdate = (supabase as any).from("gastos_manuales").update(payload).eq("id", gmEditingId);
+        if (sociedadActiva?.id) gmUpdate = gmUpdate.eq("sociedad_id", sociedadActiva.id);
+        const { error } = await gmUpdate;
         if (error) throw error;
       } else {
         // Insert new gasto
@@ -1976,7 +1988,9 @@ export default function FinanzasPage() {
   async function handleDeleteGM(id: string) {
     if (!confirm("¿Seguro que queres eliminar este gasto?")) return;
     try {
-      const { error } = await (supabase as any).from("gastos_manuales").delete().eq("id", id);
+      let gmDelete = (supabase as any).from("gastos_manuales").delete().eq("id", id);
+      if (sociedadActiva?.id) gmDelete = gmDelete.eq("sociedad_id", sociedadActiva.id);
+      const { error } = await gmDelete;
       if (error) throw error;
       await fetchData();
     } catch (err) { alert("Error eliminando gasto: " + (err instanceof Error ? err.message : String(err))); }
@@ -2158,7 +2172,9 @@ export default function FinanzasPage() {
         const { error: upErr } = await supabase.storage.from("facturas-compra").upload(filePath, fcFile, { upsert: true });
         if (!upErr) {
           const { data: urlData } = supabase.storage.from("facturas-compra").getPublicUrl(filePath);
-          await (supabase as any).from("facturas_compra").update({ archivo_url: urlData.publicUrl, archivo_nombre: fcFile.name }).eq("id", fcData.id);
+          let fcFileUpdate = (supabase as any).from("facturas_compra").update({ archivo_url: urlData.publicUrl, archivo_nombre: fcFile.name }).eq("id", fcData.id);
+          if (sociedadActiva?.id) fcFileUpdate = fcFileUpdate.eq("sociedad_id", sociedadActiva.id);
+          await fcFileUpdate;
         }
         setFcUploading(false);
       }
@@ -2192,7 +2208,9 @@ export default function FinanzasPage() {
   async function handleDeleteFC(id: string) {
     if (!confirm("¿Seguro que querés eliminar esta factura de compra?")) return;
     try {
-      const { error } = await (supabase as any).from("facturas_compra").delete().eq("id", id);
+      let fcDelete = (supabase as any).from("facturas_compra").delete().eq("id", id);
+      if (sociedadActiva?.id) fcDelete = fcDelete.eq("sociedad_id", sociedadActiva.id);
+      const { error } = await fcDelete;
       if (error) throw error;
       await fetchData();
     } catch (err) { console.error("Error eliminando FC:", err); alert("Error al eliminar FC: " + (err instanceof Error ? err.message : String(err))); }
@@ -2339,7 +2357,9 @@ export default function FinanzasPage() {
   async function handleAnularFC(id: string) {
     if (!confirm("¿Seguro que querés anular esta factura?")) return;
     try {
-      const { error } = await (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id);
+    let fcAnular = (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id);
+    if (sociedadActiva?.id) fcAnular = fcAnular.eq("sociedad_id", sociedadActiva.id);
+    const { error } = await fcAnular;
       if (error) throw error;
       await fetchData();
     } catch (err) { console.error("Error anulando FC:", err); alert("Error al anular FC: " + (err instanceof Error ? err.message : String(err))); }
@@ -2348,7 +2368,9 @@ export default function FinanzasPage() {
   async function handleRecibirFC(id: string) {
     try {
       // FC de compra NO mueve stock — stock solo lo mueven las OC y las ventas
-      const { error: updErr } = await (supabase as any).from("facturas_compra").update({ estado: "recibida" }).eq("id", id);
+      let fcReceive = (supabase as any).from("facturas_compra").update({ estado: "recibida" }).eq("id", id);
+      if (sociedadActiva?.id) fcReceive = fcReceive.eq("sociedad_id", sociedadActiva.id);
+      const { error: updErr } = await fcReceive;
       if (updErr) throw updErr;
       alert("FC marcada como recibida");
       await fetchData();
@@ -2687,7 +2709,9 @@ export default function FinanzasPage() {
     const label = nuevoEstado === "pendiente" ? "Pendiente" : nuevoEstado === "pagada" ? "Pagada" : nuevoEstado === "anulada" ? "Anulada" : nuevoEstado === "recibida" ? "Recibida" : nuevoEstado;
     if (!confirm(`¿Cambiar ${fcSelectedIds.size} factura${fcSelectedIds.size > 1 ? "s" : ""} de compra a "${label}"?`)) return;
     try {
-      const { error } = await (supabase as any).from("facturas_compra").update({ estado: nuevoEstado }).in("id", Array.from(fcSelectedIds));
+      let bulkFC = (supabase as any).from("facturas_compra").update({ estado: nuevoEstado }).in("id", Array.from(fcSelectedIds));
+      if (sociedadActiva?.id) bulkFC = bulkFC.eq("sociedad_id", sociedadActiva.id);
+      const { error } = await bulkFC;
       if (error) { alert(error.message); return; }
       setFcSelectedIds(new Set());
       await fetchData();
@@ -2794,7 +2818,9 @@ export default function FinanzasPage() {
       } else if (action === "rechazar") {
         updates.estado = "rechazado";
       }
-      const { error } = await (supabase as any).from("echeqs").update(updates).eq("id", echeq.id);
+      let echeqUpdate = (supabase as any).from("echeqs").update(updates).eq("id", echeq.id);
+      if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
+      const { error } = await echeqUpdate;
       if (error) throw error;
       setSelectedEcheq(null); setEcheqActionModal(null); setEcheqDestinoId(""); setEcheqDestinoNombre(""); setEcheqProvSearch("");
       await fetchData();
@@ -2804,7 +2830,7 @@ export default function FinanzasPage() {
 
   async function handleDeleteEcheq(id: string) {
     if (!confirm("¿Seguro que querés eliminar este cheque?")) return;
-    try { const { error } = await (supabase as any).from("echeqs").delete().eq("id", id); if (error) throw error; await fetchData(); }
+    try { let echeqDelete = (supabase as any).from("echeqs").delete().eq("id", id); if (sociedadActiva?.id) echeqDelete = echeqDelete.eq("sociedad_id", sociedadActiva.id); const { error } = await echeqDelete; if (error) throw error; await fetchData(); }
     catch (err) { console.error(err); alert("Error al eliminar cheque: " + (err as any)?.message); }
   }
 
@@ -5367,7 +5393,9 @@ export default function FinanzasPage() {
                 )}
                 {selectedFC.estado === "pendiente_aprobacion" && (
                   <button onClick={async () => {
-                    const { error } = await (supabase as any).from("facturas_compra").update({ estado: "pendiente" }).eq("id", selectedFC.id);
+                    let approveFC = (supabase as any).from("facturas_compra").update({ estado: "pendiente" }).eq("id", selectedFC.id);
+                    if (sociedadActiva?.id) approveFC = approveFC.eq("sociedad_id", sociedadActiva.id);
+                    const { error } = await approveFC;
                     if (error) { alert("Error al aprobar: " + error.message); return; }
                     setSelectedFC({ ...selectedFC, estado: "pendiente" });
                     setFacturasCompra(prev => prev.map(f => f.id === selectedFC.id ? { ...f, estado: "pendiente" } : f));
@@ -5989,10 +6017,12 @@ export default function FinanzasPage() {
         onSuccess={async () => {
           const sentAt = new Date().toISOString();
           const ordenPagoId = emailModal.id;
-          const { error } = await (supabase as any)
+          let emailUpdate = (supabase as any)
             .from("ordenes_pago")
             .update({ email_enviado_at: sentAt })
             .eq("id", ordenPagoId);
+          if (sociedadActiva?.id) emailUpdate = emailUpdate.eq("sociedad_id", sociedadActiva.id);
+          const { error } = await emailUpdate;
           if (error) {
             alert(`El email se envió, pero no se pudo guardar la marca de envío: ${error.message}`);
             return;
