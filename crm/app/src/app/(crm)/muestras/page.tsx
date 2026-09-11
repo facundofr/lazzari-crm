@@ -113,9 +113,13 @@ export default function MuestrasPage() {
       if (firstError) throw firstError;
       setProductos(prodRes.data || []);
       setEnvios(envRes.data || []);
-      setItems(itemRes.data || []);
+      // Los items y sucursales no tienen sociedad_id propio: se restringen
+      // por sus entidades padre para no mezclar sociedades.
+      const envioIds = new Set((envRes.data || []).map((envio: any) => envio.id));
+      const clienteIds = new Set((cliRes.data || []).map((cliente: any) => cliente.id));
+      setItems((itemRes.data || []).filter((item: any) => envioIds.has(item.envio_id)));
       setClientes(cliRes.data || []);
-      setSucursales(sucRes.data || []);
+      setSucursales((sucRes.data || []).filter((sucursal: any) => clienteIds.has(sucursal.cliente_id)));
     } catch (error: any) {
       console.error("Error cargando muestras:", error);
       toast.error(`No se pudieron cargar las muestras: ${error.message}`);
@@ -196,7 +200,7 @@ export default function MuestrasPage() {
     if (!confirm(`¿Eliminar ${envio.numero}? Las prendas volverán a quedar disponibles.`)) return;
     setSaving(true);
     try {
-      const { error } = await (supabase as any).from("muestra_envios").delete().eq("id", envio.id);
+      const { error } = await (supabase as any).from("muestra_envios").delete().eq("id", envio.id).eq("sociedad_id", sociedadId);
       if (error) throw error;
       setSelectedEnvio(null);
       setPanelFullscreen(false);
@@ -236,7 +240,7 @@ export default function MuestrasPage() {
         created_by: profile?.id || null,
       };
       const mutation = editingProductoId
-        ? (supabase as any).from("muestra_productos").update({ ...payload, created_by: undefined }).eq("id", editingProductoId)
+        ? (supabase as any).from("muestra_productos").update({ ...payload, created_by: undefined }).eq("id", editingProductoId).eq("sociedad_id", sociedadId)
         : (supabase as any).from("muestra_productos").insert(payload);
       const { error } = await mutation;
       if (error) throw error;
@@ -312,7 +316,7 @@ export default function MuestrasPage() {
       setEnvioModal(false);
       await fetchData();
     } catch (error: any) {
-      if (envioId) await (supabase as any).from("muestra_envios").delete().eq("id", envioId);
+      if (envioId) await (supabase as any).from("muestra_envios").delete().eq("id", envioId).eq("sociedad_id", sociedadId);
       toast.error(`No se pudo registrar el envío: ${error.message}`);
     } finally {
       setSaving(false);
@@ -325,7 +329,7 @@ export default function MuestrasPage() {
     setSaving(true);
     try {
       const { error } = await (supabase as any).from("muestra_envio_items")
-        .update({ cantidad_devuelta: item.cantidad_devuelta + cantidad }).eq("id", item.id);
+        .update({ cantidad_devuelta: item.cantidad_devuelta + cantidad }).eq("id", item.id).eq("envio_id", item.envio_id);
       if (error) throw error;
 
       const nextItems = envioItems(item.envio_id).map((current) => current.id === item.id
@@ -334,7 +338,7 @@ export default function MuestrasPage() {
       const total = nextItems.reduce((sum, current) => sum + current.cantidad, 0);
       const devuelto = nextItems.reduce((sum, current) => sum + current.cantidad_devuelta, 0);
       const estado = devuelto === total ? "devuelto" : devuelto > 0 ? "parcial" : "en_cliente";
-      const { error: envioError } = await (supabase as any).from("muestra_envios").update({ estado }).eq("id", item.envio_id);
+      const { error: envioError } = await (supabase as any).from("muestra_envios").update({ estado }).eq("id", item.envio_id).eq("sociedad_id", sociedadId);
       if (envioError) throw envioError;
 
       setReturnDraft((prev) => ({ ...prev, [item.id]: 0 }));
