@@ -1105,6 +1105,7 @@ export default function FinanzasPage() {
   }, [selectedFC?.id]);
 
   async function handleCreateMov() {
+    if (!sociedadActiva?.id) { setFormError("No se pudo determinar la sociedad activa"); return; }
     if (!movForm.descripcion.trim()) { setFormError("La descripcion es obligatoria"); return; }
     if (movForm.monto <= 0) { setFormError("El monto debe ser mayor a 0"); return; }
     if (!movForm.cliente_id && !movForm.proveedor_id) { setFormError("Debe seleccionar un cliente o proveedor"); return; }
@@ -1117,7 +1118,7 @@ export default function FinanzasPage() {
         monto: movForm.monto,
         moneda: movForm.moneda,
         fecha: movForm.fecha,
-        sociedad_id: sociedadActiva?.id || null,
+        sociedad_id: sociedadActiva.id,
       };
       if (movForm.cliente_id) insertData.cliente_id = movForm.cliente_id;
       if (movForm.proveedor_id) insertData.proveedor_id = movForm.proveedor_id;
@@ -1151,13 +1152,14 @@ export default function FinanzasPage() {
   }
 
   async function handleSaveSaldoCaja(moneda: string) {
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     const monto = Number(editingSaldoVal);
     if (isNaN(monto)) { setEditingSaldo(null); return; }
     const mesActual = new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires", year: "numeric", month: "2-digit" }).slice(0, 7);
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id || null;
       const { error } = await (supabase as any).from("saldos_caja").upsert({
-        sociedad_id: sociedadActiva?.id,
+        sociedad_id: sociedadActiva.id,
         mes: mesActual,
         moneda,
         monto,
@@ -1175,6 +1177,7 @@ export default function FinanzasPage() {
   }
 
   async function handleConciliar(id: string) {
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
       let q = supabase.from("movimientos").update({ conciliado: true }).eq("id", id);
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
@@ -1198,6 +1201,7 @@ export default function FinanzasPage() {
   }
 
   async function handleSaveGasto() {
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     if (!gastoForm.descripcion.trim() || gastoForm.monto <= 0) return;
     setGastoSaving(true);
     try {
@@ -1211,7 +1215,7 @@ export default function FinanzasPage() {
         const { error } = await supabase.from("gastos_fijos").insert({
           descripcion: gastoForm.descripcion, categoria: gastoForm.categoria,
           monto: gastoForm.monto, moneda: gastoForm.moneda, notas: gastoForm.notas,
-          ...(sociedadActiva?.id ? { sociedad_id: sociedadActiva.id } : {}),
+          sociedad_id: sociedadActiva.id,
         } as any);
         if (error) throw error;
       }
@@ -1226,6 +1230,7 @@ export default function FinanzasPage() {
   }
 
   async function handleToggleGasto(id: string, activo: boolean) {
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
       let q = supabase.from("gastos_fijos").update({ activo: !activo } as any).eq("id", id);
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
@@ -1239,6 +1244,7 @@ export default function FinanzasPage() {
 
   async function handleDeleteGasto(id: string) {
     if (!confirm("Seguro que queres eliminar este gasto fijo?")) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
       let q = supabase.from("gastos_fijos").delete().eq("id", id);
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
@@ -1252,6 +1258,7 @@ export default function FinanzasPage() {
 
   async function handleDeleteMov(id: string) {
     if (!confirm("¿Seguro que queres eliminar este movimiento?")) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
       const { error } = await (supabase as any).rpc("gestionar_cobro", {
         p_movimiento_id: id,
@@ -1516,6 +1523,7 @@ export default function FinanzasPage() {
   }
 
   async function handleCreateOP() {
+    if (!sociedadActiva?.id) { setOpError("No se pudo determinar la sociedad activa"); return; }
     if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
     const selectedFCs = opFCPendientes.filter(f => f.selected);
     if (selectedFCs.length === 0 && !opForm.usar_monto_manual) { setOpError("Selecciona al menos una factura o ingresa un monto manual"); return; }
@@ -1574,7 +1582,7 @@ export default function FinanzasPage() {
         sobre_verde: opForm.sobre_verde || false,
       };
       if (profile?.id) insertData.created_by = profile.id;
-      if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
+      insertData.sociedad_id = sociedadActiva.id;
 
       const { data: opData, error } = await (supabase as any).from("ordenes_pago").insert(insertData).select("id").single();
       if (error) throw error;
@@ -1674,6 +1682,7 @@ export default function FinanzasPage() {
 
   async function handleAnularOP(id: string) {
     if (!confirm("¿Seguro que queres anular esta orden de pago?")) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
       // Get OP details for movimiento cleanup
       let opQuery = (supabase as any).from("ordenes_pago").select("numero, proveedor_id").eq("id", id);
@@ -1735,6 +1744,7 @@ export default function FinanzasPage() {
   }
 
   async function handlePagarOP(id: string) {
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
       let opUpdate = (supabase as any).from("ordenes_pago").update({ estado: "pagada" }).eq("id", id);
       if (sociedadActiva?.id) opUpdate = opUpdate.eq("sociedad_id", sociedadActiva.id);
@@ -1915,6 +1925,7 @@ export default function FinanzasPage() {
   }
 
   async function handleCreateGM() {
+    if (!sociedadActiva?.id) { setGmError("No se pudo determinar la sociedad activa"); return; }
     if (!gmForm.descripcion.trim()) { setGmError("La descripcion es obligatoria"); return; }
     if (gmForm.monto <= 0) { setGmError("El monto debe ser mayor a 0"); return; }
     setGmSaving(true);
@@ -1955,7 +1966,7 @@ export default function FinanzasPage() {
         if (error) throw error;
       } else {
         // Insert new gasto
-        if (sociedadActiva?.id) payload.sociedad_id = sociedadActiva.id;
+        payload.sociedad_id = sociedadActiva.id;
         if (profile?.id) payload.created_by = profile.id;
         const { error } = await (supabase as any).from("gastos_manuales").insert(payload);
         if (error) throw error;
@@ -2094,6 +2105,7 @@ export default function FinanzasPage() {
   }
 
   async function handleCreateFC() {
+    if (!sociedadActiva?.id) { setFcError("No se pudo determinar la sociedad activa"); return; }
     if (!fcForm.proveedor_id) { setFcError("Seleccioná un proveedor o elegí 'Cargar sin proveedor'"); return; }
     if (!fcForm.numero_factura.trim()) { setFcError("El número de factura es obligatorio"); return; }
     if (fcForm.subtotal <= 0) { setFcError("El subtotal debe ser mayor a 0"); return; }
@@ -2146,7 +2158,7 @@ export default function FinanzasPage() {
       if (fcForm.percepciones_detalle.length > 0) insertData.percepciones_detalle = JSON.stringify(fcForm.percepciones_detalle);
       if (fcForm.costo_real > 0) insertData.costo_real = fcForm.costo_real;
       if (profile?.id) insertData.created_by = profile.id;
-      if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
+      insertData.sociedad_id = sociedadActiva.id;
 
       const { data: fcData, error } = await (supabase as any).from("facturas_compra").insert(insertData).select("id").single();
       if (error) throw error;
@@ -2163,7 +2175,7 @@ export default function FinanzasPage() {
           descuento_porcentaje: it.descuento_porcentaje,
           unidad: it.unidad,
           iva_porcentaje: it.iva_porcentaje,
-          sociedad_id: sociedadActiva?.id || null,
+          sociedad_id: sociedadActiva.id,
         }));
         const { error: fcItemsErr } = await (supabase as any).from("facturas_compra_items").insert(itemsToInsert);
         if (fcItemsErr) throw new Error("Error al guardar items de FC: " + fcItemsErr.message);
@@ -2214,6 +2226,7 @@ export default function FinanzasPage() {
 
   async function handleDeleteFC(id: string) {
     if (!confirm("¿Seguro que querés eliminar esta factura de compra?")) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
       let fcDelete = (supabase as any).from("facturas_compra").delete().eq("id", id);
       if (sociedadActiva?.id) fcDelete = fcDelete.eq("sociedad_id", sociedadActiva.id);
@@ -2347,6 +2360,7 @@ export default function FinanzasPage() {
   }
 
   async function handleToggleSobreVerde(opId: string, current: boolean) {
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
       let q = (supabase as any).from("ordenes_pago").update({ sobre_verde: !current }).eq("id", opId);
       if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
@@ -2363,6 +2377,7 @@ export default function FinanzasPage() {
 
   async function handleAnularFC(id: string) {
     if (!confirm("¿Seguro que querés anular esta factura?")) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
     let fcAnular = (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id);
     if (sociedadActiva?.id) fcAnular = fcAnular.eq("sociedad_id", sociedadActiva.id);
@@ -2373,6 +2388,7 @@ export default function FinanzasPage() {
   }
 
   async function handleRecibirFC(id: string) {
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
       // FC de compra NO mueve stock — stock solo lo mueven las OC y las ventas
       let fcReceive = (supabase as any).from("facturas_compra").update({ estado: "recibida" }).eq("id", id);
@@ -2401,6 +2417,7 @@ export default function FinanzasPage() {
 
   async function handleSaveFC() {
     if (!selectedFC) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     setSavingFC(true);
     try {
       const updateData: Record<string, any> = {
@@ -2441,6 +2458,7 @@ export default function FinanzasPage() {
 
   async function handleSaveOP() {
     if (!selectedOP) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     setSavingOP(true);
     try {
       const updateData: Record<string, any> = {
@@ -2665,12 +2683,13 @@ export default function FinanzasPage() {
   }
   async function handleManualMov() {
     if (!manualMovTargetId || manualMovForm.monto <= 0 || !manualMovForm.descripcion.trim()) { setManualMovError("Completar monto, descripcion y seleccionar entidad"); return; }
+    if (!sociedadActiva?.id) { setManualMovError("No se pudo determinar la sociedad activa"); return; }
     setManualMovSaving(true); setManualMovError("");
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id || null;
       const movData: Record<string, unknown> = { tipo: manualMovForm.tipo_mov === "credito" ? "cobro" : "pago", descripcion: `[Ajuste manual] ${manualMovForm.descripcion}`, monto: manualMovForm.monto, moneda: manualMovForm.moneda, fecha: manualMovForm.fecha, conciliado: false };
       if (manualMovTarget === "cliente") (movData as any).cliente_id = manualMovTargetId; else (movData as any).proveedor_id = manualMovTargetId;
-      if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
+      (movData as any).sociedad_id = sociedadActiva.id;
       if (userId) (movData as any).created_by = userId;
       const { error } = await supabase.from("movimientos").insert(movData as any);
       if (error) throw error;
@@ -2713,6 +2732,7 @@ export default function FinanzasPage() {
   }
   async function handleBulkEstadoFC(nuevoEstado: string) {
     if (fcSelectedIds.size === 0) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     const label = nuevoEstado === "pendiente" ? "Pendiente" : nuevoEstado === "pagada" ? "Pagada" : nuevoEstado === "anulada" ? "Anulada" : nuevoEstado === "recibida" ? "Recibida" : nuevoEstado;
     if (!confirm(`¿Cambiar ${fcSelectedIds.size} factura${fcSelectedIds.size > 1 ? "s" : ""} de compra a "${label}"?`)) return;
     try {
@@ -2777,6 +2797,7 @@ export default function FinanzasPage() {
   async function handleCreateEcheq() {
     if (!echeqForm.numero.trim()) { setEcheqError("El numero es obligatorio"); return; }
     if (echeqForm.monto <= 0) { setEcheqError("El monto debe ser mayor a 0"); return; }
+    if (!sociedadActiva?.id) { setEcheqError("No se pudo determinar la sociedad activa"); return; }
     setEcheqSaving(true); setEcheqError("");
     try {
       const row: Record<string, unknown> = {
@@ -2793,7 +2814,7 @@ export default function FinanzasPage() {
       } else if (echeqForm.origen_nombre) {
         row.origen_tipo = "otro"; row.origen_nombre = echeqForm.origen_nombre;
       }
-      if (sociedadActiva?.id) row.sociedad_id = sociedadActiva.id;
+      row.sociedad_id = sociedadActiva.id;
       if (profile?.id) row.user_id = profile.id;
       const { error } = await (supabase as any).from("echeqs").insert(row);
       if (error) throw error;
@@ -2806,6 +2827,7 @@ export default function FinanzasPage() {
   async function handleEcheqAction(action: "endosar" | "depositar" | "cobrar" | "rechazar", echeqOverride?: typeof selectedEcheq) {
     const echeq = echeqOverride || selectedEcheq;
     if (!echeq) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     setEcheqActionSaving(true);
     try {
       const updates: Record<string, unknown> = {};
@@ -2837,6 +2859,7 @@ export default function FinanzasPage() {
 
   async function handleDeleteEcheq(id: string) {
     if (!confirm("¿Seguro que querés eliminar este cheque?")) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try { let echeqDelete = (supabase as any).from("echeqs").delete().eq("id", id); if (sociedadActiva?.id) echeqDelete = echeqDelete.eq("sociedad_id", sociedadActiva.id); const { error } = await echeqDelete; if (error) throw error; await fetchData(); }
     catch (err) { console.error(err); alert("Error al eliminar cheque: " + (err as any)?.message); }
   }
