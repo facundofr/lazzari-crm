@@ -121,14 +121,18 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   async function saveFechaPago(id: string, newDate: string) {
     setFacturas(prev => prev.map(f => f.id === id ? { ...f, fecha_vencimiento: newDate || null, _fechaVencCalc: newDate || "" } : f));
     setEditingFechaPago(null);
-    const { error } = await supabase.from("facturas").update({ fecha_vencimiento: newDate || null } as any).eq("id", id);
+    let q = supabase.from("facturas").update({ fecha_vencimiento: newDate || null } as any).eq("id", id);
+    if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+    const { error } = await q;
     if (error) { alert("Error: " + error.message); await fetchData(); }
   }
 
   async function toggleRecibidaCliente(id: string, current: boolean) {
     const newVal = !current;
     setFacturas(prev => prev.map(f => f.id === id ? { ...f, recibida_cliente: newVal } : f));
-    const { error } = await supabase.from("facturas").update({ recibida_cliente: newVal } as any).eq("id", id);
+    let q = supabase.from("facturas").update({ recibida_cliente: newVal } as any).eq("id", id);
+    if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+    const { error } = await q;
     if (error) {
       setFacturas(prev => prev.map(f => f.id === id ? { ...f, recibida_cliente: current } : f));
       alert("Error: " + error.message);
@@ -333,15 +337,19 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         // Actualizar total_acreditado en la factura original
         const newAcreditado = (Number(ncFactura.total_acreditado) || 0) + ncTotals.total;
         const ncCobreTotal = newAcreditado >= Number(ncFactura.total) - 0.01;
-        const { error: acredArcaErr } = await (supabase as any).from("facturas").update({
+        let acredArcaQuery = (supabase as any).from("facturas").update({
           total_acreditado: newAcreditado,
           ...(ncCobreTotal ? { estado: "anulada" } : {}),
         }).eq("id", ncFactura.id);
+        if (sociedadActiva?.id) acredArcaQuery = acredArcaQuery.eq("sociedad_id", sociedadActiva.id);
+        const { error: acredArcaErr } = await acredArcaQuery;
         if (acredArcaErr) console.error("Error actualizando total_acreditado:", acredArcaErr.message);
 
         // Si la NC cubre el total, permitir re-facturar el PR
         if (ncCobreTotal && ncFactura.presupuesto_id) {
-          await supabase.from("presupuestos").update({ estado: "facturar" } as any).eq("id", ncFactura.presupuesto_id);
+          let prQuery = supabase.from("presupuestos").update({ estado: "facturar" } as any).eq("id", ncFactura.presupuesto_id);
+          if (sociedadActiva?.id) prQuery = prQuery.eq("sociedad_id" as any, sociedadActiva.id);
+          await prQuery;
         }
 
         setNcResult(data.factura.comprobante + (data.factura.cae ? ` — CAE: ${data.factura.cae}` : ""));
@@ -383,15 +391,19 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
         const newAcreditadoManual = (Number(ncFactura.total_acreditado) || 0) + ncTotals.total;
         const ncCobreTotalManual = newAcreditadoManual >= Number(ncFactura.total) - 0.01;
-        const { error: acredErr } = await (supabase as any).from("facturas").update({
+        let acredQuery = (supabase as any).from("facturas").update({
           total_acreditado: newAcreditadoManual,
           ...(ncCobreTotalManual ? { estado: "anulada" } : {}),
         }).eq("id", ncFactura.id);
+        if (sociedadActiva?.id) acredQuery = acredQuery.eq("sociedad_id", sociedadActiva.id);
+        const { error: acredErr } = await acredQuery;
         if (acredErr) throw new Error("Error al actualizar total_acreditado: " + acredErr.message);
 
         // Si la NC cubre el total, permitir re-facturar el PR
         if (ncCobreTotalManual && ncFactura.presupuesto_id) {
-          await supabase.from("presupuestos").update({ estado: "facturar" } as any).eq("id", ncFactura.presupuesto_id);
+          let prQuery = supabase.from("presupuestos").update({ estado: "facturar" } as any).eq("id", ncFactura.presupuesto_id);
+          if (sociedadActiva?.id) prQuery = prQuery.eq("sociedad_id" as any, sociedadActiva.id);
+          await prQuery;
         }
 
         setNcResult(formatComprobante(ncTipo, emisorData.ptoVta, Number(ncNumero)) + " (manual)");
@@ -850,7 +862,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   async function handleAnular(id: string) {
     if (!confirm("¿Seguro que queres anular esta factura?")) return;
     try {
-      const { error } = await supabase.from("facturas").update({ estado: "anulada" } as any).eq("id", id);
+      let q = supabase.from("facturas").update({ estado: "anulada" } as any).eq("id", id);
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await q;
       if (error) { alert(error.message); return; }
       await fetchData();
       if (detailFactura?.id === id) { setDetailFactura(null); setPanelFullscreen(false); }
@@ -860,7 +874,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   async function handleRevertirAnulacion(id: string) {
     if (!confirm("¿Revertir la anulación y volver a estado Emitida?")) return;
     try {
-      const { error } = await supabase.from("facturas").update({ estado: "emitida" } as any).eq("id", id);
+      let q = supabase.from("facturas").update({ estado: "emitida" } as any).eq("id", id);
+      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await q;
       if (error) { alert(error.message); return; }
       await fetchData();
       if (detailFactura?.id === id) setDetailFactura(prev => prev ? { ...prev, estado: "emitida" } : null);

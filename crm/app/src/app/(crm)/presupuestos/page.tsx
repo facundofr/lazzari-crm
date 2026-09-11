@@ -1168,10 +1168,12 @@ export default function PresupuestosPage() {
           updatePayload.estado = "pendiente";
           updatePayload.enviado_at = new Date().toISOString();
         }
-        const { error } = await supabase
+        let prUpdate = supabase
           .from("presupuestos")
           .update(updatePayload as any)
           .eq("id", editingPRId);
+        if (sociedadActiva?.id) prUpdate = prUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+        const { error } = await prUpdate;
         if (error) throw new Error(error.message);
 
         // Replace items: delete old, insert new
@@ -1646,10 +1648,12 @@ export default function PresupuestosPage() {
       if (estado === "pendiente") update.enviado_at = new Date().toISOString();
       if (["aprobado", "rechazado", "postergado"].includes(estado)) update.respondido_at = new Date().toISOString();
 
-      const { error, status, statusText } = await supabase
+      let estadoQuery = supabase
         .from("presupuestos")
         .update(update as any)
         .eq("id", id);
+      if (sociedadActiva?.id) estadoQuery = estadoQuery.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error, status, statusText } = await estadoQuery;
       if (error) throw new Error(`${error.message} (${error.code}) [${status} ${statusText}]`);
 
       // When approved, auto-generate purchase orders grouped by supplier
@@ -1740,10 +1744,14 @@ export default function PresupuestosPage() {
   async function handleDelete(id: string) {
     if (!confirm("Seguro que queres eliminar este presupuesto? Se movera a la papelera.")) return;
     try {
-      const { error } = await supabase.from("presupuestos").update({ eliminado: true } as any).eq("id", id);
+      let prDelete = supabase.from("presupuestos").update({ eliminado: true } as any).eq("id", id);
+      if (sociedadActiva?.id) prDelete = prDelete.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await prDelete;
       if (error) throw new Error(error.message);
       // Cancel linked OCs
-      await supabase.from("ordenes_compra").update({ estado: "cancelada" } as any).eq("presupuesto_origen_id", id).not("estado", "eq", "cancelada");
+      let cancelOCs = supabase.from("ordenes_compra").update({ estado: "cancelada" } as any).eq("presupuesto_origen_id", id).not("estado", "eq", "cancelada");
+      if (sociedadActiva?.id) cancelOCs = cancelOCs.eq("sociedad_id" as any, sociedadActiva.id);
+      await cancelOCs;
       setSelected(null);
       setPanelFullscreen(false);
       setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: true } as any : p));
@@ -1757,7 +1765,9 @@ export default function PresupuestosPage() {
 
   async function handleRestore(id: string) {
     try {
-      const { error } = await supabase.from("presupuestos").update({ eliminado: false } as any).eq("id", id);
+      let restorePR = supabase.from("presupuestos").update({ eliminado: false } as any).eq("id", id);
+      if (sociedadActiva?.id) restorePR = restorePR.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await restorePR;
       if (error) throw new Error(error.message);
       setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: false } as any : p));
       // Regenerate OCs for restored PR
@@ -2881,7 +2891,9 @@ export default function PresupuestosPage() {
                       onClick={async () => {
                         const oc = prompt("Número de OC del cliente:");
                         if (oc && oc.trim()) {
-                          await supabase.from("presupuestos").update({ oc_cliente: oc.trim() } as any).eq("id", selected.id);
+                          let ocClienteUpdate = supabase.from("presupuestos").update({ oc_cliente: oc.trim() } as any).eq("id", selected.id);
+                          if (sociedadActiva?.id) ocClienteUpdate = ocClienteUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+                          await ocClienteUpdate;
                           setSelected({ ...selected, ocCliente: oc.trim() } as any);
                           await fetchPresupuestos();
                           toast.success("OC del cliente guardada");
@@ -2897,7 +2909,9 @@ export default function PresupuestosPage() {
                     <input type="date" value={(selected as any).ocClienteFecha || ""}
                       onChange={async (e) => {
                         const value = e.target.value || null;
-                        const update = await supabase.from("presupuestos").update({ oc_cliente_fecha: value } as any).eq("id", selected.id);
+                        let updateQuery = supabase.from("presupuestos").update({ oc_cliente_fecha: value } as any).eq("id", selected.id);
+                        if (sociedadActiva?.id) updateQuery = updateQuery.eq("sociedad_id" as any, sociedadActiva.id);
+                        const update = await updateQuery;
                         if (update.error) { toast.error("No se pudo guardar la fecha de la OC"); return; }
                         setSelected({ ...selected, ocClienteFecha: value } as any);
                       }}
@@ -2908,7 +2922,9 @@ export default function PresupuestosPage() {
                   <div className="col-span-2">
                     <button
                       onClick={async () => {
-                        const { error } = await supabase.from("presupuestos").update({ estado: "facturar", listo_para_facturar: true } as any).eq("id", selected.id);
+                        let readyQuery = supabase.from("presupuestos").update({ estado: "facturar", listo_para_facturar: true } as any).eq("id", selected.id);
+                        if (sociedadActiva?.id) readyQuery = readyQuery.eq("sociedad_id" as any, sociedadActiva.id);
+                        const { error } = await readyQuery;
                         if (error) { toast.error("Error al actualizar"); return; }
                         setSelected({ ...selected, estado: "facturar" as any, listoParaFacturar: true } as any);
                         await fetchPresupuestos();
@@ -2940,7 +2956,9 @@ export default function PresupuestosPage() {
                         onClick={async () => {
                           const path = `pr/${selected.id}/${(selected as any).archivoNombre}`;
                           await supabase.storage.from("presupuestos").remove([path]);
-                          await supabase.from("presupuestos").update({ archivo_url: null, archivo_nombre: null } as any).eq("id", selected.id);
+                          let clearFile = supabase.from("presupuestos").update({ archivo_url: null, archivo_nombre: null } as any).eq("id", selected.id);
+                          if (sociedadActiva?.id) clearFile = clearFile.eq("sociedad_id" as any, sociedadActiva.id);
+                          await clearFile;
                           setSelected({ ...selected, archivoUrl: null, archivoNombre: null } as any);
                           await fetchPresupuestos();
                           toast.success("Archivo eliminado");
@@ -2962,7 +2980,9 @@ export default function PresupuestosPage() {
                         const { error: upErr } = await supabase.storage.from("presupuestos").upload(path, file, { upsert: true });
                         if (upErr) { toast.error("Error al subir archivo"); return; }
                         const { data: urlData } = supabase.storage.from("presupuestos").getPublicUrl(path);
-                        await supabase.from("presupuestos").update({ archivo_url: urlData.publicUrl, archivo_nombre: file.name } as any).eq("id", selected.id);
+                        let attachFile = supabase.from("presupuestos").update({ archivo_url: urlData.publicUrl, archivo_nombre: file.name } as any).eq("id", selected.id);
+                        if (sociedadActiva?.id) attachFile = attachFile.eq("sociedad_id" as any, sociedadActiva.id);
+                        await attachFile;
                         setSelected({ ...selected, archivoUrl: urlData.publicUrl, archivoNombre: file.name } as any);
                         await fetchPresupuestos();
                         toast.success("Archivo adjuntado");

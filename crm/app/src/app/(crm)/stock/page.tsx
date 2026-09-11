@@ -361,7 +361,9 @@ export default function StockPage() {
       }
 
       if (editingId) {
-        const { error } = await (supabase as any).from("productos").update(payload).eq("id", editingId);
+        let productUpdate = (supabase as any).from("productos").update(payload).eq("id", editingId);
+        if (sociedadActiva?.id) productUpdate = productUpdate.eq("sociedad_id", sociedadActiva.id);
+        const { error } = await productUpdate;
         if (error) throw error;
       } else {
         const { error } = await (supabase as any).from("productos").insert(payload);
@@ -385,7 +387,9 @@ export default function StockPage() {
     if (!deleteConfirm) return;
     setDeleting(true);
     try {
-      const { error } = await supabase.from("productos").delete().eq("id", deleteConfirm.id);
+      let productDelete = supabase.from("productos").delete().eq("id", deleteConfirm.id);
+      if (sociedadActiva?.id) productDelete = productDelete.eq("sociedad_id" as any, sociedadActiva.id);
+      const { error } = await productDelete;
       if (error) throw error;
       setDeleteConfirm(null);
       if (selectedProduct?.id === deleteConfirm.id) setSelectedProduct(null);
@@ -408,7 +412,9 @@ export default function StockPage() {
           setSaving(false);
           return;
         }
-        const { error } = await supabase.from("productos").update({ stock: adjustAmount }).eq("id", adjustModal.id);
+        let stockUpdate = supabase.from("productos").update({ stock: adjustAmount }).eq("id", adjustModal.id);
+        if (sociedadActiva?.id) stockUpdate = stockUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+        const { error } = await stockUpdate;
         if (error) throw error;
       } else {
         // Atomic increment via RPC — no read-then-write race condition

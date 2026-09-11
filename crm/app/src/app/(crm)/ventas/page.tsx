@@ -571,7 +571,9 @@ export default function VentasPage() {
         setEmitSuccess(`${data.factura.comprobante} emitida - CAE: ${data.factura.cae}`);
         setEmitFacturaId(data.factura.id);
         // Marcar PR como facturado
-        await supabase.from("presupuestos").update({ estado: "facturado" } as any).eq("id", p.id);
+        let prUpdate = supabase.from("presupuestos").update({ estado: "facturado" } as any).eq("id", p.id);
+        if (sociedadActiva?.id) prUpdate = prUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+        await prUpdate;
         await fetchData();
       } else {
         setEmitError(data.error || "Error al emitir factura");
@@ -676,7 +678,9 @@ export default function VentasPage() {
       setEmitSuccess(`${comp} emitida (manual, sin CAE)`);
       setEmitFacturaId(facturaData.id);
       // Marcar PR como facturado
-      await supabase.from("presupuestos").update({ estado: "facturado" } as any).eq("id", p.id);
+      let prUpdate = supabase.from("presupuestos").update({ estado: "facturado" } as any).eq("id", p.id);
+      if (sociedadActiva?.id) prUpdate = prUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+      await prUpdate;
       await fetchData();
     } catch (err) {
       setEmitError("Error al crear factura manual");
@@ -735,7 +739,9 @@ export default function VentasPage() {
   }
 
   async function handleMarcarEntregado(remitoId: string) {
-    const { error } = await supabase.from("remitos").update({ estado: "entregado" } as any).eq("id", remitoId);
+    let remitoUpdate = supabase.from("remitos").update({ estado: "entregado" } as any).eq("id", remitoId);
+    if (sociedadActiva?.id) remitoUpdate = remitoUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+    const { error } = await remitoUpdate;
     if (error) {
       alert("Error al marcar como entregado: " + error.message);
       return;

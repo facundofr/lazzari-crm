@@ -361,7 +361,8 @@ export default function TransportesPage() {
         const { error } = await (supabase as any)
           .from("transportes")
           .update(payload)
-          .eq("id", selectedViaje.id);
+          .eq("id", selectedViaje.id)
+          .eq("sociedad_id", socId);
         if (error) throw error;
         toast.success("Viaje actualizado");
       } else {
@@ -391,7 +392,7 @@ export default function TransportesPage() {
     }
     if (!confirm("¿Eliminar este viaje?")) return;
     try {
-      const { error } = await (supabase as any).from("transportes").delete().eq("id", id);
+      const { error } = await (supabase as any).from("transportes").delete().eq("id", id).eq("sociedad_id", socId);
       if (error) throw error;
       toast.success("Viaje eliminado");
       setSelectedViaje(null);
@@ -406,7 +407,8 @@ export default function TransportesPage() {
       const { error } = await (supabase as any)
         .from("transportes")
         .update({ estado: nuevoEstado })
-        .eq("id", id);
+        .eq("id", id)
+        .eq("sociedad_id", socId);
       if (error) throw error;
       toast.success(`Estado cambiado a ${estadoConfig[nuevoEstado]?.label || nuevoEstado}`);
       fetchViajes();
