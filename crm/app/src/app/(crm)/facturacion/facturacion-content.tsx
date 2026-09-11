@@ -152,6 +152,27 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [cotizFecha, setCotizFecha] = useState("");
   const [latestFacturaDate, setLatestFacturaDate] = useState("");
 
+  // Facturación masiva de presupuestos del cliente (sin exigir OC del cliente).
+  // Se mantiene separado de la emisión manual para que cada comprobante pase por
+  // las mismas validaciones/numeración del endpoint /api/facturacion.
+  type FacturacionMasivaPR = {
+    id: string; numero: string; fecha: string; moneda: "ARS" | "USD";
+    tipo_cambio: number | null; cotizacion_modalidad: "divisas" | "billetes" | null;
+    total: number; cliente_id: string; clienteNombre: string; condicion_iva: string | null;
+    tipo_comprobante: string | null; items: EmitItem[]; selected: boolean;
+  };
+  type FacturacionMasivaResultado = { id: string; numero: string; ok: boolean; comprobante?: string; error?: string };
+  const [fmOpen, setFmOpen] = useState(false);
+  const [fmClientes, setFmClientes] = useState<ClienteOption[]>([]);
+  const [fmClienteId, setFmClienteId] = useState("");
+  const [fmClienteSearch, setFmClienteSearch] = useState("");
+  const [fmFecha, setFmFecha] = useState(todayAR());
+  const [fmPRs, setFmPRs] = useState<FacturacionMasivaPR[]>([]);
+  const [fmLoading, setFmLoading] = useState(false);
+  const [fmEmitting, setFmEmitting] = useState(false);
+  const [fmResults, setFmResults] = useState<FacturacionMasivaResultado[]>([]);
+  const [fmError, setFmError] = useState("");
+
   function previousBusinessDay(iso: string): string {
     const d = new Date(`${iso || todayAR()}T12:00:00`);
     d.setDate(d.getDate() - 1);
@@ -563,6 +584,115 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       } catch { /* ignore */ }
     })();
   };
+
+  async function openFacturacionMasiva() {
+    setFmOpen(true);
+    setFmClienteId("");
+    setFmClienteSearch("");
+    setFmPRs([]);
+    setFmResults([]);
+    setFmError("");
+    setFmFecha(todayAR());
+    const q = supabase.from("clientes").select("id, razon_social, cuit, condicion_iva").eq("activo", true).order("razon_social");
+    const { data, error } = await (sociedadActiva?.id ? q.eq("sociedad_id" as any, sociedadActiva.id) : q);
+    if (error) setFmError("No se pudieron cargar los clientes: " + error.message);
+    else setFmClientes((data || []) as ClienteOption[]);
+  }
+
+  async function fmSelectCliente(clienteId: string) {
+    setFmClienteId(clienteId);
+    setFmPRs([]);
+    setFmResults([]);
+    setFmError("");
+    if (!clienteId || !sociedadActiva?.id) return;
+    setFmLoading(true);
+    try {
+      const { data: rows, error } = await (supabase as any)
+        .from("presupuestos")
+        .select("id, numero, fecha, moneda, tipo_cambio, tipo_cambio_divisas, cotizacion_modalidad, total, cliente_id, tipo_comprobante, estado, clientes(razon_social, condicion_iva), presupuesto_items(codigo, descripcion, cantidad, precio_venta, iva_porcentaje, orden)")
+        .eq("sociedad_id", sociedadActiva.id)
+        .eq("cliente_id", clienteId)
+        .in("estado", ["facturar", "aprobado"])
+        .order("fecha", { ascending: true });
+      if (error) throw error;
+
+      // Un PR con factura ya emitida no se vuelve a ofrecer aunque su estado
+      // haya quedado viejo por una actualización anterior.
+      const ids = (rows || []).map((r: any) => r.id);
+      let emitidos = new Set<string>();
+      if (ids.length) {
+        const { data: fs, error: fErr } = await (supabase as any)
+          .from("facturas").select("presupuesto_id")
+          .eq("sociedad_id", sociedadActiva.id).in("presupuesto_id", ids)
+          .neq("estado", "anulada");
+        if (fErr) throw fErr;
+        emitidos = new Set((fs || []).map((f: any) => f.presupuesto_id).filter(Boolean));
+      }
+      const disponibles = (rows || []).filter((r: any) => !emitidos.has(r.id)).map((r: any) => ({
+        id: r.id,
+        numero: r.numero,
+        fecha: r.fecha,
+        moneda: r.moneda === "USD" ? "USD" : "ARS",
+        tipo_cambio: Number(r.tipo_cambio || r.tipo_cambio_divisas || 0) || null,
+        cotizacion_modalidad: r.cotizacion_modalidad === "billetes" ? "billetes" : "divisas",
+        total: Number(r.total || 0),
+        cliente_id: r.cliente_id,
+        clienteNombre: r.clientes?.razon_social || "",
+        condicion_iva: r.clientes?.condicion_iva || null,
+        tipo_comprobante: r.tipo_comprobante || null,
+        items: (r.presupuesto_items || []).sort((a: any, b: any) => Number(a.orden || 0) - Number(b.orden || 0)).map((it: any) => ({
+          descripcion: it.descripcion || it.codigo || "Item",
+          cantidad: Number(it.cantidad || 0),
+          precio_unitario: Number(it.precio_venta || 0),
+          iva_porcentaje: Number(it.iva_porcentaje ?? 21),
+        })),
+        selected: true,
+      })) as FacturacionMasivaPR[];
+      setFmPRs(disponibles);
+      if (!disponibles.length) setFmError("No hay presupuestos aprobados/listos para facturar sin una factura vigente.");
+    } catch (err: any) {
+      setFmError("No se pudieron cargar los presupuestos: " + (err?.message || "error desconocido"));
+    } finally { setFmLoading(false); }
+  }
+
+  async function handleFacturacionMasiva() {
+    const seleccionados = fmPRs.filter(p => p.selected);
+    if (!sociedadActiva?.id) { setFmError("Seleccioná una sociedad antes de facturar"); return; }
+    if (!seleccionados.length) { setFmError("Seleccioná al menos un presupuesto"); return; }
+    if (!fmFecha) { setFmError("Elegí la fecha común de facturación"); return; }
+    if (arcaStatus?.certOk === false) { setFmError("No se puede emitir masivamente: falta el certificado ARCA de esta sociedad"); return; }
+    const sinItems = seleccionados.find(p => !p.items.length || p.items.some(i => !i.descripcion || i.cantidad <= 0 || i.precio_unitario <= 0));
+    if (sinItems) { setFmError(`El presupuesto ${sinItems.numero} no tiene ítems completos para facturar`); return; }
+    setFmEmitting(true); setFmError(""); setFmResults([]);
+    const { data: { session } } = await supabase.auth.getSession();
+    const resultados: FacturacionMasivaResultado[] = [];
+    for (const pr of seleccionados) {
+      const esRI = (pr.condicion_iva || "").toUpperCase() === "RI" || (pr.condicion_iva || "").toUpperCase() === "RESPONSABLE INSCRIPTO";
+      const tipo = ["FA", "FB"].includes(pr.tipo_comprobante || "") ? pr.tipo_comprobante! : (esRI ? "FA" : "FB");
+      try {
+        const res = await fetch("/api/facturacion", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+          body: JSON.stringify({
+            tipo, cliente_id: pr.cliente_id, punto_venta: emisorData.ptoVta,
+            moneda: pr.moneda, tipo_cambio: pr.moneda === "USD" ? pr.tipo_cambio : null,
+            cotizacion_modalidad: pr.moneda === "USD" ? pr.cotizacion_modalidad : null,
+            fecha: fmFecha, items: pr.items, presupuesto_id: pr.id, sociedad_id: sociedadActiva.id,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+        const { error: updateError } = await (supabase as any).from("presupuestos").update({ estado: "facturado" }).eq("id", pr.id).eq("sociedad_id", sociedadActiva.id);
+        resultados.push({ id: pr.id, numero: pr.numero, ok: true, comprobante: data.factura?.comprobante, error: updateError ? "Factura emitida; no se pudo actualizar el estado del presupuesto" : undefined });
+      } catch (err: any) {
+        resultados.push({ id: pr.id, numero: pr.numero, ok: false, error: err?.message || "Error desconocido" });
+      }
+      setFmResults([...resultados]);
+    }
+    setFmPRs(prev => prev.filter(p => !resultados.some(r => r.ok && r.id === p.id)));
+    await fetchData();
+    setFmEmitting(false);
+  }
 
   const addItem = () => setEmitData((p) => ({ ...p, items: [...p.items, { descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] }));
   const removeItem = (idx: number) => setEmitData((p) => ({ ...p, items: p.items.filter((_, i) => i !== idx) }));
@@ -1226,6 +1356,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             <Plus className="h-4 w-4" /> Emitir factura
           </button>
         )}
+        <button onClick={openFacturacionMasiva} className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 transition-colors">
+          <FileCheck className="h-4 w-4" /> Facturación masiva sin OC
+        </button>
         <button onClick={openCobroMasivo} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition-colors">
           <DollarSign className="h-4 w-4" /> Cobro masivo
         </button>
@@ -1433,6 +1566,36 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           </div>
         </Card>
       </div>
+
+      {/* ── Facturación masiva sin OC del cliente ───────────────────── */}
+      {fmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900">
+              <div><h2 className="text-lg font-bold dark:text-white">Facturación masiva sin OC del cliente</h2><p className="text-xs text-zinc-500 mt-1">Seleccioná presupuestos aprobados/listos para facturar y emitilos con una fecha común.</p></div>
+              <button onClick={() => setFmOpen(false)} disabled={fmEmitting} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="p-6 space-y-5">
+              {fmError && <div className="text-sm text-red-700 bg-red-50 dark:bg-red-900/20 dark:text-red-300 rounded-lg px-3 py-2">{fmError}</div>}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="relative">
+                  <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cliente *</label>
+                  <input value={fmClienteId ? (fmClientes.find(c => c.id === fmClienteId)?.razon_social || "") : fmClienteSearch} onChange={e => { setFmClienteSearch(e.target.value); if (fmClienteId) setFmClienteId(""); }} placeholder="Buscar por nombre o CUIT..." className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" autoComplete="off" />
+                  {!fmClienteId && fmClienteSearch.trim() && <div className="absolute z-20 mt-1 left-0 right-0 max-h-40 overflow-y-auto rounded-lg border bg-white dark:bg-zinc-800 dark:border-zinc-700 shadow-lg">{fmClientes.filter(c => c.razon_social.toLowerCase().includes(fmClienteSearch.toLowerCase()) || (c.cuit || "").includes(fmClienteSearch)).slice(0, 15).map(c => <button key={c.id} onClick={() => { setFmClienteId(c.id); setFmClienteSearch(""); fmSelectCliente(c.id); }} className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white">{c.razon_social} <span className="text-xs text-zinc-400 float-right">{c.cuit || "Sin CUIT"}</span></button>)}</div>}
+                </div>
+                <div><label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha común *</label><input type="date" value={fmFecha} min={minFecha} max={todayAR()} onChange={e => setFmFecha(e.target.value)} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" /></div>
+              </div>
+              {fmLoading && <div className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando presupuestos...</div>}
+              {fmPRs.length > 0 && <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                <div className="flex items-center justify-between px-4 py-3 bg-zinc-50 dark:bg-zinc-800/60 text-sm"><span className="font-medium dark:text-white">{fmPRs.filter(p => p.selected).length} de {fmPRs.length} seleccionados</span><button onClick={() => setFmPRs(p => p.map(x => ({ ...x, selected: !p.every(y => y.selected) })))} className="text-indigo-600 hover:underline text-xs">{fmPRs.every(p => p.selected) ? "Quitar todos" : "Seleccionar todos"}</button></div>
+                <div className="divide-y divide-zinc-200 dark:divide-zinc-700">{fmPRs.map(pr => <label key={pr.id} className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 cursor-pointer"><input type="checkbox" checked={pr.selected} onChange={() => setFmPRs(p => p.map(x => x.id === pr.id ? { ...x, selected: !x.selected } : x))} disabled={fmEmitting} className="h-4 w-4 rounded border-zinc-300 text-indigo-600" /><span className="flex-1 min-w-0"><span className="font-medium text-sm dark:text-white">{pr.numero}</span><span className="ml-2 text-xs text-zinc-400">{formatDate(pr.fecha)} · {pr.items.length} ítem{pr.items.length === 1 ? "" : "s"}</span></span><span className="text-sm font-mono dark:text-zinc-200">{formatCurrency(pr.total, pr.moneda)}</span></label>)}</div>
+              </div>}
+              {fmResults.length > 0 && <div className="space-y-2"><h3 className="text-sm font-semibold dark:text-white">Resultado</h3>{fmResults.map(r => <div key={r.id} className={`rounded-lg px-3 py-2 text-sm ${r.ok ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300" : "bg-red-50 text-red-800 dark:bg-red-900/20 dark:text-red-300"}`}><span className="font-medium">{r.numero}</span>: {r.ok ? `emitida ${r.comprobante || ""}` : `no emitida — ${r.error}`}{r.ok && r.error && <span className="block text-xs mt-1">Aviso: {r.error}</span>}</div>)}</div>}
+              <div className="flex justify-end gap-3 pt-2"><button onClick={() => setFmOpen(false)} disabled={fmEmitting} className="px-4 py-2 text-sm rounded-lg border border-zinc-300 dark:border-zinc-700 dark:text-zinc-200">{fmResults.some(r => r.ok) ? "Cerrar" : "Cancelar"}</button><button onClick={handleFacturacionMasiva} disabled={fmEmitting || fmLoading || !fmClienteId || !fmPRs.some(p => p.selected)} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">{fmEmitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Emitiendo...</> : <><FileCheck className="h-4 w-4" /> Emitir seleccionadas</>}</button></div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Emit Modal ──────────────────────────────────────────────── */}
       {emitOpen && (
