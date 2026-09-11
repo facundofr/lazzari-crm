@@ -182,6 +182,7 @@ interface FacturaCompraRow {
   cae?: string;
   percepciones_detalle?: { tipo: string; monto: number; localidad?: string }[];
   op_vinculada?: { id: string; numero: string; estado: string; fecha: string; sobre_verde?: boolean } | null;
+  pago_directo?: number;
   ocs_vinculadas?: { numero: string }[];
 }
 
@@ -321,6 +322,7 @@ interface MovimientoRow {
   moneda?: string;
   fecha: string;
   factura_id?: string;
+  factura_compra_id?: string;
   conciliado: boolean;
   created_at: string;
   anulado?: boolean;
@@ -464,6 +466,8 @@ export default function FinanzasPage() {
   // OP state
   const [ordenesPago, setOrdenesPago] = useState<OrdenPagoRow[]>([]);
   const [opModalOpen, setOpModalOpen] = useState(false);
+  const [pagoParcialDirecto, setPagoParcialDirecto] = useState(false);
+  const [pagoParcialFCId, setPagoParcialFCId] = useState<string | null>(null);
   const [opForm, setOpForm] = useState(emptyOPForm);
   const [opSaving, setOpSaving] = useState(false);
   const [opError, setOpError] = useState("");
@@ -987,6 +991,18 @@ export default function FinanzasPage() {
           if (sociedadActiva?.id) qFc = qFc.eq("sociedad_id", sociedadActiva.id);
           const { data: fcData } = await qFc;
           if (fcData) {
+            const fcIds = fcData.map((r: any) => r.id);
+            let directPayments: any[] = [];
+            if (fcIds.length > 0) {
+              let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, anulado").in("factura_compra_id", fcIds).eq("tipo", "pago");
+              if (sociedadActiva?.id) qDirect = qDirect.eq("sociedad_id", sociedadActiva.id);
+              const { data } = await qDirect;
+              directPayments = data || [];
+            }
+            const directByFC = directPayments.reduce((acc: Record<string, number>, p: any) => {
+              if (!p.anulado) acc[p.factura_compra_id] = (acc[p.factura_compra_id] || 0) + Number(p.monto || 0);
+              return acc;
+            }, {});
             setFacturasCompra(fcData.map((r: any) => ({
               id: r.id, numero_factura: r.numero_factura,
               proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? "—",
@@ -1009,6 +1025,7 @@ export default function FinanzasPage() {
                 ? { id: r.op_facturas_compra[0].ordenes_pago.id, numero: r.op_facturas_compra[0].ordenes_pago.numero, estado: r.op_facturas_compra[0].ordenes_pago.estado, fecha: r.op_facturas_compra[0].ordenes_pago.fecha, sobre_verde: !!r.op_facturas_compra[0].ordenes_pago.sobre_verde }
                 : null,
               ocs_vinculadas: (r.factura_compra_ocs || []).map((link: any) => ({ numero: link.ordenes_compra?.numero || "—" })).filter((o: any) => o.numero !== "—"),
+              pago_directo: directByFC[r.id] || 0,
             })));
           } else {
             setFacturasCompra([]);
@@ -1310,12 +1327,20 @@ export default function FinanzasPage() {
             if (r.ordenes_pago?.estado === "anulada") return; // Skip anulada OPs
             pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto);
           });
+          let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, anulado")
+            .in("factura_compra_id", fcIds).eq("tipo", "pago");
+          if (sociedadActiva?.id) qDirect = qDirect.eq("sociedad_id", sociedadActiva.id);
+          const { data: directData } = await qDirect;
+          (directData || []).forEach((r: any) => {
+            if (!r.anulado) pagadoPorFC[r.factura_compra_id] = (pagadoPorFC[r.factura_compra_id] || 0) + Number(r.monto || 0);
+          });
         }
 
         setOpFCPendientes((data || []).map((fc: any) => {
           const pagado = pagadoPorFC[fc.id] || 0;
           const saldo = Math.max(0, Number(fc.total) - pagado);
-          return { id: fc.id, numero: fc.numero_factura || "S/N", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: false, monto_a_pagar: saldo };
+          const esDirecta = pagoParcialDirecto && pagoParcialFCId === fc.id;
+          return { id: fc.id, numero: fc.numero_factura || "S/N", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: esDirecta, monto_a_pagar: 0 };
         }).filter((fc: any) => fc.saldo_pendiente > 0));
 
         // Acumulado mensual de PAGOS (OPs) a este proveedor — Art. 26 RG 830
@@ -1393,6 +1418,8 @@ export default function FinanzasPage() {
 
   // ── OP handlers ──
   function openOPModal(preloadProveedorId?: string) {
+    setPagoParcialDirecto(false);
+    setPagoParcialFCId(null);
     setOpForm(preloadProveedorId ? { ...emptyOPForm, proveedor_id: preloadProveedorId } : emptyOPForm);
     setOpError("");
     setOpFiles([]);
@@ -2176,6 +2203,56 @@ export default function FinanzasPage() {
     if (!fc) return;
     // Open OP modal pre-loaded with this FC's proveedor
     openOPModal(fc.proveedor_id || "");
+  }
+
+  function handlePagoParcialDirecto(id: string) {
+    const fc = facturasCompra.find(f => f.id === id);
+    if (!fc || !fc.proveedor_id) return;
+    openOPModal(fc.proveedor_id);
+    setPagoParcialDirecto(true);
+    setPagoParcialFCId(id);
+  }
+
+  async function handleRegistrarPagoParcialDirecto() {
+    const selected = opFCPendientes.filter(f => f.selected);
+    const fc = selected.length === 1 ? selected[0] : null;
+    const total = opMedios.reduce((sum, medio) => sum + Number(medio.monto || 0), 0);
+    if (!fc) { setOpError("Seleccioná una sola factura para registrar el pago parcial directo"); return; }
+    if (total <= 0) { setOpError("Ingresá un medio de pago con monto mayor a cero"); return; }
+    if (total >= fc.saldo_pendiente - 0.01) { setOpError("Este flujo es solo para un pago parcial; para cancelar el saldo usá Generar OP"); return; }
+    if (!sociedadActiva?.id) { setOpError("No se pudo determinar la sociedad activa"); return; }
+    setOpSaving(true);
+    setOpError("");
+    try {
+      const { data: fresh, error: freshError } = await (supabase as any).from("facturas_compra")
+        .select("id, proveedor_id, total, moneda, numero_factura, estado")
+        .eq("id", fc.id).eq("sociedad_id", sociedadActiva.id).single();
+      if (freshError || !fresh) throw new Error("No se pudo verificar la factura de compra");
+      if (fresh.proveedor_id !== opForm.proveedor_id) throw new Error("La factura no pertenece al proveedor seleccionado");
+      const { data: existing } = await (supabase as any).from("movimientos")
+        .select("monto, anulado").eq("factura_compra_id", fresh.id).eq("tipo", "pago").eq("sociedad_id", sociedadActiva.id);
+      const pagado = (existing || []).filter((p: any) => !p.anulado).reduce((sum: number, p: any) => sum + Number(p.monto || 0), 0);
+      if (pagado + total >= Number(fresh.total) - 0.01) throw new Error("El importe completa la factura; generá una OP para cancelar el saldo");
+      const { error } = await (supabase as any).from("movimientos").insert({
+        tipo: "pago",
+        proveedor_id: fresh.proveedor_id,
+        factura_compra_id: fresh.id,
+        monto: total,
+        moneda: fresh.moneda || opForm.moneda,
+        fecha: opForm.fecha,
+        descripcion: `Pago parcial directo — ${fresh.numero_factura || "FC"} — ${opMedios.map((m) => m.tipo).join(" + ")}`,
+        conciliado: true,
+        sociedad_id: sociedadActiva.id,
+        created_by: profile?.id || null,
+      });
+      if (error) throw error;
+      setOpModalOpen(false);
+      setPagoParcialDirecto(false);
+      setPagoParcialFCId(null);
+      await fetchData();
+    } catch (err: unknown) {
+      setOpError(err instanceof Error ? err.message : "No se pudo registrar el pago parcial");
+    } finally { setOpSaving(false); }
   }
 
   async function handleToggleSobreVerde(opId: string, current: boolean) {
@@ -3230,6 +3307,7 @@ export default function FinanzasPage() {
                   { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => (
                     <div className="text-right">
                       <span className="font-mono font-semibold text-red-600">{formatCurrency(row.total, row.moneda)}</span>
+                      {(row.pago_directo ?? 0) > 0 && <p className="text-[10px] text-blue-500 mt-0.5">Pago directo: {formatCurrency(row.pago_directo || 0, row.moneda)}</p>}
                       {row.percepciones > 0 && (
                         <p className="text-[10px] text-zinc-400 mt-0.5">
                           {row.percepciones_detalle && row.percepciones_detalle.length > 0
@@ -3254,9 +3332,14 @@ export default function FinanzasPage() {
                           </Badge>
                         </button>
                       ) : (row.estado === "pendiente" || row.estado === "recibida") ? (
-                        <button onClick={() => handlePagarFC(row.id)} className="rounded px-2 py-1 text-xs text-orange-600 border border-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20 font-medium" title="Crear orden de pago">
-                          + OP
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => handlePagarFC(row.id)} className="rounded px-2 py-1 text-xs text-orange-600 border border-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20 font-medium" title="Crear orden de pago">
+                            + OP
+                          </button>
+                          <button onClick={() => handlePagoParcialDirecto(row.id)} className="rounded px-2 py-1 text-xs text-blue-600 border border-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 font-medium" title="Registrar pago parcial sin OP">
+                            + Parcial
+                          </button>
+                        </div>
                       ) : (
                         <span className="text-zinc-300 text-xs">—</span>
                       )}
@@ -4573,11 +4656,12 @@ export default function FinanzasPage() {
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <FileText className="h-5 w-5 text-orange-500" />
-                <h2 className="text-lg font-bold dark:text-white">Nueva Orden de Pago</h2>
+                <h2 className="text-lg font-bold dark:text-white">{pagoParcialDirecto ? "Registrar pago parcial" : "Nueva Orden de Pago"}</h2>
               </div>
               <button onClick={() => setOpModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
             </div>
             {opError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}
+            {pagoParcialDirecto && <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300">Este pago se registra como movimiento directo contra una sola factura y no crea una Orden de Pago. Las retenciones se calculan y documentan al generar la OP correspondiente.</div>}
             <div className="space-y-4">
               {/* Proveedor + Fecha */}
               <div className="grid grid-cols-3 gap-4">
@@ -4645,8 +4729,9 @@ export default function FinanzasPage() {
                             <tr key={fc.id} className={`hover:bg-zinc-50 dark:hover:bg-zinc-800/30 ${fc.selected ? "bg-orange-50/50 dark:bg-orange-900/10" : ""}`}>
                               <td className="p-2 text-center">
                                 <input type="checkbox" checked={fc.selected}
+                                  disabled={pagoParcialDirecto && pagoParcialFCId !== fc.id}
                                   onChange={() => {
-                                    setOpFCPendientes(prev => prev.map(f => f.id === fc.id ? { ...f, selected: !f.selected, monto_a_pagar: !f.selected ? f.saldo_pendiente : 0 } : f));
+                                    setOpFCPendientes(prev => prev.map(f => (pagoParcialDirecto && f.id !== fc.id) ? { ...f, selected: false, monto_a_pagar: 0 } : f.id === fc.id ? { ...f, selected: !f.selected, monto_a_pagar: !f.selected ? f.saldo_pendiente : 0 } : f));
                                   }}
                                   className="rounded border-zinc-300 text-orange-500 focus:ring-orange-500" />
                               </td>
@@ -4680,7 +4765,7 @@ export default function FinanzasPage() {
               )}
 
               {/* ── Retención Ganancias ── */}
-              {opMontoBruto > 0 && (
+              {!pagoParcialDirecto && opMontoBruto > 0 && (
                 <div>
                   <div className="rounded-lg border border-violet-200 dark:border-violet-800 p-3 space-y-2">
                     <div className="flex items-center justify-between">
@@ -4917,10 +5002,10 @@ export default function FinanzasPage() {
             </div>
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
               <button onClick={() => setOpModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
-              <button onClick={handleCreateOP} disabled={opSaving || !opForm.proveedor_id || (opMontoBruto <= 0)}
+              <button onClick={pagoParcialDirecto ? handleRegistrarPagoParcialDirecto : handleCreateOP} disabled={opSaving || !opForm.proveedor_id || (opMontoBruto <= 0)}
                 className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {opSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                Crear Orden de Pago
+                {pagoParcialDirecto ? "Registrar pago parcial" : "Crear Orden de Pago"}
               </button>
             </div>
           </div>

@@ -20,7 +20,11 @@ export default function PapeleraPage() {
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    if (!sociedadActiva?.id) return;
+    if (!sociedadActiva?.id) {
+      setRows([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     const run = async (table: string, select: string, filter: (q: any) => any) => {
       try {
