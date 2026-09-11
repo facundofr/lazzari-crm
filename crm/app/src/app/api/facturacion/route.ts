@@ -126,6 +126,7 @@ export async function POST(req: NextRequest) {
       presupuesto_id, // optional UUID
       moneda,         // "ARS" | "USD" (default ARS)
       tipo_cambio,    // number — exchange rate USD→ARS (required when USD)
+      cotizacion_modalidad, // "divisas" | "billetes" — source of the BNA quote
       sociedad_id,    // optional UUID — defaults to Lazzari
       oc_cliente,     // optional string — OC number from client
       solicitado_por, // optional string — who requested it
@@ -196,6 +197,7 @@ export async function POST(req: NextRequest) {
           total: totalFinal,
           moneda: isUSD ? "USD" : "ARS",
           tipo_cambio: isUSD ? tc : null,
+          cotizacion_modalidad: isUSD ? (cotizacion_modalidad === "billetes" ? "billetes" : "divisas") : null,
           estado: "emitida",
           sociedad_id: sociedad_id || ARCA_CONFIGS[0].id,
           oc_cliente: oc_cliente || null,
@@ -479,6 +481,7 @@ export async function POST(req: NextRequest) {
         total: totalFinal,
         moneda: isUSD ? "USD" : "ARS",
         tipo_cambio: isUSD ? tc : null,
+        cotizacion_modalidad: isUSD ? (cotizacion_modalidad === "billetes" ? "billetes" : "divisas") : null,
         estado: "emitida",
         sociedad_id: arcaConfig.id,
         oc_cliente: oc_cliente || null,

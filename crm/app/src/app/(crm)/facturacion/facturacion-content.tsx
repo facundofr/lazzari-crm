@@ -45,6 +45,7 @@ interface FacturaRow {
   total: number;
   moneda: string;
   tipo_cambio: number | null;
+  cotizacion_modalidad?: "divisas" | "billetes" | null;
   estado: string;
   presupuesto_id: string | null;
   oc_cliente?: string | null;
@@ -411,7 +412,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     try {
       let query = supabase
         .from("facturas")
-        .select(`*, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia, dias_cuenta_corriente), presupuestos:presupuesto_id(numero)`)
+        .select(`*, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia, dias_cuenta_corriente), presupuestos:presupuesto_id(numero, cotizacion_modalidad)`)
         .order("created_at", { ascending: false });
 
       if (sociedadActiva?.id) {
@@ -432,7 +433,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             if (fv && fv < hoy) estado = "vencida";
             else estado = "pendiente";
           }
-          return { ...f, estado, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "", _prNumero: (f as any).presupuestos?.numero || "" };
+          return { ...f, estado, cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "", _prNumero: (f as any).presupuestos?.numero || "" };
         }));
       } else if (error) {
         setFacturas(mockFacturas.map((f) => ({
@@ -605,6 +606,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           punto_venta: emitData.punto_venta,
           moneda: emitData.moneda,
           tipo_cambio: isUSD ? tc : null,
+          cotizacion_modalidad: isUSD ? (cotizBna?.modalidad === "billetes" ? "billetes" : "divisas") : null,
           fecha: emitData.fecha || null,
           condicion_venta: emitData.condicion_venta || null,
           fecha_vencimiento: emitData.fecha_vencimiento || null,
@@ -663,6 +665,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           total: emitTotals.total,
           moneda: emitData.moneda,
           tipo_cambio: emitData.moneda === "USD" && emitData.tipo_cambio > 0 ? emitData.tipo_cambio : null,
+          cotizacion_modalidad: emitData.moneda === "USD" ? (cotizBna?.modalidad === "billetes" ? "billetes" : "divisas") : null,
           estado: "emitida",
           sociedad_id: sociedadActiva?.id || null,
           created_by: profile?.id || null,
@@ -1118,6 +1121,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       condicion_venta: f.condicion_venta,
       moneda: f.moneda as "ARS" | "USD",
       tipo_cambio: f.tipo_cambio,
+      cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null,
       subtotal: Number(f.subtotal),
       iva: Number(f.iva),
       total: Number(f.total),
@@ -2559,7 +2563,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero,
             fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento,
             condicion_venta: f.condicion_venta, moneda: f.moneda as "ARS" | "USD",
-            tipo_cambio: f.tipo_cambio, subtotal: Number(f.subtotal), iva: Number(f.iva), total: Number(f.total),
+            tipo_cambio: f.tipo_cambio, cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null, subtotal: Number(f.subtotal), iva: Number(f.iva), total: Number(f.total),
             cae: f.cae, cae_vencimiento: f.cae_vencimiento, oc_cliente: f.oc_cliente,
             cliente: cli ? {
               razon_social: cli.razon_social, cuit: cli.cuit, condicion_iva: cli.condicion_iva,

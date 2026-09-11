@@ -954,7 +954,7 @@ export default function PresupuestosPage() {
         const { data, error } = await supabase
           .from("profiles")
           .select("id, full_name")
-          .in("role", ["vendedor", "admin", "super_admin"])
+          .in("role", ["vendedor", "administrativo", "admin", "super_admin"])
           .order("full_name");
         if (!error && data) {
           setVendedores(data as { id: string; full_name: string }[]);
@@ -2778,10 +2778,15 @@ export default function PresupuestosPage() {
                     value={(selected as any).creadoPorId || ""}
                     onChange={async (e) => {
                       const newOpId = e.target.value || null;
-                      const { error } = await supabase.from("presupuestos").update({ created_by: newOpId } as any).eq("id", selected.id);
+                      let updateQuery = supabase.from("presupuestos").update({ created_by: newOpId } as any).eq("id", selected.id);
+                      if (sociedadActiva?.id) updateQuery = updateQuery.eq("sociedad_id" as any, sociedadActiva.id);
+                      const { error } = await updateQuery;
                       if (error) { toast.error("Error al cambiar operador"); return; }
                       // Also update linked OCs
-                      await supabase.from("ordenes_compra").update({ created_by: newOpId } as any).eq("presupuesto_origen_id", selected.id).not("estado", "eq", "cancelada");
+                      let ocUpdateQuery = supabase.from("ordenes_compra").update({ created_by: newOpId } as any).eq("presupuesto_origen_id", selected.id).not("estado", "eq", "cancelada");
+                      if (sociedadActiva?.id) ocUpdateQuery = ocUpdateQuery.eq("sociedad_id" as any, sociedadActiva.id);
+                      const { error: ocError } = await ocUpdateQuery;
+                      if (ocError) { toast.error(`Presupuesto actualizado, pero no se pudieron actualizar las OC: ${ocError.message}`); return; }
                       const v = vendedores.find(v => v.id === newOpId);
                       setSelected({ ...selected, creadoPorId: newOpId || "", creadoPor: v?.full_name || "" } as any);
                       await fetchPresupuestos();

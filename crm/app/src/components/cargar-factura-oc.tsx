@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { X, Loader2, Sparkles, Check, Search, Plus, Trash2, Maximize2, Minimize2, AlertTriangle } from "lucide-react";
 import { formatCurrency, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
@@ -115,6 +115,9 @@ export default function CargarFacturaOC({
   const [alignmentLoading, setAlignmentLoading] = useState(false);
   const [alignmentError, setAlignmentError] = useState("");
   const [overrideOC, setOverrideOC] = useState(false);
+  // La IA devuelve el subtotal impreso. Se conserva una pasada para que el
+  // efecto que recalcula desde renglones no lo pise inmediatamente (especialmente FC B).
+  const parsedSubtotalRef = useRef<number | null>(null);
 
   // ── Computed ──
   const iva = useMemo(() => {
@@ -191,6 +194,11 @@ export default function CargarFacturaOC({
 
   useEffect(() => {
     if (items.length > 0) {
+      if (parsedSubtotalRef.current != null) {
+        setSubtotal(parsedSubtotalRef.current);
+        parsedSubtotalRef.current = null;
+        return;
+      }
       setSubtotal(roundMoney(items.reduce((sum, item) => sum + itemNeto(item), 0)));
     }
   }, [items]);
@@ -344,7 +352,10 @@ export default function CargarFacturaOC({
       if (d.fecha_vencimiento) setFechaVencimiento(d.fecha_vencimiento);
       if (d.cae) setCae(d.cae);
       if (d.moneda) setMoneda(d.moneda === "USD" ? "USD" : "ARS");
-      if (d.subtotal) setSubtotal(Number(d.subtotal) || 0);
+      if (d.subtotal != null) {
+        parsedSubtotalRef.current = Number(d.subtotal) || 0;
+        setSubtotal(parsedSubtotalRef.current);
+      }
       setIvaPorcentaje(isNotaPedido ? 0 : (d.iva_porcentaje != null ? (Number(d.iva_porcentaje) || 0) : 21));
       if (d.percepciones && !isNotaPedido) setPercepciones(Number(d.percepciones) || 0);
       if (d.notas) setNotas(d.notas);
@@ -567,6 +578,70 @@ export default function CargarFacturaOC({
                     .eq("id", prItem.id);
                 }
               }
+            }
+          }
+        }
+      }
+
+      // Si la factura trae costos distintos, actualizar el costo de la OC y del
+      // PR asociado sin tocar el precio de venta. Se conserva cantidad/recepción
+      // de la OC; el detalle del cambio queda visible en observaciones.
+      if (isMercaderia && !overrideOC && selectedOCIds.size > 0 && items.length > 0) {
+        const stamp = new Date().toLocaleString("es-AR");
+        for (const ocId of Array.from(selectedOCIds)) {
+          const { data: ocRow, error: ocLoadError } = await (supabase as any)
+            .from("ordenes_compra")
+            .select("id, subtotal, iva, total, moneda, observaciones, presupuesto_origen_id")
+            .eq("id", ocId).single();
+          if (ocLoadError || !ocRow) throw new Error(ocLoadError?.message || "No se pudo leer la OC vinculada");
+          const { data: ocItems, error: itemsLoadError } = await (supabase as any)
+            .from("orden_compra_items")
+            .select("id, descripcion, precio_unitario, cantidad")
+            .eq("orden_id", ocId).order("orden");
+          if (itemsLoadError) throw new Error(itemsLoadError.message);
+          const changed: string[] = [];
+          for (let i = 0; i < Math.min((ocItems || []).length, items.length); i++) {
+            const oldItem = ocItems[i];
+            const newCost = roundMoney(Number(items[i].precio_unitario || 0));
+            if (Math.abs(Number(oldItem.precio_unitario || 0) - newCost) < 0.005) continue;
+            const { error: itemUpdateError } = await (supabase as any)
+              .from("orden_compra_items").update({ precio_unitario: newCost }).eq("id", oldItem.id);
+            if (itemUpdateError) throw new Error(itemUpdateError.message);
+            changed.push(`${oldItem.descripcion || `item ${i + 1}`}: ${oldItem.precio_unitario} → ${newCost} ${moneda}`);
+          }
+          // Para una sola OC, sus totales deben reflejar el comprobante. En
+          // facturas divididas se dejan los totales originales y se actualiza el
+          // costo de cada línea, evitando asignar todo el total a cada OC.
+          if (selectedOCIds.size === 1) {
+            const { error: headerUpdateError } = await (supabase as any)
+              .from("ordenes_compra").update({ subtotal, iva, total, moneda }).eq("id", ocId);
+            if (headerUpdateError) throw new Error(headerUpdateError.message);
+          }
+          if (changed.length > 0) {
+            const history = `\n[${stamp}] Costo actualizado desde FC ${numeroFactura.trim()}: ${changed.join("; ")}`;
+            const { error: ocHistoryError } = await (supabase as any)
+              .from("ordenes_compra").update({ observaciones: `${ocRow.observaciones || ""}${history}` }).eq("id", ocId);
+            if (ocHistoryError) throw new Error(ocHistoryError.message);
+
+            if (ocRow.presupuesto_origen_id) {
+              const { data: prRow } = await (supabase as any).from("presupuestos")
+                .select("observaciones").eq("id", ocRow.presupuesto_origen_id).single();
+              const { data: prItems } = await (supabase as any).from("presupuesto_items")
+                .select("id, descripcion, precio_costo").eq("presupuesto_id", ocRow.presupuesto_origen_id).order("orden");
+              for (let i = 0; i < Math.min((ocItems || []).length, items.length); i++) {
+                const oldItem = ocItems[i];
+                const prItem = (prItems || []).find((pr: any) =>
+                  String(pr.descripcion || "").trim().toLowerCase() === String(oldItem.descripcion || "").trim().toLowerCase()
+                ) || (prItems || [])[i];
+                if (!prItem) continue;
+                const { error: prCostError } = await (supabase as any).from("presupuesto_items")
+                  .update({ precio_costo: roundMoney(Number(items[i].precio_unitario || 0)), costo_moneda: moneda })
+                  .eq("id", prItem.id);
+                if (prCostError) throw new Error(prCostError.message);
+              }
+              await (supabase as any).from("presupuestos").update({
+                observaciones: `${prRow?.observaciones || ""}${history}`,
+              }).eq("id", ocRow.presupuesto_origen_id);
             }
           }
         }

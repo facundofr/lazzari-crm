@@ -3407,7 +3407,10 @@ export default function OrdenesCompraPage() {
         <CargarFacturaOC
           sociedadId={sociedadActiva?.id || ""}
           profileId={profile?.id || null}
-          ordenes={ordenes.filter(o => o.proveedor_id && !["borrador", "cancelada"].includes(o.estado)).map(o => ({
+          // Las OC en borrador también deben poder seleccionarse para cargar una
+          // factura: el circuito de recepción/activación es independiente del
+          // vínculo contable de la factura y, de lo contrario, quedan invisibles.
+          ordenes={ordenes.filter(o => o.proveedor_id && o.estado !== "cancelada").map(o => ({
             id: o.id,
             numero: o.numero,
             proveedor_id: o.proveedor_id!,

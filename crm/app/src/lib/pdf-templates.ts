@@ -435,6 +435,7 @@ interface FacturaData {
   condicion_venta?: string | null;
   moneda: "ARS" | "USD";
   tipo_cambio?: number | null;
+  cotizacion_modalidad?: "divisas" | "billetes" | null;
   subtotal: number;
   iva: number;
   total: number;
@@ -566,7 +567,7 @@ ${documentHeader(soc, {
       <div class="compact-title">Datos del comprobante</div>
       ${f.condicion_venta ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Pago</span><span>${f.condicion_venta}</span></div>` : ""}
       <div class="compact-line compact-line-aligned"><span class="compact-label">Moneda</span><span>${mon === "USD" ? "USD — Dólares estadounidenses" : "ARS — Pesos argentinos"}</span></div>
-      ${isUSD ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Tipo de cambio</span><span>$ ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
+      ${isUSD ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Cotización BNA</span><span>${f.cotizacion_modalidad === "billetes" ? "Billete" : "Divisa"} — $ ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
       ${f.oc_cliente ? `<div class="compact-line compact-line-aligned"><span class="compact-label">OC cliente</span><span>${f.oc_cliente}</span></div>` : ""}
     </td>
   </tr>
@@ -587,7 +588,7 @@ ${documentHeader(soc, {
 
 <table style="width:100%;margin-top:14px;border-collapse:collapse">
   <tr><td></td><td style="width:260px">
-    ${isUSD ? `<div style="font-size:9px;color:#444;padding:5px 0">Operación en USD &mdash; TC: ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>` : ""}
+    ${isUSD ? `<div style="font-size:9px;color:#444;padding:5px 0">Operación en USD — cotización BNA ${f.cotizacion_modalidad === "billetes" ? "billete" : "divisa"} — TC: ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>` : ""}
     ${totalsHtml}
   </td></tr>
 </table>

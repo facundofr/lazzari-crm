@@ -40,10 +40,13 @@ Reglas:
 - NUNCA usar como proveedor estos nombres (son nuestros, somos el comprador): "Lazzari", "Augusto Lazzari", "Lazzari Soluciones", "Grupo LA", "LAZZARI". Si el nombre en el encabezado contiene alguno de estos, está MAL — buscá el verdadero emisor en otra parte del documento.
 - Si el CUIT del emisor contiene 20379309128 o 30719396042, estás leyendo el comprador, NO el emisor. Buscá el otro CUIT.
 - Extraé todos los items/líneas de la factura.
-- El precio_unitario debe ser el precio de lista antes del descuento. Extraé el descuento de cada renglón en descuento_porcentaje.
+- El precio_unitario debe ser el importe UNITARIO IMPRESO en el renglón (no inventes un precio de lista). Si el renglón muestra un descuento separado, extraé el precio impreso antes del descuento y el porcentaje; si no muestra descuento, dejá descuento_porcentaje en 0.
 - Si el documento aplica un único descuento general, devolvelo en descuento_general_porcentaje y repetilo en cada item que no tenga un descuento propio.
 - Si el descuento aparece como importe y no como porcentaje, calculá el porcentaje equivalente.
 - El subtotal debe ser el neto luego de aplicar descuentos y antes del IVA.
+- Leé la tabla completa, incluyendo todas las páginas. No resumas varios renglones en uno: cada artículo/código distinto es un item separado.
+- Verificá aritméticamente cantidad × precio unitario × (1 - descuento/100), subtotal, IVA, percepciones y total contra los totales impresos. Conservá los importes impresos como subtotal/iva/total y corregí únicamente un item evidentemente mal leído.
+- En documentos con separador de miles y decimales argentinos (1.234,56), convertí a número 1234.56. Nunca devuelvas números con formato local ni símbolos.
 - Los precios deben ser números (sin símbolos de moneda).
 - Si un campo no existe en el documento, usá null para texto o 0 para números.
 - El número de factura debe incluir punto de venta si aparece (ej: 0001-00012345).
@@ -153,6 +156,34 @@ export async function POST(request: NextRequest) {
     }
 
     const parsed = JSON.parse(jsonText);
+
+    // Claude a veces devuelve importes como "1.234,56" o cantidades como texto.
+    // Normalizamos acá para que la pantalla no pierda artículos/precios por Number(...)=NaN.
+    const parseNumeric = (value: unknown): number => {
+      if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+      if (typeof value !== "string") return 0;
+      const clean = value.trim().replace(/[^0-9,.-]/g, "");
+      if (!clean) return 0;
+      const normalized = clean.includes(",")
+        ? clean.replace(/\./g, "").replace(",", ".")
+        : clean.replace(/,(?=\d{3}(?:\D|$))/g, "");
+      const result = Number(normalized);
+      return Number.isFinite(result) ? result : 0;
+    };
+    for (const key of ["subtotal", "iva", "percepciones", "total", "iva_porcentaje", "descuento_general_porcentaje"]) {
+      if (key in parsed) parsed[key] = parseNumeric(parsed[key]);
+    }
+    if (Array.isArray(parsed.items)) {
+      parsed.items = parsed.items
+        .filter((item: any) => item && (item.descripcion || item.codigo || item.cantidad || item.precio_unitario))
+        .map((item: any) => ({
+          ...item,
+          cantidad: parseNumeric(item.cantidad) || 1,
+          precio_unitario: parseNumeric(item.precio_unitario),
+          descuento_porcentaje: parseNumeric(item.descuento_porcentaje),
+          iva_porcentaje: parseNumeric(item.iva_porcentaje) || parsed.iva_porcentaje || 21,
+        }));
+    }
 
     return Response.json({
       success: true,
