@@ -3070,7 +3070,7 @@ export default function OrdenesCompraPage() {
                         {(detailOC.presupuesto_origen as { numero: string }).numero}
                       </Link>
                       {canManageCompras && (
-                        <button onClick={handleUnassignPR} className="text-zinc-300 hover:text-red-400" title="Quitar PR"><X className="h-3 w-3" /></button>
+                        <button onClick={handleUnassignPR} className="text-zinc-900 hover:text-red-600 dark:text-white dark:hover:text-red-400" title="Quitar PR"><X className="h-3 w-3" /></button>
                       )}
                     </div>
                   ) : canManageCompras ? (
