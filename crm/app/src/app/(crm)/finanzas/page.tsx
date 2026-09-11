@@ -747,6 +747,11 @@ export default function FinanzasPage() {
           qMov, qCcCli, qCcProv, qExt, qLc, qGf, qObj, qSaldos,
         ]);
 
+        // La pantalla principal no debe quedar bloqueada por consultas secundarias
+        // (extractos, objetivos, e-cheques, etc.). Mostramos el módulo con los
+        // datos principales y dejamos que el resto termine en segundo plano.
+        setLoading(false);
+
         // Use Supabase data if available, otherwise fall back to mock data mapped to snake_case
         if (movRes.data) {
           setMovimientos(movRes.data as MovimientoRow[]);
