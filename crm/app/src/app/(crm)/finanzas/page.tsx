@@ -1021,9 +1021,16 @@ export default function FinanzasPage() {
               solo_iva: r.solo_iva ?? false,
               cae: r.cae ?? undefined,
               percepciones_detalle: r.percepciones_detalle ? (typeof r.percepciones_detalle === "string" ? JSON.parse(r.percepciones_detalle) : r.percepciones_detalle) : undefined,
-              op_vinculada: r.op_facturas_compra?.length > 0 && r.op_facturas_compra[0]?.ordenes_pago
-                ? { id: r.op_facturas_compra[0].ordenes_pago.id, numero: r.op_facturas_compra[0].ordenes_pago.numero, estado: r.op_facturas_compra[0].ordenes_pago.estado, fecha: r.op_facturas_compra[0].ordenes_pago.fecha, sobre_verde: !!r.op_facturas_compra[0].ordenes_pago.sobre_verde }
-                : null,
+              // Una OP anulada no debe seguir bloqueando la factura: la FC
+              // vuelve a estar disponible para generar una nueva OP.
+              op_vinculada: (() => {
+                const link = (r.op_facturas_compra || []).find((l: any) =>
+                  l?.ordenes_pago && l.ordenes_pago.estado !== "anulada"
+                );
+                return link?.ordenes_pago
+                  ? { id: link.ordenes_pago.id, numero: link.ordenes_pago.numero, estado: link.ordenes_pago.estado, fecha: link.ordenes_pago.fecha, sobre_verde: !!link.ordenes_pago.sobre_verde }
+                  : null;
+              })(),
               ocs_vinculadas: (r.factura_compra_ocs || []).map((link: any) => ({ numero: link.ordenes_compra?.numero || "—" })).filter((o: any) => o.numero !== "—"),
               pago_directo: directByFC[r.id] || 0,
             })));
