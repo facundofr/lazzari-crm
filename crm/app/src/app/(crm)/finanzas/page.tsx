@@ -474,7 +474,7 @@ export default function FinanzasPage() {
   const [retencionConfig, setRetencionConfig] = useState({
     aplica_iva: true, minimo_iva: 130000, tasa_iva_ri: 10.5,
     aplica_ganancias: true, minimo_ganancias: 224000, tasa_ganancias_ri: 2, tasa_ganancias_no_inscripto: 28,
-    minimo_retencion_ganancias: 15000,
+    minimo_retencion_ganancias: 240,
   });
   const [proveedoresOptions, setProveedoresOptions] = useState<ProveedorOption[]>([]);
   const [chequesRecibidos, setChequesRecibidos] = useState<MovimientoRow[]>([]);
@@ -896,7 +896,7 @@ export default function FinanzasPage() {
               minimo_ganancias: retCfg.minimo_ganancias ?? 400000,
               tasa_ganancias_ri: retCfg.tasa_ganancias_ri ?? 2,
               tasa_ganancias_no_inscripto: retCfg.tasa_ganancias_no_inscripto ?? 28,
-              minimo_retencion_ganancias: retCfg.minimo_retencion_ganancias ?? 15000,
+              minimo_retencion_ganancias: retCfg.minimo_retencion_ganancias ?? 240,
             });
           }
         } catch { /* use defaults */ }

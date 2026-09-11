@@ -19,6 +19,24 @@ const CBTE_SICORE: Record<string, string> = {
   "FCEA": "201", "FCEB": "206",
 };
 
+// Códigos de régimen vigentes para los conceptos RG 830 que se pueden
+// asignar a proveedores en el CRM. El código 078 solo corresponde a
+// compraventa de bienes; no debe usarse para servicios u otros conceptos.
+const REGIMEN_RG830: Record<string, string> = {
+  compraventa_bienes: "078",
+  servicios: "094",
+  honorarios: "116",
+  alquileres_inmuebles: "027",
+  alquileres_muebles: "027",
+  intereses_financieros: "019",
+  intereses_otros: "021",
+  transporte: "078",
+  fletes: "078",
+  comisiones: "025",
+  publicidad: "094",
+  seguros: "094",
+};
+
 function pad(s: string, len: number, char = " ", right = false): string {
   if (right) return s.slice(0, len).padEnd(len, char);
   return s.slice(0, len).padStart(len, char);
@@ -71,7 +89,7 @@ export async function GET(req: NextRequest) {
   const provIds = [...new Set(ops.map(op => op.proveedor_id))];
   const { data: provs } = await supabase
     .from("proveedores")
-    .select("id, cuit, razon_social, condicion_iva")
+    .select("id, cuit, razon_social, condicion_iva, concepto_retencion_ganancias")
     .in("id", provIds);
 
   const provMap = new Map((provs || []).map(p => [p.id, p]));
@@ -101,7 +119,7 @@ export async function GET(req: NextRequest) {
     const nroComprobante = pad((op.numero || "").replace(/[^0-9]/g, ""), 16, "0");
     const importeComprobante = fmtMonto(op.monto_bruto, 16);
     const codImpuesto = "217"; // Ganancias
-    const codRegimen = "078"; // Anexo II inc. f
+    const codRegimen = REGIMEN_RG830[prov.concepto_retencion_ganancias || "compraventa_bienes"] || "078";
     const codOperacion = "1"; // Retención
     const baseCalculo = fmtMonto(op.base_retencion_ganancias || 0, 14);
     const fechaEmision = fecha;

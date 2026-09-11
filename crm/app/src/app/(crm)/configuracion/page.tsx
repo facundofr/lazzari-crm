@@ -140,7 +140,7 @@ export default function ConfiguracionPage() {
     minimo_ganancias: 224000,
     tasa_ganancias_ri: 3.5,
     tasa_ganancias_no_inscripto: 28,
-    minimo_retencion_ganancias: 15000,
+    minimo_retencion_ganancias: 240,
   });
   const [retencionCfgSaving, setRetencionCfgSaving] = useState(false);
   const [retencionCfgSaved, setRetencionCfgSaved] = useState(false);
@@ -376,7 +376,7 @@ export default function ConfiguracionPage() {
             minimo_ganancias: data.minimo_ganancias ?? 400000,
             tasa_ganancias_ri: data.tasa_ganancias_ri ?? 3.5,
             tasa_ganancias_no_inscripto: data.tasa_ganancias_no_inscripto ?? 28,
-            minimo_retencion_ganancias: data.minimo_retencion_ganancias ?? 15000,
+            minimo_retencion_ganancias: data.minimo_retencion_ganancias ?? 240,
           });
         } catch { /* use defaults */ }
       })();

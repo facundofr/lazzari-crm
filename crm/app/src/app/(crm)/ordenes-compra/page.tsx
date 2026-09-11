@@ -756,7 +756,7 @@ export default function OrdenesCompraPage() {
     }
   };
 
-  const handleAdvanceEstado = async (oc: OCRow, nuevoEstado: "enviada" | "confirmada") => {
+  const handleAdvanceEstado = async (oc: OCRow, nuevoEstado: "pendiente") => {
     try {
       const { error } = await supabase.from("ordenes_compra").update({ estado: nuevoEstado } as any).eq("id", oc.id);
       if (error) throw error;
@@ -2793,6 +2793,14 @@ export default function OrdenesCompraPage() {
               {/* ── Action Buttons ─────────────────────────────────────── */}
               {canManageCompras && !["recibida", "cancelada"].includes(detailOC.estado) && (
                 <div className="flex flex-wrap gap-2">
+                  {detailOC.estado === "borrador" && (
+                    <button
+                      onClick={() => handleAdvanceEstado(detailOC, "pendiente")}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                    >
+                      <Send className="h-4 w-4" /> Activar OC
+                    </button>
+                  )}
                   {["pendiente", "enviada", "confirmada", "recibida_parcial"].includes(detailOC.estado) && detailItems.length > 0 && (
                     <button
                       onClick={handleMarcarTodoRecibido}
