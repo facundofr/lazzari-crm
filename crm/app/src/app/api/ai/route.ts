@@ -313,11 +313,18 @@ export async function POST(request: NextRequest) {
               result = JSON.stringify({ error: `No tenés permisos para escribir en ${table} con rol ${role}` });
             } else {
               const data = input.data as Record<string, unknown>;
-              // Enforce sociedad_id on insert
-              if (allowedSociedadIds.length > 0 && TABLES_WITH_SOCIEDAD.has(table) && !data.sociedad_id) {
-                data.sociedad_id = allowedSociedadIds[0];
+              // Never infer a sociedad for writes: an absent context must fail closed.
+              if (TABLES_WITH_SOCIEDAD.has(table) && allowedSociedadIds.length === 0) {
+                result = JSON.stringify({ error: "No hay una sociedad autorizada para esta operación" });
+                toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result });
+                continue;
               }
-              if (allowedSociedadIds.length > 0 && TABLES_WITH_SOCIEDAD.has(table) && data.sociedad_id && !allowedSociedadIds.includes(data.sociedad_id as string)) {
+              if (TABLES_WITH_SOCIEDAD.has(table) && !data.sociedad_id) {
+                result = JSON.stringify({ error: "sociedad_id es obligatorio para insertar este registro" });
+                toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result });
+                continue;
+              }
+              if (TABLES_WITH_SOCIEDAD.has(table) && data.sociedad_id && !allowedSociedadIds.includes(data.sociedad_id as string)) {
                 result = JSON.stringify({ error: "No tenés acceso a esa sociedad" });
                 toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result });
                 continue;
@@ -336,7 +343,19 @@ export async function POST(request: NextRequest) {
             } else {
               const id = input.id as string;
               const data = input.data as Record<string, unknown>;
-              const { data: updated, error } = await supabase.from(table).update(data).eq("id", id).select().single();
+              if (TABLES_WITH_SOCIEDAD.has(table) && allowedSociedadIds.length === 0) {
+                result = JSON.stringify({ error: "No hay una sociedad autorizada para esta operación" });
+                toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result });
+                continue;
+              }
+              if (TABLES_WITH_SOCIEDAD.has(table) && data.sociedad_id && !allowedSociedadIds.includes(data.sociedad_id as string)) {
+                result = JSON.stringify({ error: "No tenés acceso a esa sociedad" });
+                toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result });
+                continue;
+              }
+              let updateQuery = supabase.from(table).update(data).eq("id", id);
+              if (TABLES_WITH_SOCIEDAD.has(table)) updateQuery = updateQuery.in("sociedad_id", allowedSociedadIds);
+              const { data: updated, error } = await updateQuery.select().single();
               if (error) {
                 result = JSON.stringify({ error: error.message });
               } else {

@@ -387,7 +387,7 @@ export default function CalendarioPage() {
   }
 
   async function handleCreateEvento() {
-    if (!createForm.titulo || !createForm.fecha_inicio) return;
+    if (!createForm.titulo || !createForm.fecha_inicio || !sociedadActiva?.id) return;
     setCreating(true);
     try {
       // For todo_el_dia events, store noon local to avoid UTC midnight → AR previous day issue
@@ -418,7 +418,7 @@ export default function CalendarioPage() {
         : await (supabase as any).from("eventos").insert({
           ...eventValues,
           created_by: profile?.id || null,
-          sociedad_id: sociedadActiva?.id || null,
+          sociedad_id: sociedadActiva.id,
           completado: false,
         });
       if (error) { alert(error.message); return; }
@@ -452,8 +452,9 @@ export default function CalendarioPage() {
 
   // ── Toggle completado ────────────────────────────────────────
   async function toggleCompletado(id: string, current: boolean) {
+    if (!sociedadActiva?.id) return;
     try {
-      const { error } = await (supabase as any).from("eventos").update({ completado: !current }).eq("id", id);
+      const { error } = await (supabase as any).from("eventos").update({ completado: !current }).eq("id", id).eq("sociedad_id", sociedadActiva.id);
       if (error) { alert(error.message); return; }
       await fetchData();
       if (detailEvento?.id === id) {
@@ -467,8 +468,9 @@ export default function CalendarioPage() {
   // ── Delete evento ────────────────────────────────────────────
   async function handleDeleteEvento(id: string) {
     if (!confirm("Eliminar este evento?")) return;
+    if (!sociedadActiva?.id) return;
     try {
-      const { error } = await (supabase as any).from("eventos").delete().eq("id", id);
+      const { error } = await (supabase as any).from("eventos").delete().eq("id", id).eq("sociedad_id", sociedadActiva.id);
       if (error) { alert(error.message); return; }
       setDetailEvento(null);
       await fetchData();

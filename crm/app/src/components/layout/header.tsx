@@ -44,6 +44,7 @@ interface AlertRow {
   read: boolean;
   created_at: string;
   entity_id: string | null;
+  sociedad_id: string | null;
 }
 
 interface SearchResultCliente {
@@ -178,11 +179,16 @@ export function Header({ title, subtitle, action }: HeaderProps) {
         clearTimeout(debounceRef.current);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
+  }, [search, sociedadActiva?.id]);
 
   async function performSearch(query: string) {
     const pattern = `%${query}%`;
+
+    if (!sociedadActiva?.id) {
+      setSearchResults({ clientes: [], presupuestos: [], facturas: [], productos: [] });
+      setSearchLoading(false);
+      return;
+    }
 
     try {
       const [clientesRes, presupuestosRes, facturasRes, productosRes] =
@@ -191,21 +197,25 @@ export function Header({ title, subtitle, action }: HeaderProps) {
             .from("clientes")
             .select("id, razon_social, cuit")
             .ilike("razon_social", pattern)
+            .eq("sociedad_id", sociedadActiva.id)
             .limit(3),
           supabase
             .from("presupuestos")
             .select("id, numero, clientes(razon_social)")
             .ilike("numero", pattern)
+            .eq("sociedad_id", sociedadActiva.id)
             .limit(3),
           supabase
             .from("facturas")
             .select("id, numero, tipo, clientes(razon_social)")
             .ilike("numero::text", pattern)
+            .eq("sociedad_id", sociedadActiva.id)
             .limit(3),
           supabase
             .from("productos")
             .select("id, codigo, nombre")
             .or(`codigo.ilike.${pattern},nombre.ilike.${pattern}`)
+            .eq("sociedad_id", sociedadActiva.id)
             .limit(3),
         ]);
 
@@ -246,6 +256,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
           .from("alertas")
           .select("*")
           .or(`user_id.eq.${profile?.id},user_id.is.null`)
+          .or(`sociedad_id.eq.${sociedadActiva?.id},sociedad_id.is.null`)
           .order("created_at", { ascending: false })
           .limit(30),
         profile?.id
@@ -279,7 +290,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
     } catch {
       setAlerts([]);
     }
-  }, [supabase, profile?.id]);
+  }, [supabase, profile?.id, sociedadActiva?.id]);
 
   useEffect(() => {
     if (!profile?.id) return;
@@ -298,12 +309,14 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   async function markAllRead() {
     const unreadIds = unread.map((a) => a.id);
     if (unreadIds.length === 0) return;
-    await supabase.from("alertas").update({ read: true }).in("id", unreadIds);
+    if (!sociedadActiva?.id) return;
+    await supabase.from("alertas").update({ read: true }).in("id", unreadIds).or(`sociedad_id.eq.${sociedadActiva.id},sociedad_id.is.null`);
     setAlerts((prev) => prev.map((a) => ({ ...a, read: true })));
   }
 
   async function markOneRead(id: string) {
-    await supabase.from("alertas").update({ read: true }).eq("id", id);
+    if (!sociedadActiva?.id) return;
+    await supabase.from("alertas").update({ read: true }).eq("id", id).or(`sociedad_id.eq.${sociedadActiva.id},sociedad_id.is.null`);
     setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, read: true } : a)));
   }
 

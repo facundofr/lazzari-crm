@@ -416,7 +416,7 @@ export default function ConfiguracionPage() {
         activo: comisionForm.activo,
       };
       if (editingComision) {
-        const { error } = await (supabase as any).from("comision_reglas").update(payload).eq("id", editingComision.id);
+        const { error } = await (supabase as any).from("comision_reglas").update(payload).eq("id", editingComision.id).eq("sociedad_id", sociedadActiva.id);
         if (error) {
           alert("Error al actualizar regla de comisión: " + error.message);
           return;
@@ -447,7 +447,7 @@ export default function ConfiguracionPage() {
   async function handleDeleteComision(id: string) {
     if (!sociedadActiva) return;
     try {
-      const { error } = await (supabase as any).from("comision_reglas").delete().eq("id", id);
+      const { error } = await (supabase as any).from("comision_reglas").delete().eq("id", id).eq("sociedad_id", sociedadActiva.id);
       if (error) {
         alert("Error al eliminar regla de comisión: " + error.message);
         return;
@@ -460,8 +460,9 @@ export default function ConfiguracionPage() {
   }
 
   async function handleToggleComisionActivo(regla: ComisionRegla) {
+    if (!sociedadActiva?.id) return;
     try {
-      const { error } = await (supabase as any).from("comision_reglas").update({ activo: !regla.activo }).eq("id", regla.id);
+      const { error } = await (supabase as any).from("comision_reglas").update({ activo: !regla.activo }).eq("id", regla.id).eq("sociedad_id", sociedadActiva.id);
       if (error) {
         alert("Error al cambiar estado de comisión: " + error.message);
         return;

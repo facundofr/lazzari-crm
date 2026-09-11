@@ -205,7 +205,7 @@ export async function POST(req: NextRequest) {
       nro_remito_afip: `${String(cfg.ptoVtaRemito).padStart(5, "0")}-${String(cbteNro).padStart(8, "0")}`,
     };
 
-    const { error: updErr } = await (supabase as any).from("remitos").update(updatePayload).eq("id", remito_id);
+    const { error: updErr } = await (supabase as any).from("remitos").update(updatePayload).eq("id", remito_id).eq("sociedad_id", sid);
     if (updErr) console.error("Error guardando CAE del remito:", updErr.message);
 
     return NextResponse.json({

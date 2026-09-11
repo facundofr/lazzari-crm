@@ -172,7 +172,7 @@ export async function POST(req: NextRequest) {
       moneda,         // "ARS" | "USD" (default ARS)
       tipo_cambio,    // number — exchange rate USD→ARS (required when USD)
       cotizacion_modalidad, // "divisas" | "billetes" — source of the BNA quote
-      sociedad_id,    // optional UUID — defaults to Lazzari
+      sociedad_id,    // required UUID — prevents emitting under the wrong sociedad
       oc_cliente,     // optional string — OC number from client
       oc_cliente_fecha, // optional date — date printed on the client's OC
       solicitado_por, // optional string — who requested it
@@ -189,6 +189,10 @@ export async function POST(req: NextRequest) {
     const authHeader = req.headers.get("authorization");
     const supabase = getSupabase(authHeader);
 
+    if (!sociedad_id || typeof sociedad_id !== "string") {
+      return NextResponse.json({ error: "sociedad_id es requerido para emitir una factura" }, { status: 400 });
+    }
+
     // ── Manual mode: skip ARCA entirely ──
     if (manual === true) {
       if (!numero_manual && numero_manual !== 0) {
@@ -197,7 +201,7 @@ export async function POST(req: NextRequest) {
       if (!tipo || !cliente_id || !items?.length) {
         return NextResponse.json({ error: "Faltan campos requeridos: tipo, cliente_id, items" }, { status: 400 });
       }
-      const sociedadId = sociedad_id || DEFAULT_ARCA_CONFIG.id;
+      const sociedadId = sociedad_id;
       if (!SUPPORTED_MANUAL_TYPES.has(tipo)) {
         return NextResponse.json({ error: `Tipo de comprobante manual no válido: ${tipo}` }, { status: 400 });
       }
