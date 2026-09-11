@@ -404,7 +404,9 @@ export default function ClientesPage() {
         condicion_iva: data.condicion_iva || prev.condicion_iva,
         direccion: data.direccion || prev.direccion,
         localidad: data.localidad || prev.localidad,
-        provincia: data.provincia || prev.provincia,
+        // No pisar una provincia ya cargada: puede ser la dirección histórica
+        // comercial del cliente y ARCA puede devolver otra sede fiscal.
+        provincia: prev.provincia || data.provincia || "",
         cp: data.cp || prev.cp,
         type: data.tipo_persona === "JURIDICA" ? "empresa" : data.tipo_persona === "FISICA" ? "persona" : prev.type,
       }));

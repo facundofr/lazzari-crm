@@ -456,6 +456,21 @@ export default function CargarFacturaOC({
     setError("");
 
     try {
+      // Evitar duplicar una factura del mismo proveedor y número dentro de la
+      // sociedad antes de insertar y generar saldos/pagos duplicados.
+      const normalizedNumero = numeroFactura.trim();
+      const { data: duplicateFactura, error: duplicateError } = await (supabase as any)
+        .from("facturas_compra")
+        .select("id, numero_factura, estado")
+        .eq("sociedad_id", sociedadId)
+        .eq("proveedor_id", proveedorId)
+        .eq("numero_factura", normalizedNumero)
+        .limit(1);
+      if (duplicateError) throw new Error(`No se pudo validar duplicados: ${duplicateError.message}`);
+      if (duplicateFactura?.length) {
+        throw new Error(`La factura ${normalizedNumero} de este proveedor ya está cargada (estado ${duplicateFactura[0].estado || "registrada"}). Revisá antes de continuar.`);
+      }
+
       let alignmentResult: { remaining: number; partial: boolean; freshOCs: any[] } | null = null;
       if (isMercaderia && selectedOCIds.size > 0) {
         alignmentResult = await validateOCAlignmentLive();

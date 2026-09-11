@@ -250,7 +250,9 @@ export default function ProveedoresPage() {
         condicion_iva: data.condicion_iva || prev.condicion_iva,
         direccion: data.direccion || prev.direccion,
         localidad: data.localidad || prev.localidad,
-        provincia: data.provincia || prev.provincia,
+        // Conservar la provincia histórica/comercial si ya estaba cargada;
+        // la consulta de ARCA puede corresponder a otra sede fiscal.
+        provincia: prev.provincia || data.provincia || "",
         concepto_retencion_ganancias: data.retencion_ganancias?.concepto || prev.concepto_retencion_ganancias,
         alicuota_ganancias: data.retencion_ganancias?.alicuota_inscripto ?? prev.alicuota_ganancias,
       }));

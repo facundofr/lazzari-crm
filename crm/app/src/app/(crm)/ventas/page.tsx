@@ -42,7 +42,7 @@ interface VentaPresupuesto {
   observaciones: string | null;
   vendedor_profile: { full_name: string; avatar_url: string | null } | null;
   listo_para_facturar?: boolean;
-  clientes: { razon_social: string; cuit: string; condicion_iva: string; forma_pago: string | null; dias_cuenta_corriente?: number | null; email?: string | null; email_facturacion?: string | null } | null;
+  clientes: { razon_social: string; cuit: string; condicion_iva: string; forma_pago: string | null; dias_cuenta_corriente?: number | null; limite_credito?: number | null; saldo_cuenta_corriente?: number | null; email?: string | null; email_facturacion?: string | null } | null;
   presupuesto_items: {
     descripcion: string;
     cantidad: number;
@@ -269,7 +269,7 @@ export default function VentasPage() {
         .select(`
           id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id, modalidad_emision, oc_cliente, archivo_url, archivo_nombre, observaciones, listo_para_facturar,
           vendedor_profile:vendedor_id(full_name, avatar_url),
-          clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, email, email_facturacion),
+          clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, limite_credito, saldo_cuenta_corriente, email, email_facturacion),
           presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total)
         `)
         .in("estado" as any, ["aprobado", "facturar", "facturado"])
@@ -916,6 +916,11 @@ export default function VentasPage() {
                             <span className="text-xs text-zinc-400">{vendedorName}</span>
                           )}
                           <span className="text-xs text-zinc-400">{formatDate(p.fecha)}</span>
+                          {!!p.clientes?.limite_credito && Number(p.clientes.saldo_cuenta_corriente || 0) >= Number(p.clientes.limite_credito) && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700 dark:bg-red-950/40 dark:text-red-300">
+                              <AlertCircle className="h-3 w-3" /> Límite de crédito excedido
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="text-right">
@@ -1044,6 +1049,11 @@ export default function VentasPage() {
                     <X className="h-5 w-5" />
                   </button>
                 </div>
+                {!!selectedVenta.presupuesto.clientes?.limite_credito && Number(selectedVenta.presupuesto.clientes.saldo_cuenta_corriente || 0) >= Number(selectedVenta.presupuesto.clientes.limite_credito) && (
+                  <div className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
+                    <AlertCircle className="mr-1 inline h-3.5 w-3.5" /> El cliente alcanzó o superó su límite de crédito.
+                  </div>
+                )}
 
                 <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
                   {/* Step 1: Presupuesto */}

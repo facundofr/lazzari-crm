@@ -159,6 +159,7 @@ interface SupabasePresupuesto {
   updated_at: string;
   vendedor_id: string | null;
   oc_cliente?: string | null;
+  oc_cliente_fecha?: string | null;
   tipo_comprobante?: string | null;
   modalidad_emision?: string | null;
   archivo_url?: string | null;
@@ -242,6 +243,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     sucursalDireccion: [row.sucursal?.direccion, row.sucursal?.localidad, row.sucursal?.provincia].filter(Boolean).join(", "),
     contactoNombre: row.contacto?.nombre ?? "",
     ocCliente: row.oc_cliente ?? "",
+    ocClienteFecha: row.oc_cliente_fecha ?? null,
     tipoComprobante: row.tipo_comprobante ?? "",
     modalidadEmision: row.modalidad_emision ?? "sin_definir",
     clienteCuit: row.clientes?.cuit ?? "",
@@ -2878,6 +2880,17 @@ export default function PresupuestosPage() {
                       + Adjuntar OC
                     </button>
                   )}
+                  <div className="mt-2">
+                    <label className="text-[11px] text-zinc-400">Fecha de la OC</label>
+                    <input type="date" value={(selected as any).ocClienteFecha || ""}
+                      onChange={async (e) => {
+                        const value = e.target.value || null;
+                        const update = await supabase.from("presupuestos").update({ oc_cliente_fecha: value } as any).eq("id", selected.id);
+                        if (update.error) { toast.error("No se pudo guardar la fecha de la OC"); return; }
+                        setSelected({ ...selected, ocClienteFecha: value } as any);
+                      }}
+                      className="mt-0.5 rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  </div>
                 </div>
                 {selected.estado === "aprobado" && (
                   <div className="col-span-2">

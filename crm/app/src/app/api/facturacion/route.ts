@@ -174,6 +174,7 @@ export async function POST(req: NextRequest) {
       cotizacion_modalidad, // "divisas" | "billetes" — source of the BNA quote
       sociedad_id,    // optional UUID — defaults to Lazzari
       oc_cliente,     // optional string — OC number from client
+      oc_cliente_fecha, // optional date — date printed on the client's OC
       solicitado_por, // optional string — who requested it
       observaciones,  // optional string — visible on invoice
       condicion_venta, // optional string — payment terms
@@ -264,6 +265,7 @@ export async function POST(req: NextRequest) {
           estado: "emitida",
           sociedad_id: sociedadId,
           oc_cliente: oc_cliente || null,
+          oc_cliente_fecha: oc_cliente_fecha || null,
           solicitado_por: solicitado_por || null,
           observaciones: observaciones || null,
           condicion_venta: condicion_venta || null,
@@ -557,6 +559,7 @@ export async function POST(req: NextRequest) {
         estado: "emitida",
         sociedad_id: arcaConfig.id,
         oc_cliente: oc_cliente || null,
+        oc_cliente_fecha: oc_cliente_fecha || null,
         solicitado_por: solicitado_por || null,
         observaciones: observaciones || null,
         condicion_venta: condicion_venta || null,

@@ -258,6 +258,8 @@ interface OpMedioPago {
   monto: number;
   fecha: string;
   banco: string;
+  /** Texto ingresado cuando se elige el banco "Otro". */
+  banco_otro?: string;
   numero_cheque: string;
   moneda: "ARS" | "USD";
   cotizacion: number;
@@ -1460,6 +1462,7 @@ export default function FinanzasPage() {
           monto: Number(d.monto) || 0,
           fecha: d.fecha || opMedios[0]?.fecha || todayAR(),
           banco: d.banco || "",
+          banco_otro: "",
           numero_cheque: d.cheque_numero || "",
         };
       });
@@ -1521,7 +1524,7 @@ export default function FinanzasPage() {
         neto_a_pagar: totalMediosVal,
         moneda: opForm.moneda,
         medio_pago: opMedios[0]?.tipo || "transferencia",
-        medios_pago: JSON.stringify(opMedios.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion, echeq_id: m.echeq_id }))),
+        medios_pago: JSON.stringify(opMedios.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco === "Otro" ? (m.banco_otro?.trim() || "Otro") : m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion, echeq_id: m.echeq_id }))),
         notas: opForm.notas,
         estado: esPagoParcial ? "pendiente" : "pagada",
         sobre_verde: opForm.sobre_verde || false,
@@ -4792,13 +4795,12 @@ export default function FinanzasPage() {
                           className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                         {(m.tipo === "cheque" || m.tipo === "cheque_propio" || m.tipo === "echeq") && (
                           <>
-                            <select value={m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value } : x))}
+                            <select value={m.banco === "Otro" || (m.banco && !BANCOS_ARGENTINA.includes(m.banco)) ? "Otro" : m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value, banco_otro: e.target.value === "Otro" ? (x.banco === "Otro" ? x.banco_otro : x.banco) : undefined } : x))}
                               className="w-32 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                               <option value="">Banco…</option>
-                              {m.banco && !BANCOS_ARGENTINA.includes(m.banco) && <option value={m.banco}>{m.banco}</option>}
                               {BANCOS_ARGENTINA.filter((b, i, a) => a.indexOf(b) === i).map(b => <option key={b} value={b}>{b}</option>)}
                             </select>
-                            {m.banco === "Otro" && <input value={m.banco === "Otro" ? "" : m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value } : x))}
+                            {(m.banco === "Otro" || (m.banco && !BANCOS_ARGENTINA.includes(m.banco))) && <input value={m.banco === "Otro" ? (m.banco_otro || "") : m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: "Otro", banco_otro: e.target.value } : x))}
                               placeholder="Nombre del banco" className="w-28 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />}
                             <input value={m.numero_cheque} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, numero_cheque: e.target.value } : x))}
                               placeholder="N° cheque" className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />

@@ -400,7 +400,9 @@ export default function OrdenesCompraPage() {
 
   async function handleAssignPR(prId: string) {
     if (!detailOC) return;
-    const { error } = await supabase.from("ordenes_compra").update({ presupuesto_origen_id: prId } as any).eq("id", detailOC.id);
+    let query = supabase.from("ordenes_compra").update({ presupuesto_origen_id: prId } as any).eq("id", detailOC.id);
+    if (sociedadActiva?.id) query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
+    const { error } = await query;
     if (error) { alert("Error al asignar PR: " + error.message); return; }
     const pr = assignPROptions.find(p => p.id === prId);
     setDetailOC({ ...detailOC, presupuesto_origen_id: prId, presupuesto_origen: pr ? { numero: pr.numero } : null });
@@ -410,7 +412,9 @@ export default function OrdenesCompraPage() {
 
   async function handleUnassignPR() {
     if (!detailOC) return;
-    const { error } = await supabase.from("ordenes_compra").update({ presupuesto_origen_id: null } as any).eq("id", detailOC.id);
+    let query = supabase.from("ordenes_compra").update({ presupuesto_origen_id: null } as any).eq("id", detailOC.id);
+    if (sociedadActiva?.id) query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
+    const { error } = await query;
     if (error) { alert("Error al desasignar PR: " + error.message); return; }
     setDetailOC({ ...detailOC, presupuesto_origen_id: null, presupuesto_origen: null });
     setOrdenes(prev => prev.map(o => o.id === detailOC.id ? { ...o, presupuesto_origen_id: null, presupuesto_origen: null } : o));
@@ -762,15 +766,21 @@ export default function OrdenesCompraPage() {
   };
 
   const handleAdvanceEstado = async (oc: OCRow, nuevoEstado: "pendiente") => {
+    if (oc.estado !== "borrador") {
+      alert(`La OC ${oc.numero || ""} ya está ${oc.estado}. No hace falta activarla nuevamente.`);
+      return;
+    }
     try {
-      const { error } = await supabase.from("ordenes_compra").update({ estado: nuevoEstado } as any).eq("id", oc.id);
+      let query = supabase.from("ordenes_compra").update({ estado: nuevoEstado } as any).eq("id", oc.id);
+      if (sociedadActiva?.id) query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
+      const { error } = await query;
       if (error) throw error;
       await fetchData();
       if (detailOC?.id === oc.id) {
         setDetailOC({ ...oc, estado: nuevoEstado });
       }
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Error al actualizar estado");
+      alert(err instanceof Error ? `No se pudo activar la OC: ${err.message}` : "No se pudo activar la OC. Verificá la sociedad y el estado actual.");
     }
   };
 

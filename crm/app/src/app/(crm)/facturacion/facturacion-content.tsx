@@ -49,6 +49,7 @@ interface FacturaRow {
   estado: string;
   presupuesto_id: string | null;
   oc_cliente?: string | null;
+  oc_cliente_fecha?: string | null;
   condicion_venta?: string | null;
   fecha_vencimiento?: string | null;
   factura_origen_id?: string | null;
@@ -436,7 +437,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     try {
       let query = supabase
         .from("facturas")
-        .select(`*, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia, dias_cuenta_corriente), presupuestos:presupuesto_id(numero, cotizacion_modalidad)`)
+        .select(`*, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia, dias_cuenta_corriente), presupuestos:presupuesto_id(numero, cotizacion_modalidad, oc_cliente_fecha)`)
         .order("created_at", { ascending: false });
 
       if (sociedadActiva?.id) {
@@ -457,7 +458,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             if (fv && fv < hoy) estado = "vencida";
             else estado = "pendiente";
           }
-          return { ...f, estado, cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "", _prNumero: (f as any).presupuestos?.numero || "" };
+          return { ...f, estado, cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null, oc_cliente_fecha: f.oc_cliente_fecha || (f as any).presupuestos?.oc_cliente_fecha || null, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "", _prNumero: (f as any).presupuestos?.numero || "" };
         }));
       } else if (error) {
         setFacturas(mockFacturas.map((f) => ({
@@ -1299,7 +1300,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               )},
               { key: "clientes", label: "Cliente", sortable: true, sortKey: "_clienteNombre", render: (r) => <span className="font-medium">{r.clientes?.razon_social || "\u2014"}</span> },
               { key: "oc_cliente", label: "OC", render: (r) => r.oc_cliente
-                ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{r.oc_cliente}</span>
+                ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{r.oc_cliente}{r.oc_cliente_fecha && <small className="ml-1 font-sans text-zinc-400">({formatDate(r.oc_cliente_fecha)})</small>}</span>
                 : <span className="text-zinc-300">{"\u2014"}</span>
               },
               { key: "fecha", label: "F.Venta", sortable: true, render: (r) => <span className="text-zinc-500">{formatDate(r.fecha)}</span> },
