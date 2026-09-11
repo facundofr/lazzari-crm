@@ -63,14 +63,14 @@ function getArcaInstance(config: ArcaConfig = DEFAULT_ARCA_CONFIG) {
   // Support base64-encoded certs (Vercel), plain text certs (env), or file-based certs (local)
   let cert = "";
   if (process.env[config.certB64Env]) {
-    cert = Buffer.from(process.env[config.certB64Env]!, "base64").toString("utf-8");
+    cert = decodePemEnv(process.env[config.certB64Env]!);
   } else if (fs.existsSync(certPath)) {
     cert = fs.readFileSync(certPath, "utf-8");
   }
 
   let key = "";
   if (process.env[config.keyB64Env]) {
-    key = Buffer.from(process.env[config.keyB64Env]!, "base64").toString("utf-8");
+    key = decodePemEnv(process.env[config.keyB64Env]!);
   } else if (fs.existsSync(keyPath)) {
     key = fs.readFileSync(keyPath, "utf-8");
   }
@@ -82,6 +82,15 @@ function getArcaInstance(config: ArcaConfig = DEFAULT_ARCA_CONFIG) {
   const production = process.env.ARCA_PRODUCTION !== "false";
 
   return new Arca({ cuit: config.cuit, cert, key, production, requestTimeoutMs: 30_000, retries: 2, retryDelayMs: 750 });
+}
+
+// Vercel puede conservar el valor como base64, PEM plano o PEM con saltos
+// escapados. Normalizamos los tres formatos antes de entregarlos al SDK WSAA.
+function decodePemEnv(raw: string) {
+  const value = raw.trim().replace(/\\n/g, "\n");
+  if (value.includes("-----BEGIN")) return value;
+  const decoded = Buffer.from(value, "base64").toString("utf-8").trim();
+  return decoded.includes("-----BEGIN") ? decoded : value;
 }
 
 function condicionIvaArca(value?: string | null) {

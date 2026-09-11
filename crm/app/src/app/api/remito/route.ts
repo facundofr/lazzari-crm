@@ -78,13 +78,20 @@ function buildArca(cfg: ArcaConfig) {
   const certPath = path.join(process.cwd(), "..", "certs", cfg.certFile);
   const keyPath = path.join(process.cwd(), "..", "certs", cfg.keyFile);
   let cert = "", key = "";
-  if (process.env[cfg.certB64Env]) cert = Buffer.from(process.env[cfg.certB64Env]!, "base64").toString();
+  if (process.env[cfg.certB64Env]) cert = decodePemEnv(process.env[cfg.certB64Env]!);
   else if (fs.existsSync(certPath)) cert = fs.readFileSync(certPath, "utf-8");
-  if (process.env[cfg.keyB64Env]) key = Buffer.from(process.env[cfg.keyB64Env]!, "base64").toString();
+  if (process.env[cfg.keyB64Env]) key = decodePemEnv(process.env[cfg.keyB64Env]!);
   else if (fs.existsSync(keyPath)) key = fs.readFileSync(keyPath, "utf-8");
   if (!cert || !key) throw new Error(`Certificado ARCA no disponible (${cfg.certB64Env}/${cfg.keyB64Env})`);
   const production = process.env.ARCA_PRODUCTION !== "false";
   return new Arca({ cuit: cfg.cuit, cert, key, production, requestTimeoutMs: 30_000, retries: 2, retryDelayMs: 750 });
+}
+
+function decodePemEnv(raw: string) {
+  const value = raw.trim().replace(/\\n/g, "\n");
+  if (value.includes("-----BEGIN")) return value;
+  const decoded = Buffer.from(value, "base64").toString("utf-8").trim();
+  return decoded.includes("-----BEGIN") ? decoded : value;
 }
 
 function getSupabase(authHeader?: string | null) {
