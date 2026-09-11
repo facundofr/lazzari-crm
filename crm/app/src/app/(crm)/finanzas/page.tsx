@@ -18,6 +18,7 @@ import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } 
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
+import CargaMasivaFacturasCompra from "@/components/carga-masiva-facturas-compra";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -264,10 +265,12 @@ interface OpMedioPago {
   moneda: "ARS" | "USD";
   cotizacion: number;
   echeq_id?: string; // if selecting from cartera
+  comprobante_url?: string;
+  comprobante_nombre?: string;
 }
 const BANCOS_ARGENTINA = [
   "Banco Galicia", "Banco Nación", "Banco Provincia", "Banco Santander",
-  "BBVA", "HSBC", "ICBC", "Banco Macro", "Banco Credicoop", "Banco Galicia",
+  "BBVA", "HSBC", "ICBC", "Banco Macro", "Banco Credicoop",
   "Brubank", "Mercado Pago", "Ualá", "Otro",
 ];
 const makeOpMedio = (moneda: "ARS" | "USD" = "ARS"): OpMedioPago => ({
@@ -512,6 +515,7 @@ export default function FinanzasPage() {
   // Facturas compra state
   const [facturasCompra, setFacturasCompra] = useState<FacturaCompraRow[]>([]);
   const [fcModalOpen, setFcModalOpen] = useState(false);
+  const [fcMassModalOpen, setFcMassModalOpen] = useState(false);
   const [fcForm, setFcForm] = useState(emptyFCForm);
   const [fcSaving, setFcSaving] = useState(false);
   const [fcError, setFcError] = useState("");
@@ -1551,6 +1555,17 @@ export default function FinanzasPage() {
         if (archivosArr.length > 0) {
           const updateData: Record<string, unknown> = { archivo_url: archivosArr[0].url, archivo_nombre: archivosArr[0].nombre };
           if (archivosArr.length > 1) updateData.archivos = JSON.stringify(archivosArr);
+          // Keep the comprobante next to the payment medium it documents.
+          // The legacy OP-level fields remain populated for backwards compatibility.
+          const mediosConArchivo = opMedios.map((medio, index) => ({
+            tipo: medio.tipo, monto: medio.monto, fecha: medio.fecha,
+            banco: medio.banco === "Otro" ? (medio.banco_otro?.trim() || "Otro") : medio.banco,
+            numero_cheque: medio.numero_cheque, moneda: medio.moneda,
+            cotizacion: medio.cotizacion, echeq_id: medio.echeq_id,
+            comprobante_url: archivosArr[index]?.url,
+            comprobante_nombre: archivosArr[index]?.nombre,
+          }));
+          updateData.medios_pago = JSON.stringify(mediosConArchivo);
           await (supabase as any).from("ordenes_pago").update(updateData).eq("id", opData.id);
         }
       }
@@ -2163,6 +2178,21 @@ export default function FinanzasPage() {
     openOPModal(fc.proveedor_id || "");
   }
 
+  async function handleToggleSobreVerde(opId: string, current: boolean) {
+    try {
+      let q = (supabase as any).from("ordenes_pago").update({ sobre_verde: !current }).eq("id", opId);
+      if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
+      const { error } = await q;
+      if (error) throw error;
+      setOrdenesPago(prev => prev.map(op => op.id === opId ? { ...op, sobre_verde: !current } : op));
+      setFacturasCompra(prev => prev.map(fc => fc.op_vinculada?.id === opId
+        ? { ...fc, op_vinculada: fc.op_vinculada ? { ...fc.op_vinculada, sobre_verde: !current } : fc.op_vinculada }
+        : fc));
+    } catch (err) {
+      alert("No se pudo actualizar el sobre verde: " + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
   async function handleAnularFC(id: string) {
     if (!confirm("¿Seguro que querés anular esta factura?")) return;
     try {
@@ -2213,7 +2243,9 @@ export default function FinanzasPage() {
         notas: editFCForm.notas,
         cae: editFCForm.cae.trim() || null,
       };
-      const { error } = await (supabase as any).from("facturas_compra").update(updateData).eq("id", selectedFC.id);
+      let fcUpdate = (supabase as any).from("facturas_compra").update(updateData).eq("id", selectedFC.id);
+      if (sociedadActiva?.id) fcUpdate = fcUpdate.eq("sociedad_id", sociedadActiva.id);
+      const { error } = await fcUpdate;
       if (error) throw error;
       setEditingFC(false);
       setSelectedFC(null);
@@ -2244,7 +2276,9 @@ export default function FinanzasPage() {
         moneda: editOPForm.moneda,
         notas: editOPForm.notas,
       };
-      const { error } = await (supabase as any).from("ordenes_pago").update(updateData).eq("id", selectedOP.id);
+      let opUpdate = (supabase as any).from("ordenes_pago").update(updateData).eq("id", selectedOP.id);
+      if (sociedadActiva?.id) opUpdate = opUpdate.eq("sociedad_id", sociedadActiva.id);
+      const { error } = await opUpdate;
       if (error) throw error;
       setEditingOP(false);
       setSelectedOP(null);
@@ -3109,6 +3143,9 @@ export default function FinanzasPage() {
                 <button onClick={openFCModal} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
                   <Plus className="h-4 w-4" /> Nueva factura de compra
                 </button>
+                <button onClick={() => setFcMassModalOpen(true)} className="flex items-center gap-1.5 rounded-lg border border-orange-500 px-3 py-2 text-sm font-medium text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors">
+                  <Upload className="h-4 w-4" /> Carga masiva con IA
+                </button>
               </div>
             </div>
             {/* Search & filters */}
@@ -3225,8 +3262,12 @@ export default function FinanzasPage() {
                       )}
                     </div>
                   )},
-                  { key: "sobre_verde" as any, label: "Sobre", sortable: false, render: (row) => row.op_vinculada?.sobre_verde ? (
-                    <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-600" title="Sobre verde asociado a la OP"><Mail className="h-3.5 w-3.5" /> Verde</span>
+                  { key: "sobre_verde" as any, label: "Sobre", sortable: false, render: (row) => row.op_vinculada ? (
+                    <button type="button" onClick={() => handleToggleSobreVerde(row.op_vinculada!.id, !!row.op_vinculada!.sobre_verde)}
+                      className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium ${row.op_vinculada.sobre_verde ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
+                      title={row.op_vinculada.sobre_verde ? "Quitar sobre verde" : "Marcar como sobre verde"}>
+                      <Mail className="h-3.5 w-3.5" /> {row.op_vinculada.sobre_verde ? "Verde" : "Marcar"}
+                    </button>
                   ) : <span className="text-zinc-300 text-xs">—</span> },
                   { key: "actions", label: "", sortable: false, render: (row) => (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -4793,7 +4834,7 @@ export default function FinanzasPage() {
                         </div>
                         <input type="date" value={m.fecha} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, fecha: e.target.value } : x))}
                           className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                        {(m.tipo === "cheque" || m.tipo === "cheque_propio" || m.tipo === "echeq") && (
+                        {(m.tipo !== "efectivo" && m.tipo !== "tarjeta") && (
                           <>
                             <select value={m.banco === "Otro" || (m.banco && !BANCOS_ARGENTINA.includes(m.banco)) ? "Otro" : m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value, banco_otro: e.target.value === "Otro" ? (x.banco === "Otro" ? x.banco_otro : x.banco) : undefined } : x))}
                               className="w-32 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
@@ -4904,6 +4945,17 @@ export default function FinanzasPage() {
           }))}
           onClose={() => setFcModalOpen(false)}
           onSuccess={() => { setFcModalOpen(false); fetchData(); }}
+        />
+      )}
+
+      {fcMassModalOpen && (
+        <CargaMasivaFacturasCompra
+          sociedadId={sociedadActiva?.id || ""}
+          profileId={profile?.id || null}
+          proveedores={proveedoresOptions.map(p => ({ id: p.id, razon_social: p.razon_social, cuit: p.cuit }))}
+          ordenes={ocOptions.filter(o => o.proveedor_id && !["cancelada"].includes(o.estado || "")).map(o => ({ id: o.id, numero: o.numero, proveedor_id: o.proveedor_id, proveedor_nombre: o.proveedores?.razon_social || "Sin proveedor", moneda: o.moneda }))}
+          onClose={() => setFcMassModalOpen(false)}
+          onSuccess={() => { setFcMassModalOpen(false); fetchData(); }}
         />
       )}
 
@@ -5277,7 +5329,10 @@ export default function FinanzasPage() {
                       <div className="space-y-1 mt-1">
                         {selectedOP.medios_pago.map((m, i) => {
                           const ml = m.tipo === "transferencia" ? "Transf." : m.tipo === "cheque" ? "Cheque" : m.tipo === "cheque_propio" ? "Ch. propio" : m.tipo === "echeq" ? "E-Cheq" : m.tipo === "deposito" ? "Depósito" : m.tipo === "tarjeta" ? "Tarjeta" : "Efectivo";
-                          return <p key={i} className="text-sm dark:text-white">{ml}{m.banco ? ` — ${m.banco}` : ""} <span className="font-mono text-xs">{formatCurrency(m.monto, m.moneda || selectedOP.moneda)}</span></p>;
+                          return <div key={i} className="flex items-center gap-2 text-sm dark:text-white">
+                            <span>{ml}{m.banco ? ` — ${m.banco}` : ""} <span className="font-mono text-xs">{formatCurrency(m.monto, m.moneda || selectedOP.moneda)}</span></span>
+                            {m.comprobante_url && <a href={m.comprobante_url} target="_blank" rel="noopener noreferrer" className="text-orange-500 hover:text-orange-600" title={m.comprobante_nombre || "Ver comprobante de este medio"}><Paperclip className="h-3.5 w-3.5" /></a>}
+                          </div>;
                         })}
                       </div>
                     ) : (
@@ -5295,17 +5350,6 @@ export default function FinanzasPage() {
                     <p className="text-sm text-zinc-600 dark:text-zinc-400">{selectedOP.notas}</p>
                   </div>
                 )}
-                <label className={`flex items-center gap-2 cursor-pointer rounded-lg px-3 py-2 border ${selectedOP.sobre_verde ? "bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800" : "border-zinc-200 dark:border-zinc-700"}`}>
-                  <input type="checkbox" checked={!!selectedOP.sobre_verde} onChange={async (e) => {
-                    const val = e.target.checked;
-                    const { error } = await (supabase as any).from("ordenes_pago").update({ sobre_verde: val }).eq("id", selectedOP.id);
-                    if (error) return;
-                    setSelectedOP({ ...selectedOP, sobre_verde: val });
-                    setOrdenesPago(prev => prev.map(op => op.id === selectedOP.id ? { ...op, sobre_verde: val } : op));
-                  }} className="rounded border-zinc-300 accent-emerald-600" />
-                  <Mail className={`h-4 w-4 ${selectedOP.sobre_verde ? "text-emerald-500" : "text-zinc-400"}`} />
-                  <span className={`text-sm font-medium ${selectedOP.sobre_verde ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-500"}`}>Sobre verde</span>
-                </label>
               </div>
 
               {/* Desglose de importes */}

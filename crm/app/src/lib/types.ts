@@ -390,6 +390,8 @@ export interface Proveedor {
   cbu?: string;
   aliasBancario?: string;
   numeroCuenta?: string;
+  titularCuenta?: string;
+  tipoCuenta?: string;
   contactos: Contacto[];
   rubro: string;
   formaPago: string;

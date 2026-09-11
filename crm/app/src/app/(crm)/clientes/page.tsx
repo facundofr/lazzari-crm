@@ -1885,7 +1885,6 @@ export default function ClientesPage() {
                         </div>
                       )}
                       {(selectedCliente as any).flete && <InfoField label="Flete" value={(selectedCliente as any).flete} />}
-                      {(selectedCliente as any).vendedorNombre && (selectedCliente as any).vendedorNombre !== "—" && <InfoField label="Vendedor asignado" value={(selectedCliente as any).vendedorNombre} />}
                     </div>
                   </div>
 

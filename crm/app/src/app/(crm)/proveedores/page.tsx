@@ -68,6 +68,8 @@ function mapSupabaseProveedor(row: Record<string, unknown>): Proveedor {
     cbu: (row.cbu as string) ?? "",
     aliasBancario: (row.alias_bancario as string) ?? "",
     numeroCuenta: (row.numero_cuenta as string) ?? "",
+    titularCuenta: (row.titular_cuenta as string) ?? "",
+    tipoCuenta: (row.tipo_cuenta as string) ?? "",
     contactos: (Array.isArray(row.contactos) ? row.contactos : []).map((c: Record<string, unknown>) => ({
       id: c.id as string, nombre: c.nombre as string, cargo: c.cargo as string,
       email: c.email as string, telefono: c.telefono as string, principal: c.principal as boolean,
@@ -146,6 +148,8 @@ const emptyForm = {
   cbu: "",
   alias_bancario: "",
   numero_cuenta: "",
+  titular_cuenta: "",
+  tipo_cuenta: "",
   rubro: "",
   forma_pago: "Transferencia",
   dias_cuenta_corriente: 30,
@@ -202,6 +206,11 @@ export default function ProveedoresPage() {
 
   // Detail
   const [selectedProv, setSelectedProv] = useState<Proveedor | null>(null);
+  type ProveedorContactoForm = { id?: string; nombre: string; cargo: string; email: string; telefono: string; whatsapp: string; principal: boolean; notas: string };
+  const emptyProveedorContacto: ProveedorContactoForm = { nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", principal: false, notas: "" };
+  const [proveedorContactoForm, setProveedorContactoForm] = useState<ProveedorContactoForm>(emptyProveedorContacto);
+  const [editingProveedorContacto, setEditingProveedorContacto] = useState(false);
+  const [savingProveedorContacto, setSavingProveedorContacto] = useState(false);
 
   // AI Upload
   const [aiModalOpen, setAiModalOpen] = useState(false);
@@ -312,7 +321,7 @@ export default function ProveedoresPage() {
           const mapped = data.map((c: Record<string, unknown>) => ({
             id: c.id as string, nombre: (c.nombre as string) ?? "",
             cargo: (c.cargo as string) ?? "", email: (c.email as string) ?? "",
-            telefono: (c.telefono as string) ?? "", principal: (c.principal as boolean) ?? false,
+            telefono: (c.telefono as string) ?? "", whatsapp: (c.whatsapp as string) ?? "", notas: (c.notas as string) ?? "", principal: (c.principal as boolean) ?? false,
           }));
           setSelectedProv((prev) => prev ? { ...prev, contactos: mapped } : prev);
         }
@@ -322,6 +331,35 @@ export default function ProveedoresPage() {
     }
     fetchContactos();
   }, [selectedProv?.id]);
+
+  function startProveedorContacto(contacto?: any) {
+    setProveedorContactoForm(contacto ? { id: contacto.id, nombre: contacto.nombre ?? "", cargo: contacto.cargo ?? "", email: contacto.email ?? "", telefono: contacto.telefono ?? "", whatsapp: contacto.whatsapp ?? "", principal: !!contacto.principal, notas: contacto.notas ?? "" } : emptyProveedorContacto);
+    setEditingProveedorContacto(true);
+  }
+
+  async function saveProveedorContacto() {
+    if (!selectedProv || !proveedorContactoForm.nombre.trim()) return;
+    setSavingProveedorContacto(true);
+    try {
+      const payload = { nombre: proveedorContactoForm.nombre.trim(), cargo: proveedorContactoForm.cargo.trim() || null, email: proveedorContactoForm.email.trim() || null, telefono: proveedorContactoForm.telefono.trim() || null, whatsapp: proveedorContactoForm.whatsapp.trim() || null, notas: proveedorContactoForm.notas.trim() || null, principal: proveedorContactoForm.principal };
+      const q = (supabase as any).from("contactos");
+      const result = proveedorContactoForm.id
+        ? await q.update(payload).eq("id", proveedorContactoForm.id).eq("entity_id", selectedProv.id)
+        : await q.insert({ ...payload, entity_type: "proveedor", entity_id: selectedProv.id });
+      if (result.error) throw result.error;
+      const { data } = await q.select("*").eq("entity_type", "proveedor").eq("entity_id", selectedProv.id).order("principal", { ascending: false });
+      setSelectedProv((prev) => prev ? { ...prev, contactos: (data ?? []) as any } : prev);
+      setProveedorContactoForm(emptyProveedorContacto); setEditingProveedorContacto(false); toast.success("Contacto guardado");
+    } catch { toast.error("No se pudo guardar el contacto"); } finally { setSavingProveedorContacto(false); }
+  }
+
+  async function deleteProveedorContacto(id: string) {
+    if (!selectedProv) return;
+    const { error } = await (supabase as any).from("contactos").delete().eq("id", id).eq("entity_id", selectedProv.id);
+    if (error) { toast.error("No se pudo eliminar el contacto"); return; }
+    setSelectedProv((prev) => prev ? { ...prev, contactos: prev.contactos.filter((c) => c.id !== id) } : prev);
+    toast.success("Contacto eliminado");
+  }
 
   // Build filter configs dynamically from current data
   const filterConfigs: FilterConfig[] = [
@@ -403,6 +441,7 @@ export default function ProveedoresPage() {
       email: p.email, telefono: p.telefono, direccion: p.direccion,
       localidad: p.localidad, provincia: p.provincia, rubro: p.rubro,
       cbu: p.cbu ?? "", alias_bancario: p.aliasBancario ?? "", numero_cuenta: p.numeroCuenta ?? "",
+      titular_cuenta: (p as any).titularCuenta ?? "", tipo_cuenta: (p as any).tipoCuenta ?? "",
       forma_pago: p.formaPago, dias_cuenta_corriente: p.diasCuentaCorriente,
       limite_credito: p.limiteCredito, notas: p.notas,
       clasificacion_tags: p.clasificacionTags ?? [], marcas: p.marcas ?? "",
@@ -427,7 +466,9 @@ export default function ProveedoresPage() {
     setFormError("");
     try {
       if (editingId) {
-        const { error } = await supabase.from("proveedores").update(form as any).eq("id", editingId);
+        let updateQuery = supabase.from("proveedores").update(form as any).eq("id", editingId);
+        if (sociedadActiva?.id) updateQuery = updateQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        const { error } = await updateQuery;
         if (error) throw error;
       } else {
         const insertData = { ...form } as any;
@@ -854,16 +895,29 @@ export default function ProveedoresPage() {
                   )}
                 </div>
               </div>
-              {(selectedProv.cbu || selectedProv.aliasBancario || selectedProv.numeroCuenta) && (
+              {(selectedProv.cbu || selectedProv.aliasBancario || selectedProv.numeroCuenta || (selectedProv as any).titularCuenta || (selectedProv as any).tipoCuenta) && (
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                   <h3 className="text-sm font-semibold mb-3">Datos bancarios</h3>
                   <div className="grid grid-cols-2 gap-4">
+                    <div><p className="text-xs text-zinc-500">Titular</p><p className="text-sm font-medium">{(selectedProv as any).titularCuenta || "—"}</p></div>
+                    <div><p className="text-xs text-zinc-500">Tipo de cuenta</p><p className="text-sm font-medium">{(selectedProv as any).tipoCuenta || "—"}</p></div>
                     <div className="col-span-2"><p className="text-xs text-zinc-500">CBU / CVU</p><p className="text-sm font-mono font-medium">{selectedProv.cbu || "—"}</p></div>
                     <div><p className="text-xs text-zinc-500">Alias</p><p className="text-sm font-medium">{selectedProv.aliasBancario || "—"}</p></div>
                     <div><p className="text-xs text-zinc-500">N° de cuenta</p><p className="text-sm font-medium">{selectedProv.numeroCuenta || "—"}</p></div>
                   </div>
                 </div>
               )}
+              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                <div className="flex items-center justify-between mb-3"><h3 className="text-sm font-semibold">Contactos comerciales</h3><button type="button" onClick={() => startProveedorContacto()} className="rounded-lg bg-orange-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-orange-600">Agregar contacto</button></div>
+                {editingProveedorContacto && <div className="mb-3 rounded-lg border border-orange-200 bg-orange-50/50 p-3 space-y-2 dark:border-orange-900/40 dark:bg-orange-900/10">
+                  <div className="grid grid-cols-2 gap-2"><input placeholder="Nombre y apellido *" value={proveedorContactoForm.nombre} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, nombre: e.target.value }))} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /><input placeholder="Cargo" value={proveedorContactoForm.cargo} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, cargo: e.target.value }))} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+                  <div className="grid grid-cols-2 gap-2"><input type="email" placeholder="Email" value={proveedorContactoForm.email} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, email: e.target.value }))} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /><input placeholder="WhatsApp / teléfono" value={proveedorContactoForm.whatsapp} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, whatsapp: e.target.value }))} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+                  <textarea placeholder="Notas" rows={2} value={proveedorContactoForm.notas} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, notas: e.target.value }))} className="w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+                  <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={proveedorContactoForm.principal} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, principal: e.target.checked }))} /> Contacto principal</label>
+                  <div className="flex justify-end gap-2"><button type="button" onClick={() => setEditingProveedorContacto(false)} className="rounded border px-2 py-1 text-xs">Cancelar</button><button type="button" disabled={savingProveedorContacto || !proveedorContactoForm.nombre.trim()} onClick={saveProveedorContacto} className="rounded bg-orange-500 px-2 py-1 text-xs text-white disabled:opacity-50">Guardar</button></div>
+                </div>}
+                {selectedProv.contactos?.length ? <div className="space-y-2">{selectedProv.contactos.map((c: any) => <div key={c.id} className="flex items-start justify-between rounded-lg bg-zinc-50 p-2.5 dark:bg-zinc-800"><div><p className="text-sm font-medium">{c.nombre} {c.principal && <span className="text-[10px] text-orange-600">Principal</span>}</p><p className="text-xs text-zinc-500">{[c.cargo, c.email, c.whatsapp || c.telefono].filter(Boolean).join(" · ") || "Sin datos"}</p></div><div className="flex gap-1"><button type="button" onClick={() => startProveedorContacto(c)} className="rounded p-1 text-zinc-400 hover:text-orange-500"><Pencil className="h-3.5 w-3.5" /></button><button type="button" onClick={() => deleteProveedorContacto(c.id)} className="rounded p-1 text-zinc-400 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button></div></div>)}</div> : <p className="text-sm italic text-zinc-400">Sin contactos registrados</p>}
+              </div>
               {(selectedProv.clasificacionTags?.length > 0 || selectedProv.marcas || selectedProv.clasificacionNota) && (
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                   <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><Tag className="h-4 w-4" /> Clasificacion</h3>
@@ -948,6 +1002,8 @@ export default function ProveedoresPage() {
               </div>
               <div><label className="text-xs font-medium text-zinc-500">CBU / CVU</label><input value={form.cbu} onChange={(e) => setForm({ ...form, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Alias</label><input value={form.alias_bancario} onChange={(e) => setForm({ ...form, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div><label className="text-xs font-medium text-zinc-500">Titular</label><input value={(form as any).titular_cuenta} onChange={(e) => setForm({ ...form, titular_cuenta: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div><label className="text-xs font-medium text-zinc-500">Tipo de cuenta</label><select value={(form as any).tipo_cuenta} onChange={(e) => setForm({ ...form, tipo_cuenta: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"><option value="">Seleccionar...</option><option value="CC">Cuenta corriente (CC)</option><option value="CA">Caja de ahorro (CA)</option><option value="CVU">CVU</option></select></div>
               <div><label className="text-xs font-medium text-zinc-500">N° de cuenta</label><input value={form.numero_cuenta} onChange={(e) => setForm({ ...form, numero_cuenta: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div className="col-span-2"><label className="text-xs font-medium text-zinc-500">Notas</label><textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={3} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               {/* Retención Ganancias RG 830 */}
