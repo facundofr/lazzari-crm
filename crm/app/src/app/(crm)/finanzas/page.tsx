@@ -1306,6 +1306,43 @@ export default function FinanzasPage() {
     }
   }
 
+  async function handleMatchExtracto(row: ExtractoMovimientoRow) {
+    if (!sociedadActiva?.id || !extracto) { alert("No se pudo determinar la sociedad activa"); return; }
+    const tipos = row.tipo === "credito"
+      ? ["cobro", "transferencia", "deposito"]
+      : ["pago", "transferencia", "cheque_emitido", "efectivo"];
+    const target = movimientos.filter((m) => {
+      if (m.anulado || m.conciliado || !tipos.includes(m.tipo)) return false;
+      if (Math.abs(Number(m.monto) - Number(row.monto)) > 0.01) return false;
+      const delta = Math.abs(new Date(m.fecha).getTime() - new Date(row.fecha).getTime()) / 86400000;
+      return delta <= 3;
+    });
+    if (target.length !== 1) {
+      alert(target.length === 0 ? "No encontramos un movimiento único para matchear." : "Hay más de un movimiento posible; conciliá desde Movimientos para evitar una asociación incorrecta.");
+      return;
+    }
+    const match = target[0];
+    const { error } = await (supabase as any).from("extracto_movimientos").update({
+      estado: "matcheado",
+      match_cliente_id: match.cliente_id || null,
+      match_proveedor_id: match.proveedor_id || null,
+      match_factura_id: match.factura_id || match.factura_compra_id || null,
+    }).eq("id", row.id).eq("extracto_id", extracto.id);
+    if (error) { alert("No se pudo guardar el match: " + error.message); return; }
+    const { error: movementError } = await supabase.from("movimientos").update({ conciliado: true }).eq("id", match.id).eq("sociedad_id" as any, sociedadActiva.id);
+    if (movementError) { alert("El match se guardó, pero no se pudo marcar el movimiento como conciliado: " + movementError.message); }
+    setExtractos((prev) => prev.map((item) => item.id !== extracto.id ? item : {
+      ...item,
+      extracto_movimientos: item.extracto_movimientos.map((movement) => movement.id === row.id ? {
+        ...movement,
+        estado: "matcheado",
+        match_cliente_id: match.cliente_id,
+        match_proveedor_id: match.proveedor_id,
+        match_factura_id: match.factura_id || match.factura_compra_id,
+      } : movement),
+    }));
+  }
+
   function openGastoModal(gasto?: GastoFijo) {
     if (gasto) {
       setEditingGasto(gasto);
@@ -4359,7 +4396,7 @@ export default function FinanzasPage() {
                     )},
                     { key: "estado", label: "Match", render: (row) => row.estado === "matcheado"
                       ? <div className="flex items-center gap-1.5"><Link2 className="h-3.5 w-3.5 text-emerald-500" /><Badge variant="success">Match</Badge></div>
-                      : <div className="flex items-center gap-2"><Badge variant="warning">Pendiente</Badge><button className="rounded bg-orange-500 px-2 py-1 text-xs font-medium text-white hover:bg-orange-600">Matchear</button></div>
+                      : <div className="flex items-center gap-2"><Badge variant="warning">Pendiente</Badge><button onClick={() => void handleMatchExtracto(row)} className="rounded bg-orange-500 px-2 py-1 text-xs font-medium text-white hover:bg-orange-600">Matchear</button></div>
                     },
                   ]}
                   data={movsFiltrados}
