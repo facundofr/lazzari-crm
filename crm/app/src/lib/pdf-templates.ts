@@ -632,6 +632,8 @@ interface RemitoData {
   numero: string;
   fecha: string;
   cae?: string | null;
+  cae_vencimiento?: string | null;
+  nro_remito_afip?: string | null;
   oc_cliente?: string | null;
   valor_declarado?: number | null;
   observaciones?: string | null;
@@ -706,7 +708,11 @@ ${documentHeader(soc, {
         <div class="compact-line"><span class="compact-label">Transportista</span>${t.transportista}</div>
         ${t.destino ? `<div class="compact-line"><span class="compact-label">Destino</span>${t.destino}</div>` : ""}
       `).join("") : `<div class="compact-line" style="color:#444;font-style:italic">Sin transporte asignado</div>`}
-      ${r.cae ? `<div class="compact-line"><span class="compact-label">CAR</span>${r.cae}</div>` : `<div class="compact-line"><span class="compact-label">Autorización</span>Pendiente</div>`}
+      ${r.cae ? `
+        <div class="compact-line"><span class="compact-label">CAE</span>${r.cae}</div>
+        ${r.cae_vencimiento ? `<div class="compact-line"><span class="compact-label">Vto. CAE</span>${formatDate(r.cae_vencimiento)}</div>` : ""}
+        ${r.nro_remito_afip ? `<div class="compact-line"><span class="compact-label">Comp. ARCA</span>${r.nro_remito_afip}</div>` : ""}
+      ` : `<div class="compact-line"><span class="compact-label">Autorización</span>Pendiente ARCA</div>`}
     </td>
   </tr>
 </table>

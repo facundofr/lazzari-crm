@@ -51,6 +51,8 @@ interface RemitoRow {
   presupuesto_id: string | null;
   fecha: string;
   cae: string | null;
+  car_vencimiento: string | null;
+  nro_remito_afip: string | null;
   estado: string;
   observaciones: string;
   valor_declarado: number | null;
@@ -277,7 +279,7 @@ export default function RemitosPage() {
           setRemitos(mockRemitos.map((r) => ({
             id: r.id, numero: r.numero, cliente_id: r.clienteId,
             presupuesto_id: r.presupuestoId || null, fecha: r.fecha,
-            cae: r.cae || null, estado: r.estado, observaciones: r.observaciones,
+            cae: r.cae || null, car_vencimiento: null, nro_remito_afip: null, estado: r.estado, observaciones: r.observaciones,
             valor_declarado: null,
             clientes: { razon_social: r.clienteNombre },
             clienteNombre: r.clienteNombre,
@@ -288,7 +290,7 @@ export default function RemitosPage() {
         setRemitos(mockRemitos.map((r) => ({
           id: r.id, numero: r.numero, cliente_id: r.clienteId,
           presupuesto_id: r.presupuestoId || null, fecha: r.fecha,
-          cae: r.cae || null, estado: r.estado, observaciones: r.observaciones,
+          cae: r.cae || null, car_vencimiento: null, nro_remito_afip: null, estado: r.estado, observaciones: r.observaciones,
           valor_declarado: null,
           clientes: { razon_social: r.clienteNombre },
           clienteNombre: r.clienteNombre,
@@ -458,8 +460,13 @@ export default function RemitosPage() {
         setAfipError(data.error || "Error al autorizar remito");
         return;
       }
-      // Update local state with CAE
-      setDetailRemito({ ...detailRemito, cae: data.cae || data.car || "OK" });
+      // Update local state with CAE + vencimiento + nro ARCA
+      setDetailRemito({
+        ...detailRemito,
+        cae: data.cae || "OK",
+        car_vencimiento: data.cae_vencimiento || null,
+        nro_remito_afip: data.nro_remito_afip || null,
+      });
       await fetchData();
     } catch (err: any) {
       setAfipError(err.message || "Error de conexión");
@@ -1112,6 +1119,8 @@ export default function RemitosPage() {
       numero: r.numero,
       fecha: r.fecha,
       cae: r.cae,
+      cae_vencimiento: r.car_vencimiento,
+      nro_remito_afip: r.nro_remito_afip,
       oc_cliente: r.oc_cliente,
       valor_declarado: overrideValorDeclarado ?? r.valor_declarado,
       observaciones: r.observaciones,
@@ -1415,11 +1424,16 @@ export default function RemitosPage() {
                   </div>
                 )}
                 {detailRemito.cae ? (
-                  <div>
-                    <span className="text-zinc-400">CAE</span>
-                    <div className="flex items-center gap-2">
+                  <div className="col-span-2">
+                    <span className="text-zinc-400">Autorización ARCA</span>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
                       <p className="font-mono text-xs dark:text-white">{detailRemito.cae}</p>
                       <CopyButton text={detailRemito.cae} />
+                    </div>
+                    <div className="flex gap-4 mt-1 text-xs text-zinc-500">
+                      {detailRemito.car_vencimiento && <span>Vto: {detailRemito.car_vencimiento}</span>}
+                      {detailRemito.nro_remito_afip && <span>Comp: {detailRemito.nro_remito_afip}</span>}
                     </div>
                   </div>
                 ) : (
@@ -1430,7 +1444,7 @@ export default function RemitosPage() {
                       className="flex items-center gap-2 px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-md text-xs font-medium disabled:opacity-50 transition-colors"
                     >
                       {autorizandoAFIP ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-                      {autorizandoAFIP ? "Autorizando..." : "Autorizar AFIP"}
+                      {autorizandoAFIP ? "Autorizando..." : "Autorizar ARCA"}
                     </button>
                     {afipError && <p className="text-xs text-red-500 mt-1">{afipError}</p>}
                   </div>
@@ -2367,6 +2381,8 @@ export default function RemitosPage() {
             numero: r.numero,
             fecha: r.fecha,
             cae: r.cae,
+            cae_vencimiento: r.car_vencimiento,
+            nro_remito_afip: r.nro_remito_afip,
             oc_cliente: r.oc_cliente,
             valor_declarado: r.valor_declarado,
             observaciones: r.observaciones,
