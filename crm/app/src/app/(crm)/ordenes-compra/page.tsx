@@ -51,6 +51,7 @@ interface ProveedorInfo {
 
 interface OCRow {
   id: string;
+  sociedad_id?: string | null;
   numero: string;
   proveedor_id: string | null;
   fecha: string;
@@ -117,6 +118,7 @@ interface ProveedorOption {
 function mapMockToOCRow(oc: (typeof mockOrdenesCompra)[number]): OCRow {
   return {
     id: oc.id,
+    sociedad_id: null,
     numero: oc.numero,
     proveedor_id: oc.proveedorId,
     fecha: oc.fecha,
@@ -400,8 +402,9 @@ export default function OrdenesCompraPage() {
 
   async function handleAssignPR(prId: string) {
     if (!detailOC) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de asignar el presupuesto"); return; }
     let query = supabase.from("ordenes_compra").update({ presupuesto_origen_id: prId } as any).eq("id", detailOC.id);
-    if (sociedadActiva?.id) query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
+    query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
     const { error } = await query;
     if (error) { alert("Error al asignar PR: " + error.message); return; }
     const pr = assignPROptions.find(p => p.id === prId);
@@ -412,8 +415,9 @@ export default function OrdenesCompraPage() {
 
   async function handleUnassignPR() {
     if (!detailOC) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de desasignar el presupuesto"); return; }
     let query = supabase.from("ordenes_compra").update({ presupuesto_origen_id: null } as any).eq("id", detailOC.id);
-    if (sociedadActiva?.id) query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
+    query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
     const { error } = await query;
     if (error) { alert("Error al desasignar PR: " + error.message); return; }
     setDetailOC({ ...detailOC, presupuesto_origen_id: null, presupuesto_origen: null });
@@ -587,6 +591,7 @@ export default function OrdenesCompraPage() {
     // proveedor_id es opcional — se puede crear OC sin proveedor
     setFormLoading(true);
     setFormError("");
+    if (!sociedadActiva?.id) { setFormError("Seleccioná una sociedad antes de crear la OC"); setFormLoading(false); return; }
     try {
       // If linked to a PR, fetch its items to calculate totals and insert them
       let prItems: any[] = [];
@@ -652,7 +657,7 @@ export default function OrdenesCompraPage() {
         subtotal: Math.round(finalSubtotal * 100) / 100,
         iva: Math.round(finalIva * 100) / 100,
         total: Math.round((finalSubtotal + finalIva) * 100) / 100,
-        sociedad_id: sociedadActiva?.id || null,
+        sociedad_id: sociedadActiva.id,
         presupuesto_origen_id: formData.presupuesto_origen_id || null,
         created_by: profile?.id || null,
         estado_pago: formData.pagada_con_tarjeta ? "pagada" : "pendiente",
@@ -717,9 +722,10 @@ export default function OrdenesCompraPage() {
 
   const handleCancel = async (oc: OCRow) => {
     if (!confirm(`¿Cancelar la OC ${oc.numero}?`)) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de cancelar la OC"); return; }
     try {
       let cancelQuery = supabase.from("ordenes_compra").update({ estado: "cancelada" } as any).eq("id", oc.id);
-      if (sociedadActiva?.id) cancelQuery = cancelQuery.eq("sociedad_id" as any, sociedadActiva.id);
+      cancelQuery = cancelQuery.eq("sociedad_id" as any, sociedadActiva.id);
       const { error } = await cancelQuery;
       if (error) throw error;
       await fetchData();
@@ -730,6 +736,8 @@ export default function OrdenesCompraPage() {
   };
 
   const handleDeleteOC = async (oc: OCRow) => {
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de eliminar la OC"); return; }
+    if (oc.sociedad_id && oc.sociedad_id !== sociedadActiva.id) { alert("La OC no pertenece a la sociedad activa"); return; }
     try {
       // Check linked FC — block deletion if any non-anulada FC exists
       const { data: linkedFCs } = await (supabase as any)
@@ -758,7 +766,7 @@ export default function OrdenesCompraPage() {
         .from("ordenes_compra")
         .delete()
         .eq("id", oc.id);
-      if (sociedadActiva?.id) ocDelete = ocDelete.eq("sociedad_id" as any, sociedadActiva.id);
+      ocDelete = ocDelete.eq("sociedad_id" as any, sociedadActiva.id);
       const { error: ocErr } = await ocDelete;
       if (ocErr) throw ocErr;
       // 3. Refresh and close panel
@@ -774,9 +782,10 @@ export default function OrdenesCompraPage() {
       alert(`La OC ${oc.numero || ""} ya está ${oc.estado}. No hace falta activarla nuevamente.`);
       return;
     }
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de activar la OC"); return; }
     try {
       let query = supabase.from("ordenes_compra").update({ estado: nuevoEstado } as any).eq("id", oc.id);
-      if (sociedadActiva?.id) query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
+      query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
       const { error } = await query;
       if (error) throw error;
       await fetchData();
@@ -790,6 +799,8 @@ export default function OrdenesCompraPage() {
 
   const handleRegistrarRecepcion = async () => {
     if (!detailOC) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de registrar la recepción"); return; }
+    if (detailOC.sociedad_id && detailOC.sociedad_id !== sociedadActiva.id) { alert("La OC no pertenece a la sociedad activa"); return; }
     // Check there's at least one item with qty > 0
     const hasQty = Object.values(recepcionQtys).some((v) => v > 0);
     if (!hasQty) { alert("Ingresa al menos una cantidad recibida"); return; }
@@ -837,7 +848,7 @@ export default function OrdenesCompraPage() {
 
       if (newEstado !== detailOC.estado) {
         let estadoQuery = supabase.from("ordenes_compra").update({ estado: newEstado } as any).eq("id", detailOC.id);
-        if (sociedadActiva?.id) estadoQuery = estadoQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        estadoQuery = estadoQuery.eq("sociedad_id" as any, sociedadActiva.id);
         const { error: estadoErr } = await estadoQuery;
         if (estadoErr) {
           alert(`Error al actualizar estado de la OC: ${estadoErr.message}`);
@@ -859,6 +870,8 @@ export default function OrdenesCompraPage() {
 
   const handleMarcarTodoRecibido = async () => {
     if (!detailOC || !confirm("¿Marcar todos los items como recibidos?")) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de registrar la recepción"); return; }
+    if (detailOC.sociedad_id && detailOC.sociedad_id !== sociedadActiva.id) { alert("La OC no pertenece a la sociedad activa"); return; }
     // Fill recepcionQtys with pending amounts and call handleRegistrarRecepcion
     const qtys: Record<string, number> = {};
     for (const item of detailItems) {
@@ -889,7 +902,7 @@ export default function OrdenesCompraPage() {
           }
         }
       }
-      const { error: estadoErr } = await supabase.from("ordenes_compra").update({ estado: "recibida" } as any).eq("id", detailOC.id);
+      const { error: estadoErr } = await (supabase as any).from("ordenes_compra").update({ estado: "recibida" }).eq("id", detailOC.id).eq("sociedad_id", sociedadActiva.id);
       if (estadoErr) {
         alert(`Error al marcar OC como recibida: ${estadoErr.message}`);
         throw estadoErr;
@@ -925,6 +938,8 @@ export default function OrdenesCompraPage() {
 
   const handleSaveEdit = async () => {
     if (!detailOC) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de guardar la OC"); return; }
+    if (detailOC.sociedad_id && detailOC.sociedad_id !== sociedadActiva.id) { alert("La OC no pertenece a la sociedad activa"); return; }
     setSavingEdit(true);
     try {
       const compraSinIva = ocCompraSinIva(detailOC);
@@ -1033,7 +1048,7 @@ export default function OrdenesCompraPage() {
       }
 
       // 4. Update OC header
-      const { error: ocErr } = await supabase
+      const { error: ocErr } = await (supabase as any)
         .from("ordenes_compra")
         .update({
           proveedor_id: editOC.proveedor_id || null,
@@ -1048,7 +1063,8 @@ export default function OrdenesCompraPage() {
           medio_pago: editOC.pagada_con_tarjeta ? "tarjeta" : null,
           pagada_at: editOC.pagada_con_tarjeta ? (detailOC.pagada_at || new Date().toISOString()) : null,
         } as any)
-        .eq("id", detailOC.id);
+        .eq("id", detailOC.id)
+        .eq("sociedad_id", sociedadActiva.id);
       if (ocErr) throw new Error(`Error al actualizar OC: ${ocErr.message}`);
 
       // 5. Refresh items from DB (new items need real IDs)
@@ -1098,8 +1114,9 @@ export default function OrdenesCompraPage() {
   };
 
   const handleChangeOperador = async (ocId: string, newCreatedBy: string) => {
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de cambiar el operador"); return; }
     try {
-      const { error } = await (supabase as any).from("ordenes_compra").update({ created_by: newCreatedBy || null }).eq("id", ocId);
+      const { error } = await (supabase as any).from("ordenes_compra").update({ created_by: newCreatedBy || null }).eq("id", ocId).eq("sociedad_id", sociedadActiva.id);
       if (error) throw error;
       if (detailOC?.id === ocId) {
         const prof = allProfiles.find(p => p.id === newCreatedBy);
@@ -1113,6 +1130,7 @@ export default function OrdenesCompraPage() {
   };
 
   const handleSyncFromFC = async (oc: OCRow) => {
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de sincronizar la OC"); return; }
     try {
       // Buscar FC vinculada a esta OC
       const { data: links } = await (supabase as any)
@@ -1134,10 +1152,11 @@ export default function OrdenesCompraPage() {
       }
       const fc = fcs[0];
       if (!confirm(`¿Actualizar la OC a moneda ${fc.moneda}?`)) return;
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from("ordenes_compra")
         .update({ moneda: fc.moneda } as any)
-        .eq("id", oc.id);
+        .eq("id", oc.id)
+        .eq("sociedad_id", sociedadActiva.id);
       if (error) throw error;
       // Refresh
       const { data: freshOC } = await supabase
@@ -1238,12 +1257,14 @@ export default function OrdenesCompraPage() {
   // ── Toggle pedido Si/No ───────────────────────────────────────────
   const handleTogglePedido = async (oc: OCRow, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de actualizar el pedido"); return; }
     const newVal = !oc.pedido;
     try {
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from("ordenes_compra")
         .update({ pedido: newVal } as any)
-        .eq("id", oc.id);
+        .eq("id", oc.id)
+        .eq("sociedad_id", sociedadActiva.id);
       if (error) throw error;
       setOrdenes((prev) =>
         prev.map((o) => (o.id === oc.id ? { ...o, pedido: newVal } : o))
@@ -1257,6 +1278,7 @@ export default function OrdenesCompraPage() {
   // ── Pago directo con tarjeta (sin orden de pago) ────────────────
   const handleTogglePagoTarjeta = async (oc: OCRow, e?: React.MouseEvent) => {
     e?.stopPropagation();
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de actualizar el pago"); return; }
     const marcarPagada = !ocPagadaConTarjeta(oc);
     try {
       const pagoPatch = {
@@ -1264,7 +1286,7 @@ export default function OrdenesCompraPage() {
         medio_pago: marcarPagada ? "tarjeta" : null,
         pagada_at: marcarPagada ? new Date().toISOString() : null,
       };
-      const { error } = await supabase.from("ordenes_compra").update(pagoPatch as any).eq("id", oc.id);
+      const { error } = await (supabase as any).from("ordenes_compra").update(pagoPatch).eq("id", oc.id).eq("sociedad_id", sociedadActiva.id);
       if (error) throw error;
       setOrdenes((prev) => prev.map((row) => row.id === oc.id ? { ...row, ...pagoPatch } as OCRow : row));
       if (detailOC?.id === oc.id) setDetailOC((prev) => prev ? { ...prev, ...pagoPatch } as OCRow : prev);
@@ -1286,12 +1308,14 @@ export default function OrdenesCompraPage() {
 
   const handleSaveNotaRecepcion = async () => {
     if (!notaPopoverId) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de guardar la nota"); return; }
     setSavingNota(true);
     try {
-      const { error } = await supabase
+      const { error } = await (supabase as any)
         .from("ordenes_compra")
         .update({ notas_recepcion: notaPopoverText || null } as any)
-        .eq("id", notaPopoverId);
+        .eq("id", notaPopoverId)
+        .eq("sociedad_id", sociedadActiva.id);
       if (error) throw error;
       setOrdenes((prev) =>
         prev.map((o) =>
@@ -1482,6 +1506,7 @@ export default function OrdenesCompraPage() {
   };
 
   const handleCreateConsolidatedOCs = async () => {
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de consolidar OCs"); return; }
     setConsolidateCreating(true);
     try {
       const today = todayAR();
@@ -1514,7 +1539,7 @@ export default function OrdenesCompraPage() {
             iva,
             total: Math.round((subtotal + iva) * 100) / 100,
             observaciones: obs,
-            sociedad_id: sociedadActiva?.id || null,
+            sociedad_id: sociedadActiva.id,
             presupuesto_origen_id: prIds.length === 1 ? prIds[0] : null,
             created_by: profile?.id || null,
           } as any)
@@ -1644,6 +1669,7 @@ export default function OrdenesCompraPage() {
   const handleAsignarProveedores = async () => {
     const toUpdate = sinProveedorItems.filter(it => it.proveedor_id || (it as any)._stockPropio);
     if (toUpdate.length === 0) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de asignar proveedores"); return; }
     setSinProveedorSaving(true);
     try {
       // Get proveedor names
@@ -1688,7 +1714,7 @@ export default function OrdenesCompraPage() {
         const providerIds = [...new Set((ocItems || []).map((item: any) => item.proveedor_id).filter(Boolean))];
         const hasMissing = (ocItems || []).some((item: any) => !item.proveedor_id);
         if (!hasMissing && providerIds.length === 1) {
-          const { error: headerError } = await supabase.from("ordenes_compra").update({ proveedor_id: providerIds[0] } as any).eq("id", ocId);
+          const { error: headerError } = await (supabase as any).from("ordenes_compra").update({ proveedor_id: providerIds[0] }).eq("id", ocId).eq("sociedad_id", sociedadActiva.id);
           if (headerError) throw headerError;
         }
       }
@@ -1710,6 +1736,9 @@ export default function OrdenesCompraPage() {
 
   // ── Asignar proveedor a item de OC ─────────────────────────────
   const handleItemProveedorChange = async (itemId: string, provId: string) => {
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de asignar proveedores"); return; }
+    if (!detailOC) return;
+    if (detailOC.sociedad_id && detailOC.sociedad_id !== sociedadActiva.id) { alert("La OC no pertenece a la sociedad activa"); return; }
     const { error } = await supabase.from("orden_compra_items").update({ proveedor_id: provId || null } as any).eq("id", itemId);
     if (error) { alert("Error al asignar proveedor al item"); return; }
     setDetailItems(prev => prev.map(it => it.id === itemId ? { ...it, proveedor_id: provId || null } : it));
@@ -1738,7 +1767,7 @@ export default function OrdenesCompraPage() {
       // All items same proveedor — just assign to the OC header
       const provId = [...groups.keys()][0];
       if (provId && !detailOC.proveedor_id) {
-        const { error } = await supabase.from("ordenes_compra").update({ proveedor_id: provId } as any).eq("id", detailOC.id);
+    const { error } = await (supabase as any).from("ordenes_compra").update({ proveedor_id: provId }).eq("id", detailOC.id).eq("sociedad_id", sociedadActiva.id);
         if (error) { alert("Error al asignar proveedor"); return; }
         const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
         if (fresh) setDetailOC(fresh as any);
@@ -1823,12 +1852,12 @@ export default function OrdenesCompraPage() {
           const subtotalItem = Number(item.precio_unitario) * Number(item.cantidad);
           return sum + Math.round(subtotalItem * ((item.iva_porcentaje ?? 21) / 100) * 100) / 100;
         }, 0);
-        const { error: updateOriginalError } = await supabase.from("ordenes_compra").update({
+        const { error: updateOriginalError } = await (supabase as any).from("ordenes_compra").update({
           proveedor_id: null,
           subtotal: Math.round(subtotalRestante * 100) / 100,
           iva: Math.round(ivaRestante * 100) / 100,
           total: Math.round((subtotalRestante + ivaRestante) * 100) / 100,
-        } as any).eq("id", detailOC.id);
+        } as any).eq("id", detailOC.id).eq("sociedad_id", sociedadActiva.id);
         if (updateOriginalError) throw new Error(`Error al actualizar la OC restante: ${updateOriginalError.message}`);
 
         await fetchDetailItems(detailOC.id);
@@ -1842,7 +1871,7 @@ export default function OrdenesCompraPage() {
         const { error: deleteItemsError } = await supabase.from("orden_compra_items").delete().eq("orden_id", detailOC.id);
         if (deleteItemsError) throw new Error(`Error al reemplazar items de la OC original: ${deleteItemsError.message}`);
         originalModified = true;
-        const { error: deleteOCError } = await supabase.from("ordenes_compra").delete().eq("id", detailOC.id);
+      const { error: deleteOCError } = await (supabase as any).from("ordenes_compra").delete().eq("id", detailOC.id).eq("sociedad_id", sociedadActiva.id);
         if (deleteOCError) throw new Error(`Error al reemplazar la OC original: ${deleteOCError.message}`);
 
         setDetailOC(null);
@@ -1854,7 +1883,8 @@ export default function OrdenesCompraPage() {
       // Si la division fallo antes de modificar la OC original, limpia las OCs nuevas incompletas.
       if (!originalModified && createdOcIds.length > 0) {
         await supabase.from("orden_compra_items").delete().in("orden_id", createdOcIds);
-        await supabase.from("ordenes_compra").delete().in("id", createdOcIds);
+        let cleanupOCs = (supabase as any).from("ordenes_compra").delete().in("id", createdOcIds).eq("sociedad_id", sociedadActiva.id);
+        await cleanupOCs;
       }
       alert("Error al dividir OC: " + (err as any)?.message);
     } finally {
@@ -2983,7 +3013,8 @@ export default function OrdenesCompraPage() {
                         placeholder="Buscar proveedor para toda la OC..."
                         onChange={async (provId) => {
                           if (!provId || !detailOC) return;
-                          const { error } = await supabase.from("ordenes_compra").update({ proveedor_id: provId } as any).eq("id", detailOC.id);
+                          if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de asignar proveedor"); return; }
+                          const { error } = await (supabase as any).from("ordenes_compra").update({ proveedor_id: provId }).eq("id", detailOC.id).eq("sociedad_id", sociedadActiva.id);
                           if (error) { alert("Error al asignar proveedor"); return; }
                           const { error: itemProvError } = await supabase.from("orden_compra_items").update({ proveedor_id: provId } as any).eq("orden_id", detailOC.id);
                           if (itemProvError) { alert("Se asignó la OC, pero no se pudo actualizar el proveedor de sus items"); return; }

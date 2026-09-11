@@ -339,6 +339,11 @@ export default function StockPage() {
       setFormError("Codigo y nombre son obligatorios");
       return;
     }
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) {
+      setFormError("Seleccioná una sociedad antes de guardar el artículo");
+      return;
+    }
     setSaving(true);
     setFormError("");
     try {
@@ -356,13 +361,11 @@ export default function StockPage() {
         stock_minimo: form.stock_minimo,
       };
 
-      if (!editingId && sociedadActiva?.id) {
-        payload.sociedad_id = sociedadActiva.id;
-      }
+      payload.sociedad_id = sociedadId;
 
       if (editingId) {
         let productUpdate = (supabase as any).from("productos").update(payload).eq("id", editingId);
-        if (sociedadActiva?.id) productUpdate = productUpdate.eq("sociedad_id", sociedadActiva.id);
+        productUpdate = productUpdate.eq("sociedad_id", sociedadId);
         const { error } = await productUpdate;
         if (error) throw error;
       } else {
@@ -385,10 +388,15 @@ export default function StockPage() {
 
   async function handleDelete() {
     if (!deleteConfirm) return;
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) {
+      alert("Seleccioná una sociedad antes de eliminar un artículo");
+      return;
+    }
     setDeleting(true);
     try {
       let productDelete = supabase.from("productos").delete().eq("id", deleteConfirm.id);
-      if (sociedadActiva?.id) productDelete = productDelete.eq("sociedad_id" as any, sociedadActiva.id);
+      productDelete = productDelete.eq("sociedad_id" as any, sociedadId);
       const { error } = await productDelete;
       if (error) throw error;
       setDeleteConfirm(null);
@@ -404,6 +412,11 @@ export default function StockPage() {
 
   async function handleAdjust() {
     if (!adjustModal) return;
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) {
+      alert("Seleccioná una sociedad antes de ajustar el stock");
+      return;
+    }
     setSaving(true);
     try {
       if (adjustMode === "set") {
@@ -413,7 +426,7 @@ export default function StockPage() {
           return;
         }
         let stockUpdate = supabase.from("productos").update({ stock: adjustAmount }).eq("id", adjustModal.id);
-        if (sociedadActiva?.id) stockUpdate = stockUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+        stockUpdate = stockUpdate.eq("sociedad_id" as any, sociedadId);
         const { error } = await stockUpdate;
         if (error) throw error;
       } else {

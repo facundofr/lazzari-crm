@@ -508,11 +508,16 @@ export default function ClientesPage() {
 
   async function handleSaveRelevamiento() {
     if (!selectedCliente || !relevForm.descripcion.trim()) return;
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) {
+      toast.error("Seleccioná una sociedad antes de guardar el relevamiento");
+      return;
+    }
     setRelevSaving(true);
     try {
       const payload = {
         cliente_id: selectedCliente.id,
-        sociedad_id: sociedadActiva?.id,
+        sociedad_id: sociedadId,
         descripcion: relevForm.descripcion.trim(),
         productos_habituales: relevForm.productos_habituales || null,
         frecuencia_compra: relevForm.frecuencia_compra || null,
@@ -527,7 +532,7 @@ export default function ClientesPage() {
       };
       if (relevEditingId) {
         let relevQuery = (supabase as any).from("fichas_relevamiento").update(payload).eq("id", relevEditingId);
-        if (sociedadActiva?.id) relevQuery = relevQuery.eq("sociedad_id", sociedadActiva.id);
+        relevQuery = relevQuery.eq("sociedad_id", sociedadId);
         const { error } = await relevQuery;
         if (error) throw error;
         toast.success("Relevamiento actualizado");
@@ -540,7 +545,7 @@ export default function ClientesPage() {
       setRelevEditingId(null);
       setRelevForm(emptyRelevForm);
       // Refresh
-      const { data } = await (supabase as any).from("fichas_relevamiento").select("*, profiles:actualizado_por(full_name)").eq("cliente_id", selectedCliente.id).order("updated_at", { ascending: false });
+      const { data } = await (supabase as any).from("fichas_relevamiento").select("*, profiles:actualizado_por(full_name)").eq("cliente_id", selectedCliente.id).eq("sociedad_id", sociedadId).order("updated_at", { ascending: false });
       setFichasRelevamiento(data || []);
     } catch (err: any) { toast.error(err.message || "Error al guardar relevamiento"); }
     finally { setRelevSaving(false); }
@@ -1188,6 +1193,12 @@ export default function ClientesPage() {
       return;
     }
     setFormFieldErrors({});
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) {
+      setFormError("Seleccioná una sociedad antes de guardar el cliente");
+      toast.error("No hay una sociedad activa");
+      return;
+    }
     setSaving(true);
     setFormError("");
     try {
@@ -1199,15 +1210,13 @@ export default function ClientesPage() {
         assigned_to: (form as any).assigned_to || null,
         flete: (form as any).flete?.trim() || null,
       };
-      if (!editingId && sociedadActiva?.id) {
-        payload.sociedad_id = sociedadActiva.id;
-      }
+      payload.sociedad_id = sociedadId;
       if (editingId) {
         let clienteUpdate = supabase
           .from("clientes")
           .update(payload as any)
           .eq("id", editingId);
-        if (sociedadActiva?.id) clienteUpdate = clienteUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+        clienteUpdate = clienteUpdate.eq("sociedad_id" as any, sociedadId);
         const { error } = await clienteUpdate;
         if (error) throw error;
 
@@ -1325,9 +1334,14 @@ export default function ClientesPage() {
   }
 
   async function handleToggleActivo(c: ClienteExt) {
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) {
+      toast.error("Seleccioná una sociedad antes de cambiar el estado");
+      return;
+    }
     try {
       let clienteToggle = supabase.from("clientes").update({ activo: !c.activo }).eq("id", c.id);
-      if (sociedadActiva?.id) clienteToggle = clienteToggle.eq("sociedad_id" as any, sociedadActiva.id);
+      clienteToggle = clienteToggle.eq("sociedad_id" as any, sociedadId);
       const { error } = await clienteToggle;
       if (error) throw error;
       toast.info(c.activo ? "Cliente desactivado" : "Cliente activado");
@@ -1339,12 +1353,17 @@ export default function ClientesPage() {
   }
 
   async function handleDelete(id: string) {
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) {
+      toast.error("Seleccioná una sociedad antes de eliminar el cliente");
+      return;
+    }
     try {
       // Check for associated documents before deleting
       const [{ count: presCount }, { count: factCount }, { count: remCount }] = await Promise.all([
-        (() => { let q = supabase.from("presupuestos").select("id", { count: "exact", head: true }).eq("cliente_id", id); if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id); return q; })(),
-        (() => { let q = supabase.from("facturas").select("id", { count: "exact", head: true }).eq("cliente_id", id); if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id); return q; })(),
-        (() => { let q = (supabase as any).from("remitos").select("id", { count: "exact", head: true }).eq("cliente_id", id); if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id); return q; })(),
+        (() => supabase.from("presupuestos").select("id", { count: "exact", head: true }).eq("cliente_id", id).eq("sociedad_id" as any, sociedadId))(),
+        (() => supabase.from("facturas").select("id", { count: "exact", head: true }).eq("cliente_id", id).eq("sociedad_id" as any, sociedadId))(),
+        (() => (supabase as any).from("remitos").select("id", { count: "exact", head: true }).eq("cliente_id", id).eq("sociedad_id", sociedadId))(),
       ]);
       const docs: string[] = [];
       if ((presCount ?? 0) > 0) docs.push(`${presCount} presupuesto${presCount !== 1 ? "s" : ""}`);
@@ -1356,7 +1375,7 @@ export default function ClientesPage() {
       }
       if (!confirm("¿Seguro que queres eliminar este cliente? Esta accion no se puede deshacer.")) return;
       let clienteDelete = supabase.from("clientes").delete().eq("id", id);
-      if (sociedadActiva?.id) clienteDelete = clienteDelete.eq("sociedad_id" as any, sociedadActiva.id);
+      clienteDelete = clienteDelete.eq("sociedad_id" as any, sociedadId);
       const { error } = await clienteDelete;
       if (error) throw error;
       setSelectedCliente(null);
@@ -1460,6 +1479,10 @@ export default function ClientesPage() {
 
   // Handler: assign vendedor to a contacto
   async function handleAssignVendedor(contactoId: string, vendedorId: string | null) {
+    if (!sociedadActiva?.id) {
+      toast.error("Seleccioná una sociedad antes de asignar el vendedor");
+      return;
+    }
     try {
       const { error } = await (supabase as any)
         .from("contactos")
@@ -1488,6 +1511,10 @@ export default function ClientesPage() {
 
   async function handleSaveSucursalDetail() {
     if (!selectedCliente || !sucursalDetailForm.nombre.trim()) return;
+    if (!sociedadActiva?.id) {
+      toast.error("Seleccioná una sociedad antes de guardar la sucursal");
+      return;
+    }
     setSavingSucursal(true);
     try {
       const sucursalPayload = {
@@ -1537,6 +1564,10 @@ export default function ClientesPage() {
 
   async function handleDeleteSucursalDetail(sucursalId: string) {
     if (!selectedCliente) return;
+    if (!sociedadActiva?.id) {
+      toast.error("Seleccioná una sociedad antes de eliminar la sucursal");
+      return;
+    }
     try {
       const { error } = await (supabase as any).from("cliente_sucursales").update({ activo: false }).eq("id", sucursalId).eq("cliente_id", selectedCliente.id);
       if (error) throw error;
@@ -1549,6 +1580,10 @@ export default function ClientesPage() {
 
   async function handleSaveContacto() {
     if (!selectedCliente || !contactoForm.nombre.trim()) return;
+    if (!sociedadActiva?.id) {
+      toast.error("Seleccioná una sociedad antes de guardar el contacto");
+      return;
+    }
     setSavingContacto(true);
     try {
       if (editingContactoId) {
@@ -1597,6 +1632,10 @@ export default function ClientesPage() {
 
   async function handleDeleteContacto(contactoId: string) {
     if (!selectedCliente) return;
+    if (!sociedadActiva?.id) {
+      toast.error("Seleccioná una sociedad antes de eliminar el contacto");
+      return;
+    }
     try {
       const { error } = await (supabase as any).from("contactos").delete().eq("id", contactoId).eq("entity_type", "cliente").eq("entity_id", selectedCliente.id);
       if (error) throw error;

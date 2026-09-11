@@ -52,6 +52,7 @@ function remitoRequiereARCA(remito: Pick<RemitoRow, "observaciones" | "cae" | "t
 
 interface RemitoRow {
   id: string;
+  sociedad_id?: string | null;
   numero: string;
   cliente_id: string;
   presupuesto_id: string | null;
@@ -313,9 +314,10 @@ export default function RemitosPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   async function handleEstadoChange(id: string, estado: "pendiente" | "entregado" | "parcial") {
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de modificar el remito"); return; }
     try {
       let remitoUpdate = supabase.from("remitos").update({ estado }).eq("id", id);
-      if (sociedadActiva?.id) remitoUpdate = remitoUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+      remitoUpdate = remitoUpdate.eq("sociedad_id" as any, sociedadActiva.id);
       const { error } = await remitoUpdate;
       if (error) {
         alert("Error al actualizar estado: " + error.message);
@@ -329,11 +331,16 @@ export default function RemitosPage() {
 
   async function handleDeleteRemito(id: string) {
     if (!confirm("¿Seguro que querés eliminar este remito? Esta acción no se puede deshacer.")) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de eliminar el remito"); return; }
+    const selectedRemito = remitos.find((remito) => remito.id === id);
+    if (selectedRemito && selectedRemito.sociedad_id && selectedRemito.sociedad_id !== sociedadActiva.id) {
+      alert("El remito no pertenece a la sociedad activa"); return;
+    }
     try {
       const { error: itemsErr } = await (supabase as any).from("remito_items").delete().eq("remito_id", id);
       if (itemsErr) throw itemsErr;
       let remitoDelete = supabase.from("remitos").delete().eq("id", id);
-      if (sociedadActiva?.id) remitoDelete = remitoDelete.eq("sociedad_id" as any, sociedadActiva.id);
+      remitoDelete = remitoDelete.eq("sociedad_id" as any, sociedadActiva.id);
       const { error: remErr } = await remitoDelete;
       if (remErr) throw remErr;
       setDetailRemito(null);
@@ -372,6 +379,10 @@ export default function RemitosPage() {
 
   async function handleSaveParcial() {
     if (!parcialRemito || parcialItems.length === 0) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de guardar la entrega"); return; }
+    if (parcialRemito.sociedad_id && parcialRemito.sociedad_id !== sociedadActiva.id) {
+      alert("El remito no pertenece a la sociedad activa"); return;
+    }
     setSavingParcial(true);
     try {
       const entregados = parcialItems.filter(it => it.cantidadEntregada > 0);
@@ -396,7 +407,7 @@ export default function RemitosPage() {
 
       // Mark current remito as parcial
       let parcialUpdate = supabase.from("remitos").update({ estado: "parcial" }).eq("id", parcialRemito.id);
-      if (sociedadActiva?.id) parcialUpdate = parcialUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+      parcialUpdate = parcialUpdate.eq("sociedad_id" as any, sociedadActiva.id);
       const { error: statusErr } = await parcialUpdate;
       if (statusErr) { alert("Error al actualizar estado: " + statusErr.message); return; }
 
@@ -416,7 +427,7 @@ export default function RemitosPage() {
           observaciones: `Saldo pendiente de remito ${parcialRemito.numero}`,
           presupuesto_id: parcialRemito.presupuesto_id || null,
           estado: "pendiente",
-          sociedad_id: sociedadActiva?.id || null,
+          sociedad_id: sociedadActiva.id,
           valor_declarado: null,
           created_by: profile?.id || null,
         }).select("id").single();
@@ -543,7 +554,7 @@ export default function RemitosPage() {
         .eq("cliente_id", clienteId)
         .in("estado", ["aprobado", "facturar", "facturado"])
         .order("created_at", { ascending: false });
-      if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id", sociedadActiva.id);
+      if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id" as any, sociedadActiva.id);
       const { data, error } = await prQ;
       if (error) throw error;
       setPresupuestosAprobados((data || []) as any[]);
@@ -657,6 +668,7 @@ export default function RemitosPage() {
     // Filter out items with empty description
     const validItems = createItems.filter(it => it.descripcion.trim());
     if (validItems.length === 0) { setCreateError("Agregá al menos un item al remito"); return; }
+    if (!sociedadActiva?.id) { setCreateError("Seleccioná una sociedad antes de crear el remito"); return; }
 
     setCreating(true);
     try {
@@ -696,7 +708,7 @@ export default function RemitosPage() {
           presupuesto_id: createForm.presupuesto_id || null,
           estado: "pendiente",
           valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : (valorDeclaradoSugerido ? Number(valorDeclaradoSugerido) : null),
-          sociedad_id: sociedadActiva?.id || null,
+          sociedad_id: sociedadActiva.id,
           sucursal_id: sucursalId,
           created_by: profile?.id || null,
         };
@@ -802,6 +814,7 @@ export default function RemitosPage() {
 
   async function handleGenerateIA() {
     if (selectedPresupuestos.size === 0) return;
+    if (!sociedadActiva?.id) { setIaError("Seleccioná una sociedad antes de generar remitos"); return; }
     setGeneratingIA(true);
     setIaError("");
     setIaSuccess("");
@@ -848,7 +861,7 @@ export default function RemitosPage() {
           observaciones: `Generado desde presupuesto ${p.numero}`,
           presupuesto_id: p.id,
           estado: "pendiente",
-          sociedad_id: sociedadActiva?.id || null,
+          sociedad_id: sociedadActiva.id,
           valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
           created_by: profile?.id || null,
         }).select("id").single();
@@ -923,6 +936,10 @@ export default function RemitosPage() {
 
   async function handleSplitSave() {
     if (!detailRemito || splitAssignments.length === 0) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de dividir el remito"); return; }
+    if (detailRemito.sociedad_id && detailRemito.sociedad_id !== sociedadActiva.id) {
+      alert("El remito no pertenece a la sociedad activa"); return;
+    }
 
     // Validate: total assigned per item must not exceed original
     const itemTotals = new Map<string, number>();
@@ -959,7 +976,7 @@ export default function RemitosPage() {
 
       // Update original remito: set sucursal_id
       const keepSucursalId = keepKey === "__none" ? null : keepKey;
-      await (supabase as any).from("remitos").update({ sucursal_id: keepSucursalId }).eq("id", detailRemito.id);
+      await (supabase as any).from("remitos").update({ sucursal_id: keepSucursalId }).eq("id", detailRemito.id).eq("sociedad_id", sociedadActiva.id);
 
       // Delete ALL original items and re-insert the ones that stay (with possibly changed quantities)
       await supabase.from("remito_items").delete().eq("remito_id" as any, detailRemito.id);
@@ -989,7 +1006,7 @@ export default function RemitosPage() {
           observaciones: `Dividido de ${detailRemito.numero}${sucNombre ? ` — Suc: ${sucNombre}` : ""}`,
           presupuesto_id: detailRemito.presupuesto_id || null,
           estado: "pendiente",
-          sociedad_id: sociedadActiva?.id || null,
+          sociedad_id: sociedadActiva.id,
           sucursal_id: sucursalId,
           valor_declarado: detailRemito.valor_declarado,
           created_by: profile?.id || null,
@@ -1180,10 +1197,11 @@ export default function RemitosPage() {
       ? (catalogTransportistas.find(t => t.id === transporteForm.transportista_id)?.nombre || transporteForm.transportista)
       : transporteForm.transportista;
     if (!detailRemito || !nombreTransportista) return;
+    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de crear el transporte"); return; }
     setCreatingTransporte(true);
     try {
       const { error } = await (supabase as any).from("transportes").insert({
-        sociedad_id: sociedadActiva?.id,
+        sociedad_id: sociedadActiva.id,
         transportista: nombreTransportista,
         transportista_id: (transporteForm.transportista_id && transporteForm.transportista_id !== "__manual") ? transporteForm.transportista_id : null,
         destino: transporteForm.destino || null,
@@ -1499,7 +1517,9 @@ export default function RemitosPage() {
                     onBlur={async (e) => {
                       const val = Number(e.target.value.replace(",", ".")) || 0;
                       setDetailRemito({ ...detailRemito, valor_declarado: val || null });
-                      await (supabase as any).from("remitos").update({ valor_declarado: val || null }).eq("id", detailRemito.id);
+                      if (sociedadActiva?.id) {
+                        await (supabase as any).from("remitos").update({ valor_declarado: val || null }).eq("id", detailRemito.id).eq("sociedad_id", sociedadActiva.id);
+                      }
                     }}
                     className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-mono font-medium text-zinc-600 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
                   />
@@ -1548,7 +1568,7 @@ export default function RemitosPage() {
                               <button
                                 onClick={async () => {
                                   if (!confirm("¿Eliminar este transporte?")) return;
-                                  const { error } = await (supabase as any).from("transportes").delete().eq("id", t.id);
+                                  const { error } = await (supabase as any).from("transportes").delete().eq("id", t.id).eq("sociedad_id", sociedadActiva?.id || "");
                                   if (error) { alert("Error al eliminar transporte"); return; }
                                   setDetailTransportes((prev) => prev.filter((tr) => tr.id !== t.id));
                                 }}
@@ -1678,7 +1698,8 @@ export default function RemitosPage() {
                   onChange={(e) => setDetailRemito(prev => prev ? { ...prev, observaciones: e.target.value } : prev)}
                   onBlur={async (e) => {
                     const val = e.target.value;
-                    const { error } = await supabase.from("remitos").update({ observaciones: val }).eq("id", detailRemito.id);
+                    if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de guardar observaciones"); return; }
+                    const { error } = await (supabase as any).from("remitos").update({ observaciones: val }).eq("id", detailRemito.id).eq("sociedad_id", sociedadActiva.id);
                     if (error) alert("Error al guardar observaciones: " + error.message);
                     else setRemitos(prev => prev.map(r => r.id === detailRemito.id ? { ...r, observaciones: val } : r));
                   }}

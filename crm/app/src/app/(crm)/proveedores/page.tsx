@@ -339,6 +339,10 @@ export default function ProveedoresPage() {
 
   async function saveProveedorContacto() {
     if (!selectedProv || !proveedorContactoForm.nombre.trim()) return;
+    if (!sociedadActiva?.id) {
+      toast.error("Seleccioná una sociedad antes de guardar el contacto");
+      return;
+    }
     setSavingProveedorContacto(true);
     try {
       const payload = { nombre: proveedorContactoForm.nombre.trim(), cargo: proveedorContactoForm.cargo.trim() || null, email: proveedorContactoForm.email.trim() || null, telefono: proveedorContactoForm.telefono.trim() || null, whatsapp: proveedorContactoForm.whatsapp.trim() || null, notas: proveedorContactoForm.notas.trim() || null, principal: proveedorContactoForm.principal };
@@ -355,6 +359,10 @@ export default function ProveedoresPage() {
 
   async function deleteProveedorContacto(id: string) {
     if (!selectedProv) return;
+    if (!sociedadActiva?.id) {
+      toast.error("Seleccioná una sociedad antes de eliminar el contacto");
+      return;
+    }
     const { error } = await (supabase as any).from("contactos").delete().eq("id", id).eq("entity_id", selectedProv.id);
     if (error) { toast.error("No se pudo eliminar el contacto"); return; }
     setSelectedProv((prev) => prev ? { ...prev, contactos: prev.contactos.filter((c) => c.id !== id) } : prev);
@@ -462,17 +470,22 @@ export default function ProveedoresPage() {
       setFormError("Razon social y CUIT son obligatorios");
       return;
     }
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) {
+      setFormError("Seleccioná una sociedad antes de guardar el proveedor");
+      return;
+    }
     setSaving(true);
     setFormError("");
     try {
       if (editingId) {
         let updateQuery = supabase.from("proveedores").update(form as any).eq("id", editingId);
-        if (sociedadActiva?.id) updateQuery = updateQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        updateQuery = updateQuery.eq("sociedad_id" as any, sociedadId);
         const { error } = await updateQuery;
         if (error) throw error;
       } else {
         const insertData = { ...form } as any;
-        if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
+        insertData.sociedad_id = sociedadId;
         const { error } = await supabase.from("proveedores").insert(insertData);
         if (error) throw error;
       }
@@ -539,6 +552,11 @@ export default function ProveedoresPage() {
 
   async function handleAiCreateNewProv() {
     if (!aiNewProvForm.razon_social.trim()) return;
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) {
+      alert("Seleccioná una sociedad antes de crear el proveedor");
+      return;
+    }
     setAiNewProvSaving(true);
     try {
       const insertData: Record<string, unknown> = {
@@ -547,7 +565,7 @@ export default function ProveedoresPage() {
         activo: true,
       };
       if (aiNewProvForm.cuit.trim()) insertData.cuit = aiNewProvForm.cuit.trim();
-      if (sociedadActiva?.id) insertData.sociedad_id = sociedadActiva.id;
+      insertData.sociedad_id = sociedadId;
       const { data, error } = await supabase.from("proveedores").insert(insertData as any).select("id").single();
       if (error) throw error;
       await fetchData();
@@ -564,6 +582,11 @@ export default function ProveedoresPage() {
 
   async function handleAiSave() {
     if (!aiResult || !aiProveedorId) return;
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) {
+      toast.error("Seleccioná una sociedad antes de guardar la lista");
+      return;
+    }
     setAiSaving(true);
 
     try {
@@ -578,7 +601,7 @@ export default function ProveedoresPage() {
           archivo_origen: aiFile?.name || null,
           notas: aiResult.notas || "",
       };
-      if (sociedadActiva?.id) listaInsert.sociedad_id = sociedadActiva.id;
+      listaInsert.sociedad_id = sociedadId;
       const { data: lista, error: listaError } = await supabase
         .from("listas_precios")
         .insert(listaInsert as any)
@@ -599,7 +622,7 @@ export default function ProveedoresPage() {
           precio: item.precio,
           descuento: item.descuento || 0,
           precio_neto: item.precio_neto,
-          ...(sociedadActiva?.id ? { sociedad_id: sociedadActiva.id } : {}),
+          sociedad_id: sociedadId,
         }));
 
         const { error: itemsError } = await (supabase as any)
