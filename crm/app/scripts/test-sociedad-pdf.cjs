@@ -1,0 +1,25 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const ts = require('typescript');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync(path.join(__dirname, '../src/lib/pdf-templates.ts'), 'utf8');
+const context = {exports:{}, require(name) {
+  assert.equal(name, '@/lib/utils');
+  return {formatCurrency: (n) => String(n), formatDate: (d) => d};
+}, Buffer, btoa:(s)=>Buffer.from(s,'binary').toString('base64')};
+vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
+const grupo = context.exports.getSociedadPDF({id:'fee94607-747a-4e87-ba24-aff9032f7a56',nombre:'Grupo LA',razonSocial:'Grupo La Servicios Integrales SAS',cuit:'30719396042',condicionIva:'Responsable Inscripto',colorPrimario:'#2563EB'});
+assert.equal(grupo.domicilio,'Charcas 5151 Piso:1 Dpto:106');
+assert.equal(grupo.inicioActividades,'13-05-2026');
+assert.equal(grupo.email,'administracion@lazzari.com.ar');
+const lazzari = context.exports.getSociedadPDF({id:'eee2a3c8-fe6c-494d-bd2f-7a5d8067d021'});
+assert.equal(lazzari.domicilio,'Pueyrredón 653, Pergamino, Buenos Aires');
+assert.equal(lazzari.inicioActividades,'01-09-2017');
+const factura={tipo:'FA',punto_venta:10,numero:1,fecha:'2026-09-09',moneda:'USD',tipo_cambio:1511.50,subtotal:243,iva:51.03,total:294.03,cae:'86372728764166',cae_vencimiento:'2026-09-19',cliente:null,items:[]};
+const before=JSON.stringify(factura);
+const html=context.exports.generateFacturaPDF(factura,{cuitNumero:30719396042},grupo);
+for(const text of [grupo.domicilio,grupo.inicioActividades,grupo.email,'0010-00000001','86372728764166']) assert.ok(html.includes(text),text);
+assert.ok(!html.includes('administracion@grupola.com.ar'));
+assert.equal(JSON.stringify(factura),before);
+console.log('OK: datos de Grupo LA corregidos en plantilla, Lazzari sin cambios y factura/CAE preservados; sin red ni emisión.');
