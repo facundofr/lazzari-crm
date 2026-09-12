@@ -226,10 +226,12 @@ export async function POST(req: NextRequest) {
     let supabase: any;
     try { supabase = await authorizeFacturaRequest(req, sociedad_id); }
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "No autorizado" }, { status: 403 }); }
+    let inheritedRateModality: "divisas" | "billetes" = "divisas";
     if (presupuesto_id) {
-      const { data: pr, error: prError } = await supabase.from("presupuestos").select("id, cliente_id")
+      const { data: pr, error: prError } = await supabase.from("presupuestos").select("id, cliente_id, cotizacion_modalidad")
         .eq("id", presupuesto_id).eq("sociedad_id", sociedad_id).single();
       if (prError || !pr || pr.cliente_id !== cliente_id) return NextResponse.json({ error: "El presupuesto no pertenece al cliente y sociedad de la factura" }, { status: 400 });
+      inheritedRateModality = pr.cotizacion_modalidad === "billetes" ? "billetes" : "divisas";
     }
 
     // ── Manual mode: skip ARCA entirely ──
@@ -388,9 +390,9 @@ export async function POST(req: NextRequest) {
     const automaticInvoiceRate = isUSD && ["FA", "FB", "FCEA", "FCEB"].includes(tipo) && !requestedRateOverride;
     if (automaticInvoiceRate) {
       try {
-        const quote = await getInvoiceExchangeRate(fechaFacturaInput);
+        const quote = await getInvoiceExchangeRate(fechaFacturaInput, inheritedRateModality);
         if (Math.abs(tc - quote.valor_venta) > 0.000001) {
-          return NextResponse.json({error:`La cotización debe ser BNA divisa venta del ${quote.fecha}: $${quote.valor_venta}. Volvé a abrir la emisión para actualizarla. No se emitió la factura.`},{status:409});
+          return NextResponse.json({error:`La cotización debe ser BNA ${inheritedRateModality} venta del ${quote.fecha}: $${quote.valor_venta}. Volvé a abrir la emisión para actualizarla. No se emitió la factura.`},{status:409});
         }
         tc = quote.valor_venta;
       } catch (error) { return NextResponse.json({error:error instanceof Error ? error.message : "No se pudo verificar la cotización automática. No se emitió."},{status:503}); }
@@ -619,7 +621,7 @@ export async function POST(req: NextRequest) {
         total: totalFinal,
         moneda: isUSD ? "USD" : "ARS",
         tipo_cambio: isUSD ? tc : null,
-        cotizacion_modalidad: isUSD ? (automaticInvoiceRate ? "divisas" : (cotizacion_modalidad === "billetes" ? "billetes" : "divisas")) : null,
+        cotizacion_modalidad: isUSD ? (automaticInvoiceRate ? inheritedRateModality : (cotizacion_modalidad === "billetes" ? "billetes" : "divisas")) : null,
         estado: "emitida",
         sociedad_id: arcaConfig.id,
         oc_cliente: oc_cliente || null,

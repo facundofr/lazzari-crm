@@ -7,15 +7,16 @@ export function previousInvoiceDay(fecha: string) {
   return date.toISOString().slice(0,10);
 }
 
-/** No manual cache or alternate provider: BNA divisa venta, prior trading day. */
-export async function getInvoiceExchangeRate(fechaFactura: string) {
+/** No manual cache or alternate provider; preserve the presupuesto's BNA modality. */
+export async function getInvoiceExchangeRate(fechaFactura: string, modalidad: "divisas" | "billetes" = "divisas") {
+  if (!["divisas", "billetes"].includes(modalidad)) throw new Error("Modalidad de cotización inválida.");
   const target=previousInvoiceDay(fechaFactura);
   const [y,m,d]=target.split('-');
-  const url=`https://www.bna.com.ar/Cotizador/HistoricoPrincipales?id=divisas&fecha=${encodeURIComponent(`${d}/${m}/${y}`)}&idMoneda=55`;
+  const url=`https://www.bna.com.ar/Cotizador/HistoricoPrincipales?id=${modalidad}&fecha=${encodeURIComponent(`${d}/${m}/${y}`)}&idMoneda=${modalidad === "billetes" ? "22" : "55"}`;
   const res=await fetch(url,{headers:{"User-Agent":"Mozilla/5.0","X-Requested-With":"XMLHttpRequest"},cache:"no-store",signal:AbortSignal.timeout(10000)});
   if(!res.ok) throw new Error("No se pudo verificar el tipo de cambio del BNA. No se emitió la factura.");
   const quote=parseBnaHistorical(await res.text(),target);
   // BNA provides nearest trading dates; retain its actual date (weekends/holidays).
   if(!quote || Date.parse(target)-Date.parse(quote.fecha)>7*86400000) throw new Error("BNA no devolvió una cotización reciente anterior a la factura. No se emitió.");
-  return {fecha:quote.fecha,valor_venta:quote.venta,valor_compra:quote.compra,modalidad:"divisas" as const,fuente:"BNA",automatica:true};
+  return {fecha:quote.fecha,valor_venta:quote.venta,valor_compra:quote.compra,modalidad,fuente:"BNA",automatica:true};
 }

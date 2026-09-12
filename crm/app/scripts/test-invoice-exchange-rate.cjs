@@ -20,7 +20,7 @@ const row=(date,value)=>`<td>Dolar U.S.A</td><td>1500</td><td>${value}</td><td>$
  html='error';await assert.rejects(rate.getInvoiceExchangeRate('2026-09-09'));
  ok=false;await assert.rejects(rate.getInvoiceExchangeRate('2026-09-09'));
  const api=fs.readFileSync('src/app/api/facturacion/route.ts','utf8');
- assert.ok(api.indexOf('if (manual === true)')<api.indexOf('getInvoiceExchangeRate(fechaFacturaInput)'));
+ assert.ok(api.indexOf('if (manual === true)')<api.indexOf('getInvoiceExchangeRate(fechaFacturaInput, inheritedRateModality)'));
  assert.ok(api.includes('Math.abs(tc - quote.valor_venta)'));
  for(const file of ['src/app/(crm)/ventas/page.tsx','src/app/(crm)/facturacion/facturacion-content.tsx']){
    const ui=fs.readFileSync(file,'utf8');assert.ok(ui.includes('readOnly='));assert.ok(ui.includes('fecha_factura'));assert.ok(ui.includes('canOverrideInvoiceRate(profile?.email)'));assert.ok(ui.includes('cotizacion_override: canOverrideRate && rateOverride'));
@@ -32,10 +32,19 @@ const row=(date,value)=>`<td>Dolar U.S.A</td><td>1500</td><td>${value}</td><td>$
  assert.ok(api.includes('canOverrideInvoiceRate(user?.email)'));
  assert.ok(api.includes('Cotización modificada por augusto@lazzari.com.ar'));
  assert.ok(api.includes('&& !requestedRateOverride'));
+ ok=true;html=row('8/9/2026',1530);
+ const billetes=await rate.getInvoiceExchangeRate('2026-09-09','billetes');
+ assert.equal(billetes.modalidad,'billetes');assert.equal(billetes.valor_venta,1530);assert.ok(requested.includes('id=billetes'));assert.ok(requested.includes('idMoneda=22'));
+ await rate.getInvoiceExchangeRate('2026-09-09','divisas');assert.ok(requested.includes('id=divisas'));assert.ok(requested.includes('idMoneda=55'));
+ await assert.rejects(rate.getInvoiceExchangeRate('2026-09-09','blue'));
+ assert.ok(api.includes('inheritedRateModality = pr.cotizacion_modalidad'));
+ assert.ok(api.includes('automaticInvoiceRate ? inheritedRateModality'));
  console.log('OK: fecha automática, fin de semana, cambio de año/bisiesto, BNA ausente/futuro/antiguo bloqueados, sin caché, protección servidor y controles manuales separados. Sin emisión real.');
  if(process.argv.includes('--live')) {
    const live=load('src/lib/invoice-exchange-rate.ts',{require:()=>parser,AbortSignal,fetch});
    const quote=await live.getInvoiceExchangeRate('2026-09-09');
    assert.equal(quote.fecha,'2026-09-08');assert.equal(quote.valor_venta,1512);console.log('BNA real:',quote);
+   const bills=await live.getInvoiceExchangeRate('2026-09-09','billetes');
+   assert.equal(bills.fecha,'2026-09-08');assert.equal(bills.modalidad,'billetes');assert.ok(bills.valor_venta>0);console.log('BNA billetes real:',bills);
  }
 })().catch(e=>{console.error(e);process.exitCode=1;});

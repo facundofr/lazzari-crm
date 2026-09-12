@@ -36,6 +36,7 @@ interface VentaPresupuesto {
   total: number;
   moneda: string;
   tipo_cambio: number | null;
+  cotizacion_modalidad?: "divisas" | "billetes" | null;
   vendedor_id: string | null;
   oc_cliente: string | null;
   archivo_url: string | null;
@@ -240,6 +241,7 @@ export default function VentasPage() {
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
   const [cotizFecha, setCotizFecha] = useState("");
+  const [emitRateModality, setEmitRateModality] = useState<"divisas" | "billetes">("divisas");
   const cotizRequest = useRef(0);
 
   useEffect(() => {
@@ -247,13 +249,13 @@ export default function VentasPage() {
     setCotizBnaLoading(false);
     if (!emitModalOpen || editRate || (emitMoneda !== "USD" && emitVenta?.presupuesto.moneda !== "USD")) return;
     setEmitTipoCambio(0); setCotizBna(null); setCotizBnaLoading(true);
-    fetch(`/api/cotizacion-bna?fecha_factura=${encodeURIComponent(emitFecha)}`)
+    fetch(`/api/cotizacion-bna?fecha_factura=${encodeURIComponent(emitFecha)}&modalidad=${emitVenta?.presupuesto.cotizacion_modalidad === "billetes" ? "billetes" : "divisas"}`)
       .then(async res => { const data = await res.json(); if (!res.ok) throw new Error(data.error); return data; })
-      .then(data => { if (id !== cotizRequest.current) return; setCotizBna(data); setEmitTipoCambio(data.valor_venta); })
+      .then(data => { if (id !== cotizRequest.current) return; setCotizBna(data); setEmitRateModality(data.modalidad); setEmitTipoCambio(data.valor_venta); })
       .catch(error => { if (id === cotizRequest.current) setEmitError(error.message || "No se pudo verificar la cotización automática."); })
       .finally(() => { if (id === cotizRequest.current) setCotizBnaLoading(false); });
     return () => { cotizRequest.current += 1; };
-  }, [emitModalOpen, editRate, emitMoneda, emitFecha, emitVenta?.presupuesto.id, emitVenta?.presupuesto.moneda]);
+  }, [emitModalOpen, editRate, emitMoneda, emitFecha, emitVenta?.presupuesto.id, emitVenta?.presupuesto.moneda, emitVenta?.presupuesto.cotizacion_modalidad]);
 
   async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas", fecha?: string) {
     const id = ++cotizRequest.current;
@@ -265,6 +267,7 @@ export default function VentasPage() {
       if (res.ok && id === cotizRequest.current) {
         const data = await res.json();
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
+        setEmitRateModality(modalidad);
         setEmitTipoCambio(data.valor_venta);
       }
     } catch { /* silencioso */ } finally {
@@ -286,7 +289,7 @@ export default function VentasPage() {
       let presupuestosQuery = supabase
         .from("presupuestos")
         .select(`
-          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, vendedor_id, modalidad_emision, oc_cliente, archivo_url, archivo_nombre, observaciones, listo_para_facturar,
+          id, numero, cliente_id, fecha, estado, subtotal, iva, total, moneda, tipo_cambio, cotizacion_modalidad, vendedor_id, modalidad_emision, oc_cliente, archivo_url, archivo_nombre, observaciones, listo_para_facturar,
           vendedor_profile:vendedor_id(full_name, avatar_url),
           clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, limite_credito, saldo_cuenta_corriente, email, email_facturacion),
           presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total)
@@ -519,6 +522,7 @@ export default function VentasPage() {
 
     setEmitTipoCambio(p.tipo_cambio || 0);
     setRateOverride(false);
+    setEmitRateModality(p.cotizacion_modalidad === "billetes" ? "billetes" : "divisas");
     setEmitMoneda(p.moneda as "ARS" | "USD" || "ARS");
     setEmitError("");
     setEmitSuccess("");
@@ -576,7 +580,7 @@ export default function VentasPage() {
           tipo_cambio: emitMoneda === "USD" && emitTipoCambio > 0 ? emitTipoCambio : null,
           cotizacion_override: canOverrideRate && rateOverride,
           cotizacion_fecha: cotizFecha || cotizBna?.fecha || null,
-          cotizacion_modalidad: cotizBna?.modalidad || "divisas",
+          cotizacion_modalidad: emitRateModality,
           items: emitItems.map(it => ({ ...it, precio_unitario: convertPrice(it.precio_unitario) })),
           presupuesto_id: p.id,
           sociedad_id: sociedadActiva?.id || null,
@@ -1612,7 +1616,7 @@ export default function VentasPage() {
                           {cotizBnaLoading ? "…" : "Billetes"}
                         </button>
                         <input type="date" value={cotizFecha} onChange={e => setCotizFecha(e.target.value)} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" /></>}
-                        {!editRate && <span className="text-xs text-amber-700 dark:text-amber-400">{cotizBnaLoading ? "Verificando BNA…" : "Automática: BNA divisa venta, día hábil anterior a la factura"}</span>}
+                        {!editRate && <span className="text-xs text-amber-700 dark:text-amber-400">{cotizBnaLoading ? "Verificando BNA…" : `Automática: BNA ${emitVenta.presupuesto.cotizacion_modalidad === "billetes" ? "billetes" : "divisas"} venta, día hábil anterior. Modalidad del presupuesto.`}</span>}
                         {!emitManual && canOverrideRate && <label className="text-xs"><input type="checkbox" checked={rateOverride} onChange={e => setRateOverride(e.target.checked)} /> Modificar cotización (Augusto)</label>}
                       </div>
                       {cotizBna && (

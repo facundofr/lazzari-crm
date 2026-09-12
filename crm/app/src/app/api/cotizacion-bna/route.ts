@@ -149,7 +149,7 @@ async function upsertCotiz(supabase: any, fecha: string, tipoDb: string, compra:
 export async function GET(req: NextRequest) {
   const fechaFactura = req.nextUrl.searchParams.get("fecha_factura");
   if (fechaFactura) {
-    try { return NextResponse.json(await getInvoiceExchangeRate(fechaFactura)); }
+    try { return NextResponse.json(await getInvoiceExchangeRate(fechaFactura, (req.nextUrl.searchParams.get("modalidad") || "divisas") as "divisas" | "billetes")); }
     catch (error) { return NextResponse.json({error:error instanceof Error ? error.message : "No se pudo verificar la cotización automática."},{status:503}); }
   }
   const modalidad = (req.nextUrl.searchParams.get("modalidad") || "divisas") as "divisas" | "billetes";

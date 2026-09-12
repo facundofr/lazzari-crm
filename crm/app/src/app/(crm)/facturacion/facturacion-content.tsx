@@ -715,7 +715,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       try {
         let automaticRate: number | null = null;
         if (pr.moneda === "USD") {
-          const quoteRes = await fetch(`/api/cotizacion-bna?fecha_factura=${encodeURIComponent(fmFecha)}`);
+          const quoteRes = await fetch(`/api/cotizacion-bna?fecha_factura=${encodeURIComponent(fmFecha)}&modalidad=${pr.cotizacion_modalidad || "divisas"}`);
           const quote = await quoteRes.json();
           if (!quoteRes.ok || !(quote.valor_venta > 0)) throw new Error(quote.error || "No se pudo verificar el tipo de cambio automático.");
           automaticRate = quote.valor_venta;
@@ -726,7 +726,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           body: JSON.stringify({
             tipo, cliente_id: pr.cliente_id, punto_venta: emisorData.ptoVta,
             moneda: pr.moneda, tipo_cambio: automaticRate,
-            cotizacion_modalidad: pr.moneda === "USD" ? "divisas" : null,
+            cotizacion_modalidad: pr.moneda === "USD" ? (pr.cotizacion_modalidad || "divisas") : null,
             fecha: fmFecha, items: pr.items, presupuesto_id: pr.id, sociedad_id: sociedadActiva.id,
           }),
         });
