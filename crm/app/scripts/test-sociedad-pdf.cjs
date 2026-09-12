@@ -8,6 +8,7 @@ const fceContext={exports:{}};
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/lib/fce-invoice.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,fceContext);
 const context = {exports:{}, require(name) {
   if(name==='@/lib/fce-invoice') return fceContext.exports;
+  if(name==='@/lib/pdf-style-scope') return {scopePdfStyles:()=>{throw new Error('Rendering is not exercised by this template-only test');}};
   assert.equal(name, '@/lib/utils');
   return {formatCurrency: (n) => String(n), formatDate: (d) => d};
 }, Buffer, btoa:(s)=>Buffer.from(s,'binary').toString('base64')};

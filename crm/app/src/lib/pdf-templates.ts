@@ -7,6 +7,7 @@
 
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { readFceMetadata, importeEnLetras } from "@/lib/fce-invoice";
+import { scopePdfStyles } from "@/lib/pdf-style-scope";
 
 // ── Sociedad info (static data not in the Sociedad type) ─────────
 interface SociedadPDF {
@@ -1229,13 +1230,9 @@ export async function openPDFWindow(html: string, filename?: string, preview?: b
 export async function htmlToPdfBase64(html: string): Promise<string> {
   const html2pdf = (await import("html2pdf.js")).default;
 
-  // Prevent body scroll shift while rendering
-  const prevOverflow = document.body.style.overflow;
-  document.body.style.overflow = "hidden";
-
   // Offscreen container for html2canvas — must be in DOM and "visible" (not display:none).
-  // Position at top-left with z-index:-9999 so it's behind everything. Body overflow:hidden
-  // prevents any scroll shift the user could see.
+  // Fixed positioning keeps the renderer out of page layout. Never change the
+  // host body's styles: it may already be locked by an open email modal.
   const overlay = document.createElement("div");
   overlay.style.cssText = "position:fixed;left:0;top:0;z-index:-9999;background:#fff;width:794px;overflow:hidden;pointer-events:none;";
 
@@ -1243,26 +1240,23 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
   const styleMatches = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)];
 
-  // Combine all CSS; replace 'body' selector with our container class
-  let cssText = styleMatches.map(m => m[1]).join("\n");
-  cssText = cssText.replace(/\bbody\s*\{/g, ".pdf-root {");
-  // Also handle @media print body references
-  cssText = cssText.replace(/@media\s+print\s*\{[^}]*\}/g, "");
-  cssText = cssText.replace(/@page\s*\{[^}]*\}/g, "");
-
+  const renderId = crypto.randomUUID();
   const styleEl = document.createElement("style");
-  styleEl.textContent = cssText;
-  overlay.appendChild(styleEl);
+  styleEl.textContent = scopePdfStyles(styleMatches.map(m => m[1]).join("\n"), `[data-pdf-render="${renderId}"]`);
 
   // Container simulates <body> with proper width for A4
   const container = document.createElement("div");
   container.className = "pdf-root";
+  container.setAttribute("data-pdf-render", renderId);
   container.style.cssText = "width:794px;background:#fff;";
-  container.innerHTML = bodyMatch ? bodyMatch[1] : html;
+  container.innerHTML = (bodyMatch ? bodyMatch[1] : html).replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+  // Keep scoped styles with the root so html2pdf's clone retains them too.
+  container.prepend(styleEl);
   overlay.appendChild(container);
 
   document.body.appendChild(overlay);
-
+  let worker: any;
+  try {
   // Wait for every image (including the ARCA QR) before rasterizing.
   const images = Array.from(container.querySelectorAll("img"));
   await Promise.all(images.map((img) => {
@@ -1276,8 +1270,7 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
   }));
   await new Promise(r => setTimeout(r, 100));
 
-  try {
-    const blob: Blob = await html2pdf()
+    worker = html2pdf()
       .set({
         margin: [0, 0, 0, 0],
         image: { type: "jpeg", quality: 0.98 },
@@ -1291,8 +1284,8 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
         },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
       })
-      .from(container)
-      .outputPdf("blob");
+      .from(container);
+    const blob: Blob = await worker.outputPdf("blob");
 
     return new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -1304,7 +1297,8 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
       reader.readAsDataURL(blob);
     });
   } finally {
-    document.body.removeChild(overlay);
-    document.body.style.overflow = prevOverflow;
+    // html2pdf normally removes its own overlay on success, but not every failure.
+    worker?.prop?.overlay?.remove();
+    overlay.remove();
   }
 }
