@@ -11,6 +11,7 @@ import { generateFacturaPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64, doc
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { EmailComposeModal, type EmailDocumentType } from "@/components/email-compose-modal";
 import { useUser } from "@/lib/auth-context";
+import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { supabase } from "@/lib/supabase/client";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { mockFacturas } from "@/lib/mock-data";
@@ -87,6 +88,8 @@ function formatComprobante(tipo: string, pv: number, num: number) {
 
 export function FacturacionContent({ embedded = false, autoSelectId }: { embedded?: boolean; autoSelectId?: string }) {
   const { sociedadActiva, profile } = useUser();
+  const [rateOverride, setRateOverride] = useState(false);
+  const canOverrideRate = canOverrideInvoiceRate(profile?.email);
 
   const emisorData = useMemo(() => {
     if (sociedadActiva?.nombre === "Grupo LA") {
@@ -198,13 +201,13 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       const params = new URLSearchParams({ modalidad });
       // Por defecto se usa el día hábil anterior a la fecha de la factura.
       // Solo un valor explícito en el selector permite cambiar esta regla.
-      if (emitManual) params.set("fecha", fecha || cotizFecha || previousBusinessDay(emitData.fecha));
+      if (emitManual || (canOverrideRate && rateOverride)) params.set("fecha", fecha || cotizFecha || previousBusinessDay(emitData.fecha));
       else params.set("fecha_factura", emitData.fecha);
       const res = await fetch(`/api/cotizacion-bna?${params}`);
       const data = await res.json();
       if (requestId !== cotizRequest.current) return;
       if (!res.ok) throw new Error(data.error || "No se pudo consultar la cotización.");
-      if (emitManual && (data.stale || data.fecha !== params.get("fecha"))) {
+      if ((emitManual || (canOverrideRate && rateOverride)) && (data.stale || data.fecha !== params.get("fecha"))) {
         throw new Error(`La cotización disponible es del ${data.fecha}, no del ${params.get("fecha")}. No se aplicó; ingresá el valor correcto manualmente.`);
       }
       if (Number(data.valor_venta) > 0) {
@@ -230,12 +233,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   useEffect(() => {
     if (!emitOpen || emitData.moneda !== "USD") return;
-    if (emitManual) { setCotizBnaLoading(false); return; }
+    if (emitManual || (canOverrideRate && rateOverride)) { setCotizBnaLoading(false); return; }
     void fetchCotizBna("divisas", previousBusinessDay(emitData.fecha));
     return () => { cotizRequest.current += 1; };
     // La edición manual de tipo_cambio no dispara otra consulta.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [emitOpen, emitData.moneda, emitData.fecha, emitManual]);
+  }, [emitOpen, emitData.moneda, emitData.fecha, emitManual, canOverrideRate, rateOverride]);
 
   function calcFechaVencFC(condVenta: string, fechaBase: string): string {
     const diasMap: Record<string, number> = {
@@ -586,6 +589,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     setEmitManual(forceManual);
     setCotizBna(null);
     setCotizFecha("");
+    setRateOverride(false);
     setCotizError("");
     setCotizModalidad("divisas");
     const tipoInicial = forceManual ? "X" : (prefill?.tipo || "FB");
@@ -809,6 +813,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           moneda: emitData.moneda,
           tipo_cambio: isUSD ? tc : null,
           cotizacion_modalidad: isUSD ? cotizModalidad : null,
+          cotizacion_override: canOverrideRate && rateOverride,
+          cotizacion_fecha: cotizFecha || cotizBna?.fecha || null,
           fecha: emitData.fecha || null,
           condicion_venta: emitData.condicion_venta || null,
           fecha_vencimiento: emitData.fecha_vencimiento || null,
@@ -1851,9 +1857,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                   {isUSD && (
                     <div className="col-span-8">
                       <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cotizacion USD/ARS {emitManual ? "" : "*"}</label>
-                      <input type="number" readOnly={!emitManual} step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => { cotizRequest.current += 1; setCotizBnaLoading(false); setCotizBna(null); setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) })); }} placeholder={emitManual ? "Ej: 1450.00" : "Verificando BNA…"} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                      <input type="number" readOnly={!(emitManual || (canOverrideRate && rateOverride))} step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => { cotizRequest.current += 1; setCotizBnaLoading(false); setCotizBna(null); setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) })); }} placeholder={emitManual ? "Ej: 1450.00" : "Verificando BNA…"} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
                       <div className="mt-1 flex items-center gap-2 flex-wrap">
-                        {emitManual && <>
+                        {(emitManual || (canOverrideRate && rateOverride)) && <>
                         <span className="text-xs text-zinc-400">BNA:</span>
                         <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
                           {cotizBnaLoading ? "…" : "Divisas"}
@@ -1864,7 +1870,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                         </button>
                         <input type="date" value={cotizFecha} onChange={e => { cotizRequest.current += 1; setCotizFecha(e.target.value); setCotizBnaLoading(false); setCotizBna(null); setCotizError(""); setEmitData(p => ({ ...p, tipo_cambio: 0 })); }} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
                         </>}
-                        {!emitManual && <span className="text-xs text-zinc-500">Automática: BNA divisa venta, día hábil anterior a la factura.</span>}
+                        {!emitManual && !rateOverride && <span className="text-xs text-zinc-500">Automática: BNA divisa venta, día hábil anterior a la factura.</span>}
+                        {!emitManual && canOverrideRate && <label className="text-xs"><input type="checkbox" checked={rateOverride} onChange={e => setRateOverride(e.target.checked)} /> Modificar cotización (Augusto)</label>}
                         {cotizBna && <span className="text-xs text-zinc-400">→ Venta {cotizBna.modalidad}: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})</span>}
                       </div>
                       {cotizError && <p role="alert" className="mt-1 text-xs text-amber-700 dark:text-amber-400">{cotizError}</p>}
@@ -1976,7 +1983,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                       <FileCheck className="h-4 w-4" /> Guardar manual
                     </button>
                   ) : (
-                    <button onClick={handleEmit} disabled={isUSD && (cotizBnaLoading || !cotizBna || tc <= 0)} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
+                    <button onClick={handleEmit} disabled={isUSD && (cotizBnaLoading || (!(canOverrideRate && rateOverride) && !cotizBna) || tc <= 0)} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
                       <ShieldCheck className="h-4 w-4" /> Emitir con ARCA
                     </button>
                   )}

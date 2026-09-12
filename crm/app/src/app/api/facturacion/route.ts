@@ -4,6 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { crearFacturaWsfeNode } from "@/lib/arca-wsfe-node";
 import { getInvoiceExchangeRate } from "@/lib/invoice-exchange-rate";
+import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -378,7 +379,13 @@ export async function POST(req: NextRequest) {
     }
 
     const fechaFacturaInput = fecha || todayArgentina();
-    const automaticInvoiceRate = isUSD && ["FA", "FB", "FCEA", "FCEB"].includes(tipo);
+    const requestedRateOverride = isUSD && body.cotizacion_override === true;
+    if (requestedRateOverride) {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      if (error || !canOverrideInvoiceRate(user?.email)) return NextResponse.json({error:"Solo Augusto puede modificar la cotización en una factura ARCA."},{status:403});
+      if (!Number.isFinite(tc) || tc <= 0) return NextResponse.json({error:"La cotización debe ser un número positivo."},{status:400});
+    }
+    const automaticInvoiceRate = isUSD && ["FA", "FB", "FCEA", "FCEB"].includes(tipo) && !requestedRateOverride;
     if (automaticInvoiceRate) {
       try {
         const quote = await getInvoiceExchangeRate(fechaFacturaInput);
@@ -621,7 +628,7 @@ export async function POST(req: NextRequest) {
         observaciones: observaciones || null,
         condicion_venta: condicion_venta || null,
         fecha_vencimiento: fecha_vencimiento || null,
-        nota_interna: nota_interna || null,
+        nota_interna: requestedRateOverride ? `${nota_interna || ""}\nCotización modificada por augusto@lazzari.com.ar antes de emitir: ${tc} ARS/USD. Fecha indicada: ${String(body.cotizacion_fecha || "sin especificar").slice(0,10)}. Registro: ${new Date().toISOString()}`.trim() : (nota_interna || null),
       } as any)
       .select()
       .single();
