@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import * as fs from "fs";
 import * as path from "path";
 import { crearFacturaWsfeNode } from "@/lib/arca-wsfe-node";
+import { getInvoiceExchangeRate } from "@/lib/invoice-exchange-rate";
 import { createSupabaseServer } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
@@ -364,7 +365,7 @@ export async function POST(req: NextRequest) {
     }
 
     const isUSD = moneda === "USD";
-    const tc = Number(tipo_cambio) || 0;
+    let tc = Number(tipo_cambio) || 0;
     if (isUSD && (!tc || tc <= 0)) {
       return NextResponse.json({ error: "Tipo de cambio requerido para facturar en USD (ARCA necesita la cotizacion)" }, { status: 400 });
     }
@@ -377,6 +378,16 @@ export async function POST(req: NextRequest) {
     }
 
     const fechaFacturaInput = fecha || todayArgentina();
+    const automaticInvoiceRate = isUSD && ["FA", "FB", "FCEA", "FCEB"].includes(tipo);
+    if (automaticInvoiceRate) {
+      try {
+        const quote = await getInvoiceExchangeRate(fechaFacturaInput);
+        if (Math.abs(tc - quote.valor_venta) > 0.000001) {
+          return NextResponse.json({error:`La cotización debe ser BNA divisa venta del ${quote.fecha}: $${quote.valor_venta}. Volvé a abrir la emisión para actualizarla. No se emitió la factura.`},{status:409});
+        }
+        tc = quote.valor_venta;
+      } catch (error) { return NextResponse.json({error:error instanceof Error ? error.message : "No se pudo verificar la cotización automática. No se emitió."},{status:503}); }
+    }
     try {
       await validateFacturaInput(supabase, {
         sociedadId: arcaConfig.id, tipo, puntoVenta: Number(punto_venta), fecha: fechaFacturaInput, clienteId: cliente_id,
@@ -601,7 +612,7 @@ export async function POST(req: NextRequest) {
         total: totalFinal,
         moneda: isUSD ? "USD" : "ARS",
         tipo_cambio: isUSD ? tc : null,
-        cotizacion_modalidad: isUSD ? (cotizacion_modalidad === "billetes" ? "billetes" : "divisas") : null,
+        cotizacion_modalidad: isUSD ? (automaticInvoiceRate ? "divisas" : (cotizacion_modalidad === "billetes" ? "billetes" : "divisas")) : null,
         estado: "emitida",
         sociedad_id: arcaConfig.id,
         oc_cliente: oc_cliente || null,

@@ -15,7 +15,7 @@ import {
   ArrowRight, Clock, Package, ClipboardList, Search, Download, Mail, MailCheck, Maximize2, Minimize2,
 } from "lucide-react";
 import { FichasRelevamiento } from "@/components/ventas/fichas-relevamiento";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -236,20 +236,35 @@ export default function VentasPage() {
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
   const [cotizFecha, setCotizFecha] = useState("");
+  const cotizRequest = useRef(0);
+
+  useEffect(() => {
+    const id = ++cotizRequest.current;
+    setCotizBnaLoading(false);
+    if (!emitModalOpen || emitManual || (emitMoneda !== "USD" && emitVenta?.presupuesto.moneda !== "USD")) return;
+    setEmitTipoCambio(0); setCotizBna(null); setCotizBnaLoading(true);
+    fetch(`/api/cotizacion-bna?fecha_factura=${encodeURIComponent(emitFecha)}`)
+      .then(async res => { const data = await res.json(); if (!res.ok) throw new Error(data.error); return data; })
+      .then(data => { if (id !== cotizRequest.current) return; setCotizBna(data); setEmitTipoCambio(data.valor_venta); })
+      .catch(error => { if (id === cotizRequest.current) setEmitError(error.message || "No se pudo verificar la cotización automática."); })
+      .finally(() => { if (id === cotizRequest.current) setCotizBnaLoading(false); });
+    return () => { cotizRequest.current += 1; };
+  }, [emitModalOpen, emitManual, emitMoneda, emitFecha, emitVenta?.presupuesto.id, emitVenta?.presupuesto.moneda]);
 
   async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas", fecha?: string) {
+    const id = ++cotizRequest.current;
     setCotizBnaLoading(true);
     try {
       const params = new URLSearchParams({ modalidad });
       if (fecha) params.set("fecha", fecha);
       const res = await fetch(`/api/cotizacion-bna?${params}`);
-      if (res.ok) {
+      if (res.ok && id === cotizRequest.current) {
         const data = await res.json();
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
         setEmitTipoCambio(data.valor_venta);
       }
     } catch { /* silencioso */ } finally {
-      setCotizBnaLoading(false);
+      if (id === cotizRequest.current) setCotizBnaLoading(false);
     }
   }
 
@@ -1576,18 +1591,20 @@ export default function VentasPage() {
                         <input
                           type="number" step="0.01" min={0}
                           value={emitTipoCambio || ""}
+                          readOnly={!emitManual}
                           onChange={e => setEmitTipoCambio(Number(e.target.value))}
                           placeholder="Ej: 1450.00"
                           className="w-32 rounded-lg border border-amber-300 dark:border-amber-700 bg-white dark:bg-zinc-900 px-2 py-1 text-sm font-mono dark:text-white"
                         />
-                        <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap">
+                        {emitManual && <><button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap">
                           {cotizBnaLoading ? "…" : "Divisas"}
                         </button>
                         <span className="text-xs text-zinc-400">·</span>
                         <button type="button" onClick={() => fetchCotizBna("billetes", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50 whitespace-nowrap">
                           {cotizBnaLoading ? "…" : "Billetes"}
                         </button>
-                        <input type="date" value={cotizFecha} onChange={e => setCotizFecha(e.target.value)} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
+                        <input type="date" value={cotizFecha} onChange={e => setCotizFecha(e.target.value)} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" /></>}
+                        {!emitManual && <span className="text-xs text-amber-700 dark:text-amber-400">{cotizBnaLoading ? "Verificando BNA…" : "Automática: BNA divisa venta, día hábil anterior a la factura"}</span>}
                       </div>
                       {cotizBna && (
                         <p className="text-xs text-zinc-500 mt-1">BNA {cotizBna.modalidad} venta: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})</p>
@@ -1796,7 +1813,7 @@ export default function VentasPage() {
                 <div className="flex justify-end gap-2">
                   <button
                     onClick={() => setEmitModalOpen(false)}
-                    disabled={emitting}
+                    disabled={emitting || (!emitManual && (emitMoneda === "USD" || emitVenta.presupuesto.moneda === "USD") && (cotizBnaLoading || !cotizBna || emitTipoCambio <= 0))}
                     className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
                   >
                     Cancelar

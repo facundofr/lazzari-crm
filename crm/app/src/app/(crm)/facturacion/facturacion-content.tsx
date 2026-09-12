@@ -198,16 +198,17 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       const params = new URLSearchParams({ modalidad });
       // Por defecto se usa el día hábil anterior a la fecha de la factura.
       // Solo un valor explícito en el selector permite cambiar esta regla.
-      params.set("fecha", fecha || cotizFecha || previousBusinessDay(emitData.fecha));
+      if (emitManual) params.set("fecha", fecha || cotizFecha || previousBusinessDay(emitData.fecha));
+      else params.set("fecha_factura", emitData.fecha);
       const res = await fetch(`/api/cotizacion-bna?${params}`);
       const data = await res.json();
       if (requestId !== cotizRequest.current) return;
       if (!res.ok) throw new Error(data.error || "No se pudo consultar la cotización.");
-      if (data.stale || data.fecha !== params.get("fecha")) {
+      if (emitManual && (data.stale || data.fecha !== params.get("fecha"))) {
         throw new Error(`La cotización disponible es del ${data.fecha}, no del ${params.get("fecha")}. No se aplicó; ingresá el valor correcto manualmente.`);
       }
       if (Number(data.valor_venta) > 0) {
-        setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
+        setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad: data.modalidad || modalidad });
         setEmitData((p) => ({ ...p, tipo_cambio: data.valor_venta }));
       } else throw new Error("La cotización recibida no es válida. Ingresá el valor correcto manualmente.");
     } catch (error) { if (requestId === cotizRequest.current) setCotizError(error instanceof Error ? error.message : "No se pudo consultar la cotización. Ingresala manualmente."); } finally {
@@ -229,11 +230,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   useEffect(() => {
     if (!emitOpen || emitData.moneda !== "USD") return;
-    void fetchCotizBna(cotizModalidad, previousBusinessDay(emitData.fecha));
+    if (emitManual) { setCotizBnaLoading(false); return; }
+    void fetchCotizBna("divisas", previousBusinessDay(emitData.fecha));
     return () => { cotizRequest.current += 1; };
     // La edición manual de tipo_cambio no dispara otra consulta.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [emitOpen, emitData.moneda, emitData.fecha]);
+  }, [emitOpen, emitData.moneda, emitData.fecha, emitManual]);
 
   function calcFechaVencFC(condVenta: string, fechaBase: string): string {
     const diasMap: Record<string, number> = {
@@ -707,13 +709,20 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       const esRI = (pr.condicion_iva || "").toUpperCase() === "RI" || (pr.condicion_iva || "").toUpperCase() === "RESPONSABLE INSCRIPTO";
       const tipo = ["FA", "FB"].includes(pr.tipo_comprobante || "") ? pr.tipo_comprobante! : (esRI ? "FA" : "FB");
       try {
+        let automaticRate: number | null = null;
+        if (pr.moneda === "USD") {
+          const quoteRes = await fetch(`/api/cotizacion-bna?fecha_factura=${encodeURIComponent(fmFecha)}`);
+          const quote = await quoteRes.json();
+          if (!quoteRes.ok || !(quote.valor_venta > 0)) throw new Error(quote.error || "No se pudo verificar el tipo de cambio automático.");
+          automaticRate = quote.valor_venta;
+        }
         const res = await fetch("/api/facturacion", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
           body: JSON.stringify({
             tipo, cliente_id: pr.cliente_id, punto_venta: emisorData.ptoVta,
-            moneda: pr.moneda, tipo_cambio: pr.moneda === "USD" ? pr.tipo_cambio : null,
-            cotizacion_modalidad: pr.moneda === "USD" ? pr.cotizacion_modalidad : null,
+            moneda: pr.moneda, tipo_cambio: automaticRate,
+            cotizacion_modalidad: pr.moneda === "USD" ? "divisas" : null,
             fecha: fmFecha, items: pr.items, presupuesto_id: pr.id, sociedad_id: sociedadActiva.id,
           }),
         });
@@ -1842,8 +1851,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                   {isUSD && (
                     <div className="col-span-8">
                       <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cotizacion USD/ARS {emitManual ? "" : "*"}</label>
-                      <input type="number" step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => { cotizRequest.current += 1; setCotizBnaLoading(false); setCotizBna(null); setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) })); }} placeholder="Ej: 1450.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                      <input type="number" readOnly={!emitManual} step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => { cotizRequest.current += 1; setCotizBnaLoading(false); setCotizBna(null); setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) })); }} placeholder={emitManual ? "Ej: 1450.00" : "Verificando BNA…"} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
                       <div className="mt-1 flex items-center gap-2 flex-wrap">
+                        {emitManual && <>
                         <span className="text-xs text-zinc-400">BNA:</span>
                         <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
                           {cotizBnaLoading ? "…" : "Divisas"}
@@ -1853,6 +1863,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                           {cotizBnaLoading ? "…" : "Billetes"}
                         </button>
                         <input type="date" value={cotizFecha} onChange={e => { cotizRequest.current += 1; setCotizFecha(e.target.value); setCotizBnaLoading(false); setCotizBna(null); setCotizError(""); setEmitData(p => ({ ...p, tipo_cambio: 0 })); }} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
+                        </>}
+                        {!emitManual && <span className="text-xs text-zinc-500">Automática: BNA divisa venta, día hábil anterior a la factura.</span>}
                         {cotizBna && <span className="text-xs text-zinc-400">→ Venta {cotizBna.modalidad}: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})</span>}
                       </div>
                       {cotizError && <p role="alert" className="mt-1 text-xs text-amber-700 dark:text-amber-400">{cotizError}</p>}
@@ -1964,7 +1976,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                       <FileCheck className="h-4 w-4" /> Guardar manual
                     </button>
                   ) : (
-                    <button onClick={handleEmit} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors">
+                    <button onClick={handleEmit} disabled={isUSD && (cotizBnaLoading || !cotizBna || tc <= 0)} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
                       <ShieldCheck className="h-4 w-4" /> Emitir con ARCA
                     </button>
                   )}
