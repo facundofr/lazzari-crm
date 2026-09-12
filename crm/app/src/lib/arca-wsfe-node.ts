@@ -138,8 +138,25 @@ export async function crearFacturaWsfeNode(args: {
 }) {
   const endpoint = args.production ? WSFE_PRODUCTION : WSFE_TESTING;
   const last = await postSoap(endpoint, "FECompUltimoAutorizado", `${authXml(args.auth)}<PtoVta>${args.ptoVta}</PtoVta><CbteTipo>${args.cbteTipo}</CbteTipo>`);
-  const nextNumber = Number(last.CbteNro || 0) + 1;
+  const lastNumber = Number(last.CbteNro);
+  if (!Number.isSafeInteger(lastNumber) || lastNumber < 0) {
+    throw new Error("No se pudo verificar el último número autorizado en ARCA. No se emitió el comprobante.");
+  }
+  const nextNumber = lastNumber + 1;
   const inv = args.invoice;
+  // Consultar ARCA, no solamente la DB local: puede haber emisiones externas.
+  // La secuencia es independiente por CUIT, punto de venta y tipo fiscal.
+  if (lastNumber > 0) {
+    const previous = await postSoap(endpoint, "FECompConsultar", `${authXml(args.auth)}<FeCompConsReq><CbteTipo>${args.cbteTipo}</CbteTipo><CbteNro>${lastNumber}</CbteNro><PtoVta>${args.ptoVta}</PtoVta></FeCompConsReq>`);
+    const lastDate = String(previous.ResultGet?.CbteFch || "");
+    if (!/^\d{8}$/.test(lastDate)) {
+      throw new Error("ARCA no devolvió la fecha del último comprobante. No se emitió; reintentá la consulta.");
+    }
+    if (inv.CbteFch < lastDate) {
+      const display = (d: string) => `${d.slice(6,8)}/${d.slice(4,6)}/${d.slice(0,4)}`;
+      throw new Error(`No podés emitir con fecha ${display(inv.CbteFch)}: el último comprobante autorizado de este tipo (${args.cbteTipo}), punto de venta ${String(args.ptoVta).padStart(4,"0")}, número ${lastNumber}, tiene fecha ${display(lastDate)}. Elegí esa fecha o una posterior.`);
+    }
+  }
   const ivaXml = inv.Iva?.length
     ? `<Iva>${inv.Iva.map((iva) => `<AlicIva><Id>${iva.Id}</Id><BaseImp>${money(iva.BaseImp)}</BaseImp><Importe>${money(iva.Importe)}</Importe></AlicIva>`).join("")}</Iva>`
     : "";
