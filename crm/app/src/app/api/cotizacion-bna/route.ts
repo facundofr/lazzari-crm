@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
+import { parseBnaHistorical, isTrustedBnaCache, BNA_VERIFIED_SOURCE } from "@/lib/bna-historical";
 
 /**
  * GET /api/cotizacion-bna?modalidad=divisas|billetes&fecha=YYYY-MM-DD
@@ -28,10 +29,6 @@ const toddmmyyyy = (isoDate: string) => {
   return `${d}/${m}/${y}`;
 };
 
-const parse = (s: string) => {
-  if (s.includes(",")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
-  return parseFloat(s);
-};
 
 /**
  * Scrape BNA Cotizador — AJAX endpoint que devuelve HTML parcial con tabla.
@@ -41,7 +38,7 @@ const parse = (s: string) => {
 async function scrapeBna(
   modalidad: "divisas" | "billetes",
   fecha: string
-): Promise<{ compra: number; venta: number; fechaBna: string } | null> {
+): Promise<{ compra: number; venta: number; fecha: string } | null> {
   const id = modalidad;
   const idMoneda = modalidad === "billetes" ? "22" : "55";
   const fechaDdMm = toddmmyyyy(fecha);
@@ -60,18 +57,7 @@ async function scrapeBna(
     if (!res.ok) return null;
     const html = await res.text();
 
-    // Parse: find rows with "Dolar U.S.A" followed by compra/venta TDs
-    // Pattern: <td>Dolar U.S.A</td> <td class="dest">COMPRA</td> <td class="dest">VENTA</td> <td>FECHA</td>
-    const rowMatch = html.match(
-      /Dolar\s+U\.S\.A<\/td>\s*<td[^>]*>([\d.,]+)<\/td>\s*<td[^>]*>([\d.,]+)<\/td>\s*<td[^>]*>([^<]+)<\/td>/i
-    );
-    if (!rowMatch) return null;
-
-    const compra = parse(rowMatch[1]);
-    const venta = parse(rowMatch[2]);
-    const fechaBna = rowMatch[3].trim();
-    if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
-    return { compra, venta, fechaBna };
+    return parseBnaHistorical(html, fecha);
   } catch {
     return null;
   }
@@ -150,12 +136,13 @@ function buildResponse(row: any, modalidad: string, tipoDb: string, cached: bool
 }
 
 async function upsertCotiz(supabase: any, fecha: string, tipoDb: string, compra: number, venta: number, fuente: string) {
-  await (supabase as any)
+  const { error } = await (supabase as any)
     .from("cotizaciones_dolar")
     .upsert(
       { fecha, tipo: tipoDb, valor_compra: compra, valor_venta: venta, fuente, es_manual: false },
       { onConflict: "fecha,tipo" }
     );
+  if (error) console.warn("No se pudo guardar la cotización verificada:", error.message);
 }
 
 export async function GET(req: NextRequest) {
@@ -177,19 +164,19 @@ export async function GET(req: NextRequest) {
   // -- Buscar en DB primero (skip si force) --
   if (!forceRefresh) {
     const cached = await lookupDb(supabase as any, tipoDb, targetFecha);
-    if (cached) return buildResponse(cached, modalidad, tipoDb, true);
+    if (isTrustedBnaCache(cached)) return buildResponse(cached, modalidad, tipoDb, true);
   }
 
   // -- BNA Cotizador (distingue divisas vs billetes) --
   const bna = await scrapeBna(modalidad, targetFecha);
   if (bna) {
-    const fechaMatch = bna.fechaBna.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-    const fechaReal = fechaMatch ? `${fechaMatch[3]}-${fechaMatch[2]}-${fechaMatch[1]}` : null;
+    const fechaReal = bna.fecha;
     // Nunca etiquetar como histórica una cotización que BNA devolvió para otro día.
     if (fechaReal && fechaReal <= targetFecha) {
-      await upsertCotiz(supabase as any, fechaReal, tipoDb, bna.compra, bna.venta, "BNA");
+      const existing = await lookupDb(supabase as any, tipoDb, fechaReal);
+      if (!existing?.es_manual) await upsertCotiz(supabase as any, fechaReal, tipoDb, bna.compra, bna.venta, BNA_VERIFIED_SOURCE);
       return buildResponse(
-        { fecha: fechaReal, valor_compra: bna.compra, valor_venta: bna.venta, fuente: "BNA", es_manual: false },
+        { fecha: fechaReal, valor_compra: bna.compra, valor_venta: bna.venta, fuente: BNA_VERIFIED_SOURCE, es_manual: false },
         modalidad, tipoDb, false, fechaReal !== targetFecha
       );
     }
@@ -211,7 +198,7 @@ export async function GET(req: NextRequest) {
 
   // -- Último valor en DB (stale) --
   const ultimo = await lookupLatest(supabase as any, tipoDb, targetFecha);
-  if (ultimo) return buildResponse(ultimo, modalidad, tipoDb, true, true);
+  if (isTrustedBnaCache(ultimo)) return buildResponse(ultimo, modalidad, tipoDb, true, true);
 
   return NextResponse.json(
     { error: "No se pudo obtener la cotización del dólar. Ingresela manualmente." },
