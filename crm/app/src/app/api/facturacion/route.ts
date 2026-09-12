@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import * as fs from "fs";
 import * as path from "path";
 import { crearFacturaWsfeNode } from "@/lib/arca-wsfe-node";
+import { createSupabaseServer } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 
@@ -114,14 +115,7 @@ function condicionIvaArca(value?: string | null) {
 }
 
 function getSupabase(authHeader?: string | null) {
-  // If service role key is available, use it (bypasses RLS)
-  if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
-  }
-  // Otherwise, use the user's JWT to respect RLS
+  // Preserve the caller's identity: issuing a document must never bypass RLS.
   const opts = authHeader
     ? { global: { headers: { Authorization: authHeader } } }
     : undefined;
@@ -134,6 +128,23 @@ function getSupabase(authHeader?: string | null) {
 
 const SUPPORTED_MANUAL_TYPES = new Set(["X", ...Object.keys(CBTE_TIPO_MAP)]);
 
+async function authorizeFacturaRequest(req: NextRequest, sociedadId: string) {
+  const bearer = req.headers.get("authorization");
+  const supabase = bearer ? getSupabase(bearer) : await createSupabaseServer();
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) throw new Error("Sesión no válida");
+  const { data: profile, error: roleError } = await supabase.from("profiles").select("role").eq("id", user.id).single();
+  if (roleError || !profile || !["super_admin", "admin", "administrativo"].includes(profile.role)) throw new Error("No tenés permiso para emitir facturas");
+  const { data: membership, error: membershipError } = await (supabase as any).from("user_sociedades")
+    .select("sociedad_id").eq("user_id", user.id).eq("sociedad_id", sociedadId).maybeSingle();
+  if (membershipError || !membership) throw new Error("No tenés acceso a la sociedad seleccionada");
+  return supabase;
+}
+
+function todayArgentina() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Argentina/Buenos_Aires", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
 /** Validaciones comunes para evitar comprobantes manuales inconsistentes o fechas retroactivas. */
 async function validateFacturaInput(
   supabase: any,
@@ -143,10 +154,11 @@ async function validateFacturaInput(
   if (!Number.isInteger(params.puntoVenta) || !config.ptoVtaPermitidos.includes(params.puntoVenta)) {
     throw new Error(`Punto de venta ${params.puntoVenta} no está permitido para esta sociedad (permitidos: ${config.ptoVtaPermitidos.join(", ")})`);
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(params.fecha) || Number.isNaN(new Date(`${params.fecha}T12:00:00`).getTime())) {
+  const parsedDate = new Date(`${params.fecha}T12:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(params.fecha) || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== params.fecha) {
     throw new Error("La fecha de factura no es válida");
   }
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayArgentina();
   if (params.fecha > today) throw new Error("La fecha de factura no puede ser futura");
 
   if (params.clienteId && params.clienteId !== "consumidor_final") {
@@ -206,11 +218,16 @@ export async function POST(req: NextRequest) {
       factura_origen_id, // optional UUID — original invoice for NC/ND (CbtesAsoc)
     } = body;
 
-    const authHeader = req.headers.get("authorization");
-    const supabase = getSupabase(authHeader);
-
     if (!sociedad_id || typeof sociedad_id !== "string") {
       return NextResponse.json({ error: "sociedad_id es requerido para emitir una factura" }, { status: 400 });
+    }
+    let supabase: any;
+    try { supabase = await authorizeFacturaRequest(req, sociedad_id); }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "No autorizado" }, { status: 403 }); }
+    if (presupuesto_id) {
+      const { data: pr, error: prError } = await supabase.from("presupuestos").select("id, cliente_id")
+        .eq("id", presupuesto_id).eq("sociedad_id", sociedad_id).single();
+      if (prError || !pr || pr.cliente_id !== cliente_id) return NextResponse.json({ error: "El presupuesto no pertenece al cliente y sociedad de la factura" }, { status: 400 });
     }
 
     // ── Manual mode: skip ARCA entirely ──
@@ -259,7 +276,7 @@ export async function POST(req: NextRequest) {
       const totalFinal = Math.round((totalNeto + totalIva) * 100) / 100;
 
       const ptoVta = Number(punto_venta) || 0;
-      const fechaFactura = fecha || new Date().toISOString().slice(0, 10);
+      const fechaFactura = fecha || todayArgentina();
       try {
         await validateFacturaInput(supabase, {
           sociedadId, tipo, puntoVenta: ptoVta, fecha: fechaFactura,
@@ -359,7 +376,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const fechaFacturaInput = fecha || new Date().toISOString().slice(0, 10);
+    const fechaFacturaInput = fecha || todayArgentina();
     try {
       await validateFacturaInput(supabase, {
         sociedadId: arcaConfig.id, tipo, puntoVenta: Number(punto_venta), fecha: fechaFacturaInput, clienteId: cliente_id,
@@ -397,12 +414,13 @@ export async function POST(req: NextRequest) {
         .from("clientes")
         .select("razon_social, cuit, condicion_iva")
         .eq("id", cliente_id)
+        .eq("sociedad_id", sociedad_id)
         .single();
 
       if (clienteError || !data) {
         return NextResponse.json({ error: "Cliente no encontrado" }, { status: 404 });
       }
-      cliente = data;
+      cliente = { razon_social: data.razon_social, cuit: data.cuit, condicion_iva: data.condicion_iva };
 
       // Validate tipo vs condicion_iva
       if (tipo.endsWith("A") && cliente.condicion_iva !== "RI") {
@@ -487,17 +505,21 @@ export async function POST(req: NextRequest) {
       Importe: Math.round(vals.importe * 100) / 100,
     }));
 
-    const today = fecha ? fecha.replace(/-/g, "") : new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const today = fechaFacturaInput.replace(/-/g, "");
 
     // Build CbtesAsoc for NC/ND (required by ARCA)
     const isNCND = ["NCA", "NCB", "NCEA", "NCEB", "NDA", "NDB"].includes(tipo);
     let cbtesAsoc: { Tipo: number; PtoVta: number; Nro: number; Cuit: number; CbteFch: string }[] | undefined;
     if (isNCND && factura_origen_id) {
-      const { data: origen } = await (supabase as any)
+      const { data: origen, error: origenError } = await (supabase as any)
         .from("facturas")
         .select("tipo, punto_venta, numero, fecha")
         .eq("id", factura_origen_id)
+        .eq("sociedad_id", sociedad_id)
+        .eq("cliente_id", cliente_id)
+        .eq("moneda", isUSD ? "USD" : "ARS")
         .single();
+      if (origenError || !origen) return NextResponse.json({ error: "La factura origen no pertenece al mismo cliente, sociedad y moneda" }, { status: 400 });
       if (origen) {
         const origenTipo = CBTE_TIPO_MAP[origen.tipo];
         if (origenTipo) {

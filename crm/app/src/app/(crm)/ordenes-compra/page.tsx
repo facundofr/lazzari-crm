@@ -418,8 +418,10 @@ export default function OrdenesCompraPage() {
     if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de desasignar el presupuesto"); return; }
     let query = supabase.from("ordenes_compra").update({ presupuesto_origen_id: null } as any).eq("id", detailOC.id);
     query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
-    const { error } = await query;
+    query = query.eq("presupuesto_origen_id" as any, detailOC.presupuesto_origen_id) as any;
+    const { data, error } = await query.select("id").maybeSingle();
     if (error) { alert("Error al desasignar PR: " + error.message); return; }
+    if (!data) { alert("No se desasignó el PR: la OC cambió o no tenés permiso para modificarla. Actualizá la pantalla y volvé a intentar."); return; }
     setDetailOC({ ...detailOC, presupuesto_origen_id: null, presupuesto_origen: null });
     setOrdenes(prev => prev.map(o => o.id === detailOC.id ? { ...o, presupuesto_origen_id: null, presupuesto_origen: null } : o));
   }
@@ -786,8 +788,10 @@ export default function OrdenesCompraPage() {
     try {
       let query = supabase.from("ordenes_compra").update({ estado: nuevoEstado } as any).eq("id", oc.id);
       query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
-      const { error } = await query;
+      query = query.eq("estado" as any, "borrador") as any;
+      const { data, error } = await query.select("id").maybeSingle();
       if (error) throw error;
+      if (!data) throw new Error("No se modificó ninguna fila: la OC ya cambió de estado o no tenés permiso para modificarla. Actualizá la pantalla y volvé a intentar.");
       await fetchData();
       if (detailOC?.id === oc.id) {
         setDetailOC({ ...oc, estado: nuevoEstado });

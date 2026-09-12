@@ -44,7 +44,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
       if (!sociedadId) throw new Error("Seleccioná una sociedad");
       const { data, error } = await (supabase as any).from("ordenes_compra")
         .select("id, numero, proveedor_id, total, moneda, estado, fecha, proveedores(razon_social)")
-        .eq("sociedad_id", sociedadId).in("estado", ["enviada", "confirmada", "recibida_parcial", "recibida"]);
+        .eq("sociedad_id", sociedadId).in("estado", ["pendiente", "enviada", "confirmada", "recibida_parcial", "recibida"]);
       if (error) throw error;
       setReview({ row, orders: (data || []).map((o: any) => ({ ...o, proveedor_nombre: o.proveedores?.razon_social || "Sin proveedor" })) });
     } catch (e) { alert(e instanceof Error ? e.message : "No se pudieron cargar las OC"); }
