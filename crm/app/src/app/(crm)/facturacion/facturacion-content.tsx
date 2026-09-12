@@ -13,6 +13,7 @@ import { EmailComposeModal, type EmailDocumentType } from "@/components/email-co
 import { useUser } from "@/lib/auth-context";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { useFiscalDateLimits } from "@/lib/use-fiscal-date-limits";
+import { useFceCheck, fceTotalArs } from "@/lib/use-fce-check";
 import { supabase } from "@/lib/supabase/client";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { mockFacturas } from "@/lib/mock-data";
@@ -54,6 +55,7 @@ interface FacturaRow {
   oc_cliente_fecha?: string | null;
   condicion_venta?: string | null;
   fecha_vencimiento?: string | null;
+  nota_interna?: string | null;
   factura_origen_id?: string | null;
   total_acreditado?: number | null;
   modalidad_emision?: string | null;
@@ -117,6 +119,25 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [facturas, setFacturas] = useState<FacturaRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
+  const [fceRegistry, setFceRegistry] = useState<{ key: string; loading?: boolean; error?: string; estado?: string; historial?: { estado: string; fechaHora?: string }[]; checkedAt?: string }>({ key: "" });
+  const fceRegistryRequest = useRef(0);
+  useEffect(() => { fceRegistryRequest.current += 1; setFceRegistry({ key: "" }); }, [detailFactura?.id, sociedadActiva?.id]);
+  async function consultarRegistroFce() {
+    if (!detailFactura || !sociedadActiva?.id) return;
+    const key = `${sociedadActiva.id}:${detailFactura.id}`;
+    const request = ++fceRegistryRequest.current;
+    setFceRegistry({ key, loading: true });
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const params = new URLSearchParams({ action: "fce-status", sociedad_id: sociedadActiva.id, factura_id: detailFactura.id });
+      const response = await fetch(`/api/facturacion?${params}`, { cache: "no-store", headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {} });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "No se pudo consultar el Registro FCE.");
+      if (request === fceRegistryRequest.current) setFceRegistry({ key, estado: data.estado || "Sin estado informado", historial: Array.isArray(data.historial) ? data.historial : [], checkedAt: new Date().toLocaleString("es-AR") });
+    } catch (error) {
+      if (request === fceRegistryRequest.current) setFceRegistry({ key, error: error instanceof Error ? error.message : "No se pudo consultar el Registro FCE." });
+    }
+  }
   const [detailItems, setDetailItems] = useState<{ descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number; subtotal: number }[]>([]);
   const [panelFullscreen, setPanelFullscreen] = useState(false);
   const [emailModal, setEmailModal] = useState<{ open: boolean; facturaId: string; to: string; subject: string; body: string; filename: string; suggestedEmails: { email: string; label?: string }[] }>({ open: false, facturaId: "", to: "", subject: "", body: "", filename: "", suggestedEmails: [] });
@@ -229,6 +250,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     fecha: todayAR(),
     condicion_venta: "Cta. Cte.",
     fecha_vencimiento: "",
+    fce_cbu: "",
+    fce_transmision: "",
     items: [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }] as EmitItem[],
   });
 
@@ -611,6 +634,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       fecha: hoy,
       condicion_venta: "Cta. Cte.",
       fecha_vencimiento: calcFechaVencFC("Cta. Cte.", hoy),
+      fce_cbu: "",
+      fce_transmision: "",
       items: prefill?.items || [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],
     });
     setEmitStep("form");
@@ -792,14 +817,34 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     }
   }, { neto: 0, iva: 0, total: 0 });
 
+  const fceApplies = !emitManual && ["FA", "FB", "FCEA", "FCEB"].includes(emitData.tipo);
+  const fceCheck = useFceCheck(emitOpen && fceApplies, sociedadActiva?.id, emitData.cliente_id, emitData.fecha);
+  const fceRateReady = !isUSD || (tc > 0 && !cotizBnaLoading && ((canOverrideRate && rateOverride) || !!cotizBna));
+  const fceRequired = fceCheck.ready && fceCheck.obligado && fceTotalArs(emitData.items, isFacturaA, isUSD ? tc : 1) >= (fceCheck.montoDesde || Infinity);
+  const fceExpectedTipo = isFacturaA ? (fceRequired ? "FCEA" : "FA") : (fceRequired ? "FCEB" : "FB");
+  const fceBlocked = fceApplies && (!fceCheck.ready || !fceRateReady || emitData.tipo !== fceExpectedTipo);
+  useEffect(() => {
+    if (!emitOpen || !fceApplies || !fceCheck.ready || !fceRateReady) return;
+    if (emitData.tipo !== fceExpectedTipo) setEmitData(p => ({ ...p, tipo: fceExpectedTipo }));
+  }, [emitOpen, fceApplies, fceCheck.ready, fceRateReady, emitData.tipo, fceExpectedTipo]);
+
   const handleEmit = async () => {
     if (!emitData.cliente_id) { setEmitError("Selecciona un cliente"); return; }
+    if (fceBlocked) { setEmitError(fceCheck.error || "Esperá la verificación de FCE y de la cotización antes de emitir."); return; }
     if (fiscalDateBlocked) { setEmitError(fiscalDates.error || `Elegí una fecha válida desde ${fiscalMinDate}; esperá la verificación de ARCA si está en curso.`); return; }
     if (emitData.items.some((it) => !it.descripcion || it.precio_unitario <= 0)) {
       setEmitError("Completa todos los items con descripcion y precio"); return;
     }
     if (isUSD && (!tc || tc <= 0)) {
       setEmitError("Factura en USD requiere tipo de cambio (cotizacion ARCA)"); return;
+    }
+    if (["FCEA", "FCEB"].includes(emitData.tipo)) {
+      if (!emitData.fecha_vencimiento || emitData.fecha_vencimiento < emitData.fecha || emitData.fecha_vencimiento < todayAR()) {
+        setEmitError("La FCE requiere un vencimiento igual o posterior a hoy y a la fecha de emisión."); return;
+      }
+      if (!/^\d{22}$/.test(emitData.fce_cbu) || !["SCA", "ADC"].includes(emitData.fce_transmision)) {
+        setEmitError("La FCE requiere la CBU del emisor (22 dígitos) y elegir SCA o ADC."); return;
+      }
     }
 
     setEmitStep("emitting");
@@ -825,6 +870,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           fecha: emitData.fecha || null,
           condicion_venta: emitData.condicion_venta || null,
           fecha_vencimiento: emitData.fecha_vencimiento || null,
+          fce_cbu: ["FCEA", "FCEB"].includes(emitData.tipo) ? emitData.fce_cbu : undefined,
+          fce_transmision: ["FCEA", "FCEB"].includes(emitData.tipo) ? emitData.fce_transmision : undefined,
           items: emitData.items,
           sociedad_id: sociedadActiva?.id,
         }),
@@ -833,7 +880,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       const data = await res.json();
 
       if (data.success) {
-        setEmitResult(data.factura);
+        setEmitResult({ ...data.factura, warnings: data.warnings, warning: data.warning });
         setEmitStep("success");
         await fetchData();
       } else {
@@ -1321,6 +1368,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       numero: f.numero,
       fecha: f.fecha,
       fecha_vencimiento: f.fecha_vencimiento,
+      nota_interna: f.nota_interna,
       condicion_venta: f.condicion_venta,
       moneda: f.moneda as "ARS" | "USD",
       tipo_cambio: f.tipo_cambio,
@@ -1790,7 +1838,15 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                           </button>
                         )}
                         {emitFilteredClientes.slice(0, 12).map(c => (
-                          <button key={c.id} onClick={() => { setEmitData(p => ({ ...p, cliente_id: c.id })); setEmitClienteSearch(""); }}
+                          <button key={c.id} onClick={() => {
+                            setEmitData(p => {
+                              if (emitManual || !["FA", "FB", "FCEA", "FCEB"].includes(p.tipo)) return { ...p, cliente_id: c.id };
+                              const nextA = ["RI", "MONOTRIBUTO", "MONOTRIBUTISTA"].includes((c.condicion_iva || "").toUpperCase());
+                              const previousA = p.tipo.endsWith("A");
+                              return { ...p, cliente_id: c.id, tipo: nextA ? "FA" : "FB", items: previousA === nextA ? p.items : p.items.map(it => ({ ...it, precio_unitario: Math.round((nextA ? it.precio_unitario / (1 + it.iva_porcentaje / 100) : it.precio_unitario * (1 + it.iva_porcentaje / 100)) * 100) / 100 })) };
+                            });
+                            setEmitClienteSearch("");
+                          }}
                             className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex justify-between">
                             <span>{c.razon_social}</span>
                             <span className="text-xs text-zinc-400">{c.cuit || "Sin CUIT"}</span>
@@ -1914,6 +1970,29 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                   </div>
                 </div>
 
+                {fceApplies && <div className="text-sm text-zinc-600 dark:text-zinc-300" role="status">
+                  {fceCheck.error ? <><span className="text-red-600">{fceCheck.error}</span> <button type="button" onClick={fceCheck.retry} className="underline">Reintentar verificación FCE</button></>
+                    : !emitData.cliente_id ? "Seleccioná un cliente para verificar el régimen FCE."
+                    : !fceCheck.ready ? "Consultando encuadre FCE del cliente en ARCA…"
+                    : !fceRateReady ? "Esperando cotización para determinar si corresponde FCE…"
+                    : fceRequired ? `Corresponde FCE por consulta ARCA e importe. Mínimo: ${formatCurrency(fceCheck.montoDesde || 0, "ARS")}.`
+                    : `Corresponde factura común según la consulta y el importe.${fceCheck.obligado ? ` Mínimo FCE: ${formatCurrency(fceCheck.montoDesde || 0, "ARS")}.` : ""}`}
+                </div>}
+                {!emitManual && ["FCEA", "FCEB"].includes(emitData.tipo) && (
+                  <div className="rounded-lg border border-blue-200 p-3 space-y-3 dark:border-blue-900">
+                    <p className="text-sm dark:text-zinc-200">Datos obligatorios de la FCE. La CBU debe pertenecer al emisor de esta sociedad. El vencimiento es obligatorio y no puede ser anterior a hoy ni a la emisión.</p>
+                    <label className="block text-sm dark:text-zinc-300">CBU del emisor *
+                      <input inputMode="numeric" maxLength={22} value={emitData.fce_cbu} onChange={e => setEmitData(p => ({ ...p, fce_cbu: e.target.value.replace(/\D/g, "") }))} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900" />
+                    </label>
+                    <label className="block text-sm dark:text-zinc-300">Transmisión de la FCE *
+                      <select value={emitData.fce_transmision} onChange={e => setEmitData(p => ({ ...p, fce_transmision: e.target.value }))} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900">
+                        <option value="">Seleccioná una modalidad</option>
+                        <option value="SCA">SCA — Sistema de Circulación Abierta</option>
+                        <option value="ADC">ADC — Agente de Depósito Colectivo</option>
+                      </select>
+                    </label>
+                  </div>
+                )}
                 {/* Items */}
                 <div>
                   <div className="flex items-center justify-between mb-3">
@@ -1991,7 +2070,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                       <FileCheck className="h-4 w-4" /> Guardar manual
                     </button>
                   ) : (
-                    <button onClick={handleEmit} disabled={fiscalDateBlocked || (isUSD && (cotizBnaLoading || (!(canOverrideRate && rateOverride) && !cotizBna) || tc <= 0))} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
+                    <button onClick={handleEmit} disabled={fiscalDateBlocked || fceBlocked || (isUSD && (cotizBnaLoading || (!(canOverrideRate && rateOverride) && !cotizBna) || tc <= 0))} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
                       <ShieldCheck className="h-4 w-4" /> Emitir con ARCA
                     </button>
                   )}
@@ -2014,6 +2093,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                     <CheckCircle2 className="h-8 w-8 text-emerald-600" />
                   </div>
                   <h3 className="text-lg font-bold dark:text-white">{emitResult.manual ? "Factura guardada" : "Factura emitida exitosamente"}</h3>
+                  {emitResult.warning && <p className="text-sm text-amber-700 dark:text-amber-400">{emitResult.warning}</p>}
+                  {emitResult.warnings?.length > 0 && <p className="text-sm text-amber-700 dark:text-amber-400">Advertencias ARCA: {emitResult.warnings.map((w: any) => typeof w === "string" ? w : (w.Msg || w.message || JSON.stringify(w))).join("; ")}</p>}
                 </div>
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30 p-4 space-y-2 text-sm">
                   <div className="flex justify-between"><span className="text-emerald-700 dark:text-emerald-400">Comprobante</span><span className="font-mono font-bold">{emitResult.comprobante}</span></div>
@@ -2104,6 +2185,18 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             </div>
 
             <div className="px-6 py-5 space-y-6">
+              {["FCEA", "FCEB"].includes(detailFactura.tipo) && <div className="rounded-lg border border-blue-200 p-3 space-y-2 dark:border-blue-900">
+                <h4 className="text-sm font-semibold dark:text-zinc-200">Registro FCE de ARCA</h4>
+                <p className="text-xs text-zinc-500">Consulta de solo lectura. Este estado no equivale al estado de cobro del CRM.</p>
+                <button type="button" onClick={consultarRegistroFce} disabled={fceRegistry.key === `${sociedadActiva?.id}:${detailFactura.id}` && fceRegistry.loading} className="text-sm text-blue-600 underline disabled:opacity-50">Consultar / actualizar estado en ARCA</button>
+                {fceRegistry.key === `${sociedadActiva?.id}:${detailFactura.id}` && <div className="text-sm dark:text-zinc-300" role="status">
+                  {fceRegistry.loading ? "Consultando…" : fceRegistry.error ? <p className="text-red-600">{fceRegistry.error}</p> : <>
+                    <p>Estado informado: {fceRegistry.estado}</p>
+                    <p className="text-xs text-zinc-500">Consultado: {fceRegistry.checkedAt}</p>
+                    {(fceRegistry.historial || []).map((event, index) => <p key={index} className="text-xs">{event.fechaHora || "Sin fecha"} — {event.estado}</p>)}
+                  </>}
+                </div>}
+              </div>}
               {/* Cliente */}
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Cliente</h4>
@@ -2809,6 +2902,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           const html = generateFacturaPDF({
             tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero,
             fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento,
+            nota_interna: f.nota_interna,
             condicion_venta: f.condicion_venta, moneda: f.moneda as "ARS" | "USD",
             tipo_cambio: f.tipo_cambio, cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null, subtotal: Number(f.subtotal), iva: Number(f.iva), total: Number(f.total),
             cae: f.cae, cae_vencimiento: f.cae_vencimiento, oc_cliente: f.oc_cliente,

@@ -4,7 +4,10 @@ const vm = require('node:vm');
 const ts = require('typescript');
 const assert = require('node:assert/strict');
 const source = fs.readFileSync(path.join(__dirname, '../src/lib/pdf-templates.ts'), 'utf8');
+const fceContext={exports:{}};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname,'../src/lib/fce-invoice.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,fceContext);
 const context = {exports:{}, require(name) {
+  if(name==='@/lib/fce-invoice') return fceContext.exports;
   assert.equal(name, '@/lib/utils');
   return {formatCurrency: (n) => String(n), formatDate: (d) => d};
 }, Buffer, btoa:(s)=>Buffer.from(s,'binary').toString('base64')};
@@ -22,4 +25,13 @@ const html=context.exports.generateFacturaPDF(factura,{cuitNumero:30719396042},g
 for(const text of [grupo.domicilio,grupo.inicioActividades,grupo.email,'0010-00000001','86372728764166']) assert.ok(html.includes(text),text);
 assert.ok(!html.includes('administracion@grupola.com.ar'));
 assert.equal(JSON.stringify(factura),before);
+assert.ok(!html.includes('CBU de cobro'));
+const cbu='2850590940090418135201';
+assert.ok(fceContext.exports.validCbu(cbu));
+const fce={...factura,tipo:'FCEA',nota_interna:fceContext.exports.withFceMetadata('',{cbu,transmision:'SCA',vencimiento:'2026-10-12',cuitReceptor:'30641405554',fecha:'2026-09-12',montoDesde:5549862,totalArs:6000000})};
+const fceHtml=context.exports.generateFacturaPDF(fce,{cuitNumero:30719396042},grupo);
+for(const text of ['FACTURA DE CRÉDITO ELECTRÓNICA MiPyME','CBU de cobro',cbu,'SCA','2026-10-12']) assert.ok(fceHtml.includes(text),text);
+assert.ok(!fceHtml.includes('[ARCA_FCE_V1]'));
+const legacyFce=context.exports.generateFacturaPDF({...factura,tipo:'FCEA'},{cuitNumero:30719396042},grupo);
+assert.ok(!legacyFce.includes('CBU de cobro'));
 console.log('OK: datos de Grupo LA corregidos en plantilla, Lazzari sin cambios y factura/CAE preservados; sin red ni emisión.');

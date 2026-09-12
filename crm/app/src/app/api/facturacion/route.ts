@@ -6,8 +6,11 @@ import { crearFacturaWsfeNode, consultarLimiteFechaPv } from "@/lib/arca-wsfe-no
 import { getInvoiceExchangeRate } from "@/lib/invoice-exchange-rate";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { createSupabaseServer } from "@/lib/supabase/server";
+import { consultarObligacionFce, consultarComprobanteFce } from "@/lib/arca-wsfecred-node";
+import { fceRequired, validateFceFields, withFceMetadata, type FceInvoiceData } from "@/lib/fce-invoice";
 
 export const runtime = "nodejs";
+export const maxDuration = 120;
 
 // Lazy-import arca-facturacion (ESM module)
 let Arca: any;
@@ -236,6 +239,7 @@ export async function POST(req: NextRequest) {
 
     // ── Manual mode: skip ARCA entirely ──
     if (manual === true) {
+      if (["FCEA","FCEB","NCEA","NCEB"].includes(tipo)) return NextResponse.json({error:"Una FCE requiere autorización ARCA. No puede crearse como factura manual sin CAE. Para registrar una FCE externa hay que importar su comprobante autorizado."},{status:400});
       if (!numero_manual && numero_manual !== 0) {
         return NextResponse.json({ error: "Número de factura requerido para emisión manual" }, { status: 400 });
       }
@@ -368,10 +372,12 @@ export async function POST(req: NextRequest) {
     }
 
     const isUSD = moneda === "USD";
+    if (moneda && !["ARS","USD"].includes(moneda)) return NextResponse.json({error:"Moneda no soportada: elegí ARS o USD."},{status:400});
     let tc = Number(tipo_cambio) || 0;
     if (isUSD && (!tc || tc <= 0)) {
       return NextResponse.json({ error: "Tipo de cambio requerido para facturar en USD (ARCA necesita la cotizacion)" }, { status: 400 });
     }
+    if (isUSD && (!Number.isFinite(tc) || Math.abs(tc-Number(tc.toFixed(6)))>1e-9)) return NextResponse.json({error:"La cotización debe ser positiva y tener como máximo seis decimales."},{status:400});
 
     if (!tipo || !cliente_id || !punto_venta || !items?.length) {
       return NextResponse.json(
@@ -381,6 +387,7 @@ export async function POST(req: NextRequest) {
     }
 
     const fechaFacturaInput = fecha || todayArgentina();
+    if (!Array.isArray(items) || items.some((item:any)=>!Number.isFinite(Number(item.cantidad)) || Number(item.cantidad)<=0 || !Number.isFinite(Number(item.precio_unitario)) || Number(item.precio_unitario)<0 || ![0,10.5,21,27].includes(Number(item.iva_porcentaje ?? 21)))) return NextResponse.json({error:"Revisá los artículos: cantidades positivas, precios válidos y alícuotas soportadas (0, 10,5, 21 o 27)."},{status:400});
     const requestedRateOverride = isUSD && body.cotizacion_override === true;
     if (requestedRateOverride) {
       const { data: { user }, error } = await supabase.auth.getUser();
@@ -443,9 +450,9 @@ export async function POST(req: NextRequest) {
       cliente = { razon_social: data.razon_social, cuit: data.cuit, condicion_iva: data.condicion_iva };
 
       // Validate tipo vs condicion_iva
-      if (tipo.endsWith("A") && cliente.condicion_iva !== "RI") {
+      if (tipo.endsWith("A") && ![1,6].includes(condicionIvaArca(cliente.condicion_iva))) {
         return NextResponse.json({
-          error: `Factura A solo para Responsable Inscripto. Este cliente es ${cliente.condicion_iva || "desconocido"}.`,
+          error: `Factura A requiere receptor Responsable Inscripto o Monotributista. Este cliente es ${cliente.condicion_iva || "desconocido"}.`,
         }, { status: 400 });
       }
 
@@ -518,6 +525,34 @@ export async function POST(req: NextRequest) {
     // Build ARCA invoice
     const arca = getArcaInstance(arcaConfig);
     const ptoVta = Number(punto_venta);
+    let fceData: FceInvoiceData | null = null;
+    if (["FA","FB","FCEA","FCEB"].includes(tipo)) {
+      const cuitReceptor = String(cliente?.cuit || "").replace(/\D/g, "");
+      try {
+        const check = cuitReceptor ? await consultarObligacionFce({
+          auth:await arca.getAuth("wsfecred"), production:process.env.ARCA_PRODUCTION !== "false",
+          cuitConsultada:Number(cuitReceptor), fechaEmision:fechaFacturaInput,
+        }) : {obligado:false,montoDesde:null};
+        const totalArs = Math.round(totalFinal * (isUSD ? tc : 1) * 100)/100;
+        const required = fceRequired(check,totalArs);
+        const selectedFce = tipo === "FCEA" || tipo === "FCEB";
+        if (required !== selectedFce) return NextResponse.json({error:required
+          ? `Corresponde Factura de Crédito Electrónica MiPyME: ARCA informa receptor obligado y el total alcanza $${check.montoDesde}. Volvé a revisar el formulario. No se emitió.`
+          : "La operación no alcanza las condiciones de FCE verificadas en ARCA. Seleccioná la factura común correspondiente. No se emitió."},{status:409});
+        if (selectedFce) {
+          if (fechaFacturaInput > "2026-10-31") throw new Error("Debe actualizarse el plazo normativo de FCE posterior al 31/10/2026 antes de emitir.");
+          fceData = {...validateFceFields(body.fce_cbu,body.fce_transmision,fecha_vencimiento,fechaFacturaInput,todayArgentina()),cuitReceptor,fecha:fechaFacturaInput,montoDesde:Number(check.montoDesde),totalArs,plazoAceptacion:21};
+          if (presupuesto_id) {
+            const {data:remitos,error:remitoError}=await supabase.from("remitos").select("numero").eq("presupuesto_id",presupuesto_id).eq("sociedad_id",sociedad_id).neq("estado","anulado");
+            if (remitoError) throw new Error("No se pudieron verificar los remitos asociados a la FCE");
+            fceData.remitos=(remitos || []).map((r:any)=>String(r.numero));
+          }
+        }
+      } catch(error) {return NextResponse.json({error:`No se pudo validar FCE: ${error instanceof Error ? error.message : "sin respuesta de ARCA"}. No se emitió.`},{status:503});}
+    }
+    // A FCE adjustment cannot use the ordinary cancellation path without checking
+    // acceptance and its special annulment flag. Fail closed until that workflow is verified.
+    if (["NCEA","NCEB"].includes(tipo)) return NextResponse.json({error:"Las notas de FCE requieren verificar su estado en Registro FCE antes de ajustar o anular. Realizá esta operación en ARCA; el CRM no emitió ninguna nota."},{status:409});
 
     const ivaArray = Object.entries(ivaGroups).map(([id, vals]) => ({
       Id: Number(id),
@@ -529,6 +564,7 @@ export async function POST(req: NextRequest) {
 
     // Build CbtesAsoc for NC/ND (required by ARCA)
     const isNCND = ["NCA", "NCB", "NCEA", "NCEB", "NDA", "NDB"].includes(tipo);
+    if (isNCND && !factura_origen_id) return NextResponse.json({error:"La nota requiere una factura origen válida. No se emitió."},{status:400});
     let cbtesAsoc: { Tipo: number; PtoVta: number; Nro: number; Cuit: number; CbteFch: string }[] | undefined;
     if (isNCND && factura_origen_id) {
       const { data: origen, error: origenError } = await (supabase as any)
@@ -540,6 +576,7 @@ export async function POST(req: NextRequest) {
         .eq("moneda", isUSD ? "USD" : "ARS")
         .single();
       if (origenError || !origen) return NextResponse.json({ error: "La factura origen no pertenece al mismo cliente, sociedad y moneda" }, { status: 400 });
+      if (["FCEA","FCEB","NCEA","NCEB"].includes(origen.tipo)) return NextResponse.json({error:"Una FCE no puede ajustarse con una nota común. Requiere el circuito de notas FCE y verificar su estado en ARCA. No se emitió."},{status:409});
       if (origen) {
         const origenTipo = CBTE_TIPO_MAP[origen.tipo];
         if (origenTipo) {
@@ -568,6 +605,7 @@ export async function POST(req: NextRequest) {
       DocTipo: docTipo,
       DocNro: Number(docNro),
       CbteFch: today,
+      ...(fceData ? {FchVtoPago:fceData.vencimiento.replace(/-/g,""),Opcionales:[{Id:2101,Valor:fceData.cbu},{Id:27,Valor:fceData.transmision}]} : {}),
       ImpTotal: totalFinal,
       ImpTotConc: 0,
       ImpNeto: totalNeto,
@@ -587,6 +625,8 @@ export async function POST(req: NextRequest) {
     const det = result?.FeDetResp?.FECAEDetResponse;
     const detArray = Array.isArray(det) ? det : det ? [det] : [];
     const firstDet = detArray[0];
+    const acceptedObs = firstDet?.Observaciones?.Obs;
+    const arcaWarnings = (Array.isArray(acceptedObs) ? acceptedObs : acceptedObs ? [acceptedObs] : []).map((o:any)=>`[${o.Code}] ${o.Msg}`);
 
     if (!firstDet || firstDet.Resultado !== "A") {
       const obs = firstDet?.Observaciones?.Obs;
@@ -603,6 +643,9 @@ export async function POST(req: NextRequest) {
     const caeFchVto = `${rawFchVto.slice(0, 4)}-${rawFchVto.slice(4, 6)}-${rawFchVto.slice(6, 8)}`;
     const cbteNro = Number(firstDet.CbteDesde);
     const fechaFactura = fechaFacturaInput;
+    let savedNote = requestedRateOverride ? `${nota_interna || ""}\nCotización modificada por augusto@lazzari.com.ar antes de emitir: ${tc} ARS/USD. Fecha indicada: ${String(body.cotizacion_fecha || "sin especificar").slice(0,10)}. Registro: ${new Date().toISOString()}`.trim() : String(nota_interna || "");
+    if (arcaWarnings.length) savedNote += `\nObservaciones ARCA: ${arcaWarnings.join("; ")}`;
+    if (fceData) savedNote = withFceMetadata(savedNote,fceData);
 
     // Save factura to database
     const { data: factura, error: insertError } = await supabase
@@ -630,7 +673,7 @@ export async function POST(req: NextRequest) {
         observaciones: observaciones || null,
         condicion_venta: condicion_venta || null,
         fecha_vencimiento: fecha_vencimiento || null,
-        nota_interna: requestedRateOverride ? `${nota_interna || ""}\nCotización modificada por augusto@lazzari.com.ar antes de emitir: ${tc} ARS/USD. Fecha indicada: ${String(body.cotizacion_fecha || "sin especificar").slice(0,10)}. Registro: ${new Date().toISOString()}`.trim() : (nota_interna || null),
+        nota_interna: savedNote || null,
       } as any)
       .select()
       .single();
@@ -654,7 +697,7 @@ export async function POST(req: NextRequest) {
       descripcion: item.descripcion || "Item",
       cantidad: Number(item.cantidad),
       precio_unitario: Number(item.precio_unitario),
-      iva_porcentaje: isFacturaA ? Number(item.iva_porcentaje ?? 21) : 21,
+      iva_porcentaje: Number(item.iva_porcentaje ?? 21),
       orden: idx,
     }));
 
@@ -668,6 +711,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      warning: [...arcaWarnings, ...(itemsError ? ["Factura autorizada, pero sus artículos no se guardaron. No vuelvas a emitir; requiere conciliación local."] : [])].join("; ") || undefined,
       factura: {
         id: factura.id,
         numero: cbteNro,
@@ -688,6 +732,42 @@ export async function POST(req: NextRequest) {
 // GET /api/facturacion — Check status or list puntos de venta
 export async function GET(req: NextRequest) {
   const action = req.nextUrl.searchParams.get("action");
+  if (action === "fce-status") {
+    const sociedadId=req.nextUrl.searchParams.get("sociedad_id") || "";
+    let supabase:any;
+    try {supabase=await authorizeFacturaRequest(req,sociedadId);}
+    catch {return NextResponse.json({error:"No tenés acceso a esta sociedad o sesión válida."},{status:403});}
+    try {
+      const {data:factura,error}=await supabase.from("facturas").select("tipo, punto_venta, numero, cae").eq("id",req.nextUrl.searchParams.get("factura_id") || "").eq("sociedad_id",sociedadId).single();
+      if (error || !factura || !["FCEA","FCEB","NCEA","NCEB"].includes(factura.tipo) || !factura.cae) return NextResponse.json({error:"No se encontró una FCE autorizada de esta sociedad."},{status:404});
+      await loadArca();
+      const arca=getArcaInstance(getArcaConfigBySociedad(sociedadId));
+      const status=await consultarComprobanteFce({auth:await arca.getAuth("wsfecred"),production:process.env.ARCA_PRODUCTION!=="false",cbteTipo:CBTE_TIPO_MAP[factura.tipo],ptoVta:Number(factura.punto_venta),numero:Number(factura.numero)});
+      return NextResponse.json(status,{headers:{"Cache-Control":"no-store"}});
+    } catch(error) {return NextResponse.json({error:error instanceof Error ? error.message : "No se pudo consultar el Registro FCE"},{status:503});}
+  }
+  if (action === "fce-check") {
+    const sociedadId = req.nextUrl.searchParams.get("sociedad_id") || "";
+    let supabase:any;
+    try {supabase=await authorizeFacturaRequest(req,sociedadId);}
+    catch {return NextResponse.json({error:"No tenés acceso a esta sociedad o sesión válida."},{status:403});}
+    try {
+      const config=getArcaConfigBySociedad(sociedadId);
+      const clienteId=req.nextUrl.searchParams.get("cliente_id") || "";
+      const fecha=req.nextUrl.searchParams.get("fecha") || "";
+      const d=new Date(`${fecha}T12:00:00Z`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha) || !Number.isFinite(d.getTime()) || d.toISOString().slice(0,10)!==fecha) return NextResponse.json({error:"Fecha inválida"},{status:400});
+      if (clienteId==="consumidor_final") return NextResponse.json({obligado:false,montoDesde:null},{headers:{"Cache-Control":"no-store"}});
+      const {data:cliente,error}=await supabase.from("clientes").select("cuit").eq("id",clienteId).eq("sociedad_id",sociedadId).single();
+      if (error || !cliente) return NextResponse.json({error:"Cliente no encontrado en la sociedad"},{status:404});
+      const cuit=String(cliente.cuit || "").replace(/\D/g, "");
+      if (!cuit) return NextResponse.json({obligado:false,montoDesde:null},{headers:{"Cache-Control":"no-store"}});
+      await loadArca();
+      const arca=getArcaInstance(config);
+      const check=await consultarObligacionFce({auth:await arca.getAuth("wsfecred"),production:process.env.ARCA_PRODUCTION!=="false",cuitConsultada:Number(cuit),fechaEmision:fecha});
+      return NextResponse.json({...check,fecha,sociedad_id:sociedadId,cliente_id:clienteId},{headers:{"Cache-Control":"no-store"}});
+    } catch(error) {return NextResponse.json({error:error instanceof Error ? error.message : "No se pudo verificar FCE en ARCA"},{status:503});}
+  }
   if (action === "date-limits") {
     const sociedadId = req.nextUrl.searchParams.get("sociedad_id") || "";
     try { await authorizeFacturaRequest(req, sociedadId); }

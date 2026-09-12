@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { useFiscalDateLimits } from "@/lib/use-fiscal-date-limits";
+import { useFceCheck, fceTotalArs as calculateFceTotalArs } from "@/lib/use-fce-check";
 import { generateFacturaPDF, getSociedadPDF, openPDFWindow, documentFilename } from "@/lib/pdf-templates";
 import Link from "next/link";
 import {
@@ -208,6 +209,7 @@ export default function VentasPage() {
   const [pvCrm, setPvCrm] = useState(() => pvOpciones[0]);
 
   const [ventas, setVentas] = useState<Venta[]>([]);
+  const ventasRequest = useRef(0);
   const [loading, setLoading] = useState(true);
   const [vendedores, setVendedores] = useState<VendedorOption[]>([]);
   const [filterVendedor, setFilterVendedor] = useState<string>("todos");
@@ -239,6 +241,9 @@ export default function VentasPage() {
   const [emitPvManual, setEmitPvManual] = useState<number>(0);
   const [emitCondVenta, setEmitCondVenta] = useState("Contado");
   const [emitFechaVenc, setEmitFechaVenc] = useState("");
+  const [emitFceCbu, setEmitFceCbu] = useState("");
+  const [emitFceTransmision, setEmitFceTransmision] = useState<"" | "SCA" | "ADC">("");
+  const emitIsFce = !emitManual && (emitTipo === "FCEA" || emitTipo === "FCEB");
   const [emitObservaciones, setEmitObservaciones] = useState("");
   const fiscalDates = useFiscalDateLimits(emitModalOpen && !emitManual, sociedadActiva?.id, pvCrm, emitTipo);
   const fiscalMinDate = fiscalDates.minDate && fiscalDates.minDate > minFecha ? fiscalDates.minDate : minFecha;
@@ -248,6 +253,22 @@ export default function VentasPage() {
   const [cotizFecha, setCotizFecha] = useState("");
   const [emitRateModality, setEmitRateModality] = useState<"divisas" | "billetes">("divisas");
   const cotizRequest = useRef(0);
+  const fceCheck = useFceCheck(emitModalOpen && !emitManual, sociedadActiva?.id, emitVenta?.presupuesto.cliente_id, emitFecha);
+  const fceTotalArs = calculateFceTotalArs(emitItems.map(it => {
+    let price = it.precio_unitario;
+    const source = emitVenta?.presupuesto.moneda || "ARS";
+    if (source !== emitMoneda && emitTipoCambio > 0) price = roundMoney(source === "USD" ? price * emitTipoCambio : price / emitTipoCambio);
+    return { ...it, precio_unitario: price };
+  }), isFacturaA(emitTipo), emitMoneda === "USD" ? emitTipoCambio : 1);
+  const fceNeedsRate = emitMoneda === "USD" || emitVenta?.presupuesto.moneda === "USD";
+  const fceRateReady = !fceNeedsRate || (emitTipoCambio > 0 && !cotizBnaLoading && (editRate || !!cotizBna));
+  const fceRequired = fceCheck.ready && fceCheck.obligado && fceTotalArs >= (fceCheck.montoDesde || Infinity);
+  const fceExpectedTipo = isFacturaA(emitTipo) ? (fceRequired ? "FCEA" : "FA") : (fceRequired ? "FCEB" : "FB");
+  const fceBlocked = !emitManual && (!fceCheck.ready || !fceRateReady || emitTipo !== fceExpectedTipo);
+  useEffect(() => {
+    if (!emitModalOpen || emitManual || !fceCheck.ready || !fceRateReady) return;
+    if (emitTipo !== fceExpectedTipo) setEmitTipo(fceExpectedTipo);
+  }, [emitModalOpen, emitManual, fceCheck.ready, fceRateReady, emitTipo, fceExpectedTipo]);
 
   useEffect(() => {
     const id = ++cotizRequest.current;
@@ -289,6 +310,7 @@ export default function VentasPage() {
   useEffect(() => { setPvCrm(pvOpciones[0]); }, [pvOpciones]);
 
   const fetchData = useCallback(async () => {
+    const request = ++ventasRequest.current;
     try {
       // Fetch presupuestos aprobados with items
       let presupuestosQuery = supabase
@@ -303,6 +325,7 @@ export default function VentasPage() {
         .order("fecha", { ascending: false });
       if (sociedadActiva?.id) presupuestosQuery = presupuestosQuery.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: presupuestos, error: pError } = await presupuestosQuery;
+      if (request !== ventasRequest.current) return;
 
       if (pError || !presupuestos) {
         console.error("Error fetching presupuestos:", pError);
@@ -340,6 +363,7 @@ export default function VentasPage() {
       ]);
 
       const facturas = (facturasRes.data || []) as VentaFactura[];
+      if (request !== ventasRequest.current) return;
       const remitos = (remitosRes.data || []) as VentaRemito[];
       const ocs = (ocRes.data || []) as VentaOC[];
 
@@ -359,12 +383,12 @@ export default function VentasPage() {
         .select("id, full_name")
         .in("role", ["vendedor", "admin", "super_admin"])
         .eq("active", true);
-      if (vendedorData) setVendedores(vendedorData as VendedorOption[]);
+      if (vendedorData && request === ventasRequest.current) setVendedores(vendedorData as VendedorOption[]);
     } catch (err) {
       console.error("Error fetching ventas:", err);
-      setVentas([]);
+      if (request === ventasRequest.current) setVentas([]);
     } finally {
-      setLoading(false);
+      if (request === ventasRequest.current) setLoading(false);
     }
   }, [sociedadActiva]);
 
@@ -391,6 +415,7 @@ export default function VentasPage() {
         numero: factura.numero,
         fecha: factura.fecha,
         fecha_vencimiento: factura.fecha_vencimiento,
+        nota_interna: factura.nota_interna,
         condicion_venta: factura.condicion_venta,
         moneda: factura.moneda || "ARS",
         tipo_cambio: factura.tipo_cambio,
@@ -435,6 +460,27 @@ export default function VentasPage() {
   }
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Los cambios de Presupuestos deben actualizar también el filtro de Ventas.
+  useEffect(() => {
+    if (!sociedadActiva?.id) return;
+    const refresh = () => { if (document.visibilityState === "visible") void fetchData(); };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const channel = supabase.channel(`ventas-presupuestos-${sociedadActiva.id}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "presupuestos", filter: `sociedad_id=eq.${sociedadActiva.id}` }, (payload) => {
+        const updated = payload.new as { id: string; listo_para_facturar?: boolean; estado?: string };
+        setVentas(current => current.map(venta => venta.presupuesto.id === updated.id
+          ? { ...venta, presupuesto: { ...venta.presupuesto, ...updated } }
+          : venta));
+        void fetchData();
+      }).subscribe();
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      void supabase.removeChannel(channel);
+    };
+  }, [fetchData, sociedadActiva?.id]);
 
   // ── Filtered data ──────────────────────────────────────────────
 
@@ -492,7 +538,7 @@ export default function VentasPage() {
   function openEmitModal(venta: Venta) {
     const p = venta.presupuesto;
     const condIva = p.clientes?.condicion_iva;
-    const defaultTipo: EmitTipo = condIva === "RI" ? "FA" : "FB";
+    const defaultTipo: EmitTipo = ["RI", "MONOTRIBUTO", "MONOTRIBUTISTA"].includes((condIva || "").toUpperCase()) ? "FA" : "FB";
     const sourceIsManual = (p as any).modalidad_emision === "manual";
     const initialTipo: EmitTipo = sourceIsManual ? "X" : defaultTipo;
 
@@ -537,6 +583,8 @@ export default function VentasPage() {
     setEmitFecha(hoy);
     setEmitCondVenta(condCliente);
     setEmitFechaVenc(calcFechaVenc(condCliente, hoy));
+    setEmitFceCbu("");
+    setEmitFceTransmision("");
     setEmitObservaciones("");
     setCotizBna(null);
     setEmitModalOpen(true);
@@ -545,8 +593,16 @@ export default function VentasPage() {
 
   async function handleEmitFactura() {
     if (!emitVenta || emitting) return;
+    if (fceBlocked) { setEmitError(fceCheck.error || "Esperá la verificación de FCE y de la cotización antes de emitir."); return; }
     if (fiscalDateBlocked) { setEmitError(fiscalDates.error || `Elegí una fecha válida desde ${fiscalMinDate}; esperá la verificación de ARCA si está en curso.`); return; }
     const p = emitVenta.presupuesto;
+
+    if (emitIsFce && (!emitFechaVenc || emitFechaVenc < emitFecha || emitFechaVenc < todayAR())) {
+      setEmitError("La FCE requiere un vencimiento igual o posterior a hoy y a la fecha de emisión."); return;
+    }
+    if (emitIsFce && (!/^\d{22}$/.test(emitFceCbu) || !emitFceTransmision)) {
+      setEmitError("La FCE requiere la CBU del emisor (22 dígitos) y elegir SCA o ADC."); return;
+    }
 
     if (emitItems.some(it => !it.descripcion || it.precio_unitario <= 0 || it.cantidad <= 0)) {
       setEmitError("Completa todos los items con descripcion, cantidad > 0 y precio > 0.");
@@ -593,6 +649,8 @@ export default function VentasPage() {
           fecha: emitFecha || null,
           condicion_venta: emitCondVenta || null,
           fecha_vencimiento: emitFechaVenc || null,
+          fce_cbu: emitIsFce ? emitFceCbu : undefined,
+          fce_transmision: emitIsFce ? emitFceTransmision : undefined,
           observaciones: emitObservaciones || null,
           oc_cliente: p.oc_cliente || null,
           oc_cliente_fecha: p.oc_cliente_fecha || null,
@@ -602,7 +660,7 @@ export default function VentasPage() {
       const data = await res.json();
 
       if (data.success) {
-        setEmitSuccess(`${data.factura.comprobante} emitida - CAE: ${data.factura.cae}`);
+        setEmitSuccess(`${data.factura.comprobante} emitida - CAE: ${data.factura.cae}${data.warning ? ` · ${data.warning}` : ""}${data.warnings?.length ? ` · Advertencias ARCA: ${data.warnings.map((w: any) => typeof w === "string" ? w : (w.Msg || w.message || JSON.stringify(w))).join("; ")}` : ""}`);
         setEmitFacturaId(data.factura.id);
         // Marcar PR como facturado
         let prUpdate = supabase.from("presupuestos").update({ estado: "facturado" } as any).eq("id", p.id);
@@ -1542,11 +1600,11 @@ export default function VentasPage() {
                     {emitManual ? (
                       <option value="X">Comprobante X (sin IVA)</option>
                     ) : (<>
-                    {emitVenta.presupuesto.clientes?.condicion_iva === "RI" && (
+                    {["RI", "MONOTRIBUTO", "MONOTRIBUTISTA"].includes((emitVenta.presupuesto.clientes?.condicion_iva || "").toUpperCase()) && (
                       <option value="FA">Factura A (discrimina IVA)</option>
                     )}
                     <option value="FB">Factura B (precio final)</option>
-                    {emitVenta.presupuesto.clientes?.condicion_iva === "RI" && (
+                    {["RI", "MONOTRIBUTO", "MONOTRIBUTISTA"].includes((emitVenta.presupuesto.clientes?.condicion_iva || "").toUpperCase()) && (
                       <option value="FCEA">FCE A — Crédito Electrónica (MiPyMEs)</option>
                     )}
                     <option value="FCEB">FCE B — Crédito Electrónica (MiPyMEs)</option>
@@ -1555,6 +1613,13 @@ export default function VentasPage() {
                 </div>
 
                 {/* Manual toggle */}
+                {!emitManual && <div className="text-sm text-zinc-600 dark:text-zinc-300" role="status">
+                  {fceCheck.error ? <><span className="text-red-600">{fceCheck.error}</span> <button type="button" onClick={fceCheck.retry} className="underline">Reintentar verificación FCE</button></>
+                    : !fceCheck.ready ? "Consultando encuadre FCE del cliente en ARCA…"
+                    : !fceRateReady ? "Esperando cotización para determinar si corresponde FCE…"
+                    : fceRequired ? `Corresponde FCE por consulta ARCA e importe. Mínimo: ${formatCurrency(fceCheck.montoDesde || 0, "ARS")}.`
+                    : `Corresponde factura común según la consulta y el importe.${fceCheck.obligado ? ` Mínimo FCE: ${formatCurrency(fceCheck.montoDesde || 0, "ARS")}.` : ""}`}
+                </div>}
                 <div className="flex items-center gap-3 rounded-lg border border-zinc-200 dark:border-zinc-700 p-3">
                   <label className="relative inline-flex items-center cursor-pointer">
                     <input
@@ -1568,7 +1633,7 @@ export default function VentasPage() {
                           setEmitPvManual(0);
                           fetchNextNum("X", 0);
                         } else {
-                          const tipoArca: EmitTipo = emitVenta.presupuesto.clientes?.condicion_iva === "RI" ? "FA" : "FB";
+                          const tipoArca: EmitTipo = ["RI", "MONOTRIBUTO", "MONOTRIBUTISTA"].includes((emitVenta.presupuesto.clientes?.condicion_iva || "").toUpperCase()) ? "FA" : "FB";
                           setEmitItems((items) => convertItemsForInvoiceType(items, "X", tipoArca));
                           setEmitTipo(tipoArca);
                           fetchNextNum(tipoArca);
@@ -1729,6 +1794,21 @@ export default function VentasPage() {
                   </div>
                 </div>
 
+                {emitIsFce && (
+                  <div className="rounded-lg border border-blue-200 p-3 space-y-3 dark:border-blue-900">
+                    <p className="text-sm dark:text-zinc-200">Datos obligatorios de la FCE. La CBU debe pertenecer al emisor de esta sociedad.</p>
+                    <label className="block text-sm dark:text-zinc-300">CBU del emisor *
+                      <input inputMode="numeric" maxLength={22} value={emitFceCbu} onChange={e => setEmitFceCbu(e.target.value.replace(/\D/g, ""))} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900" />
+                    </label>
+                    <label className="block text-sm dark:text-zinc-300">Transmisión de la FCE *
+                      <select value={emitFceTransmision} onChange={e => setEmitFceTransmision(e.target.value as "" | "SCA" | "ADC")} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900">
+                        <option value="">Seleccioná una modalidad</option>
+                        <option value="SCA">SCA — Sistema de Circulación Abierta</option>
+                        <option value="ADC">ADC — Agente de Depósito Colectivo</option>
+                      </select>
+                    </label>
+                  </div>
+                )}
                 {/* Condición de venta + Fecha vencimiento */}
                 <div className="grid grid-cols-3 gap-4">
                   <div>
@@ -1754,6 +1834,8 @@ export default function VentasPage() {
                     <input
                       type="date"
                       value={emitFechaVenc}
+                      required={emitIsFce}
+                      min={emitIsFce ? (emitFecha > todayAR() ? emitFecha : todayAR()) : undefined}
                       onChange={e => setEmitFechaVenc(e.target.value)}
                       className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                     />
@@ -1834,7 +1916,7 @@ export default function VentasPage() {
                 <div className="flex justify-end gap-2">
                   <button
                     onClick={() => setEmitModalOpen(false)}
-                    disabled={emitting || fiscalDateBlocked || (!emitManual && (emitMoneda === "USD" || emitVenta.presupuesto.moneda === "USD") && (cotizBnaLoading || (!editRate && !cotizBna) || emitTipoCambio <= 0))}
+                    disabled={emitting || fiscalDateBlocked || fceBlocked || (!emitManual && (emitMoneda === "USD" || emitVenta.presupuesto.moneda === "USD") && (cotizBnaLoading || (!editRate && !cotizBna) || emitTipoCambio <= 0))}
                     className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
                   >
                     Cancelar

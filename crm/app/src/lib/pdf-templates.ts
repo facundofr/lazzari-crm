@@ -6,6 +6,7 @@
  */
 
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { readFceMetadata, importeEnLetras } from "@/lib/fce-invoice";
 
 // ── Sociedad info (static data not in the Sociedad type) ─────────
 interface SociedadPDF {
@@ -427,6 +428,7 @@ interface FacturaItemPDF {
 }
 
 interface FacturaData {
+  nota_interna?: string | null;
   tipo: string;
   punto_venta: number;
   numero: number;
@@ -471,6 +473,7 @@ export function generateFacturaPDF(
 ): string {
   const c = soc.colorPrimario;
   const cli = f.cliente;
+  const fce = f.tipo.startsWith("FCE") ? readFceMetadata(f.nota_interna) : null;
   const letraComprobante = f.tipo.slice(-1);
   const isManualX = f.tipo === "X";
   const isB = f.tipo === "FB" || f.tipo === "NCB" || f.tipo === "NDB" || f.tipo === "FCEB" || f.tipo === "NCEB";
@@ -484,7 +487,7 @@ export function generateFacturaPDF(
     : f.tipo.startsWith("NC") ? "NOTA DE CRÉDITO"
     : f.tipo.startsWith("NDE") ? "NOTA DE DÉBITO ELECTRÓNICA"
     : f.tipo.startsWith("ND") ? "NOTA DE DÉBITO"
-    : f.tipo.startsWith("FCE") ? "FACTURA DE CRÉDITO ELECTRÓNICA"
+    : f.tipo.startsWith("FCE") ? "FACTURA DE CRÉDITO ELECTRÓNICA MiPyME"
     : "FACTURA";
 
   const codMap: Record<string, number> = { FA: 1, FB: 6, FC: 11, X: 0, NCA: 3, NCB: 8, NDA: 2, NDB: 7, FCEA: 201, FCEB: 206, NCEA: 203, NCEB: 208 };
@@ -569,6 +572,7 @@ ${documentHeader(soc, {
       <div class="compact-line compact-line-aligned"><span class="compact-label">Moneda</span><span>${mon === "USD" ? "USD — Dólares estadounidenses" : "ARS — Pesos argentinos"}</span></div>
       ${isUSD ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Cotización BNA</span><span>${f.cotizacion_modalidad === "billetes" ? "Billete" : "Divisa"} — $ ${Number(f.tipo_cambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
       ${f.oc_cliente ? `<div class="compact-line compact-line-aligned"><span class="compact-label">OC cliente</span><span>${f.oc_cliente}</span></div>` : ""}
+      ${fce ? `<div class="compact-line"><span class="compact-label">CBU de cobro</span>${fce.cbu}</div><div class="compact-line"><span class="compact-label">Transmisión FCE</span>${fce.transmision}</div><div class="compact-line"><span class="compact-label">Vencimiento de pago</span>${formatDate(fce.vencimiento)}</div>` : ""}
     </td>
   </tr>
 </table>
@@ -593,6 +597,7 @@ ${documentHeader(soc, {
   </td></tr>
 </table>
 
+${fce ? `<div class="footer-legal"><strong>Son: ${importeEnLetras(Number(f.total),f.moneda)}.</strong><br/>${fce.remitos?.length ? `Remitos asociados: ${fce.remitos.map(n=>String(n).replace(/[&<>"']/g, "")).join(", ")}.<br/>` : ""}Esta Factura de Crédito Electrónica MiPyME se considerará aceptada si, al vencimiento del plazo de ${fce.plazoAceptacion || 21} días corridos desde su recepción en el domicilio fiscal electrónico del comprador o locatario, no se hubiera registrado su rechazo total o aceptación. Si al vencimiento no se hubiera registrado su cancelación, constituirá título ejecutivo en los términos del artículo 523 del Código Procesal Civil y Comercial de la Nación y concordantes. La aceptación expresa o tácita implica plena conformidad para transferir la información del documento desde el Registro de Facturas de Crédito Electrónicas MiPyMEs a terceros si el vendedor opta por su cesión, transmisión o negociación.</div>` : ""}
 ${f.cae ? `
 <table style="width:100%;margin-top:20px;padding:14px 16px;border:1px solid #ddd;border-collapse:collapse">
   <tr>
@@ -608,6 +613,7 @@ ${f.cae ? `
   </tr>
 </table>` : ""}
 
+${["MONOTRIBUTO","MONOTRIBUTISTA"].includes((cli?.condicion_iva || "").toUpperCase()) && letraComprobante === "A" ? `<div class="footer-legal">El crédito fiscal discriminado en el presente comprobante, solo podrá ser computado a efectos del Régimen de Sostenimiento e Inclusión Fiscal para Pequeños Contribuyentes de la Ley Nº 27.618.</div>` : ""}
 ${documentFooter(soc, `${tipoLabel} ${letraComprobante} N° ${compNum}`)}
 
 </div></body></html>`;

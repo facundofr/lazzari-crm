@@ -19,6 +19,8 @@ type InvoiceDetail = {
   DocTipo: number;
   DocNro: number;
   CbteFch: string;
+  FchVtoPago?: string;
+  Opcionales?: { Id: number; Valor: string }[];
   ImpTotal: number;
   ImpTotConc: number;
   ImpNeto: number;
@@ -51,6 +53,11 @@ function escapeXml(value: string | number) {
 
 function money(value: number) {
   return (Math.round(Number(value) * 100) / 100).toFixed(2);
+}
+
+function exchangeRate(value: number) {
+  if (!Number.isFinite(value) || value <= 0 || Math.abs(value - Number(value.toFixed(6))) > 1e-9) throw new Error("Cotización inválida: debe ser positiva y tener como máximo seis decimales.");
+  return value.toFixed(6);
 }
 
 function authXml(auth: WsfeAuth) {
@@ -159,7 +166,7 @@ export async function consultarUltimoWsfeNode(args: {
 export async function consultarLimiteFechaPv(args: {
   auth: WsfeAuth; production: boolean; ptoVta: number; cbteTipo: number;
 }) {
-  const tipos = [...new Set([1, 6, 2, 3, 7, 8, 201, 206, 203, 208, args.cbteTipo])];
+  const tipos = [...new Set([1, 6, 2, 3, 7, 8, 201, 206, 202, 207, 203, 208, args.cbteTipo])];
   const ultimos = await Promise.all(tipos.map(async cbteTipo => ({
     cbteTipo, ...await consultarUltimoWsfeNode({...args, cbteTipo}),
   })));
@@ -187,10 +194,23 @@ export async function crearFacturaWsfeNode(args: {
     ? `<Iva>${inv.Iva.map((iva) => `<AlicIva><Id>${iva.Id}</Id><BaseImp>${money(iva.BaseImp)}</BaseImp><Importe>${money(iva.Importe)}</Importe></AlicIva>`).join("")}</Iva>`
     : "";
   const foreignCurrency = inv.CanMisMonExt ? `<CanMisMonExt>${inv.CanMisMonExt}</CanMisMonExt>` : "";
+  if ([201,206].includes(args.cbteTipo)) {
+    const due = inv.FchVtoPago || "";
+    const iso = `${due.slice(0,4)}-${due.slice(4,6)}-${due.slice(6,8)}`;
+    const validDate = /^\d{8}$/.test(due) && Number.isFinite(Date.parse(`${iso}T00:00:00Z`)) && new Date(`${iso}T00:00:00Z`).toISOString().slice(0,10) === iso;
+    const cbus = inv.Opcionales?.filter(o=>o.Id===2101) || [];
+    const modes = inv.Opcionales?.filter(o=>o.Id===27) || [];
+    if (!validDate || due < today || due < inv.CbteFch || cbus.length !== 1 || !/^\d{22}$/.test(cbus[0].Valor) || /^0+$/.test(cbus[0].Valor) || modes.length !== 1 || !["SCA","ADC"].includes(modes[0].Valor)) throw new Error("FCE incompleta: se requiere vencimiento, CBU y transmisión SCA/ADC. No se emitió.");
+  }
+  const dueXml = inv.FchVtoPago ? `<FchVtoPago>${escapeXml(inv.FchVtoPago)}</FchVtoPago>` : "";
+  const optionalXml = inv.Opcionales?.length ? `<Opcionales>${inv.Opcionales.map(o=>`<Opcional><Id>${o.Id}</Id><Valor>${escapeXml(o.Valor)}</Valor></Opcional>`).join("")}</Opcionales>` : "";
   const cbtesAsocXml = inv.CbtesAsoc?.length
     ? `<CbtesAsoc>${inv.CbtesAsoc.map((a) => `<CbteAsoc><Tipo>${a.Tipo}</Tipo><PtoVta>${a.PtoVta}</PtoVta><Nro>${a.Nro}</Nro><Cuit>${a.Cuit}</Cuit><CbteFch>${a.CbteFch}</CbteFch></CbteAsoc>`).join("")}</CbtesAsoc>`
     : "";
-  const detail = `<FECAEDetRequest><Concepto>${inv.Concepto}</Concepto><DocTipo>${inv.DocTipo}</DocTipo><DocNro>${inv.DocNro}</DocNro><CbteDesde>${nextNumber}</CbteDesde><CbteHasta>${nextNumber}</CbteHasta><CbteFch>${inv.CbteFch}</CbteFch><ImpTotal>${money(inv.ImpTotal)}</ImpTotal><ImpTotConc>${money(inv.ImpTotConc)}</ImpTotConc><ImpNeto>${money(inv.ImpNeto)}</ImpNeto><ImpOpEx>${money(inv.ImpOpEx)}</ImpOpEx><ImpTrib>${money(inv.ImpTrib)}</ImpTrib><ImpIVA>${money(inv.ImpIVA)}</ImpIVA><MonId>${escapeXml(inv.MonId)}</MonId><MonCotiz>${money(inv.MonCotiz)}</MonCotiz><CondicionIVAReceptorId>${inv.CondicionIVAReceptorId}</CondicionIVAReceptorId>${foreignCurrency}${cbtesAsocXml}${ivaXml}</FECAEDetRequest>`;
+  const detail = `<FECAEDetRequest><Concepto>${inv.Concepto}</Concepto><DocTipo>${inv.DocTipo}</DocTipo><DocNro>${inv.DocNro}</DocNro><CbteDesde>${nextNumber}</CbteDesde><CbteHasta>${nextNumber}</CbteHasta><CbteFch>${inv.CbteFch}</CbteFch><ImpTotal>${money(inv.ImpTotal)}</ImpTotal><ImpTotConc>${money(inv.ImpTotConc)}</ImpTotConc><ImpNeto>${money(inv.ImpNeto)}</ImpNeto><ImpOpEx>${money(inv.ImpOpEx)}</ImpOpEx><ImpTrib>${money(inv.ImpTrib)}</ImpTrib><ImpIVA>${money(inv.ImpIVA)}</ImpIVA>${dueXml}<MonId>${escapeXml(inv.MonId)}</MonId><MonCotiz>${exchangeRate(inv.MonCotiz)}</MonCotiz>${foreignCurrency}<CondicionIVAReceptorId>${inv.CondicionIVAReceptorId}</CondicionIVAReceptorId>${cbtesAsocXml}${ivaXml}${optionalXml}</FECAEDetRequest>`;
   const requestBody = `${authXml(args.auth)}<FeCAEReq><FeCabReq><CantReg>1</CantReg><PtoVta>${args.ptoVta}</PtoVta><CbteTipo>${args.cbteTipo}</CbteTipo></FeCabReq><FeDetReq>${detail}</FeDetReq></FeCAEReq>`;
-  return postSoap(endpoint, "FECAESolicitar", requestBody);
+  // Never blindly retry a fiscal mutation after an uncertain transport result.
+  // The operator must reconcile the assigned number before requesting another CAE.
+  try { return await postSoap(endpoint, "FECAESolicitar", requestBody, 1); }
+  catch (error) { throw new Error(`${error instanceof Error ? error.message : String(error)}. No reintentes sin consultar ARCA: la solicitud pudo autorizarse (${args.ptoVta}/${args.cbteTipo}/${nextNumber}).`); }
 }
