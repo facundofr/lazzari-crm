@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
+import { InvoiceNumberError, normalizeInvoiceNumbers } from "@/lib/invoice-number-parser";
 
 const EXTRACTION_PROMPT = `Sos un experto en extracción de datos de facturas de compra y notas de pedido argentinas.
 
@@ -157,33 +158,7 @@ export async function POST(request: NextRequest) {
 
     const parsed = JSON.parse(jsonText);
 
-    // Claude a veces devuelve importes como "1.234,56" o cantidades como texto.
-    // Normalizamos acá para que la pantalla no pierda artículos/precios por Number(...)=NaN.
-    const parseNumeric = (value: unknown): number => {
-      if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-      if (typeof value !== "string") return 0;
-      const clean = value.trim().replace(/[^0-9,.-]/g, "");
-      if (!clean) return 0;
-      const normalized = clean.includes(",")
-        ? clean.replace(/\./g, "").replace(",", ".")
-        : clean.replace(/,(?=\d{3}(?:\D|$))/g, "");
-      const result = Number(normalized);
-      return Number.isFinite(result) ? result : 0;
-    };
-    for (const key of ["subtotal", "iva", "percepciones", "total", "iva_porcentaje", "descuento_general_porcentaje"]) {
-      if (key in parsed) parsed[key] = parseNumeric(parsed[key]);
-    }
-    if (Array.isArray(parsed.items)) {
-      parsed.items = parsed.items
-        .filter((item: any) => item && (item.descripcion || item.codigo || item.cantidad || item.precio_unitario))
-        .map((item: any) => ({
-          ...item,
-          cantidad: parseNumeric(item.cantidad) || 1,
-          precio_unitario: parseNumeric(item.precio_unitario),
-          descuento_porcentaje: parseNumeric(item.descuento_porcentaje),
-          iva_porcentaje: parseNumeric(item.iva_porcentaje) || parsed.iva_porcentaje || 21,
-        }));
-    }
+    normalizeInvoiceNumbers(parsed);
 
     return Response.json({
       success: true,
@@ -192,6 +167,10 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: unknown) {
     console.error("Error parsing factura de compra:", error);
+
+    if (error instanceof InvoiceNumberError) {
+      return Response.json({ error: error.message }, { status: 422 });
+    }
 
     if (error instanceof SyntaxError) {
       return Response.json(

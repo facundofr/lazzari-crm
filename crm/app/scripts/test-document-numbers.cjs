@@ -1,0 +1,26 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const ts = require('typescript');
+function load(name) {
+  const file = path.resolve(__dirname, '../src/lib', name + '.ts');
+  const js = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+  const mod = { exports: {} };
+  new Function('module', 'exports', 'require', js)(mod, mod.exports, spec => load(spec.replace('./', '')));
+  return mod.exports;
+}
+const { parseInvoiceNumber: parse, normalizeInvoiceNumbers: normalize } = load('invoice-number-parser');
+for (const [input, expected] of [[0, 0], [1.234, 1.234], ['0.125', .125], ['-0,125', -.125], ['1.234,56', 1234.56], ['1,234.56', 1234.56], ['1.234.567', 1234567], ['12,50', 12.5], ['ARS 250,25', 250.25], ['(250,25)', -250.25]]) assert.equal(parse(input), expected);
+for (const input of ['1.234', '1,234', 'abc', '', null, Infinity, '1.23.456,78', '12,34,56', '1,2.3']) assert.throws(() => parse(input));
+const invoice = normalize({ iva_porcentaje: 0, total: '1,234.56', items: [{ cantidad: 0, precio_unitario: '12,50', iva_porcentaje: 0 }, { cantidad: .125, precio_unitario: 10 }] });
+assert.equal(invoice.items[0].cantidad, 0);
+assert.equal(invoice.items[0].iva_porcentaje, 0);
+assert.equal(invoice.items[1].iva_porcentaje, 0);
+assert.equal(invoice.items[1].cantidad, .125);
+assert.throws(() => normalize({ items: [{ cantidad: 1, precio_unitario: 'ilegible' }] }));
+const { paymentDocumentFields: payment } = load('payment-document-parser');
+const cheque = payment({ tipo: 'echeq', moneda: 'USD', monto: 250, fecha: '2026-09-11', cheque_fecha: '2026-10-15', cheque_numero: '123' });
+assert.equal(cheque.moneda, 'USD'); assert.equal(cheque.fecha, '2026-10-15'); assert.equal(cheque.monto, 250);
+for (const tipo of ['retencion_ganancias', 'retencion_iibb', 'otro', null]) assert.throws(() => payment({ tipo, moneda: 'ARS', monto: 100, fecha: '2026-09-11' }));
+for (const overrides of [{ moneda: null }, { monto: -1 }, { fecha: '2026-02-31' }, { fecha: null }]) assert.throws(() => payment({ tipo: 'transferencia', moneda: 'ARS', monto: 100, fecha: '2026-09-11', ...overrides }));
+console.log('OK: números AR/internacionales, ambigüedad, IVA cero, cantidades, medios de pago, moneda y vencimiento; sin red ni escrituras.');

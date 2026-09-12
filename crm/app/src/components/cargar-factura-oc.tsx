@@ -382,7 +382,7 @@ export default function CargarFacturaOC({
           tempId: `ai-${Date.now()}-${idx}`,
           codigo: it.codigo || "",
           descripcion: it.descripcion || "",
-          cantidad: Number(it.cantidad) || 1,
+          cantidad: it.cantidad == null ? 1 : Number(it.cantidad),
           precio_unitario: Number(it.precio_unitario) || 0,
           descuento_porcentaje: Math.max(0, Math.min(100, Number(it.descuento_porcentaje ?? d.descuento_general_porcentaje) || 0)),
           iva_porcentaje: isNotaPedido ? 0 : (it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21),

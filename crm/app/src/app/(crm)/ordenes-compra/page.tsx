@@ -9,7 +9,6 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { generateOrdenCompraPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase/client";
-import { mockOrdenesCompra } from "@/lib/mock-data";
 import type { OCStatus } from "@/lib/types";
 import {
   ShoppingCart, Clock, CheckCircle2, Truck, Loader2,
@@ -26,6 +25,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useUser } from "@/lib/auth-context";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
+import { attachPurchaseOrderInvoices } from "@/lib/purchase-order-invoice-links";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" | "outline" | "purple" }> = {
   borrador: { label: "Borrador", variant: "outline" },
@@ -75,6 +75,7 @@ interface OCRow {
   presupuesto_origen: { numero: string; modalidad_emision?: string | null } | null;
   orden_compra_items: { codigo: string | null; descripcion: string | null; cantidad: number; cantidad_recibida: number }[];
   facturas_vinculadas?: { id: string; numero_factura: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null; archivo_nombre?: string | null }[];
+  facturas_vinculadas_estado?: "conocido" | "desconocido";
 }
 
 const ocPagada = (oc: OCRow) => {
@@ -88,7 +89,7 @@ const ocPagadaConTarjeta = (oc: OCRow) => oc.estado_pago === "pagada" && oc.medi
 // Una factura que ya fue aprobada por Finanzas no permite modificar la OC
 // vinculada: conserva la trazabilidad entre el comprobante aprobado y el costo.
 const ocTieneFacturaAprobada = (oc: OCRow) =>
-  (oc.facturas_vinculadas || []).some((factura) => ["pendiente", "recibida", "pagada"].includes(factura.estado));
+  oc.facturas_vinculadas_estado === "desconocido" || (oc.facturas_vinculadas || []).some((factura) => ["pendiente", "recibida", "pagada"].includes(factura.estado));
 
 // Una OC originada en un PR manual debe conservarse sin IVA durante todo su ciclo
 // (creacion, edicion y division por proveedor). El chequeo del encabezado cubre
@@ -113,40 +114,6 @@ interface DetailItem {
 interface ProveedorOption {
   id: string;
   razon_social: string;
-}
-
-function mapMockToOCRow(oc: (typeof mockOrdenesCompra)[number]): OCRow {
-  return {
-    id: oc.id,
-    sociedad_id: null,
-    numero: oc.numero,
-    proveedor_id: oc.proveedorId,
-    fecha: oc.fecha,
-    fecha_entrega_estimada: oc.fechaEntregaEstimada,
-    estado: oc.estado,
-    subtotal: oc.subtotal,
-    iva: oc.iva,
-    total: oc.total,
-    moneda: oc.moneda,
-    presupuesto_origen_id: oc.presupuestoOrigenId || null,
-    pedido: oc.estado !== "borrador",
-    estado_pago: "pendiente",
-    medio_pago: null,
-    pagada_at: null,
-    notas_recepcion: null,
-    observaciones: oc.observaciones,
-    created_at: oc.fecha,
-    created_by: null,
-    proveedores: { razon_social: oc.proveedorNombre, cuit: null, email: null, telefono: null, direccion: null, localidad: null, provincia: null, forma_pago: null, condicion_iva: null },
-    created_by_profile: null,
-    presupuesto_origen: null,
-    orden_compra_items: oc.items.map((i) => ({
-      codigo: i.codigo,
-      descripcion: i.descripcion,
-      cantidad: i.cantidad,
-      cantidad_recibida: i.cantidadRecibida,
-    })),
-  };
 }
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -221,6 +188,7 @@ export default function OrdenesCompraPage() {
   const [operadorFilter, setOperadorFilter] = useState("");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [facturaLinksError, setFacturaLinksError] = useState("");
 
   const [smartFilterValues, setSmartFilterValues] = useState<FilterValues>({
     fecha: { from: "", to: "" },
@@ -470,6 +438,13 @@ export default function OrdenesCompraPage() {
   // ── Fetch main data ──────────────────────────────────────────────
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setFacturaLinksError("");
+    if (!sociedadActiva?.id) {
+      setOrdenes([]);
+      setFacturaLinksError("Seleccioná una sociedad para consultar las órdenes de compra.");
+      setLoading(false);
+      return;
+    }
     try {
       let q = supabase
         .from("ordenes_compra")
@@ -482,33 +457,42 @@ export default function OrdenesCompraPage() {
         `)
         .order("created_at", { ascending: false });
 
-      if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+      q = q.eq("sociedad_id" as any, sociedadActiva.id);
 
       const { data, error } = await q;
 
-      if (!error && data) {
-        const rows = data as unknown as OCRow[];
+      if (error) throw error;
+      const rows = (data || []) as unknown as OCRow[];
         const ids = rows.map((row) => row.id);
-        const linksByOC = new Map<string, { id: string; numero_factura: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null; archivo_nombre?: string | null }[]>();
+        let junctionRows: any[] = [];
+        let legacyInvoices: any[] = [];
+        let junctionErrorMessage = "";
+        let legacyErrorMessage = "";
         if (ids.length > 0) {
-          const { data: links } = await (supabase as any)
+          const { data: links, error: junctionError } = await (supabase as any)
             .from("factura_compra_ocs")
             .select("orden_compra_id, facturas_compra(id, numero_factura, tipo_comprobante, estado, total, moneda, archivo_url, archivo_nombre)")
             .in("orden_compra_id", ids);
-          for (const link of links || []) {
-            const factura = link.facturas_compra;
-            if (!factura) continue;
-            const list = linksByOC.get(link.orden_compra_id) || [];
-            list.push(factura);
-            linksByOC.set(link.orden_compra_id, list);
-          }
+          junctionRows = links || [];
+          if (junctionError) junctionErrorMessage = junctionError.message;
+          const { data: legacyRows, error: legacyError } = await (supabase as any)
+            .from("facturas_compra")
+            .select("id, numero_factura, tipo_comprobante, estado, total, moneda, archivo_url, archivo_nombre, orden_compra_id")
+            .eq("sociedad_id", sociedadActiva.id)
+            .in("orden_compra_id", ids);
+          legacyInvoices = legacyRows || [];
+          if (legacyError) legacyErrorMessage = legacyError.message;
         }
-        setOrdenes(rows.map((row) => ({ ...row, facturas_vinculadas: linksByOC.get(row.id) || [] })));
-      } else if (error) {
-        setOrdenes(mockOrdenesCompra.map(mapMockToOCRow));
-      }
-    } catch {
-      setOrdenes(mockOrdenesCompra.map(mapMockToOCRow));
+        const result = attachPurchaseOrderInvoices(rows, junctionRows, legacyInvoices, {
+          junction: junctionErrorMessage,
+          legacy: legacyErrorMessage,
+        });
+        setOrdenes(result.orders as OCRow[]);
+        setFacturaLinksError(result.error);
+    } catch (err) {
+      console.error("Error cargando órdenes de compra:", err);
+      setOrdenes([]);
+      setFacturaLinksError(`No se pudieron cargar las órdenes de compra. No se muestran datos de ejemplo. ${err instanceof Error ? err.message : "Reintentá."}`);
     } finally {
       setLoading(false);
     }
@@ -741,11 +725,16 @@ export default function OrdenesCompraPage() {
     if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de eliminar la OC"); return; }
     if (oc.sociedad_id && oc.sociedad_id !== sociedadActiva.id) { alert("La OC no pertenece a la sociedad activa"); return; }
     try {
+      if (oc.facturas_vinculadas_estado === "desconocido") {
+        alert("No se puede eliminar la OC porque no se pudo verificar si tiene facturas vinculadas. Reintentá cargar la lista antes de borrar.");
+        return;
+      }
       // Check linked FC — block deletion if any non-anulada FC exists
-      const { data: linkedFCs } = await (supabase as any)
+      const { data: linkedFCs, error: junctionError } = await (supabase as any)
         .from("factura_compra_ocs")
         .select("facturas_compra(id, estado)")
         .eq("orden_compra_id", oc.id);
+      if (junctionError) throw junctionError;
       const activeFCs = (linkedFCs || []).filter((l: any) => {
         const fc = Array.isArray(l.facturas_compra) ? l.facturas_compra[0] : l.facturas_compra;
         return fc && fc.estado !== "anulada";
@@ -754,7 +743,20 @@ export default function OrdenesCompraPage() {
         alert("No se puede eliminar esta OC porque tiene facturas de compra vinculadas. Anulá las facturas primero.");
         return;
       }
-    } catch {}
+      const { data: legacyFCs, error: legacyError } = await (supabase as any)
+        .from("facturas_compra")
+        .select("id, estado")
+        .eq("sociedad_id", sociedadActiva.id)
+        .eq("orden_compra_id", oc.id);
+      if (legacyError) throw legacyError;
+      if ((legacyFCs || []).some((fc: any) => fc.estado !== "anulada")) {
+        alert("No se puede eliminar esta OC porque tiene facturas de compra históricas vinculadas. Anulá las facturas primero.");
+        return;
+      }
+    } catch (err) {
+      alert(`No se pudo verificar si la OC tiene facturas vinculadas; no se eliminó. ${err instanceof Error ? err.message : "Reintentá y, si persiste, contactá soporte."}`);
+      return;
+    }
     if (!confirm(`¿Eliminar la OC ${oc.numero}? Esta acción no se puede deshacer.`)) return;
     try {
       // 1. Delete orden_compra_items
@@ -924,6 +926,10 @@ export default function OrdenesCompraPage() {
 
   const startEditMode = () => {
     if (!detailOC) return;
+    if (detailOC.facturas_vinculadas_estado === "desconocido") {
+      alert("No se puede editar esta OC hasta verificar sus facturas vinculadas. Reintentá cargar la lista.");
+      return;
+    }
     if (ocTieneFacturaAprobada(detailOC)) {
       alert("Esta OC no se puede editar porque tiene una factura aprobada por Finanzas. Anulá la factura o corregila desde Finanzas antes de modificarla.");
       return;
@@ -942,6 +948,7 @@ export default function OrdenesCompraPage() {
 
   const handleSaveEdit = async () => {
     if (!detailOC) return;
+    if (detailOC.facturas_vinculadas_estado === "desconocido") { alert("No se puede guardar: no se pudo verificar el vínculo de facturas. Reintentá cargar la lista."); return; }
     if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de guardar la OC"); return; }
     if (detailOC.sociedad_id && detailOC.sociedad_id !== sociedadActiva.id) { alert("La OC no pertenece a la sociedad activa"); return; }
     setSavingEdit(true);
@@ -2020,6 +2027,13 @@ export default function OrdenesCompraPage() {
       </div>}
 
       <div className="p-4 sm:p-8 space-y-6">
+        {facturaLinksError && (
+          <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{facturaLinksError}</span>
+            <button onClick={fetchData} className="ml-auto shrink-0 font-semibold underline">Reintentar</button>
+          </div>
+        )}
         {/* Success message */}
         {consolidateSuccessMsg && (
           <div className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
@@ -2306,6 +2320,7 @@ export default function OrdenesCompraPage() {
                 render: (row) => {
                   const fcs = (row.facturas_vinculadas || []).filter(f => f.estado !== "anulada");
                   if (row.estado === "cancelada") return <span className="text-zinc-300">{"\u2014"}</span>;
+                  if (row.facturas_vinculadas_estado === "desconocido") return <span title="No se pudieron verificar los vínculos de facturas" className="text-amber-500"><AlertTriangle className="h-4 w-4" /></span>;
                   return fcs.length > 0
                     ? <span title="Factura compra cargada" className="text-emerald-500"><Check className="h-4 w-4" /></span>
                     : <span title="Sin factura compra" className="text-zinc-300"><X className="h-3.5 w-3.5" /></span>;
@@ -2861,8 +2876,8 @@ export default function OrdenesCompraPage() {
                         </button>
                       )}
                       {canManageCompras && ocTieneFacturaAprobada(detailOC) && (
-                        <span className="flex items-center gap-1 rounded-lg border border-amber-200 px-2 py-1 text-[11px] text-amber-600 dark:border-amber-900/50 dark:text-amber-400" title="La edición está bloqueada por una factura aprobada por Finanzas">
-                          <Lock className="h-3 w-3" /> Edición bloqueada
+                        <span className="flex items-center gap-1 rounded-lg border border-amber-200 px-2 py-1 text-[11px] text-amber-600 dark:border-amber-900/50 dark:text-amber-400" title={detailOC.facturas_vinculadas_estado === "desconocido" ? "No se pudieron verificar los vínculos de facturas" : "La edición está bloqueada por una factura aprobada por Finanzas"}>
+                          <Lock className="h-3 w-3" /> {detailOC.facturas_vinculadas_estado === "desconocido" ? "Vínculo sin verificar" : "Edición bloqueada"}
                         </span>
                       )}
                       <button onClick={handleCopySummary} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Copiar resumen">
@@ -3220,11 +3235,16 @@ export default function OrdenesCompraPage() {
                 <div>
                   <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
                     <FileText className="h-4 w-4 text-zinc-400" /> Facturas de compra
-                    {(detailOC.facturas_vinculadas || []).filter(f => f.estado !== "anulada").length > 0
+                    {detailOC.facturas_vinculadas_estado === "desconocido"
+                      ? <Badge variant="warning">Vínculo no verificado</Badge>
+                      : (detailOC.facturas_vinculadas || []).filter(f => f.estado !== "anulada").length > 0
                       ? <Badge variant="success">{(detailOC.facturas_vinculadas || []).filter(f => f.estado !== "anulada").length} cargada{(detailOC.facturas_vinculadas || []).filter(f => f.estado !== "anulada").length > 1 ? "s" : ""}</Badge>
                       : <Badge variant="outline">Sin factura</Badge>
                     }
                   </h3>
+                  {detailOC.facturas_vinculadas_estado === "desconocido" && (
+                    <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">No se pudo verificar si esta OC tiene otras facturas asociadas. La edición y eliminación quedan bloqueadas hasta volver a cargar.</p>
+                  )}
                   {(detailOC.facturas_vinculadas || []).length > 0 ? (
                     <div className="space-y-2">
                       {(detailOC.facturas_vinculadas || []).map((fc, idx) => (

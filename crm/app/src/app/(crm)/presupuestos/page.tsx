@@ -26,6 +26,7 @@ import { useUser } from "@/lib/auth-context";
 import { PendientesWidget } from "@/components/presupuestos/pendientes-widget";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
+import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalizePurchaseCurrency } from "@/lib/own-stock-purchase-orders";
 
 /** Number input that allows typing decimals (e.g. "10.") without losing the dot */
 function NumInput({ value, onChange, className, ...props }: { value: number | string; onChange: (n: number) => void; className?: string } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "type">) {
@@ -681,6 +682,31 @@ export default function PresupuestosPage() {
         }
       } catch { /* ignore */ }
     }
+  }
+
+  function handleAIImageFile(file: File) {
+    if (!file.type.startsWith("image/")) {
+      toast.error("El archivo pegado no es una imagen");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) { toast.error("Imagen muy grande (máx 10MB)"); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.split(",")[1];
+      if (!base64) { toast.error("No se pudo leer la imagen del portapapeles"); return; }
+      setAiImage({ data: base64, media_type: file.type || "image/jpeg", name: file.name || "imagen-pegada.png" });
+    };
+    reader.onerror = () => toast.error("No se pudo leer la imagen");
+    reader.readAsDataURL(file);
+  }
+
+  function handleAIPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const imageItem = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/"));
+    const imageFile = imageItem?.getAsFile();
+    if (!imageFile) return;
+    event.preventDefault();
+    handleAIImageFile(imageFile);
   }
 
   async function handleAIGenerate() {
@@ -1360,7 +1386,7 @@ export default function PresupuestosPage() {
         // Match PR items to this OC by proveedor_id
         const isStockOwnOC = !oc.proveedor_id && String((oc as any).observaciones || "").includes("Stock propio");
         const matchingItems = prItems.filter((it: any) => isStockOwnOC
-          ? Boolean(it.stock_propio)
+          ? Boolean(it.stock_propio) && normalizePurchaseCurrency(it.costo_moneda) === normalizePurchaseCurrency(oc.moneda)
           : it.proveedor_id === oc.proveedor_id && !it.stock_propio);
         if (matchingItems.length === 0) continue;
 
@@ -1434,7 +1460,9 @@ export default function PresupuestosPage() {
       // una OC interna real, para que también puedan pasar por recepción y dejar
       // trazabilidad del ingreso al circuito de compras.
       const stockItemsCount = items.filter((item: any) => Boolean(item.stock_propio)).length;
-      const stockItems = items.filter((item: any) => Boolean(item.stock_propio));
+      // Supabase generated types lag this table's costo_moneda column; keep the
+      // row shape explicit here because internal purchase orders are grouped by it.
+      const stockItems = (items as any[]).filter((item: any) => Boolean(item.stock_propio));
       const itemsAComprar = items.filter((item: any) => !item.stock_propio);
 
       // Group purchasable items by proveedor_id (items sin proveedor van a key "__sin_proveedor__")
@@ -1455,6 +1483,7 @@ export default function PresupuestosPage() {
       }
 
       let ocsCreated = 0;
+      let ocCreationFailed = false;
       const today = todayAR();
 
       // Only generate OCs for items that HAVE a proveedor assigned
@@ -1489,6 +1518,7 @@ export default function PresupuestosPage() {
         if (ocErr || !ocRow) {
           console.error("Error creating OC for proveedor:", provId, JSON.stringify(ocErr));
           toast.error(`Error al crear OC: ${ocErr?.message ?? "sin datos de respuesta"}`);
+          ocCreationFailed = true;
           continue;
         }
 
@@ -1508,6 +1538,8 @@ export default function PresupuestosPage() {
         if (itemsErr) {
           console.error("Error inserting OC items:", JSON.stringify(itemsErr));
           toast.error(`OC ${ocRow.numero ?? ""} creada pero falló la carga de items: ${itemsErr.message}`);
+          ocCreationFailed = true;
+          continue;
         }
         ocsCreated++;
       }
@@ -1516,32 +1548,30 @@ export default function PresupuestosPage() {
       // Se deja en borrador para que el usuario pueda activarla y recibirla
       // normalmente desde el módulo de Compras.
       if (stockItems.length > 0) {
-        const subtotalSP = stockItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
-        const ivaSP = compraSinIva ? 0 : stockItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad) * (Number(it.iva_porcentaje ?? 21) / 100), 0);
-        const costoMonedasSP = new Set(stockItems.map((it: any) => (it.costo_moneda || "ARS").startsWith("USD") ? "USD" : "ARS"));
-        const ocMonedaSP = costoMonedasSP.size === 1 ? [...costoMonedasSP][0] : "ARS";
-        const { data: stockOC, error: stockOCErr } = await supabase
-          .from("ordenes_compra")
-          .insert({
-            proveedor_id: null,
-            presupuesto_origen_id: prId,
-            sociedad_id: sociedadId,
-            fecha: today,
-            moneda: ocMonedaSP,
-            estado: "borrador",
-            subtotal: subtotalSP,
-            iva: ivaSP,
-            total: subtotalSP + ivaSP,
-            observaciones: `Stock propio — OC interna generada desde ${prNumero}`,
-            created_by: prCreatedBy ?? profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
-          } as any)
-          .select()
-          .single();
-        if (stockOCErr || !stockOC) {
-          console.error("Error creating internal stock OC:", JSON.stringify(stockOCErr));
-          toast.error(`No se pudo crear la OC interna de stock propio: ${stockOCErr?.message ?? "sin datos"}`);
-        } else {
-          const stockOCItems = stockItems.map((it: any, idx: number) => ({
+        for (const { moneda, items: currencyItems } of groupOwnStockItemsByCurrency(stockItems)) {
+          const totals = calculateOwnStockPurchaseOrder(currencyItems, compraSinIva);
+          const { data: stockOC, error: stockOCErr } = await supabase
+            .from("ordenes_compra")
+            .insert({
+              proveedor_id: null,
+              presupuesto_origen_id: prId,
+              sociedad_id: sociedadId,
+              fecha: today,
+              moneda,
+              estado: "borrador",
+              ...totals,
+              observaciones: `Stock propio — OC interna generada desde ${prNumero}`,
+              created_by: prCreatedBy ?? profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
+            } as any)
+            .select()
+            .single();
+          if (stockOCErr || !stockOC) {
+            console.error("Error creating internal stock OC:", JSON.stringify(stockOCErr));
+            toast.error(`No se pudo crear la OC interna de stock propio ${moneda}: ${stockOCErr?.message ?? "sin respuesta"}`);
+            ocCreationFailed = true;
+            continue;
+          }
+          const stockOCItems = currencyItems.map((it: any, idx: number) => ({
             orden_id: stockOC.id,
             codigo: it.codigo || "",
             descripcion: it.descripcion || "Sin descripción",
@@ -1554,10 +1584,15 @@ export default function PresupuestosPage() {
           }));
           const { error: stockItemsErr } = await supabase.from("orden_compra_items").insert(stockOCItems as any);
           if (stockItemsErr) {
-            toast.error(`OC interna ${stockOC.numero ?? ""} creada pero falló la carga de items: ${stockItemsErr.message}`);
-          } else {
-            ocsCreated++;
+            console.error("Error inserting internal stock OC items:", JSON.stringify(stockItemsErr));
+            const { data: deletedOC, error: cleanupError } = await supabase.from("ordenes_compra").delete().eq("id", stockOC.id).eq("sociedad_id" as any, sociedadId).select("id").maybeSingle();
+            toast.error(cleanupError || !deletedOC
+              ? `OC ${stockOC.numero ?? ""} ${moneda} quedó incompleta (sin items) y no se pudo limpiar. Contactá soporte con ID ${stockOC.id}.`
+              : `No se generó la OC interna ${moneda}: falló la carga de sus items y se limpió el encabezado.`);
+            ocCreationFailed = true;
+            continue;
           }
+          ocsCreated++;
         }
       }
 
@@ -1599,12 +1634,28 @@ export default function PresupuestosPage() {
             orden: idx + 1,
             cantidad_recibida: 0,
           }));
-          await supabase.from("orden_compra_items").insert(ocItemsSP as any);
-          ocsCreated++;
+          const { error: itemsSPError } = await supabase.from("orden_compra_items").insert(ocItemsSP as any);
+          if (itemsSPError) {
+            const { data: deletedOC, error: cleanupError } = await supabase.from("ordenes_compra").delete().eq("id", ocRow.id).eq("sociedad_id" as any, sociedadId).select("id").maybeSingle();
+            toast.error(cleanupError || !deletedOC
+              ? `OC ${ocRow.numero ?? ""} quedó incompleta (sin items) y no se pudo limpiar. Contactá soporte con ID ${ocRow.id}.`
+              : `No se generó la OC sin proveedor: falló la carga de sus items y se limpió el encabezado.`);
+            ocCreationFailed = true;
+          } else {
+            ocsCreated++;
+          }
+        } else {
+          console.error("Error creating OC without provider:", JSON.stringify(ocErr));
+          toast.error(`No se pudo crear la OC sin proveedor: ${ocErr?.message ?? "sin respuesta"}`);
+          ocCreationFailed = true;
         }
       }
 
-      if (ocsCreated > 0) {
+      if (ocCreationFailed) {
+        toast.warning(ocsCreated > 0
+          ? `Generación parcial: ${ocsCreated} OC(s) completas; una o más fallaron. Revisá los avisos antes de continuar.`
+          : "No se completó la generación de todas las OCs. Revisá los avisos antes de continuar.");
+      } else if (ocsCreated > 0) {
         toast.success(`Se generaron ${ocsCreated} orden(es) de compra automáticamente`);
       }
 
@@ -1612,7 +1663,7 @@ export default function PresupuestosPage() {
       if (sinProveedorCount > 0 && sinProvItems.length > 0) {
         toast.info(`${sinProveedorCount} item(s) sin proveedor — OC creada en borrador para asignar proveedor`);
       }
-      if (stockItemsCount > 0) toast.info(`${stockItemsCount} item(s) de stock propio: OC interna creada en borrador para recibirla por el circuito normal`);
+      if (stockItemsCount > 0 && !ocCreationFailed) toast.info(`${stockItemsCount} item(s) de stock propio: OC(s) interna(s) creada(s) en borrador, separadas por moneda, para recibirlas por el circuito normal`);
     } catch (err) {
       console.error("Error generating OCs:", err);
       toast.warning("PR aprobado pero hubo un error al generar las OC");
@@ -3485,8 +3536,9 @@ export default function PresupuestosPage() {
               <textarea
                 value={aiMessage}
                 onChange={(e) => setAiMessage(e.target.value)}
+                onPaste={handleAIPaste}
                 rows={3}
-                placeholder="Ej: Necesito 3 válvulas esféricas de 2 pulgadas, 10 metros de caño SCH40 de 4 y un manómetro de glicerina..."
+                placeholder="Pegá un pedido o pegá una captura de imagen (Ctrl/Cmd+V)…"
                 className="w-full rounded-lg border border-orange-200 px-3 py-2 text-sm dark:border-orange-800 dark:bg-zinc-900 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-200 resize-none"
               />
               {/* Image upload */}
@@ -3501,15 +3553,7 @@ export default function PresupuestosPage() {
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (!file) return;
-                      if (file.size > 10 * 1024 * 1024) { toast.error("Imagen muy grande (máx 10MB)"); return; }
-                      const reader = new FileReader();
-                      reader.onload = () => {
-                        const result = reader.result as string;
-                        const base64 = result.split(",")[1];
-                        const mediaType = file.type || "image/jpeg";
-                        setAiImage({ data: base64, media_type: mediaType, name: file.name });
-                      };
-                      reader.readAsDataURL(file);
+                      handleAIImageFile(file);
                       e.target.value = "";
                     }}
                   />

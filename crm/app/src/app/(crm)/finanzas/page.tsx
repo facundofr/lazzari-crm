@@ -20,6 +20,7 @@ import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import CargaMasivaFacturasCompra from "@/components/carga-masiva-facturas-compra";
+import { paymentDocumentFields } from "@/lib/payment-document-parser";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -1709,15 +1710,11 @@ export default function FinanzasPage() {
       const pagos: any[] = json.data.pagos || (json.data.tipo ? [json.data] : []);
       if (pagos.length === 0) return;
       const mapped: OpMedioPago[] = pagos.map(d => {
-        const tipo = d.tipo === "deposito" ? "deposito" : d.tipo === "cheque" ? "cheque" : d.tipo === "echeq" ? "echeq" : d.tipo === "efectivo" ? "efectivo" : "transferencia";
+        const fields = paymentDocumentFields(d);
         return {
-          ...makeOpMedio(opForm.moneda),
-          tipo: tipo as OpMedioPago["tipo"],
-          monto: Number(d.monto) || 0,
-          fecha: d.fecha || opMedios[0]?.fecha || todayAR(),
-          banco: d.banco || "",
+          ...makeOpMedio(fields.moneda),
+          ...fields,
           banco_otro: "",
-          numero_cheque: d.cheque_numero || "",
         };
       });
       setOpMedios(prev => [...prev, ...mapped]);
@@ -1856,10 +1853,11 @@ export default function FinanzasPage() {
         // If monto_a_pagar == saldo_pendiente → pagada; else stays as está
         for (const fc of selectedFCs) {
           const linked = links.find((link: { factura_compra_id: string }) => link.factura_compra_id === fc.id);
-          if (linked && Math.abs(linked.monto - fc.saldo_pendiente) < 1) {
+          if (linked && Math.round(linked.monto * 100) === Math.round(fc.saldo_pendiente * 100)) {
             let fcUpdate = (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", fc.id);
             if (sociedadActiva?.id) fcUpdate = fcUpdate.eq("sociedad_id", sociedadActiva.id);
-            await fcUpdate;
+            const { data: updatedFC, error: updateFCError } = await fcUpdate.select("id").maybeSingle();
+            if (updateFCError || !updatedFC) throw new Error(`La OP ${opData.numero || opData.id} fue creada, pero no se pudo actualizar la factura ${fc.id}. No vuelvas a generar el pago: revisá esta OP. ${updateFCError?.message || "No se modificó ninguna fila"}`);
           }
         }
       }
@@ -2606,6 +2604,10 @@ export default function FinanzasPage() {
   }
 
   function startEditFC(fc: FacturaCompraRow) {
+    if (!["pendiente", "borrador"].includes(fc.estado)) {
+      alert("La factura ya fue recibida, aprobada, pagada o anulada y no se puede editar desde este formulario.");
+      return;
+    }
     setEditFCForm({
       numero_factura: fc.numero_factura,
       fecha: fc.fecha,
@@ -2622,6 +2624,7 @@ export default function FinanzasPage() {
 
   async function handleSaveFC() {
     if (!selectedFC) return;
+    if (!["pendiente", "borrador"].includes(selectedFC.estado)) { alert("La factura ya no está habilitada para edición."); return; }
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     setSavingFC(true);
     try {
@@ -2639,8 +2642,10 @@ export default function FinanzasPage() {
       };
       let fcUpdate = (supabase as any).from("facturas_compra").update(updateData).eq("id", selectedFC.id);
       if (sociedadActiva?.id) fcUpdate = fcUpdate.eq("sociedad_id", sociedadActiva.id);
-      const { error } = await fcUpdate;
+      fcUpdate = fcUpdate.eq("estado", selectedFC.estado);
+      const { data: savedFC, error } = await fcUpdate.select("id").maybeSingle();
       if (error) throw error;
+      if (!savedFC) throw new Error("La factura cambió de estado o no tenés permiso para editarla. No se guardaron cambios; actualizá la pantalla.");
       setEditingFC(false);
       setSelectedFC(null);
       await fetchData();
@@ -3948,7 +3953,7 @@ export default function FinanzasPage() {
                       { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
                       { key: "saldo_cuenta_corriente", label: "Nos debe", className: "text-right", sortable: true, render: (row) => {
                         const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
-                        return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                        return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span>{row.limite_credito > 0 && row.saldo_cuenta_corriente > row.limite_credito && <p className="mt-1 text-xs text-red-600 dark:text-red-400">Límite de crédito excedido</p>}<div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.max(0, Math.min(pct, 100))}%` }} /></div></div>);
                       }},
                       { key: "cuit" as any, label: "Le debemos", className: "text-right", sortable: false, render: (row) => {
                         const saldoProv = row.cuit ? cuitToSaldoProveedor[row.cuit] : undefined;
@@ -5438,7 +5443,7 @@ export default function FinanzasPage() {
                 </Badge>
               </div>
               <div className="flex items-center gap-1">
-                {!editingFC && selectedFC.estado !== "anulada" && (
+                {!editingFC && ["pendiente", "borrador"].includes(selectedFC.estado) && (
                   <button onClick={() => startEditFC(selectedFC)} className="rounded-lg p-2 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-900/20" title="Editar">
                     <Pencil className="h-4 w-4" />
                   </button>
