@@ -8,6 +8,7 @@ import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { consultarObligacionFce, consultarComprobanteFce } from "@/lib/arca-wsfecred-node";
 import { fceRequired, validateFceFields, withFceMetadata, type FceInvoiceData } from "@/lib/fce-invoice";
+import { fiscalPayloadHash, validEmissionKey, reserveFiscalEmission, finishFiscalEmission } from "@/lib/fiscal-emission-guard";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -595,7 +596,16 @@ export async function POST(req: NextRequest) {
     // y reintentos: evita los fallos intermitentes de fetch/undici observados en Vercel.
     const auth = await arca.getAuth("wsfe");
     const production = process.env.ARCA_PRODUCTION !== "false";
-    const result = await crearFacturaWsfeNode({
+    const emissionKey = req.headers.get("Idempotency-Key");
+    if (!validEmissionKey(emissionKey)) return NextResponse.json({ error: "Falta la clave segura de emisión. Actualizá el CRM antes de emitir." }, { status: 400 });
+    const emissionHash = fiscalPayloadHash({ body, production, cuit: arcaConfig.cuit });
+    const attempt = await reserveFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, ptoVta, body);
+    if (!attempt.acquired) {
+      if (attempt.response && attempt.status) return NextResponse.json(attempt.response, { status: attempt.status });
+      return NextResponse.json({ error: "Esta emisión ya está en curso o pendiente de conciliación con ARCA. No se enviará nuevamente.", emission_key: emissionKey }, { status: 409 });
+    }
+    let result;
+    try { result = await crearFacturaWsfeNode({
       auth,
       production,
       ptoVta,
@@ -619,7 +629,14 @@ export async function POST(req: NextRequest) {
       Iva: ivaArray,
       ...(cbtesAsoc ? { CbtesAsoc: cbtesAsoc } : {}),
       },
-    });
+    }); } catch (error) {
+      if (error && typeof error === "object" && "wsfeNotSubmitted" in error && error.wsfeNotSubmitted === true) {
+        const failure = { error: error instanceof Error ? error.message : "La solicitud no fue enviada a ARCA.", emission_completed: true };
+        await finishFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, "completed", 422, failure);
+        return NextResponse.json(failure, { status: 422 });
+      }
+      throw error;
+    }
 
     // Extract CAE from response
     const det = result?.FeDetResp?.FECAEDetResponse;
@@ -629,12 +646,17 @@ export async function POST(req: NextRequest) {
     const arcaWarnings = (Array.isArray(acceptedObs) ? acceptedObs : acceptedObs ? [acceptedObs] : []).map((o:any)=>`[${o.Code}] ${o.Msg}`);
 
     if (!firstDet || firstDet.Resultado !== "A") {
+      if (firstDet?.Resultado !== "R") throw new Error("ARCA devolvió un resultado incierto. El intento quedó bloqueado para conciliación; no vuelvas a emitir.");
       const obs = firstDet?.Observaciones?.Obs;
       const obsArray = Array.isArray(obs) ? obs : obs ? [obs] : [];
       const obsMsg = obsArray.map((o: any) => `[${o.Code}] ${o.Msg}`).join(", ");
-      return NextResponse.json({
+      const rejection = {
         error: `ARCA rechazó el comprobante: ${obsMsg || "Error desconocido"}`,
-      }, { status: 422 });
+        emission_completed: true,
+      };
+      // An absent detail is an uncertain response, never evidence that emission failed.
+      if (firstDet?.Resultado === "R") await finishFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, "completed", 422, rejection);
+      return NextResponse.json(rejection, { status: 422 });
     }
 
     const cae = String(firstDet.CAE);
@@ -642,6 +664,14 @@ export async function POST(req: NextRequest) {
     // Convert YYYYMMDD → YYYY-MM-DD for DB date column
     const caeFchVto = `${rawFchVto.slice(0, 4)}-${rawFchVto.slice(4, 6)}-${rawFchVto.slice(6, 8)}`;
     const cbteNro = Number(firstDet.CbteDesde);
+    if (!/^\d{14}$/.test(cae) || !Number.isSafeInteger(cbteNro) || cbteNro <= 0) throw new Error("ARCA devolvió una autorización incompleta. No reemitir: conciliar el intento registrado.");
+    await finishFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, "authorized", 200, {
+      success: true,
+      warning: "Factura autorizada por ARCA. Su registro local está pendiente de conciliación; no vuelvas a emitir.",
+      reconciliation_required: true,
+      factura: { numero: cbteNro, cae, cae_vencimiento: caeFchVto, total: totalFinal, comprobante: `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(cbteNro).padStart(8, "0")}` },
+      emission_key: emissionKey,
+    });
     const fechaFactura = fechaFacturaInput;
     let savedNote = requestedRateOverride ? `${nota_interna || ""}\nCotización modificada por augusto@lazzari.com.ar antes de emitir: ${tc} ARS/USD. Fecha indicada: ${String(body.cotizacion_fecha || "sin especificar").slice(0,10)}. Registro: ${new Date().toISOString()}`.trim() : String(nota_interna || "");
     if (arcaWarnings.length) savedNote += `\nObservaciones ARCA: ${arcaWarnings.join("; ")}`;
@@ -683,6 +713,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         warning: "Factura autorizada por ARCA pero hubo un error al guardar localmente.",
+        reconciliation_required: true,
         factura: {
           numero: cbteNro, cae, cae_vencimiento: caeFchVto, total: totalFinal,
           comprobante: `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(cbteNro).padStart(8, "0")}`,
@@ -709,8 +740,9 @@ export async function POST(req: NextRequest) {
       console.error("Error guardando factura_items:", itemsError);
     }
 
-    return NextResponse.json({
+    const completedResponse = {
       success: true,
+      reconciliation_required: !!itemsError,
       warning: [...arcaWarnings, ...(itemsError ? ["Factura autorizada, pero sus artículos no se guardaron. No vuelvas a emitir; requiere conciliación local."] : [])].join("; ") || undefined,
       factura: {
         id: factura.id,
@@ -720,7 +752,10 @@ export async function POST(req: NextRequest) {
         total: totalFinal,
         comprobante: `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(cbteNro).padStart(8, "0")}`,
       },
-    });
+    };
+    // Keep the PV reserved if item persistence failed; reconciliation must finish it.
+    if (!itemsError) await finishFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, "completed", 200, completedResponse);
+    return NextResponse.json(completedResponse);
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
     const errStack = err instanceof Error ? err.stack : "";

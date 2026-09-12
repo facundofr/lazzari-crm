@@ -183,6 +183,8 @@ export async function crearFacturaWsfeNode(args: {
   auth: WsfeAuth; production: boolean; ptoVta: number; cbteTipo: number; invoice: InvoiceDetail;
 }) {
   const endpoint = args.production ? WSFE_PRODUCTION : WSFE_TESTING;
+  let submissionStarted = false;
+  try {
   const { lastNumber, minDate, today } = await consultarLimiteFechaPv(args);
   const nextNumber = lastNumber + 1;
   const inv = args.invoice;
@@ -211,6 +213,15 @@ export async function crearFacturaWsfeNode(args: {
   const requestBody = `${authXml(args.auth)}<FeCAEReq><FeCabReq><CantReg>1</CantReg><PtoVta>${args.ptoVta}</PtoVta><CbteTipo>${args.cbteTipo}</CbteTipo></FeCabReq><FeDetReq>${detail}</FeDetReq></FeCAEReq>`;
   // Never blindly retry a fiscal mutation after an uncertain transport result.
   // The operator must reconcile the assigned number before requesting another CAE.
+  submissionStarted = true;
   try { return await postSoap(endpoint, "FECAESolicitar", requestBody, 1); }
   catch (error) { throw new Error(`${error instanceof Error ? error.message : String(error)}. No reintentes sin consultar ARCA: la solicitud pudo autorizarse (${args.ptoVta}/${args.cbteTipo}/${nextNumber}).`); }
+  } catch (error) {
+    if (!submissionStarted) {
+      const failure = new Error(error instanceof Error ? error.message : String(error));
+      Object.assign(failure, { wsfeNotSubmitted: true });
+      throw failure;
+    }
+    throw error;
+  }
 }

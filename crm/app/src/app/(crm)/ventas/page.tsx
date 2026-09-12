@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { useFiscalDateLimits } from "@/lib/use-fiscal-date-limits";
+import { beginInvoiceIntent, postInvoiceIntent } from "@/lib/invoice-intent";
 import { useFceCheck, fceTotalArs as calculateFceTotalArs } from "@/lib/use-fce-check";
 import { generateFacturaPDF, getSociedadPDF, openPDFWindow, documentFilename } from "@/lib/pdf-templates";
 import Link from "next/link";
@@ -536,6 +537,7 @@ export default function VentasPage() {
   // ── Actions ────────────────────────────────────────────────────
 
   function openEmitModal(venta: Venta) {
+    beginInvoiceIntent(`presupuesto:${sociedadActiva?.id}:${venta.presupuesto.id}`);
     const p = venta.presupuesto;
     const condIva = p.clientes?.condicion_iva;
     const defaultTipo: EmitTipo = ["RI", "MONOTRIBUTO", "MONOTRIBUTISTA"].includes((condIva || "").toUpperCase()) ? "FA" : "FB";
@@ -628,7 +630,7 @@ export default function VentasPage() {
         return prMoneda === "USD" ? Math.round(price * emitTipoCambio * 100) / 100 : Math.round(price / emitTipoCambio * 100) / 100;
       };
       const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch("/api/facturacion", {
+      const res = await postInvoiceIntent(`presupuesto:${sociedadActiva?.id}:${p.id}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

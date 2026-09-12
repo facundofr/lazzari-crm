@@ -13,6 +13,7 @@ import { EmailComposeModal, type EmailDocumentType } from "@/components/email-co
 import { useUser } from "@/lib/auth-context";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { useFiscalDateLimits } from "@/lib/use-fiscal-date-limits";
+import { beginInvoiceIntent, postInvoiceIntent } from "@/lib/invoice-intent";
 import { useFceCheck, fceTotalArs } from "@/lib/use-fce-check";
 import { supabase } from "@/lib/supabase/client";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
@@ -331,6 +332,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   }, { neto: 0, iva: 0, total: 0 });
 
   async function openNcModal(factura: FacturaRow) {
+    beginInvoiceIntent(`nc:${sociedadActiva?.id}:${factura.id}`);
     // Cargar items de la factura original
     const { data: items } = await supabase
       .from("factura_items")
@@ -370,7 +372,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       if (!ncManual) {
         // Electrónica via ARCA
         const { data: { session } } = await supabase.auth.getSession();
-        const res = await fetch("/api/facturacion", {
+        const res = await postInvoiceIntent(`nc:${sociedadActiva?.id}:${ncFactura.id}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -614,6 +616,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   // ── Emit handlers ──────────────────────────────────────────────
   const openEmitModal = (prefill?: { cliente_id: string; tipo?: string; items?: EmitItem[]; moneda?: "ARS" | "USD"; tipo_cambio?: number }) => {
+    beginInvoiceIntent(`facturacion:${sociedadActiva?.id}:emit`);
     // Solo forzar manual si certOk es explícitamente false (certificado no encontrado)
     const forceManual = arcaStatus !== null && arcaStatus.certOk === false;
     setEmitManual(forceManual);
@@ -752,7 +755,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           if (!quoteRes.ok || !(quote.valor_venta > 0)) throw new Error(quote.error || "No se pudo verificar el tipo de cambio automático.");
           automaticRate = quote.valor_venta;
         }
-        const res = await fetch("/api/facturacion", {
+        const res = await postInvoiceIntent(`presupuesto:${sociedadActiva.id}:${pr.id}`, {
           method: "POST",
           headers: { "Content-Type": "application/json", ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
           body: JSON.stringify({
@@ -852,7 +855,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch("/api/facturacion", {
+      const res = await postInvoiceIntent(`facturacion:${sociedadActiva?.id}:emit`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -910,7 +913,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     try {
       const cliente = clientes.find(c => c.id === emitData.cliente_id);
       const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch("/api/facturacion", {
+      const res = await postInvoiceIntent(`facturacion:${sociedadActiva?.id}:emit`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

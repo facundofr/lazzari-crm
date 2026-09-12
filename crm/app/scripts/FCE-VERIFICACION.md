@@ -1,4 +1,4 @@
-# FCE - alcance de la versión 1.1.288
+# FCE - alcance de la versión candidata 1.1.289 (NO publicada)
 
 ## Verificado el 12/09/2026
 
@@ -17,7 +17,8 @@ Selección automática por consulta del receptor, fecha e importe, con repetici�
 
 - No se emitió una FCE real ni una FCE en homologación: no había certificado separado de homologación configurado. Las pruebas de emisión fueron con respuestas simuladas.
 - No se implementaron aceptación, rechazo, cesión ni cancelación en WSFECRED. Las notas FCE se bloquean con indicación de resolver por el portal; nunca convertirlas a notas comunes. El régimen jurídico de esos flujos exige implementación y pruebas separadas.
-- La reserva durable de idempotencia multi-instancia sigue pendiente: se eliminó el reintento automático SOAP, pero una nueva solicitud HTTP puede ser una nueva intención de emisión. Ante resultado incierto se muestra PV/tipo/número y exige conciliar en ARCA antes de reintentar. No afirmar garantía global de no duplicación.
+- Reserva durable implementada en código y migración aditiva `supabase/migrations/20260912150000_fiscal_emission_attempts.sql`, todavía NO aplicada en Supabase. Claves persistentes en navegador; reserva atómica por sociedad/clave y bloqueo de PV mientras haya intento incierto; respuesta ARCA guardada antes de escritura local. Pruebas de ruta simulada y SQL real en PostgreSQL embebido. Sin migración aplicada el servidor rechaza emisión antes de enviar WSFE. No publicar hasta aplicar y verificar la migración y completar homologación.
+- Recuperación de intentos inciertos requiere conciliación contra ARCA por administrador; no hay liberación automática ni por vencimiento. El ledger conserva solicitud y respuesta, pero no constituye prueba de CAE: verificar siempre contra ARCA. La interfaz de conciliación automática no está implementada.
 - El snapshot FCE usa una columna existente de nota interna, no una tabla fiscal inmutable. Debe migrarse a campos dedicados con reserva transaccional cuando haya acceso de migración. CLI Supabase sin sesión en esta revisión.
 - La elección asume el encuadre actual de estas sociedades como emisores MiPyME para operaciones locales normales; excepciones documentadas y cambios de habilitación requieren revisión, no override indiscriminado.
 - El plazo de aceptación está fijado en 21 días para el período normativo verificado; se bloquea emisión FCE posterior al 31/10/2026 hasta revisar vigencia normativa.
