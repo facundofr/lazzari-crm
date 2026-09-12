@@ -28,7 +28,16 @@ const template=ctx.exports.generateFacturaPDF({tipo:'FA',punto_venta:15,numero:1
       const el=document.querySelector(selector),s=getComputedStyle(el),r=el.getBoundingClientRect();
       return {selector,rect:[r.x,r.y,r.width,r.height],font:s.fontSize,fontFamily:s.fontFamily,padding:s.padding,margin:s.margin,overflow:s.overflow,boxSizing:s.boxSizing,border:s.borderWidth};
     });
-    const before=metrics();let differences=[],frames=0,cloneChecks=0;
+    const before=metrics();let differences=[],frames=0,cloneChecks=0,paintedCanvases=0;
+    const originalDataUrl=HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL=function(...args){
+      if(this.width>500&&this.height>200){
+        const pixels=this.getContext('2d')?.getImageData(0,0,this.width,this.height).data;
+        let colored=0;if(pixels)for(let i=0;i<pixels.length;i+=64)if(pixels[i+3]>0&&(pixels[i]<240||pixels[i+1]<240||pixels[i+2]<240))colored++;
+        if(colored>100)paintedCanvases++;
+      }
+      return originalDataUrl.apply(this,args);
+    };
     const timer=setInterval(()=>{frames++;if(JSON.stringify(metrics())!==JSON.stringify(before))differences.push(metrics());},10);
     // Different simultaneous scopes do not restyle one another or the host.
     const first=document.createElement('div'),second=document.createElement('div');
@@ -51,12 +60,13 @@ const template=ctx.exports.generateFacturaPDF({tipo:'FA',punto_venta:15,numero:1
     });observer.observe(document.body,{childList:true,subtree:true});
     let pdfs;
     try { pdfs=await Promise.all([window.renderPdf(html),window.renderPdf(html)]); }
-    finally {clearInterval(timer);observer.disconnect();}
-    return {before,after:metrics(),differences,frames,scopeValues,cloneValue,printRemoved,cloneChecks,pdfs:pdfs.map(base64=>({bytes:atob(base64).length,header:atob(base64).slice(0,5)})),remainingRoots:document.querySelectorAll('[data-pdf-render]').length};
+    finally {clearInterval(timer);observer.disconnect();HTMLCanvasElement.prototype.toDataURL=originalDataUrl;}
+    return {before,after:metrics(),differences,frames,scopeValues,cloneValue,printRemoved,cloneChecks,paintedCanvases,pdfs:pdfs.map(base64=>({bytes:atob(base64).length,header:atob(base64).slice(0,5)})),remainingRoots:document.querySelectorAll('[data-pdf-render]').length};
   },template);
   assert.deepEqual(result.after,result.before,'Host changed after render');assert.equal(result.differences.length,0,'Host shifted during render');
   assert.ok(result.frames>0);assert.deepEqual(result.scopeValues,['9px','8px','13px','12px']);assert.equal(result.cloneValue,'8px');assert.equal(result.printRemoved,true);assert.ok(result.cloneChecks>=2);assert.equal(result.remainingRoots,0);
   for(const pdf of result.pdfs){assert.equal(pdf.header,'%PDF-');assert.ok(pdf.bytes>10000,'PDF suspiciously empty');}
+  assert.ok(result.paintedCanvases>=2,'PDF raster must contain non-white painted content');
   console.log(JSON.stringify({ok:true,...result,before:undefined,after:undefined,differences:undefined}));
  } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
