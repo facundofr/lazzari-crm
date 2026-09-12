@@ -40,7 +40,8 @@ export async function updateSession(request: NextRequest) {
   }
 
   // Supabase unreachable — don't treat as "no user"
-  if (authError && !user && authError.status !== 401) {
+  const missingSession = authError?.name === "AuthSessionMissingError";
+  if (authError && !user && authError.status !== 401 && !missingSession) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Servicio temporalmente no disponible" }, { status: 503 });
     }
