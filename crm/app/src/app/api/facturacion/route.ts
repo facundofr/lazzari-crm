@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import * as fs from "fs";
 import * as path from "path";
-import { crearFacturaWsfeNode, consultarUltimoWsfeNode } from "@/lib/arca-wsfe-node";
+import { crearFacturaWsfeNode, consultarLimiteFechaPv } from "@/lib/arca-wsfe-node";
 import { getInvoiceExchangeRate } from "@/lib/invoice-exchange-rate";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { createSupabaseServer } from "@/lib/supabase/server";
@@ -699,8 +699,8 @@ export async function GET(req: NextRequest) {
       if (!config.ptoVtaPermitidos.includes(ptoVta) || !cbteTipo) return NextResponse.json({error:"Punto de venta o tipo de comprobante inválido."},{status:400});
       await loadArca();
       const arca = getArcaInstance(config);
-      const last = await consultarUltimoWsfeNode({auth:await arca.getAuth("wsfe"),production:process.env.ARCA_PRODUCTION !== "false",ptoVta,cbteTipo});
-      const minDate = last.lastDate ? `${last.lastDate.slice(0,4)}-${last.lastDate.slice(4,6)}-${last.lastDate.slice(6,8)}` : null;
+      const last = await consultarLimiteFechaPv({auth:await arca.getAuth("wsfe"),production:process.env.ARCA_PRODUCTION !== "false",ptoVta,cbteTipo});
+      const minDate = `${last.minDate.slice(0,4)}-${last.minDate.slice(4,6)}-${last.minDate.slice(6,8)}`;
       return NextResponse.json({minDate,lastNumber:last.lastNumber,punto_venta:ptoVta,tipo:req.nextUrl.searchParams.get("tipo"),sociedad_id:sociedadId},{headers:{"Cache-Control":"no-store"}});
     } catch (error) { return NextResponse.json({error:error instanceof Error ? error.message : "No se pudo consultar la fecha autorizada en ARCA."},{status:503}); }
   }

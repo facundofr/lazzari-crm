@@ -154,16 +154,34 @@ export async function consultarUltimoWsfeNode(args: {
   return { lastNumber, lastDate };
 }
 
+// Regla interna del CRM: un único piso de fecha por CUIT/PV, aunque
+// ARCA conserve numeraciones independientes por tipo. Sin caché local.
+export async function consultarLimiteFechaPv(args: {
+  auth: WsfeAuth; production: boolean; ptoVta: number; cbteTipo: number;
+}) {
+  const tipos = [...new Set([1, 6, 2, 3, 7, 8, 201, 206, 203, 208, args.cbteTipo])];
+  const ultimos = await Promise.all(tipos.map(async cbteTipo => ({
+    cbteTipo, ...await consultarUltimoWsfeNode({...args, cbteTipo}),
+  })));
+  const today = new Intl.DateTimeFormat("sv-SE", {timeZone:"America/Argentina/Buenos_Aires"}).format(new Date());
+  const floor = new Date(`${today}T12:00:00Z`);
+  floor.setUTCDate(floor.getUTCDate() - 5);
+  const lastDate = ultimos.reduce<string|null>((max, row) => row.lastDate && (!max || row.lastDate > max) ? row.lastDate : max, null);
+  const windowMin = floor.toISOString().slice(0,10).replace(/-/g, "");
+  const minDate = lastDate && lastDate > windowMin ? lastDate : windowMin;
+  return {minDate, lastDate, today:today.replace(/-/g,""), lastNumber:ultimos.find(row=>row.cbteTipo===args.cbteTipo)!.lastNumber};
+}
+
 export async function crearFacturaWsfeNode(args: {
   auth: WsfeAuth; production: boolean; ptoVta: number; cbteTipo: number; invoice: InvoiceDetail;
 }) {
   const endpoint = args.production ? WSFE_PRODUCTION : WSFE_TESTING;
-  const { lastNumber, lastDate } = await consultarUltimoWsfeNode(args);
+  const { lastNumber, minDate, today } = await consultarLimiteFechaPv(args);
   const nextNumber = lastNumber + 1;
   const inv = args.invoice;
-    if (lastDate && inv.CbteFch < lastDate) {
+    if (!/^\d{8}$/.test(inv.CbteFch) || inv.CbteFch < minDate || inv.CbteFch > today) {
       const display = (d: string) => `${d.slice(6,8)}/${d.slice(4,6)}/${d.slice(0,4)}`;
-      throw new Error(`No podés emitir con fecha ${display(inv.CbteFch)}: el último comprobante autorizado de este tipo (${args.cbteTipo}), punto de venta ${String(args.ptoVta).padStart(4,"0")}, número ${lastNumber}, tiene fecha ${display(lastDate)}. Elegí esa fecha o una posterior.`);
+      throw new Error(`No podés emitir con fecha ${display(inv.CbteFch)}: para el punto de venta ${String(args.ptoVta).padStart(4,"0")} la primera fecha habilitada es ${display(minDate)}. Regla interna: máximo cinco días hacia atrás y nunca antes del último uso del PV, sin distinguir A/B. Tampoco se permiten fechas futuras.`);
     }
   const ivaXml = inv.Iva?.length
     ? `<Iva>${inv.Iva.map((iva) => `<AlicIva><Id>${iva.Id}</Id><BaseImp>${money(iva.BaseImp)}</BaseImp><Importe>${money(iva.Importe)}</Importe></AlicIva>`).join("")}</Iva>`
