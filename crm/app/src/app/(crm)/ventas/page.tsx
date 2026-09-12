@@ -7,6 +7,7 @@ import { formatCurrency, formatDate, getInitials, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
+import { useFiscalDateLimits } from "@/lib/use-fiscal-date-limits";
 import { generateFacturaPDF, getSociedadPDF, openPDFWindow, documentFilename } from "@/lib/pdf-templates";
 import Link from "next/link";
 import {
@@ -238,6 +239,9 @@ export default function VentasPage() {
   const [emitCondVenta, setEmitCondVenta] = useState("Contado");
   const [emitFechaVenc, setEmitFechaVenc] = useState("");
   const [emitObservaciones, setEmitObservaciones] = useState("");
+  const fiscalDates = useFiscalDateLimits(emitModalOpen && !emitManual, sociedadActiva?.id, pvCrm, emitTipo);
+  const fiscalMinDate = fiscalDates.minDate && fiscalDates.minDate > minFecha ? fiscalDates.minDate : minFecha;
+  const fiscalDateBlocked = !emitManual && (!fiscalDates.ready || emitFecha < fiscalMinDate || emitFecha > todayAR());
   const [cotizBna, setCotizBna] = useState<{ valor_venta: number; fecha: string; fuente: string; modalidad: string } | null>(null);
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
   const [cotizFecha, setCotizFecha] = useState("");
@@ -540,6 +544,7 @@ export default function VentasPage() {
 
   async function handleEmitFactura() {
     if (!emitVenta || emitting) return;
+    if (fiscalDateBlocked) { setEmitError(fiscalDates.error || `Elegí una fecha válida desde ${fiscalMinDate}; esperá la verificación de ARCA si está en curso.`); return; }
     const p = emitVenta.presupuesto;
 
     if (emitItems.some(it => !it.descripcion || it.precio_unitario <= 0 || it.cantidad <= 0)) {
@@ -1475,7 +1480,8 @@ export default function VentasPage() {
                   <input
                     type="date"
                     value={emitFecha}
-                    min={minFecha}
+                    min={emitManual ? minFecha : fiscalMinDate}
+                    disabled={!emitManual && !fiscalDates.ready}
                     max={todayAR()}
                     onChange={e => {
                       setEmitFecha(e.target.value);
@@ -1483,6 +1489,7 @@ export default function VentasPage() {
                     }}
                     className="w-full max-w-xs rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   />
+                  {!emitManual && <div className="mt-1 text-xs text-zinc-500">{fiscalDates.error ? <><span className="text-red-600">{fiscalDates.error}</span> <button type="button" onClick={fiscalDates.retry} className="underline">Reintentar</button></> : !fiscalDates.ready ? "Consultando fechas habilitadas en ARCA…" : <>Primera fecha habilitada: {formatDate(fiscalMinDate)}. {emitFecha < fiscalMinDate && <span className="text-red-600">Cambiá la fecha seleccionada.</span>}</>}</div>}
                 </div>
 
                 {/* Info adicional del PR */}
@@ -1826,7 +1833,7 @@ export default function VentasPage() {
                 <div className="flex justify-end gap-2">
                   <button
                     onClick={() => setEmitModalOpen(false)}
-                    disabled={emitting || (!emitManual && (emitMoneda === "USD" || emitVenta.presupuesto.moneda === "USD") && (cotizBnaLoading || (!editRate && !cotizBna) || emitTipoCambio <= 0))}
+                    disabled={emitting || fiscalDateBlocked || (!emitManual && (emitMoneda === "USD" || emitVenta.presupuesto.moneda === "USD") && (cotizBnaLoading || (!editRate && !cotizBna) || emitTipoCambio <= 0))}
                     className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
                   >
                     Cancelar

@@ -12,6 +12,7 @@ import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/co
 import { EmailComposeModal, type EmailDocumentType } from "@/components/email-compose-modal";
 import { useUser } from "@/lib/auth-context";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
+import { useFiscalDateLimits } from "@/lib/use-fiscal-date-limits";
 import { supabase } from "@/lib/supabase/client";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { mockFacturas } from "@/lib/mock-data";
@@ -258,6 +259,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     const fallback = d.toISOString().slice(0, 10);
     return latestFacturaDate && latestFacturaDate > fallback ? latestFacturaDate : fallback;
   }, [latestFacturaDate]);
+  const fiscalDates = useFiscalDateLimits(emitOpen && !emitManual, sociedadActiva?.id, emitData.punto_venta, emitData.tipo);
+  const dateWindow = new Date(`${todayAR()}T12:00:00Z`);
+  dateWindow.setUTCDate(dateWindow.getUTCDate() - 5);
+  const dateWindowMin = dateWindow.toISOString().slice(0,10);
+  const fiscalMinDate = fiscalDates.minDate && fiscalDates.minDate > dateWindowMin ? fiscalDates.minDate : dateWindowMin;
+  const fiscalDateBlocked = !emitManual && (!fiscalDates.ready || emitData.fecha < fiscalMinDate || emitData.fecha > todayAR());
 
   useEffect(() => {
     if (!emitOpen || !sociedadActiva?.id || !emitData.tipo) return;
@@ -787,7 +794,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   const handleEmit = async () => {
     if (!emitData.cliente_id) { setEmitError("Selecciona un cliente"); return; }
-    if (emitData.fecha < minFecha) { setEmitError(`La fecha no puede ser anterior a la última factura (${minFecha})`); return; }
+    if (fiscalDateBlocked) { setEmitError(fiscalDates.error || `Elegí una fecha válida desde ${fiscalMinDate}; esperá la verificación de ARCA si está en curso.`); return; }
     if (emitData.items.some((it) => !it.descripcion || it.precio_unitario <= 0)) {
       setEmitError("Completa todos los items con descripcion y precio"); return;
     }
@@ -1883,9 +1890,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 <div className="grid grid-cols-12 gap-4">
                   <div className="col-span-3">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha facturación</label>
-                    <input type="date" value={emitData.fecha} min={minFecha} max={todayAR()}
+                    <input type="date" value={emitData.fecha} min={emitManual ? minFecha : fiscalMinDate} max={todayAR()} disabled={!emitManual && !fiscalDates.ready}
                       onChange={(e) => setEmitData((p) => ({ ...p, fecha: e.target.value, fecha_vencimiento: calcFechaVencFC(p.condicion_venta, e.target.value) }))}
                       className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+                    {!emitManual && <div className="mt-1 text-xs text-zinc-500">{fiscalDates.error ? <><span className="text-red-600">{fiscalDates.error}</span> <button type="button" onClick={fiscalDates.retry} className="underline">Reintentar</button></> : !fiscalDates.ready ? "Consultando fechas habilitadas en ARCA…" : <>Primera fecha habilitada: {formatDate(fiscalMinDate)}. {emitData.fecha < fiscalMinDate && <span className="text-red-600">Cambiá la fecha seleccionada.</span>}</>}</div>}
                   </div>
                   <div className="col-span-3">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Condición de venta</label>
@@ -1983,7 +1991,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                       <FileCheck className="h-4 w-4" /> Guardar manual
                     </button>
                   ) : (
-                    <button onClick={handleEmit} disabled={isUSD && (cotizBnaLoading || (!(canOverrideRate && rateOverride) && !cotizBna) || tc <= 0)} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
+                    <button onClick={handleEmit} disabled={fiscalDateBlocked || (isUSD && (cotizBnaLoading || (!(canOverrideRate && rateOverride) && !cotizBna) || tc <= 0))} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
                       <ShieldCheck className="h-4 w-4" /> Emitir con ARCA
                     </button>
                   )}
