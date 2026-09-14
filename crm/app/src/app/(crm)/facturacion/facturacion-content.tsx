@@ -1385,7 +1385,15 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     // Fetch client emails + contactos
     const suggested: { email: string; label?: string }[] = [];
     try {
-      if (f.clientes?.email) suggested.push({ email: f.clientes.email, label: "Cliente" });
+      if (f.clientes?.email_facturacion) {
+        // email_facturacion can be comma-separated
+        for (const e of f.clientes.email_facturacion.split(",").map(s => s.trim()).filter(Boolean)) {
+          suggested.push({ email: e, label: "Facturación" });
+        }
+      }
+      if (f.clientes?.email && !suggested.some(s => s.email === f.clientes!.email)) {
+        suggested.push({ email: f.clientes.email, label: "Cliente" });
+      }
       const { data: contactos } = await (supabase as any).from("contactos").select("nombre, email").eq("entity_type", "cliente").eq("entity_id", f.cliente_id);
       if (contactos) {
         for (const c of contactos) {
@@ -1396,10 +1404,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       }
     } catch { /* ignore */ }
 
+    // Priority: email_facturacion > email > empty
+    const defaultTo = f.clientes?.email_facturacion?.split(",")[0]?.trim() || f.clientes?.email || "";
     setEmailModal({
       open: true,
       facturaId: f.id,
-      to: f.clientes?.email || "",
+      to: defaultTo,
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
       filename: documentFilename(f.tipo, f.punto_venta, f.numero, f.clientes?.razon_social),
