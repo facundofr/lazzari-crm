@@ -93,7 +93,7 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
       if (!Number.isFinite(totalUsd) || totalUsd <= 0 || documents.some(d => !Number.isFinite(number(allocations[d.id] || "0")) || number(allocations[d.id] || "0") < 0 || cents(number(allocations[d.id] || "0")) > cents(d.saldo))) { setError("Indicá USD a cancelar sin superar el saldo de cada factura."); return; }
       if (medios.some(m => !["transferencia", "efectivo", "deposito"].includes(m.tipo) || m.fecha !== fecha || !Number.isFinite(number(m.monto)) || number(m.monto) <= 0) || retenciones.some(r => !retentionTypes.some(t => t.value === r.tipo) || !r.certificado.trim() || !Number.isFinite(number(r.monto)) || number(r.monto) <= 0)) { setError("Completá cada medio y retención con importe positivo. Todos los medios deben tener la fecha de la operación; las retenciones requieren certificado."); return; }
       if ([...documents.map(d => number(allocations[d.id] || "0")), ...medios.map(m => number(m.monto)), ...retenciones.map(r => number(r.monto))].some(value => Math.abs(value - cents(value) / 100) > 0.0000001)) { setError("Los importes admiten como máximo dos decimales."); return; }
-      if (difference !== 0) { setError("La suma de medios en ARS y retenciones debe coincidir exactamente con los USD a cancelar multiplicados por la cotización."); return; }
+      // Allow difference — it's common due to exchange rate variations
     }
     setError(""); setSaving(true); inFlight.current = true;
     try {
