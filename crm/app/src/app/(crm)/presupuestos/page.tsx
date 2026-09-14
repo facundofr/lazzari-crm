@@ -2017,13 +2017,15 @@ export default function PresupuestosPage() {
         .single();
       const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
 
-      // Get next CAI number atomically
+      // Get next CAI number atomically (skip for manual presupuestos — no fiscal remito)
       let caiData: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
-      const { data: caiRows } = await (supabase as any).rpc("next_cai_number", {
-        p_sociedad_id: sociedadActiva.id,
-        p_tipo: "remito_r",
-      });
-      if (caiRows && caiRows.length > 0) caiData = caiRows[0];
+      if ((pr as any).modalidadEmision !== "manual") {
+        const { data: caiRows } = await (supabase as any).rpc("next_cai_number", {
+          p_sociedad_id: sociedadActiva.id,
+          p_tipo: "remito_r",
+        });
+        if (caiRows && caiRows.length > 0) caiData = caiRows[0];
+      }
 
       const remitoInsert: Record<string, unknown> = {
         numero: null,

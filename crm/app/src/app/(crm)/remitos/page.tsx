@@ -120,6 +120,7 @@ interface PresupuestoIA {
   id: string;
   numero: string;
   cliente_id: string;
+  modalidad_emision?: string | null;
   clientes: { razon_social: string } | null;
   presupuesto_items: { id: string; descripcion: string; cantidad: number; unidad: string; orden?: number }[];
 }
@@ -187,6 +188,7 @@ export default function RemitosPage() {
 
   // IA generation modal state
   const [iaModalOpen, setIaModalOpen] = useState(false);
+  const [iaSearch, setIaSearch] = useState("");
   const [presupuestosIA, setPresupuestosIA] = useState<PresupuestoIA[]>([]);
   const [selectedPresupuestos, setSelectedPresupuestos] = useState<Set<string>>(new Set());
   const [generatingIA, setGeneratingIA] = useState(false);
@@ -424,13 +426,15 @@ export default function RemitosPage() {
         }, 999);
         const newNumero = `R-0001-${String(maxNum + 1).padStart(8, "0")}`;
 
-        // Get next CAI number for remainder remito
+        // Get next CAI number for remainder remito (only if original had CAI)
         let caiParcial: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
-        const { data: caiPRows } = await (supabase as any).rpc("next_cai_number", {
-          p_sociedad_id: sociedadActiva.id,
-          p_tipo: "remito_r",
-        });
-        if (caiPRows && caiPRows.length > 0) caiParcial = caiPRows[0];
+        if (parcialRemito.cai_numero) {
+          const { data: caiPRows } = await (supabase as any).rpc("next_cai_number", {
+            p_sociedad_id: sociedadActiva.id,
+            p_tipo: "remito_r",
+          });
+          if (caiPRows && caiPRows.length > 0) caiParcial = caiPRows[0];
+        }
 
         const parcialInsert: Record<string, unknown> = {
           numero: newNumero,
@@ -731,7 +735,7 @@ export default function RemitosPage() {
         }
 
         const remitoInsert: Record<string, unknown> = {
-          numero: createForm.numero.trim() || null,
+          numero: null,
           cliente_id: createForm.cliente_id,
           fecha: createForm.fecha,
           observaciones: obs,
@@ -798,14 +802,14 @@ export default function RemitosPage() {
     try {
       let iaQ = (supabase as any)
         .from("presupuestos")
-        .select("id, numero, cliente_id")
+        .select("id, numero, cliente_id, modalidad_emision")
         .in("estado", ["aprobado", "facturar", "facturado"])
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) iaQ = iaQ.eq("sociedad_id", sociedadActiva.id);
       const { data: headers, error: headersError } = await iaQ;
       if (headersError) throw headersError;
 
-      const prRows = (headers || []) as Array<{ id: string; numero: string; cliente_id: string }>;
+      const prRows = (headers || []) as Array<{ id: string; numero: string; cliente_id: string; modalidad_emision?: string | null }>;
       if (prRows.length === 0) return;
 
       const prIds = prRows.map((p) => p.id);
@@ -827,6 +831,7 @@ export default function RemitosPage() {
       }
       setPresupuestosIA(prRows.map((p) => ({
         ...p,
+        modalidad_emision: p.modalidad_emision,
         clientes: { razon_social: clienteMap.get(p.cliente_id) || "Cliente sin acceso" },
         presupuesto_items: itemsByPR.get(p.id) || [],
       })));
@@ -890,13 +895,15 @@ export default function RemitosPage() {
         }
         const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
 
-        // Get next CAI number
+        // Get next CAI number (skip for manual PRs — no fiscal remito needed)
         let caiIA: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
-        const { data: caiIARows } = await (supabase as any).rpc("next_cai_number", {
-          p_sociedad_id: sociedadActiva.id,
-          p_tipo: "remito_r",
-        });
-        if (caiIARows && caiIARows.length > 0) caiIA = caiIARows[0];
+        if (p.modalidad_emision !== "manual") {
+          const { data: caiIARows } = await (supabase as any).rpc("next_cai_number", {
+            p_sociedad_id: sociedadActiva.id,
+            p_tipo: "remito_r",
+          });
+          if (caiIARows && caiIARows.length > 0) caiIA = caiIARows[0];
+        }
 
         const iaRemitoInsert: Record<string, unknown> = {
           numero: null,
@@ -1049,13 +1056,15 @@ export default function RemitosPage() {
         const sucursalId = key === "__none" ? null : key;
         const sucNombre = splitSucursales.find(s => s.id === key)?.nombre || "";
 
-        // Get next CAI number for split remito
+        // Get next CAI number for split remito (only if original had CAI)
         let caiSplit: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
-        const { data: caiSplitRows } = await (supabase as any).rpc("next_cai_number", {
-          p_sociedad_id: sociedadActiva.id,
-          p_tipo: "remito_r",
-        });
-        if (caiSplitRows && caiSplitRows.length > 0) caiSplit = caiSplitRows[0];
+        if (detailRemito?.cai_numero) {
+          const { data: caiSplitRows } = await (supabase as any).rpc("next_cai_number", {
+            p_sociedad_id: sociedadActiva.id,
+            p_tipo: "remito_r",
+          });
+          if (caiSplitRows && caiSplitRows.length > 0) caiSplit = caiSplitRows[0];
+        }
 
         const splitInsert: Record<string, unknown> = {
           numero: null,
@@ -1862,14 +1871,10 @@ export default function RemitosPage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Numero</label>
-                  <input
-                    type="text"
-                    value={createForm.numero}
-                    onChange={(e) => setCreateForm({ ...createForm, numero: e.target.value })}
-                    className="w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                    placeholder="R-0001-00001000"
-                  />
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Número</label>
+                  <div className="flex items-center h-[38px] rounded-lg border border-zinc-200 bg-zinc-50 px-3 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400">
+                    {createTipoRemito === "muestra" ? "Asignado automáticamente" : "CAI — asignado al crear"}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Fecha</label>
@@ -2106,20 +2111,14 @@ export default function RemitosPage() {
                 <Sparkles className="h-5 w-5 text-violet-600" />
                 <h2 className="text-lg font-semibold dark:text-white">Generar Remitos desde Presupuestos</h2>
               </div>
-              <button onClick={() => setIaModalOpen(false)} className="text-zinc-400 hover:text-zinc-600">
+              <button onClick={() => { setIaModalOpen(false); setIaSearch(""); }} className="text-zinc-400 hover:text-zinc-600">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            {/* Tipo de remito */}
-            <div>
-              <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tipo de remito</label>
-              <div className="flex gap-2">
-                <div className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-emerald-600 text-white text-center">
-                  Remito R (con CAI)
-                </div>
-              </div>
-            </div>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              Los remitos de PRs electrónicos usan CAI. Los de PRs manuales se crean sin CAI.
+            </p>
 
             {iaError && (
               <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
@@ -2139,6 +2138,18 @@ export default function RemitosPage() {
                 <p className="text-sm text-zinc-500">
                   Seleccioná presupuestos aprobados para generar remitos automáticamente con todos sus items y valor declarado.
                 </p>
+                {!loadingIA && presupuestosIA.length > 0 && (
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                    <input
+                      type="text"
+                      placeholder="Buscar por número o cliente..."
+                      value={iaSearch}
+                      onChange={(e) => setIaSearch(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-300 py-2 pl-9 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+                    />
+                  </div>
+                )}
                 {loadingIA ? (
                   <div className="flex items-center justify-center gap-2 py-6 text-sm text-zinc-400">
                     <Loader2 className="h-4 w-4 animate-spin" /> Cargando presupuestos aprobados...
@@ -2147,7 +2158,15 @@ export default function RemitosPage() {
                   <p className="text-sm text-zinc-400 py-4 text-center">No hay presupuestos aprobados disponibles.</p>
                 ) : (
                   <div className="space-y-2">
-                    {presupuestosIA.map((p) => (
+                    {presupuestosIA
+                      .filter((p) => {
+                        if (!iaSearch.trim()) return true;
+                        const q = iaSearch.toLowerCase();
+                        return p.numero.toLowerCase().includes(q) || (p.clientes?.razon_social || "").toLowerCase().includes(q);
+                      })
+                      .map((p) => {
+                      const isManualPR = p.modalidad_emision === "manual";
+                      return (
                       <label
                         key={p.id}
                         className="flex items-center gap-3 rounded-lg border border-zinc-200 p-3 cursor-pointer hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
@@ -2162,11 +2181,17 @@ export default function RemitosPage() {
                           <div className="flex items-center gap-2">
                             <span className="font-mono text-xs font-bold">{p.numero}</span>
                             <span className="text-sm text-zinc-500">{p.clientes?.razon_social}</span>
+                            {isManualPR ? (
+                              <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">Manual</span>
+                            ) : (
+                              <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400">CAI</span>
+                            )}
                           </div>
                           <p className="text-xs text-zinc-400 mt-0.5">{p.presupuesto_items.length} item(s)</p>
                         </div>
                       </label>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </>
@@ -2174,7 +2199,7 @@ export default function RemitosPage() {
 
             <div className="flex justify-end gap-2 pt-2">
               <button
-                onClick={() => setIaModalOpen(false)}
+                onClick={() => { setIaModalOpen(false); setIaSearch(""); }}
                 className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
               >
                 {iaSuccess ? "Cerrar" : "Cancelar"}
