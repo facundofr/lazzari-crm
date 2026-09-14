@@ -53,7 +53,9 @@ interface EcheqRow {
   moneda: "USD" | "ARS";
   fecha_emision: string | null;
   fecha_pago: string;
-  estado: "en_cartera" | "endosado" | "depositado" | "cobrado" | "rechazado" | "vencido";
+  estado: "en_cartera" | "endosado" | "depositado" | "cobrado" | "rechazado" | "vencido" | "pendiente" | "entregado" | "anulado";
+  direccion: "emitido" | "recibido";
+  chequera: string | null;
   origen_tipo: string | null;
   origen_id: string | null;
   origen_nombre: string | null;
@@ -80,13 +82,18 @@ const echeqEstadoConfig: Record<string, { label: string; variant: "info" | "outl
   cobrado: { label: "Cobrado", variant: "success" },
   rechazado: { label: "Rechazado", variant: "danger" },
   vencido: { label: "Vencido", variant: "outline" },
+  pendiente: { label: "Pendiente", variant: "warning" },
+  entregado: { label: "Entregado", variant: "info" },
+  anulado: { label: "Anulado", variant: "danger" },
 };
 
 const emptyEcheqForm = {
-  tipo_cheque: "echeq" as "echeq" | "fisico",
+  direccion: "recibido" as "emitido" | "recibido",
+  tipo_cheque: "fisico" as "echeq" | "fisico",
   numero: "",
   banco_emisor: "",
   cuit_emisor: "",
+  chequera: "",
   monto: 0,
   moneda: "ARS" as "ARS" | "USD",
   fecha_emision: "",
@@ -759,6 +766,7 @@ export default function FinanzasPage() {
   const [echeqDestinoNombre, setEcheqDestinoNombre] = useState("");
   const [echeqProvSearch, setEcheqProvSearch] = useState("");
   const [echeqFilterEstado, setEcheqFilterEstado] = useState("");
+  const [echeqFilterDireccion, setEcheqFilterDireccion] = useState<"" | "emitido" | "recibido">("");
 
   // Sync selectedEcheq after data reload
   useEffect(() => {
@@ -1906,13 +1914,35 @@ export default function FinanzasPage() {
         if (retErr) throw new Error("Error al crear movimiento retención: " + retErr.message);
       }
 
-      // Mark echeqs used as endosado
+      // Process cheques: endorse received, create or mark emitted
       for (const m of opMedios) {
-        if (m.echeq_id) {
-          let echeqUpdate = (supabase as any).from("echeqs").update({ estado: "endosado", destino_nombre: provNombre }).eq("id", m.echeq_id).eq("estado", "en_cartera");
+        if (m.tipo === "cheque_propio") {
+          if (m.echeq_id) {
+            // Existing emitted cheque — mark as entregado
+            let echeqUpdate = (supabase as any).from("echeqs").update({ estado: "entregado", destino_tipo: "proveedor", destino_id: opForm.proveedor_id, destino_nombre: provNombre }).eq("id", m.echeq_id).eq("estado", "pendiente");
+            if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
+            const { data: claimed, error: claimErr } = await echeqUpdate.select("id");
+            if (claimErr || claimed?.length !== 1) throw new Error(`No se pudo reservar el cheque propio ${m.numero_cheque || m.echeq_id}: ${claimErr?.message || "ya cambió de estado"}`);
+          } else {
+            // Create new emitted cheque
+            const newCheque: Record<string, unknown> = {
+              tipo_cheque: "fisico", direccion: "emitido", numero: m.numero_cheque || `CHQ-${Date.now()}`,
+              banco_emisor: m.banco === "Otro" ? (m.banco_otro?.trim() || "Otro") : (m.banco || null),
+              monto: m.monto, moneda: m.moneda, fecha_pago: m.fecha, estado: "entregado",
+              destino_tipo: "proveedor", destino_id: opForm.proveedor_id, destino_nombre: provNombre,
+            };
+            if (sociedadActiva?.id) newCheque.sociedad_id = sociedadActiva.id;
+            if (profile?.id) newCheque.user_id = profile.id;
+            const { error: newErr } = await (supabase as any).from("echeqs").insert(newCheque);
+            if (newErr) throw new Error("Error al registrar cheque propio: " + newErr.message);
+          }
+        } else if (m.echeq_id) {
+          // Received cheque (echeq or cheque tercero) — mark as endosado
+          const updateEstado = m.tipo === "cheque" ? "endosado" : "endosado";
+          let echeqUpdate = (supabase as any).from("echeqs").update({ estado: updateEstado, destino_tipo: "proveedor", destino_id: opForm.proveedor_id, destino_nombre: provNombre, fecha_endoso: new Date().toISOString().slice(0, 10) }).eq("id", m.echeq_id).eq("estado", "en_cartera");
           if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
           const { data: claimedEcheq, error: echeqError } = await echeqUpdate.select("id");
-          if (echeqError || claimedEcheq?.length !== 1) throw new Error(`No se pudo reservar el e-cheq ${m.numero_cheque || m.echeq_id}: ${echeqError?.message || "otro usuario cambió su estado"}. Revisá esta OP antes de entregarlo`);
+          if (echeqError || claimedEcheq?.length !== 1) throw new Error(`No se pudo reservar el cheque ${m.numero_cheque || m.echeq_id}: ${echeqError?.message || "otro usuario cambió su estado"}. Revisá esta OP antes de entregarlo`);
         }
       }
 
@@ -3035,9 +3065,13 @@ export default function FinanzasPage() {
     : proveedoresOptions;
 
   // ── Echeq handlers ──
-  const filteredEcheqs = echeqFilterEstado ? echeqs.filter(e => e.estado === echeqFilterEstado) : echeqs;
-  const echeqsEnCartera = echeqs.filter(e => e.estado === "en_cartera");
+  const filteredEcheqs = echeqs.filter(e => (!echeqFilterEstado || e.estado === echeqFilterEstado) && (!echeqFilterDireccion || e.direccion === echeqFilterDireccion));
+  const echeqsRecibidos = echeqs.filter(e => e.direccion === "recibido" || !e.direccion);
+  const echeqsEmitidos = echeqs.filter(e => e.direccion === "emitido");
+  const echeqsEnCartera = echeqsRecibidos.filter(e => e.estado === "en_cartera");
   const echeqsMontoCartera = echeqsEnCartera.reduce((s, e) => s + e.monto, 0);
+  const echeqsEmitidosPendientes = echeqsEmitidos.filter(e => e.estado === "pendiente");
+  const echeqsMontoEmitidosPend = echeqsEmitidosPendientes.reduce((s, e) => s + e.monto, 0);
   const today = new Date().toISOString().slice(0, 10);
   const sevenDays = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
   const echeqsPorVencer = echeqsEnCartera.filter(e => e.fecha_pago >= today && e.fecha_pago <= sevenDays).length;
@@ -3052,18 +3086,23 @@ export default function FinanzasPage() {
     if (!sociedadActiva?.id) { setEcheqError("No se pudo determinar la sociedad activa"); return; }
     setEcheqSaving(true); setEcheqError("");
     try {
+      const isEmitido = echeqForm.direccion === "emitido";
       const row: Record<string, unknown> = {
+        direccion: echeqForm.direccion,
         tipo_cheque: echeqForm.tipo_cheque, numero: echeqForm.numero.trim(),
         banco_emisor: echeqForm.banco_emisor || null,
-        cuit_emisor: echeqForm.cuit_emisor || null, monto: echeqForm.monto,
+        cuit_emisor: isEmitido ? null : (echeqForm.cuit_emisor || null),
+        chequera: isEmitido ? (echeqForm.chequera || null) : null,
+        monto: echeqForm.monto,
         moneda: echeqForm.moneda, fecha_emision: echeqForm.fecha_emision || null,
-        fecha_pago: echeqForm.fecha_pago, estado: "en_cartera",
+        fecha_pago: echeqForm.fecha_pago,
+        estado: isEmitido ? "pendiente" : "en_cartera",
         observaciones: echeqForm.observaciones || null,
       };
-      if (echeqForm.origen_tipo === "cliente" && echeqForm.origen_id) {
+      if (!isEmitido && echeqForm.origen_tipo === "cliente" && echeqForm.origen_id) {
         row.origen_tipo = "cliente"; row.origen_id = echeqForm.origen_id;
         row.origen_nombre = clientesOptions.find((c: ClienteOption) => c.id === echeqForm.origen_id)?.razon_social || "";
-      } else if (echeqForm.origen_nombre) {
+      } else if (!isEmitido && echeqForm.origen_nombre) {
         row.origen_tipo = "otro"; row.origen_nombre = echeqForm.origen_nombre;
       }
       row.sociedad_id = sociedadActiva.id;
@@ -4198,13 +4237,19 @@ export default function FinanzasPage() {
         {tab === "echeqs" && (
           <>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-4 mb-4">
-              <StatCard title="En cartera" value={`${echeqsEnCartera.length} — ${formatCurrency(echeqsMontoCartera)}`} icon={Wallet} iconColor="text-blue-600" />
+              <StatCard title="Recibidos en cartera" value={`${echeqsEnCartera.length} — ${formatCurrency(echeqsMontoCartera)}`} icon={Wallet} iconColor="text-blue-600" />
+              <StatCard title="Propios pendientes" value={`${echeqsEmitidosPendientes.length} — ${formatCurrency(echeqsMontoEmitidosPend)}`} icon={CreditCard} iconColor="text-orange-500" />
               <StatCard title="Por vencer (7 días)" value={String(echeqsPorVencer)} icon={Clock} iconColor="text-amber-500" />
-              <StatCard title="Endosados" value={String(echeqs.filter(e => e.estado === "endosado").length)} icon={ArrowUpRight} iconColor="text-purple-500" />
-              <StatCard title="Cobrados" value={String(echeqs.filter(e => e.estado === "cobrado").length)} icon={CheckCircle2} iconColor="text-green-600" />
+              <StatCard title="Endosados / Entregados" value={String(echeqs.filter(e => e.estado === "endosado" || e.estado === "entregado").length)} icon={ArrowUpRight} iconColor="text-purple-500" />
             </div>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
+                <select value={echeqFilterDireccion} onChange={(e) => setEcheqFilterDireccion(e.target.value as "" | "emitido" | "recibido")}
+                  className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="">Todos</option>
+                  <option value="recibido">Recibidos</option>
+                  <option value="emitido">Emitidos (propios)</option>
+                </select>
                 <select value={echeqFilterEstado} onChange={(e) => setEcheqFilterEstado(e.target.value)}
                   className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                   <option value="">Todos los estados</option>
@@ -4221,6 +4266,11 @@ export default function FinanzasPage() {
                 <Card className="p-0 overflow-hidden">
                   <DataTable<EcheqRow>
                     columns={[
+                      { key: "direccion" as any, label: "Dir.", sortable: true, render: (row) => (
+                        <Badge variant={row.direccion === "emitido" ? "orange" : "default"}>
+                          {row.direccion === "emitido" ? "Emitido" : "Recibido"}
+                        </Badge>
+                      )},
                       { key: "tipo_cheque" as any, label: "Tipo", sortable: true, render: (row) => (
                         <Badge variant={row.tipo_cheque === "echeq" ? "info" : "outline"}>
                           {row.tipo_cheque === "echeq" ? "E-Cheq" : "Físico"}
@@ -4253,6 +4303,9 @@ export default function FinanzasPage() {
                     </div>
                     <div className="p-4 space-y-4">
                       <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant={selectedEcheq.direccion === "emitido" ? "orange" : "default"}>
+                          {selectedEcheq.direccion === "emitido" ? "Emitido" : "Recibido"}
+                        </Badge>
                         <Badge variant={selectedEcheq.tipo_cheque === "echeq" ? "info" : "outline"}>
                           {selectedEcheq.tipo_cheque === "echeq" ? "E-Cheq" : "Físico"}
                         </Badge>
@@ -4322,17 +4375,31 @@ export default function FinanzasPage() {
               </div>
               {echeqError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{echeqError}</div>}
               <div className="space-y-4">
+                {/* Dirección: emitido vs recibido */}
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Dirección</label>
+                  <div className="flex gap-2 mt-1">
+                    <button type="button" onClick={() => setEcheqForm({ ...echeqForm, direccion: "recibido" })}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${echeqForm.direccion === "recibido" ? "bg-blue-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                      Recibido (de tercero)
+                    </button>
+                    <button type="button" onClick={() => setEcheqForm({ ...echeqForm, direccion: "emitido" })}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${echeqForm.direccion === "emitido" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                      Emitido (propio)
+                    </button>
+                  </div>
+                </div>
                 {/* Tipo de cheque */}
                 <div>
                   <label className="text-xs font-medium text-zinc-500">Tipo de cheque</label>
                   <div className="flex gap-2 mt-1">
-                    <button type="button" onClick={() => setEcheqForm({ ...echeqForm, tipo_cheque: "echeq" })}
-                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${echeqForm.tipo_cheque === "echeq" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                      E-Cheq (electrónico)
-                    </button>
                     <button type="button" onClick={() => setEcheqForm({ ...echeqForm, tipo_cheque: "fisico" })}
                       className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${echeqForm.tipo_cheque === "fisico" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
                       Cheque físico
+                    </button>
+                    <button type="button" onClick={() => setEcheqForm({ ...echeqForm, tipo_cheque: "echeq" })}
+                      className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${echeqForm.tipo_cheque === "echeq" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                      E-Cheq (electrónico)
                     </button>
                   </div>
                 </div>
@@ -4343,12 +4410,12 @@ export default function FinanzasPage() {
                       className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                   </div>
                   <div>
-                    <label className="text-xs font-medium text-zinc-500">Banco emisor</label>
+                    <label className="text-xs font-medium text-zinc-500">{echeqForm.direccion === "emitido" ? "Banco (nuestro)" : "Banco emisor"}</label>
                     <input value={echeqForm.banco_emisor} onChange={(e) => setEcheqForm({ ...echeqForm, banco_emisor: e.target.value })}
                       className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-4">
+                <div className={`grid gap-4 ${echeqForm.direccion === "emitido" ? "grid-cols-3" : "grid-cols-3"}`}>
                   <div>
                     <label className="text-xs font-medium text-zinc-500">Monto *</label>
                     <input type="number" value={echeqForm.monto || ""} onChange={(e) => setEcheqForm({ ...echeqForm, monto: Number(e.target.value) })}
@@ -4361,11 +4428,19 @@ export default function FinanzasPage() {
                       <option value="ARS">ARS</option><option value="USD">USD</option>
                     </select>
                   </div>
-                  <div>
-                    <label className="text-xs font-medium text-zinc-500">CUIT emisor</label>
-                    <input value={echeqForm.cuit_emisor} onChange={(e) => setEcheqForm({ ...echeqForm, cuit_emisor: e.target.value })}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                  </div>
+                  {echeqForm.direccion === "recibido" ? (
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">CUIT emisor</label>
+                      <input value={echeqForm.cuit_emisor} onChange={(e) => setEcheqForm({ ...echeqForm, cuit_emisor: e.target.value })}
+                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">N° Chequera</label>
+                      <input value={echeqForm.chequera} onChange={(e) => setEcheqForm({ ...echeqForm, chequera: e.target.value })}
+                        placeholder="Ej: 001" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -4379,25 +4454,28 @@ export default function FinanzasPage() {
                       className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                   </div>
                 </div>
-                <div>
-                  <label className="text-xs font-medium text-zinc-500">Origen</label>
-                  <div className="flex gap-2 mt-1 mb-2">
-                    <button onClick={() => setEcheqForm({ ...echeqForm, origen_tipo: "cliente", origen_nombre: "" })}
-                      className={`rounded-lg px-3 py-1.5 text-xs font-medium ${echeqForm.origen_tipo === "cliente" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>Cliente</button>
-                    <button onClick={() => setEcheqForm({ ...echeqForm, origen_tipo: "otro", origen_id: "" })}
-                      className={`rounded-lg px-3 py-1.5 text-xs font-medium ${echeqForm.origen_tipo === "otro" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>Otro</button>
+                {/* Origen: solo para recibidos */}
+                {echeqForm.direccion === "recibido" && (
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Origen</label>
+                    <div className="flex gap-2 mt-1 mb-2">
+                      <button onClick={() => setEcheqForm({ ...echeqForm, origen_tipo: "cliente", origen_nombre: "" })}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-medium ${echeqForm.origen_tipo === "cliente" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>Cliente</button>
+                      <button onClick={() => setEcheqForm({ ...echeqForm, origen_tipo: "otro", origen_id: "" })}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-medium ${echeqForm.origen_tipo === "otro" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>Otro</button>
+                    </div>
+                    {echeqForm.origen_tipo === "cliente" ? (
+                      <select value={echeqForm.origen_id} onChange={(e) => setEcheqForm({ ...echeqForm, origen_id: e.target.value })}
+                        className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                        <option value="">Seleccionar cliente</option>
+                        {clientesOptions.map((c: ClienteOption) => <option key={c.id} value={c.id}>{c.razon_social}</option>)}
+                      </select>
+                    ) : (
+                      <input value={echeqForm.origen_nombre} onChange={(e) => setEcheqForm({ ...echeqForm, origen_nombre: e.target.value })}
+                        placeholder="Nombre del origen" className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    )}
                   </div>
-                  {echeqForm.origen_tipo === "cliente" ? (
-                    <select value={echeqForm.origen_id} onChange={(e) => setEcheqForm({ ...echeqForm, origen_id: e.target.value })}
-                      className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                      <option value="">Seleccionar cliente</option>
-                      {clientesOptions.map((c: ClienteOption) => <option key={c.id} value={c.id}>{c.razon_social}</option>)}
-                    </select>
-                  ) : (
-                    <input value={echeqForm.origen_nombre} onChange={(e) => setEcheqForm({ ...echeqForm, origen_nombre: e.target.value })}
-                      placeholder="Nombre del origen" className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                  )}
-                </div>
+                )}
                 <div>
                   <label className="text-xs font-medium text-zinc-500">Observaciones</label>
                   <textarea value={echeqForm.observaciones} onChange={(e) => setEcheqForm({ ...echeqForm, observaciones: e.target.value })}
@@ -5370,16 +5448,21 @@ export default function FinanzasPage() {
                               placeholder="N° cheque" className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                           </>
                         )}
-                        {m.tipo === "echeq" && (() => {
-                          const enCartera = echeqs.filter(e => e.estado === "en_cartera");
-                          return enCartera.length > 0 ? (
+                        {/* Picker de cheques: echeq y cheque tercero eligen de recibidos en_cartera; cheque_propio de emitidos pendiente */}
+                        {(m.tipo === "echeq" || m.tipo === "cheque" || m.tipo === "cheque_propio") && (() => {
+                          const available = m.tipo === "cheque_propio"
+                            ? echeqs.filter(e => e.direccion === "emitido" && e.estado === "pendiente" && e.moneda === m.moneda)
+                            : echeqs.filter(e => (e.direccion === "recibido" || !e.direccion) && e.estado === "en_cartera" && e.moneda === m.moneda);
+                          return available.length > 0 ? (
                             <select value={m.echeq_id || ""} onChange={(e) => {
-                              const sel = enCartera.find(x => x.id === e.target.value);
+                              const sel = available.find(x => x.id === e.target.value);
                               setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, echeq_id: e.target.value || undefined, monto: sel ? sel.monto : x.monto, banco: sel?.banco_emisor || x.banco, numero_cheque: sel?.numero || x.numero_cheque } : x));
-                            }} className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                              <option value="">Manual</option>
-                              {enCartera.map(e => <option key={e.id} value={e.id}>{e.numero} — {formatCurrency(e.monto, (e.moneda as "ARS" | "USD") || "ARS")}</option>)}
+                            }} className="max-w-[180px] rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                              <option value="">{m.tipo === "cheque_propio" ? "Nuevo cheque" : "Manual"}</option>
+                              {available.map(e => <option key={e.id} value={e.id}>{e.numero} — {formatCurrency(e.monto, (e.moneda as "ARS" | "USD") || "ARS")}{e.banco_emisor ? ` (${e.banco_emisor})` : ""}</option>)}
                             </select>
+                          ) : m.tipo === "cheque_propio" ? (
+                            <span className="text-[10px] text-zinc-400 self-center">Se creará al confirmar</span>
                           ) : null;
                         })()}
                         {opMedios.length > 1 && (

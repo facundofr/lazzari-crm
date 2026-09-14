@@ -1210,6 +1210,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       const chequeLineas = lineasValidas.filter(l => l.tipo === "cheque_recibido" || l.tipo === "echeq");
       for (const cl of chequeLineas) {
         const echeqRow: Record<string, unknown> = {
+          direccion: "recibido",
           tipo_cheque: cl.tipo === "echeq" ? "echeq" : "fisico",
           numero: cl.cheque_numero || `CHQ-${Date.now()}`,
           banco_emisor: cl.cheque_banco || null,
