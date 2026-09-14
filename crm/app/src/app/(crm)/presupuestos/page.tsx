@@ -167,7 +167,7 @@ interface SupabasePresupuesto {
   archivo_nombre?: string | null;
   sucursal_id?: string | null;
   contacto_id?: string | null;
-  clientes?: { razon_social: string; cuit: string; email?: string | null; telefono?: string | null; direccion?: string | null; localidad?: string | null; provincia?: string | null; condicion_iva?: string | null } | null;
+  clientes?: { razon_social: string; cuit: string; email?: string | null; telefono?: string | null; direccion?: string | null; localidad?: string | null; provincia?: string | null; condicion_iva?: string | null; limite_credito?: number | null; saldo_cuenta_corriente?: number | null } | null;
   created_by_profile?: { full_name: string } | null;
   vendedor_profile?: { full_name: string; avatar_url: string | null } | null;
   sucursal?: { nombre: string; direccion?: string | null; localidad?: string | null; provincia?: string | null } | null;
@@ -254,6 +254,8 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     clienteLocalidad: row.clientes?.localidad ?? "",
     clienteProvincia: row.clientes?.provincia ?? "",
     clienteCondicionIva: row.clientes?.condicion_iva ?? "",
+    clienteLimiteCredito: Number(row.clientes?.limite_credito) || 0,
+    clienteSaldoCC: Number(row.clientes?.saldo_cuenta_corriente) || 0,
     archivoUrl: row.archivo_url ?? null,
     archivoNombre: row.archivo_nombre ?? null,
     listoParaFacturar: (row as any).listo_para_facturar ?? false,
@@ -779,7 +781,7 @@ export default function PresupuestosPage() {
       // First try with items + vendedor profile
       let q = (supabase as any)
         .from("presupuestos")
-        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
+        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva, limite_credito, saldo_cuenta_corriente), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       let res: { data: any; error: any } = await q;
@@ -788,7 +790,7 @@ export default function PresupuestosPage() {
       if (res.error) {
         let q2 = supabase
           .from("presupuestos")
-          .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_id`)
+          .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva, limite_credito, saldo_cuenta_corriente), created_by_profile:created_by(full_name), vendedor_id`)
           .order("created_at", { ascending: false });
         if (sociedadActiva?.id) q2 = q2.eq("sociedad_id" as any, sociedadActiva.id);
         res = await q2;
@@ -1266,7 +1268,7 @@ export default function PresupuestosPage() {
         // Fetch the newly created PR with full joins before refreshing the list
         const { data: fullRow } = await (supabase as any)
           .from("presupuestos")
-          .select(`*, listo_para_facturar, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
+          .select(`*, listo_para_facturar, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva, limite_credito, saldo_cuenta_corriente), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
           .eq("id", newRow.id)
           .single();
         const createdPR = fullRow ? mapToPresupuesto(fullRow as any) : mapToPresupuesto(newRow as any);
@@ -2792,6 +2794,11 @@ export default function PresupuestosPage() {
                   })()}
                 </div>
                 <p className="text-sm text-zinc-500 mt-0.5">{selected.clienteNombre}</p>
+                {!!(selected as any).clienteLimiteCredito && (selected as any).clienteSaldoCC >= (selected as any).clienteLimiteCredito && (
+                  <div className="flex items-center gap-1 mt-1 rounded-md bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 px-2 py-1 text-xs font-medium text-red-700 dark:text-red-300">
+                    <AlertTriangle className="h-3 w-3 shrink-0" /> Límite de crédito excedido
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-1">
                 <button

@@ -1091,7 +1091,15 @@ export default function VentasPage() {
                               <span className="hidden sm:inline">{st.cobrado ? "Cobrado" : "Pend. cobro"}</span>
                             </div>
                           )}
-                          {/* OC */}
+                          {/* OC cliente */}
+                          {v.presupuesto.oc_cliente && (
+                            <div className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400"
+                              title={`OC cliente: ${v.presupuesto.oc_cliente}${v.presupuesto.oc_cliente_fecha ? ` — ${formatDate(v.presupuesto.oc_cliente_fecha)}` : ""}`}>
+                              <FileText className="h-3 w-3" />
+                              <span className="hidden sm:inline">OC: {v.presupuesto.oc_cliente}</span>
+                            </div>
+                          )}
+                          {/* OC proveedor */}
                           {v.ordenesCompra.length > 0 && (
                             <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
                               v.ordenesCompra.some(oc => oc.pago === "tarjeta")
