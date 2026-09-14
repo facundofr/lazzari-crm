@@ -529,14 +529,23 @@ export async function POST(req: NextRequest) {
     let fceData: FceInvoiceData | null = null;
     if (["FA","FB","FCEA","FCEB"].includes(tipo)) {
       const cuitReceptor = String(cliente?.cuit || "").replace(/\D/g, "");
+      const selectedFce = tipo === "FCEA" || tipo === "FCEB";
+      // FCE obligation check — soft-fail for regular FA/FB if ARCA is unreachable
+      let check: {obligado:boolean;montoDesde:number|null} = {obligado:false,montoDesde:null};
       try {
-        const check = cuitReceptor ? await consultarObligacionFce({
+        if (cuitReceptor) check = await consultarObligacionFce({
           auth:await arca.getAuth("wsfecred"), production:process.env.ARCA_PRODUCTION !== "false",
           cuitConsultada:Number(cuitReceptor), fechaEmision:fechaFacturaInput,
-        }) : {obligado:false,montoDesde:null};
-        const totalArs = Math.round(totalFinal * (isUSD ? tc : 1) * 100)/100;
+        });
+      } catch(fceCheckErr) {
+        // If user explicitly selected FCE, the check is mandatory
+        if (selectedFce) return NextResponse.json({error:`No se pudo verificar la obligación FCE en ARCA: ${fceCheckErr instanceof Error ? fceCheckErr.message : "sin respuesta"}. No se emitió.`},{status:503});
+        // For regular FA/FB, skip FCE check if ARCA is unreachable — proceed with emission
+        console.warn("FCE check skipped (ARCA unreachable):", fceCheckErr instanceof Error ? fceCheckErr.message : fceCheckErr);
+      }
+      const totalArs = Math.round(totalFinal * (isUSD ? tc : 1) * 100)/100;
+      try {
         const required = fceRequired(check,totalArs);
-        const selectedFce = tipo === "FCEA" || tipo === "FCEB";
         if (required !== selectedFce) return NextResponse.json({error:required
           ? `Corresponde Factura de Crédito Electrónica MiPyME: ARCA informa receptor obligado y el total alcanza $${check.montoDesde}. Volvé a revisar el formulario. No se emitió.`
           : "La operación no alcanza las condiciones de FCE verificadas en ARCA. Seleccioná la factura común correspondiente. No se emitió."},{status:409});
@@ -545,11 +554,11 @@ export async function POST(req: NextRequest) {
           fceData = {...validateFceFields(body.fce_cbu,body.fce_transmision,fecha_vencimiento,fechaFacturaInput,todayArgentina()),cuitReceptor,fecha:fechaFacturaInput,montoDesde:Number(check.montoDesde),totalArs,plazoAceptacion:21};
           if (presupuesto_id) {
             const {data:remitos,error:remitoError}=await supabase.from("remitos").select("numero").eq("presupuesto_id",presupuesto_id).eq("sociedad_id",sociedad_id).neq("estado","anulado");
-            if (remitoError) throw new Error("No se pudieron verificar los remitos asociados a la FCE");
+            if (remitoError) throw new Error(`No se pudieron verificar los remitos: ${remitoError.message}`);
             fceData.remitos=(remitos || []).map((r:any)=>String(r.numero));
           }
         }
-      } catch(error) {return NextResponse.json({error:`No se pudo validar FCE: ${error instanceof Error ? error.message : "sin respuesta de ARCA"}. No se emitió.`},{status:503});}
+      } catch(error) {return NextResponse.json({error:`${error instanceof Error ? error.message : "Error de validación FCE"}. No se emitió.`},{status:503});}
     }
     // A FCE adjustment cannot use the ordinary cancellation path without checking
     // acceptance and its special annulment flag. Fail closed until that workflow is verified.

@@ -1417,7 +1417,14 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     });
   }
 
-  function buildFacturaHTML(f: FacturaRow): string | null {
+  async function fetchFacturaItems(facturaId: string) {
+    const { data } = await supabase.from("factura_items")
+      .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal")
+      .eq("factura_id", facturaId).order("orden");
+    return (data || []).map(d => ({ ...d, subtotal: d.subtotal ?? 0 }));
+  }
+
+  function buildFacturaHTML(f: FacturaRow, items: { descripcion: string; cantidad: number; precio_unitario: number; iva_porcentaje: number; subtotal: number }[]): string | null {
     if (!sociedadActiva) return null;
     const soc = getSociedadPDF(sociedadActiva);
     const cli = f.clientes;
@@ -1448,7 +1455,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         email: cli.email,
         telefono: cli.telefono,
       } : null,
-      items: detailItems.map(it => ({
+      items: items.map(it => ({
         descripcion: it.descripcion,
         cantidad: it.cantidad,
         precio_unitario: Number(it.precio_unitario),
@@ -1460,14 +1467,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   async function handlePrintFactura(f: FacturaRow) {
     if (!sociedadActiva) return;
-    // Ensure items are loaded before generating PDF
-    if (detailItems.length === 0) {
-      const { data } = await supabase.from("factura_items")
-        .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal")
-        .eq("factura_id", f.id).order("orden");
-      if (data) setDetailItems(data.map(d => ({ ...d, subtotal: d.subtotal ?? 0 })));
-    }
-    const html = buildFacturaHTML(f);
+    // Always fetch fresh items for the specific factura to avoid cross-contamination
+    const items = await fetchFacturaItems(f.id);
+    setDetailItems(items);
+    const html = buildFacturaHTML(f, items);
     if (html) openPDFWindow(html, documentFilename(f.tipo, f.punto_venta, f.numero, f.clientes?.razon_social));
   }
 
@@ -2250,7 +2253,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                   <Download className="h-3.5 w-3.5" /> PDF
                 </button>
                 <button onClick={async () => {
-                  const html = buildFacturaHTML(detailFactura);
+                  const items = await fetchFacturaItems(detailFactura.id);
+                  const html = buildFacturaHTML(detailFactura, items);
                   if (html) await openPDFWindow(html, undefined, true);
                 }} className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" title="Ver factura online">
                   <Eye className="h-3.5 w-3.5" /> Ver
@@ -2976,33 +2980,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         generatePdf={async () => {
           const f = facturas.find(ff => ff.id === emailModal.facturaId);
           if (!f || !sociedadActiva) throw new Error("Factura no encontrada");
-          let pdfItems = detailItems;
-          if (pdfItems.length === 0) {
-            const { data } = await supabase.from("factura_items")
-              .select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal")
-              .eq("factura_id", f.id).order("orden");
-            pdfItems = (data || []).map(d => ({ ...d, subtotal: d.subtotal ?? 0 }));
-          }
-          const soc = getSociedadPDF(sociedadActiva);
-          const cli = f.clientes;
-          const html = generateFacturaPDF({
-            tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero,
-            fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento,
-            nota_interna: f.nota_interna,
-            condicion_venta: f.condicion_venta, moneda: f.moneda as "ARS" | "USD",
-            tipo_cambio: f.tipo_cambio, cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null, subtotal: Number(f.subtotal), iva: Number(f.iva), total: Number(f.total),
-            cae: f.cae, cae_vencimiento: f.cae_vencimiento, oc_cliente: f.oc_cliente,
-            cliente: cli ? {
-              razon_social: cli.razon_social, cuit: cli.cuit, condicion_iva: cli.condicion_iva,
-              direccion: cli.direccion, localidad: cli.localidad, provincia: cli.provincia,
-              email: cli.email, telefono: cli.telefono,
-            } : null,
-            items: pdfItems.map(it => ({
-              descripcion: it.descripcion, cantidad: it.cantidad,
-              precio_unitario: Number(it.precio_unitario), iva_porcentaje: it.iva_porcentaje,
-              subtotal: Number(it.subtotal),
-            })),
-          }, emisorData, soc);
+          // Always fetch fresh items for the specific factura
+          const pdfItems = await fetchFacturaItems(f.id);
+          const html = buildFacturaHTML(f, pdfItems);
+          if (!html) throw new Error("No se pudo generar el PDF");
           return htmlToPdfBase64(html);
         }}
         defaultTo={emailModal.to}
