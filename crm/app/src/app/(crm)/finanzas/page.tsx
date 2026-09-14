@@ -2930,7 +2930,7 @@ export default function FinanzasPage() {
     if (!ccDetailCliente) return;
     setCobroMultiOpen(true); setCobroMultiLiqOpen(false);
     try {
-      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, tipo_cambio, estado").eq("cliente_id", ccDetailCliente.id).in("estado", ["emitida", "parcial", "vencida", "pendiente"]).order("fecha", { ascending: true });
+      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, tipo_cambio, estado").eq("cliente_id", ccDetailCliente.id).in("estado", ["emitida", "parcial", "vencida"]).order("fecha", { ascending: true });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       const { data, error } = await q;
       if (error) throw error;

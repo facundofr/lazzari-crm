@@ -1270,7 +1270,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     if(!sociedadActiva?.id){alert("Seleccioná una sociedad antes de consultar los saldos.");return;}
     setCmLoadingFCs(true);
     try {
-      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, tipo_cambio, estado").eq("cliente_id", clienteId).in("estado", ["emitida", "parcial", "vencida", "pendiente"]).order("fecha", { ascending: true });
+      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, tipo_cambio, estado").eq("cliente_id", clienteId).in("estado", ["emitida", "parcial", "vencida"]).order("fecha", { ascending: true });
       if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
       const { data, error } = await q;
       if(error)throw error;
