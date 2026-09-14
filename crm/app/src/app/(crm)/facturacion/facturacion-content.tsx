@@ -23,7 +23,7 @@ import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
   ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, MailCheck, FileText, Search, Scissors,
-  Maximize2, Minimize2, Pencil, Trash2, Upload, Sparkles, Eye,
+  Maximize2, Minimize2, Pencil, Trash2, Upload, Sparkles, Eye, CheckCheck, MailX,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
@@ -64,6 +64,8 @@ interface FacturaRow {
   recibida_cliente?: boolean;
   email_enviado_at?: string | null;
   email_enviado_a?: string | null;
+  email_resend_id?: string | null;
+  email_estado?: "sent" | "delivered" | "bounced" | "complained" | "delivery_delayed" | null;
   clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; email_facturacion?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string; dias_cuenta_corriente?: number | null } | null;
   _clienteNombre?: string;
   _fechaVencCalc?: string;
@@ -1641,16 +1643,35 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               { key: "_mail" as any, label: "", sortable: false, className: "w-10", render: (r: FacturaRow) => (
                 <div
                   onClick={(e) => { e.stopPropagation(); handleEmailFactura(r); }}
+                  onDoubleClick={async (e) => {
+                    e.stopPropagation();
+                    if (!r.email_resend_id) return;
+                    try {
+                      const res = await fetch(`/api/email/status?resend_id=${r.email_resend_id}`);
+                      const data = await res.json();
+                      if (data.status && data.status !== r.email_estado) {
+                        await (supabase as any).from("facturas").update({ email_estado: data.status }).eq("id", r.id);
+                        setFacturas(prev => prev.map(f => f.id === r.id ? { ...f, email_estado: data.status } : f));
+                      }
+                      const statusLabels: Record<string, string> = { sent: "Enviado", delivered: "Entregado", bounced: "Rebotado", complained: "Spam", delivery_delayed: "Demorado" };
+                      alert(`Estado: ${statusLabels[data.status] || data.status}`);
+                    } catch { /* ignore */ }
+                  }}
                   className="flex justify-center cursor-pointer"
                   title={(() => {
                     const emailDest = r.email_enviado_a || r.clientes?.email_facturacion || r.clientes?.email || "";
+                    const estadoLabel = r.email_estado === "delivered" ? " - Entregado" : r.email_estado === "bounced" ? " - Rebotado" : r.email_estado === "delivery_delayed" ? " - Demorado" : "";
                     return r.email_enviado_at
-                      ? `Enviada por email el ${formatDateTime(r.email_enviado_at)}${emailDest ? ` a ${emailDest}` : ""}`
+                      ? `Enviada el ${formatDateTime(r.email_enviado_at)}${emailDest ? ` a ${emailDest}` : ""}${estadoLabel}. Doble click para verificar.`
                       : `Enviar por email${emailDest ? ` (${emailDest})` : ""}`;
                   })()}
                 >
                   {r.email_enviado_at
-                    ? <MailCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                    ? r.email_estado === "delivered"
+                      ? <CheckCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                      : r.email_estado === "bounced"
+                        ? <MailX className="h-5 w-5 text-red-500" />
+                        : <MailCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
                     : <Mail className="h-4 w-4 text-zinc-700 dark:text-zinc-300 hover:text-orange-500 transition-colors" />}
                 </div>
               )},
@@ -2978,12 +2999,14 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
-        onSuccess={async () => {
+        onSuccess={async (emailId) => {
           const sentAt = new Date().toISOString();
           const facturaId = emailModal.facturaId;
+          const updateData: Record<string, unknown> = { email_enviado_at: sentAt, email_enviado_a: emailModal.to || null, email_estado: "sent" };
+          if (emailId) updateData.email_resend_id = emailId;
           const { error } = await (supabase as any)
             .from("facturas")
-            .update({ email_enviado_at: sentAt, email_enviado_a: emailModal.to || null })
+            .update(updateData)
             .eq("id", facturaId);
           if (error) {
             alert(`El email se envió, pero no se pudo guardar la marca de envío: ${error.message}`);
@@ -2991,10 +3014,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           }
           const sentTo = emailModal.to || null;
           setFacturas((prev) => prev.map((factura) =>
-            factura.id === facturaId ? { ...factura, email_enviado_at: sentAt, email_enviado_a: sentTo } : factura
+            factura.id === facturaId ? { ...factura, email_enviado_at: sentAt, email_enviado_a: sentTo, email_resend_id: emailId || null, email_estado: "sent" as const } : factura
           ));
           setDetailFactura((prev) =>
-            prev?.id === facturaId ? { ...prev, email_enviado_at: sentAt, email_enviado_a: sentTo } : prev
+            prev?.id === facturaId ? { ...prev, email_enviado_at: sentAt, email_enviado_a: sentTo, email_resend_id: emailId || null, email_estado: "sent" as const } : prev
           );
         }}
         onMarkSent={async () => {

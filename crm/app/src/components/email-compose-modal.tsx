@@ -19,8 +19,8 @@ interface EmailComposeModalProps {
   pdfFilename?: string;
   /** Function that generates PDF and returns base64 string. MUST be provided. */
   generatePdf: () => Promise<string>;
-  /** Callback on successful send */
-  onSuccess?: () => void | Promise<void>;
+  /** Callback on successful send — receives Resend email ID for delivery tracking */
+  onSuccess?: (emailId?: string) => void | Promise<void>;
   /** Sociedad ID for sender email selection */
   sociedadId?: string;
   /** User email — used as sender for PR/remitos */
@@ -122,7 +122,7 @@ export function EmailComposeModal({
       if (!res.ok || data.error) {
         setResult({ success: false, message: data.error || "Error al enviar" });
       } else {
-        await onSuccess?.();
+        await onSuccess?.(data.emailId);
         setResult({ success: true, message: `Email enviado correctamente a ${emails.join(", ")}` });
       }
     } catch (err: any) {
