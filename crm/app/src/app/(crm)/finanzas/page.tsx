@@ -126,6 +126,7 @@ interface OrdenPagoRow {
   proveedor_id: string;
   proveedor_nombre: string;
   proveedor_email?: string | null;
+  proveedor_cuit?: string | null;
   monto_bruto: number;
   retencion_pct: number;
   monto_retencion: number;
@@ -598,6 +599,9 @@ export default function FinanzasPage() {
 
   // OP state
   const [ordenesPago, setOrdenesPago] = useState<OrdenPagoRow[]>([]);
+  const [opFilterRetencion, setOpFilterRetencion] = useState(false);
+  const [opFilterDesde, setOpFilterDesde] = useState("");
+  const [opFilterHasta, setOpFilterHasta] = useState("");
   const [opModalOpen, setOpModalOpen] = useState(false);
   const [pagoParcialDirecto, setPagoParcialDirecto] = useState(false);
   const [pagoParcialFCId, setPagoParcialFCId] = useState<string | null>(null);
@@ -1087,7 +1091,7 @@ export default function FinanzasPage() {
 
         // Fetch ordenes de pago (movimientos with tipo=pago that have op_ prefix in descripcion)
         try {
-          let qOp = (supabase as any).from("ordenes_pago").select("*, proveedores(razon_social, email)").order("fecha", { ascending: false });
+          let qOp = (supabase as any).from("ordenes_pago").select("*, proveedores(razon_social, email, cuit)").order("fecha", { ascending: false });
           if (sociedadActiva?.id) qOp = qOp.eq("sociedad_id", sociedadActiva.id);
           const { data: opData } = await qOp;
           if (opData) {
@@ -1095,6 +1099,7 @@ export default function FinanzasPage() {
               id: r.id, numero: r.numero ?? undefined, fecha: r.fecha, proveedor_id: r.proveedor_id,
               proveedor_nombre: r.proveedores?.razon_social ?? "—",
               proveedor_email: r.proveedores?.email ?? null,
+              proveedor_cuit: r.proveedores?.cuit ?? null,
               monto_bruto: Number(r.monto_bruto), retencion_pct: Number(r.retencion_porcentaje ?? r.retencion_pct ?? 0),
               monto_retencion: Number(r.retencion_monto ?? r.monto_retencion ?? 0),
               retencion_ganancias_pct: Number(r.retencion_ganancias_pct ?? 0),
@@ -1668,6 +1673,31 @@ export default function FinanzasPage() {
   }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase, opForm.proveedor_id, opManualGanancias]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── OP handlers ──
+  const filteredOPs = useMemo(() => {
+    let list = ordenesPago;
+    if (opFilterRetencion) list = list.filter(o => o.retencion_ganancias_monto > 0);
+    if (opFilterDesde) list = list.filter(o => o.fecha >= opFilterDesde);
+    if (opFilterHasta) list = list.filter(o => o.fecha <= opFilterHasta);
+    return list;
+  }, [ordenesPago, opFilterRetencion, opFilterDesde, opFilterHasta]);
+
+  function exportOPRetencionesCSV() {
+    const rows = filteredOPs.filter(o => o.retencion_ganancias_monto > 0 && o.estado !== "anulada");
+    if (rows.length === 0) { alert("No hay retenciones para exportar en el rango seleccionado."); return; }
+    const header = "Numero,Fecha,Proveedor,CUIT,Monto Bruto,Base Retencion,% Ganancias,Retencion Ganancias,Neto,Moneda";
+    const csvRows = rows.map(r => {
+      return [r.numero || "", r.fecha, `"${r.proveedor_nombre.replace(/"/g, '""')}"`, r.proveedor_cuit || "", r.monto_bruto, (r as any).base_retencion_ganancias || r.monto_bruto, r.retencion_ganancias_pct, r.retencion_ganancias_monto, r.neto, r.moneda].join(",");
+    });
+    const csv = "\uFEFF" + header + "\n" + csvRows.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url;
+    const desde = opFilterDesde || "inicio";
+    const hasta = opFilterHasta || "hoy";
+    a.download = `Retenciones-Ganancias-${desde}-a-${hasta}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+  }
+
   function openOPModal(preloadProveedorId?: string) {
     setPagoParcialDirecto(false);
     setPagoParcialFCId(null);
@@ -3861,6 +3891,24 @@ export default function FinanzasPage() {
                 <Plus className="h-4 w-4" /> Nueva OP
               </button>
             </div>
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <button
+                onClick={() => setOpFilterRetencion(!opFilterRetencion)}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${opFilterRetencion ? "border-violet-500 bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300" : "border-zinc-300 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400"}`}
+              >
+                <ShieldCheck className="inline h-3 w-3 mr-1" />Con retención
+              </button>
+              <input type="date" value={opFilterDesde} onChange={e => setOpFilterDesde(e.target.value)} className="rounded-lg border border-zinc-300 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" placeholder="Desde" title="Desde" />
+              <input type="date" value={opFilterHasta} onChange={e => setOpFilterHasta(e.target.value)} className="rounded-lg border border-zinc-300 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" placeholder="Hasta" title="Hasta" />
+              {(opFilterDesde || opFilterHasta || opFilterRetencion) && (
+                <button onClick={() => { setOpFilterRetencion(false); setOpFilterDesde(""); setOpFilterHasta(""); }} className="text-xs text-zinc-400 hover:text-zinc-600">Limpiar</button>
+              )}
+              {opFilterRetencion && (
+                <button onClick={exportOPRetencionesCSV} className="ml-auto rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-950 dark:text-violet-300 flex items-center gap-1">
+                  <Download className="h-3 w-3" />Exportar retenciones CSV
+                </button>
+              )}
+            </div>
             <Card className="p-0 overflow-hidden">
               <DataTable<OrdenPagoRow>
                 columns={[
@@ -3938,7 +3986,7 @@ export default function FinanzasPage() {
                     </div>
                   )},
                 ]}
-                data={ordenesPago}
+                data={filteredOPs}
                 onRowClick={(row) => setSelectedOP(row)}
                 emptyMessage="No hay ordenes de pago cargadas"
               />
