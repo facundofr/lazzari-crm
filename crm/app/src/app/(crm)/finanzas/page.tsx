@@ -97,7 +97,7 @@ const emptyEcheqForm = {
   monto: 0,
   moneda: "ARS" as "ARS" | "USD",
   fecha_emision: "",
-  fecha_pago: new Date().toISOString().slice(0, 10),
+  fecha_pago: todayAR(),
   origen_tipo: "cliente" as "cliente" | "otro",
   origen_id: "",
   origen_nombre: "",
@@ -214,7 +214,7 @@ const emptyFCForm = {
   numero_factura: "",
   proveedor_id: "",
   orden_compra_id: "",
-  fecha: new Date().toISOString().slice(0, 10),
+  fecha: todayAR(),
   fecha_vencimiento: "",
   subtotal: 0,
   iva_porcentaje: 21,
@@ -289,7 +289,7 @@ const makeOpMedio = (moneda: "ARS" | "USD" = "ARS"): OpMedioPago => ({
   tempId: Math.random().toString(36).slice(2),
   tipo: "transferencia",
   monto: 0,
-  fecha: new Date().toISOString().slice(0, 10),
+  fecha: todayAR(),
   banco: "",
   numero_cheque: "",
   moneda,
@@ -302,7 +302,7 @@ const emptyOPForm = {
   aplica_ganancias: false,
   retencion_ganancias_pct: 0,
   notas: "",
-  fecha: new Date().toISOString().slice(0, 10),
+  fecha: todayAR(),
   monto_manual: 0,
   usar_monto_manual: false,
   iva_manual_pct: 21 as number,
@@ -319,7 +319,7 @@ const emptyGastoManualForm = {
   monto: 0,
   moneda: "ARS" as "ARS" | "USD",
   notas: "",
-  fecha: new Date().toISOString().slice(0, 10),
+  fecha: todayAR(),
 };
 
 // ── Helper types for Supabase rows (snake_case) ──
@@ -472,7 +472,7 @@ const emptyMovForm = {
   tipo: "cobro" as "cobro" | "pago" | "cheque_emitido" | "cheque_recibido" | "transferencia" | "efectivo",
   descripcion: "",
   monto: 0,
-  fecha: new Date().toISOString().slice(0, 10),
+  fecha: todayAR(),
   moneda: "ARS" as "USD" | "ARS",
   cliente_id: "",
   proveedor_id: "",
@@ -811,7 +811,7 @@ export default function FinanzasPage() {
   const [manualMovTarget, setManualMovTarget] = useState<"cliente" | "proveedor">("cliente");
   const [manualMovTargetId, setManualMovTargetId] = useState("");
   const [manualMovTargetName, setManualMovTargetName] = useState("");
-  const [manualMovForm, setManualMovForm] = useState({ monto: 0, descripcion: "", fecha: new Date().toISOString().slice(0, 10), tipo_mov: "credito" as "credito" | "debito", moneda: "ARS" as "ARS" | "USD" });
+  const [manualMovForm, setManualMovForm] = useState({ monto: 0, descripcion: "", fecha: todayAR(), tipo_mov: "credito" as "credito" | "debito", moneda: "ARS" as "ARS" | "USD" });
   const [manualMovSaving, setManualMovSaving] = useState(false);
   const [manualMovError, setManualMovError] = useState("");
 
@@ -1836,17 +1836,10 @@ export default function FinanzasPage() {
         }
       }
       const provNombre = proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social ?? "";
-      // Generate OP number
-      let qLastOP = (supabase as any).from("ordenes_pago").select("numero").order("created_at", { ascending: false }).limit(1);
-      if (sociedadActiva?.id) qLastOP = qLastOP.eq("sociedad_id", sociedadActiva.id);
-      const { data: lastOP } = await qLastOP;
-      let nextNum = 1;
-      if (lastOP?.[0]?.numero) {
-        const parts = lastOP[0].numero.split("-");
-        const n = parseInt(parts[parts.length - 1]);
-        if (n > 0) nextNum = n + 1;
-      }
-      const opNumero = `OP-${String(nextNum).padStart(6, "0")}`;
+      // Generate OP number atomically via PG function
+      const { data: opNumData, error: opNumErr } = await (supabase as any).rpc("next_op_number", { p_sociedad_id: sociedadActiva!.id });
+      if (opNumErr) throw new Error("Error al generar número de OP: " + opNumErr.message);
+      const opNumero = opNumData as string;
 
       const insertData: Record<string, unknown> = {
         numero: opNumero,
@@ -2915,11 +2908,11 @@ export default function FinanzasPage() {
       let cobradoMap: Record<string, number> = {};
       if (fData && fData.length > 0) {
         const fIds = fData.map((f: any) => f.id);
-        const { data: cobros } = await (supabase as any).from("movimientos").select("factura_id, monto").in("factura_id", fIds);
-        if (cobros) (cobros as any[]).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
+        const { data: cobros } = await (supabase as any).from("movimientos").select("factura_id, monto, anulado").in("factura_id", fIds);
+        if (cobros) (cobros as any[]).filter((m: any) => !m.anulado).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
         // Also count consolidated cobros via cobro_aplicaciones
-        const { data: aplicaciones } = await (supabase as any).from("cobro_aplicaciones").select("factura_id, monto").in("factura_id", fIds);
-        if (aplicaciones) (aplicaciones as any[]).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
+        const { data: aplicaciones } = await (supabase as any).from("cobro_aplicaciones").select("factura_id, monto, movimientos!inner(anulado)").in("factura_id", fIds);
+        if (aplicaciones) (aplicaciones as any[]).filter((a: any) => { const mov = Array.isArray(a.movimientos) ? a.movimientos[0] : a.movimientos; return mov && !mov.anulado; }).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
       }
       if (fData) setCcDetailFacturas(fData.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.fecha_vencimiento ?? null, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: f.estado })));
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
@@ -2948,6 +2941,9 @@ export default function FinanzasPage() {
           const activasSet = new Set((opsActivas || []).map((o: any) => o.id));
           (opLinks as any[]).forEach((l: any) => { if (activasSet.has(l.orden_pago_id)) pagadoMap[l.factura_compra_id] = (pagadoMap[l.factura_compra_id] || 0) + Number(l.monto); });
         }
+        // Also include direct payments (pagos parciales) from movimientos
+        const { data: directPayments } = await (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado").in("factura_compra_id", fcIds).eq("tipo", "pago");
+        if (directPayments) (directPayments as any[]).filter((p: any) => !p.anulado).forEach((p: any) => { pagadoMap[p.factura_compra_id] = (pagadoMap[p.factura_compra_id] || 0) + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0); });
       }
       if (fcData) setCcDetailFCProv(fcData.map((f: any) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento, total: Number(f.total), pagado: pagadoMap[f.id] || 0, estado: f.estado, moneda: f.moneda ?? "ARS" })));
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("proveedor_id" as any, prov.id).order("fecha", { ascending: false });
@@ -3012,11 +3008,11 @@ export default function FinanzasPage() {
   }
   function openManualMovForCliente(cli: CCRow) {
     setManualMovTarget("cliente"); setManualMovTargetId(cli.id); setManualMovTargetName(cli.razon_social);
-    setManualMovForm({ monto: 0, descripcion: "", fecha: new Date().toISOString().slice(0, 10), tipo_mov: "credito", moneda: "ARS" }); setManualMovError(""); setManualMovOpen(true);
+    setManualMovForm({ monto: 0, descripcion: "", fecha: todayAR(), tipo_mov: "credito", moneda: "ARS" }); setManualMovError(""); setManualMovOpen(true);
   }
   function openManualMovForProveedor(prov: CCRow) {
     setManualMovTarget("proveedor"); setManualMovTargetId(prov.id); setManualMovTargetName(prov.razon_social);
-    setManualMovForm({ monto: 0, descripcion: "", fecha: new Date().toISOString().slice(0, 10), tipo_mov: "credito", moneda: "ARS" }); setManualMovError(""); setManualMovOpen(true);
+    setManualMovForm({ monto: 0, descripcion: "", fecha: todayAR(), tipo_mov: "credito", moneda: "ARS" }); setManualMovError(""); setManualMovOpen(true);
   }
 
   function exportCCCliente() {
@@ -3034,9 +3030,9 @@ export default function FinanzasPage() {
     let saldoAcum = 0;
     const lines: string[] = ["Fecha,Cliente,Documento,Moneda,Debe,Haber,Saldo"];
     entries.forEach(e => { saldoAcum += e.debe - e.haber; lines.push(`${e.fecha},"${ccDetailCliente!.razon_social}","${e.documento}",${e.moneda},${e.debe || ""},${e.haber || ""},${saldoAcum.toFixed(2)}`); });
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `CC_${ccDetailCliente.razon_social.replace(/[^a-zA-Z0-9]/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+    const a = document.createElement("a"); a.href = url; a.download = `CC_${ccDetailCliente.razon_social.replace(/[^a-zA-Z0-9]/g, "_")}_${todayAR()}.csv`; a.click(); URL.revokeObjectURL(url);
   }
 
   function fcToggleSelect(id: string) {
@@ -3081,9 +3077,9 @@ export default function FinanzasPage() {
     let saldoAcum = 0;
     const lines: string[] = ["Fecha,Proveedor,Documento,Moneda,Debe,Haber,Saldo"];
     entries.forEach(e => { saldoAcum += e.debe - e.haber; lines.push(`${e.fecha},"${ccDetailProveedor!.razon_social}","${e.documento}",${e.moneda},${e.debe || ""},${e.haber || ""},${saldoAcum.toFixed(2)}`); });
-    const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `CC_${ccDetailProveedor.razon_social.replace(/[^a-zA-Z0-9]/g, "_")}_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+    const a = document.createElement("a"); a.href = url; a.download = `CC_${ccDetailProveedor.razon_social.replace(/[^a-zA-Z0-9]/g, "_")}_${todayAR()}.csv`; a.click(); URL.revokeObjectURL(url);
   }
 
   // ── Mov modal filtered lists ──
@@ -3187,16 +3183,14 @@ export default function FinanzasPage() {
 
   // ── Derived calculations ──
   const currentMonth = new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires", year: "numeric", month: "2-digit" }).slice(0, 7);
-  const movimientosMes = movimientos.filter((m) => m.fecha?.startsWith(currentMonth));
+  const movimientosMes = movimientos.filter((m) => m.fecha?.startsWith(currentMonth) && !m.anulado);
   const movimientosMesARS = movimientosMes.filter((m) => !m.moneda || m.moneda === "ARS");
   const movimientosMesUSD = movimientosMes.filter((m) => m.moneda === "USD");
-  const totalCobrosARS = movimientosMesARS.filter((m) => ["cobro", "cheque_recibido", "transferencia"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const totalCobrosARS = movimientosMesARS.filter((m) => ["cobro", "cheque_recibido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
   const totalPagosARS = movimientosMesARS.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const totalCobrosUSD = movimientosMesUSD.filter((m) => ["cobro", "cheque_recibido", "transferencia"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const totalCobrosUSD = movimientosMesUSD.filter((m) => ["cobro", "cheque_recibido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
   const totalPagosUSD = movimientosMesUSD.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const totalCobros = totalCobrosARS;
-  const totalPagos = totalPagosARS;
-  const sinConciliar = movimientos.filter((m) => !m.conciliado).length;
+  const sinConciliar = movimientos.filter((m) => !m.conciliado && !m.anulado).length;
 
   // Caja: saldo inicial + ingresos - egresos = saldo final
   const saldoInicialARS = saldosCaja.find(s => s.moneda === "ARS")?.monto ?? 0;
