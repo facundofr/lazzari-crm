@@ -322,7 +322,7 @@ export default function VentasPage() {
           clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, limite_credito, saldo_cuenta_corriente, email, email_facturacion),
           presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total)
         `)
-        .in("estado" as any, ["aprobado", "facturar", "facturado"])
+        .in("estado" as any, ["aprobado", "facturar"])
         .order("fecha", { ascending: false });
       if (sociedadActiva?.id) presupuestosQuery = presupuestosQuery.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: presupuestos, error: pError } = await presupuestosQuery;
@@ -497,7 +497,7 @@ export default function VentasPage() {
       if (filterFacturacion !== "todas") {
         const st = getVentaStatus(v);
         if (filterFacturacion === "pend" && st.facturado) return false;
-        if (filterFacturacion === "lista" && (!v.presupuesto.listo_para_facturar || st.facturado)) return false;
+        if (filterFacturacion === "lista" && (v.presupuesto.estado !== "facturar" || st.facturado)) return false;
         if (filterFacturacion === "facturada" && !st.facturado) return false;
       }
       return true;
@@ -677,6 +677,14 @@ export default function VentasPage() {
     } finally {
       setEmitting(false);
     }
+  }
+
+  async function handleFinalizarPR(prId: string) {
+    if (!confirm("¿Finalizar este presupuesto sin re-facturar? Se marcará como cerrado y saldrá de Ventas.")) return;
+    const { error } = await (supabase as any).from("presupuestos").update({ estado: "facturado" }).eq("id", prId);
+    if (error) { alert("Error al finalizar: " + error.message); return; }
+    await fetchData();
+    setSelectedVentaId(null);
   }
 
   async function handleEmitFacturaManual() {
@@ -1367,6 +1375,7 @@ export default function VentasPage() {
                         );
                       }
                       const tieneNcTotal = selectedVenta.facturas.some(f => f.estado === "anulada");
+                      const puedeFacturar = selectedVenta.presupuesto.estado === "facturar" || tieneNcTotal;
                       return role === "vendedor" ? (
                         <p className="text-sm text-zinc-500">Pendiente de facturación administrativa</p>
                       ) : (
@@ -1374,16 +1383,27 @@ export default function VentasPage() {
                           {tieneNcTotal && (
                             <p className="text-sm text-amber-600 dark:text-amber-400">Factura anterior anulada por Nota de Crédito</p>
                           )}
-                          {selectedVenta.presupuesto.estado === "facturar" ? (
+                          {puedeFacturar ? (
                             <>
-                              <p className="text-sm text-zinc-500">{tieneNcTotal ? "Podés volver a facturar" : "Sin factura emitida"}</p>
-                              <button
-                                onClick={() => openEmitModal(selectedVenta)}
-                                className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
-                              >
-                                <Receipt className="h-4 w-4" />
-                                {tieneNcTotal ? "Re-facturar" : "Facturar"}
-                              </button>
+                              <p className="text-sm text-zinc-500">{tieneNcTotal ? "Podés volver a facturar o finalizar" : "Sin factura emitida"}</p>
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <button
+                                  onClick={() => openEmitModal(selectedVenta)}
+                                  className="flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                                >
+                                  <Receipt className="h-4 w-4" />
+                                  {tieneNcTotal ? "Re-facturar" : "Facturar"}
+                                </button>
+                                {tieneNcTotal && (
+                                  <button
+                                    onClick={() => handleFinalizarPR(selectedVenta.presupuesto.id)}
+                                    className="flex items-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                                  >
+                                    <CheckCircle2 className="h-4 w-4" />
+                                    Finalizar
+                                  </button>
+                                )}
+                              </div>
                             </>
                           ) : (
                             <p className="text-sm text-amber-600 dark:text-amber-400">El presupuesto no esta marcado como &ldquo;Listo para facturar&rdquo;. Marcalo desde Presupuestos.</p>
