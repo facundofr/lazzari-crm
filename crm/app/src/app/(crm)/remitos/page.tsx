@@ -742,7 +742,7 @@ export default function RemitosPage() {
           tipo_remito: createTipoRemito,
           presupuesto_id: createForm.presupuesto_id || null,
           estado: "pendiente",
-          valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : (valorDeclaradoSugerido ? Number(valorDeclaradoSugerido) : null),
+          valor_declarado: createForm.valor_declarado ? Number(createForm.valor_declarado) : null,
           sociedad_id: sociedadActiva.id,
           sucursal_id: sucursalId,
           created_by: profile?.id || null,
@@ -913,7 +913,7 @@ export default function RemitosPage() {
           presupuesto_id: p.id,
           estado: "pendiente",
           sociedad_id: sociedadActiva.id,
-          valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
+          valor_declarado: null,
           created_by: profile?.id || null,
         };
         if (caiIA) {
@@ -1341,21 +1341,6 @@ export default function RemitosPage() {
         action={{ label: "Nuevo remito", onClick: openCreateModal }}
       />
       <div className="p-4 sm:p-8 space-y-6">
-        <div className="flex items-center gap-4 rounded-xl border border-violet-200 bg-violet-50 p-4 dark:border-violet-800 dark:bg-violet-950/30">
-          <div className="rounded-lg bg-violet-100 p-2 dark:bg-violet-900">
-            <Sparkles className="h-5 w-5 text-violet-600" />
-          </div>
-          <div className="flex-1">
-            <p className="font-medium text-violet-800 dark:text-violet-300">Generar remitos desde PR</p>
-            <p className="text-sm text-violet-600 dark:text-violet-400">
-              Generá remitos automáticamente desde presupuestos aprobados con todos sus items.
-            </p>
-          </div>
-          <button onClick={openIAModal} className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700">
-            Generar desde PR
-          </button>
-        </div>
-
         <SmartFilters
           filters={smartFilterConfigs}
           values={smartFilterValues}

@@ -2851,7 +2851,7 @@ export default function PresupuestosPage() {
                     {selected.estado === "solicitud" ? "Convertir" : "Editar"}
                   </button>
                 )}
-                {(selected.estado === "aprobado" || selected.estado === "facturar" || selected.estado === "remitido") && remitidoStatus[selected.id] !== "total" && (
+                {(selected.estado === "aprobado" || selected.estado === "facturar" || selected.estado === "facturado" || selected.estado === "remitido") && remitidoStatus[selected.id] !== "total" && (
                   <button
                     onClick={() => openRemitarModal(selected)}
                     className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 dark:text-emerald-400 dark:hover:bg-emerald-950/30 transition-colors"
