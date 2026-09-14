@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
-import { Filter, X, Calendar } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Filter, X, Calendar, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface FilterConfig {
   key: string;
   label: string;
-  type: "select" | "date-range" | "number-range";
+  type: "select" | "search-select" | "date-range" | "number-range";
   options?: { value: string; label: string }[];
   placeholder?: string;
 }
@@ -21,6 +21,79 @@ interface SmartFiltersProps {
   values: FilterValues;
   onChange: (values: FilterValues) => void;
   className?: string;
+}
+
+function SearchSelect({
+  value,
+  onChange,
+  options,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  placeholder: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setIsOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const norm = (s: string) =>
+    s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+  const filtered = options.filter((o) =>
+    norm(o.label).includes(norm(query))
+  );
+
+  const selectedLabel = options.find((o) => o.value === value)?.label || "";
+
+  return (
+    <div ref={ref} className="relative">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+        <input
+          type="text"
+          value={isOpen ? query : selectedLabel}
+          placeholder={placeholder}
+          onFocus={() => { setIsOpen(true); setQuery(""); }}
+          onChange={(e) => { setQuery(e.target.value); setIsOpen(true); }}
+          className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-7 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+        />
+        {value && (
+          <button
+            onClick={() => { onChange(""); setQuery(""); }}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {isOpen && filtered.length > 0 && (
+        <div className="absolute z-50 mt-1 max-h-48 w-full overflow-auto rounded-md border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-800">
+          {filtered.map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => { onChange(opt.value); setIsOpen(false); setQuery(""); }}
+              className={cn(
+                "block w-full px-3 py-1.5 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700",
+                opt.value === value ? "bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400" : "text-zinc-700 dark:text-zinc-200"
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function SmartFilters({ filters, values, onChange, className }: SmartFiltersProps) {
@@ -42,7 +115,7 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
   function clearAll() {
     const cleared: FilterValues = {};
     filters.forEach((f) => {
-      if (f.type === "select") cleared[f.key] = "";
+      if (f.type === "select" || f.type === "search-select") cleared[f.key] = "";
       else if (f.type === "date-range") cleared[f.key] = { from: "", to: "" };
       else if (f.type === "number-range") cleared[f.key] = {};
     });
@@ -88,6 +161,15 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
                 </select>
+              )}
+
+              {filter.type === "search-select" && (
+                <SearchSelect
+                  value={(values[filter.key] as string) || ""}
+                  onChange={(v) => updateValue(filter.key, v)}
+                  options={filter.options || []}
+                  placeholder={filter.placeholder || "Buscar..."}
+                />
               )}
 
               {filter.type === "date-range" && (

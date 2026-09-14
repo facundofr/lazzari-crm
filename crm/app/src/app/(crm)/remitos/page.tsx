@@ -250,8 +250,9 @@ export default function RemitosPage() {
     {
       key: "cliente",
       label: "Cliente",
-      type: "select",
+      type: "search-select",
       options: clienteOptions,
+      placeholder: "Buscar cliente...",
     },
     {
       key: "vinculado",
