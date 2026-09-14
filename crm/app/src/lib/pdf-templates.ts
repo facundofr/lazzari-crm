@@ -1380,9 +1380,9 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
     worker = html2pdf()
       .set({
         margin: [0, 0, 0, 0],
-        image: { type: "jpeg", quality: 0.98 },
+        image: { type: "jpeg", quality: 0.95 },
         html2canvas: {
-          scale: 2,
+          scale: 1.5,
           useCORS: true,
           letterRendering: true,
           backgroundColor: "#ffffff",
