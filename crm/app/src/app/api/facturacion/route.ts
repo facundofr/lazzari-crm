@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import * as fs from "fs";
 import * as path from "path";
-import { crearFacturaWsfeNode, consultarLimiteFechaPv } from "@/lib/arca-wsfe-node";
+import { crearFacturaWsfeNode, consultarLimiteFechaPv, consultarUltimoWsfeNode } from "@/lib/arca-wsfe-node";
 import { getInvoiceExchangeRate } from "@/lib/invoice-exchange-rate";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { createSupabaseServer } from "@/lib/supabase/server";
@@ -840,15 +840,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ connected: false, certOk: false, error: "Certificado no configurado", ptoVta: arcaConfig.ptoVta, cuit: String(arcaConfig.cuit) });
     }
 
-    // Second: try AFIP connectivity (may fail due to network/AFIP downtime)
+    // Second: try AFIP connectivity via raw SOAP (avoids SDK fetch issues with AFIP IPv6/ciphers)
     try {
       const arca = getArcaInstance(arcaConfig);
-      const lastVoucher = await arca.ultimoComprobante(arcaConfig.ptoVta, 1);
+      const auth = await arca.getAuth("wsfe");
+      const production = process.env.ARCA_PRODUCTION !== "false";
+      const { lastNumber } = await consultarUltimoWsfeNode({ auth, production, ptoVta: arcaConfig.ptoVta, cbteTipo: 1 });
       return NextResponse.json({
         connected: true,
         certOk: true,
         production: true,
-        lastVoucher,
+        lastVoucher: lastNumber,
         ptoVta: arcaConfig.ptoVta,
         cuit: String(arcaConfig.cuit),
         sociedad_id: arcaConfig.id,
