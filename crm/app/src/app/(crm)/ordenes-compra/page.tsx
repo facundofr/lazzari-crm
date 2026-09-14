@@ -781,25 +781,29 @@ export default function OrdenesCompraPage() {
     }
   };
 
-  const handleAdvanceEstado = async (oc: OCRow, nuevoEstado: "pendiente") => {
+  const handleAdvanceEstado = async (oc: OCRow, nuevoEstado: "pendiente" | "enviada") => {
     if (oc.estado !== "borrador") {
       alert(`La OC ${oc.numero || ""} ya está ${oc.estado}. No hace falta activarla nuevamente.`);
       return;
     }
     if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de activar la OC"); return; }
     try {
-      let query = supabase.from("ordenes_compra").update({ estado: nuevoEstado } as any).eq("id", oc.id);
-      query = query.eq("sociedad_id" as any, sociedadActiva.id) as any;
-      query = query.eq("estado" as any, "borrador") as any;
-      const { data, error } = await query.select("id").maybeSingle();
-      if (error) throw error;
-      if (!data) throw new Error("No se modificó ninguna fila: la OC ya cambió de estado o no tenés permiso para modificarla. Actualizá la pantalla y volvé a intentar.");
+      const { data, error } = await (supabase as any)
+        .from("ordenes_compra")
+        .update({ estado: nuevoEstado })
+        .eq("id", oc.id)
+        .eq("sociedad_id", sociedadActiva.id)
+        .eq("estado", "borrador")
+        .select("id")
+        .maybeSingle();
+      if (error) throw new Error(error.message || "Error de base de datos al activar la OC");
+      if (!data) throw new Error("No se modificó ninguna fila. La OC ya cambió de estado o pertenece a otra sociedad. Recargá la página.");
       await fetchData();
       if (detailOC?.id === oc.id) {
         setDetailOC({ ...oc, estado: nuevoEstado });
       }
     } catch (err: unknown) {
-      alert(err instanceof Error ? `No se pudo activar la OC: ${err.message}` : "No se pudo activar la OC. Verificá la sociedad y el estado actual.");
+      alert(err instanceof Error ? err.message : "No se pudo activar la OC. Verificá la sociedad y el estado actual.");
     }
   };
 
@@ -2912,7 +2916,7 @@ export default function OrdenesCompraPage() {
                 <div className="flex flex-wrap gap-2">
                   {detailOC.estado === "borrador" && (
                     <button
-                      onClick={() => handleAdvanceEstado(detailOC, "pendiente")}
+                      onClick={() => handleAdvanceEstado(detailOC, "enviada")}
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 transition-colors"
                     >
                       <Send className="h-4 w-4" /> Activar OC
