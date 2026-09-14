@@ -72,6 +72,10 @@ interface RemitoRow {
   oc_cliente?: string | null;
   presupuesto_numero?: string | null;
   remito_items: { id: string }[];
+  // CAI fields
+  cai_numero?: string | null;
+  punto_venta_cai?: number | null;
+  nro_comprobante_cai?: number | null;
 }
 
 interface RemitoDetailItem {
@@ -420,7 +424,15 @@ export default function RemitosPage() {
         }, 999);
         const newNumero = `R-0001-${String(maxNum + 1).padStart(8, "0")}`;
 
-        const { data: newRemito, error: newErr } = await (supabase.from("remitos") as any).insert({
+        // Get next CAI number for remainder remito
+        let caiParcial: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
+        const { data: caiPRows } = await (supabase as any).rpc("next_cai_number", {
+          p_sociedad_id: sociedadActiva.id,
+          p_tipo: "remito_r",
+        });
+        if (caiPRows && caiPRows.length > 0) caiParcial = caiPRows[0];
+
+        const parcialInsert: Record<string, unknown> = {
           numero: newNumero,
           cliente_id: parcialRemito.cliente_id,
           fecha: todayAR(),
@@ -430,7 +442,13 @@ export default function RemitosPage() {
           sociedad_id: sociedadActiva.id,
           valor_declarado: null,
           created_by: profile?.id || null,
-        }).select("id").single();
+        };
+        if (caiParcial) {
+          parcialInsert.cai_numero = caiParcial.cai_numero;
+          parcialInsert.punto_venta_cai = caiParcial.punto_venta;
+          parcialInsert.nro_comprobante_cai = caiParcial.nro_comprobante;
+        }
+        const { data: newRemito, error: newErr } = await (supabase.from("remitos") as any).insert(parcialInsert).select("id").single();
 
         if (newErr) {
           console.error("Error creating remainder remito:", newErr);
@@ -692,14 +710,27 @@ export default function RemitosPage() {
         const sucursalId = sucKey === "__none" ? null : sucKey;
         const sucNombre = sucursalId ? clienteSucursales.find(s => s.id === sucursalId)?.nombre : null;
 
-        const typeLabel = createTipoRemito === "muestra" ? "Muestra" : createTipoRemito === "electronico" ? "Electrónico ARCA" : "Interno";
-        const obsBase = [`Tipo: ${typeLabel}`, `Emisión: ${createTipoRemito === "electronico" ? "ARCA" : "Manual"}`, createForm.observaciones]
+        const typeLabel = createTipoRemito === "muestra" ? "Muestra" : "Remito R";
+        const obsBase = [`Tipo: ${typeLabel}`, createForm.observaciones]
           .filter(Boolean).join(" — ");
         const obs = groupEntries.length > 1 && sucNombre
           ? [obsBase, `Sucursal: ${sucNombre}`].filter(Boolean).join(" — ")
           : obsBase;
 
-        const remitoInsert = {
+        // Get next CAI number if tipo is not "muestra" (muestras are internal, no CAI)
+        let caiData: { cai_numero: string; punto_venta: number; nro_comprobante: number; fecha_vencimiento: string } | null = null;
+        if (createTipoRemito !== "muestra") {
+          const { data: caiRows, error: caiErr } = await (supabase as any).rpc("next_cai_number", {
+            p_sociedad_id: sociedadActiva.id,
+            p_tipo: "remito_r",
+          });
+          if (!caiErr && caiRows && caiRows.length > 0) {
+            caiData = caiRows[0];
+          }
+          // If no CAI configured, continue without — remito will be internal
+        }
+
+        const remitoInsert: Record<string, unknown> = {
           numero: createForm.numero.trim() || null,
           cliente_id: createForm.cliente_id,
           fecha: createForm.fecha,
@@ -712,10 +743,15 @@ export default function RemitosPage() {
           sucursal_id: sucursalId,
           created_by: profile?.id || null,
         };
+        if (caiData) {
+          remitoInsert.cai_numero = caiData.cai_numero;
+          remitoInsert.punto_venta_cai = caiData.punto_venta;
+          remitoInsert.nro_comprobante_cai = caiData.nro_comprobante;
+        }
         let { data: remitoData, error } = await (supabase.from("remitos") as any).insert(remitoInsert).select("id").single();
         // Compatibilidad transitoria con una base que todavía no aplicó la migración.
-        if (error && /tipo_remito|column/i.test(error.message || "")) {
-          const { tipo_remito: _tipo, ...legacyInsert } = remitoInsert;
+        if (error && /tipo_remito|cai_numero|punto_venta_cai|nro_comprobante_cai|column/i.test(error.message || "")) {
+          const { tipo_remito: _tipo, cai_numero: _c, punto_venta_cai: _p, nro_comprobante_cai: _n, ...legacyInsert } = remitoInsert;
           ({ data: remitoData, error } = await (supabase.from("remitos") as any).insert(legacyInsert).select("id").single());
         }
 
@@ -854,7 +890,15 @@ export default function RemitosPage() {
         }
         const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
 
-        const { data: remitoData, error: rErr } = await (supabase.from("remitos") as any).insert({
+        // Get next CAI number
+        let caiIA: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
+        const { data: caiIARows } = await (supabase as any).rpc("next_cai_number", {
+          p_sociedad_id: sociedadActiva.id,
+          p_tipo: "remito_r",
+        });
+        if (caiIARows && caiIARows.length > 0) caiIA = caiIARows[0];
+
+        const iaRemitoInsert: Record<string, unknown> = {
           numero: null,
           cliente_id: p.cliente_id,
           fecha: todayAR(),
@@ -864,7 +908,13 @@ export default function RemitosPage() {
           sociedad_id: sociedadActiva.id,
           valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
           created_by: profile?.id || null,
-        }).select("id").single();
+        };
+        if (caiIA) {
+          iaRemitoInsert.cai_numero = caiIA.cai_numero;
+          iaRemitoInsert.punto_venta_cai = caiIA.punto_venta;
+          iaRemitoInsert.nro_comprobante_cai = caiIA.nro_comprobante;
+        }
+        const { data: remitoData, error: rErr } = await (supabase.from("remitos") as any).insert(iaRemitoInsert).select("id").single();
 
         if (rErr || !remitoData) {
           generationErrors.push(`${p.numero}: ${rErr?.message || "no se pudo crear el remito"}`);
@@ -999,7 +1049,15 @@ export default function RemitosPage() {
         const sucursalId = key === "__none" ? null : key;
         const sucNombre = splitSucursales.find(s => s.id === key)?.nombre || "";
 
-        const { data: newRemito, error: rErr } = await (supabase.from("remitos") as any).insert({
+        // Get next CAI number for split remito
+        let caiSplit: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
+        const { data: caiSplitRows } = await (supabase as any).rpc("next_cai_number", {
+          p_sociedad_id: sociedadActiva.id,
+          p_tipo: "remito_r",
+        });
+        if (caiSplitRows && caiSplitRows.length > 0) caiSplit = caiSplitRows[0];
+
+        const splitInsert: Record<string, unknown> = {
           numero: null,
           cliente_id: detailRemito.cliente_id,
           fecha: detailRemito.fecha,
@@ -1011,7 +1069,13 @@ export default function RemitosPage() {
           valor_declarado: detailRemito.valor_declarado,
           created_by: profile?.id || null,
           remito_origen_id: detailRemito.id,
-        }).select("id").single();
+        };
+        if (caiSplit) {
+          splitInsert.cai_numero = caiSplit.cai_numero;
+          splitInsert.punto_venta_cai = caiSplit.punto_venta;
+          splitInsert.nro_comprobante_cai = caiSplit.nro_comprobante;
+        }
+        const { data: newRemito, error: rErr } = await (supabase.from("remitos") as any).insert(splitInsert).select("id").single();
 
         if (rErr) { alert("Error al crear remito: " + rErr.message); return; }
         if (newRemito) {
@@ -1157,10 +1221,21 @@ export default function RemitosPage() {
     setPdfModalOpen(true);
   }
 
-  function handleDownloadPDF(overrideValorDeclarado?: number) {
+  async function handleDownloadPDF(overrideValorDeclarado?: number) {
     if (!detailRemito || !sociedadActiva) return;
     const r = detailRemito;
     const soc = getSociedadPDF(sociedadActiva);
+    // Lookup CAI vencimiento if remito has CAI
+    let caiVencimiento: string | null = null;
+    if (r.cai_numero) {
+      const { data: caiConf } = await (supabase as any)
+        .from("cai_config")
+        .select("fecha_vencimiento")
+        .eq("sociedad_id", sociedadActiva.id)
+        .eq("cai_numero", r.cai_numero)
+        .maybeSingle();
+      caiVencimiento = caiConf?.fecha_vencimiento || null;
+    }
     const html = generateRemitoPDF({
       numero: r.numero,
       fecha: r.fecha,
@@ -1170,6 +1245,11 @@ export default function RemitosPage() {
       oc_cliente: r.oc_cliente,
       valor_declarado: overrideValorDeclarado ?? r.valor_declarado,
       observaciones: r.observaciones,
+      cai_numero: r.cai_numero,
+      punto_venta_cai: r.punto_venta_cai,
+      nro_comprobante_cai: r.nro_comprobante_cai,
+      cai_vencimiento: caiVencimiento,
+      cuit_emisor: sociedadActiva.cuit,
       cliente: r.clientes ? {
         razon_social: r.clientes.razon_social,
         cuit: r.clientes.cuit,
@@ -1278,12 +1358,19 @@ export default function RemitosPage() {
             columns={[
               {
                 key: "numero", label: "N° Remito",
-                render: (row) => (
-                  <div className="flex items-center gap-2">
-                    <Truck className="h-4 w-4 text-zinc-400" />
-                    <span className="font-mono text-xs font-bold">{row.numero}</span>
-                  </div>
-                ),
+                render: (row) => {
+                  const hasCai = !!(row.cai_numero && row.punto_venta_cai && row.nro_comprobante_cai);
+                  const displayNum = hasCai
+                    ? `R ${String(row.punto_venta_cai).padStart(4, "0")}-${String(row.nro_comprobante_cai).padStart(8, "0")}`
+                    : row.numero;
+                  return (
+                    <div className="flex items-center gap-2">
+                      <Truck className={`h-4 w-4 ${hasCai ? "text-emerald-500" : "text-zinc-400"}`} />
+                      <span className="font-mono text-xs font-bold">{displayNum}</span>
+                      {hasCai && <span title="CAI autorizado"><ShieldCheck className="h-3 w-3 text-emerald-400" /></span>}
+                    </div>
+                  );
+                },
               },
               { key: "clientes", label: "Cliente", sortable: true, sortKey: "clienteNombre", render: (row) => <span className="font-medium">{row.clientes?.razon_social}</span> },
               { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
@@ -1470,7 +1557,21 @@ export default function RemitosPage() {
                     <p className="font-mono text-sm font-medium text-blue-600 dark:text-blue-400">{detailRemito.oc_cliente}</p>
                   </div>
                 )}
-                {detailRemito.cae ? (
+                {detailRemito.cai_numero ? (
+                  <div className="col-span-2">
+                    <span className="text-zinc-400">Remito R — CAI</span>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
+                      <p className="font-mono text-xs dark:text-white">
+                        PV {String(detailRemito.punto_venta_cai).padStart(4, "0")} — Nro {String(detailRemito.nro_comprobante_cai).padStart(8, "0")}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <p className="font-mono text-xs text-zinc-500">CAI: {detailRemito.cai_numero}</p>
+                      <CopyButton text={detailRemito.cai_numero} />
+                    </div>
+                  </div>
+                ) : detailRemito.cae ? (
                   <div className="col-span-2">
                     <span className="text-zinc-400">Autorización ARCA</span>
                     <div className="flex items-center gap-2 mt-0.5">
@@ -1483,15 +1584,10 @@ export default function RemitosPage() {
                       {detailRemito.nro_remito_afip && <span>Comp: {detailRemito.nro_remito_afip}</span>}
                     </div>
                   </div>
-                ) : remitoRequiereARCA(detailRemito) ? (
-                  <div>
-                    <p className="text-sm font-medium text-amber-700 dark:text-amber-400">Autorización fiscal pendiente de configuración</p>
-                    <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">El circuito de remitos requiere validar CAI/autoimpresión. No se solicitará un CAE de factura para este documento.</p>
-                  </div>
                 ) : (
                   <div className="text-xs text-zinc-500 dark:text-zinc-400">
                     <span className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 dark:bg-zinc-800">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-zinc-400" /> Emisión manual
+                      <CheckCircle2 className="h-3.5 w-3.5 text-zinc-400" /> Remito interno (sin CAI)
                     </span>
                   </div>
                 )}
@@ -1755,16 +1851,12 @@ export default function RemitosPage() {
                 <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Tipo de remito</label>
                 <div className="flex gap-2">
                   <button type="button" onClick={() => { setCreateTipoRemito("interno"); setCreateForm(f => ({ ...f, numero: getNextInternoNumero() })); }}
-                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${createTipoRemito === "interno" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                    Interno (numeración propia)
+                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${createTipoRemito === "interno" ? "bg-emerald-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                    Remito R (con CAI)
                   </button>
                   <button type="button" onClick={() => { setCreateTipoRemito("muestra"); setCreateForm(f => ({ ...f, numero: getNextInternoNumero() })); }}
                     className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${createTipoRemito === "muestra" ? "bg-violet-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                    Muestras (manual)
-                  </button>
-                  <button type="button" onClick={() => setCreateTipoRemito("electronico")}
-                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${createTipoRemito === "electronico" ? "bg-emerald-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                    Electrónico (ARCA)
+                    Muestras (sin CAI)
                   </button>
                 </div>
               </div>
@@ -2023,11 +2115,8 @@ export default function RemitosPage() {
             <div>
               <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tipo de remito</label>
               <div className="flex gap-2">
-                <div className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-orange-500 text-white text-center">
-                  Interno (numeración propia)
-                </div>
-                <div className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-zinc-100 text-zinc-400 text-center cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-500" title="Próximamente">
-                  Electrónico (AFIP) — Próx.
+                <div className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-emerald-600 text-white text-center">
+                  Remito R (con CAI)
                 </div>
               </div>
             </div>
@@ -2429,6 +2518,16 @@ export default function RemitosPage() {
           if (!detailRemito || !sociedadActiva) throw new Error("No se encontró el remito");
           const r = detailRemito;
           const soc = getSociedadPDF(sociedadActiva);
+          let caiVto: string | null = null;
+          if (r.cai_numero) {
+            const { data: cc } = await (supabase as any)
+              .from("cai_config")
+              .select("fecha_vencimiento")
+              .eq("sociedad_id", sociedadActiva.id)
+              .eq("cai_numero", r.cai_numero)
+              .maybeSingle();
+            caiVto = cc?.fecha_vencimiento || null;
+          }
           const html = generateRemitoPDF({
             numero: r.numero,
             fecha: r.fecha,
@@ -2438,6 +2537,11 @@ export default function RemitosPage() {
             oc_cliente: r.oc_cliente,
             valor_declarado: r.valor_declarado,
             observaciones: r.observaciones,
+            cai_numero: r.cai_numero,
+            punto_venta_cai: r.punto_venta_cai,
+            nro_comprobante_cai: r.nro_comprobante_cai,
+            cai_vencimiento: caiVto,
+            cuit_emisor: sociedadActiva.cuit,
             cliente: r.clientes ? {
               razon_social: r.clientes.razon_social,
               cuit: r.clientes.cuit,

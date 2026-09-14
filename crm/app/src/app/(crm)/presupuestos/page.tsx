@@ -2017,20 +2017,34 @@ export default function PresupuestosPage() {
         .single();
       const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
 
+      // Get next CAI number atomically
+      let caiData: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
+      const { data: caiRows } = await (supabase as any).rpc("next_cai_number", {
+        p_sociedad_id: sociedadActiva.id,
+        p_tipo: "remito_r",
+      });
+      if (caiRows && caiRows.length > 0) caiData = caiRows[0];
+
+      const remitoInsert: Record<string, unknown> = {
+        numero: null,
+        cliente_id: pr.clienteId,
+        fecha: todayAR(),
+        observaciones: `Generado desde presupuesto ${pr.numero}`,
+        presupuesto_id: pr.id,
+        estado: "pendiente",
+        sociedad_id: sociedadActiva.id,
+        created_by: profile?.id || null,
+        oc_cliente: pr.ocCliente || null,
+        valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
+      };
+      if (caiData) {
+        remitoInsert.cai_numero = caiData.cai_numero;
+        remitoInsert.punto_venta_cai = caiData.punto_venta;
+        remitoInsert.nro_comprobante_cai = caiData.nro_comprobante;
+      }
       const { data: remitoData, error: remitoErr } = await (supabase as any)
         .from("remitos")
-        .insert({
-          numero: null,
-          cliente_id: pr.clienteId,
-          fecha: todayAR(),
-          observaciones: `Generado desde presupuesto ${pr.numero}`,
-          presupuesto_id: pr.id,
-          estado: "pendiente",
-          sociedad_id: sociedadActiva.id,
-          created_by: profile?.id || null,
-          oc_cliente: pr.ocCliente || null,
-          valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
-        })
+        .insert(remitoInsert)
         .select("id, numero")
         .single();
 

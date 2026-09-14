@@ -645,6 +645,12 @@ interface RemitoData {
   oc_cliente?: string | null;
   valor_declarado?: number | null;
   observaciones?: string | null;
+  // CAI fields
+  cai_numero?: string | null;
+  punto_venta_cai?: number | null;
+  nro_comprobante_cai?: number | null;
+  cai_vencimiento?: string | null;
+  cuit_emisor?: string | null;
   cliente: {
     razon_social?: string;
     cuit?: string;
@@ -659,12 +665,68 @@ interface RemitoData {
   transportes: TransportePDF[];
 }
 
+// Generate Interleaved 2 of 5 barcode as SVG (used by ARCA for CAI comprobantes)
+function itf25Svg(digits: string): string {
+  // ITF encoding patterns: N=narrow, W=wide
+  const patterns: Record<string, string> = {
+    "0":"NNWWN","1":"WNNNW","2":"NWNNW","3":"WWNNN","4":"NNWNW",
+    "5":"WNWNN","6":"NWWNN","7":"NNNWW","8":"WNNWN","9":"NWNWN",
+  };
+  // Pad to even length
+  let d = digits.length % 2 === 1 ? "0" + digits : digits;
+  const narrow = 1, wide = 3;
+  let bars: {w:number;black:boolean}[] = [];
+  // Start pattern: narrow black, narrow white, narrow black, narrow white
+  bars.push({w:narrow,black:true},{w:narrow,black:false},{w:narrow,black:true},{w:narrow,black:false});
+  for (let i = 0; i < d.length; i += 2) {
+    const bPat = patterns[d[i]];
+    const sPat = patterns[d[i+1]];
+    for (let j = 0; j < 5; j++) {
+      bars.push({w: bPat[j]==="W" ? wide : narrow, black: true});
+      bars.push({w: sPat[j]==="W" ? wide : narrow, black: false});
+    }
+  }
+  // Stop pattern: wide black, narrow white, narrow black
+  bars.push({w:wide,black:true},{w:narrow,black:false},{w:narrow,black:true});
+  const totalW = bars.reduce((s,b) => s + b.w, 0);
+  const svgW = 360, svgH = 50;
+  const scale = svgW / totalW;
+  let x = 0;
+  let rects = "";
+  for (const b of bars) {
+    if (b.black) rects += `<rect x="${(x*scale).toFixed(1)}" y="0" width="${(b.w*scale).toFixed(1)}" height="${svgH}" fill="#000"/>`;
+    x += b.w;
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" height="${svgH}">${rects}</svg>`;
+}
+
+// Build the 42-digit ARCA barcode data for CAI comprobantes
+function buildCaiBarcode(cuit: string, tipoComprobante: number, pv: number, cai: string, vtoDate: string): string {
+  const c = cuit.replace(/\D/g, "").padStart(11, "0");
+  const tipo = String(tipoComprobante).padStart(3, "0");
+  const punto = String(pv).padStart(5, "0");
+  const caiClean = cai.replace(/\D/g, "").padStart(14, "0");
+  // vtoDate as YYYYMMDD
+  const vto = vtoDate.replace(/\D/g, "").slice(0, 8);
+  const raw = c + tipo + punto + caiClean + vto;
+  // Verificador módulo 10
+  let sum = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const digit = parseInt(raw[i]);
+    // Posiciones impares (1-based) × 1, pares × 3
+    sum += (i % 2 === 0) ? digit : digit * 3;
+  }
+  const check = (10 - (sum % 10)) % 10;
+  return raw + check;
+}
+
 export function generateRemitoPDF(
   r: RemitoData,
   soc: SociedadPDF
 ): string {
   const c = soc.colorPrimario;
   const cli = r.cliente;
+  const hasCAI = !!(r.cai_numero && r.punto_venta_cai && r.nro_comprobante_cai);
 
   const itemRows = r.items.length > 0
     ? r.items.map((it, i) => `
@@ -681,22 +743,69 @@ export function generateRemitoPDF(
     ? `${r.sucursal_nombre}${r.sucursal_direccion ? ` &mdash; ${r.sucursal_direccion}` : ""}`
     : (cli?.direccion ? `${cli.direccion}${cli.localidad ? `, ${cli.localidad}` : ""}${cli.provincia ? ` (${cli.provincia})` : ""}` : "");
 
+  // Formatted PV-number for CAI remitos
+  const pvStr = hasCAI ? String(r.punto_venta_cai).padStart(4, "0") : "";
+  const nroStr = hasCAI ? String(r.nro_comprobante_cai).padStart(8, "0") : "";
+  const displayNumber = hasCAI ? `${pvStr}-${nroStr}` : r.numero;
+
+  // Barcode for CAI
+  let barcodeHtml = "";
+  if (hasCAI && r.cuit_emisor && r.cai_vencimiento) {
+    const vtoForBarcode = r.cai_vencimiento.replace(/-/g, ""); // YYYYMMDD
+    const barcodeData = buildCaiBarcode(r.cuit_emisor, 91, r.punto_venta_cai!, r.cai_numero!, vtoForBarcode);
+    const svg = itf25Svg(barcodeData);
+    const svgB64 = typeof btoa !== "undefined"
+      ? `data:image/svg+xml;base64,${btoa(svg)}`
+      : `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+    barcodeHtml = `
+      <div class="cai-section">
+        <div>
+          <div class="cai-label">CAI</div>
+          <div class="cai-value">${r.cai_numero}</div>
+          <div class="cai-vto">Fecha Vto. CAI: ${formatDate(r.cai_vencimiento)}</div>
+        </div>
+        <div style="text-align:center">
+          <img src="${svgB64}" style="width:280px;height:40px" />
+          <div style="font-size:8px;font-family:'Courier New',monospace;letter-spacing:1px;margin-top:2px">${barcodeData}</div>
+        </div>
+      </div>`;
+  }
+
+  // CAI section styles
+  const caiStyles = hasCAI ? `
+    .cai-section { margin-top: 20px; padding: 14px 16px; border: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
+    .cai-label { font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #444; font-weight: 700; }
+    .cai-value { font-size: 11px; font-weight: 700; font-family: 'Courier New', Courier, monospace; margin-top: 2px; color: #222; }
+    .cai-vto { font-size: 9px; color: #333; margin-top: 3px; }
+  ` : "";
+
+  // Authorization info in right panel
+  const authInfo = hasCAI
+    ? `<div class="compact-line"><span class="compact-label">CAI</span>${r.cai_numero}</div>
+       <div class="compact-line"><span class="compact-label">Vto. CAI</span>${formatDate(r.cai_vencimiento!)}</div>`
+    : r.cae
+    ? `<div class="compact-line"><span class="compact-label">CAE</span>${r.cae}</div>
+       ${r.cae_vencimiento ? `<div class="compact-line"><span class="compact-label">Vto. CAE</span>${formatDate(r.cae_vencimiento)}</div>` : ""}
+       ${r.nro_remito_afip ? `<div class="compact-line"><span class="compact-label">Comp. ARCA</span>${r.nro_remito_afip}</div>` : ""}`
+    : `<div class="compact-line"><span class="compact-label">Autorización</span>Remito interno</div>`;
+
   return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Remito ${r.numero}</title>
+<html><head><meta charset="utf-8"><title>Remito ${displayNumber}</title>
 <style>
   ${baseStyles(c)}
   .valor-declarado { background: #fff8e1; border: 2px solid #f9a825; border-radius: 6px; padding: 12px 16px; margin-top: 18px; font-size: 14px; font-weight: 700; color: #e65100; text-align: center; }
   .transport-grid { display: flex; flex-wrap: wrap; gap: 12px; }
   .transport-item { flex: 1; min-width: 140px; }
+  ${caiStyles}
 </style></head><body>
 <div class="page">
 ${documentHeader(soc, {
-  title: "Remito",
-  number: r.numero,
+  title: hasCAI ? "Remito R" : "Remito",
+  number: displayNumber,
   date: formatDate(r.fecha),
   secondary: "Original",
-  marker: r.cae ? "R" : "X",
-  markerCode: r.cae ? "Código 091 - Remito con CAE" : "Remito manual",
+  marker: hasCAI ? "R" : (r.cae ? "R" : "X"),
+  markerCode: hasCAI ? "Código 091 - Remito R" : (r.cae ? "Código 091 - Remito con CAE" : "Remito interno"),
   legalLegend: true,
   contactEmail: soc.commercialEmail,
 })}
@@ -716,11 +825,7 @@ ${documentHeader(soc, {
         <div class="compact-line"><span class="compact-label">Transportista</span>${t.transportista}</div>
         ${t.destino ? `<div class="compact-line"><span class="compact-label">Destino</span>${t.destino}</div>` : ""}
       `).join("") : `<div class="compact-line" style="color:#444;font-style:italic">Sin transporte asignado</div>`}
-      ${r.cae ? `
-        <div class="compact-line"><span class="compact-label">CAE</span>${r.cae}</div>
-        ${r.cae_vencimiento ? `<div class="compact-line"><span class="compact-label">Vto. CAE</span>${formatDate(r.cae_vencimiento)}</div>` : ""}
-        ${r.nro_remito_afip ? `<div class="compact-line"><span class="compact-label">Comp. ARCA</span>${r.nro_remito_afip}</div>` : ""}
-      ` : `<div class="compact-line"><span class="compact-label">Autorización</span>Pendiente ARCA</div>`}
+      ${authInfo}
     </td>
   </tr>
 </table>
@@ -749,7 +854,9 @@ ${r.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones
   </tr>
 </table>
 
-${documentFooter(soc, r.numero)}
+${barcodeHtml}
+
+${documentFooter(soc, displayNumber)}
 <div class="footer-legal">Recibí conforme la mercadería detallada precedentemente.</div>
 
 </div></body></html>`;
