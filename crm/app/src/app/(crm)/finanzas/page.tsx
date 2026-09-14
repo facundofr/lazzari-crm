@@ -1928,12 +1928,12 @@ export default function FinanzasPage() {
       if (sociedadActiva?.id) (movBase as any).sociedad_id = sociedadActiva.id;
 
       // Movimiento principal (neto a pagar)
-      const { error: movErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "pago", descripcion: `${opNumero} — ${provNombre}`, monto: totalMediosVal } as any);
+      const { error: movErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "pago", descripcion: `${opNumero} — ${provNombre}`, monto: totalMediosVal, orden_pago_id: opData.id } as any);
       if (movErr) throw new Error("Error al crear movimiento: " + movErr.message);
 
       // Movimiento retención ganancias
       if (retencionEfectiva > 0) {
-        const { error: retErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "retencion_ganancias", descripcion: `${opNumero} — Ret. Ganancias — ${provNombre}`, monto: retencionEfectiva } as any);
+        const { error: retErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "retencion_ganancias", descripcion: `${opNumero} — Ret. Ganancias — ${provNombre}`, monto: retencionEfectiva, orden_pago_id: opData.id } as any);
         if (retErr) throw new Error("Error al crear movimiento retención: " + retErr.message);
       }
 
@@ -1962,7 +1962,7 @@ export default function FinanzasPage() {
         } else if (m.echeq_id) {
           // Received cheque (echeq or cheque tercero) — mark as endosado
           const updateEstado = m.tipo === "cheque" ? "endosado" : "endosado";
-          let echeqUpdate = (supabase as any).from("echeqs").update({ estado: updateEstado, destino_tipo: "proveedor", destino_id: opForm.proveedor_id, destino_nombre: provNombre, fecha_endoso: new Date().toISOString().slice(0, 10) }).eq("id", m.echeq_id).eq("estado", "en_cartera");
+          let echeqUpdate = (supabase as any).from("echeqs").update({ estado: updateEstado, destino_tipo: "proveedor", destino_id: opForm.proveedor_id, destino_nombre: provNombre, fecha_endoso: todayAR() }).eq("id", m.echeq_id).eq("estado", "en_cartera");
           if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
           const { data: claimedEcheq, error: echeqError } = await echeqUpdate.select("id");
           if (echeqError || claimedEcheq?.length !== 1) throw new Error(`No se pudo reservar el cheque ${m.numero_cheque || m.echeq_id}: ${echeqError?.message || "otro usuario cambió su estado"}. Revisá esta OP antes de entregarlo`);
@@ -2003,12 +2003,18 @@ export default function FinanzasPage() {
 
       // No borrar movimientos: la anulación debe conservar el rastro contable.
       // Se marcan como anulados para excluirlos de saldos y conciliaciones.
-      if (opRow?.numero && opRow?.proveedor_id) {
-        let movUpdate = supabase.from("movimientos").update({ anulado: true, anulado_at: new Date().toISOString() } as any)
+      // Prefer orden_pago_id link; fallback to description pattern for legacy data.
+      let movUpdate = (supabase as any).from("movimientos").update({ anulado: true, anulado_at: new Date().toISOString() })
+        .eq("orden_pago_id", id);
+      if (sociedadActiva?.id) movUpdate = movUpdate.eq("sociedad_id", sociedadActiva.id);
+      const { data: movUpdated, error: movError } = await movUpdate.select("id");
+      if (movError) throw movError;
+      // Fallback for old movimientos without orden_pago_id
+      if ((!movUpdated || movUpdated.length === 0) && opRow?.numero && opRow?.proveedor_id) {
+        let movFallback = supabase.from("movimientos").update({ anulado: true, anulado_at: new Date().toISOString() } as any)
           .like("descripcion" as any, `${opRow.numero} — %`).eq("proveedor_id" as any, opRow.proveedor_id);
-        if (sociedadActiva?.id) movUpdate = movUpdate.eq("sociedad_id" as any, sociedadActiva.id);
-        const { error: movError } = await movUpdate;
-        if (movError) throw movError;
+        if (sociedadActiva?.id) movFallback = movFallback.eq("sociedad_id" as any, sociedadActiva.id);
+        await movFallback;
       }
 
       // Un e-cheq endosado por esta OP vuelve a estar disponible en cartera.
@@ -3054,14 +3060,15 @@ export default function FinanzasPage() {
   }
 
   function exportFCCompraCSV(data: FacturaCompraRow[]) {
-    const lines: string[] = ["Fecha;Vencimiento;Proveedor;Documento;Moneda;Importe;Deuda"];
+    const lines: string[] = ["Fecha;Vencimiento;Proveedor;Documento;Moneda;Importe;Pagado;Deuda"];
     data.forEach(f => {
-      const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : f.total;
-      lines.push(`${f.fecha};${f.fecha_vencimiento || ""};"${f.proveedor_nombre}";"${f.numero_factura}";${f.moneda};"${formatCurrency(f.total, f.moneda as "ARS"|"USD")}";"${formatCurrency(saldo, f.moneda as "ARS"|"USD")}"`);
+      const pagado = f.pago_directo || 0;
+      const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : Math.max(0, f.total - pagado);
+      lines.push(`${f.fecha};${f.fecha_vencimiento || ""};"${f.proveedor_nombre}";"${f.numero_factura}";${f.moneda};"${formatCurrency(f.total, f.moneda)}";"${formatCurrency(pagado, f.moneda)}";"${formatCurrency(saldo, f.moneda)}"`);
     });
     const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `Facturas_Compra_${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(url);
+    const a = document.createElement("a"); a.href = url; a.download = `Facturas_Compra_${todayAR()}.csv`; a.click(); URL.revokeObjectURL(url);
   }
 
   function exportCCProveedor() {

@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown, RefreshCw } from "lucide-react";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 
 // ── Types ────────────────────────────────────────────────
@@ -49,7 +49,7 @@ interface Props {
 
 // ── Helpers ──────────────────────────────────────────────
 const uid = () => Math.random().toString(36).slice(2, 9);
-const todayStr = () => new Date().toISOString().slice(0, 10);
+const todayStr = () => todayAR();
 const num = (v: string) => parseFloat(v) || 0;
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
