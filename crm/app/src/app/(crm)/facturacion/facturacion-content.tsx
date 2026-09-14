@@ -9,6 +9,7 @@ import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, formatDateTime, todayAR } from "@/lib/utils";
 import { generateFacturaPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64, documentFilename } from "@/lib/pdf-templates";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
+import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { EmailComposeModal, type EmailDocumentType } from "@/components/email-compose-modal";
 import { useUser } from "@/lib/auth-context";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
@@ -118,6 +119,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     };
   }, [sociedadActiva]);
   const [facturas, setFacturas] = useState<FacturaRow[]>([]);
+  const [cobradoPorFactura, setCobradoPorFactura] = useState<Record<string,number> | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
   const [fceRegistry, setFceRegistry] = useState<{ key: string; loading?: boolean; error?: string; estado?: string; historial?: { estado: string; fechaHora?: string }[]; checkedAt?: string }>({ key: "" });
@@ -525,6 +527,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   // ── Fetch data ─────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
+    setCobradoPorFactura(null);
     try {
       let query = supabase
         .from("facturas")
@@ -538,6 +541,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       const { data, error } = await query;
 
       if (!error && data) {
+        try {setCobradoPorFactura(await fetchCobradoMap((data as unknown as FacturaRow[]).map(f=>({id:f.id,moneda:f.moneda||"ARS"}))))}
+        catch {setCobradoPorFactura(null);}
         const hoy = new Date().toISOString().slice(0, 10);
         setFacturas((data as unknown as FacturaRow[]).map(f => {
           const fv = f.fecha_vencimiento || (f.clientes?.dias_cuenta_corriente && f.fecha
@@ -996,6 +1001,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   // ── Copy & PDF ─────────────────────────────────────────────────
   // Cobro modal
   const [cobroModalId, setCobroModalId] = useState<string | null>(null);
+  const [fxCobro, setFxCobro] = useState<{clienteId:string; documents:{id:string;numero:string;saldo:number;total:number;subtotal?:number;cotizacion?:number}[]} | null>(null);
   type CobroLinea = { tipo: "cobro" | "transferencia" | "efectivo" | "tarjeta" | "cheque_recibido" | "echeq" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva"; monto: string; descripcion: string; cheque_numero?: string; cheque_banco?: string; cheque_fecha?: string; cheque_id_digital?: string };
   const [cobroLineas, setCobroLineas] = useState<CobroLinea[]>([{ tipo: "transferencia", monto: "", descripcion: "" }]);
   const [cobroFecha, setCobroFecha] = useState(todayAR());
@@ -1081,26 +1087,62 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     } catch { /* ignore */ } finally { setCobroCotizFetching(false); }
   }
 
+  async function fetchCobradoMap(documents: {id:string;moneda:string}): Promise<Record<string,number>>;
+  async function fetchCobradoMap(documents: {id:string;moneda:string}[]): Promise<Record<string,number>>;
+  async function fetchCobradoMap(input: {id:string;moneda:string} | {id:string;moneda:string}[]): Promise<Record<string,number>> {
+    if (!sociedadActiva?.id) throw new Error("No se pudo identificar la sociedad para verificar los saldos.");
+    const documents=Array.isArray(input)?input:[input];
+    if(!documents.length)return {};
+    const ids=documents.map(f=>f.id);
+    const [direct,applications]=await Promise.all([
+      (supabase as any).from("movimientos").select("factura_id,monto,moneda,anulado").in("factura_id",ids).eq("sociedad_id",sociedadActiva.id),
+      (supabase as any).from("cobro_aplicaciones").select("factura_id,monto,movimientos!inner(anulado,sociedad_id)").in("factura_id",ids).eq("movimientos.sociedad_id",sociedadActiva.id),
+    ]);
+    if(direct.error||applications.error)throw new Error("No se pudieron verificar los cobros previos; no se habilitó el cobro. Reintentá la consulta.");
+    const totals:Record<string,number>={};
+    for(const m of direct.data||[]){
+      if(m.anulado)continue;
+      const doc=documents.find(f=>f.id===m.factura_id);
+      if(!doc || (m.moneda||"ARS")!==doc.moneda)throw new Error("Hay un cobro previo en otra moneda sin aplicación conciliada. Revisalo antes de continuar.");
+      if(!Number.isFinite(Number(m.monto)))throw new Error("Un cobro previo tiene un importe inválido.");
+      totals[m.factura_id]=(totals[m.factura_id]||0)+Number(m.monto);
+    }
+    for(const a of applications.data||[]){
+      const movement=Array.isArray(a.movimientos)?a.movimientos[0]:a.movimientos;
+      if(!movement)throw new Error("Una aplicación no tiene un movimiento verificable.");
+      if(movement.anulado)continue;
+      if(!Number.isFinite(Number(a.monto)))throw new Error("Una aplicación de cobro tiene un importe inválido.");
+      // Application amount is ALWAYS in the invoice's currency; FX cash is ARS
+      // with factura_id null, so it must not also be counted as a direct payment.
+      totals[a.factura_id]=(totals[a.factura_id]||0)+Number(a.monto);
+    }
+    return totals;
+  }
   async function fetchCobrosPrevios(facturaId: string): Promise<number> {
-    const { data: movs } = await (supabase as any).from("movimientos").select("monto").eq("factura_id", facturaId);
-    return (movs || []).reduce((s: number, m: any) => s + Number(m.monto), 0);
+    const factura=facturas.find(f=>f.id===facturaId);
+    if(!factura)throw new Error("Factura no encontrada para verificar su saldo.");
+    return (await fetchCobradoMap({id:factura.id,moneda:factura.moneda}))[facturaId]||0;
   }
 
   async function openCobroModal(factura: FacturaRow) {
     setCobroPreviosLoading(true);
     setCobroPrevios(0);
     setCobroFecha(todayAR());
-    setCobroModalId(factura.id);
+    setCobroModalId(null);
     setCobroCotiz("");
-    if (factura.moneda === "USD") fetchCobroCotizBNA("divisas");
     try {
       const previos = await fetchCobrosPrevios(factura.id);
       setCobroPrevios(previos);
       const saldoReal = Number(factura.total) - Number(factura.total_acreditado || 0) - previos;
+      if(saldoReal<=0.005)throw new Error("La factura no tiene saldo pendiente.");
+      if(factura.moneda==="USD"){
+        setFxCobro({clienteId:factura.cliente_id,documents:[{id:factura.id,numero:formatComprobante(factura.tipo,factura.punto_venta,factura.numero),saldo:saldoReal,total:Number(factura.total),subtotal:Number(factura.subtotal),cotizacion:Number(factura.tipo_cambio)||undefined}]});
+        return;
+      }
+      setCobroModalId(factura.id);
       setCobroLineas([{ tipo: "transferencia", monto: String(Math.max(0, Math.round(saldoReal * 100) / 100)), descripcion: "" }]);
-    } catch {
-      const saldoFallback = Number(factura.total) - Number(factura.total_acreditado || 0);
-      setCobroLineas([{ tipo: "transferencia", monto: String(Math.max(0, saldoFallback)), descripcion: "" }]);
+    } catch(error) {
+      alert(error instanceof Error?error.message:"No se pudo verificar el saldo de la factura.");
     } finally {
       setCobroPreviosLoading(false);
     }
@@ -1135,10 +1177,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     if (!cobroModalId || lineasValidas.length === 0) return;
     const factura = facturas.find(f => f.id === cobroModalId);
     if (!factura) return;
+    if(factura.moneda!=="ARS"){alert("Los cobros de facturas USD deben registrarse desde la liquidación con tipo de cambio.");return;}
     const totalLineas = lineasValidas.reduce((s, l) => s + Number(l.monto), 0);
     const saldo = Number(factura.total) - Number(factura.total_acreditado || 0) - cobroPrevios;
-    const cotizNum = parseFloat(cobroCotiz) || 0;
-    const saldoComp = factura.moneda === "USD" && cotizNum > 0 ? saldo * cotizNum : saldo;
+    const saldoComp = saldo;
     if (totalLineas > saldoComp + 0.01) {
       alert(`El total de cobros ($${totalLineas.toLocaleString()}) supera el saldo pendiente ($${Math.max(0, saldoComp).toLocaleString()})`);
       return;
@@ -1146,9 +1188,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     setCobroSaving(true);
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id || null;
-      const cotizSuffix = factura.moneda === "USD" && cotizNum > 0 ? ` | TC: ${cotizNum.toFixed(2)} (${cobroCotizModalidad})` : "";
       const lineasPayload = lineasValidas.map(l => {
-        let desc = l.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}${cotizSuffix}`;
+        let desc = l.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}`;
         // Append cheque details to description
         if ((l.tipo === "cheque_recibido" || l.tipo === "echeq") && (l.cheque_numero || l.cheque_banco)) {
           const parts = [l.cheque_banco, l.cheque_numero ? `N° ${l.cheque_numero}` : null, l.cheque_fecha, l.cheque_id_digital ? `ID: ${l.cheque_id_digital}` : null].filter(Boolean);
@@ -1173,7 +1214,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           numero: cl.cheque_numero || `CHQ-${Date.now()}`,
           banco_emisor: cl.cheque_banco || null,
           monto: Number(cl.monto),
-          moneda: factura.moneda === "USD" && cotizNum > 0 ? "ARS" : factura.moneda,
+          moneda: "ARS",
           fecha_pago: cl.cheque_fecha || cobroFecha,
           estado: "en_cartera",
           origen_tipo: "cliente",
@@ -1199,7 +1240,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   }
 
   // ── Cobro masivo modal ────────────────────────────────────────
-  interface CobroMasivoFC { id: string; numero: number; tipo: string; punto_venta: number; fecha: string; total: number; subtotal: number; iva: number; total_acreditado: number; moneda: string; saldo: number; selected: boolean }
+  interface CobroMasivoFC { id: string; numero: number; tipo: string; punto_venta: number; fecha: string; total: number; subtotal: number; iva: number; total_acreditado: number; moneda: string; tipo_cambio?:number; saldo: number; selected: boolean }
   const [cmOpen, setCmOpen] = useState(false);
   const [cmClientes, setCmClientes] = useState<ClienteOption[]>([]);
   const [cmClienteId, setCmClienteId] = useState("");
@@ -1223,31 +1264,33 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     setCmClienteId(clienteId);
     setCmFCs([]);
     if (!clienteId) return;
+    if(!sociedadActiva?.id){alert("Seleccioná una sociedad antes de consultar los saldos.");return;}
     setCmLoadingFCs(true);
     try {
-      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, estado").eq("cliente_id", clienteId).in("estado", ["emitida", "parcial"]).order("fecha", { ascending: true });
+      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, tipo_cambio, estado").eq("cliente_id", clienteId).in("estado", ["emitida", "parcial", "vencida", "pendiente"]).order("fecha", { ascending: true });
       if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
-      const { data } = await q;
+      const { data, error } = await q;
+      if(error)throw error;
       if (data && data.length > 0) {
         // Query existing movimientos + cobro_aplicaciones to get real saldo
-        const ids = data.map((f: any) => f.id);
-        const { data: movs } = await (supabase as any).from("movimientos").select("factura_id, monto").in("factura_id", ids);
-        const cobradoMap: Record<string, number> = {};
-        (movs || []).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
-        const { data: aplicaciones } = await (supabase as any).from("cobro_aplicaciones").select("factura_id, monto").in("factura_id", ids);
-        if (aplicaciones) (aplicaciones as any[]).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
+        const cobradoMap = await fetchCobradoMap(data.map((f:any)=>({id:f.id,moneda:f.moneda||"ARS"})));
         setCmFCs(data.map((f: any) => {
           const cobrado = cobradoMap[f.id] || 0;
           const saldo = Number(f.total) - Number(f.total_acreditado || 0) - cobrado;
-          return { id: f.id, numero: f.numero ?? 0, tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", saldo: Math.max(0, saldo), selected: false };
+          return { id: f.id, numero: f.numero ?? 0, tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", tipo_cambio:Number(f.tipo_cambio)||undefined, saldo: Math.max(0, saldo), selected: false };
         }).filter((f: CobroMasivoFC) => f.saldo > 0.01));
       }
-    } catch { /* noop */ } finally { setCmLoadingFCs(false); }
+    } catch(error) {setCmFCs([]);alert(error instanceof Error?error.message:"No se pudieron verificar los saldos.");} finally { setCmLoadingFCs(false); }
   }
 
   function cmOpenLiquidacion() {
     const selected = cmFCs.filter(f => f.selected);
     if (selected.length === 0) { alert("Seleccioná al menos una factura"); return; }
+    if(new Set(selected.map(f=>f.moneda)).size!==1){alert("Seleccioná facturas de una sola moneda por liquidación; no se pueden sumar pesos y dólares.");return;}
+    if(selected[0].moneda==="USD"){
+      setFxCobro({clienteId:cmClienteId,documents:selected.map(f=>({id:f.id,numero:formatComprobante(f.tipo,f.punto_venta,f.numero),saldo:f.saldo,total:f.total,subtotal:f.subtotal,cotizacion:f.tipo_cambio}))});
+      return;
+    }
     setCmLiquidacionOpen(true);
   }
 
@@ -1423,17 +1466,19 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     const d = new Date(f.fecha);
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear && f.estado !== "anulada";
   });
-  const ncTipos = ["NCA", "NCB", "NCEA", "NCEB", "NDA", "NDB"];
-  const facturadoMes = facturasEsteMes.reduce((a, f) => a + (ncTipos.includes(f.tipo) ? -Number(f.total) : Number(f.total)), 0);
-  const pendientesCobro = facturas.filter(f => ["pendiente", "parcial", "vencida"].includes(f.estado) && !ncTipos.includes(f.tipo)).reduce((a, f) => a + Number(f.total) - Number(f.total_acreditado || 0), 0);
+  const ncTipos = ["NCA", "NCB", "NCEA", "NCEB"];
+  const facturadoMesMoneda = (moneda:string)=>facturasEsteMes.filter(f=>f.moneda===moneda).reduce((a, f) => a + (ncTipos.includes(f.tipo) ? -Number(f.total) : Number(f.total)), 0);
+  const saldoFactura = (f:FacturaRow)=>["pagada","anulada"].includes(f.estado)?0:Math.max(0,Number(f.total)-Number(f.total_acreditado||0)-(cobradoPorFactura?.[f.id]||0));
+  const pendientesMoneda = (moneda:string)=>facturas.filter(f => f.moneda===moneda && ["pendiente", "parcial", "vencida"].includes(f.estado) && !ncTipos.includes(f.tipo)).reduce((a, f) => a + saldoFactura(f), 0);
   const facturasVencidas = facturas.filter(f => f.estado === "vencida").length;
   const caeVigentes = facturas.filter(f => f.cae && f.estado !== "anulada").length;
 
   function exportFacturasCSV() {
+    if(!cobradoPorFactura){alert("No se pudieron verificar los saldos. Actualizá la lista antes de exportar para no informar una deuda incorrecta.");return;}
     const csvLines: string[] = ["Fecha;Vencimiento;Cliente;Documento;Moneda;Importe;Deuda"];
     filteredFacturas.forEach((f: any) => {
       const doc = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
-      const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : Number(f.total) - (f.total_acreditado || 0);
+      const saldo = saldoFactura(f);
       csvLines.push(`${f.fecha};${f._fechaVencCalc || ""};"${(f.clientes?.razon_social || "").replace(/"/g, '""')}";"${doc}";${f.moneda};"${formatCurrency(Number(f.total), f.moneda as "ARS"|"USD")}";"${formatCurrency(saldo, f.moneda as "ARS"|"USD")}"`);
     });
     const blob = new Blob(["\uFEFF" + csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
@@ -1483,8 +1528,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       <div className="p-6 lg:p-8 space-y-6">
         {/* KPIs */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard title="Facturado este mes" value={formatCurrency(facturadoMes, "ARS")} icon={DollarSign} iconColor="text-emerald-600" />
-          <StatCard title="Pendientes de cobro" value={formatCurrency(pendientesCobro, "ARS")} icon={Clock} iconColor="text-amber-500" />
+          <StatCard title="Facturado este mes" value={`${formatCurrency(facturadoMesMoneda("ARS"),"ARS")} / ${formatCurrency(facturadoMesMoneda("USD"),"USD")}`} icon={DollarSign} iconColor="text-emerald-600" />
+          <StatCard title="Pendientes de cobro" value={cobradoPorFactura?`${formatCurrency(pendientesMoneda("ARS"),"ARS")} / ${formatCurrency(pendientesMoneda("USD"),"USD")}`:"Saldo sin verificar"} icon={Clock} iconColor="text-amber-500" />
           <StatCard title="Comprobantes vencidos" value={String(facturasVencidas)} icon={AlertTriangle} iconColor="text-red-500" />
           <StatCard title="CAE vigentes" value={String(caeVigentes)} icon={FileCheck} iconColor="text-blue-600" />
         </div>
@@ -2355,6 +2400,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       )}
 
       {/* ── Cobro Modal ──────────────────────────────────────────── */}
+      {fxCobro && sociedadActiva?.id && <FxSettlementDialog
+        kind="cobro" counterpartyId={fxCobro.clienteId} sociedadId={sociedadActiva.id}
+        documents={fxCobro.documents}
+        onClose={()=>setFxCobro(null)}
+        onSuccess={()=>{setFxCobro(null);setCobroModalId(null);setCmOpen(false);setCmLiquidacionOpen(false);fetchData();}}
+      />}
       {cobroModalId && (() => {
         const f = facturas.find(ff => ff.id === cobroModalId);
         if (!f) return null;

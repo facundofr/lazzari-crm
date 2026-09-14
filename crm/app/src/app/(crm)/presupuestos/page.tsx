@@ -2897,6 +2897,12 @@ export default function PresupuestosPage() {
                   <p className="text-xs text-zinc-500">Sucursal</p>
                   <p className="text-sm font-medium">{selected.sucursalNombre || "—"}</p>
                 </div>
+                {(selected as any).contactoNombre && (
+                  <div>
+                    <p className="text-xs text-zinc-500">Solicitante</p>
+                    <p className="text-sm font-medium">{(selected as any).contactoNombre}</p>
+                  </div>
+                )}
                 <div>
                   <p className="text-xs text-zinc-500">Operador</p>
                   <select

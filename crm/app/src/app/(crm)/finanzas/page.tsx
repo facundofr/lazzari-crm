@@ -21,6 +21,7 @@ import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import CargaMasivaFacturasCompra from "@/components/carga-masiva-facturas-compra";
 import { paymentDocumentFields } from "@/lib/payment-document-parser";
+import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -330,6 +331,7 @@ interface MovimientoRow {
   anulado?: boolean;
   monto_original?: number | null;
   anulado_at?: string | null;
+  liquidacion_fx_id?: string | null;
   clientes?: { razon_social: string } | null;
   proveedores?: { razon_social: string } | null;
 }
@@ -785,10 +787,12 @@ export default function FinanzasPage() {
   const [ccDetailProvLoading, setCcDetailProvLoading] = useState(false);
 
   // ── Cobro Multiple modal ──
-  interface CobroMultiFC { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; subtotal: number; iva: number; total: number; total_acreditado: number; moneda: string; saldo: number; selected: boolean }
+  interface CobroMultiFC { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; subtotal: number; iva: number; total: number; total_acreditado: number; moneda: string; tipo_cambio?: number; saldo: number; selected: boolean }
   const [cobroMultiOpen, setCobroMultiOpen] = useState(false);
   const [cobroMultiFCs, setCobroMultiFCs] = useState<CobroMultiFC[]>([]);
   const [cobroMultiLiqOpen, setCobroMultiLiqOpen] = useState(false);
+  const [fxPago, setFxPago] = useState<{proveedorId:string; documents:{id:string;numero:string;saldo:number;total:number;subtotal?:number;cotizacion?:number}[]} | null>(null);
+  const [fxCobroMulti, setFxCobroMulti] = useState<{clienteId:string; documents:{id:string;numero:string;saldo:number;total:number;subtotal?:number;cotizacion?:number}[]} | null>(null);
 
   // ── Manual movement modal (conciliacion) ──
   const [manualMovOpen, setManualMovOpen] = useState(false);
@@ -1433,6 +1437,8 @@ export default function FinanzasPage() {
   }
 
   async function handleDeleteMov(id: string) {
+    const mov = movimientos.find(m => m.id === id);
+    if (mov?.liquidacion_fx_id) { alert("Este movimiento pertenece a una liquidación FX. Anulá la liquidación completa desde el botón Anular."); return; }
     if (!confirm("¿Seguro que queres eliminar este movimiento?")) return;
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
@@ -1467,6 +1473,19 @@ export default function FinanzasPage() {
   }
 
   async function handleAnularMov(id: string) {
+    // Check if this movement belongs to an FX settlement
+    const mov = movimientos.find(m => m.id === id);
+    if (mov?.liquidacion_fx_id) {
+      if (!confirm("Este movimiento pertenece a una liquidación FX. ¿Anular la liquidación completa?")) return;
+      if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
+      try {
+        const { error } = await (supabase as any).rpc("anular_liquidacion_fx", { p_id: mov.liquidacion_fx_id, p_sociedad_id: sociedadActiva.id });
+        if (error) throw error;
+        setSelectedMov(null);
+        await fetchData();
+      } catch (err) { alert("Error al anular liquidación FX: " + (err instanceof Error ? err.message : String(err))); }
+      return;
+    }
     if (!confirm("¿Anular este cobro? Se conservará el registro, se revertirá el importe y se recalculará la factura.")) return;
     try {
       const { error } = await (supabase as any).rpc("gestionar_cobro", {
@@ -1735,6 +1754,11 @@ export default function FinanzasPage() {
     if (!["RI", "RESPONSABLE INSCRIPTO", "RESPONSABLE INSCRIPTO IVA", "MONOTRIBUTISTA", "MT", "EXENTO", "EX", "CONSUMIDOR FINAL", "CF", "NO RESPONSABLE"].includes(opProvCondicion.trim().toUpperCase())) {
       setOpError("La condición fiscal del proveedor no está reconocida. Revisá su ficha antes de generar la OP."); return;
     }
+    if (selectedFCs.length > 0 && selectedFCs.every(f => f.moneda === "USD")) {
+      setOpModalOpen(false);
+      setFxPago({proveedorId: opForm.proveedor_id, documents: selectedFCs.map(fc => ({id:fc.id,numero:fc.numero,saldo:fc.saldo_pendiente,total:fc.total,subtotal:fc.subtotal,cotizacion:undefined}))});
+      return;
+    }
     if (selectedFCs.some(f => f.moneda !== opForm.moneda) || opMedios.some(m => m.moneda !== opForm.moneda)) {
       setOpError("Hay documentos o medios en otra moneda. No se puede sumar pesos y dólares sin conversión: esta OP debe tener todos sus importes en la misma moneda."); return;
     }
@@ -1907,6 +1931,14 @@ export default function FinanzasPage() {
     if (!confirm("¿Seguro que queres anular esta orden de pago?")) return;
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
+      // Check if this OP belongs to an FX settlement
+      const { data: fxLink } = await (supabase as any).from("liquidaciones_fx").select("id").eq("orden_pago_id", id).eq("sociedad_id", sociedadActiva.id).maybeSingle();
+      if (fxLink?.id) {
+        const { data: result, error: fxErr } = await (supabase as any).rpc("anular_liquidacion_fx", { p_id: fxLink.id, p_sociedad_id: sociedadActiva.id });
+        if (fxErr) throw new Error(fxErr.message);
+        await fetchData();
+        return;
+      }
       // Get OP details for movimiento cleanup
       let opQuery = (supabase as any).from("ordenes_pago").select("numero, proveedor_id").eq("id", id);
       if (sociedadActiva?.id) opQuery = opQuery.eq("sociedad_id", sociedadActiva.id);
@@ -2485,6 +2517,11 @@ export default function FinanzasPage() {
     if (!opProvCondicion || !opForm.proveedor_id) { setOpError("Falta verificar la condición fiscal del proveedor"); return; }
     const knownConditions = ["RI", "RESPONSABLE INSCRIPTO", "RESPONSABLE INSCRIPTO IVA", "MONOTRIBUTISTA", "MT", "EXENTO", "EX", "CONSUMIDOR FINAL", "CF", "NO RESPONSABLE"];
     if (!knownConditions.includes(String(opProvCondicion).trim().toUpperCase())) { setOpError("La condición fiscal del proveedor no está reconocida. Revisá su ficha antes de registrar el pago"); return; }
+    if (fc.moneda === "USD") {
+      setOpModalOpen(false);
+      setFxPago({proveedorId: opForm.proveedor_id, documents: [{id:fc.id,numero:fc.numero,saldo:fc.saldo_pendiente,total:fc.total,subtotal:fc.subtotal,cotizacion:undefined}]});
+      return;
+    }
     if (opForm.moneda !== "ARS") { setOpError("El pago en dólares requiere registrar su conversión a pesos antes de calcular las retenciones"); return; }
     if (opForm.usar_monto_manual) { setOpError("Para un pago parcial directo indicá el importe bruto en «A pagar» de la factura"); return; }
     if (fc.moneda !== opForm.moneda || opMedios.some(m => m.moneda !== opForm.moneda)) { setOpError("La factura y todos los medios deben estar en la misma moneda"); return; }
@@ -2863,24 +2900,29 @@ export default function FinanzasPage() {
     if (!ccDetailCliente) return;
     setCobroMultiOpen(true); setCobroMultiLiqOpen(false);
     try {
-      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, estado").eq("cliente_id", ccDetailCliente.id).in("estado", ["emitida", "parcial"]).order("fecha", { ascending: true });
+      let q = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, tipo_cambio, estado").eq("cliente_id", ccDetailCliente.id).in("estado", ["emitida", "parcial", "vencida", "pendiente"]).order("fecha", { ascending: true });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
-      const { data } = await q;
+      const { data, error } = await q;
+      if (error) throw error;
       if (data && data.length > 0) {
         const ids = data.map((f: any) => f.id);
-        const { data: movs } = await (supabase as any).from("movimientos").select("factura_id, monto").in("factura_id", ids);
+        const { data: movs } = await (supabase as any).from("movimientos").select("factura_id, monto, anulado").in("factura_id", ids);
         const cobradoMap: Record<string, number> = {};
-        (movs || []).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
-        // Also count consolidated cobros via cobro_aplicaciones
-        const { data: aplicaciones } = await (supabase as any).from("cobro_aplicaciones").select("factura_id, monto").in("factura_id", ids);
-        if (aplicaciones) (aplicaciones as any[]).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
-        setCobroMultiFCs(data.map((f: any) => { const cobrado = cobradoMap[f.id] || 0; const saldo = Math.max(0, Number(f.total) - Number(f.total_acreditado || 0) - cobrado); return { id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", saldo, selected: false }; }).filter((f: CobroMultiFC) => f.saldo > 0.01));
+        (movs || []).filter((m: any) => !m.anulado).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
+        const { data: aplicaciones } = await (supabase as any).from("cobro_aplicaciones").select("factura_id, monto, movimientos!inner(anulado)").in("factura_id", ids);
+        if (aplicaciones) (aplicaciones as any[]).filter((a: any) => { const mov = Array.isArray(a.movimientos) ? a.movimientos[0] : a.movimientos; return mov && !mov.anulado; }).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
+        setCobroMultiFCs(data.map((f: any) => { const cobrado = cobradoMap[f.id] || 0; const saldo = Math.max(0, Number(f.total) - Number(f.total_acreditado || 0) - cobrado); return { id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", tipo_cambio: Number(f.tipo_cambio) || undefined, saldo, selected: false }; }).filter((f: CobroMultiFC) => f.saldo > 0.01));
       }
-    } catch { /* noop */ }
+    } catch (err) { setCobroMultiFCs([]); alert(err instanceof Error ? err.message : "No se pudieron verificar los saldos."); }
   }
   function cobroMultiOpenLiquidacion() {
     const selected = cobroMultiFCs.filter(f => f.selected);
     if (selected.length === 0) { alert("Seleccioná al menos una factura"); return; }
+    if (new Set(selected.map(f => f.moneda)).size !== 1) { alert("Seleccioná facturas de una sola moneda por liquidación; no se pueden sumar pesos y dólares."); return; }
+    if (selected[0].moneda === "USD" && ccDetailCliente) {
+      setFxCobroMulti({clienteId: ccDetailCliente.id, documents: selected.map(f => ({id:f.id,numero:`${f.tipo} ${String(f.punto_venta).padStart(4,"0")}-${String(f.numero).padStart(8,"0")}`,saldo:f.saldo,total:f.total,subtotal:f.subtotal,cotizacion:f.tipo_cambio}))});
+      return;
+    }
     setCobroMultiLiqOpen(true);
   }
   function cobroMultiGetLiqFacturas(): LiquidacionFactura[] {
@@ -3460,6 +3502,14 @@ export default function FinanzasPage() {
                   </div>
                 </div>
 
+                {/* FX settlement badge */}
+                {selectedMov.liquidacion_fx_id && (
+                  <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 px-3 py-2">
+                    <DollarSign className="h-4 w-4 text-blue-500" />
+                    <span className="text-xs font-medium text-blue-700 dark:text-blue-300">Liquidación FX — Para corregir o anular, usá el botón Anular de este movimiento.</span>
+                  </div>
+                )}
+
                 {/* Descripcion completa */}
                 <div>
                   <p className="text-xs text-zinc-400 uppercase mb-1">Descripcion</p>
@@ -3518,20 +3568,24 @@ export default function FinanzasPage() {
                   )}
                   {!selectedMov.anulado && (
                     <>
-                      <button onClick={() => { const mov = selectedMov; setSelectedMov(null); openEditMov(mov); }}
-                        className="flex items-center gap-1.5 rounded-lg border border-blue-300 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20">
-                        <Pencil className="h-4 w-4" /> Editar
-                      </button>
+                      {!selectedMov.liquidacion_fx_id && (
+                        <button onClick={() => { const mov = selectedMov; setSelectedMov(null); openEditMov(mov); }}
+                          className="flex items-center gap-1.5 rounded-lg border border-blue-300 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20">
+                          <Pencil className="h-4 w-4" /> Editar
+                        </button>
+                      )}
                       <button onClick={() => handleAnularMov(selectedMov.id)}
                         className="flex items-center gap-1.5 rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20">
-                        <Ban className="h-4 w-4" /> Anular
+                        <Ban className="h-4 w-4" /> {selectedMov.liquidacion_fx_id ? "Anular liquidación FX" : "Anular"}
                       </button>
                     </>
                   )}
-                  <button onClick={() => handleDeleteMov(selectedMov.id)}
-                    className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
-                    <Trash2 className="h-4 w-4" /> Eliminar
-                  </button>
+                  {!selectedMov.liquidacion_fx_id && (
+                    <button onClick={() => handleDeleteMov(selectedMov.id)}
+                      className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+                      <Trash2 className="h-4 w-4" /> Eliminar
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -6169,6 +6223,20 @@ export default function FinanzasPage() {
           </div>
         </>
       )}
+
+      {/* ── FX Settlement Dialogs ── */}
+      {fxPago && sociedadActiva?.id && <FxSettlementDialog
+        kind="pago" counterpartyId={fxPago.proveedorId} sociedadId={sociedadActiva.id}
+        documents={fxPago.documents}
+        onClose={() => setFxPago(null)}
+        onSuccess={async () => { setFxPago(null); setOpModalOpen(false); await fetchData(); }}
+      />}
+      {fxCobroMulti && sociedadActiva?.id && <FxSettlementDialog
+        kind="cobro" counterpartyId={fxCobroMulti.clienteId} sociedadId={sociedadActiva.id}
+        documents={fxCobroMulti.documents}
+        onClose={() => setFxCobroMulti(null)}
+        onSuccess={async () => { setFxCobroMulti(null); setCobroMultiOpen(false); setCobroMultiLiqOpen(false); await fetchData(); if (ccDetailCliente) await fetchCCDetailCliente(ccDetailCliente); }}
+      />}
 
       {/* ── Cobro Multiple Modal — Paso 1: selección ── */}
       {cobroMultiOpen && ccDetailCliente && !cobroMultiLiqOpen && (
