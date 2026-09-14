@@ -515,7 +515,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     return c;
   }, [facturas]);
 
-  const filteredFacturas = facturas.filter((f) => {
+  const filteredFacturas = useMemo(() => facturas.filter((f) => {
     if (!fvIsAll && !Array.from(fvSelectedEstados).some(grp => (ESTADO_GROUPS[grp] || [grp]).includes(f.estado))) return false;
     if (fvTipoFilter && f.tipo !== fvTipoFilter) return false;
     if (clienteSearch.trim()) {
@@ -525,7 +525,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     if (fvEnvioFilter === "enviada" && !f.email_enviado_at) return false;
     if (fvEnvioFilter === "no_enviada" && f.email_enviado_at) return false;
     return true;
-  });
+  }), [facturas, fvIsAll, fvSelectedEstados, fvTipoFilter, clienteSearch, fvEnvioFilter]);
 
   // ── Fetch data ─────────────────────────────────────────────────
   const fetchData = useCallback(async () => {

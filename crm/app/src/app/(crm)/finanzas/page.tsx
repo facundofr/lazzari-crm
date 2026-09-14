@@ -5215,7 +5215,7 @@ export default function FinanzasPage() {
       {opModalOpen && (
         <>
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setOpModalOpen(false)} />
-          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <FileText className="h-5 w-5 text-orange-500" />
