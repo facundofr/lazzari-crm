@@ -11,7 +11,7 @@ import { canMatchBankMovement } from "@/lib/extracto-match";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles, Mail, MailCheck } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles, Mail, MailCheck, Send } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -3856,7 +3856,7 @@ export default function FinanzasPage() {
                       {row.estado === "pagada" ? "Pagada" : row.estado === "anulada" ? "Anulada" : row.estado === "recibida" ? "Recibida" : row.estado === "pendiente_aprobacion" ? "Por aprobar" : "Pendiente"}
                     </Badge>
                   )},
-                  { key: "op_vinculada" as any, label: "OP", sortable: false, render: (row) => (
+                  { key: "op_vinculada" as any, label: "OP", sortable: true, render: (row) => (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       {row.op_vinculada ? (
                         <button onClick={() => { const op = ordenesPago.find(o => o.id === row.op_vinculada!.id); if (op) { setSelectedOP(op); } else { alert("No se encontró la OP. Intente recargar la página."); } }}
@@ -3879,12 +3879,19 @@ export default function FinanzasPage() {
                       )}
                     </div>
                   )},
-                  { key: "sobre_verde" as any, label: "Sobre", sortable: false, render: (row) => row.op_vinculada ? (
-                    <button type="button" onClick={() => handleToggleSobreVerde(row.op_vinculada!.id, !!row.op_vinculada!.sobre_verde)}
-                      className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium ${row.op_vinculada.sobre_verde ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30" : "text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
-                      title={row.op_vinculada.sobre_verde ? "Quitar sobre verde" : "Marcar como sobre verde"}>
-                      <Mail className="h-3.5 w-3.5" /> {row.op_vinculada.sobre_verde ? "Verde" : "Marcar"}
-                    </button>
+                  { key: "sobre_verde" as any, label: "Sobre", sortable: true, render: (row) => row.op_vinculada ? (
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      <button type="button" onClick={() => { const op = ordenesPago.find(o => o.id === row.op_vinculada!.id); if (op) openOrdenPagoEmail(op); }}
+                        className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-900/20"
+                        title="Enviar OP por email">
+                        <Send className="h-3.5 w-3.5" />
+                      </button>
+                      <button type="button" onClick={() => handleToggleSobreVerde(row.op_vinculada!.id, !!row.op_vinculada!.sobre_verde)}
+                        className={`rounded p-1.5 ${row.op_vinculada.sobre_verde ? "text-emerald-500 bg-emerald-50 dark:bg-emerald-950/30" : "text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-500"}`}
+                        title={row.op_vinculada.sobre_verde ? "Quitar sobre verde" : "Marcar como sobre verde"}>
+                        <Mail className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   ) : <span className="text-zinc-300 text-xs">—</span> },
                   { key: "actions", label: "", sortable: false, render: (row) => (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
