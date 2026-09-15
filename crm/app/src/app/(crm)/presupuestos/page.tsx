@@ -1804,7 +1804,8 @@ export default function PresupuestosPage() {
       // Cancel linked OCs
       let cancelOCs = supabase.from("ordenes_compra").update({ estado: "cancelada" } as any).eq("presupuesto_origen_id", id).not("estado", "eq", "cancelada");
       if (sociedadActiva?.id) cancelOCs = cancelOCs.eq("sociedad_id" as any, sociedadActiva.id);
-      await cancelOCs;
+      const { error: ocErr } = await cancelOCs;
+      if (ocErr) console.error("Error cancelando OCs:", ocErr.message);
       setSelected(null);
       setPanelFullscreen(false);
       setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: true } as any : p));
@@ -2328,7 +2329,7 @@ export default function PresupuestosPage() {
                   <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">{cfg.label} ({counts[estado] || 0})</p>
                   <div className="mt-1 space-y-0.5">
                     {t.USD > 0 && <p className="text-sm font-bold font-mono text-zinc-900 dark:text-white">{formatCurrency(t.USD, "USD")}</p>}
-                    {t.ARS > 0 && <p className={`${t.USD > 0 ? "text-xs text-zinc-500" : "text-sm font-bold"} font-mono dark:text-zinc-${t.USD > 0 ? "400" : "100"}`}>{formatCurrency(t.ARS, "ARS")}</p>}
+                    {t.ARS > 0 && <p className={`${t.USD > 0 ? "text-xs text-zinc-500 dark:text-zinc-400" : "text-sm font-bold dark:text-zinc-100"} font-mono`}>{formatCurrency(t.ARS, "ARS")}</p>}
                     {t.USD === 0 && t.ARS === 0 && <p className="text-sm font-mono text-zinc-300 dark:text-zinc-600">—</p>}
                   </div>
                 </div>

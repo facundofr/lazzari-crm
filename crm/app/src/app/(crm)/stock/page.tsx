@@ -301,7 +301,7 @@ export default function StockPage() {
     if (selectedProduct && !adjustModal && !editingId) {
       fetchPrecioHistorial(selectedProduct.id);
     }
-  }, [selectedProduct, adjustModal, editingId, fetchPrecioHistorial]);
+  }, [selectedProduct?.id, adjustModal, editingId, fetchPrecioHistorial]);
 
   function openCreate() {
     setEditingId(null);
@@ -524,7 +524,7 @@ export default function StockPage() {
                   )},
                   { key: "categoria", label: "Categoria", sortable: true, render: (row) => <Badge variant="outline">{row.categoria || "\u2014"}</Badge> },
                   { key: "proveedores", label: "Proveedor", sortable: false, render: (row) => <span className="text-zinc-500">{row.proveedores?.razon_social || "\u2014"}</span> },
-                  { key: "precio_costo", label: "Costo", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(Number(row.precio_costo))} <span className="text-zinc-400 text-xs">{row.moneda_costo}</span></span> },
+                  { key: "precio_costo", label: "Costo", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(Number(row.precio_costo), row.moneda_costo as "ARS" | "USD")}</span> },
                   {
                     key: "stock", label: "Stock", className: "text-right", sortable: true,
                     render: (row) => {
@@ -602,9 +602,8 @@ export default function StockPage() {
                     <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
                       <span className="text-xs text-zinc-500 block">Precio costo</span>
                       <span className="font-mono font-bold text-zinc-900 dark:text-white">
-                        {formatCurrency(Number(selectedProduct.precio_costo))}
+                        {formatCurrency(Number(selectedProduct.precio_costo), selectedProduct.moneda_costo as "ARS" | "USD")}
                       </span>
-                      <span className="text-xs text-zinc-400 ml-1">{selectedProduct.moneda_costo}</span>
                     </div>
                     <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
                       <span className="text-xs text-zinc-500 block">IVA</span>

@@ -545,7 +545,7 @@ export default function VentasPage() {
     const initialTipo: EmitTipo = sourceIsManual ? "X" : defaultTipo;
 
     const items = (p.presupuesto_items || []).map(it => {
-      const ivaPorcentaje = Number(it.iva_porcentaje) > 0 ? Number(it.iva_porcentaje) : 21;
+      const ivaPorcentaje = Number(it.iva_porcentaje ?? 21);
       const precioNeto = it.precio_venta ?? (it.total
         ? it.total / (it.cantidad || 1) / (1 + ivaPorcentaje / 100)
         : 0);
@@ -667,7 +667,8 @@ export default function VentasPage() {
         // Marcar PR como facturado
         let prUpdate = supabase.from("presupuestos").update({ estado: "facturado" } as any).eq("id", p.id);
         if (sociedadActiva?.id) prUpdate = prUpdate.eq("sociedad_id" as any, sociedadActiva.id);
-        await prUpdate;
+        const { error: prErr } = await prUpdate;
+        if (prErr) console.error("Error al marcar PR como facturado:", prErr.message);
         await fetchData();
       } else {
         setEmitError(data.error || "Error al emitir factura");
@@ -681,7 +682,9 @@ export default function VentasPage() {
 
   async function handleFinalizarPR(prId: string) {
     if (!confirm("¿Finalizar este presupuesto sin re-facturar? Se marcará como cerrado y saldrá de Ventas.")) return;
-    const { error } = await (supabase as any).from("presupuestos").update({ estado: "facturado" }).eq("id", prId);
+    let finQ = (supabase as any).from("presupuestos").update({ estado: "facturado" }).eq("id", prId);
+    if (sociedadActiva?.id) finQ = finQ.eq("sociedad_id", sociedadActiva.id);
+    const { error } = await finQ;
     if (error) { alert("Error al finalizar: " + error.message); return; }
     await fetchData();
     setSelectedVentaId(null);
@@ -901,7 +904,7 @@ export default function VentasPage() {
         ) : (
         <>
         {/* KPI Cards */}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {[
             { label: "Total", value: kpis.total, color: "text-zinc-900 dark:text-white", key: null },
             { label: "Pend. factura", value: kpis.pendFactura, color: "text-red-600", key: "pend_factura" },
@@ -1946,7 +1949,7 @@ export default function VentasPage() {
                 <div className="flex justify-end gap-2">
                   <button
                     onClick={() => setEmitModalOpen(false)}
-                    disabled={emitting || fiscalDateBlocked || fceBlocked || (!emitManual && (emitMoneda === "USD" || emitVenta.presupuesto.moneda === "USD") && (cotizBnaLoading || (!editRate && !cotizBna) || emitTipoCambio <= 0))}
+                    disabled={emitting}
                     className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
                   >
                     Cancelar

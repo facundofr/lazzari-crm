@@ -1020,7 +1020,7 @@ export default function ClientesPage() {
     } finally {
       setLoading(false);
     }
-  }, [sociedadActiva]);
+  }, [sociedadActiva?.id]);
 
   useEffect(() => {
     fetchClientes();
@@ -1685,11 +1685,11 @@ export default function ClientesPage() {
           </div>
           <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Saldo total CC</p>
-            <p className="mt-1 text-xl sm:text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.saldoCuentaCorriente, 0))}</p>
+            <p className="mt-1 text-xl sm:text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.saldoCuentaCorriente, 0), "ARS")}</p>
           </div>
           <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Credito otorgado</p>
-            <p className="mt-1 text-xl sm:text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.limiteCredito, 0))}</p>
+            <p className="mt-1 text-xl sm:text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.limiteCredito, 0), "ARS")}</p>
           </div>
           <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Provincias</p>
@@ -1737,7 +1737,7 @@ export default function ClientesPage() {
                     </div>
                   ) : <span className="text-zinc-300 dark:text-zinc-600">—</span>;
                 }},
-                { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono text-xs block text-right">{formatCurrency(row.saldoCuentaCorriente)}</span> },
+                { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono text-xs block text-right">{formatCurrency(row.saldoCuentaCorriente, "ARS")}</span> },
                 { key: "activo", label: "Estado", sortable: true, render: (row) => <Badge variant={row.activo ? "success" : "danger"}>{row.activo ? "Activo" : "Inactivo"}</Badge> },
                 {
                   key: "actions", label: "", sortable: false,
@@ -1926,8 +1926,8 @@ export default function ClientesPage() {
                       <InfoField label="Lista de precios" value={selectedCliente.listaPrecio || "—"} />
                       <InfoField label="Forma de pago" value={selectedCliente.formaPago || "—"} />
                       <InfoField label="Dias CC" value={String(selectedCliente.diasCuentaCorriente)} />
-                      <InfoField label="Limite credito" value={formatCurrency(selectedCliente.limiteCredito)} />
-                      <InfoField label="Saldo CC" value={formatCurrency(selectedCliente.saldoCuentaCorriente)} highlight />
+                      <InfoField label="Limite credito" value={formatCurrency(selectedCliente.limiteCredito, "ARS")} />
+                      <InfoField label="Saldo CC" value={formatCurrency(selectedCliente.saldoCuentaCorriente, "ARS")} highlight />
                       {selectedCliente.limiteCredito > 0 && selectedCliente.saldoCuentaCorriente >= selectedCliente.limiteCredito && (
                         <div className="col-span-2 sm:col-span-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
                           Aviso de límite de crédito: el saldo alcanzó o superó el límite configurado.
@@ -2387,7 +2387,7 @@ export default function ClientesPage() {
                             <p className="text-xs text-emerald-600 dark:text-emerald-400">Total facturado</p>
                           </div>
                           <p className="mt-1 text-lg font-bold text-emerald-700 dark:text-emerald-300">
-                            {formatCurrency(fichaData.totalFacturado)}
+                            {formatCurrency(fichaData.totalFacturado, "ARS")}
                           </p>
                         </div>
                         <div className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800">
@@ -2407,7 +2407,7 @@ export default function ClientesPage() {
                             <p className="text-xs text-orange-600 dark:text-orange-400">Saldo CC</p>
                           </div>
                           <p className="mt-1 text-lg font-bold text-orange-700 dark:text-orange-300">
-                            {formatCurrency(fichaData.saldoCC)}
+                            {formatCurrency(fichaData.saldoCC, "ARS")}
                           </p>
                         </div>
                       </div>
@@ -2594,7 +2594,7 @@ export default function ClientesPage() {
                                       {cat.categoria}
                                     </span>
                                     <span className="text-xs text-zinc-500">
-                                      {cat.cantidad} u. &middot; {formatCurrency(cat.total)}
+                                      {cat.cantidad} u. &middot; {formatCurrency(cat.total, "ARS")}
                                     </span>
                                   </div>
                                   <div className="h-2 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">

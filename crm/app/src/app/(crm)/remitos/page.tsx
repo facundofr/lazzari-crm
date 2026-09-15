@@ -286,7 +286,8 @@ export default function RemitosPage() {
           .select(`*, clientes(razon_social, email, cuit, direccion), presupuestos(numero), remito_items(id)`)
           .order("fecha", { ascending: false });
 
-        if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
+        if (!sociedadActiva?.id) { setRemitos([]); return; }
+        q = q.eq("sociedad_id" as any, sociedadActiva.id);
 
         const { data, error } = await q;
 
@@ -1602,7 +1603,8 @@ export default function RemitosPage() {
                       const val = Number(e.target.value.replace(",", ".")) || 0;
                       setDetailRemito({ ...detailRemito, valor_declarado: val || null });
                       if (sociedadActiva?.id) {
-                        await (supabase as any).from("remitos").update({ valor_declarado: val || null }).eq("id", detailRemito.id).eq("sociedad_id", sociedadActiva.id);
+                        const { error: vdErr } = await (supabase as any).from("remitos").update({ valor_declarado: val || null }).eq("id", detailRemito.id).eq("sociedad_id", sociedadActiva.id);
+                        if (vdErr) console.error("Error actualizando valor declarado:", vdErr.message);
                       }
                     }}
                     className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-mono font-medium text-zinc-600 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"

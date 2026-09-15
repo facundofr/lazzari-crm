@@ -303,7 +303,7 @@ export default function ProveedoresPage() {
     } finally {
       setLoading(false);
     }
-  }, [sociedadActiva]);
+  }, [sociedadActiva?.id]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -363,6 +363,7 @@ export default function ProveedoresPage() {
       toast.error("Seleccioná una sociedad antes de eliminar el contacto");
       return;
     }
+    if (!confirm("¿Eliminar este contacto?")) return;
     const { error } = await (supabase as any).from("contactos").delete().eq("id", id).eq("entity_id", selectedProv.id);
     if (error) { toast.error("No se pudo eliminar el contacto"); return; }
     setSelectedProv((prev) => prev ? { ...prev, contactos: prev.contactos.filter((c) => c.id !== id) } : prev);
@@ -691,10 +692,10 @@ export default function ProveedoresPage() {
             <p className="text-xs text-zinc-500">Proveedores</p><p className="mt-1 text-2xl font-bold">{proveedores.length}</p>
           </div>
           <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Deuda CC</p><p className="mt-1 text-2xl font-bold">{formatCurrency(totalDeuda)}</p>
+            <p className="text-xs text-zinc-500">Deuda CC</p><p className="mt-1 text-2xl font-bold">{formatCurrency(totalDeuda, "ARS")}</p>
           </div>
           <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Credito total</p><p className="mt-1 text-2xl font-bold">{formatCurrency(totalCredito)}</p>
+            <p className="text-xs text-zinc-500">Credito total</p><p className="mt-1 text-2xl font-bold">{formatCurrency(totalCredito, "ARS")}</p>
           </div>
           <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Listas vigentes</p><p className="mt-1 text-2xl font-bold text-emerald-600">{listasVigentes}</p>
@@ -751,8 +752,8 @@ export default function ProveedoresPage() {
                     )},
                     { key: "localidad", label: "Ubicacion", sortable: true, render: (row) => <span className="text-zinc-500">{row.localidad}, {row.provincia}</span> },
                     { key: "formaPago", label: "Forma pago", sortable: true, render: (row) => <Badge variant="outline">{row.formaPago}</Badge> },
-                    { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right text-red-600">{formatCurrency(row.saldoCuentaCorriente)}</span> },
-                    { key: "limiteCredito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limiteCredito)}</span> },
+                    { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right text-red-600">{formatCurrency(row.saldoCuentaCorriente, "ARS")}</span> },
+                    { key: "limiteCredito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limiteCredito, "ARS")}</span> },
                     { key: "actions", label: "", sortable: false, render: (row) => (
                       <button onClick={(e) => { e.stopPropagation(); openEdit(row); }} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Editar">
                         <Pencil className="h-3.5 w-3.5" />
@@ -789,7 +790,7 @@ export default function ProveedoresPage() {
                         </div>
                       )}
                       <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4 dark:border-zinc-800">
-                        <div><p className="text-xs text-zinc-400">Saldo CC</p><p className="font-mono font-semibold text-red-600">{formatCurrency(prov.saldoCuentaCorriente)}</p></div>
+                        <div><p className="text-xs text-zinc-400">Saldo CC</p><p className="font-mono font-semibold text-red-600">{formatCurrency(prov.saldoCuentaCorriente, "ARS")}</p></div>
                         <div className="text-right"><p className="text-xs text-zinc-400">Forma pago</p><Badge variant="outline">{prov.formaPago}</Badge></div>
                       </div>
                     </Card>
@@ -908,8 +909,8 @@ export default function ProveedoresPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div><p className="text-xs text-zinc-500">Forma de pago</p><p className="text-sm font-medium">{selectedProv.formaPago}</p></div>
                   <div><p className="text-xs text-zinc-500">Dias CC</p><p className="text-sm font-medium">{selectedProv.diasCuentaCorriente}</p></div>
-                  <div><p className="text-xs text-zinc-500">Limite credito</p><p className="text-sm font-medium">{formatCurrency(selectedProv.limiteCredito)}</p></div>
-                  <div><p className="text-xs text-zinc-500">Saldo CC</p><p className="text-sm font-medium text-red-600">{formatCurrency(selectedProv.saldoCuentaCorriente)}</p></div>
+                  <div><p className="text-xs text-zinc-500">Limite credito</p><p className="text-sm font-medium">{formatCurrency(selectedProv.limiteCredito, "ARS")}</p></div>
+                  <div><p className="text-xs text-zinc-500">Saldo CC</p><p className="text-sm font-medium text-red-600">{formatCurrency(selectedProv.saldoCuentaCorriente, "ARS")}</p></div>
                   {((selectedProv as any).conceptoRetencionGanancias || (selectedProv as any).alicuotaGanancias != null) && (
                     <>
                       <div><p className="text-xs text-zinc-500">Ret. Ganancias</p><p className="text-sm font-medium">{CONCEPTOS_RG830[(selectedProv as any).conceptoRetencionGanancias] || "—"}</p></div>

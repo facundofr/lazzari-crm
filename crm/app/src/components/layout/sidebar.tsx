@@ -43,7 +43,7 @@ const navigation = [
   { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
   // ── Compras & logistica ──
   { name: "Compras", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
-  { name: "Remitos", href: "/remitos", icon: Truck, module: "remitos" },
+  { name: "Remitos", href: "/remitos", icon: Receipt, module: "remitos" },
   { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
   // ── Admin ──
   { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },

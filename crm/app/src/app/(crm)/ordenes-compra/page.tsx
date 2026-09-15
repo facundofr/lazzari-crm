@@ -217,7 +217,7 @@ export default function OrdenesCompraPage() {
   const [proveedores, setProveedores] = useState<ProveedorOption[]>([]);
   const [formData, setFormData] = useState({
     proveedor_id: "",
-    fecha: new Date().toISOString().slice(0, 10),
+    fecha: todayAR(),
     fecha_entrega_estimada: "",
     moneda: "ARS" as "ARS" | "USD",
     observaciones: "",
@@ -557,7 +557,7 @@ export default function OrdenesCompraPage() {
 
   // ── Handlers ─────────────────────────────────────────────────────
   const openCreateModal = () => {
-    setFormData({ proveedor_id: "", fecha: new Date().toISOString().slice(0, 10), fecha_entrega_estimada: "", moneda: "ARS", observaciones: "", presupuesto_origen_id: "", pagada_con_tarjeta: false });
+    setFormData({ proveedor_id: "", fecha: todayAR(), fecha_entrega_estimada: "", moneda: "ARS", observaciones: "", presupuesto_origen_id: "", pagada_con_tarjeta: false });
     setCreateItems([]);
     setFormError("");
     setCreateOpen(true);
@@ -1979,9 +1979,9 @@ export default function OrdenesCompraPage() {
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
   });
 
-  const totalPendiente = ordenes
-    .filter((oc) => ["pendiente", "enviada", "confirmada"].includes(oc.estado))
-    .reduce((a, oc) => a + Number(oc.total), 0);
+  const ocPendientes = ordenes.filter((oc) => ["pendiente", "enviada", "confirmada"].includes(oc.estado));
+  const totalPendienteARS = ocPendientes.filter(oc => oc.moneda !== "USD").reduce((a, oc) => a + Number(oc.total), 0);
+  const totalPendienteUSD = ocPendientes.filter(oc => oc.moneda === "USD").reduce((a, oc) => a + Number(oc.total), 0);
   const pendientesRecepcion = ordenes.filter((oc) =>
     ["pendiente", "enviada", "confirmada", "recibida_parcial"].includes(oc.estado)
   ).length;
@@ -2069,7 +2069,7 @@ export default function OrdenesCompraPage() {
         {/* Stats */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard title="Total OC este mes" value={String(ocEsteMes.length)} icon={ShoppingCart} iconColor="text-blue-600" />
-          <StatCard title="Monto pendiente" value={formatCurrency(totalPendiente)} icon={Clock} iconColor="text-amber-500" />
+          <StatCard title="Monto pendiente" value={`${formatCurrency(totalPendienteARS, "ARS")}${totalPendienteUSD > 0 ? ` + ${formatCurrency(totalPendienteUSD, "USD")}` : ""}`} icon={Clock} iconColor="text-amber-500" />
           <StatCard title="Pend. recepcion" value={String(pendientesRecepcion)} icon={Truck} iconColor="text-violet-600" />
           <StatCard title="Recibidas completas" value={String(ordenes.filter((oc) => oc.estado === "recibida").length)} icon={CheckCircle2} iconColor="text-emerald-600" />
         </div>
