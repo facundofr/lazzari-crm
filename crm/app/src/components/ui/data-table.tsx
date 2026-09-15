@@ -37,13 +37,14 @@ export function DataTable<T extends { id: string }>({
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(0);
 
-  // Reset page when data changes (use ref to avoid setState-during-render issues)
-  const prevDataRef = useRef(data);
+  // Reset page only when data actually changes (different length or different IDs)
+  const prevDataKeyRef = useRef("");
   useEffect(() => {
-    if (prevDataRef.current !== data) {
-      prevDataRef.current = data;
+    const key = data.length + ":" + data.slice(0, 3).map(r => r.id).join(",");
+    if (prevDataKeyRef.current && prevDataKeyRef.current !== key) {
       setPage(0);
     }
+    prevDataKeyRef.current = key;
   }, [data]);
 
   const sorted = useMemo(() => {
