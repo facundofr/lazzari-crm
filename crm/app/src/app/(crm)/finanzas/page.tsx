@@ -1888,8 +1888,7 @@ export default function FinanzasPage() {
           } else attachmentWarnings.push(`${file.name}: ${upErr.message}`);
         }
         if (archivosArr.length > 0) {
-          const updateData: Record<string, unknown> = { archivo_url: archivosArr[0].url, archivo_nombre: archivosArr[0].nombre };
-          updateData.archivos = JSON.stringify(archivosArr);
+          const updateData: Record<string, unknown> = { archivos: JSON.stringify(archivosArr) };
           // El formulario carga archivos de la OP sin asignación explícita a
           // un medio. No inventar vínculos por posición ni tras fallos de carga.
           let opDocUpdate = (supabase as any).from("ordenes_pago").update(updateData).eq("id", opData.id);
