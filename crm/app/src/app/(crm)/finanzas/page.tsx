@@ -509,16 +509,19 @@ export default function FinanzasPage() {
     setRelatedFactura(null);
     if (mov.factura_id) {
       // Fetch all movimientos for this factura (to see the full cobro)
-      const { data: rels } = await supabase.from("movimientos")
+      let qRels = supabase.from("movimientos")
         .select("*, clientes(razon_social), proveedores(razon_social)")
         .eq("factura_id" as any, mov.factura_id)
         .order("created_at", { ascending: true });
+      if (sociedadActiva?.id) qRels = qRels.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: rels } = await qRels;
       if (rels) setRelatedMovs(rels as MovimientoRow[]);
       // Fetch factura info
-      const { data: fc } = await supabase.from("facturas")
+      let qFact = supabase.from("facturas")
         .select("tipo, punto_venta, numero, total, estado, moneda")
-        .eq("id", mov.factura_id)
-        .single();
+        .eq("id", mov.factura_id);
+      if (sociedadActiva?.id) qFact = qFact.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: fc } = await qFact.single();
       if (fc) setRelatedFactura(fc as any);
     }
   }
@@ -787,7 +790,7 @@ export default function FinanzasPage() {
 
   // ── CC Detail (Estado de cuenta) ──
   interface CCFacturaRow { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; vencimiento: string | null; total: number; total_acreditado: number; cobrado: number; moneda: string; estado: string }
-  interface CCMovRow { id: string; tipo: string; monto: number; moneda: string; descripcion: string; fecha: string; referencia: string | null; factura_id: string | null; conciliado: boolean; cliente_id?: string | null; proveedor_id?: string | null; clientes?: { razon_social: string } | null; proveedores?: { razon_social: string } | null }
+  interface CCMovRow { id: string; tipo: string; monto: number; moneda: string; descripcion: string; fecha: string; factura_id: string | null; conciliado: boolean; cliente_id?: string | null; proveedor_id?: string | null; clientes?: { razon_social: string } | null; proveedores?: { razon_social: string } | null }
   interface CCFCRow { id: string; numero_factura: string; fecha: string; fecha_vencimiento: string | null; total: number; pagado: number; estado: string; moneda: string }
   const [ccDetailCliente, setCcDetailCliente] = useState<CCRow | null>(null);
   const [ccDetailFacturas, setCcDetailFacturas] = useState<CCFacturaRow[]>([]);
@@ -1670,7 +1673,7 @@ export default function FinanzasPage() {
       }
     }
     setOpForm(prev => ({ ...prev, aplica_ganancias, retencion_ganancias_pct }));
-  }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase, opForm.proveedor_id, opManualGanancias]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase, opForm.proveedor_id, opForm.fecha, opManualGanancias]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── OP handlers ──
   const filteredOPs = useMemo(() => {
@@ -2027,7 +2030,8 @@ export default function FinanzasPage() {
         if (!medio?.echeq_id) continue;
         let echeqUpdate = (supabase as any).from("echeqs").update({ estado: "en_cartera", destino_nombre: null }).eq("id", medio.echeq_id);
         if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
-        await echeqUpdate;
+        const { error: echeqErr } = await echeqUpdate;
+        if (echeqErr) console.error("Error restaurando echeq:", echeqErr);
       }
 
       // Revertir FCs vinculadas a pendiente si quedaron como pagadas
@@ -2195,7 +2199,8 @@ export default function FinanzasPage() {
       if (publicUrl) {
         let certUpdate = (supabase as any).from("ordenes_pago").update({ certificado_retencion_url: publicUrl }).eq("id", opId);
         if (sociedadActiva?.id) certUpdate = certUpdate.eq("sociedad_id", sociedadActiva.id);
-        await certUpdate;
+        const { error: certUpdErr } = await certUpdate;
+        if (certUpdErr) throw certUpdErr;
         // Update local state
         setOrdenesPago(prev => prev.map(o => o.id === opId ? { ...o, certificado_retencion_url: publicUrl } : o));
         if (selectedOP?.id === opId) setSelectedOP(prev => prev ? { ...prev, certificado_retencion_url: publicUrl } : null);
@@ -2507,14 +2512,15 @@ export default function FinanzasPage() {
           const { data: urlData } = supabase.storage.from("facturas-compra").getPublicUrl(filePath);
           let fcFileUpdate = (supabase as any).from("facturas_compra").update({ archivo_url: urlData.publicUrl, archivo_nombre: fcFile.name }).eq("id", fcData.id);
           if (sociedadActiva?.id) fcFileUpdate = fcFileUpdate.eq("sociedad_id", sociedadActiva.id);
-          await fcFileUpdate;
+          const { error: fcFileErr } = await fcFileUpdate;
+          if (fcFileErr) console.error("Error guardando referencia de archivo FC:", fcFileErr);
         }
         setFcUploading(false);
       }
 
       // Create gasto_manual for solo_iva with costo_real
       if (fcForm.tipo_fc === "solo_iva" && fcForm.costo_real > 0 && fcData?.id) {
-        await (supabase as any).from("gastos_manuales").insert({
+        const { error: gmInsertErr } = await (supabase as any).from("gastos_manuales").insert({
           descripcion: `Compra credito fiscal IVA — FC ${fcForm.numero_factura.trim()}`,
           categoria: "Impuestos",
           monto: fcForm.costo_real,
@@ -2527,6 +2533,7 @@ export default function FinanzasPage() {
           tipo_gasto: "Compra IVA",
           medio_pago: "efectivo",
         });
+        if (gmInsertErr) console.error("Error creando gasto manual para IVA:", gmInsertErr);
       }
 
       setFcModalOpen(false);
@@ -2700,8 +2707,8 @@ export default function FinanzasPage() {
   }
 
   function startEditFC(fc: FacturaCompraRow) {
-    if (!["pendiente", "borrador"].includes(fc.estado)) {
-      alert("La factura ya fue recibida, aprobada, pagada o anulada y no se puede editar desde este formulario.");
+    if (!["pendiente", "pendiente_aprobacion"].includes(fc.estado)) {
+      alert("La factura ya fue recibida, pagada o anulada y no se puede editar desde este formulario.");
       return;
     }
     setEditFCForm({
@@ -2720,7 +2727,7 @@ export default function FinanzasPage() {
 
   async function handleSaveFC() {
     if (!selectedFC) return;
-    if (!["pendiente", "borrador"].includes(selectedFC.estado)) { alert("La factura ya no está habilitada para edición."); return; }
+    if (!["pendiente", "pendiente_aprobacion"].includes(selectedFC.estado)) { alert("La factura ya no está habilitada para edición."); return; }
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     setSavingFC(true);
     try {
@@ -2914,17 +2921,21 @@ export default function FinanzasPage() {
       let cobradoMap: Record<string, number> = {};
       if (fData && fData.length > 0) {
         const fIds = fData.map((f: any) => f.id);
-        const { data: cobros } = await (supabase as any).from("movimientos").select("factura_id, monto, anulado").in("factura_id", fIds);
+        let qCobros = (supabase as any).from("movimientos").select("factura_id, monto, anulado").in("factura_id", fIds);
+        if (sociedadActiva?.id) qCobros = qCobros.eq("sociedad_id", sociedadActiva.id);
+        const { data: cobros } = await qCobros;
         if (cobros) (cobros as any[]).filter((m: any) => !m.anulado).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
         // Also count consolidated cobros via cobro_aplicaciones
-        const { data: aplicaciones } = await (supabase as any).from("cobro_aplicaciones").select("factura_id, monto, movimientos!inner(anulado)").in("factura_id", fIds);
+        let qAplic = (supabase as any).from("cobro_aplicaciones").select("factura_id, monto, movimientos!inner(anulado)").in("factura_id", fIds);
+        if (sociedadActiva?.id) qAplic = qAplic.eq("sociedad_id", sociedadActiva.id);
+        const { data: aplicaciones } = await qAplic;
         if (aplicaciones) (aplicaciones as any[]).filter((a: any) => { const mov = Array.isArray(a.movimientos) ? a.movimientos[0] : a.movimientos; return mov && !mov.anulado; }).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
       }
       if (fData) setCcDetailFacturas(fData.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.fecha_vencimiento ?? null, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: f.estado })));
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData } = await qM;
-      if (mData) setCcDetailMovimientos(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, referencia: null, factura_id: m.factura_id ?? null, conciliado: !!m.conciliado, cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
+      if (mData) setCcDetailMovimientos(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, factura_id: m.factura_id ?? null, conciliado: !!m.conciliado, cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
     } catch (err) { console.error("CC detail err:", err); } finally { setCcDetailLoading(false); }
   }
   async function fetchCCDetailProveedor(prov: CCRow) {
@@ -2948,14 +2959,16 @@ export default function FinanzasPage() {
           (opLinks as any[]).forEach((l: any) => { if (activasSet.has(l.orden_pago_id)) pagadoMap[l.factura_compra_id] = (pagadoMap[l.factura_compra_id] || 0) + Number(l.monto); });
         }
         // Also include direct payments (pagos parciales) from movimientos
-        const { data: directPayments } = await (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado").in("factura_compra_id", fcIds).eq("tipo", "pago");
+        let qDirectPay = (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado").in("factura_compra_id", fcIds).eq("tipo", "pago");
+        if (sociedadActiva?.id) qDirectPay = qDirectPay.eq("sociedad_id", sociedadActiva.id);
+        const { data: directPayments } = await qDirectPay;
         if (directPayments) (directPayments as any[]).filter((p: any) => !p.anulado).forEach((p: any) => { pagadoMap[p.factura_compra_id] = (pagadoMap[p.factura_compra_id] || 0) + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0); });
       }
       if (fcData) setCcDetailFCProv(fcData.map((f: any) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento, total: Number(f.total), pagado: pagadoMap[f.id] || 0, estado: f.estado, moneda: f.moneda ?? "ARS" })));
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("proveedor_id" as any, prov.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData } = await qM;
-      if (mData) setCcDetailMovProv(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, referencia: null, factura_id: m.factura_id ?? null, conciliado: !!m.conciliado, cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
+      if (mData) setCcDetailMovProv(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, factura_id: m.factura_id ?? null, conciliado: !!m.conciliado, cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
     } catch (err) { console.error("CC prov detail err:", err); } finally { setCcDetailProvLoading(false); }
   }
   async function openCobroMultiple() {
@@ -2968,10 +2981,14 @@ export default function FinanzasPage() {
       if (error) throw error;
       if (data && data.length > 0) {
         const ids = data.map((f: any) => f.id);
-        const { data: movs } = await (supabase as any).from("movimientos").select("factura_id, monto, anulado").in("factura_id", ids);
+        let qCobMovs = (supabase as any).from("movimientos").select("factura_id, monto, anulado").in("factura_id", ids);
+        if (sociedadActiva?.id) qCobMovs = qCobMovs.eq("sociedad_id", sociedadActiva.id);
+        const { data: movs } = await qCobMovs;
         const cobradoMap: Record<string, number> = {};
         (movs || []).filter((m: any) => !m.anulado).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
-        const { data: aplicaciones } = await (supabase as any).from("cobro_aplicaciones").select("factura_id, monto, movimientos!inner(anulado)").in("factura_id", ids);
+        let qCobAplic = (supabase as any).from("cobro_aplicaciones").select("factura_id, monto, movimientos!inner(anulado)").in("factura_id", ids);
+        if (sociedadActiva?.id) qCobAplic = qCobAplic.eq("sociedad_id", sociedadActiva.id);
+        const { data: aplicaciones } = await qCobAplic;
         if (aplicaciones) (aplicaciones as any[]).filter((a: any) => { const mov = Array.isArray(a.movimientos) ? a.movimientos[0] : a.movimientos; return mov && !mov.anulado; }).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
         setCobroMultiFCs(data.map((f: any) => { const cobrado = cobradoMap[f.id] || 0; const saldo = Math.max(0, Number(f.total) - Number(f.total_acreditado || 0) - cobrado); return { id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", tipo_cambio: Number(f.tipo_cambio) || undefined, saldo, selected: false }; }).filter((f: CobroMultiFC) => f.saldo > 0.01));
       }
@@ -3062,7 +3079,8 @@ export default function FinanzasPage() {
   function exportFCCompraCSV(data: FacturaCompraRow[]) {
     const lines: string[] = ["Fecha;Vencimiento;Proveedor;Documento;Moneda;Importe;Pagado;Deuda"];
     data.forEach(f => {
-      const pagado = f.pago_directo || 0;
+      const pagadoOP = f.op_vinculada && f.op_vinculada.estado !== "anulada" ? Number(f.op_vinculada.numero ? f.total : 0) : 0;
+      const pagado = (f.pago_directo || 0) + pagadoOP;
       const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : Math.max(0, f.total - pagado);
       lines.push(`${f.fecha};${f.fecha_vencimiento || ""};"${f.proveedor_nombre}";"${f.numero_factura}";${f.moneda};"${formatCurrency(f.total, f.moneda)}";"${formatCurrency(pagado, f.moneda)}";"${formatCurrency(saldo, f.moneda)}"`);
     });
@@ -3102,9 +3120,11 @@ export default function FinanzasPage() {
   const echeqsRecibidos = echeqs.filter(e => e.direccion === "recibido" || !e.direccion);
   const echeqsEmitidos = echeqs.filter(e => e.direccion === "emitido");
   const echeqsEnCartera = echeqsRecibidos.filter(e => e.estado === "en_cartera");
-  const echeqsMontoCartera = echeqsEnCartera.reduce((s, e) => s + e.monto, 0);
+  const echeqsMontoCarteraARS = echeqsEnCartera.filter(e => e.moneda !== "USD").reduce((s, e) => s + e.monto, 0);
+  const echeqsMontoCarteraUSD = echeqsEnCartera.filter(e => e.moneda === "USD").reduce((s, e) => s + e.monto, 0);
   const echeqsEmitidosPendientes = echeqsEmitidos.filter(e => e.estado === "pendiente");
-  const echeqsMontoEmitidosPend = echeqsEmitidosPendientes.reduce((s, e) => s + e.monto, 0);
+  const echeqsMontoEmitidosPendARS = echeqsEmitidosPendientes.filter(e => e.moneda !== "USD").reduce((s, e) => s + e.monto, 0);
+  const echeqsMontoEmitidosPendUSD = echeqsEmitidosPendientes.filter(e => e.moneda === "USD").reduce((s, e) => s + e.monto, 0);
   const today = new Date().toISOString().slice(0, 10);
   const sevenDays = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
   const echeqsPorVencer = echeqsEnCartera.filter(e => e.fecha_pago >= today && e.fecha_pago <= sevenDays).length;
@@ -3193,10 +3213,12 @@ export default function FinanzasPage() {
   const movimientosMes = movimientos.filter((m) => m.fecha?.startsWith(currentMonth) && !m.anulado);
   const movimientosMesARS = movimientosMes.filter((m) => !m.moneda || m.moneda === "ARS");
   const movimientosMesUSD = movimientosMes.filter((m) => m.moneda === "USD");
-  const totalCobrosARS = movimientosMesARS.filter((m) => ["cobro", "cheque_recibido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const totalPagosARS = movimientosMesARS.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const totalCobrosUSD = movimientosMesUSD.filter((m) => ["cobro", "cheque_recibido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const totalPagosUSD = movimientosMesUSD.filter((m) => ["pago", "cheque_emitido"].includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const tiposIngreso = ["cobro", "cheque_recibido", "deposito"];
+  const tiposEgreso = ["pago", "cheque_emitido", "retencion_ganancias", "retencion_iva", "retencion_iibb", "retencion_suss"];
+  const totalCobrosARS = movimientosMesARS.filter((m) => tiposIngreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const totalPagosARS = movimientosMesARS.filter((m) => tiposEgreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const totalCobrosUSD = movimientosMesUSD.filter((m) => tiposIngreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  const totalPagosUSD = movimientosMesUSD.filter((m) => tiposEgreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
   const sinConciliar = movimientos.filter((m) => !m.conciliado && !m.anulado).length;
 
   // Caja: saldo inicial + ingresos - egresos = saldo final
@@ -3233,9 +3255,15 @@ export default function FinanzasPage() {
   const extracto = extractos[0] ?? null;
   const movsFiltrados = extracto ? extracto.extracto_movimientos.filter((m) => filterExtracto === "todos" || m.estado === filterExtracto) : [];
 
-  const totalDisponibleCredito = lineasCredito.reduce((a, lc) => a + lc.monto_disponible, 0);
-  const totalUtilizadoCredito = lineasCredito.reduce((a, lc) => a + lc.monto_utilizado, 0);
-  const totalLineas = lineasCredito.reduce((a, lc) => a + lc.monto_total, 0);
+  const lcARS = lineasCredito.filter(lc => (lc as any).moneda !== "USD");
+  const lcUSD = lineasCredito.filter(lc => (lc as any).moneda === "USD");
+  const totalDisponibleCreditoARS = lcARS.reduce((a, lc) => a + lc.monto_disponible, 0);
+  const totalDisponibleCreditoUSD = lcUSD.reduce((a, lc) => a + lc.monto_disponible, 0);
+  const totalUtilizadoCreditoARS = lcARS.reduce((a, lc) => a + lc.monto_utilizado, 0);
+  const totalUtilizadoCreditoUSD = lcUSD.reduce((a, lc) => a + lc.monto_utilizado, 0);
+  const totalLineasARS = lcARS.reduce((a, lc) => a + lc.monto_total, 0);
+  const totalLineasUSD = lcUSD.reduce((a, lc) => a + lc.monto_total, 0);
+  const totalLineas = totalLineasARS + totalLineasUSD;
 
   // ── Balance projection helpers ──
   function sumBands(items: { banda: string; moneda: string; total: number }[], moneda: string, bandas: string[]): number {
@@ -3395,7 +3423,7 @@ export default function FinanzasPage() {
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <StatCard title="Saldo CC clientes" value={formatCurrency(ccClientes.reduce((a, c) => a + c.saldo_cuenta_corriente, 0))} icon={Wallet} iconColor="text-blue-600" />
-          <StatCard title="Credito disponible" value={formatCurrency(totalDisponibleCredito)} icon={CreditCard} iconColor="text-emerald-600" />
+          <StatCard title="Credito disponible" value={`${formatCurrency(totalDisponibleCreditoARS)}${totalDisponibleCreditoUSD > 0 ? ` + ${formatCurrency(totalDisponibleCreditoUSD, "USD")}` : ""}`} icon={CreditCard} iconColor="text-emerald-600" />
           <StatCard title="Sin conciliar" value={`${sinConciliar} movimientos`} icon={Clock} iconColor="text-amber-500" />
         </div>
 
@@ -4091,7 +4119,7 @@ export default function FinanzasPage() {
                       { key: "razon_social", label: "Cliente", sortable: true, render: (row) => <span className="font-medium">{row.razon_social}</span> },
                       { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
                       { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
-                      { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
+                      { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago || "—"}</Badge> },
                       { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
                       { key: "saldo_cuenta_corriente", label: "Nos debe", className: "text-right", sortable: true, render: (row) => {
                         const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
@@ -4147,7 +4175,7 @@ export default function FinanzasPage() {
                         columns={[
                           { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-sm">{formatDate(row.fecha)}</span> },
                           { key: "vencimiento" as any, label: "Vencimiento", render: (row) => <span className={`text-sm ${row.vencimiento && row.vencimiento < new Date().toISOString().slice(0, 10) && row.estado !== "pagada" ? "text-red-600 font-semibold" : ""}`}>{row.vencimiento ? formatDate(row.vencimiento) : "—"}</span> },
-                          { key: "numero", label: "Comprobante", sortable: true, render: (row) => <span className="font-mono text-xs">{row.tipo}{String(row.punto_venta).padStart(5, "0")}-{String(row.numero).padStart(8, "0")}</span> },
+                          { key: "numero", label: "Comprobante", sortable: true, render: (row) => <span className="font-mono text-xs">{row.tipo}{String(row.punto_venta).padStart(4, "0")}-{String(row.numero).padStart(8, "0")}</span> },
                           { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.total, row.moneda as "ARS" | "USD")}</span> },
                           { key: "total_acreditado" as any, label: "Saldo", className: "text-right", render: (row) => { const saldo = Math.max(0, row.total - row.total_acreditado - row.cobrado); return <span className={`font-mono font-semibold block text-right ${saldo > 0.01 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(saldo, row.moneda as "ARS" | "USD")}</span>; }},
                           { key: "estado", label: "Estado", render: (row) => { const cfg: Record<string, { label: string; variant: "success" | "warning" | "danger" | "outline" }> = { pagada: { label: "Pagada", variant: "success" }, parcial: { label: "Parcial", variant: "warning" }, emitida: { label: "Pendiente", variant: "danger" } }; const c = cfg[row.estado] || { label: row.estado, variant: "outline" as const }; return <Badge variant={c.variant}>{c.label}</Badge>; }},
@@ -4207,7 +4235,7 @@ export default function FinanzasPage() {
                     { key: "cuit", label: "CUIT", render: (row) => <span className="font-mono text-xs text-zinc-500">{row.cuit}</span> },
                     { key: "rubro", label: "Rubro", render: (row) => <Badge variant="info">{(row.rubro ?? "").split(" ")[0]}</Badge> },
                     { key: "dias_cuenta_corriente", label: "Dias CC", sortable: true, render: (row) => <span>{row.dias_cuenta_corriente} dias</span> },
-                    { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago}</Badge> },
+                    { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago || "—"}</Badge> },
                     { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
                     { key: "saldo_cuenta_corriente", label: "Le debemos", className: "text-right", sortable: true, render: (row) => {
                       const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
@@ -4286,8 +4314,8 @@ export default function FinanzasPage() {
         {tab === "echeqs" && (
           <>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-4 mb-4">
-              <StatCard title="Recibidos en cartera" value={`${echeqsEnCartera.length} — ${formatCurrency(echeqsMontoCartera)}`} icon={Wallet} iconColor="text-blue-600" />
-              <StatCard title="Propios pendientes" value={`${echeqsEmitidosPendientes.length} — ${formatCurrency(echeqsMontoEmitidosPend)}`} icon={CreditCard} iconColor="text-orange-500" />
+              <StatCard title="Recibidos en cartera" value={`${echeqsEnCartera.length} — ${formatCurrency(echeqsMontoCarteraARS)}${echeqsMontoCarteraUSD > 0 ? ` + ${formatCurrency(echeqsMontoCarteraUSD, "USD")}` : ""}`} icon={Wallet} iconColor="text-blue-600" />
+              <StatCard title="Propios pendientes" value={`${echeqsEmitidosPendientes.length} — ${formatCurrency(echeqsMontoEmitidosPendARS)}${echeqsMontoEmitidosPendUSD > 0 ? ` + ${formatCurrency(echeqsMontoEmitidosPendUSD, "USD")}` : ""}`} icon={CreditCard} iconColor="text-orange-500" />
               <StatCard title="Por vencer (7 días)" value={String(echeqsPorVencer)} icon={Clock} iconColor="text-amber-500" />
               <StatCard title="Endosados / Entregados" value={String(echeqs.filter(e => e.estado === "endosado" || e.estado === "entregado").length)} icon={ArrowUpRight} iconColor="text-purple-500" />
             </div>
@@ -4635,7 +4663,7 @@ export default function FinanzasPage() {
                     { key: "monto", label: "Monto", className: "text-right", render: (row) => (
                       <div className="flex items-center justify-end gap-1.5">
                         {row.tipo === "credito" ? <ArrowDownLeft className="h-3.5 w-3.5 text-emerald-500" /> : <ArrowUpRight className="h-3.5 w-3.5 text-red-500" />}
-                        <span className={`font-mono font-semibold ${row.tipo === "credito" ? "text-emerald-600" : "text-red-600"}`}>{row.tipo === "credito" ? "+" : "-"}{formatCurrency(row.monto)}</span>
+                        <span className={`font-mono font-semibold ${row.tipo === "credito" ? "text-emerald-600" : "text-red-600"}`}>{row.tipo === "credito" ? "+" : "-"}{formatCurrency(row.monto, (extracto as any)?.moneda || "ARS")}</span>
                       </div>
                     )},
                     { key: "estado", label: "Match", render: (row) => row.estado === "matcheado"
@@ -4660,9 +4688,9 @@ export default function FinanzasPage() {
         {tab === "lineas_credito" && (
           <>
             <Card>
-              <CardHeader><CardTitle>Uso global de credito</CardTitle><span className="text-sm text-zinc-500">{totalLineas > 0 ? Math.round((totalUtilizadoCredito / totalLineas) * 100) : 0}% utilizado</span></CardHeader>
-              <div className="h-4 rounded-full bg-zinc-100 dark:bg-zinc-700"><div className="h-4 rounded-full bg-gradient-to-r from-orange-500 to-red-500" style={{ width: `${totalLineas > 0 ? (totalUtilizadoCredito / totalLineas) * 100 : 0}%` }} /></div>
-              <div className="mt-2 flex justify-between text-xs text-zinc-400"><span>Utilizado: {formatCurrency(totalUtilizadoCredito)}</span><span>Disponible: {formatCurrency(totalDisponibleCredito)}</span></div>
+              <CardHeader><CardTitle>Uso global de credito</CardTitle><span className="text-sm text-zinc-500">{totalLineasARS > 0 ? Math.round((totalUtilizadoCreditoARS / totalLineasARS) * 100) : 0}% utilizado</span></CardHeader>
+              <div className="h-4 rounded-full bg-zinc-100 dark:bg-zinc-700"><div className="h-4 rounded-full bg-gradient-to-r from-orange-500 to-red-500" style={{ width: `${totalLineasARS > 0 ? (totalUtilizadoCreditoARS / totalLineasARS) * 100 : 0}%` }} /></div>
+              <div className="mt-2 flex justify-between text-xs text-zinc-400"><span>Utilizado: {formatCurrency(totalUtilizadoCreditoARS)}{totalUtilizadoCreditoUSD > 0 ? ` + ${formatCurrency(totalUtilizadoCreditoUSD, "USD")}` : ""}</span><span>Disponible: {formatCurrency(totalDisponibleCreditoARS)}{totalDisponibleCreditoUSD > 0 ? ` + ${formatCurrency(totalDisponibleCreditoUSD, "USD")}` : ""}</span></div>
             </Card>
 
             {lineasCredito.length > 0 ? (
