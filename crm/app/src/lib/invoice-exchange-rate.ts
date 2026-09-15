@@ -1,4 +1,5 @@
-import { parseBnaHistorical } from "./bna-historical";
+import { parseBnaHistorical, isTrustedBnaCache } from "./bna-historical";
+import { createSupabaseServer } from "./supabase/server";
 
 export function previousInvoiceDay(fecha: string) {
   const date = new Date(`${fecha}T12:00:00Z`);
@@ -7,16 +8,57 @@ export function previousInvoiceDay(fecha: string) {
   return date.toISOString().slice(0,10);
 }
 
-/** No manual cache or alternate provider; preserve the presupuesto's BNA modality. */
+/** Try BNA scraping first, then fall back to verified DB cache. */
 export async function getInvoiceExchangeRate(fechaFactura: string, modalidad: "divisas" | "billetes" = "divisas") {
   if (!["divisas", "billetes"].includes(modalidad)) throw new Error("Modalidad de cotización inválida.");
-  const target=previousInvoiceDay(fechaFactura);
-  const [y,m,d]=target.split('-');
-  const url=`https://www.bna.com.ar/Cotizador/HistoricoPrincipales?id=${modalidad}&fecha=${encodeURIComponent(`${d}/${m}/${y}`)}&idMoneda=${modalidad === "billetes" ? "22" : "55"}`;
-  const res=await fetch(url,{headers:{"User-Agent":"Mozilla/5.0","X-Requested-With":"XMLHttpRequest"},cache:"no-store",signal:AbortSignal.timeout(10000)});
-  if(!res.ok) throw new Error("No se pudo verificar el tipo de cambio del BNA. No se emitió la factura.");
-  const quote=parseBnaHistorical(await res.text(),target);
-  // BNA provides nearest trading dates; retain its actual date (weekends/holidays).
-  if(!quote || Date.parse(target)-Date.parse(quote.fecha)>7*86400000) throw new Error("BNA no devolvió una cotización reciente anterior a la factura. No se emitió.");
-  return {fecha:quote.fecha,valor_venta:quote.venta,valor_compra:quote.compra,modalidad,fuente:"BNA",automatica:true};
+  const target = previousInvoiceDay(fechaFactura);
+  const tipoDb = modalidad === "billetes" ? "oficial_billetes" : "oficial_divisas";
+
+  // 1. Try BNA direct scraping
+  try {
+    const [y,m,d] = target.split('-');
+    const url = `https://www.bna.com.ar/Cotizador/HistoricoPrincipales?id=${modalidad}&fecha=${encodeURIComponent(`${d}/${m}/${y}`)}&idMoneda=${modalidad === "billetes" ? "22" : "55"}`;
+    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest" }, cache: "no-store", signal: AbortSignal.timeout(10000) });
+    if (res.ok) {
+      const quote = parseBnaHistorical(await res.text(), target);
+      if (quote && Date.parse(target) - Date.parse(quote.fecha) <= 7 * 86400000) {
+        return { fecha: quote.fecha, valor_venta: quote.venta, valor_compra: quote.compra, modalidad, fuente: "BNA", automatica: true };
+      }
+    }
+  } catch {
+    // BNA no respondió — continuar a fallback DB
+  }
+
+  // 2. Fallback: verified cache in DB (cotizaciones_dolar)
+  try {
+    const supabase = await createSupabaseServer();
+    // Look for exact date match first
+    const { data: exact } = await (supabase as any)
+      .from("cotizaciones_dolar")
+      .select("fecha, tipo, valor_compra, valor_venta, fuente, es_manual")
+      .eq("tipo", tipoDb)
+      .eq("fecha", target)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (isTrustedBnaCache(exact)) {
+      return { fecha: exact.fecha, valor_venta: Number(exact.valor_venta), valor_compra: Number(exact.valor_compra), modalidad, fuente: exact.fuente, automatica: true };
+    }
+    // Look for most recent trusted entry ≤ target
+    const { data: latest } = await (supabase as any)
+      .from("cotizaciones_dolar")
+      .select("fecha, tipo, valor_compra, valor_venta, fuente, es_manual")
+      .eq("tipo", tipoDb)
+      .lte("fecha", target)
+      .order("fecha", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (isTrustedBnaCache(latest) && Date.parse(target) - Date.parse(latest.fecha) <= 7 * 86400000) {
+      return { fecha: latest.fecha, valor_venta: Number(latest.valor_venta), valor_compra: Number(latest.valor_compra), modalidad, fuente: latest.fuente, automatica: true };
+    }
+  } catch {
+    // DB fallback failed too
+  }
+
+  throw new Error("No se pudo obtener la cotización BNA. Verificá tu conexión e intentá de nuevo, o usá la opción de cotización manual.");
 }
