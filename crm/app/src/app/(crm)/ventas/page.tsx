@@ -323,6 +323,7 @@ export default function VentasPage() {
           presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total)
         `)
         .in("estado" as any, ["aprobado", "facturar"])
+        .neq("eliminado" as any, true)
         .order("fecha", { ascending: false });
       if (sociedadActiva?.id) presupuestosQuery = presupuestosQuery.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: presupuestos, error: pError } = await presupuestosQuery;
