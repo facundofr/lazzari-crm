@@ -996,6 +996,12 @@ export default function PresupuestosPage() {
     fetchVendedores();
   }, []);
 
+  // Auto-load BNA rate when PR form opens (for USD cost conversion)
+  useEffect(() => {
+    if (showNewPR && !cotizBna) fetchCotizBna("divisas");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showNewPR]);
+
   useEffect(() => {
     if (!showNewPR) return;
     async function fetchClientes() {
@@ -1916,6 +1922,8 @@ export default function PresupuestosPage() {
       setSelected(null);
       setPanelFullscreen(false);
       setShowNewPR(true);
+      // Load BNA rate for USD cost conversion (even on ARS PRs)
+      if (!Number(fullPR.tipo_cambio_divisas)) fetchCotizBna("divisas");
     } catch (err) {
       console.error("Error loading PR for edit:", err);
       toast.error("Error al cargar presupuesto para editar");
@@ -3111,7 +3119,7 @@ export default function PresupuestosPage() {
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
                           <td className="px-3 py-2">{item.descripcion}</td>
                           <td className="px-3 py-2 text-right">{item.cantidad} {item.unidad}</td>
-                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">{formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")}</td>
+                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell" title={item.costoMoneda !== selected.moneda ? `Orig: ${formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")}` : undefined}>{formatCurrency(costoConv, selected.moneda as "ARS" | "USD")}</td>
                           <td className="px-3 py-2 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>
                           <td className={`px-3 py-2 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
                             <span className="inline-flex items-center gap-1">
@@ -3427,14 +3435,15 @@ export default function PresupuestosPage() {
               const mon = e.target.value as "USD" | "ARS";
               setNewPR((p) => {
                 const tc = mon === "ARS" ? 0 : p.tipo_cambio;
-                const tcD = mon === "ARS" ? 0 : p.tipo_cambio_divisas;
+                // Keep tipo_cambio_divisas for USD→ARS cost conversion even on ARS PRs
+                const tcD = p.tipo_cambio_divisas;
                 const items = p.items.map(it => {
                   const costoConv = convertCosto(it.precio_costo, it.costo_moneda, mon, tc, tcD);
                   return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
                 });
                 return { ...p, moneda: mon, tipo_cambio: tc, tipo_cambio_divisas: tcD, items };
               });
-              if (mon === "USD") fetchCotizBna("divisas");
+              fetchCotizBna("divisas");
             }}
             options={[{ value: "ARS", label: "ARS — Pesos" }, { value: "USD", label: "USD — Dolares" }]}
           />
