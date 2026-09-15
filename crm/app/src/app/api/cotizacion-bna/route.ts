@@ -149,8 +149,11 @@ async function upsertCotiz(supabase: any, fecha: string, tipoDb: string, compra:
 export async function GET(req: NextRequest) {
   const fechaFactura = req.nextUrl.searchParams.get("fecha_factura");
   if (fechaFactura) {
-    try { return NextResponse.json(await getInvoiceExchangeRate(fechaFactura, (req.nextUrl.searchParams.get("modalidad") || "divisas") as "divisas" | "billetes")); }
-    catch (error) { return NextResponse.json({error:error instanceof Error ? error.message : "No se pudo verificar la cotización automática."},{status:503}); }
+    try {
+      return NextResponse.json(await getInvoiceExchangeRate(fechaFactura, (req.nextUrl.searchParams.get("modalidad") || "divisas") as "divisas" | "billetes"));
+    } catch {
+      // BNA directo falló — caer al flujo normal con cache DB + fallbacks
+    }
   }
   const modalidad = (req.nextUrl.searchParams.get("modalidad") || "divisas") as "divisas" | "billetes";
   const fechaParam = req.nextUrl.searchParams.get("fecha");
@@ -159,7 +162,8 @@ export async function GET(req: NextRequest) {
   const supabase = await createSupabaseServer();
 
   const hoy = todayAR();
-  const targetFecha = fechaParam || previousBusinessDay(hoy);
+  const fallbackFechaFactura = fechaFactura ? previousBusinessDay(fechaFactura) : null;
+  const targetFecha = fechaParam || fallbackFechaFactura || previousBusinessDay(hoy);
   const validFecha = /^\d{4}-\d{2}-\d{2}$/.test(targetFecha)
     && Number.isFinite(Date.parse(`${targetFecha}T12:00:00Z`))
     && new Date(`${targetFecha}T12:00:00Z`).toISOString().slice(0, 10) === targetFecha;
