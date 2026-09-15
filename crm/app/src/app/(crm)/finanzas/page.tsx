@@ -1816,9 +1816,11 @@ export default function FinanzasPage() {
     if (opMedios.some(m => !Number.isFinite(m.monto) || m.monto < 0)) { setOpError("Los medios de pago no pueden tener importes negativos o inválidos"); return; }
     if (totalMediosVal <= 0) { setOpError("Ingresá al menos un medio de pago con monto mayor a 0"); return; }
     if (!Number.isFinite(opRetencionGanancias) || opRetencionGanancias < 0 || opRetencionGanancias > opMontoBruto) { setOpError("La retención debe estar entre cero y el importe bruto a pagar"); return; }
-    if (Math.round(totalMediosVal * 100) !== Math.round(opNetoAPagar * 100)) {
-      setOpError("Los medios deben sumar exactamente el neto a pagar. Para un pago parcial, modificá primero «A pagar» en cada factura; así se recalcula la retención sobre lo que realmente cancelás."); return;
+    const opDiffMedios = Math.abs(totalMediosVal - opNetoAPagar);
+    if (opDiffMedios > 1) {
+      setOpError("Los medios deben sumar el neto a pagar (diferencia: $" + opDiffMedios.toFixed(2) + "). Para un pago parcial, modificá primero «A pagar» en cada factura; así se recalcula la retención sobre lo que realmente cancelás."); return;
     }
+    if (opDiffMedios > 0.001 && !confirm(`Hay una diferencia de $${opDiffMedios.toFixed(2)} entre los medios y el neto a pagar. ¿Continuar igual?`)) return;
     const montoBrutoEfectivo = opMontoBruto;
     const retencionEfectiva = opRetencionGanancias;
     const baseRetencionEfectiva = opBaseSinIVA;
