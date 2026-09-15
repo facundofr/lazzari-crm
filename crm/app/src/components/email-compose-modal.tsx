@@ -29,6 +29,8 @@ interface EmailComposeModalProps {
   suggestedEmails?: { email: string; label?: string }[];
   /** If provided, shows a "Marcar como enviada" button (for when sent outside the system) */
   onMarkSent?: () => void | Promise<void>;
+  /** Extra file attachments (e.g. comprobantes) to include in the email */
+  extraAttachments?: { filename: string; url: string }[];
 }
 
 const DOC_LABELS: Record<EmailDocumentType, string> = {
@@ -53,6 +55,7 @@ export function EmailComposeModal({
   userEmail,
   suggestedEmails = [],
   onMarkSent,
+  extraAttachments = [],
 }: EmailComposeModalProps) {
   const [to, setTo] = useState(defaultTo);
   const [subject, setSubject] = useState(defaultSubject);
@@ -114,6 +117,7 @@ export function EmailComposeModal({
           sociedadId,
           documentType,
           userEmail,
+          ...(extraAttachments.length > 0 ? { extraAttachments } : {}),
         }),
       });
 
@@ -225,15 +229,23 @@ export function EmailComposeModal({
             />
           </div>
 
-          {/* PDF attachment indicator */}
-          <div className="flex items-center gap-2 rounded-lg bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 px-3 py-2.5">
-            <Paperclip className="h-4 w-4 text-orange-500 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-orange-700 dark:text-orange-300 truncate">
-                {pdfFilename || `${DOC_LABELS[documentType]}.pdf`}
-              </p>
-              <p className="text-xs text-orange-500">Se genera y adjunta automaticamente al enviar</p>
+          {/* Attachments */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 rounded-lg bg-orange-50 dark:bg-orange-950/20 border border-orange-200 dark:border-orange-800 px-3 py-2.5">
+              <Paperclip className="h-4 w-4 text-orange-500 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-orange-700 dark:text-orange-300 truncate">
+                  {pdfFilename || `${DOC_LABELS[documentType]}.pdf`}
+                </p>
+                <p className="text-xs text-orange-500">Se genera y adjunta automaticamente al enviar</p>
+              </div>
             </div>
+            {extraAttachments.map((att, i) => (
+              <div key={i} className="flex items-center gap-2 rounded-lg bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 px-3 py-2">
+                <Paperclip className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                <p className="text-sm text-zinc-600 dark:text-zinc-300 truncate flex-1">{att.filename}</p>
+              </div>
+            ))}
           </div>
 
           {/* Send button */}

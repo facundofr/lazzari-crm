@@ -13,7 +13,7 @@ import { Resend } from "resend";
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId, documentType, userEmail } = body as {
+    const { to, subject, bodyHtml, pdfBase64, pdfFilename, sociedadId, documentType, userEmail, extraAttachments } = body as {
       to: string[];
       subject: string;
       bodyHtml: string;
@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
       sociedadId?: string;
       documentType?: string;
       userEmail?: string;
+      extraAttachments?: { filename: string; url: string }[];
     };
 
     // Validate required fields
@@ -69,17 +70,30 @@ export async function POST(req: NextRequest) {
       fromEmail = process.env.EMAIL_FROM || ADMIN_EMAIL;
     }
 
+    // Build attachments array: PDF + extra files (comprobantes, etc.)
+    const attachments: { filename: string; content: Buffer }[] = [
+      { filename: pdfFilename, content: pdfBuffer },
+    ];
+
+    // Download extra attachments from URLs (e.g. comprobantes uploaded to Supabase Storage)
+    if (extraAttachments?.length) {
+      await Promise.all(extraAttachments.map(async (att) => {
+        try {
+          const res = await fetch(att.url, { signal: AbortSignal.timeout(15000) });
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            if (buf.length > 0) attachments.push({ filename: att.filename, content: buf });
+          }
+        } catch { /* skip failed downloads silently */ }
+      }));
+    }
+
     const { data: emailResult, error: emailError } = await resend.emails.send({
       from: fromEmail,
       to,
       subject,
       html: bodyHtml || `<p>Adjunto encontrará el documento solicitado.</p>`,
-      attachments: [
-        {
-          filename: pdfFilename,
-          content: pdfBuffer,
-        },
-      ],
+      attachments,
     });
 
     if (emailError) {

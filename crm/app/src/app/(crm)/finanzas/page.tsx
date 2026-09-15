@@ -639,7 +639,7 @@ export default function FinanzasPage() {
   const [editingOP, setEditingOP] = useState(false);
   const [editOPForm, setEditOPForm] = useState<{ fecha: string; moneda: "ARS" | "USD"; notas: string }>({ fecha: "", moneda: "ARS", notas: "" });
   const [savingOP, setSavingOP] = useState(false);
-  const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string; suggestedEmails: { email: string; label?: string }[] }>({ open: false, id: "", to: "", subject: "", body: "", filename: "", suggestedEmails: [] });
+  const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string; suggestedEmails: { email: string; label?: string }[]; extraAttachments: { filename: string; url: string }[] }>({ open: false, id: "", to: "", subject: "", body: "", filename: "", suggestedEmails: [], extraAttachments: [] });
 
   // Gastos manuales state
   const [gastosManuales, setGastosManuales] = useState<GastoManualRow[]>([]);
@@ -2178,6 +2178,14 @@ export default function FinanzasPage() {
       }
     } catch { /* ignore */ }
 
+    // Collect comprobantes from OP archivos
+    const opAttachments: { filename: string; url: string }[] = [];
+    if (op.archivos?.length) {
+      for (const a of op.archivos) {
+        if (a.url) opAttachments.push({ filename: a.nombre || "comprobante.pdf", url: a.url });
+      }
+    }
+
     setEmailModal({
       open: true,
       id: op.id,
@@ -2186,6 +2194,7 @@ export default function FinanzasPage() {
       body: applyTemplateVars(template.cuerpo, vars),
       filename: `OP-${op.numero || op.id.slice(0, 8)}.pdf`,
       suggestedEmails: suggested,
+      extraAttachments: opAttachments,
     });
   }
 
@@ -6536,6 +6545,7 @@ export default function FinanzasPage() {
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
         suggestedEmails={emailModal.suggestedEmails}
+        extraAttachments={emailModal.extraAttachments}
         onSuccess={async () => {
           const sentAt = new Date().toISOString();
           const ordenPagoId = emailModal.id;
