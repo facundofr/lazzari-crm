@@ -682,12 +682,12 @@ export default function VentasPage() {
     }
   }
 
-  async function handleFinalizarPR(prId: string) {
-    if (!confirm("¿Finalizar este presupuesto sin re-facturar? Se marcará como cerrado y saldrá de Ventas.")) return;
-    let finQ = (supabase as any).from("presupuestos").update({ estado: "facturado" }).eq("id", prId);
+  async function handleCancelarVenta(prId: string) {
+    if (!confirm("¿Cancelar esta venta? El presupuesto pasará a estado «rechazado» y saldrá de Ventas.")) return;
+    let finQ = (supabase as any).from("presupuestos").update({ estado: "rechazado" }).eq("id", prId);
     if (sociedadActiva?.id) finQ = finQ.eq("sociedad_id", sociedadActiva.id);
     const { error } = await finQ;
-    if (error) { alert("Error al finalizar: " + error.message); return; }
+    if (error) { alert("Error al cancelar: " + error.message); return; }
     await fetchData();
     setSelectedVentaId(null);
   }
@@ -1334,10 +1334,10 @@ export default function VentasPage() {
                               <div className="flex flex-wrap items-center gap-1 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 px-3 py-2 mb-1">
                                 <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium mr-1">Historial:</span>
                                 {allFacturas.map((f, idx) => {
-                                  const fComp = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
                                   const isNC = ncTipos.includes(f.tipo);
                                   const isActive = f.id === facturaActiva.id;
                                   const isAnulada = f.estado === "anulada";
+                                  const fLabel = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
                                   return (
                                     <span key={f.id} className="flex items-center gap-1">
                                       {idx > 0 && <ArrowRight className="h-3 w-3 text-amber-400 shrink-0" />}
@@ -1347,8 +1347,7 @@ export default function VentasPage() {
                                         : isAnulada ? "bg-zinc-100 text-zinc-500 line-through dark:bg-zinc-800 dark:text-zinc-500"
                                         : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
                                       }`}>
-                                        {f.tipo}
-                                        {f.cae ? " ARCA" : ""}
+                                        {fLabel}
                                       </span>
                                     </span>
                                   );
@@ -1414,11 +1413,12 @@ export default function VentasPage() {
                         <p className="text-sm text-zinc-500">Pendiente de facturación administrativa</p>
                       ) : (
                         <div className="space-y-3">
-                          {showPath && (
+                          {allFacturas.length > 0 && (
                             <div className="flex flex-wrap items-center gap-1 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 px-3 py-2">
                               <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium mr-1">Historial:</span>
                               {allFacturas.map((f, idx) => {
                                 const isNC = ncTipos.includes(f.tipo);
+                                const fLabel = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
                                 return (
                                   <span key={f.id} className="flex items-center gap-1">
                                     {idx > 0 && <ArrowRight className="h-3 w-3 text-amber-400 shrink-0" />}
@@ -1426,19 +1426,19 @@ export default function VentasPage() {
                                       isNC ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
                                       : "bg-zinc-100 text-zinc-500 line-through dark:bg-zinc-800 dark:text-zinc-500"
                                     }`}>
-                                      {f.tipo}{f.cae ? " ARCA" : ""}
+                                      {fLabel}
                                     </span>
                                   </span>
                                 );
                               })}
                             </div>
                           )}
-                          {tieneNcTotal && !showPath && (
+                          {tieneNcTotal && allFacturas.length === 0 && (
                             <p className="text-sm text-amber-600 dark:text-amber-400">Factura anterior anulada por Nota de Crédito</p>
                           )}
                           {puedeFacturar ? (
                             <>
-                              <p className="text-sm text-zinc-500">{tieneNcTotal ? "Podés volver a facturar o finalizar" : "Sin factura emitida"}</p>
+                              <p className="text-sm text-zinc-500">{tieneNcTotal ? "La factura fue anulada por NC. Podés volver a facturar o cancelar la venta." : "Sin factura emitida"}</p>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <button
                                   onClick={() => openEmitModal(selectedVenta)}
@@ -1449,11 +1449,11 @@ export default function VentasPage() {
                                 </button>
                                 {tieneNcTotal && (
                                   <button
-                                    onClick={() => handleFinalizarPR(selectedVenta.presupuesto.id)}
-                                    className="flex items-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                                    onClick={() => handleCancelarVenta(selectedVenta.presupuesto.id)}
+                                    className="flex items-center gap-2 rounded-lg border border-red-300 dark:border-red-700 px-3 py-2 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30"
                                   >
-                                    <CheckCircle2 className="h-4 w-4" />
-                                    Finalizar
+                                    <X className="h-4 w-4" />
+                                    Cancelar venta
                                   </button>
                                 )}
                               </div>

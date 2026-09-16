@@ -108,10 +108,11 @@ export default function DashboardPage() {
       setObjetivos([]);
       try {
         // Build queries with optional sociedad filter
-        let qPresupuestosEstado = supabase.from("presupuestos").select("estado");
+        let qPresupuestosEstado = supabase.from("presupuestos").select("estado").neq("eliminado" as any, true);
         let qPresupuestosRecent = supabase
           .from("presupuestos")
           .select("id, numero, cliente_id, total, estado, fecha, clientes(razon_social)")
+          .neq("eliminado" as any, true)
           .order("created_at", { ascending: false })
           .limit(5);
         let qTopClientes = supabase

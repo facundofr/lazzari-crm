@@ -1119,6 +1119,7 @@ export default function FinanzasPage() {
               archivos: r.archivos ? (typeof r.archivos === "string" ? JSON.parse(r.archivos) : r.archivos) : undefined,
               sobre_verde: !!r.sobre_verde,
               email_enviado_at: r.email_enviado_at ?? null,
+              base_retencion_ganancias: Number(r.base_retencion_ganancias || 0),
               created_at: r.created_at,
             })));
           }
@@ -1349,7 +1350,7 @@ export default function FinanzasPage() {
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       const { error } = await q;
       if (error) throw error;
-      await fetchData();
+      setMovimientos(prev => prev.map(m => m.id === id ? { ...m, conciliado: true } : m));
     } catch (err) {
       alert("Error conciliando: " + (err instanceof Error ? err.message : String(err)));
     }
@@ -1578,7 +1579,7 @@ export default function FinanzasPage() {
           const pagado = pagadoPorFC[fc.id] || 0;
           const saldo = Math.max(0, Number(fc.total) - pagado);
           const esDirecta = pagoParcialDirecto && pagoParcialFCId === fc.id;
-          return { id: fc.id, numero: fc.numero_factura || "S/N", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: esDirecta, monto_a_pagar: 0 };
+          return { id: fc.id, numero: fc.numero_factura || "S/N", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: esDirecta, monto_a_pagar: esDirecta ? saldo : 0 };
         }).filter((fc: any) => fc.saldo_pendiente > 0));
 
         // Acumulado mensual de PAGOS (OPs) a este proveedor — Art. 26 RG 830
@@ -1816,11 +1817,12 @@ export default function FinanzasPage() {
     if (opMedios.some(m => !Number.isFinite(m.monto) || m.monto < 0)) { setOpError("Los medios de pago no pueden tener importes negativos o inválidos"); return; }
     if (totalMediosVal <= 0) { setOpError("Ingresá al menos un medio de pago con monto mayor a 0"); return; }
     if (!Number.isFinite(opRetencionGanancias) || opRetencionGanancias < 0 || opRetencionGanancias > opMontoBruto) { setOpError("La retención debe estar entre cero y el importe bruto a pagar"); return; }
-    const opDiffMedios = Math.abs(totalMediosVal - opNetoAPagar);
-    if (opDiffMedios > 1) {
-      setOpError("Los medios deben sumar el neto a pagar (diferencia: $" + opDiffMedios.toFixed(2) + "). Para un pago parcial, modificá primero «A pagar» en cada factura; así se recalcula la retención sobre lo que realmente cancelás."); return;
+    const opDiffMedios = totalMediosVal - opNetoAPagar;
+    if (opDiffMedios < -1) {
+      setOpError("Los medios suman menos que el neto a pagar (faltan $" + Math.abs(opDiffMedios).toFixed(2) + "). Para un pago parcial, modificá primero «A pagar» en cada factura; así se recalcula la retención sobre lo que realmente cancelás."); return;
     }
-    if (opDiffMedios > 0.001 && !confirm(`Hay una diferencia de $${opDiffMedios.toFixed(2)} entre los medios y el neto a pagar. ¿Continuar igual?`)) return;
+    if (opDiffMedios > 0.01 && !confirm(`Los medios superan el neto a pagar en $${opDiffMedios.toFixed(2)}. El excedente quedará a favor en la CC del proveedor. ¿Continuar?`)) return;
+    if (Math.abs(opDiffMedios) > 0.001 && Math.abs(opDiffMedios) <= 1 && !confirm(`Hay una diferencia de $${Math.abs(opDiffMedios).toFixed(2)} entre los medios y el neto a pagar. ¿Continuar igual?`)) return;
     const montoBrutoEfectivo = opMontoBruto;
     const retencionEfectiva = opRetencionGanancias;
     const baseRetencionEfectiva = opBaseSinIVA;
@@ -4559,11 +4561,20 @@ export default function FinanzasPage() {
                         className={`rounded-lg px-3 py-1.5 text-xs font-medium ${echeqForm.origen_tipo === "otro" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>Otro</button>
                     </div>
                     {echeqForm.origen_tipo === "cliente" ? (
-                      <select value={echeqForm.origen_id} onChange={(e) => setEcheqForm({ ...echeqForm, origen_id: e.target.value })}
-                        className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                        <option value="">Seleccionar cliente</option>
-                        {clientesOptions.map((c: ClienteOption) => <option key={c.id} value={c.id}>{c.razon_social}</option>)}
-                      </select>
+                      <div>
+                        <input
+                          type="text"
+                          value={echeqClienteSearch}
+                          onChange={(e) => setEcheqClienteSearch(e.target.value)}
+                          placeholder="Filtrar clientes..."
+                          className="w-full rounded-t-lg border border-zinc-200 px-3 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                        />
+                        <select value={echeqForm.origen_id} onChange={(e) => setEcheqForm({ ...echeqForm, origen_id: e.target.value })} size={5}
+                          className="w-full rounded-b-lg border border-t-0 border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                          <option value="">Seleccionar cliente</option>
+                          {filteredClientesEcheq.map((c: ClienteOption) => <option key={c.id} value={c.id}>{c.razon_social}</option>)}
+                        </select>
+                      </div>
                     ) : (
                       <input value={echeqForm.origen_nombre} onChange={(e) => setEcheqForm({ ...echeqForm, origen_nombre: e.target.value })}
                         placeholder="Nombre del origen" className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
@@ -6557,7 +6568,7 @@ export default function FinanzasPage() {
           const ordenPagoId = emailModal.id;
           let emailUpdate = (supabase as any)
             .from("ordenes_pago")
-            .update({ email_enviado_at: sentAt })
+            .update({ email_enviado_at: sentAt, sobre_verde: true })
             .eq("id", ordenPagoId);
           if (sociedadActiva?.id) emailUpdate = emailUpdate.eq("sociedad_id", sociedadActiva.id);
           const { error } = await emailUpdate;
@@ -6566,10 +6577,10 @@ export default function FinanzasPage() {
             return;
           }
           setOrdenesPago((prev) => prev.map((orden) =>
-            orden.id === ordenPagoId ? { ...orden, email_enviado_at: sentAt } : orden
+            orden.id === ordenPagoId ? { ...orden, email_enviado_at: sentAt, sobre_verde: true } : orden
           ));
           setSelectedOP((prev) =>
-            prev?.id === ordenPagoId ? { ...prev, email_enviado_at: sentAt } : prev
+            prev?.id === ordenPagoId ? { ...prev, email_enviado_at: sentAt, sobre_verde: true } : prev
           );
         }}
         generatePdf={async () => {

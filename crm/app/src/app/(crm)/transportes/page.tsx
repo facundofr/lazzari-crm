@@ -624,6 +624,10 @@ export default function TransportesPage() {
     let uploadedPath = "";
     setFacturaSaving(true);
     try {
+      // Check FC duplicada
+      const { data: existing } = await (supabase as any).from("facturas_compra")
+        .select("id").eq("numero_factura", facturaForm.numero_factura.trim()).eq("proveedor_id", facturaForm.proveedor_id).eq("sociedad_id", socId).limit(1);
+      if (existing?.length) { toast.error("Ya existe una factura con ese número para este proveedor"); setFacturaSaving(false); return; }
       const { data: factura, error: facturaError } = await (supabase as any)
         .from("facturas_compra")
         .insert({
@@ -639,7 +643,7 @@ export default function TransportesPage() {
           notas: `Factura de transporte — ${facturaForm.detalle}`,
           estado: "pendiente",
           solo_iva: false,
-          tipo: "mercaderia",
+          tipo: "transporte",
           sociedad_id: socId,
           created_by: profile?.id || null,
         })
