@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { supabase } from "@/lib/supabase/client";
 import { mockRemitos } from "@/lib/mock-data";
-import { Sparkles, Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search } from "lucide-react";
+import { Truck, Loader2, CheckCircle2, Package, X, Download, Copy, Check, ClipboardCopy, Mail, Plus, Link2, Trash2, Minus, ShieldCheck, GitBranch, MapPin, Maximize2, Search } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
@@ -116,14 +116,6 @@ interface Sucursal {
   cp: string;
 }
 
-interface PresupuestoIA {
-  id: string;
-  numero: string;
-  cliente_id: string;
-  modalidad_emision?: string | null;
-  clientes: { razon_social: string } | null;
-  presupuesto_items: { id: string; descripcion: string; cantidad: number; unidad: string; orden?: number }[];
-}
 
 export default function RemitosPage() {
   const { sociedadActiva, profile } = useUser();
@@ -186,15 +178,6 @@ export default function RemitosPage() {
   const [creatingTransporte, setCreatingTransporte] = useState(false);
   const [catalogTransportistas, setCatalogTransportistas] = useState<{ id: string; nombre: string }[]>([]);
 
-  // IA generation modal state
-  const [iaModalOpen, setIaModalOpen] = useState(false);
-  const [iaSearch, setIaSearch] = useState("");
-  const [presupuestosIA, setPresupuestosIA] = useState<PresupuestoIA[]>([]);
-  const [selectedPresupuestos, setSelectedPresupuestos] = useState<Set<string>>(new Set());
-  const [generatingIA, setGeneratingIA] = useState(false);
-  const [iaSuccess, setIaSuccess] = useState("");
-  const [iaError, setIaError] = useState("");
-  const [loadingIA, setLoadingIA] = useState(false);
 
   // AFIP authorization
   const [autorizandoAFIP, setAutorizandoAFIP] = useState(false);
@@ -794,175 +777,6 @@ export default function RemitosPage() {
     }
   }
 
-  async function openIAModal() {
-    setSelectedPresupuestos(new Set());
-    setIaSuccess("");
-    setIaError("");
-    setPresupuestosIA([]);
-    setIaModalOpen(true);
-    setLoadingIA(true);
-    try {
-      let iaQ = (supabase as any)
-        .from("presupuestos")
-        .select("id, numero, cliente_id, modalidad_emision")
-        .in("estado", ["aprobado", "facturar", "facturado"])
-        .order("created_at", { ascending: false });
-      if (sociedadActiva?.id) iaQ = iaQ.eq("sociedad_id", sociedadActiva.id);
-      const { data: headers, error: headersError } = await iaQ;
-      if (headersError) throw headersError;
-
-      const prRows = (headers || []) as Array<{ id: string; numero: string; cliente_id: string; modalidad_emision?: string | null }>;
-      if (prRows.length === 0) return;
-
-      const prIds = prRows.map((p) => p.id);
-      const clienteIds = [...new Set(prRows.map((p) => p.cliente_id).filter(Boolean))];
-      const [itemsRes, clientesRes] = await Promise.all([
-        (supabase as any).from("presupuesto_items").select("id, presupuesto_id, descripcion, cantidad, unidad, orden").in("presupuesto_id", prIds).order("orden"),
-        clienteIds.length > 0
-          ? (supabase as any).from("clientes").select("id, razon_social").in("id", clienteIds)
-          : Promise.resolve({ data: [], error: null }),
-      ]);
-      if (itemsRes.error) throw itemsRes.error;
-
-      const clienteMap = new Map<string, string>(((clientesRes.data || []) as Array<{ id: string; razon_social: string }>).map((c) => [c.id, c.razon_social]));
-      const itemsByPR = new Map<string, PresupuestoIA["presupuesto_items"]>();
-      for (const item of (itemsRes.data || []) as Array<PresupuestoIA["presupuesto_items"][number] & { presupuesto_id: string }>) {
-        const list = itemsByPR.get(item.presupuesto_id) || [];
-        list.push(item);
-        itemsByPR.set(item.presupuesto_id, list);
-      }
-      setPresupuestosIA(prRows.map((p) => ({
-        ...p,
-        modalidad_emision: p.modalidad_emision,
-        clientes: { razon_social: clienteMap.get(p.cliente_id) || "Cliente sin acceso" },
-        presupuesto_items: itemsByPR.get(p.id) || [],
-      })));
-    } catch (err: any) {
-      console.error("Error cargando PR aprobados:", err);
-      const message = err?.message || err?.details || (typeof err === "string" ? err : JSON.stringify(err));
-      setIaError(`No se pudieron cargar los presupuestos aprobados: ${message}`);
-    } finally {
-      setLoadingIA(false);
-    }
-  }
-
-  function togglePresupuesto(id: string) {
-    setSelectedPresupuestos((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  async function handleGenerateIA() {
-    if (selectedPresupuestos.size === 0) return;
-    if (!sociedadActiva?.id) { setIaError("Seleccioná una sociedad antes de generar remitos"); return; }
-    setGeneratingIA(true);
-    setIaError("");
-    setIaSuccess("");
-    try {
-      let createdCount = 0;
-      const generationErrors: string[] = [];
-
-      const selectedIds = [...selectedPresupuestos];
-      const { data: existingRows, error: existingError } = await (supabase as any)
-        .from("remitos")
-        .select("presupuesto_id")
-        .in("presupuesto_id", selectedIds);
-      if (existingError) throw existingError;
-      const alreadyGenerated = new Set((existingRows || []).map((row: { presupuesto_id: string }) => row.presupuesto_id));
-
-      for (const pId of selectedPresupuestos) {
-        const p = presupuestosIA.find((x) => x.id === pId);
-        if (!p) continue;
-        if (alreadyGenerated.has(p.id)) {
-          generationErrors.push(`${p.numero}: ya tiene un remito generado`);
-          continue;
-        }
-        if (p.presupuesto_items.length === 0) {
-          generationErrors.push(`${p.numero}: no tiene items para remitir`);
-          continue;
-        }
-
-        // Fetch total for valor_declarado
-        const { data: prHeader, error: headerError } = await supabase
-          .from("presupuestos")
-          .select("total, subtotal")
-          .eq("id", pId)
-          .single();
-        if (headerError) {
-          generationErrors.push(`${p.numero}: ${headerError.message}`);
-          continue;
-        }
-        const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
-
-        // Get next CAI number (skip for manual PRs — no fiscal remito needed)
-        let caiIA: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
-        if (p.modalidad_emision !== "manual") {
-          const { data: caiIARows } = await (supabase as any).rpc("next_cai_number", {
-            p_sociedad_id: sociedadActiva.id,
-            p_tipo: "remito_r",
-          });
-          if (caiIARows && caiIARows.length > 0) caiIA = caiIARows[0];
-        }
-
-        const iaRemitoInsert: Record<string, unknown> = {
-          numero: null,
-          cliente_id: p.cliente_id,
-          fecha: todayAR(),
-          observaciones: `Generado desde presupuesto ${p.numero}`,
-          presupuesto_id: p.id,
-          estado: "pendiente",
-          sociedad_id: sociedadActiva.id,
-          valor_declarado: null,
-          created_by: profile?.id || null,
-        };
-        if (caiIA) {
-          iaRemitoInsert.cai_numero = caiIA.cai_numero;
-          iaRemitoInsert.punto_venta_cai = caiIA.punto_venta;
-          iaRemitoInsert.nro_comprobante_cai = caiIA.nro_comprobante;
-        }
-        const { data: remitoData, error: rErr } = await (supabase.from("remitos") as any).insert(iaRemitoInsert).select("id").single();
-
-        if (rErr || !remitoData) {
-          generationErrors.push(`${p.numero}: ${rErr?.message || "no se pudo crear el remito"}`);
-          continue;
-        }
-
-        if (remitoData) {
-          const items = p.presupuesto_items.map((item, idx) => ({
-            remito_id: remitoData.id,
-            descripcion: item.descripcion,
-            cantidad: item.cantidad,
-            unidad: item.unidad || "UN",
-            orden: item.orden ?? idx,
-            presupuesto_item_id: item.id || null,
-          }));
-          const { error: itemsErr } = await (supabase.from("remito_items") as any).insert(items);
-          if (itemsErr) {
-            let rollbackRemito = (supabase as any).from("remitos").delete().eq("id", remitoData.id);
-            if (sociedadActiva?.id) rollbackRemito = rollbackRemito.eq("sociedad_id", sociedadActiva.id);
-            await rollbackRemito;
-            generationErrors.push(`${p.numero}: no se pudieron guardar los items (${itemsErr.message})`);
-            continue;
-          }
-        }
-        // El presupuesto conserva su estado aprobado: pr_status no incluye
-        // "remitido". La relación remitos.presupuesto_id identifica que ya fue
-        // generado y evita duplicados sin alterar el ciclo comercial del PR.
-        createdCount++;
-      }
-      await fetchData();
-      if (createdCount > 0) setIaSuccess(`Se generaron ${createdCount} remito(s) correctamente y ya aparecen en el listado.`);
-      if (generationErrors.length > 0) setIaError(generationErrors.join(" · "));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Error desconocido";
-      setIaError(`No se pudieron generar los remitos: ${message}`);
-    } finally {
-      setGeneratingIA(false);
-    }
-  }
 
 
   async function openSplitModal() {
@@ -2090,131 +1904,6 @@ export default function RemitosPage() {
         </div>
       )}
 
-      {/* IA Generation Modal */}
-      {iaModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <Card className="w-full max-w-2xl p-6 space-y-4 max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-violet-600" />
-                <h2 className="text-lg font-semibold dark:text-white">Generar Remitos desde Presupuestos</h2>
-              </div>
-              <button onClick={() => { setIaModalOpen(false); setIaSearch(""); }} className="text-zinc-400 hover:text-zinc-600">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Los remitos de PRs electrónicos usan CAI. Los de PRs manuales se crean sin CAI.
-            </p>
-
-            {iaError && (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
-                {iaError}
-              </div>
-            )}
-
-            {iaSuccess ? (
-              <div className="rounded-lg border border-green-200 bg-green-50 p-4 text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300">
-                <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-5 w-5" />
-                  <p className="font-medium">{iaSuccess}</p>
-                </div>
-              </div>
-            ) : (
-              <>
-                <p className="text-sm text-zinc-500">
-                  Seleccioná presupuestos aprobados para generar remitos automáticamente con todos sus items y valor declarado.
-                </p>
-                {!loadingIA && presupuestosIA.length > 0 && (
-                  <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-                    <input
-                      type="text"
-                      placeholder="Buscar por número o cliente..."
-                      value={iaSearch}
-                      onChange={(e) => setIaSearch(e.target.value)}
-                      className="w-full rounded-lg border border-zinc-300 py-2 pl-9 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
-                    />
-                  </div>
-                )}
-                {loadingIA ? (
-                  <div className="flex items-center justify-center gap-2 py-6 text-sm text-zinc-400">
-                    <Loader2 className="h-4 w-4 animate-spin" /> Cargando presupuestos aprobados...
-                  </div>
-                ) : presupuestosIA.length === 0 ? (
-                  <p className="text-sm text-zinc-400 py-4 text-center">No hay presupuestos aprobados disponibles.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {presupuestosIA
-                      .filter((p) => {
-                        if (!iaSearch.trim()) return true;
-                        const q = iaSearch.toLowerCase();
-                        return p.numero.toLowerCase().includes(q) || (p.clientes?.razon_social || "").toLowerCase().includes(q);
-                      })
-                      .map((p) => {
-                      const isManualPR = p.modalidad_emision === "manual";
-                      return (
-                      <label
-                        key={p.id}
-                        className="flex items-center gap-3 rounded-lg border border-zinc-200 p-3 cursor-pointer hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedPresupuestos.has(p.id)}
-                          onChange={() => togglePresupuesto(p.id)}
-                          className="h-4 w-4 rounded border-zinc-300"
-                        />
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs font-bold">{p.numero}</span>
-                            <span className="text-sm text-zinc-500">{p.clientes?.razon_social}</span>
-                            {isManualPR ? (
-                              <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">Manual</span>
-                            ) : (
-                              <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-400">CAI</span>
-                            )}
-                          </div>
-                          <p className="text-xs text-zinc-400 mt-0.5">{p.presupuesto_items.length} item(s)</p>
-                        </div>
-                      </label>
-                      );
-                    })}
-                  </div>
-                )}
-              </>
-            )}
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                onClick={() => { setIaModalOpen(false); setIaSearch(""); }}
-                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:text-zinc-300"
-              >
-                {iaSuccess ? "Cerrar" : "Cancelar"}
-              </button>
-              {!iaSuccess && (
-                <button
-                  onClick={handleGenerateIA}
-                  disabled={generatingIA || selectedPresupuestos.size === 0}
-                  className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50 flex items-center gap-2"
-                >
-                  {generatingIA ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Generando...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-4 w-4" />
-                      Generar {selectedPresupuestos.size > 0 ? `(${selectedPresupuestos.size})` : ""}
-                    </>
-                  )}
-                </button>
-              )}
-            </div>
-          </Card>
-        </div>
-      )}
 
       {/* Split por Sucursal Modal */}
       {splitModalOpen && detailRemito && (

@@ -243,6 +243,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     sucursalNombre: row.sucursal?.nombre ?? "",
     sucursalDireccion: [row.sucursal?.direccion, row.sucursal?.localidad, row.sucursal?.provincia].filter(Boolean).join(", "),
     contactoNombre: row.contacto?.nombre ?? "",
+    contactoEmail: (row.contacto as any)?.email ?? "",
     ocCliente: row.oc_cliente ?? "",
     ocClienteFecha: row.oc_cliente_fecha ?? null,
     tipoComprobante: row.tipo_comprobante ?? "",
@@ -412,6 +413,7 @@ export default function PresupuestosPage() {
   const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
 
   async function openEmailModal(pr: Presupuesto) {
+    const contactoEmail = (pr as any).contactoEmail || "";
     const clientEmail = (pr as any).clienteEmail || "";
     const template = await loadEmailTemplate("presupuesto", sociedadActiva?.id || "");
     const vars = {
@@ -424,7 +426,7 @@ export default function PresupuestosPage() {
     setEmailModal({
       open: true,
       id: pr.id,
-      to: clientEmail,
+      to: contactoEmail || clientEmail,
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
       filename: `${pr.numero}.pdf`,
@@ -781,7 +783,7 @@ export default function PresupuestosPage() {
       // First try with items + vendedor profile
       let q = (supabase as any)
         .from("presupuestos")
-        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva, limite_credito, saldo_cuenta_corriente), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
+        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva, limite_credito, saldo_cuenta_corriente), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre, email), presupuesto_items(*)`)
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       let res: { data: any; error: any } = await q;
@@ -1274,7 +1276,7 @@ export default function PresupuestosPage() {
         // Fetch the newly created PR with full joins before refreshing the list
         const { data: fullRow } = await (supabase as any)
           .from("presupuestos")
-          .select(`*, listo_para_facturar, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva, limite_credito, saldo_cuenta_corriente), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre), presupuesto_items(*)`)
+          .select(`*, listo_para_facturar, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva, limite_credito, saldo_cuenta_corriente), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre, email), presupuesto_items(*)`)
           .eq("id", newRow.id)
           .single();
         const createdPR = fullRow ? mapToPresupuesto(fullRow as any) : mapToPresupuesto(newRow as any);
@@ -2941,15 +2943,13 @@ export default function PresupuestosPage() {
                     value={(selected as any).creadoPorId || ""}
                     onChange={async (e) => {
                       const newOpId = e.target.value || null;
-                      let updateQuery = supabase.from("presupuestos").update({ created_by: newOpId } as any).eq("id", selected.id);
-                      if (sociedadActiva?.id) updateQuery = updateQuery.eq("sociedad_id" as any, sociedadActiva.id);
-                      const { error } = await updateQuery;
-                      if (error) { toast.error("Error al cambiar operador"); return; }
-                      // Also update linked OCs
-                      let ocUpdateQuery = supabase.from("ordenes_compra").update({ created_by: newOpId } as any).eq("presupuesto_origen_id", selected.id).not("estado", "eq", "cancelada");
-                      if (sociedadActiva?.id) ocUpdateQuery = ocUpdateQuery.eq("sociedad_id" as any, sociedadActiva.id);
-                      const { error: ocError } = await ocUpdateQuery;
-                      if (ocError) { toast.error(`Presupuesto actualizado, pero no se pudieron actualizar las OC: ${ocError.message}`); return; }
+                      if (!newOpId) return;
+                      const { error } = await (supabase as any).rpc("change_pr_operator", {
+                        p_presupuesto_id: selected.id,
+                        p_new_operator_id: newOpId,
+                        p_sociedad_id: sociedadActiva?.id,
+                      });
+                      if (error) { toast.error("Error al cambiar operador: " + error.message); return; }
                       const v = vendedores.find(v => v.id === newOpId);
                       setSelected({ ...selected, creadoPorId: newOpId || "", creadoPor: v?.full_name || "" } as any);
                       await fetchPresupuestos();
@@ -3025,6 +3025,26 @@ export default function PresupuestosPage() {
                       Marcar listo para facturar
                     </button>
                     <p className="text-xs text-zinc-400 mt-1 text-center">El PR aparecera en Ventas con estado &ldquo;Facturar&rdquo;</p>
+                  </div>
+                )}
+                {selected.estado === "facturar" && (
+                  <div className="col-span-2">
+                    <button
+                      onClick={async () => {
+                        let revertQuery = supabase.from("presupuestos").update({ estado: "aprobado", listo_para_facturar: false } as any).eq("id", selected.id);
+                        if (sociedadActiva?.id) revertQuery = revertQuery.eq("sociedad_id" as any, sociedadActiva.id);
+                        const { error } = await revertQuery;
+                        if (error) { toast.error("Error al actualizar"); return; }
+                        setSelected({ ...selected, estado: "aprobado" as any, listoParaFacturar: false } as any);
+                        await fetchPresupuestos();
+                        toast.success("PR desmarcado — vuelve a estado Aprobado");
+                      }}
+                      className="flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors w-full justify-center"
+                    >
+                      <Receipt className="h-4 w-4" />
+                      Desmarcar listo para facturar
+                    </button>
+                    <p className="text-xs text-zinc-400 mt-1 text-center">Vuelve a estado &ldquo;Aprobado&rdquo; y se quita de Ventas</p>
                   </div>
                 )}
                 {selected.enviadoAt && (
@@ -3119,7 +3139,12 @@ export default function PresupuestosPage() {
                           <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
                           <td className="px-3 py-2">{item.descripcion}</td>
                           <td className="px-3 py-2 text-right">{item.cantidad} {item.unidad}</td>
-                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell" title={item.costoMoneda !== selected.moneda ? `Orig: ${formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")}` : undefined}>{formatCurrency(costoConv, selected.moneda as "ARS" | "USD")}</td>
+                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">
+                            <div>{formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")}</div>
+                            {item.costoMoneda !== selected.moneda && costoConv > 0 && (
+                              <div className="text-[10px] text-zinc-400">≈ {formatCurrency(costoConv, selected.moneda as "ARS" | "USD")}</div>
+                            )}
+                          </td>
                           <td className="px-3 py-2 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>
                           <td className={`px-3 py-2 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
                             <span className="inline-flex items-center gap-1">
@@ -4207,6 +4232,16 @@ export default function PresupuestosPage() {
         defaultSubject={emailModal.subject}
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
+        suggestedEmails={(() => {
+          const pr = presupuestos.find(p => p.id === emailModal.id);
+          if (!pr) return [];
+          const suggestions: { email: string; label?: string }[] = [];
+          const contactoEmail = (pr as any).contactoEmail;
+          const clienteEmail = (pr as any).clienteEmail;
+          if (contactoEmail) suggestions.push({ email: contactoEmail, label: (pr as any).contactoNombre || "Solicitante" });
+          if (clienteEmail && clienteEmail !== contactoEmail) suggestions.push({ email: clienteEmail, label: "Email cliente" });
+          return suggestions;
+        })()}
         generatePdf={async () => {
           const pr = presupuestos.find(p => p.id === emailModal.id);
           if (!pr || !sociedadActiva) throw new Error("No se encontró el presupuesto");
