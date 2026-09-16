@@ -78,6 +78,7 @@ interface VentaFactura {
   oc_cliente?: string | null;
   email_enviado_at?: string | null;
   email_enviado_a?: string | null;
+  factura_origen_id?: string | null;
 }
 
 interface VentaRemito {
@@ -218,7 +219,7 @@ export default function VentasPage() {
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [filterMoneda, setFilterMoneda] = useState<string>("todas");
-  const [filterFacturacion, setFilterFacturacion] = useState<"todas" | "pend" | "lista" | "facturada">("todas");
+  const [filterFacturacion, setFilterFacturacion] = useState<"todas" | "pend" | "lista" | "facturada">("pend");
   const [selectedVentaId, setSelectedVentaId] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
 
@@ -343,7 +344,7 @@ export default function VentasPage() {
       const [facturasRes, remitosRes, ocRes] = await Promise.all([
         pIds.length > 0
           ? (() => {
-              let q = (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, cae_vencimiento, subtotal, iva, total, moneda, tipo_cambio, estado, presupuesto_id, fecha_vencimiento, condicion_venta, oc_cliente, email_enviado_at, email_enviado_a").in("presupuesto_id", pIds);
+              let q = (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, cae_vencimiento, subtotal, iva, total, moneda, tipo_cambio, estado, presupuesto_id, fecha_vencimiento, condicion_venta, oc_cliente, email_enviado_at, email_enviado_a, factura_origen_id").in("presupuesto_id", pIds);
               if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
               return q;
             })()
@@ -1320,11 +1321,40 @@ export default function VentasPage() {
                     onToggle={() => setExpandedSection(expandedSection === "factura" ? null : "factura")}
                   >
                     {(() => {
+                      const allFacturas = [...selectedVenta.facturas].sort((a, b) => new Date(a.fecha).getTime() - new Date(b.fecha).getTime());
                       const facturaActiva = selectedVenta.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
+                      const ncTipos = ["NCA", "NCB", "NCEA", "NCEB"];
+                      // Show path if there's more than 1 comprobante (e.g. FACT → NC → FACT)
+                      const showPath = allFacturas.length > 1;
                       if (facturaActiva) {
                         const comp = `${facturaActiva.tipo} ${String(facturaActiva.punto_venta).padStart(4, "0")}-${String(facturaActiva.numero).padStart(8, "0")}`;
                         return (
                           <div className="space-y-2 text-sm">
+                            {showPath && (
+                              <div className="flex flex-wrap items-center gap-1 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 px-3 py-2 mb-1">
+                                <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium mr-1">Historial:</span>
+                                {allFacturas.map((f, idx) => {
+                                  const fComp = `${f.tipo} ${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
+                                  const isNC = ncTipos.includes(f.tipo);
+                                  const isActive = f.id === facturaActiva.id;
+                                  const isAnulada = f.estado === "anulada";
+                                  return (
+                                    <span key={f.id} className="flex items-center gap-1">
+                                      {idx > 0 && <ArrowRight className="h-3 w-3 text-amber-400 shrink-0" />}
+                                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                        isActive ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                                        : isNC ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+                                        : isAnulada ? "bg-zinc-100 text-zinc-500 line-through dark:bg-zinc-800 dark:text-zinc-500"
+                                        : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
+                                      }`}>
+                                        {f.tipo}
+                                        {f.cae ? " ARCA" : ""}
+                                      </span>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            )}
                             <div className="flex justify-between">
                               <span className="text-zinc-500">Comprobante</span>
                               <div className="flex items-center gap-2">
@@ -1384,7 +1414,26 @@ export default function VentasPage() {
                         <p className="text-sm text-zinc-500">Pendiente de facturación administrativa</p>
                       ) : (
                         <div className="space-y-3">
-                          {tieneNcTotal && (
+                          {showPath && (
+                            <div className="flex flex-wrap items-center gap-1 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 px-3 py-2">
+                              <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium mr-1">Historial:</span>
+                              {allFacturas.map((f, idx) => {
+                                const isNC = ncTipos.includes(f.tipo);
+                                return (
+                                  <span key={f.id} className="flex items-center gap-1">
+                                    {idx > 0 && <ArrowRight className="h-3 w-3 text-amber-400 shrink-0" />}
+                                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                      isNC ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+                                      : "bg-zinc-100 text-zinc-500 line-through dark:bg-zinc-800 dark:text-zinc-500"
+                                    }`}>
+                                      {f.tipo}{f.cae ? " ARCA" : ""}
+                                    </span>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {tieneNcTotal && !showPath && (
                             <p className="text-sm text-amber-600 dark:text-amber-400">Factura anterior anulada por Nota de Crédito</p>
                           )}
                           {puedeFacturar ? (
