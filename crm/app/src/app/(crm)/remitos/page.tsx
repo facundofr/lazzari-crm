@@ -559,7 +559,7 @@ export default function RemitosPage() {
         .from("presupuestos")
         .select("id, numero, subtotal, total, cliente_id, estado")
         .eq("cliente_id", clienteId)
-        .in("estado", ["aprobado", "facturar", "facturado"])
+        .in("estado", ["aprobado", "facturar", "facturado", "remitido"])
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id" as any, sociedadActiva.id);
       const { data, error } = await prQ;
@@ -631,15 +631,49 @@ export default function RemitosPage() {
 
       const items = itemsRes.data;
       if (items && items.length > 0) {
-        setCreateItems(items.map((it: any, idx: number) => ({
-          tempId: `pr-${idx}`,
-          descripcion: it.descripcion || "",
-          cantidad: Number(it.cantidad) || 1,
-          unidad: it.unidad || "UN",
-          sucursal_id: prSucursalId,
-          presupuesto_item_id: it.id || null,
-          orden: it.orden ?? idx,
-        })));
+        // Fetch existing remitos to calculate pending quantities
+        const { data: existingRemitos } = await (supabase as any)
+          .from("remitos").select("id").eq("presupuesto_id", prId);
+        let remitidoByPiId: Record<string, number> = {};
+        let remitidoByKey: Record<string, number> = {};
+        if (existingRemitos && existingRemitos.length > 0) {
+          const rIds = existingRemitos.map((r: any) => r.id);
+          const { data: rItems } = await (supabase as any)
+            .from("remito_items")
+            .select("descripcion, cantidad, orden, presupuesto_item_id")
+            .in("remito_id", rIds);
+          if (rItems) {
+            for (const ri of rItems as any[]) {
+              if (ri.presupuesto_item_id) {
+                remitidoByPiId[ri.presupuesto_item_id] = (remitidoByPiId[ri.presupuesto_item_id] || 0) + Number(ri.cantidad);
+              } else {
+                const key = `${ri.descripcion}__${ri.orden}`;
+                remitidoByKey[key] = (remitidoByKey[key] || 0) + Number(ri.cantidad);
+              }
+            }
+          }
+        }
+
+        const mapped = items.map((it: any, idx: number) => {
+          const yaRemitido = remitidoByPiId[it.id] || remitidoByKey[`${it.descripcion}__${it.orden ?? idx}`] || 0;
+          const pendiente = Math.max(0, Number(it.cantidad) - yaRemitido);
+          return {
+            tempId: `pr-${idx}`,
+            descripcion: it.descripcion || "",
+            cantidad: pendiente,
+            unidad: it.unidad || "UN",
+            sucursal_id: prSucursalId,
+            presupuesto_item_id: it.id || null,
+            orden: it.orden ?? idx,
+          };
+        }).filter((it: any) => it.cantidad > 0);
+
+        if (mapped.length === 0) {
+          setCreateError("Todas las cantidades de este PR ya fueron remitidas");
+          setCreateItems([]);
+        } else {
+          setCreateItems(mapped);
+        }
       } else {
         setCreateItems([]);
       }
