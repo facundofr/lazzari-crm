@@ -130,6 +130,7 @@ function baseStyles(color: string) {
     /* Items table */
     .items-title { font-size: 8px; text-transform: uppercase; letter-spacing: 1.5px; color: ${color}; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #f0f0f0; }
     table { width: 100%; border-collapse: collapse; }
+    td, th { overflow-wrap: break-word; word-break: break-word; }
     thead th { background: #f7f7f7; padding: 8px 10px; text-align: left; font-size: 8px; text-transform: uppercase; letter-spacing: 0.8px; color: #333; font-weight: 700; border-bottom: 2px solid #e0e0e0; }
     thead th.right { text-align: right; }
     thead th.center { text-align: center; }
@@ -169,6 +170,9 @@ function baseStyles(color: string) {
       .header-bar { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       thead th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       tbody tr:nth-child(even) td { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      table { page-break-inside: auto; }
+      tr { page-break-inside: avoid; page-break-after: auto; }
+      thead { display: table-header-group; }
     }
     @page { margin: 8mm; size: A4; }
   `;

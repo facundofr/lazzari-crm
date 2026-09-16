@@ -1554,9 +1554,8 @@ export default function PresupuestosPage() {
         ocsCreated++;
       }
 
-      // Stock propio no tiene proveedor externo, pero sí una OC interna real.
-      // Se deja en borrador para que el usuario pueda activarla y recibirla
-      // normalmente desde el módulo de Compras.
+      // Stock propio no tiene proveedor externo — la OC se crea directamente
+      // como "enviada" para que se pueda recibir sin pasos intermedios.
       if (stockItems.length > 0) {
         for (const { moneda, items: currencyItems } of groupOwnStockItemsByCurrency(stockItems)) {
           const totals = calculateOwnStockPurchaseOrder(currencyItems, compraSinIva);
@@ -1568,7 +1567,7 @@ export default function PresupuestosPage() {
               sociedad_id: sociedadId,
               fecha: today,
               moneda,
-              estado: "borrador",
+              estado: "enviada",
               ...totals,
               observaciones: `Stock propio — OC interna generada desde ${prNumero}`,
               created_by: prCreatedBy ?? profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
@@ -1673,7 +1672,7 @@ export default function PresupuestosPage() {
       if (sinProveedorCount > 0 && sinProvItems.length > 0) {
         toast.info(`${sinProveedorCount} item(s) sin proveedor — OC creada en borrador para asignar proveedor`);
       }
-      if (stockItemsCount > 0 && !ocCreationFailed) toast.info(`${stockItemsCount} item(s) de stock propio: OC(s) interna(s) creada(s) en borrador, separadas por moneda, para recibirlas por el circuito normal`);
+      if (stockItemsCount > 0 && !ocCreationFailed) toast.info(`${stockItemsCount} item(s) de stock propio: OC(s) interna(s) creada(s) como enviada(s), listas para recibir`);
     } catch (err) {
       console.error("Error generating OCs:", err);
       toast.warning("PR aprobado pero hubo un error al generar las OC");
