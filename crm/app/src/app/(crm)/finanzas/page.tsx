@@ -118,6 +118,12 @@ interface ProveedorOption {
   exclusion_retencion_hasta?: string | null;
   exclusion_retencion_cert?: string | null;
   forma_pago?: string | null;
+  banco?: string | null;
+  cbu?: string | null;
+  alias_bancario?: string | null;
+  numero_cuenta?: string | null;
+  titular_cuenta?: string | null;
+  tipo_cuenta?: string | null;
 }
 
 interface OrdenPagoRow {
@@ -1051,7 +1057,7 @@ export default function FinanzasPage() {
 
         // Fetch proveedores list for OP/gastos selectors
         try {
-          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, forma_pago, alicuota_ganancias, concepto_retencion_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, exclusion_retencion_cert" as any).order("razon_social");
+          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, forma_pago, banco, cbu, alias_bancario, numero_cuenta, titular_cuenta, tipo_cuenta, alicuota_ganancias, concepto_retencion_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, exclusion_retencion_cert" as any).order("razon_social");
           if (sociedadActiva?.id) qProv = qProv.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: provData } = await qProv;
           if (provData) setProveedoresOptions(provData as unknown as ProveedorOption[]);
@@ -5518,6 +5524,25 @@ export default function FinanzasPage() {
                   </div>
                 </div>
               )}
+
+              {/* ── Datos bancarios del proveedor ── */}
+              {opForm.proveedor_id && (() => {
+                const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
+                if (!prov || (!prov.cbu && !prov.alias_bancario && !prov.banco && !prov.numero_cuenta)) return null;
+                return (
+                  <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 p-3">
+                    <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 flex items-center gap-1 mb-2"><Landmark className="h-3.5 w-3.5" />Datos bancarios</p>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                      {prov.banco && <div><span className="text-zinc-500">Banco</span><p className="font-medium">{prov.banco}</p></div>}
+                      {prov.tipo_cuenta && <div><span className="text-zinc-500">Tipo cuenta</span><p className="font-medium">{prov.tipo_cuenta}</p></div>}
+                      {prov.cbu && <div className="col-span-2"><span className="text-zinc-500">CBU / CVU</span><p className="font-mono font-medium select-all">{prov.cbu}</p></div>}
+                      {prov.alias_bancario && <div><span className="text-zinc-500">Alias</span><p className="font-mono font-medium select-all">{prov.alias_bancario}</p></div>}
+                      {prov.numero_cuenta && <div><span className="text-zinc-500">N° cuenta</span><p className="font-mono font-medium">{prov.numero_cuenta}</p></div>}
+                      {prov.titular_cuenta && <div className="col-span-2"><span className="text-zinc-500">Titular</span><p className="font-medium">{prov.titular_cuenta}</p></div>}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* ── Medios de pago (múltiples) ── */}
               {opMontoBruto > 0 && (
