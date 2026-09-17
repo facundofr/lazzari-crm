@@ -318,6 +318,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [ncStep, setNcStep] = useState<"form" | "saving" | "success" | "error">("form");
   const [ncResult, setNcResult] = useState<string>("");
   const [detailNCs, setDetailNCs] = useState<FacturaRow[]>([]);
+  const [detailSolicitante, setDetailSolicitante] = useState<string | null>(null);
 
   const isFacturaANc = ncFactura?.tipo === "FA" || ncFactura?.tipo === "FCEA";
 
@@ -1394,11 +1395,18 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       if (f.clientes?.email && !suggested.some(s => s.email === f.clientes!.email)) {
         suggested.push({ email: f.clientes.email, label: "Cliente" });
       }
-      const { data: contactos } = await (supabase as any).from("contactos").select("nombre, email").eq("entity_type", "cliente").eq("entity_id", f.cliente_id);
+      const { data: contactos } = await (supabase as any).from("contactos").select("id, nombre, email").eq("entity_type", "cliente").eq("entity_id", f.cliente_id);
+      // If factura comes from a presupuesto, find the solicitante
+      let solicitanteContactoId: string | null = null;
+      if (f.presupuesto_id) {
+        const { data: prData } = await (supabase as any).from("presupuestos").select("contacto_id").eq("id", f.presupuesto_id).single();
+        if (prData?.contacto_id) solicitanteContactoId = prData.contacto_id;
+      }
       if (contactos) {
         for (const c of contactos) {
           if (c.email && !suggested.some(s => s.email === c.email)) {
-            suggested.push({ email: c.email, label: c.nombre || "Contacto" });
+            const isSolicitante = solicitanteContactoId && c.id === solicitanteContactoId;
+            suggested.push({ email: c.email, label: isSolicitante ? `⭐ Solicitante: ${c.nombre}` : (c.nombre || "Contacto") });
           }
         }
       }
@@ -1693,12 +1701,25 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             onRowClick={(f) => {
               setDetailFactura(f);
               setDetailNCs([]);
+              setDetailSolicitante(null);
               supabase.from("factura_items").select("descripcion, cantidad, precio_unitario, iva_porcentaje, subtotal").eq("factura_id", f.id).order("orden")
                 .then(({ data }) => setDetailItems((data || []).map(d => ({ ...d, subtotal: d.subtotal ?? 0 }))));
               // Cargar NCs relacionadas a esta factura
               (supabase as any).from("facturas").select("id, tipo, punto_venta, numero, fecha, cae, total, estado")
                 .eq("factura_origen_id", f.id).order("fecha", { ascending: false })
                 .then(({ data }: { data: FacturaRow[] | null }) => setDetailNCs(data || []));
+              // Cargar solicitante del presupuesto
+              if (f.presupuesto_id) {
+                (supabase as any).from("presupuestos").select("contacto_id").eq("id", f.presupuesto_id).single()
+                  .then(({ data: prData }: any) => {
+                    if (prData?.contacto_id) {
+                      (supabase as any).from("contactos").select("nombre, cargo, email, telefono").eq("id", prData.contacto_id).single()
+                        .then(({ data: cData }: any) => {
+                          if (cData) setDetailSolicitante(cData.cargo ? `${cData.nombre} (${cData.cargo})` : cData.nombre);
+                        });
+                    }
+                  });
+              }
             }}
           />
         </Card>
@@ -2304,6 +2325,11 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 {detailFactura.clientes?.cuit && <p className="text-xs text-zinc-500 mt-0.5">CUIT: {detailFactura.clientes.cuit}</p>}
                 {detailFactura.clientes?.condicion_iva && <p className="text-xs text-zinc-400">{detailFactura.clientes.condicion_iva}</p>}
               </div>
+
+              {/* Solicitante */}
+              {detailSolicitante && (
+                <p className="text-xs text-zinc-500 mt-1">Solicitante: <span className="font-medium text-zinc-700 dark:text-zinc-300">{detailSolicitante}</span></p>
+              )}
 
               {/* OC Cliente */}
               {detailFactura.oc_cliente && (

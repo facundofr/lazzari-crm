@@ -6615,6 +6615,23 @@ export default function FinanzasPage() {
             prev?.id === ordenPagoId ? { ...prev, email_enviado_at: sentAt, sobre_verde: true } : prev
           );
         }}
+        onMarkSent={async () => {
+          const sentAt = new Date().toISOString();
+          const ordenPagoId = emailModal.id;
+          let emailUpdate = (supabase as any)
+            .from("ordenes_pago")
+            .update({ email_enviado_at: sentAt, sobre_verde: true })
+            .eq("id", ordenPagoId);
+          if (sociedadActiva?.id) emailUpdate = emailUpdate.eq("sociedad_id", sociedadActiva.id);
+          const { error } = await emailUpdate;
+          if (error) { alert(`Error al marcar como enviada: ${error.message}`); return; }
+          setOrdenesPago((prev) => prev.map((orden) =>
+            orden.id === ordenPagoId ? { ...orden, email_enviado_at: sentAt, sobre_verde: true } : orden
+          ));
+          setSelectedOP((prev) =>
+            prev?.id === ordenPagoId ? { ...prev, email_enviado_at: sentAt, sobre_verde: true } : prev
+          );
+        }}
         generatePdf={async () => {
           const op = ordenesPago.find(o => o.id === emailModal.id);
           if (!op || !sociedadActiva) throw new Error("No se encontró la OP");
