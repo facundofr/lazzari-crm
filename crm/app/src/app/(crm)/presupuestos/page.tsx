@@ -399,6 +399,7 @@ export default function PresupuestosPage() {
   }
   const [remitarModal, setRemitarModal] = useState<{ pr: Presupuesto; items: RemitarItem[] } | null>(null);
   const [remitarLoading, setRemitarLoading] = useState(false);
+  const [remitarTipo, setRemitarTipo] = useState<"interno" | "muestra">("interno");
 
   // Detail panel
   const [selected, setSelected] = useState<Presupuesto | null>(null);
@@ -2027,9 +2028,9 @@ export default function PresupuestosPage() {
         .single();
       const valorDeclarado = (prHeader as any)?.total || (prHeader as any)?.subtotal || null;
 
-      // Get next CAI number atomically (skip for manual presupuestos — no fiscal remito)
+      // Get next CAI number atomically (skip for muestras and manual presupuestos)
       let caiData: { cai_numero: string; punto_venta: number; nro_comprobante: number } | null = null;
-      if ((pr as any).modalidadEmision !== "manual") {
+      if (remitarTipo !== "muestra" && (pr as any).modalidadEmision !== "manual") {
         const { data: caiRows } = await (supabase as any).rpc("next_cai_number", {
           p_sociedad_id: sociedadActiva.id,
           p_tipo: "remito_r",
@@ -2048,6 +2049,7 @@ export default function PresupuestosPage() {
         created_by: profile?.id || null,
         oc_cliente: pr.ocCliente || null,
         valor_declarado: valorDeclarado ? Number(valorDeclarado) : null,
+        tipo_remito: remitarTipo === "muestra" ? "muestra" : "interno",
       };
       if (caiData) {
         remitoInsert.cai_numero = caiData.cai_numero;
@@ -4150,12 +4152,14 @@ export default function PresupuestosPage() {
               <div>
                 <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1">Tipo de remito</label>
                 <div className="flex gap-2">
-                  <div className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-orange-500 text-white text-center">
-                    Interno (numeración propia)
-                  </div>
-                  <div className="flex-1 rounded-lg px-3 py-2 text-sm font-medium bg-zinc-100 text-zinc-400 text-center cursor-not-allowed dark:bg-zinc-800 dark:text-zinc-500" title="Próximamente">
-                    Electrónico (AFIP) — Próx.
-                  </div>
+                  <button type="button" onClick={() => setRemitarTipo("interno")}
+                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${remitarTipo === "interno" ? "bg-emerald-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                    Remito R (con CAI)
+                  </button>
+                  <button type="button" onClick={() => setRemitarTipo("muestra")}
+                    className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${remitarTipo === "muestra" ? "bg-violet-600 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                    Muestras (sin CAI)
+                  </button>
                 </div>
               </div>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">Ingresá las cantidades a incluir en este remito. Los items con cantidad 0 no se incluyen.</p>
