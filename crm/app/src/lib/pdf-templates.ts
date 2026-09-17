@@ -380,7 +380,7 @@ ${documentHeader(soc, {
 <div class="items-title">Detalle de productos / servicios</div>
 <table>
   <thead><tr>
-    <th class="center" style="width:32px">#</th>
+    <th class="center" style="width:44px">#</th>
     <th style="width:90px">Código</th>
     <th>Descripción</th>
     <th class="right" style="width:55px">Cant.</th>
@@ -585,7 +585,7 @@ ${documentHeader(soc, {
 <div class="items-title">Detalle de productos / servicios</div>
 <table>
   <thead><tr>
-    <th class="center" style="width:32px">#</th>
+    <th class="center" style="width:44px">#</th>
     <th>Descripción</th>
     <th class="right" style="width:65px">Cantidad</th>
     <th class="right" style="width:95px">P. Unitario</th>
@@ -958,7 +958,7 @@ ${documentHeader(soc, {
 <div class="items-title">Detalle de productos / servicios</div>
 <table>
   <thead><tr>
-    <th class="center" style="width:32px">#</th>
+    <th class="center" style="width:44px">#</th>
     <th style="width:90px">Código</th>
     <th>Descripción</th>
     <th class="right" style="width:55px">Cant.</th>
@@ -1393,8 +1393,9 @@ export async function htmlToPdfBase64(html: string): Promise<string> {
           width: 794,
           windowWidth: 794,
         },
+        pagebreak: { mode: ["avoid-all", "css", "legacy"] },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      })
+      } as any)
       .from(container);
     const blob: Blob = await worker.outputPdf("blob");
 
