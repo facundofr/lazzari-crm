@@ -16,7 +16,7 @@ import {
   FileText, Receipt, Truck, CheckCircle2,
   Loader2, X, ChevronRight, ChevronDown,
   Plus, Minus, DollarSign, Eye, AlertCircle,
-  ArrowRight, Clock, Package, ClipboardList, Search, Download, Mail, MailCheck, Maximize2, Minimize2,
+  ArrowRight, Clock, Package, ClipboardList, Search, Download, Mail, MailCheck, Maximize2, Minimize2, Ban,
 } from "lucide-react";
 import { FichasRelevamiento } from "@/components/ventas/fichas-relevamiento";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -1389,6 +1389,22 @@ export default function VentasPage() {
                                 Ver en facturación <ArrowRight className="h-3 w-3" />
                               </Link>
                             </div>
+                            {facturaActiva.estado === "emitida" && role !== "vendedor" && (
+                              <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800 mt-2">
+                                <Link
+                                  href={`/finanzas?factura=${facturaActiva.id}&nc=1`}
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 dark:border-red-700 px-3 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30"
+                                >
+                                  <Ban className="h-3.5 w-3.5" /> Emitir NC
+                                </Link>
+                                <button
+                                  onClick={() => handleCancelarVenta(selectedVenta.presupuesto.id)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                                >
+                                  <X className="h-3.5 w-3.5" /> Cancelar venta
+                                </button>
+                              </div>
+                            )}
                           </div>
                         );
                       }
