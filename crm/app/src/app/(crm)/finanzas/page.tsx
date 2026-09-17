@@ -117,6 +117,7 @@ interface ProveedorOption {
   exclusion_retencion_desde?: string | null;
   exclusion_retencion_hasta?: string | null;
   exclusion_retencion_cert?: string | null;
+  forma_pago?: string | null;
 }
 
 interface OrdenPagoRow {
@@ -1050,7 +1051,7 @@ export default function FinanzasPage() {
 
         // Fetch proveedores list for OP/gastos selectors
         try {
-          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, alicuota_ganancias, concepto_retencion_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, exclusion_retencion_cert" as any).order("razon_social");
+          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, forma_pago, alicuota_ganancias, concepto_retencion_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, exclusion_retencion_cert" as any).order("razon_social");
           if (sociedadActiva?.id) qProv = qProv.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: provData } = await qProv;
           if (provData) setProveedoresOptions(provData as unknown as ProveedorOption[]);
@@ -1526,6 +1527,12 @@ export default function FinanzasPage() {
     setOpDatosError("");
     setOpCondicionLoading(false);
     const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
+    // Pre-seleccionar medio de pago según forma_pago del proveedor
+    if (prov?.forma_pago) {
+      const fpMap: Record<string, OpMedioPago["tipo"]> = { Transferencia: "transferencia", Cheque: "cheque", Echeq: "echeq", Efectivo: "efectivo", Tarjeta: "tarjeta" };
+      const tipoMedio = fpMap[prov.forma_pago];
+      if (tipoMedio) setOpMedios(prev => prev.length === 1 && prev[0].monto === 0 ? [{ ...prev[0], tipo: tipoMedio }] : prev);
+    }
     // Usar condicion_iva de la DB directamente (fuente de verdad)
     if (prov?.condicion_iva) {
       setOpProvCondicion(prov.condicion_iva);

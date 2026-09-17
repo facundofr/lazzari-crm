@@ -1051,17 +1051,20 @@ export default function VentasPage() {
                           {(() => {
                             const factActiva = v.facturas.find(f => f.estado === "emitida" || f.estado === "pagada");
                             const esManual = factActiva && !factActiva.cae;
+                            const listaParaFacturar = v.presupuesto.estado === "facturar";
                             return (
                               <div className={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${
                                 st.facturado
                                   ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
-                                  : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
+                                  : listaParaFacturar
+                                    ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
+                                    : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
                               }`}>
                                 <Receipt className="h-3 w-3" />
                                 <span className="hidden sm:inline">
                                   {st.facturado
                                     ? esManual ? "Manual" : "ARCA"
-                                    : "Sin facturar"}
+                                    : listaParaFacturar ? "Lista p/ fact." : "Sin facturar"}
                                 </span>
                               </div>
                             );

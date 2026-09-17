@@ -65,6 +65,7 @@ function mapSupabaseProveedor(row: Record<string, unknown>): Proveedor {
     direccion: row.direccion as string,
     localidad: row.localidad as string,
     provincia: row.provincia as string,
+    banco: (row.banco as string) ?? "",
     cbu: (row.cbu as string) ?? "",
     aliasBancario: (row.alias_bancario as string) ?? "",
     numeroCuenta: (row.numero_cuenta as string) ?? "",
@@ -145,6 +146,7 @@ const emptyForm = {
   direccion: "",
   localidad: "",
   provincia: "",
+  banco: "",
   cbu: "",
   alias_bancario: "",
   numero_cuenta: "",
@@ -449,7 +451,7 @@ export default function ProveedoresPage() {
       razon_social: p.razonSocial, cuit: p.cuit, condicion_iva: p.condicionIva,
       email: p.email, telefono: p.telefono, direccion: p.direccion,
       localidad: p.localidad, provincia: p.provincia, rubro: p.rubro,
-      cbu: p.cbu ?? "", alias_bancario: p.aliasBancario ?? "", numero_cuenta: p.numeroCuenta ?? "",
+      banco: (p as any).banco ?? "", cbu: p.cbu ?? "", alias_bancario: p.aliasBancario ?? "", numero_cuenta: p.numeroCuenta ?? "",
       titular_cuenta: (p as any).titularCuenta ?? "", tipo_cuenta: (p as any).tipoCuenta ?? "",
       forma_pago: p.formaPago, dias_cuenta_corriente: p.diasCuentaCorriente,
       limite_credito: p.limiteCredito, notas: p.notas,
@@ -919,10 +921,11 @@ export default function ProveedoresPage() {
                   )}
                 </div>
               </div>
-              {(selectedProv.cbu || selectedProv.aliasBancario || selectedProv.numeroCuenta || (selectedProv as any).titularCuenta || (selectedProv as any).tipoCuenta) && (
+              {(selectedProv.cbu || selectedProv.aliasBancario || selectedProv.numeroCuenta || (selectedProv as any).titularCuenta || (selectedProv as any).tipoCuenta || (selectedProv as any).banco) && (
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                   <h3 className="text-sm font-semibold mb-3">Datos bancarios</h3>
                   <div className="grid grid-cols-2 gap-4">
+                    <div><p className="text-xs text-zinc-500">Banco</p><p className="text-sm font-medium">{(selectedProv as any).banco || "—"}</p></div>
                     <div><p className="text-xs text-zinc-500">Titular</p><p className="text-sm font-medium">{(selectedProv as any).titularCuenta || "—"}</p></div>
                     <div><p className="text-xs text-zinc-500">Tipo de cuenta</p><p className="text-sm font-medium">{(selectedProv as any).tipoCuenta || "—"}</p></div>
                     <div className="col-span-2"><p className="text-xs text-zinc-500">CBU / CVU</p><p className="text-sm font-mono font-medium">{selectedProv.cbu || "—"}</p></div>
@@ -1016,7 +1019,7 @@ export default function ProveedoresPage() {
               </div>
               <div><label className="text-xs font-medium text-zinc-500">Forma de pago</label>
                 <select value={form.forma_pago} onChange={(e) => setForm({ ...form, forma_pago: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
-                  <option value="Transferencia">Transferencia</option><option value="Tarjeta">Tarjeta</option><option value="Cheque">Cheque</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option>
+                  <option value="Transferencia">Transferencia</option><option value="Tarjeta">Tarjeta</option><option value="Cheque">Cheque</option><option value="Echeq">Echeq</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option>
                 </select>
               </div>
               <div><label className="text-xs font-medium text-zinc-500">Tiempo de pago (días)</label><input type="number" list="tiempos-pago-proveedor" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /><datalist id="tiempos-pago-proveedor"><option value="0" /><option value="15" /><option value="30" /><option value="45" /><option value="60" /></datalist></div>
@@ -1024,6 +1027,7 @@ export default function ProveedoresPage() {
               <div className="col-span-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
                 <h3 className="text-sm font-semibold">Datos bancarios <span className="font-normal text-zinc-400">(opcionales)</span></h3>
               </div>
+              <div><label className="text-xs font-medium text-zinc-500">Banco</label><select value={(form as any).banco} onChange={(e) => setForm({ ...form, banco: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"><option value="">Seleccionar...</option>{["Banco Nación","Banco Provincia","Banco Ciudad","Banco Galicia","Banco Santander","Banco BBVA","Banco Macro","Banco HSBC","Banco ICBC","Banco Patagonia","Banco Credicoop","Banco Comafi","Banco Itaú","Banco Supervielle","Banco Columbia","Brubank","Mercado Pago","Ualá","Naranja X","Otro"].map(b => <option key={b} value={b}>{b}</option>)}</select></div>
               <div><label className="text-xs font-medium text-zinc-500">CBU / CVU</label><input value={form.cbu} onChange={(e) => setForm({ ...form, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Alias</label><input value={form.alias_bancario} onChange={(e) => setForm({ ...form, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Titular</label><input value={(form as any).titular_cuenta} onChange={(e) => setForm({ ...form, titular_cuenta: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
