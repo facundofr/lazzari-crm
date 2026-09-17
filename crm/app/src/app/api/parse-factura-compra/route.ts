@@ -45,8 +45,10 @@ Reglas:
 - Si el documento aplica un único descuento general, devolvelo en descuento_general_porcentaje y repetilo en cada item que no tenga un descuento propio.
 - Si el descuento aparece como importe y no como porcentaje, calculá el porcentaje equivalente.
 - El subtotal debe ser el neto luego de aplicar descuentos y antes del IVA.
-- Leé la tabla completa, incluyendo todas las páginas. No resumas varios renglones en uno: cada artículo/código distinto es un item separado.
+- Leé la tabla completa, incluyendo todas las páginas. No resumas varios renglones en uno: cada artículo/código distinto es un item separado. Prestá especial atención a tablas con muchas columnas o formatos densos — leé cada celda individualmente, no saltes columnas.
+- Si la tabla tiene columnas como Código, Descripción, Cantidad, Precio, Bonificación, Subtotal — asegurate de mapear cada columna correctamente. No confundas la columna de bonificación con el precio ni el subtotal de línea con el precio unitario.
 - Verificá aritméticamente cantidad × precio unitario × (1 - descuento/100), subtotal, IVA, percepciones y total contra los totales impresos. Conservá los importes impresos como subtotal/iva/total y corregí únicamente un item evidentemente mal leído.
+- Si la lectura de un artículo te da un subtotal de línea que no cuadra con los totales del documento, releé ese renglón con más cuidado.
 - En documentos con separador de miles y decimales argentinos (1.234,56), convertí a número 1234.56. Nunca devuelvas números con formato local ni símbolos.
 - Los precios deben ser números (sin símbolos de moneda).
 - Si un campo no existe en el documento, usá null para texto o 0 para números.

@@ -35,7 +35,11 @@ Reglas IMPORTANTES:
 - Si un campo no existe en el comprobante, usá null.
 - La moneda por defecto es "ARS" salvo que se indique USD o dólares.
 - Devolvé SOLO el JSON, sin texto adicional ni markdown.
-- SIEMPRE devolvé el array "pagos" aunque sea un solo pago.`;
+- SIEMPRE devolvé el array "pagos" aunque sea un solo pago.
+- Para transferencias bancarias, buscá el monto en el campo "Importe" o "Monto". No confundas el CBU/CVU (22 dígitos) con el monto.
+- Si el comprobante muestra "Fecha de emisión" y "Fecha de cobro/acreditación", usá siempre la de cobro/acreditación.
+- Para echeqs, el número de cheque suele tener 8 dígitos y el ID digital es más largo. No los confundas.
+- Leé con mucho cuidado los montos: $1.234.567,89 = 1234567.89. Un punto seguido de 3 dígitos es separador de miles, una coma seguida de 2 dígitos es separador decimal.`;
 
 export async function POST(request: NextRequest) {
   try {
