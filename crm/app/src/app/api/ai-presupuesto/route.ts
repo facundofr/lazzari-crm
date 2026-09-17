@@ -140,11 +140,17 @@ Respondé SOLO con un JSON válido, sin markdown ni explicaciones:
     // Parse JSON from response (handle potential markdown wrapping)
     let parsed;
     try {
-      const jsonStr = rawText.replace(/^```json?\n?/i, "").replace(/\n?```$/i, "").trim();
+      let jsonStr = rawText.replace(/^```json?\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+      // Extract JSON object if there's surrounding text
+      const jsonStart = jsonStr.indexOf("{");
+      const jsonEnd = jsonStr.lastIndexOf("}");
+      if (jsonStart !== -1 && jsonEnd !== -1 && jsonStart < jsonEnd) {
+        jsonStr = jsonStr.slice(jsonStart, jsonEnd + 1);
+      }
       parsed = JSON.parse(jsonStr);
     } catch {
-      console.error("Failed to parse AI response:", rawText);
-      return Response.json({ error: "Error al interpretar la respuesta de la IA", raw: rawText }, { status: 500 });
+      console.error("Failed to parse AI response:", rawText.slice(0, 500));
+      return Response.json({ error: "Error al interpretar la respuesta de la IA", raw: rawText.slice(0, 300) }, { status: 500 });
     }
 
     return Response.json(parsed);

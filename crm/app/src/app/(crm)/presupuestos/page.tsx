@@ -118,7 +118,7 @@ function ProveedorItemPicker({ value, stockPropio, options, onChange }: {
           </button>
           <button type="button" onMouseDown={e => { e.preventDefault(); onChange("", "Stock propio", true); setOpen(false); }}
             className="w-full text-left px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30">
-            Stock propio — genera OC interna
+            Stock propio (sin OC)
           </button>
           {filtered.map(p => (
             <button key={p.id} type="button" onMouseDown={e => { e.preventDefault(); onChange(p.id, p.razon_social, false); setOpen(false); }}
@@ -744,7 +744,7 @@ export default function PresupuestosPage() {
             cantidad: Number(item.cantidad) || 1,
             unidad: item.unidad || "UN",
             precio_costo: precioCosto,
-            costo_moneda: (item.moneda || "USD") as "ARS" | "USD" | "USD Divisa",
+            costo_moneda: (item.moneda || newPR.moneda || "USD") as "ARS" | "USD" | "USD Divisa",
             markup_porcentaje: markup,
             precio_venta: precioVenta,
             iva_porcentaje: 21,
@@ -1557,55 +1557,9 @@ export default function PresupuestosPage() {
         ocsCreated++;
       }
 
-      // Stock propio no tiene proveedor externo — la OC se crea directamente
-      // como "enviada" para que se pueda recibir sin pasos intermedios.
-      if (stockItems.length > 0) {
-        for (const { moneda, items: currencyItems } of groupOwnStockItemsByCurrency(stockItems)) {
-          const totals = calculateOwnStockPurchaseOrder(currencyItems, compraSinIva);
-          const { data: stockOC, error: stockOCErr } = await supabase
-            .from("ordenes_compra")
-            .insert({
-              proveedor_id: null,
-              presupuesto_origen_id: prId,
-              sociedad_id: sociedadId,
-              fecha: today,
-              moneda,
-              estado: "enviada",
-              ...totals,
-              observaciones: `Stock propio — OC interna generada desde ${prNumero}`,
-              created_by: prCreatedBy ?? profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
-            } as any)
-            .select()
-            .single();
-          if (stockOCErr || !stockOC) {
-            console.error("Error creating internal stock OC:", JSON.stringify(stockOCErr));
-            toast.error(`No se pudo crear la OC interna de stock propio ${moneda}: ${stockOCErr?.message ?? "sin respuesta"}`);
-            ocCreationFailed = true;
-            continue;
-          }
-          const stockOCItems = currencyItems.map((it: any, idx: number) => ({
-            orden_id: stockOC.id,
-            codigo: it.codigo || "",
-            descripcion: it.descripcion || "Sin descripción",
-            cantidad: Number(it.cantidad) || 1,
-            unidad: it.unidad || "u",
-            precio_unitario: Number(it.precio_costo) || 0,
-            iva_porcentaje: compraSinIva ? 0 : Number(it.iva_porcentaje ?? 21),
-            orden: idx + 1,
-            cantidad_recibida: 0,
-          }));
-          const { error: stockItemsErr } = await supabase.from("orden_compra_items").insert(stockOCItems as any);
-          if (stockItemsErr) {
-            console.error("Error inserting internal stock OC items:", JSON.stringify(stockItemsErr));
-            const { data: deletedOC, error: cleanupError } = await supabase.from("ordenes_compra").delete().eq("id", stockOC.id).eq("sociedad_id" as any, sociedadId).select("id").maybeSingle();
-            toast.error(cleanupError || !deletedOC
-              ? `OC ${stockOC.numero ?? ""} ${moneda} quedó incompleta (sin items) y no se pudo limpiar. Contactá soporte con ID ${stockOC.id}.`
-              : `No se generó la OC interna ${moneda}: falló la carga de sus items y se limpió el encabezado.`);
-            ocCreationFailed = true;
-            continue;
-          }
-          ocsCreated++;
-        }
+      // Stock propio: no genera OC. El usuario puede cambiar a proveedor externo después si necesita.
+      if (stockItemsCount > 0) {
+        toast.info(`${stockItemsCount} item(s) de stock propio — sin OC generada`);
       }
 
       // Also generate OC for items WITHOUT proveedor (so user can assign later)
@@ -3739,11 +3693,15 @@ export default function PresupuestosPage() {
                           stockPropio={!!item.stock_propio}
                           options={proveedoresOptions}
                           onChange={(provId, provNombre, esStockPropio) => {
+                            // Auto-detect own sociedad as stock propio
+                            const ownNames = ["lazzari", "grupo la", "augusto lazzari"];
+                            const isOwnSociedad = !esStockPropio && provNombre && ownNames.some(n => provNombre.toLowerCase().includes(n));
                             setNewPR((prev) => {
                               const items = [...prev.items];
-                              items[idx] = { ...items[idx], proveedor_id: provId, proveedor_nombre: provNombre, stock_propio: esStockPropio };
+                              items[idx] = { ...items[idx], proveedor_id: isOwnSociedad ? "" : provId, proveedor_nombre: isOwnSociedad ? "Stock propio" : provNombre, stock_propio: esStockPropio || !!isOwnSociedad };
                               return { ...prev, items };
                             });
+                            if (isOwnSociedad) toast.info("Proveedor propio detectado → marcado como stock propio");
                           }}
                         />
                       </td>
