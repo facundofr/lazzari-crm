@@ -1772,10 +1772,26 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             <div className="p-6 space-y-5">
               {fmError && <div className="text-sm text-red-700 bg-red-50 dark:bg-red-900/20 dark:text-red-300 rounded-lg px-3 py-2">{fmError}</div>}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="relative">
+                <div>
                   <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cliente *</label>
-                  <input value={fmClienteId ? (fmClientes.find(c => c.id === fmClienteId)?.razon_social || "") : fmClienteSearch} onChange={e => { setFmClienteSearch(e.target.value); if (fmClienteId) setFmClienteId(""); }} placeholder="Buscar por nombre o CUIT..." className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" autoComplete="off" />
-                  {!fmClienteId && fmClienteSearch.trim() && <div className="absolute z-20 mt-1 left-0 right-0 max-h-40 overflow-y-auto rounded-lg border bg-white dark:bg-zinc-800 dark:border-zinc-700 shadow-lg">{fmClientes.filter(c => c.razon_social.toLowerCase().includes(fmClienteSearch.toLowerCase()) || (c.cuit || "").includes(fmClienteSearch)).slice(0, 15).map(c => <button key={c.id} onClick={() => { setFmClienteId(c.id); setFmClienteSearch(""); fmSelectCliente(c.id); }} className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white">{c.razon_social} <span className="text-xs text-zinc-400 float-right">{c.cuit || "Sin CUIT"}</span></button>)}</div>}
+                  <input
+                    type="text"
+                    value={fmClienteSearch}
+                    onChange={e => setFmClienteSearch(e.target.value)}
+                    placeholder="Filtrar clientes..."
+                    className="w-full rounded-t-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-xs dark:text-white"
+                  />
+                  <select
+                    value={fmClienteId}
+                    onChange={e => { setFmClienteId(e.target.value); fmSelectCliente(e.target.value); }}
+                    size={6}
+                    className="w-full rounded-b-lg border border-t-0 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1 text-sm dark:text-white"
+                  >
+                    <option value="">Seleccionar cliente</option>
+                    {fmClientes.filter(c => !fmClienteSearch.trim() || c.razon_social.toLowerCase().includes(fmClienteSearch.toLowerCase()) || (c.cuit || "").includes(fmClienteSearch)).map(c => (
+                      <option key={c.id} value={c.id}>{c.razon_social}{c.cuit ? ` — ${c.cuit}` : ""}</option>
+                    ))}
+                  </select>
                 </div>
                 <div><label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha común *</label><input type="date" value={fmFecha} min={minFecha} max={todayAR()} onChange={e => setFmFecha(e.target.value)} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" /></div>
               </div>
