@@ -1221,15 +1221,15 @@ export default function PresupuestosPage() {
           if (itemsError) throw new Error("Error al guardar items: " + itemsError.message);
         }
 
-        // Sync existing OCs with updated PR items
-        await syncOCsFromPR(editingPRId, newPR.modalidad_emision === "manual");
+        // Sync existing OCs with updated PR items (resets estado to pendiente)
+        const ocsSynced = await syncOCsFromPR(editingPRId, newPR.modalidad_emision === "manual");
 
         setShowNewPR(false);
         setEsSolicitud(false);
         setEditingPRId(null);
         setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
         await fetchPresupuestos();
-        toast.success("Presupuesto actualizado");
+        toast.success(ocsSynced > 0 ? `Presupuesto actualizado — ${ocsSynced} OC actualizada(s) y marcada(s) como pendiente` : "Presupuesto actualizado");
       } else {
         // ── CREATE new PR ──
         const today = todayAR();
@@ -1376,7 +1376,7 @@ export default function PresupuestosPage() {
   });
 
   // Sync existing OCs when PR items change
-  async function syncOCsFromPR(prId: string, isManual: boolean) {
+  async function syncOCsFromPR(prId: string, isManual: boolean): Promise<number> {
     try {
       // Get active OCs linked to this PR
       const { data: ocs } = await supabase
@@ -1384,14 +1384,14 @@ export default function PresupuestosPage() {
         .select("id, proveedor_id, moneda, observaciones")
         .eq("presupuesto_origen_id", prId)
         .not("estado", "eq", "cancelada");
-      if (!ocs || ocs.length === 0) return;
+      if (!ocs || ocs.length === 0) return 0;
 
       // Get fresh PR items
       const { data: prItems } = await supabase
         .from("presupuesto_items")
         .select("*")
         .eq("presupuesto_id", prId);
-      if (!prItems) return;
+      if (!prItems) return 0;
 
       for (const oc of ocs) {
         // Match PR items to this OC by proveedor_id
@@ -1427,11 +1427,13 @@ export default function PresupuestosPage() {
 
         await (supabase as any)
           .from("ordenes_compra")
-          .update({ subtotal: ocSubtotal, iva: ocIva, total: ocSubtotal + ocIva, moneda: ocMoneda })
+          .update({ subtotal: ocSubtotal, iva: ocIva, total: ocSubtotal + ocIva, moneda: ocMoneda, estado: "pendiente" })
           .eq("id", oc.id);
       }
+      return ocs.length;
     } catch (err) {
       console.error("Error syncing OCs from PR:", err);
+      return 0;
     }
   }
 
