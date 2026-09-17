@@ -476,6 +476,9 @@ export default function VentasPage() {
           ? { ...venta, presupuesto: { ...venta.presupuesto, ...updated } }
           : venta));
         void fetchData();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "facturas", filter: `sociedad_id=eq.${sociedadActiva.id}` }, () => {
+        void fetchData();
       }).subscribe();
     return () => {
       window.removeEventListener("focus", refresh);
