@@ -559,7 +559,7 @@ export default function RemitosPage() {
         .from("presupuestos")
         .select("id, numero, subtotal, total, cliente_id, estado")
         .eq("cliente_id", clienteId)
-        .in("estado", ["aprobado", "facturar", "facturado", "remitido"])
+        .in("estado", ["pendiente", "aprobado", "facturar", "facturado", "remitido"])
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) prQ = prQ.eq("sociedad_id" as any, sociedadActiva.id);
       const { data, error } = await prQ;

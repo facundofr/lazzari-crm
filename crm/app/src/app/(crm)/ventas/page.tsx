@@ -216,7 +216,6 @@ export default function VentasPage() {
   const [vendedores, setVendedores] = useState<VendedorOption[]>([]);
   const [filterVendedor, setFilterVendedor] = useState<string>("todos");
   const [filterCliente, setFilterCliente] = useState("");
-  const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<"desc" | "asc">("desc");
   const [filterMoneda, setFilterMoneda] = useState<string>("todas");
   const [filterFacturacion, setFilterFacturacion] = useState<"todas" | "pend" | "lista" | "facturada">("pend");
@@ -491,9 +490,6 @@ export default function VentasPage() {
     const q = filterCliente.toLowerCase().trim();
     return ventas.filter(v => {
       if (filterVendedor !== "todos" && v.presupuesto.vendedor_id !== filterVendedor) return false;
-      if (filterStatus) {
-        if (getVentaStage(v) !== filterStatus) return false;
-      }
       if (q && !(v.presupuesto.clientes?.razon_social || "").toLowerCase().includes(q) && !v.presupuesto.numero.toLowerCase().includes(q)) return false;
       if (filterMoneda !== "todas" && v.presupuesto.moneda !== filterMoneda) return false;
       if (filterFacturacion !== "todas") {
@@ -508,7 +504,7 @@ export default function VentasPage() {
       const db = b.presupuesto.fecha || "";
       return sortOrder === "desc" ? db.localeCompare(da) : da.localeCompare(db);
     });
-  }, [ventas, filterVendedor, filterStatus, filterCliente, sortOrder, filterMoneda, filterFacturacion]);
+  }, [ventas, filterVendedor, filterCliente, sortOrder, filterMoneda, filterFacturacion]);
 
   // KPIs from filtered ventas (respecting vendedor filter, ignoring step filter)
   const kpis = useMemo(() => {
@@ -908,22 +904,17 @@ export default function VentasPage() {
         {/* KPI Cards */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {[
-            { label: "Total", value: kpis.total, color: "text-zinc-900 dark:text-white", key: null },
-            { label: "Pend. factura", value: kpis.pendFactura, color: "text-red-600", key: "pend_factura" },
-            { label: "Facturadas", value: kpis.facturadas, color: "text-blue-600", key: "facturadas" },
+            { label: "Total", value: kpis.total, color: "text-zinc-900 dark:text-white" },
+            { label: "Pend. factura", value: kpis.pendFactura, color: "text-red-600" },
+            { label: "Facturadas", value: kpis.facturadas, color: "text-blue-600" },
           ].map(kpi => (
-            <button
+            <div
               key={kpi.label}
-              onClick={() => setFilterStatus(filterStatus === kpi.key ? null : kpi.key)}
-              className={`rounded-xl border p-4 text-left transition-all ${
-                filterStatus === kpi.key
-                  ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30"
-                  : "border-zinc-200 bg-white hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-950 dark:hover:border-zinc-700"
-              }`}
+              className="rounded-xl border border-zinc-200 bg-white p-4 text-left dark:border-zinc-800 dark:bg-zinc-950"
             >
               <p className="text-xs font-medium text-zinc-500 uppercase tracking-wide">{kpi.label}</p>
               <p className={`text-2xl font-bold mt-1 ${kpi.color}`}>{kpi.value}</p>
-            </button>
+            </div>
           ))}
         </div>
 
@@ -976,15 +967,6 @@ export default function VentasPage() {
             <Clock className="h-3.5 w-3.5" />
             {sortOrder === "desc" ? "Nuevos → Viejos" : "Viejos → Nuevos"}
           </button>
-          {filterStatus !== null && (
-            <button
-              onClick={() => setFilterStatus(null)}
-              className="flex items-center gap-1 rounded-lg bg-orange-100 px-3 py-2 text-sm font-medium text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"
-            >
-              {{ pend_factura: "Pend. factura", facturadas: "Facturadas" }[filterStatus]}
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
           <span className="ml-auto text-sm text-zinc-400">
             {filteredVentas.length} venta{filteredVentas.length !== 1 ? "s" : ""}
           </span>
