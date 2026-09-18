@@ -114,6 +114,7 @@ export default function CargarFacturaOC({
   // ── Save ──
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [duplicateWarning, setDuplicateWarning] = useState("");
   const [linkedInvoices, setLinkedInvoices] = useState<{ total: number; moneda: string }[]>([]);
   const [alignmentLoading, setAlignmentLoading] = useState(false);
   const [alignmentError, setAlignmentError] = useState("");
@@ -131,6 +132,22 @@ export default function CargarFacturaOC({
   }, [items, subtotal, ivaPorcentaje]);
   const total = useMemo(() => Math.round((subtotal + iva + percepciones) * 100) / 100, [subtotal, iva, percepciones]);
   const totalSinPercepciones = useMemo(() => Math.round((subtotal + iva) * 100) / 100, [subtotal, iva]);
+
+  // Check for duplicate invoices in real-time
+  useEffect(() => {
+    setDuplicateWarning("");
+    const num = numeroFactura.trim();
+    if (!num || !proveedorId || !sociedadId) return;
+    const timer = setTimeout(async () => {
+      const canonical = canonicalPurchaseInvoiceNumber(num);
+      const { data } = await (supabase as any)
+        .from("facturas_compra").select("id, numero_factura, estado")
+        .eq("sociedad_id", sociedadId).eq("proveedor_id", proveedorId);
+      const dup = (data || []).find((fc: any) => canonicalPurchaseInvoiceNumber(fc.numero_factura || "") === canonical);
+      if (dup) setDuplicateWarning(`Esta factura ya está cargada (estado: ${dup.estado || "registrada"})`);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [numeroFactura, proveedorId, sociedadId]);
 
   // Filter OCs by selected proveedor (unless showAllOCs is enabled)
   const [showAllOCs, setShowAllOCs] = useState(false);
@@ -872,7 +889,8 @@ export default function CargarFacturaOC({
                 <label className="block text-[10px] uppercase text-zinc-400 mb-1">N° Factura</label>
                 <input type="text" value={numeroFactura} onChange={e => setNumeroFactura(e.target.value)}
                   placeholder="0001-00012345"
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
+                  className={`w-full px-3 py-2 rounded-lg border text-sm font-mono ${duplicateWarning ? "border-red-400 bg-red-50 dark:bg-red-950/30" : "border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"}`} />
+                {duplicateWarning && <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertTriangle size={12} />{duplicateWarning}</p>}
               </div>
 
               {/* Fecha */}
@@ -1093,7 +1111,7 @@ export default function CargarFacturaOC({
               className="px-4 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700">
               Cancelar
             </button>
-            <button onClick={handleSave} disabled={saving || alignmentLoading || alignmentBlocked}
+            <button onClick={handleSave} disabled={saving || alignmentLoading || alignmentBlocked || !!duplicateWarning}
               className="px-6 py-2 rounded-lg bg-orange-600 text-white text-sm font-semibold hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed">
               {saving ? "Guardando..." : "Enviar para aprobacion"}
             </button>

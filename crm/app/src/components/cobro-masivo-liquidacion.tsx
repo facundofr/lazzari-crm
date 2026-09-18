@@ -25,6 +25,9 @@ interface MedioPago {
   fecha: string;
   referencia: string;
   observaciones: string;
+  cheque_banco: string;
+  cheque_numero: string;
+  cheque_fecha_pago: string;
 }
 
 interface RetencionLinea {
@@ -71,7 +74,7 @@ const RETENCION_TIPOS = [
 ];
 
 function newMedio(): MedioPago {
-  return { _id: uid(), tipo: "transferencia", monto: "", fecha: todayStr(), referencia: "", observaciones: "" };
+  return { _id: uid(), tipo: "transferencia", monto: "", fecha: todayStr(), referencia: "", observaciones: "", cheque_banco: "", cheque_numero: "", cheque_fecha_pago: "" };
 }
 function newRetencion(): RetencionLinea {
   return { _id: uid(), tipo: "retencion_iva", organismo: "", certificado: "", monto: "", observaciones: "" };
@@ -205,6 +208,29 @@ export default function CobroMasivoLiquidacion({
         p_created_by: profileId,
       });
       if (rpcErr) throw new Error(rpcErr.message);
+
+      // Create echeq records for cheque payments
+      const chequeMedios = medios.filter(m => m.tipo === "cheque_recibido" && num(m.monto) > 0);
+      for (const chq of chequeMedios) {
+        const echeqRow = {
+          numero: chq.cheque_numero || chq.referencia || `CHQ-${Date.now()}`,
+          tipo_cheque: "echeq",
+          banco_emisor: chq.cheque_banco || null,
+          monto: num(chq.monto),
+          moneda: moneda,
+          fecha_emision: chq.fecha || null,
+          fecha_pago: chq.cheque_fecha_pago || chq.fecha || todayStr(),
+          estado: "en_cartera",
+          direccion: "recibido",
+          origen_tipo: "cliente",
+          origen_id: clienteId,
+          origen_nombre: clienteNombre,
+          sociedad_id: sociedadId,
+          user_id: profileId,
+          observaciones: chq.observaciones || null,
+        };
+        await (supabase as any).from("echeqs").insert(echeqRow);
+      }
 
       const movCount = data?.movimientos_count || mediosPayload.length + retencionesPayload.length;
       alert(`Cobro registrado: ${movCount} movimiento${movCount > 1 ? "s" : ""} para ${facturas.length} factura${facturas.length > 1 ? "s" : ""}`);
@@ -371,6 +397,28 @@ export default function CobroMasivoLiquidacion({
                       className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded">
                       <Trash2 size={16} />
                     </button>
+                  )}
+                  {medio.tipo === "cheque_recibido" && (
+                    <div className="w-full flex flex-wrap gap-2 mt-1">
+                      <div className="w-48">
+                        <label className="block text-[10px] uppercase text-zinc-400 mb-1">Banco emisor</label>
+                        <input type="text" placeholder="Ej: Galicia"
+                          value={medio.cheque_banco} onChange={e => updateMedio(medio._id, "cheque_banco", e.target.value)}
+                          className="w-full px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
+                      </div>
+                      <div className="w-36">
+                        <label className="block text-[10px] uppercase text-zinc-400 mb-1">N° cheque</label>
+                        <input type="text" placeholder="00000131"
+                          value={medio.cheque_numero} onChange={e => updateMedio(medio._id, "cheque_numero", e.target.value)}
+                          className="w-full px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
+                      </div>
+                      <div className="w-36">
+                        <label className="block text-[10px] uppercase text-zinc-400 mb-1">Fecha de pago cheque</label>
+                        <input type="date"
+                          value={medio.cheque_fecha_pago} onChange={e => updateMedio(medio._id, "cheque_fecha_pago", e.target.value)}
+                          className="w-full px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
+                      </div>
+                    </div>
                   )}
                 </div>
               ))}

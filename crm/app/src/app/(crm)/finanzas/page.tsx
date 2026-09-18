@@ -89,7 +89,7 @@ const echeqEstadoConfig: Record<string, { label: string; variant: "info" | "outl
 
 const emptyEcheqForm = {
   direccion: "recibido" as "emitido" | "recibido",
-  tipo_cheque: "fisico" as "echeq" | "fisico",
+  tipo_cheque: "echeq" as "echeq" | "fisico",
   numero: "",
   banco_emisor: "",
   cuit_emisor: "",
@@ -833,17 +833,20 @@ export default function FinanzasPage() {
       label: "Tipo",
       type: "select",
       options: [
-        { value: "cobro", label: "Cobro" },
-        { value: "pago", label: "Pago" },
-        { value: "cheque_emitido", label: "Cheque emitido" },
-        { value: "cheque_recibido", label: "Cheque recibido" },
-        { value: "transferencia", label: "Transferencia" },
-        { value: "efectivo", label: "Efectivo" },
-        { value: "deposito", label: "Deposito" },
-        { value: "retencion_iva", label: "Ret. IVA" },
-        { value: "retencion_ganancias", label: "Ret. Ganancias" },
-        { value: "retencion_iibb", label: "Ret. IIBB" },
-        { value: "retencion_suss", label: "Ret. SUSS" },
+        { value: "_cobros", label: "── Cobros (todos)" },
+        { value: "cobro", label: "    Cobro" },
+        { value: "cheque_recibido", label: "    Cheque recibido" },
+        { value: "transferencia", label: "    Transferencia" },
+        { value: "efectivo", label: "    Efectivo" },
+        { value: "deposito", label: "    Deposito" },
+        { value: "_pagos", label: "── Pagos (todos)" },
+        { value: "pago", label: "    Pago" },
+        { value: "cheque_emitido", label: "    Cheque emitido" },
+        { value: "_retenciones", label: "── Retenciones (todas)" },
+        { value: "retencion_iva", label: "    Ret. IVA" },
+        { value: "retencion_ganancias", label: "    Ret. Ganancias" },
+        { value: "retencion_iibb", label: "    Ret. IIBB" },
+        { value: "retencion_suss", label: "    Ret. SUSS" },
         { value: "ajuste", label: "Ajuste" },
       ],
     },
@@ -1207,7 +1210,7 @@ export default function FinanzasPage() {
 
         // Fetch ordenes de compra for optional linking
         try {
-          let qOc = supabase.from("ordenes_compra").select("id, numero, proveedor_id, total, moneda, estado, fecha, proveedores(razon_social)").order("numero", { ascending: false });
+          let qOc = supabase.from("ordenes_compra").select("id, numero, proveedor_id, total, moneda, estado, estado_pago, fecha, proveedores(razon_social)").order("numero", { ascending: false });
           if (sociedadActiva?.id) qOc = qOc.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: ocData } = await qOc;
           if (ocData) setOcOptions(ocData as any[]);
@@ -3260,9 +3263,17 @@ export default function FinanzasPage() {
     if (fechaFilter?.from && m.fecha < fechaFilter.from) return false;
     if (fechaFilter?.to && m.fecha > fechaFilter.to) return false;
 
-    // Tipo filter
+    // Tipo filter (with group support)
     const tipoFilter = movFilterValues.tipo as string;
-    if (tipoFilter && m.tipo !== tipoFilter) return false;
+    if (tipoFilter) {
+      if (tipoFilter === "_cobros") {
+        if (!["cobro", "cheque_recibido", "transferencia", "efectivo", "deposito"].includes(m.tipo)) return false;
+      } else if (tipoFilter === "_pagos") {
+        if (!["pago", "cheque_emitido"].includes(m.tipo)) return false;
+      } else if (tipoFilter === "_retenciones") {
+        if (!["retencion_iva", "retencion_ganancias", "retencion_iibb", "retencion_suss"].includes(m.tipo)) return false;
+      } else if (m.tipo !== tipoFilter) return false;
+    }
 
     // Conciliado filter
     const conciliadoFilter = movFilterValues.conciliado as string;
@@ -5676,7 +5687,7 @@ export default function FinanzasPage() {
           sociedadId={sociedadActiva?.id || ""}
           profileId={profile?.id || null}
           showTipoToggle
-          ordenes={ocOptions.filter(o => o.proveedor_id && !["borrador", "cancelada"].includes(o.estado || "")).map(o => ({
+          ordenes={ocOptions.filter(o => o.proveedor_id && !["borrador", "cancelada"].includes(o.estado || "") && (o as any).estado_pago !== "pagada").map(o => ({
             id: o.id,
             numero: o.numero,
             proveedor_id: o.proveedor_id,

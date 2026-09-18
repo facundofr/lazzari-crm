@@ -71,6 +71,10 @@ interface ClienteRow {
   email_facturacion?: string | null;
   envio_automatico?: boolean;
   flete?: string | null;
+  alias_cbu?: string | null;
+  tipo_cuenta?: string | null;
+  fecha_pago?: string | null;
+  email_comprobante?: string | null;
   created_at: string;
   updated_at: string;
   assigned_profile: { full_name: string } | null;
@@ -78,7 +82,7 @@ interface ClienteRow {
   cliente_sucursales: unknown[];
 }
 
-function mapRow(row: ClienteRow): Client & { vendedorNombre: string; monedaPredeterminada: string } {
+function mapRow(row: ClienteRow): Client & { vendedorNombre: string; monedaPredeterminada: string; aliasCbu: string; tipoCuenta: string; fechaPago: string; emailComprobante: string } {
   return {
     id: row.id,
     type: (row.type as Client["type"]) ?? "empresa",
@@ -104,6 +108,10 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string; monedaPrede
     emailFacturacion: row.email_facturacion ?? null,
     envioAutomatico: row.envio_automatico ?? true,
     flete: row.flete ?? "",
+    aliasCbu: row.alias_cbu ?? "",
+    tipoCuenta: row.tipo_cuenta ?? "",
+    fechaPago: row.fecha_pago ?? "",
+    emailComprobante: row.email_comprobante ?? "",
     createdAt: row.created_at ?? "",
     updatedAt: row.updated_at ?? "",
     contactos: Array.isArray(row.contactos) ? (row.contactos as Array<Record<string, unknown>>).map((c) => ({
@@ -208,6 +216,10 @@ const emptyForm = {
   envio_automatico: true,
   assigned_to: "" as string | null,
   flete: "",
+  alias_cbu: "",
+  tipo_cuenta: "",
+  fecha_pago: "",
+  email_comprobante: "",
 };
 
 type DetailTab = "datos" | "contactos" | "sucursales" | "relevamiento" | "historial" | "actividad" | "cc";
@@ -1108,6 +1120,10 @@ export default function ClientesPage() {
       envio_automatico: c.envioAutomatico ?? true,
       assigned_to: (c as any).assignedTo || null,
       flete: (c as any).flete || "",
+      alias_cbu: (c as any).aliasCbu || "",
+      tipo_cuenta: (c as any).tipoCuenta || "",
+      fecha_pago: (c as any).fechaPago || "",
+      email_comprobante: (c as any).emailComprobante || "",
     });
     setFormError("");
     setCuitLookupMsg(null);
@@ -1209,6 +1225,10 @@ export default function ClientesPage() {
         email_facturacion: form.email_facturacion?.trim() || null,
         assigned_to: (form as any).assigned_to || null,
         flete: (form as any).flete?.trim() || null,
+        alias_cbu: form.alias_cbu?.trim() || null,
+        tipo_cuenta: form.tipo_cuenta?.trim() || null,
+        fecha_pago: form.fecha_pago?.trim() || null,
+        email_comprobante: form.email_comprobante?.trim() || null,
       };
       payload.sociedad_id = sociedadId;
       if (editingId) {
@@ -1918,6 +1938,29 @@ export default function ClientesPage() {
                       </div>
                     </div>
                   </div>
+
+                  {/* Datos para pagos */}
+                  {((selectedCliente as any).aliasCbu || (selectedCliente as any).tipoCuenta || (selectedCliente as any).fechaPago || (selectedCliente as any).emailComprobante) && (
+                    <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3 flex items-center gap-1.5">
+                        <Wallet className="h-3.5 w-3.5" /> Datos para pagos
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {(selectedCliente as any).aliasCbu && <InfoField label="Alias / CBU" value={(selectedCliente as any).aliasCbu} />}
+                        {selectedCliente.cuit && <InfoField label="CUIT / CUIL" value={selectedCliente.cuit} />}
+                        {(selectedCliente as any).tipoCuenta && <InfoField label="CC / CA" value={(selectedCliente as any).tipoCuenta} />}
+                        {(selectedCliente as any).fechaPago && <InfoField label="Fecha de pago" value={(selectedCliente as any).fechaPago} />}
+                        {(selectedCliente as any).emailComprobante && (
+                          <div>
+                            <p className="text-xs text-zinc-500 dark:text-zinc-400">Email para comprobante</p>
+                            <p className="text-sm font-medium mt-0.5">
+                              <a href={`mailto:${(selectedCliente as any).emailComprobante}`} className="text-orange-600 hover:underline">{(selectedCliente as any).emailComprobante}</a>
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Commercial info */}
                   <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
@@ -3116,6 +3159,44 @@ export default function ClientesPage() {
                   {transportistas.map((t) => <option key={t.id} value={t.nombre}>{t.nombre}</option>)}
                 </select>
               </div>
+            </div>
+          </div>
+
+          {/* Section: Datos para pagos */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Datos para pagos</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input
+                label="Alias / CBU"
+                value={form.alias_cbu}
+                onChange={(e) => setForm({ ...form, alias_cbu: e.target.value })}
+                placeholder="Alias o CBU del cliente"
+              />
+              <Select
+                label="Tipo de cuenta"
+                value={form.tipo_cuenta}
+                onChange={(e) => setForm({ ...form, tipo_cuenta: e.target.value })}
+                options={[
+                  { value: "CC $", label: "Cuenta Corriente $" },
+                  { value: "CA $", label: "Caja de Ahorro $" },
+                  { value: "CC USD", label: "Cuenta Corriente USD" },
+                  { value: "CA USD", label: "Caja de Ahorro USD" },
+                ]}
+                placeholder="Seleccionar..."
+              />
+              <Input
+                label="Fecha de pago"
+                value={form.fecha_pago}
+                onChange={(e) => setForm({ ...form, fecha_pago: e.target.value })}
+                placeholder="Ej: 10 de cada mes, último viernes"
+              />
+              <Input
+                label="Email para comprobante"
+                type="email"
+                value={form.email_comprobante}
+                onChange={(e) => setForm({ ...form, email_comprobante: e.target.value })}
+                placeholder="Email donde enviar comprobantes de pago"
+              />
             </div>
           </div>
 
