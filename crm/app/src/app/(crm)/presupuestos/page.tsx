@@ -2928,7 +2928,7 @@ export default function PresupuestosPage() {
                 </div>
                 <div>
                   <p className="text-xs text-zinc-500">Moneda</p>
-                  <p className="text-sm font-medium">{selected.moneda}{(selected as any).tipoCambio ? ` — TC: ${Number((selected as any).tipoCambio).toLocaleString("es-AR")}` : ""}</p>
+                  <p className="text-sm font-medium">{selected.moneda}{selected.moneda === "USD" && (selected as any).cotizacionModalidad ? ` ${(selected as any).cotizacionModalidad === "billetes" ? "(Billete)" : "(Divisa)"}` : ""}{(selected as any).tipoCambio ? ` — TC: ${Number((selected as any).tipoCambio).toLocaleString("es-AR")}` : ""}</p>
                 </div>
                 <div>
                   <p className="text-xs text-zinc-500">Markup general</p>
@@ -3290,9 +3290,9 @@ export default function PresupuestosPage() {
                   {filteredClientes.length === 0 ? (
                     <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
                   ) : filteredClientes.slice(0, 20).map((c) => (
-                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; const td = tipoDocPorCondicion(c.condicion_iva); const monedaCliente = (c as any).moneda_predeterminada || undefined; setNewPR((p) => { const markup = mg ?? p.markup_general; return { ...p, cliente_id: c.id, markup_general: markup, ...(monedaCliente ? { moneda: monedaCliente } : {}), ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number((convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, p.tipo_cambio_divisas) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); }}
+                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; const td = tipoDocPorCondicion(c.condicion_iva); const monedaCliente = (c as any).moneda_predeterminada as string | undefined; const monOvr: Record<string,unknown> = {}; if (monedaCliente === "USD" || monedaCliente === "USD Divisa") { monOvr.moneda = "USD"; monOvr.cotizacion_modalidad = monedaCliente === "USD" ? "billetes" : "divisas"; } else if (monedaCliente === "ARS") { monOvr.moneda = "ARS"; } setNewPR((p) => { const markup = mg ?? p.markup_general; const mon = (monOvr.moneda as string) || p.moneda; return { ...p, cliente_id: c.id, markup_general: markup, ...monOvr, ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number((convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio, p.tipo_cambio_divisas) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); if (monOvr.moneda === "USD") fetchCotizBna((monOvr.cotizacion_modalidad as "divisas"|"billetes") || "divisas"); }}
                       className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${c.id === newPR.cliente_id ? "bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400" : "text-zinc-700 dark:text-zinc-300"}`}>
-                      {c.razon_social}{(c as any).moneda_predeterminada === "USD" && <span className="ml-1 text-[10px] text-blue-500">USD</span>}{c.markup_predeterminado != null && <span className="ml-auto text-xs text-zinc-400">{c.markup_predeterminado}%</span>}
+                      {c.razon_social}{((c as any).moneda_predeterminada === "USD" || (c as any).moneda_predeterminada === "USD Divisa") && <span className="ml-1 text-[10px] text-blue-500">{(c as any).moneda_predeterminada === "USD" ? "USD Billete" : "USD Divisa"}</span>}{c.markup_predeterminado != null && <span className="ml-auto text-xs text-zinc-400">{c.markup_predeterminado}%</span>}
                     </button>
                   ))}
                 </div>
@@ -3370,12 +3370,22 @@ export default function PresupuestosPage() {
                       onClick={() => {
                         const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined;
                         const td = tipoDocPorCondicion(c.condicion_iva);
+                        const monedaCliente = (c as any).moneda_predeterminada as string | undefined;
+                        const monedaOverride: Partial<typeof newPR> = {};
+                        if (monedaCliente === "USD" || monedaCliente === "USD Divisa") {
+                          monedaOverride.moneda = "USD";
+                          monedaOverride.cotizacion_modalidad = monedaCliente === "USD" ? "billetes" : "divisas";
+                        } else if (monedaCliente === "ARS") {
+                          monedaOverride.moneda = "ARS";
+                        }
                         setNewPR((p) => {
                           const markup = mg ?? p.markup_general;
-                          return { ...p, cliente_id: c.id, markup_general: markup, ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number((convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, p.tipo_cambio_divisas) * (1 + markup / 100)).toFixed(2)) })) };
+                          const mon = monedaOverride.moneda ?? p.moneda;
+                          return { ...p, cliente_id: c.id, markup_general: markup, ...td, ...monedaOverride, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number((convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio, p.tipo_cambio_divisas) * (1 + markup / 100)).toFixed(2)) })) };
                         });
                         setClientSearch(c.razon_social);
                         setClientDropdownOpen(false);
+                        if (monedaOverride.moneda === "USD") fetchCotizBna(monedaOverride.cotizacion_modalidad || "divisas");
                       }}
                       className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${c.id === newPR.cliente_id ? "bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-400" : "text-zinc-700 dark:text-zinc-300"}`}
                     >
