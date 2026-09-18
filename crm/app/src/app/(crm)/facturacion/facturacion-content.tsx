@@ -1497,6 +1497,29 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const facturasVencidas = facturas.filter(f => f.estado === "vencida").length;
   const caeVigentes = facturas.filter(f => f.cae && f.estado !== "anulada").length;
 
+  const [checkingEmails, setCheckingEmails] = useState(false);
+  async function handleCheckAllEmails() {
+    const toCheck = facturas.filter(f => f.email_resend_id && f.email_estado !== "delivered" && f.email_estado !== "bounced");
+    if (toCheck.length === 0) { alert("No hay emails pendientes de verificar"); return; }
+    setCheckingEmails(true);
+    let updated = 0;
+    let failed = 0;
+    try {
+      for (const f of toCheck) {
+        try {
+          const res = await fetch(`/api/email/status?resend_id=${f.email_resend_id}`);
+          const data = await res.json();
+          if (data.status && data.status !== f.email_estado) {
+            await (supabase as any).from("facturas").update({ email_estado: data.status }).eq("id", f.id);
+            setFacturas(prev => prev.map(x => x.id === f.id ? { ...x, email_estado: data.status } : x));
+            updated++;
+          }
+        } catch { failed++; }
+      }
+      alert(`Verificados: ${toCheck.length}. Actualizados: ${updated}.${failed > 0 ? ` Errores: ${failed}.` : ""}`);
+    } finally { setCheckingEmails(false); }
+  }
+
   function exportFacturasCSV() {
     if(!cobradoPorFactura){alert("No se pudieron verificar los saldos. Actualizá la lista antes de exportar para no informar una deuda incorrecta.");return;}
     const csvLines: string[] = ["Fecha;Vencimiento;Cliente;Documento;Moneda;Importe;Deuda"];
@@ -1544,6 +1567,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         </button>
         <button onClick={openCobroMasivo} className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition-colors">
           <DollarSign className="h-4 w-4" /> Cobro masivo
+        </button>
+        <button onClick={handleCheckAllEmails} disabled={checkingEmails} className="flex items-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50">
+          {checkingEmails ? <Loader2 className="h-4 w-4 animate-spin" /> : <MailCheck className="h-4 w-4" />} Verificar emails
         </button>
         <button onClick={exportFacturasCSV} className="flex items-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
           <Download className="h-4 w-4" /> Exportar CSV
