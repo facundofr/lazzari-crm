@@ -178,7 +178,7 @@ function getVentaStep(v: Venta): VentaStep {
 function calcFechaVenc(condVenta: string, fechaBase: string): string {
   const diasMap: Record<string, number> = {
     "Contado": 0, "Cta. Cte.": 30,
-    "15 días": 15, "30 días": 30, "60 días": 60, "90 días": 90,
+    "15 días": 15, "30 días": 30, "45 días": 45, "60 días": 60, "90 días": 90,
     "Cheque 30 días": 30, "Cheque 60 días": 60, "Cheque 90 días": 90,
   };
   const dias = diasMap[condVenta];
@@ -572,7 +572,19 @@ export default function VentasPage() {
     setEmitItems(items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]);
     const hoy = todayAR();
     const diasCC = p.clientes?.dias_cuenta_corriente;
-    const condCliente = p.clientes?.forma_pago || (diasCC && diasCC > 0 ? `${diasCC} dias` : "Contado");
+    const formaPago = p.clientes?.forma_pago;
+    // Map client's dias_cuenta_corriente to a valid condicion_venta option
+    let condCliente = "Contado";
+    if (diasCC && diasCC > 0) {
+      const diasOpts: Record<number, string> = { 15: "15 días", 30: "30 días", 45: "Cta. Cte.", 60: "60 días", 90: "90 días" };
+      if (formaPago && formaPago.toLowerCase().includes("cheque")) {
+        condCliente = diasOpts[diasCC] ? `Cheque ${diasCC} días` : `Cheque ${diasCC} días`;
+        // Validate it's a known option, fallback to nearest
+        if (!["Cheque 30 días", "Cheque 60 días", "Cheque 90 días"].includes(condCliente)) condCliente = diasOpts[diasCC] || `${diasCC} días`;
+      } else {
+        condCliente = diasOpts[diasCC] || `${diasCC} días`;
+      }
+    }
 
     setEmitTipoCambio(p.tipo_cambio || 0);
     setRateOverride(false);
@@ -1909,6 +1921,7 @@ export default function VentasPage() {
                       <option value="Cta. Cte.">Cta. Cte.</option>
                       <option value="15 días">15 días</option>
                       <option value="30 días">30 días</option>
+                      <option value="45 días">45 días</option>
                       <option value="60 días">60 días</option>
                       <option value="90 días">90 días</option>
                       <option value="Cheque 30 días">Cheque 30 días</option>
