@@ -2912,7 +2912,7 @@ export default function OrdenesCompraPage() {
 
             <div className="px-6 py-5 pb-40 space-y-6">
               {/* ── Action Buttons ─────────────────────────────────────── */}
-              {canManageCompras && !["recibida", "cancelada"].includes(detailOC.estado) && (
+              {canManageCompras && !["cancelada"].includes(detailOC.estado) && (
                 <div className="flex flex-wrap gap-2">
                   {detailOC.estado === "borrador" && (
                     <button
@@ -2957,12 +2957,14 @@ export default function OrdenesCompraPage() {
                       <CreditCard className="h-4 w-4" /> Pagada con tarjeta
                     </div>
                   )}
-                  <button
-                    onClick={() => handleCancel(detailOC)}
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors"
-                  >
-                    <XCircle className="h-4 w-4" /> Cancelar OC
-                  </button>
+                  {detailOC.estado !== "recibida" && (
+                    <button
+                      onClick={() => handleCancel(detailOC)}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors"
+                    >
+                      <XCircle className="h-4 w-4" /> Cancelar OC
+                    </button>
+                  )}
                 </div>
               )}
 
