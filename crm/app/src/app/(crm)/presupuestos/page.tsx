@@ -2255,21 +2255,6 @@ export default function PresupuestosPage() {
               );
             })}
           </div>
-          {canDeletePresupuestos && (<>
-          <div className="h-6 w-px bg-zinc-200 dark:bg-zinc-700 shrink-0" />
-          <button
-            onClick={() => { setShowPapelera(!showPapelera); if (!showPapelera) setVistaSeguimiento(false); }}
-            className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-              showPapelera
-                ? "bg-red-500 text-white shadow-sm"
-                : "bg-white text-zinc-400 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-400"
-            }`}
-            title="Papelera"
-          >
-            <Trash2 className="h-4 w-4" />
-            Papelera
-          </button>
-          </>)}
           <button
             onClick={() => setVistaSeguimiento(!vistaSeguimiento)}
             className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
