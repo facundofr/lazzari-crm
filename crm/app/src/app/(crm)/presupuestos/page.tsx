@@ -1763,21 +1763,30 @@ export default function PresupuestosPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("Seguro que queres eliminar este presupuesto? Se movera a la papelera.")) return;
+    if (!confirm("¿Seguro que querés eliminar este presupuesto?")) return;
     try {
+      // Check for linked OCs
+      let ocQuery = supabase.from("ordenes_compra").select("id, numero").eq("presupuesto_origen_id", id).not("estado", "eq", "cancelada");
+      if (sociedadActiva?.id) ocQuery = ocQuery.eq("sociedad_id" as any, sociedadActiva.id);
+      const { data: linkedOCs } = await ocQuery;
+      const hasOCs = linkedOCs && linkedOCs.length > 0;
+      const cancelOCsToo = hasOCs && confirm(`Este presupuesto tiene ${linkedOCs.length} OC vinculada(s) (${linkedOCs.map((oc: any) => oc.numero).join(", ")}). ¿Querés cancelarlas también?`);
+
       let prDelete = supabase.from("presupuestos").update({ eliminado: true } as any).eq("id", id);
       if (sociedadActiva?.id) prDelete = prDelete.eq("sociedad_id" as any, sociedadActiva.id);
       const { error } = await prDelete;
       if (error) throw new Error(error.message);
-      // Cancel linked OCs
-      let cancelOCs = supabase.from("ordenes_compra").update({ estado: "cancelada" } as any).eq("presupuesto_origen_id", id).not("estado", "eq", "cancelada");
-      if (sociedadActiva?.id) cancelOCs = cancelOCs.eq("sociedad_id" as any, sociedadActiva.id);
-      const { error: ocErr } = await cancelOCs;
-      if (ocErr) console.error("Error cancelando OCs:", ocErr.message);
+
+      if (cancelOCsToo) {
+        let cancelOCs = supabase.from("ordenes_compra").update({ estado: "cancelada" } as any).eq("presupuesto_origen_id", id).not("estado", "eq", "cancelada");
+        if (sociedadActiva?.id) cancelOCs = cancelOCs.eq("sociedad_id" as any, sociedadActiva.id);
+        await cancelOCs;
+      }
+
       setSelected(null);
       setPanelFullscreen(false);
       setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: true } as any : p));
-      toast.success("Presupuesto movido a papelera (OCs canceladas)");
+      toast.success(cancelOCsToo ? "Presupuesto eliminado (OCs canceladas)" : "Presupuesto eliminado");
     } catch (err: unknown) {
       console.error("Error deleting:", err);
       const message = err instanceof Error ? err.message : "Error inesperado";
@@ -2337,7 +2346,17 @@ export default function PresupuestosPage() {
         {vistaSeguimiento ? (() => {
           const today = new Date();
           const trackingPRs = presupuestos
-            .filter((pr) => !(pr as any).eliminado && (pr.estado === "solicitud" || pr.estado === "pendiente" || pr.estado === "postergado" || pr.estado === "vencido"))
+            .filter((pr) => {
+              if ((pr as any).eliminado) return false;
+              if (pr.estado !== "solicitud" && pr.estado !== "pendiente" && pr.estado !== "postergado" && pr.estado !== "vencido") return false;
+              if (search) {
+                const s = search.toLowerCase();
+                if (!pr.numero.toLowerCase().includes(s) && !pr.clienteNombre.toLowerCase().includes(s) && !pr.items?.some(it => (it.descripcion || "").toLowerCase().includes(s) || (it.codigo || "").toLowerCase().includes(s))) return false;
+              }
+              if (vendedorFilter && (pr as any).vendedorId !== vendedorFilter) return false;
+              if (operadorFilter && (pr as any).creadoPorId !== operadorFilter) return false;
+              return true;
+            })
             .map((pr) => {
               const fechaRef = pr.enviadoAt || pr.fecha;
               const refDate = new Date(fechaRef + (fechaRef.includes("T") ? "" : "T12:00:00"));
