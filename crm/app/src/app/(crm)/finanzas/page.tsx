@@ -199,7 +199,7 @@ interface FacturaCompraRow {
   solo_iva?: boolean;
   cae?: string;
   percepciones_detalle?: { tipo: string; monto: number; localidad?: string }[];
-  op_vinculada?: { id: string; numero: string; estado: string; fecha: string; sobre_verde?: boolean } | null;
+  op_vinculada?: { id: string; numero: string; estado: string; fecha: string; sobre_verde?: boolean; email_enviado_at?: string | null } | null;
   pago_directo?: number;
   ocs_vinculadas?: { numero: string }[];
 }
@@ -590,7 +590,7 @@ export default function FinanzasPage() {
       const { data: complete } = await (supabase as any).from("extractos_bancarios").select("*, extracto_movimientos(*)").eq("id", extracto.id).eq("sociedad_id", sociedadActiva.id).single();
       if (complete) setExtractos((prev) => [complete as ExtractoRow, ...prev]);
     } catch (error) {
-      setExtractoUploadError(error instanceof Error ? error.message : "No se pudo cargar el extracto");
+      setExtractoUploadError(error instanceof Error ? error.message : (error as any)?.message || "No se pudo cargar el extracto");
     } finally {
       setExtractoUploading(false);
     }
@@ -1153,7 +1153,7 @@ export default function FinanzasPage() {
 
         // Fetch facturas de compra
         try {
-          let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero), op_facturas_compra(orden_pago_id, monto, ordenes_pago(id, numero, estado, fecha, sobre_verde)), factura_compra_ocs(orden_compra_id, ordenes_compra(numero))").order("fecha", { ascending: false });
+          let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero), op_facturas_compra(orden_pago_id, monto, ordenes_pago(id, numero, estado, fecha, sobre_verde, email_enviado_at)), factura_compra_ocs(orden_compra_id, ordenes_compra(numero))").order("fecha", { ascending: false });
           if (sociedadActiva?.id) qFc = qFc.eq("sociedad_id", sociedadActiva.id);
           const { data: fcData } = await qFc;
           if (fcData) {
@@ -1194,7 +1194,7 @@ export default function FinanzasPage() {
                   l?.ordenes_pago && l.ordenes_pago.estado !== "anulada"
                 );
                 return link?.ordenes_pago
-                  ? { id: link.ordenes_pago.id, numero: link.ordenes_pago.numero, estado: link.ordenes_pago.estado, fecha: link.ordenes_pago.fecha, sobre_verde: !!link.ordenes_pago.sobre_verde }
+                  ? { id: link.ordenes_pago.id, numero: link.ordenes_pago.numero, estado: link.ordenes_pago.estado, fecha: link.ordenes_pago.fecha, sobre_verde: !!link.ordenes_pago.sobre_verde, email_enviado_at: link.ordenes_pago.email_enviado_at ?? null }
                   : null;
               })(),
               ocs_vinculadas: (r.factura_compra_ocs || []).map((link: any) => ({ numero: link.ordenes_compra?.numero || "—" })).filter((o: any) => o.numero !== "—"),
@@ -1319,7 +1319,7 @@ export default function FinanzasPage() {
       setMovProvSearch("");
       await fetchData();
     } catch (err: unknown) {
-      setFormError(err instanceof Error ? err.message : "Error al guardar");
+      setFormError(err instanceof Error ? err.message : (err as any)?.message || "Error al guardar");
     } finally {
       setSaving(false);
     }
@@ -1793,7 +1793,7 @@ export default function FinanzasPage() {
       });
       setOpMedios(prev => [...prev, ...mapped]);
     } catch (error) {
-      setOpError(error instanceof Error ? error.message : "No se pudo leer el comprobante. Completá los datos manualmente.");
+      setOpError(error instanceof Error ? error.message : (error as any)?.message || "No se pudo leer el comprobante. Completá los datos manualmente.");
     } finally {
       setOpParsingCount(prev => Math.max(0, prev - 1));
     }
@@ -1885,7 +1885,7 @@ export default function FinanzasPage() {
       insertData.sociedad_id = sociedadActiva.id;
 
       const { data: opData, error } = await (supabase as any).from("ordenes_pago").insert(insertData).select("id").single();
-      if (error) throw error;
+      if (error) throw new Error(error.message || JSON.stringify(error));
       registeredOP = opNumero;
       const attachmentWarnings: string[] = [];
 
@@ -1992,7 +1992,7 @@ export default function FinanzasPage() {
       await fetchData();
       if (attachmentWarnings.length) alert(`${opNumero} registrada. Quedaron comprobantes pendientes de adjuntar desde el detalle de la OP:\n${attachmentWarnings.join("\n")}`);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Error al crear la OP";
+      const message = err instanceof Error ? err.message : (err as any)?.message || "Error al crear la OP";
       setOpError(registeredOP ? `${registeredOP} ya está registrada y necesita revisión: ${message}. No vuelvas a generar el pago.` : message);
     } finally {
       setOpSaving(false);
@@ -2341,7 +2341,7 @@ export default function FinanzasPage() {
       setGmEditingId(null);
       await fetchData();
     } catch (err: unknown) {
-      setGmError(err instanceof Error ? err.message : "Error al crear el gasto");
+      setGmError(err instanceof Error ? err.message : (err as any)?.message || "Error al crear el gasto");
     } finally {
       setGmSaving(false);
     }
@@ -2564,7 +2564,7 @@ export default function FinanzasPage() {
       setFcModalOpen(false);
       await fetchData();
     } catch (err: unknown) {
-      setFcError(err instanceof Error ? err.message : "Error al crear la factura");
+      setFcError(err instanceof Error ? err.message : (err as any)?.message || "Error al crear la factura");
     } finally {
       setFcSaving(false);
     }
@@ -3896,9 +3896,9 @@ export default function FinanzasPage() {
                   { key: "sobre_verde" as any, label: "Sobre", sortable: true, render: (row) => row.op_vinculada ? (
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       <button type="button" onClick={() => { const op = ordenesPago.find(o => o.id === row.op_vinculada!.id); if (op) openOrdenPagoEmail(op); }}
-                        className="rounded p-1.5 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-900/20"
-                        title="Enviar OP por email">
-                        <Send className="h-3.5 w-3.5" />
+                        className={`rounded p-1.5 transition-colors ${row.op_vinculada.email_enviado_at ? "text-emerald-600 hover:bg-emerald-100" : "text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-900/20"}`}
+                        title={row.op_vinculada.email_enviado_at ? `OP enviada el ${formatDateTime(row.op_vinculada.email_enviado_at)}` : "Enviar OP por email"}>
+                        {row.op_vinculada.email_enviado_at ? <MailCheck className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
                       </button>
                       <button type="button" onClick={() => handleToggleSobreVerde(row.op_vinculada!.id, !!row.op_vinculada!.sobre_verde)}
                         className={`rounded p-1.5 ${row.op_vinculada.sobre_verde ? "text-emerald-500 bg-emerald-50 dark:bg-emerald-950/30" : "text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-500"}`}
@@ -6614,6 +6614,9 @@ export default function FinanzasPage() {
           setSelectedOP((prev) =>
             prev?.id === ordenPagoId ? { ...prev, email_enviado_at: sentAt, sobre_verde: true } : prev
           );
+          setFacturasCompra((prev) => prev.map((fc) => fc.op_vinculada?.id === ordenPagoId
+            ? { ...fc, op_vinculada: { ...fc.op_vinculada, sobre_verde: true, email_enviado_at: sentAt } }
+            : fc));
         }}
         onMarkSent={async () => {
           const sentAt = new Date().toISOString();
@@ -6631,6 +6634,9 @@ export default function FinanzasPage() {
           setSelectedOP((prev) =>
             prev?.id === ordenPagoId ? { ...prev, email_enviado_at: sentAt, sobre_verde: true } : prev
           );
+          setFacturasCompra((prev) => prev.map((fc) => fc.op_vinculada?.id === ordenPagoId
+            ? { ...fc, op_vinculada: { ...fc.op_vinculada, sobre_verde: true, email_enviado_at: sentAt } }
+            : fc));
         }}
         generatePdf={async () => {
           const op = ordenesPago.find(o => o.id === emailModal.id);

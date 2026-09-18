@@ -372,7 +372,7 @@ function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, 
 export default function PresupuestosPage() {
   const { profile, sociedadActiva } = useUser();
   const { toast } = useToast();
-  const canDeletePresupuestos = Boolean(profile);
+  const canDeletePresupuestos = profile?.role === "super_admin" || profile?.role === "admin";
   const allEstados: PRStatus[] = ["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido", "facturado"];
   const [selectedEstados, setSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [vistaSeguimiento, setVistaSeguimiento] = useState(false);
@@ -754,7 +754,11 @@ export default function PresupuestosPage() {
             lista_item_id: item.lista_id || "",
           };
         });
-        setNewPR((prev) => ({ ...prev, items: newItems }));
+        setNewPR((prev) => {
+          // Append to existing items (skip empty placeholder items)
+          const existing = prev.items.filter(it => it.descripcion.trim() || it.codigo.trim());
+          return { ...prev, items: existing.length > 0 ? [...existing, ...newItems] : newItems };
+        });
         if (data.notas_generales) setAiNotes(data.notas_generales);
         toast.success(`IA generó ${newItems.length} item(s)`);
         setShowAIPanel(false);
@@ -2251,6 +2255,7 @@ export default function PresupuestosPage() {
               );
             })}
           </div>
+          {canDeletePresupuestos && (<>
           <div className="h-6 w-px bg-zinc-200 dark:bg-zinc-700 shrink-0" />
           <button
             onClick={() => { setShowPapelera(!showPapelera); if (!showPapelera) setVistaSeguimiento(false); }}
@@ -2264,6 +2269,7 @@ export default function PresupuestosPage() {
             <Trash2 className="h-4 w-4" />
             Papelera
           </button>
+          </>)}
           <button
             onClick={() => setVistaSeguimiento(!vistaSeguimiento)}
             className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
@@ -2346,7 +2352,7 @@ export default function PresupuestosPage() {
         {vistaSeguimiento ? (() => {
           const today = new Date();
           const trackingPRs = presupuestos
-            .filter((pr) => pr.estado === "solicitud" || pr.estado === "pendiente" || pr.estado === "postergado" || pr.estado === "vencido")
+            .filter((pr) => !(pr as any).eliminado && (pr.estado === "solicitud" || pr.estado === "pendiente" || pr.estado === "postergado" || pr.estado === "vencido"))
             .map((pr) => {
               const fechaRef = pr.enviadoAt || pr.fecha;
               const refDate = new Date(fechaRef + (fechaRef.includes("T") ? "" : "T12:00:00"));
@@ -2475,7 +2481,7 @@ export default function PresupuestosPage() {
                               className="h-7 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-600 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                             >
                               <option value="">Cambiar estado...</option>
-                              {(["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"] as PRStatus[])
+                              {([...["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"], ...(profile?.role === "super_admin" ? ["facturado"] : [])] as PRStatus[])
                                 .filter((s) => s !== pr.estado)
                                 .map((s) => {
                                   const cfg = statusConfig[s] || { label: s };
@@ -2687,7 +2693,7 @@ export default function PresupuestosPage() {
                           title="Cambiar estado"
                         >
                           <option value="">Cambiar...</option>
-                          {(["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"] as PRStatus[])
+                          {([...["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"], ...(profile?.role === "super_admin" ? ["facturado"] : [])] as PRStatus[])
                             .filter((s) => s !== row.estado)
                             .map((s) => {
                               const cfg = statusConfig[s] || { label: s };
@@ -3187,7 +3193,7 @@ export default function PresupuestosPage() {
                   className="h-9 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                 >
                   <option value="">Seleccionar...</option>
-                  {(["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"] as PRStatus[])
+                  {([...["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"], ...(profile?.role === "super_admin" ? ["facturado"] : [])] as PRStatus[])
                     .filter((s) => s !== selected.estado)
                     .map((s) => {
                       const cfg = statusConfig[s] || { label: s };
