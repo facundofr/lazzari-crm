@@ -3333,9 +3333,13 @@ export default function FinanzasPage() {
     { id: "retenciones", label: "Retenciones" },
   ];
 
+  // Filtros de retenciones
+  const [retFilterDesde, setRetFilterDesde] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; });
+  const [retFilterHasta, setRetFilterHasta] = useState(() => new Date().toISOString().slice(0, 10));
+
   // Este hook debe ejecutarse también durante el estado de carga; dejarlo
   // debajo del return condicional rompe el orden de hooks de React.
-  const retencionesTabla = useMemo(() => [
+  const retencionesTablaAll = useMemo(() => [
     ...ordenesPago
       .filter((op) => op.estado !== "anulada" && op.retencion_ganancias_monto > 0)
       .map((op) => ({
@@ -3343,9 +3347,12 @@ export default function FinanzasPage() {
         fecha: op.fecha,
         numero: op.numero || "—",
         proveedor_nombre: op.proveedor_nombre,
+        proveedor_cuit: op.proveedor_cuit || "",
         base_retencion_ganancias: (op as any).base_retencion_ganancias || 0,
         retencion_ganancias_pct: op.retencion_ganancias_pct,
         retencion_ganancias_monto: op.retencion_ganancias_monto,
+        monto_bruto: op.monto_bruto,
+        neto: op.neto,
         moneda: op.moneda,
         origen: "OP",
       })),
@@ -3356,13 +3363,23 @@ export default function FinanzasPage() {
         fecha: mov.fecha,
         numero: "Pago directo",
         proveedor_nombre: mov.proveedores?.razon_social || "—",
+        proveedor_cuit: (mov.proveedores as any)?.cuit || "",
         base_retencion_ganancias: Number((mov as any).base_retencion_ganancias || 0),
         retencion_ganancias_pct: Number((mov as any).retencion_ganancias_pct || 0),
         retencion_ganancias_monto: Number((mov as any).retencion_ganancias_monto || 0),
+        monto_bruto: Number(mov.monto || 0),
+        neto: Number(mov.monto || 0) - Number((mov as any).retencion_ganancias_monto || 0),
         moneda: (mov.moneda || "ARS") as "ARS" | "USD",
         origen: "Pago parcial",
       })),
   ], [ordenesPago, movimientos]);
+
+  const retencionesTabla = useMemo(() => {
+    let list = retencionesTablaAll;
+    if (retFilterDesde) list = list.filter(r => r.fecha >= retFilterDesde);
+    if (retFilterHasta) list = list.filter(r => r.fecha <= retFilterHasta);
+    return list.sort((a, b) => a.fecha.localeCompare(b.fecha));
+  }, [retencionesTablaAll, retFilterDesde, retFilterHasta]);
 
   if (loading) {
     return (
@@ -5095,21 +5112,39 @@ export default function FinanzasPage() {
         {tab === "retenciones" && (
           <div className="space-y-4">
             <Card>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-violet-500" /> Retenciones practicadas</h3>
-                <div className="flex items-center gap-2">
-                  <input type="month" id="sicore-desde" defaultValue={new Date().toISOString().slice(0, 7)}
+              <div className="flex flex-col gap-3 mb-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold flex items-center gap-2"><ShieldCheck className="h-4 w-4 text-violet-500" /> Retenciones practicadas</h3>
+                  <span className="text-xs text-zinc-400">{retencionesTabla.length} registro{retencionesTabla.length !== 1 ? "s" : ""}</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-xs text-zinc-500">Desde</label>
+                  <input type="date" value={retFilterDesde} onChange={e => setRetFilterDesde(e.target.value)}
                     className="rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                  <button onClick={() => {
-                    const mes = (document.getElementById("sicore-desde") as HTMLInputElement)?.value;
-                    if (!mes || !sociedadActiva?.id) return;
-                    const desde = `${mes}-01`;
-                    const y = Number(mes.split("-")[0]); const m = Number(mes.split("-")[1]);
-                    const hasta = `${y}-${String(m).padStart(2, "0")}-${new Date(y, m, 0).getDate()}`;
-                    window.open(`/api/sicore?desde=${desde}&hasta=${hasta}&sociedad_id=${sociedadActiva.id}`, "_blank");
-                  }} className="flex items-center gap-1.5 rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-600 transition-colors">
-                    <Download className="h-3 w-3" /> Exportar SICORE
-                  </button>
+                  <label className="text-xs text-zinc-500">Hasta</label>
+                  <input type="date" value={retFilterHasta} onChange={e => setRetFilterHasta(e.target.value)}
+                    className="rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  <div className="ml-auto flex items-center gap-2">
+                    <button onClick={() => {
+                      if (retencionesTabla.length === 0) { alert("No hay retenciones en el rango seleccionado."); return; }
+                      const header = "Fecha,Numero,Proveedor,CUIT,Monto Bruto,Base Retencion,% Ganancias,Retencion Ganancias,Neto,Moneda";
+                      const csvRows = retencionesTabla.map(r => [r.fecha, r.numero, `"${r.proveedor_nombre.replace(/"/g, '""')}"`, (r as any).proveedor_cuit || "", (r as any).monto_bruto || 0, (r as any).base_retencion_ganancias || 0, (r as any).retencion_ganancias_pct, (r as any).retencion_ganancias_monto, (r as any).neto || 0, r.moneda].join(","));
+                      const csv = "\uFEFF" + header + "\n" + csvRows.join("\n");
+                      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a"); a.href = url;
+                      a.download = `Retenciones-${retFilterDesde || "inicio"}-a-${retFilterHasta || "hoy"}.csv`;
+                      a.click(); URL.revokeObjectURL(url);
+                    }} className="flex items-center gap-1.5 rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-950 dark:text-violet-300">
+                      <Download className="h-3 w-3" /> CSV
+                    </button>
+                    <button onClick={() => {
+                      if (!sociedadActiva?.id) return;
+                      window.open(`/api/sicore?desde=${retFilterDesde}&hasta=${retFilterHasta}&sociedad_id=${sociedadActiva.id}`, "_blank");
+                    }} className="flex items-center gap-1.5 rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-600 transition-colors">
+                      <Download className="h-3 w-3" /> SICORE
+                    </button>
+                  </div>
                 </div>
               </div>
               <DataTable
@@ -5118,6 +5153,7 @@ export default function FinanzasPage() {
                   { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-xs">{formatDate(row.fecha)}</span> },
                   { key: "numero", label: "OP / origen", sortable: true, render: (row) => <span className="font-mono text-xs font-medium">{row.numero}</span> },
                   { key: "proveedor_nombre", label: "Proveedor", sortable: true, render: (row) => <span className="text-xs">{row.proveedor_nombre}</span> },
+                  { key: "proveedor_cuit", label: "CUIT", sortable: true, render: (row) => <span className="font-mono text-xs">{(row as any).proveedor_cuit}</span> },
                   { key: "base_retencion_ganancias", label: "Base", sortable: true, render: (row) => <span className="font-mono text-xs">{formatCurrency((row as any).base_retencion_ganancias || 0, row.moneda as "ARS" | "USD")}</span> },
                   { key: "retencion_ganancias_pct", label: "%", sortable: true, render: (row) => <span className="text-xs">{(row as any).retencion_ganancias_pct}%</span> },
                   { key: "retencion_ganancias_monto", label: "Monto retenido", sortable: true, render: (row) => <span className="font-mono text-xs font-bold text-violet-600">{formatCurrency((row as any).retencion_ganancias_monto || 0, row.moneda as "ARS" | "USD")}</span> },
@@ -5126,7 +5162,13 @@ export default function FinanzasPage() {
               {retencionesTabla.length === 0 && (
                 <div className="text-center py-8">
                   <ShieldCheck className="mx-auto h-8 w-8 text-zinc-300 dark:text-zinc-600" />
-                  <p className="mt-2 text-sm text-zinc-500">No hay retenciones practicadas</p>
+                  <p className="mt-2 text-sm text-zinc-500">No hay retenciones en el rango seleccionado</p>
+                </div>
+              )}
+              {retencionesTabla.length > 0 && (
+                <div className="mt-3 flex items-center justify-end gap-4 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+                  <span className="text-xs text-zinc-500">Total retenido:</span>
+                  <span className="font-mono text-sm font-bold text-violet-600">{formatCurrency(retencionesTabla.reduce((s, r) => s + ((r as any).retencion_ganancias_monto || 0), 0), "ARS")}</span>
                 </div>
               )}
             </Card>
