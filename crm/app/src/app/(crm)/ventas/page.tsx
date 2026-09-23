@@ -322,7 +322,7 @@ export default function VentasPage() {
           clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, limite_credito, saldo_cuenta_corriente, email, email_facturacion),
           presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total)
         `)
-        .in("estado" as any, ["aprobado", "facturar"])
+        .in("estado" as any, ["aprobado", "facturar", "facturado"])
         .neq("eliminado" as any, true)
         .order("fecha", { ascending: false });
       if (sociedadActiva?.id) presupuestosQuery = presupuestosQuery.eq("sociedad_id" as any, sociedadActiva.id);
@@ -369,13 +369,13 @@ export default function VentasPage() {
       const remitos = (remitosRes.data || []) as VentaRemito[];
       const ocs = (ocRes.data || []) as VentaOC[];
 
-      // Build ventas array
+      // Build ventas array — exclude "aprobado" PRs with no facturas/remitos (not ready for ventas)
       const ventasArr: Venta[] = presupuestos.map((p: any) => ({
         presupuesto: p as VentaPresupuesto,
         facturas: facturas.filter(f => f.presupuesto_id === p.id),
         remitos: remitos.filter(r => r.presupuesto_id === p.id),
         ordenesCompra: ocs.filter(oc => oc.presupuesto_origen_id === p.id),
-      }));
+      })).filter(v => v.presupuesto.estado !== "aprobado" || v.facturas.length > 0 || v.remitos.length > 0);
 
       setVentas(ventasArr);
 

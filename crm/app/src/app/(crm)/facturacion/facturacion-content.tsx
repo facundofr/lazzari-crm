@@ -1399,8 +1399,11 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       // If factura comes from a presupuesto, find the solicitante
       let solicitanteContactoId: string | null = null;
       if (f.presupuesto_id) {
-        const { data: prData } = await (supabase as any).from("presupuestos").select("contacto_id").eq("id", f.presupuesto_id).single();
+        const { data: prData } = await (supabase as any).from("presupuestos").select("contacto_id, created_by_profile:created_by(full_name, email)").eq("id", f.presupuesto_id).single();
         if (prData?.contacto_id) solicitanteContactoId = prData.contacto_id;
+        if (prData?.created_by_profile?.email && !suggested.some(s => s.email === prData.created_by_profile.email)) {
+          suggested.push({ email: prData.created_by_profile.email, label: `Creador PR: ${prData.created_by_profile.full_name || ""}` });
+        }
       }
       if (contactos) {
         for (const c of contactos) {

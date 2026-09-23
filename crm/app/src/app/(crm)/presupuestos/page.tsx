@@ -250,6 +250,9 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     modalidadEmision: row.modalidad_emision ?? "sin_definir",
     clienteCuit: row.clientes?.cuit ?? "",
     clienteEmail: row.clientes?.email ?? "",
+    clienteEmailFacturacion: (row.clientes as any)?.email_facturacion ?? "",
+    creadorEmail: (row.created_by_profile as any)?.email ?? "",
+    creadorNombre: row.created_by_profile?.full_name ?? "",
     clienteTelefono: row.clientes?.telefono ?? "",
     clienteDireccion: row.clientes?.direccion ?? "",
     clienteLocalidad: row.clientes?.localidad ?? "",
@@ -416,6 +419,7 @@ export default function PresupuestosPage() {
   async function openEmailModal(pr: Presupuesto) {
     const contactoEmail = (pr as any).contactoEmail || "";
     const clientEmail = (pr as any).clienteEmail || "";
+    const emailFact = (pr as any).clienteEmailFacturacion || "";
     const template = await loadEmailTemplate("presupuesto", sociedadActiva?.id || "");
     const vars = {
       numero: pr.numero,
@@ -427,7 +431,7 @@ export default function PresupuestosPage() {
     setEmailModal({
       open: true,
       id: pr.id,
-      to: contactoEmail || clientEmail,
+      to: emailFact.split(",")[0]?.trim() || contactoEmail || clientEmail,
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
       filename: `${pr.numero}.pdf`,
@@ -788,7 +792,7 @@ export default function PresupuestosPage() {
       // First try with items + vendedor profile
       let q = (supabase as any)
         .from("presupuestos")
-        .select(`*, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva, limite_credito, saldo_cuenta_corriente), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre, email), presupuesto_items(*)`)
+        .select(`*, clientes(razon_social, cuit, email, email_facturacion, telefono, direccion, localidad, provincia, condicion_iva, limite_credito, saldo_cuenta_corriente), created_by_profile:created_by(full_name, email), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre, email), presupuesto_items(*)`)
         .order("created_at", { ascending: false });
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       let res: { data: any; error: any } = await q;
@@ -4219,10 +4223,18 @@ export default function PresupuestosPage() {
           const pr = presupuestos.find(p => p.id === emailModal.id);
           if (!pr) return [];
           const suggestions: { email: string; label?: string }[] = [];
+          const emailFact = (pr as any).clienteEmailFacturacion;
+          if (emailFact) {
+            for (const e of emailFact.split(",").map((s: string) => s.trim()).filter(Boolean)) {
+              if (!suggestions.some(s => s.email === e)) suggestions.push({ email: e, label: "Facturación" });
+            }
+          }
           const contactoEmail = (pr as any).contactoEmail;
           const clienteEmail = (pr as any).clienteEmail;
-          if (contactoEmail) suggestions.push({ email: contactoEmail, label: (pr as any).contactoNombre || "Solicitante" });
-          if (clienteEmail && clienteEmail !== contactoEmail) suggestions.push({ email: clienteEmail, label: "Email cliente" });
+          if (contactoEmail && !suggestions.some(s => s.email === contactoEmail)) suggestions.push({ email: contactoEmail, label: (pr as any).contactoNombre || "Solicitante" });
+          if (clienteEmail && !suggestions.some(s => s.email === clienteEmail)) suggestions.push({ email: clienteEmail, label: "Email cliente" });
+          const creadorEmail = (pr as any).creadorEmail;
+          if (creadorEmail && !suggestions.some(s => s.email === creadorEmail)) suggestions.push({ email: creadorEmail, label: `Creador: ${(pr as any).creadorNombre || ""}` });
           return suggestions;
         })()}
         generatePdf={async () => {

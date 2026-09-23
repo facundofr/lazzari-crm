@@ -613,6 +613,7 @@ export default function FinanzasPage() {
   const [opFilterDesde, setOpFilterDesde] = useState("");
   const [opFilterHasta, setOpFilterHasta] = useState("");
   const [opModalOpen, setOpModalOpen] = useState(false);
+  const [opModalFullscreen, setOpModalFullscreen] = useState(false);
   const [pagoParcialDirecto, setPagoParcialDirecto] = useState(false);
   const [pagoParcialFCId, setPagoParcialFCId] = useState<string | null>(null);
   const [opForm, setOpForm] = useState(emptyOPForm);
@@ -1718,9 +1719,10 @@ export default function FinanzasPage() {
     a.click(); URL.revokeObjectURL(url);
   }
 
-  function openOPModal(preloadProveedorId?: string) {
-    setPagoParcialDirecto(false);
-    setPagoParcialFCId(null);
+  function openOPModal(preloadProveedorId?: string, parcialFCId?: string) {
+    setPagoParcialDirecto(!!parcialFCId);
+    setPagoParcialFCId(parcialFCId || null);
+    setOpModalFullscreen(false);
     setOpForm(preloadProveedorId ? { ...emptyOPForm, proveedor_id: preloadProveedorId } : emptyOPForm);
     setOpError("");
     setOpFiles([]);
@@ -1961,6 +1963,7 @@ export default function FinanzasPage() {
 
       // Process cheques: endorse received, create or mark emitted
       for (const m of opMedios) {
+        if (!["cheque_propio", "cheque", "echeq"].includes(m.tipo)) continue;
         if (m.tipo === "cheque_propio") {
           if (m.echeq_id) {
             // Existing emitted cheque — mark as entregado
@@ -2595,9 +2598,7 @@ export default function FinanzasPage() {
   function handlePagoParcialDirecto(id: string) {
     const fc = facturasCompra.find(f => f.id === id);
     if (!fc || !fc.proveedor_id) return;
-    openOPModal(fc.proveedor_id);
-    setPagoParcialDirecto(true);
-    setPagoParcialFCId(id);
+    openOPModal(fc.proveedor_id, id);
   }
 
   async function handleRegistrarPagoParcialDirecto() {
@@ -5296,13 +5297,16 @@ export default function FinanzasPage() {
       {opModalOpen && (
         <>
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setOpModalOpen(false)} />
-          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+          <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900 transition-all ${opModalFullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[90vh] w-full max-w-4xl"}`}>
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <FileText className="h-5 w-5 text-orange-500" />
                 <h2 className="text-lg font-bold dark:text-white">{pagoParcialDirecto ? "Registrar pago parcial" : "Nueva Orden de Pago"}</h2>
               </div>
-              <button onClick={() => setOpModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setOpModalFullscreen(f => !f)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={opModalFullscreen ? "Reducir" : "Maximizar"}>{opModalFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
+                <button onClick={() => setOpModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              </div>
             </div>
             {opError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}
             {opDatosError && <div role="alert" className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300">{opDatosError}</div>}
