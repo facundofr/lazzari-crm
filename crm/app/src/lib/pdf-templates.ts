@@ -380,13 +380,13 @@ ${documentHeader(soc, {
 <div class="items-title">Detalle de productos / servicios</div>
 <table>
   <thead><tr>
-    <th class="center" style="width:44px">#</th>
-    <th style="width:90px">Código</th>
+    <th class="center" style="width:30px">#</th>
+    <th style="width:72px">Código</th>
     <th>Descripción</th>
-    <th class="right" style="width:55px">Cant.</th>
-    <th class="center" style="width:50px">Unid.</th>
-    <th class="right" style="width:95px">${isB ? "P. Unit. final" : "P. Unitario"}</th>
-    <th class="right" style="width:95px">${isB ? "Total final" : isManual ? "Total" : "Subtotal"}</th>
+    <th class="right" style="width:45px">Cant.</th>
+    <th class="center" style="width:40px">Unid.</th>
+    <th class="right" style="width:110px">${isB ? "P. Unit. final" : "P. Unitario"}</th>
+    <th class="right" style="width:115px">${isB ? "Total final" : isManual ? "Total" : "Subtotal"}</th>
   </tr></thead>
   <tbody>${itemRows}</tbody>
 </table>
@@ -585,12 +585,12 @@ ${documentHeader(soc, {
 <div class="items-title">Detalle de productos / servicios</div>
 <table>
   <thead><tr>
-    <th class="center" style="width:44px">#</th>
+    <th class="center" style="width:30px">#</th>
     <th>Descripción</th>
-    <th class="right" style="width:65px">Cantidad</th>
-    <th class="right" style="width:95px">P. Unitario</th>
-    ${hideItemIva ? "" : `<th class="right" style="width:55px">IVA %</th>`}
-    <th class="right" style="width:95px">Subtotal</th>
+    <th class="right" style="width:55px">Cantidad</th>
+    <th class="right" style="width:110px">P. Unitario</th>
+    ${hideItemIva ? "" : `<th class="right" style="width:50px">IVA %</th>`}
+    <th class="right" style="width:115px">Subtotal</th>
   </tr></thead>
   <tbody>${itemRows}</tbody>
 </table>
@@ -958,13 +958,13 @@ ${documentHeader(soc, {
 <div class="items-title">Detalle de productos / servicios</div>
 <table>
   <thead><tr>
-    <th class="center" style="width:44px">#</th>
-    <th style="width:90px">Código</th>
+    <th class="center" style="width:30px">#</th>
+    <th style="width:72px">Código</th>
     <th>Descripción</th>
-    <th class="right" style="width:55px">Cant.</th>
-    <th class="center" style="width:50px">Unid.</th>
-    <th class="right" style="width:95px">P. Unitario</th>
-    <th class="right" style="width:95px">Subtotal</th>
+    <th class="right" style="width:45px">Cant.</th>
+    <th class="center" style="width:40px">Unid.</th>
+    <th class="right" style="width:110px">P. Unitario</th>
+    <th class="right" style="width:115px">Subtotal</th>
   </tr></thead>
   <tbody>${itemRows}</tbody>
 </table>
