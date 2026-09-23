@@ -18,6 +18,7 @@ import { supabase } from "@/lib/supabase/client";
 import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
+import * as XLSX from "xlsx";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import CargaMasivaFacturasCompra from "@/components/carga-masiva-facturas-compra";
 import { paymentDocumentFields } from "@/lib/payment-document-parser";
@@ -5137,6 +5138,27 @@ export default function FinanzasPage() {
                       a.click(); URL.revokeObjectURL(url);
                     }} className="flex items-center gap-1.5 rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-950 dark:text-violet-300">
                       <Download className="h-3 w-3" /> CSV
+                    </button>
+                    <button onClick={() => {
+                      if (retencionesTabla.length === 0) { alert("No hay retenciones en el rango seleccionado."); return; }
+                      const rows = retencionesTabla.map(r => ({
+                        Fecha: r.fecha,
+                        Numero: r.numero,
+                        Proveedor: r.proveedor_nombre,
+                        CUIT: (r as any).proveedor_cuit || "",
+                        "Monto Bruto": (r as any).monto_bruto || 0,
+                        "Base Retención": (r as any).base_retencion_ganancias || 0,
+                        "% Ganancias": (r as any).retencion_ganancias_pct,
+                        "Retención Ganancias": (r as any).retencion_ganancias_monto,
+                        Neto: (r as any).neto || 0,
+                        Moneda: r.moneda,
+                      }));
+                      const ws = XLSX.utils.json_to_sheet(rows);
+                      const wb = XLSX.utils.book_new();
+                      XLSX.utils.book_append_sheet(wb, ws, "Retenciones");
+                      XLSX.writeFile(wb, `Retenciones-${retFilterDesde || "inicio"}-a-${retFilterHasta || "hoy"}.xlsx`);
+                    }} className="flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+                      <Download className="h-3 w-3" /> Excel
                     </button>
                     <button onClick={() => {
                       if (!sociedadActiva?.id) return;
