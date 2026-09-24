@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown, RefreshCw } from "lucide-react";
+import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown, RefreshCw, Maximize2, Minimize2 } from "lucide-react";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 
@@ -103,6 +103,7 @@ export default function CobroMasivoLiquidacion({
   const [retenciones, setRetenciones] = useState<RetencionLinea[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [fullscreen, setFullscreen] = useState(false);
 
   // ── Tipo de cambio (solo para facturas USD) ──
   const isUSD = moneda === "USD";
@@ -247,16 +248,19 @@ export default function CobroMasivoLiquidacion({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center overflow-y-auto p-4 pt-8 pb-8">
-      <div className="bg-white dark:bg-zinc-900 w-full max-w-5xl rounded-xl shadow-2xl">
+      <div className={`bg-white dark:bg-zinc-900 rounded-xl shadow-2xl transition-all ${fullscreen ? "fixed inset-2 z-50 max-h-[calc(100vh-1rem)] overflow-y-auto" : "w-full max-w-5xl"}`}>
         {/* ── Header ── */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
           <div>
             <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Liquidación de cobro</h2>
             <p className="text-sm text-zinc-500">{clienteNombre}</p>
           </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800">
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setFullscreen(f => !f)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={fullscreen ? "Reducir" : "Maximizar"}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
+            <button onClick={onClose} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800">
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         <div className="px-6 py-5 space-y-6 max-h-[75vh] overflow-y-auto">

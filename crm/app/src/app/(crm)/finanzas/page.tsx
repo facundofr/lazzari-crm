@@ -653,6 +653,7 @@ export default function FinanzasPage() {
   // Gastos manuales state
   const [gastosManuales, setGastosManuales] = useState<GastoManualRow[]>([]);
   const [gmModalOpen, setGmModalOpen] = useState(false);
+  const [gmFullscreen, setGmFullscreen] = useState(false);
   const [gmEditingId, setGmEditingId] = useState<string | null>(null);
   const [gmForm, setGmForm] = useState(emptyGastoManualForm);
   const [gmSaving, setGmSaving] = useState(false);
@@ -769,6 +770,7 @@ export default function FinanzasPage() {
   // Echeqs state
   const [echeqs, setEcheqs] = useState<EcheqRow[]>([]);
   const [echeqModalOpen, setEcheqModalOpen] = useState(false);
+  const [echeqFullscreen, setEcheqFullscreen] = useState(false);
   const [echeqForm, setEcheqForm] = useState(emptyEcheqForm);
   const [echeqSaving, setEcheqSaving] = useState(false);
   const [echeqError, setEcheqError] = useState("");
@@ -4507,10 +4509,13 @@ export default function FinanzasPage() {
         {echeqModalOpen && (
           <>
             <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setEcheqModalOpen(false)} />
-            <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+            <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900 transition-all ${echeqFullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[85vh] w-full max-w-lg"}`}>
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-lg font-bold dark:text-white">Registrar Cheque</h2>
-                <button onClick={() => setEcheqModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => setEcheqFullscreen(f => !f)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={echeqFullscreen ? "Reducir" : "Maximizar"}>{echeqFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
+                  <button onClick={() => setEcheqModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+                </div>
               </div>
               {echeqError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{echeqError}</div>}
               <div className="space-y-4">
@@ -6335,13 +6340,16 @@ export default function FinanzasPage() {
       {gmModalOpen && (
         <>
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setGmModalOpen(false)} />
-          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+          <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900 transition-all ${gmFullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[85vh] w-full max-w-md"}`}>
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
                 <Receipt className="h-5 w-5 text-orange-500" />
                 <h2 className="text-lg font-bold dark:text-white">{gmEditingId ? "Editar gasto" : "Nuevo gasto manual"}</h2>
               </div>
-              <button onClick={() => setGmModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setGmFullscreen(f => !f)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={gmFullscreen ? "Reducir" : "Maximizar"}>{gmFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
+                <button onClick={() => setGmModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+              </div>
             </div>
             {gmError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{gmError}</div>}
             <div className="space-y-4">

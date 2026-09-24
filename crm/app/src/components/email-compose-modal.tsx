@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { X, Send, Loader2, Paperclip, AlertTriangle, CheckCircle2, CheckCheck } from "lucide-react";
+import { X, Send, Loader2, Paperclip, AlertTriangle, CheckCircle2, CheckCheck, Maximize2, Minimize2 } from "lucide-react";
 
 export type EmailDocumentType = "presupuesto" | "factura" | "remito" | "orden_compra" | "orden_pago";
 
@@ -62,6 +62,7 @@ export function EmailComposeModal({
   const [bodyHtml, setBodyHtml] = useState(defaultBody);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
   const [prevOpen, setPrevOpen] = useState(false);
 
   // Reset state when modal opens (transition from closed → open)
@@ -139,16 +140,19 @@ export function EmailComposeModal({
   return (
     <>
       <div className="fixed inset-0 z-50 bg-black/40" onClick={onClose} />
-      <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+      <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900 transition-all ${fullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[85vh] w-full max-w-lg"}`}>
         {/* Header */}
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2">
             <Send className="h-5 w-5 text-orange-500" />
             <h2 className="text-lg font-bold dark:text-white">Enviar {DOC_LABELS[documentType]}</h2>
           </div>
-          <button onClick={onClose} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setFullscreen(f => !f)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={fullscreen ? "Reducir" : "Maximizar"}>{fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
+            <button onClick={onClose} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Result message */}

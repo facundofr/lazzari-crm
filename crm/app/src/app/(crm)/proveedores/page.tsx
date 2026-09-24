@@ -804,6 +804,7 @@ export default function ProveedoresPage() {
                       )}
                       <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4 dark:border-zinc-800">
                         <div><p className="text-xs text-zinc-400">Saldo CC</p><p className="font-mono font-semibold text-red-600">{formatCurrency(prov.saldoCuentaCorriente, "ARS")}</p></div>
+                        <a href={`/finanzas?tab=cc_proveedores&proveedor=${prov.id}`} className="text-xs text-orange-500 hover:text-orange-600 font-medium">Ver CC →</a>
                         <div className="text-right"><p className="text-xs text-zinc-400">Forma pago</p><Badge variant="outline">{prov.formaPago}</Badge></div>
                       </div>
                     </Card>

@@ -1805,6 +1805,7 @@ export default function ClientesPage() {
                     <p className="text-xs text-zinc-400">Saldo CC</p>
                     <p className="font-mono font-semibold">{formatCurrency(client.saldoCuentaCorriente)}</p>
                   </div>
+                  <a href={`/finanzas?tab=cc_clientes&cliente=${client.id}`} className="text-xs text-orange-500 hover:text-orange-600 font-medium">Ver CC →</a>
                   <div className="text-right">
                     <p className="text-xs text-zinc-400">Lista</p>
                     <Badge variant="info">{client.listaPrecio || "—"}</Badge>
