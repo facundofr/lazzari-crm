@@ -490,6 +490,7 @@ export default function CargarFacturaOC({
     setSaving(true);
     setError("");
     let savedFacturaId: string | null = null;
+    let generateExtrasOC = false;
 
     try {
       // Evitar duplicar una factura del mismo proveedor y número dentro de la
@@ -559,7 +560,8 @@ export default function CargarFacturaOC({
         }
         if (reconciliation.extras.length) {
           const detail = reconciliation.extras.map(it => `${it.cantidad} ${it.unidad || "UN"} · ${it.descripcion}`).join("\n");
-          if (!window.confirm(`Estos artículos/cantidades no están pendientes en las OC seleccionadas:\n\n${detail}\n\nSe cargarán en la FC pero no se generará OC adicional. ¿Continuar?`)) return;
+          if (!window.confirm(`Estos artículos/cantidades no están pendientes en las OC seleccionadas:\n\n${detail}\n\n¿Generar una OC adicional por los extras?`)) return;
+          generateExtrasOC = true;
         }
       }
 
@@ -624,9 +626,42 @@ export default function CargarFacturaOC({
         if (linkErr) throw new Error(linkErr.message);
       }
 
-      // DESACTIVADO: OC por diferencia de FC — necesita revisión (crea OCs con 0 items)
-      // Se reactivará cuando se revise el flujo completo.
-      // if (reconciliation?.extras.length && fcData?.id) { ... }
+      // OC por diferencia de FC: crear OC con items extras no cubiertos por OCs existentes
+      if (generateExtrasOC && reconciliation?.extras.length && fcData?.id) {
+        const extrasSubtotal = reconciliation.extras.reduce((s, it) => s + it.cantidad * it.precio_unitario, 0);
+        const extrasIva = reconciliation.extras.reduce((s, it) => s + it.cantidad * it.precio_unitario * ((it.iva_porcentaje ?? 21) / 100), 0);
+        const { data: extraOC, error: extraOCErr } = await (supabase as any).from("ordenes_compra").insert({
+          proveedor_id: proveedorId,
+          fecha: fecha || new Date().toISOString().slice(0, 10),
+          moneda,
+          estado: "enviada",
+          estado_pago: "pendiente",
+          subtotal: Math.round(extrasSubtotal * 100) / 100,
+          iva: Math.round(extrasIva * 100) / 100,
+          total: Math.round((extrasSubtotal + extrasIva) * 100) / 100,
+          sociedad_id: sociedadId,
+          presupuesto_origen_id: null,
+          observaciones: `OC generada automáticamente por extras de FC ${numeroFactura.trim()}`,
+          created_by: profileId,
+        }).select("id").single();
+        if (extraOCErr) console.error("Error al crear OC extras:", extraOCErr.message);
+        if (extraOC?.id) {
+          const extraItems = reconciliation.extras.map((it, idx) => ({
+            orden_id: extraOC.id,
+            codigo: it.codigo || "",
+            descripcion: it.descripcion,
+            cantidad: it.cantidad,
+            cantidad_recibida: it.cantidad,
+            unidad: it.unidad || "u",
+            precio_unitario: it.precio_unitario,
+            iva_porcentaje: it.iva_porcentaje ?? 21,
+            orden: idx,
+          }));
+          await (supabase as any).from("orden_compra_items").insert(extraItems);
+          // Link extra OC to FC
+          await (supabase as any).from("factura_compra_ocs").insert({ factura_compra_id: fcData.id, orden_compra_id: extraOC.id });
+        }
+      }
 
       // Actualizar costos por identidad de artículo, conservando cantidades y recepciones.
       if (reconciliation && alignmentResult) {

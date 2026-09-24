@@ -396,6 +396,16 @@ export default function ProveedoresPage() {
       type: "number-range",
     },
     {
+      key: "condicionIva",
+      label: "Condición IVA",
+      type: "select",
+      options: [
+        { value: "RI", label: "Resp. Inscripto" },
+        { value: "Monotributo", label: "Monotributo" },
+        { value: "Exento", label: "Exento" },
+      ],
+    },
+    {
       key: "formaPago",
       label: "Forma de pago",
       type: "select",
@@ -418,6 +428,7 @@ export default function ProveedoresPage() {
     // Smart filters
     if (filterValues.rubro && (filterValues.rubro as string) !== "" && p.rubro !== filterValues.rubro) return false;
     if (filterValues.provincia && (filterValues.provincia as string) !== "" && p.provincia !== filterValues.provincia) return false;
+    if (filterValues.condicionIva && (filterValues.condicionIva as string) !== "" && p.condicionIva !== filterValues.condicionIva) return false;
     if (filterValues.formaPago && (filterValues.formaPago as string) !== "" && p.formaPago !== filterValues.formaPago) return false;
     const saldoRange = filterValues.saldo as { min?: number; max?: number } | undefined;
     if (saldoRange) {
