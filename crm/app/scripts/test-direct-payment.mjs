@@ -4,6 +4,12 @@ import assert from "node:assert/strict";
 import ts from "typescript";
 
 const source = fs.readFileSync(new URL("../src/app/(crm)/finanzas/page.tsx", import.meta.url), "utf8");
+assert.ok(source.includes('select("factura_compra_id, monto, retencion_ganancias_monto, anulado")'), "El lector de pagos directos debe traer la retención");
+assert.ok(source.includes("+ Number(p.retencion_ganancias_monto || 0)"), "El total pagado debe sumar neto y retención");
+assert.ok(source.includes("pago_op: (r.op_facturas_compra || [])"), "El CSV debe usar aplicaciones reales de OP");
+assert.ok(source.includes("monto_bruto: Number(mov.monto || 0) + Number(mov.retencion_ganancias_monto || 0)"), "Retenciones debe reconstruir el bruto");
+assert.ok(source.includes("proveedores(razon_social,cuit)"), "Retenciones debe cargar el CUIT del proveedor");
+assert.ok(source.includes("if (mov?.factura_compra_id) { alert("), "Las acciones individuales deben bloquear pagos directos de proveedor");
 const ast = ts.createSourceFile("finanzas.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let handler;
 const visit = node => { if (ts.isFunctionDeclaration(node) && node.name?.text === "handleRegistrarPagoParcialDirecto") handler = node; ts.forEachChild(node, visit); };
@@ -52,4 +58,5 @@ await run("OP anulada no consume saldo", { links: [{ monto: 600, ordenes_pago: {
 await run("condición fiscal cargando bloquea", { overrides: { opCondicionLoading: true }, expectedError: /verificarse/ });
 await run("condición fiscal desconocida bloquea", { overrides: { opProvCondicion: "desconocido" }, expectedError: /no está reconocida/ });
 await run("no mezcla monedas", { overrides: { opMedios: [{ monto: 390, moneda: "USD" }] }, expectedError: /moneda/ });
-console.log("9 pruebas de pago parcial directo aprobadas; sin red ni escrituras reales.");
+await run("cheque requiere reserva transaccional", { overrides: { opMedios: [{ tipo: "echeq", monto: 390, moneda: "ARS", echeq_id: "echeq" }] }, expectedError: /cartera.*transacción/ });
+console.log("10 pruebas de pago parcial directo aprobadas; sin red ni escrituras reales.");

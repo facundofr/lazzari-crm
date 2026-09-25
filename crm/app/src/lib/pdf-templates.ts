@@ -1092,13 +1092,23 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
 
   // Separate medios by type
   const cheques = op.medios.filter((m) => m.tipo === "cheque" || m.tipo === "cheque_propio" || m.tipo === "echeq");
-  const depositos = op.medios.filter((m) => m.tipo === "deposito" || m.tipo === "transferencia" || m.tipo === "efectivo");
+  const pagosDirectos = op.medios.filter((m) => m.tipo === "deposito" || m.tipo === "transferencia" || m.tipo === "efectivo" || m.tipo === "tarjeta");
+  const medioLabel: Record<string, string> = {
+    deposito: "Depósito",
+    transferencia: "Transferencia",
+    efectivo: "Efectivo",
+    tarjeta: "Tarjeta",
+  };
 
   const totalCheques = cheques.reduce((s, m) => s + Number(m.monto), 0);
-  const totalDepositos = depositos.reduce((s, m) => s + Number(m.monto), 0);
+  const totalPagosDirectos = pagosDirectos.reduce((s, m) => s + Number(m.monto), 0);
   const totalRetGan = op.retencion_ganancias_monto || 0;
   const totalRetenciones = totalRetGan;
-  const totalGeneral = totalCheques + totalDepositos + totalRetenciones;
+  const totalGeneral = totalCheques + totalPagosDirectos + totalRetenciones;
+  const esLiquidacionFx = op.numero.startsWith("OP-FX-") || op.notas?.startsWith("Liquidación USD/ARS.");
+  const saldoFavorGenerado = !esLiquidacionFx && op.estado !== "anulada"
+    ? Math.max(0, totalGeneral - Number(op.monto_bruto))
+    : 0;
 
   const estadoLabel: Record<string, string> = { pendiente: "Pendiente", pagada: "Pagada", anulada: "Anulada" };
 
@@ -1131,25 +1141,25 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
       <table style="width:100%;margin-top:14px;border-collapse:collapse"><tr><td></td><td style="width:260px"><table style="width:100%;border-collapse:collapse"><tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total Cheques</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalCheques, mon)}</td></tr></table></td></tr></table>
     </div>` : "";
 
-  // ── Depósitos / Transferencias table ──
-  const depositosHtml = depositos.length > 0 ? `
+  // ── Pagos directos table ──
+  const pagosDirectosHtml = pagosDirectos.length > 0 ? `
     <div style="margin-top:18px">
-      <div class="items-title">Dep\u00F3sitos / Transferencias</div>
+      <div class="items-title">Pagos directos</div>
       <table>
         <thead><tr>
-          <th>Fecha</th><th>Moneda</th><th class="right">Importe</th><th class="right">Cotiz.</th><th class="right">Consolidado</th>
+          <th>Fecha</th><th>Medio</th><th>Moneda</th><th class="right">Importe</th><th class="right">Cotiz.</th><th class="right">Consolidado</th>
         </tr></thead>
-        <tbody>${depositos.map((m) => {
+        <tbody>${pagosDirectos.map((m) => {
           const cons = Number(m.monto) * (Number(m.cotizacion) || 1);
           return `<tr>
-            <td>${fechaDD(m.fecha)}</td><td class="center">${m.moneda || mon}</td>
+            <td>${fechaDD(m.fecha)}</td><td>${medioLabel[m.tipo] || m.tipo}</td><td class="center">${m.moneda || mon}</td>
             <td class="right mono">${formatCurrency(Number(m.monto), m.moneda || mon)}</td>
             <td class="right mono">${Number(m.cotizacion) || 1}</td>
             <td class="right mono bold">${formatCurrency(cons, "ARS")}</td>
           </tr>`;
         }).join("")}</tbody>
       </table>
-      <table style="width:100%;margin-top:14px;border-collapse:collapse"><tr><td></td><td style="width:260px"><table style="width:100%;border-collapse:collapse"><tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total Dep\u00F3sitos</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalDepositos, mon)}</td></tr></table></td></tr></table>
+      <table style="width:100%;margin-top:14px;border-collapse:collapse"><tr><td></td><td style="width:260px"><table style="width:100%;border-collapse:collapse"><tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total pagos directos</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalPagosDirectos, mon)}</td></tr></table></td></tr></table>
     </div>` : "";
 
   // ── Retenciones table ──
@@ -1172,9 +1182,10 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
       <tr><td></td><td style="width:260px">
         <table style="width:100%;border-collapse:collapse">
           ${totalCheques > 0 ? `<tr><td style="font-size:11px;color:#333;padding:5px 0">Total Cheques</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(totalCheques, mon)}</td></tr>` : ""}
-          ${totalDepositos > 0 ? `<tr><td style="font-size:11px;color:#333;padding:5px 0">Total Dep\u00F3sitos / Transf.</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(totalDepositos, mon)}</td></tr>` : ""}
+          ${totalPagosDirectos > 0 ? `<tr><td style="font-size:11px;color:#333;padding:5px 0">Total pagos directos</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(totalPagosDirectos, mon)}</td></tr>` : ""}
           ${totalRetenciones > 0 ? `<tr><td style="font-size:11px;color:#333;padding:5px 0">Total Retenciones</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(totalRetenciones, mon)}</td></tr>` : ""}
           <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalGeneral, mon)}</td></tr>
+          ${saldoFavorGenerado > 0.01 ? `<tr><td style="font-size:11px;font-weight:700;color:#047857;padding:7px 0">Crédito a nuestro favor</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:700;color:#047857">${formatCurrency(saldoFavorGenerado, mon)}</td></tr>` : ""}
         </table>
       </td></tr>
     </table>`;
@@ -1274,7 +1285,7 @@ ${documentHeader(soc, {
 ${fcsHtml}
 
 ${chequesHtml}
-${depositosHtml}
+${pagosDirectosHtml}
 ${retencionesHtml}
 
 ${totalsHtml}

@@ -202,6 +202,7 @@ interface FacturaCompraRow {
   percepciones_detalle?: { tipo: string; monto: number; localidad?: string }[];
   op_vinculada?: { id: string; numero: string; estado: string; fecha: string; sobre_verde?: boolean; email_enviado_at?: string | null } | null;
   pago_directo?: number;
+  pago_op?: number;
   ocs_vinculadas?: { numero: string }[];
 }
 
@@ -348,8 +349,11 @@ interface MovimientoRow {
   monto_original?: number | null;
   anulado_at?: string | null;
   liquidacion_fx_id?: string | null;
+  base_retencion_ganancias?: number;
+  retencion_ganancias_pct?: number;
+  retencion_ganancias_monto?: number;
   clientes?: { razon_social: string } | null;
-  proveedores?: { razon_social: string } | null;
+  proveedores?: { razon_social: string; cuit?: string | null } | null;
 }
 
 interface CCRow {
@@ -801,7 +805,7 @@ export default function FinanzasPage() {
 
   // ── CC Detail (Estado de cuenta) ──
   interface CCFacturaRow { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; vencimiento: string | null; total: number; total_acreditado: number; cobrado: number; moneda: string; estado: string }
-  interface CCMovRow { id: string; tipo: string; monto: number; moneda: string; descripcion: string; fecha: string; factura_id: string | null; conciliado: boolean; cliente_id?: string | null; proveedor_id?: string | null; clientes?: { razon_social: string } | null; proveedores?: { razon_social: string } | null }
+  interface CCMovRow { id: string; tipo: string; monto: number; moneda: string; descripcion: string; fecha: string; factura_id: string | null; factura_compra_id?: string | null; conciliado: boolean; anulado?: boolean; monto_original?: number | null; retencion_ganancias_monto?: number; cliente_id?: string | null; proveedor_id?: string | null; clientes?: { razon_social: string } | null; proveedores?: { razon_social: string } | null }
   interface CCFCRow { id: string; numero_factura: string; fecha: string; fecha_vencimiento: string | null; total: number; pagado: number; estado: string; moneda: string }
   const [ccDetailCliente, setCcDetailCliente] = useState<CCRow | null>(null);
   const [ccDetailFacturas, setCcDetailFacturas] = useState<CCFacturaRow[]>([]);
@@ -885,7 +889,7 @@ export default function FinanzasPage() {
       try {
         let qMov = supabase
           .from("movimientos")
-          .select(`*, clientes(razon_social), proveedores(razon_social)`)
+          .select(`*, clientes(razon_social), proveedores(razon_social,cuit)`)
           .order("fecha", { ascending: false });
         if (sociedadActiva?.id) qMov = qMov.eq("sociedad_id" as any, sociedadActiva.id);
 
@@ -1162,18 +1166,20 @@ export default function FinanzasPage() {
         try {
           let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero), op_facturas_compra(orden_pago_id, monto, ordenes_pago(id, numero, estado, fecha, sobre_verde, email_enviado_at)), factura_compra_ocs(orden_compra_id, ordenes_compra(numero))").order("fecha", { ascending: false });
           if (sociedadActiva?.id) qFc = qFc.eq("sociedad_id", sociedadActiva.id);
-          const { data: fcData } = await qFc;
+          const { data: fcData, error: fcDataError } = await qFc;
+          if (fcDataError) throw fcDataError;
           if (fcData) {
             const fcIds = fcData.map((r: any) => r.id);
             let directPayments: any[] = [];
             if (fcIds.length > 0) {
-              let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, anulado").in("factura_compra_id", fcIds).eq("tipo", "pago");
+              let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado").in("factura_compra_id", fcIds).eq("tipo", "pago");
               if (sociedadActiva?.id) qDirect = qDirect.eq("sociedad_id", sociedadActiva.id);
-              const { data } = await qDirect;
+              const { data, error: directPaymentsError } = await qDirect;
+              if (directPaymentsError) throw directPaymentsError;
               directPayments = data || [];
             }
             const directByFC = directPayments.reduce((acc: Record<string, number>, p: any) => {
-              if (!p.anulado) acc[p.factura_compra_id] = (acc[p.factura_compra_id] || 0) + Number(p.monto || 0);
+              if (!p.anulado) acc[p.factura_compra_id] = (acc[p.factura_compra_id] || 0) + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0);
               return acc;
             }, {});
             setFacturasCompra(fcData.map((r: any) => ({
@@ -1206,11 +1212,17 @@ export default function FinanzasPage() {
               })(),
               ocs_vinculadas: (r.factura_compra_ocs || []).map((link: any) => ({ numero: link.ordenes_compra?.numero || "—" })).filter((o: any) => o.numero !== "—"),
               pago_directo: directByFC[r.id] || 0,
+              pago_op: (r.op_facturas_compra || [])
+                .filter((link: any) => link?.ordenes_pago && link.ordenes_pago.estado !== "anulada")
+                .reduce((sum: number, link: any) => sum + Number(link.monto || 0), 0),
             })));
           } else {
             setFacturasCompra([]);
           }
-        } catch { /* table may not exist yet, ignore */ }
+        } catch (error) {
+          console.error("Error cargando facturas de compra y sus pagos:", error);
+          setFacturasCompra([]);
+        }
 
         // Fetch ordenes de compra for optional linking
         try {
@@ -1470,6 +1482,7 @@ export default function FinanzasPage() {
   async function handleDeleteMov(id: string) {
     const mov = movimientos.find(m => m.id === id);
     if (mov?.liquidacion_fx_id) { alert("Este movimiento pertenece a una liquidación FX. Anulá la liquidación completa desde el botón Anular."); return; }
+    if (mov?.factura_compra_id) { alert("Este movimiento pertenece a un pago parcial de proveedor. Hasta contar con anulación transaccional, no se puede eliminar una línea individual."); return; }
     if (!confirm("¿Seguro que queres eliminar este movimiento?")) return;
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
@@ -1487,6 +1500,7 @@ export default function FinanzasPage() {
 
   function openEditMov(mov: MovimientoRow) {
     if (mov.anulado) return;
+    if (mov.factura_compra_id) { alert("Los pagos parciales de proveedor no se editan por línea. Anulá la operación completa y volvé a registrarla."); return; }
     setEditingMovId(mov.id);
     setMovForm({
       tipo: mov.tipo as typeof emptyMovForm.tipo,
@@ -1506,6 +1520,7 @@ export default function FinanzasPage() {
   async function handleAnularMov(id: string) {
     // Check if this movement belongs to an FX settlement
     const mov = movimientos.find(m => m.id === id);
+    if (mov?.factura_compra_id && !mov.liquidacion_fx_id) { alert("Este pago parcial de proveedor tiene movimientos vinculados. La anulación individual está bloqueada hasta contar con una operación transaccional."); return; }
     if (mov?.liquidacion_fx_id) {
       if (!confirm("Este movimiento pertenece a una liquidación FX. ¿Anular la liquidación completa?")) return;
       if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
@@ -1544,7 +1559,9 @@ export default function FinanzasPage() {
     if (prov?.forma_pago) {
       const fpMap: Record<string, OpMedioPago["tipo"]> = { Transferencia: "transferencia", Cheque: "cheque", Echeq: "echeq", Efectivo: "efectivo", Tarjeta: "tarjeta" };
       const tipoMedio = fpMap[prov.forma_pago];
-      if (tipoMedio) setOpMedios(prev => prev.length === 1 && prev[0].monto === 0 ? [{ ...prev[0], tipo: tipoMedio }] : prev);
+      if (tipoMedio && (!pagoParcialDirecto || !["cheque", "cheque_propio", "echeq"].includes(tipoMedio))) {
+        setOpMedios(prev => prev.length === 1 && prev[0].monto === 0 ? [{ ...prev[0], tipo: tipoMedio }] : prev);
+      }
     }
     // Usar condicion_iva de la DB directamente (fuente de verdad)
     if (prov?.condicion_iva) {
@@ -1779,6 +1796,7 @@ export default function FinanzasPage() {
   const opNetoAPagar = opMontoBruto - opRetencionGanancias;
   const opTotalMedios = opMedios.reduce((s, m) => s + m.monto, 0);
   const opDiferencia = opNetoAPagar - opTotalMedios;
+  const opSaldoFavor = Math.max(0, -opDiferencia);
 
   async function handleParseComprobante(f: File) {
     setOpFiles(prev => [...prev, f]);
@@ -1842,8 +1860,9 @@ export default function FinanzasPage() {
     if (opDiffMedios < -1) {
       setOpError("Los medios suman menos que el neto a pagar (faltan $" + Math.abs(opDiffMedios).toFixed(2) + "). Para un pago parcial, modificá primero «A pagar» en cada factura; así se recalcula la retención sobre lo que realmente cancelás."); return;
     }
-    if (opDiffMedios > 0.01 && !confirm(`Los medios superan el neto a pagar en $${opDiffMedios.toFixed(2)}. El excedente quedará a favor en la CC del proveedor. ¿Continuar?`)) return;
-    if (Math.abs(opDiffMedios) > 0.001 && Math.abs(opDiffMedios) <= 1 && !confirm(`Hay una diferencia de $${Math.abs(opDiffMedios).toFixed(2)} entre los medios y el neto a pagar. ¿Continuar igual?`)) return;
+    if (opDiffMedios > 0.01) {
+      if (!confirm(`Los medios superan el neto a pagar en $${opDiffMedios.toFixed(2)}. El excedente quedará como crédito a nuestro favor en la CC del proveedor. ¿Continuar?`)) return;
+    } else if (Math.abs(opDiffMedios) > 0.001 && Math.abs(opDiffMedios) <= 1 && !confirm(`Hay una diferencia de $${Math.abs(opDiffMedios).toFixed(2)} entre los medios y el neto a pagar. ¿Continuar igual?`)) return;
     const montoBrutoEfectivo = opMontoBruto;
     const retencionEfectiva = opRetencionGanancias;
     const baseRetencionEfectiva = opBaseSinIVA;
@@ -1955,7 +1974,10 @@ export default function FinanzasPage() {
       if (sociedadActiva?.id) (movBase as any).sociedad_id = sociedadActiva.id;
 
       // Movimiento principal (neto a pagar)
-      const { error: movErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "pago", descripcion: `${opNumero} — ${provNombre}`, monto: totalMediosVal, orden_pago_id: opData.id } as any);
+      const pagoDescripcion = opDiffMedios > 0.01
+        ? `${opNumero} — ${provNombre} — crédito a favor ${formatCurrency(opDiffMedios, opForm.moneda)}`
+        : `${opNumero} — ${provNombre}`;
+      const { error: movErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "pago", descripcion: pagoDescripcion, monto: totalMediosVal, orden_pago_id: opData.id } as any);
       if (movErr) throw new Error("Error al crear movimiento: " + movErr.message);
 
       // Movimiento retención ganancias
@@ -2023,7 +2045,8 @@ export default function FinanzasPage() {
       // Get OP details for movimiento cleanup
       let opQuery = (supabase as any).from("ordenes_pago").select("numero, proveedor_id").eq("id", id);
       if (sociedadActiva?.id) opQuery = opQuery.eq("sociedad_id", sociedadActiva.id);
-      const { data: opRow } = await opQuery.single();
+      const { data: opRow, error: opReadError } = await opQuery.single();
+      if (opReadError) throw opReadError;
       let opUpdate = (supabase as any).from("ordenes_pago").update({ estado: "anulada" }).eq("id", id);
       if (sociedadActiva?.id) opUpdate = opUpdate.eq("sociedad_id", sociedadActiva.id);
       const { error } = await opUpdate;
@@ -2032,17 +2055,35 @@ export default function FinanzasPage() {
       // No borrar movimientos: la anulación debe conservar el rastro contable.
       // Se marcan como anulados para excluirlos de saldos y conciliaciones.
       // Prefer orden_pago_id link; fallback to description pattern for legacy data.
-      let movUpdate = (supabase as any).from("movimientos").update({ anulado: true, anulado_at: new Date().toISOString() })
+      let movQuery = (supabase as any).from("movimientos").select("id, monto, descripcion, anulado")
         .eq("orden_pago_id", id);
-      if (sociedadActiva?.id) movUpdate = movUpdate.eq("sociedad_id", sociedadActiva.id);
-      const { data: movUpdated, error: movError } = await movUpdate.select("id");
-      if (movError) throw movError;
-      // Fallback for old movimientos without orden_pago_id
-      if ((!movUpdated || movUpdated.length === 0) && opRow?.numero && opRow?.proveedor_id) {
-        let movFallback = supabase.from("movimientos").update({ anulado: true, anulado_at: new Date().toISOString() } as any)
-          .like("descripcion" as any, `${opRow.numero} — %`).eq("proveedor_id" as any, opRow.proveedor_id);
-        if (sociedadActiva?.id) movFallback = movFallback.eq("sociedad_id" as any, sociedadActiva.id);
-        await movFallback;
+      if (sociedadActiva?.id) movQuery = movQuery.eq("sociedad_id", sociedadActiva.id);
+      let { data: movimientosAnular, error: movReadError } = await movQuery;
+      if (movReadError) throw movReadError;
+      // Fallback for old movimientos without orden_pago_id.
+      if ((!movimientosAnular || movimientosAnular.length === 0) && opRow?.numero && opRow?.proveedor_id) {
+        let movFallback = (supabase as any).from("movimientos").select("id, monto, descripcion, anulado")
+          .like("descripcion", `${opRow.numero} — %`).eq("proveedor_id", opRow.proveedor_id);
+        if (sociedadActiva?.id) movFallback = movFallback.eq("sociedad_id", sociedadActiva.id);
+        const { data: legacyMovimientos, error: fallbackError } = await movFallback;
+        if (fallbackError) throw fallbackError;
+        movimientosAnular = legacyMovimientos;
+      }
+      const anuladoAt = new Date().toISOString();
+      for (const movimiento of movimientosAnular || []) {
+        if (movimiento.anulado) continue;
+        let anularMovimiento = (supabase as any).from("movimientos").update({
+          anulado: true,
+          monto_original: Number(movimiento.monto),
+          monto: 0,
+          anulado_at: anuladoAt,
+          anulado_por: profile?.id ?? null,
+          conciliado: false,
+          descripcion: `[ANULADO] ${String(movimiento.descripcion || "").replace(/^\[ANULADO\]\s*/, "")}`,
+        }).eq("id", movimiento.id);
+        if (sociedadActiva?.id) anularMovimiento = anularMovimiento.eq("sociedad_id", sociedadActiva.id);
+        const { error: movError } = await anularMovimiento;
+        if (movError) throw movError;
       }
 
       // Un e-cheq endosado por esta OP vuelve a estar disponible en cartera.
@@ -2623,6 +2664,7 @@ export default function FinanzasPage() {
     if (opForm.moneda !== "ARS") { setOpError("El pago en dólares requiere registrar su conversión a pesos antes de calcular las retenciones"); return; }
     if (opForm.usar_monto_manual) { setOpError("Para un pago parcial directo indicá el importe bruto en «A pagar» de la factura"); return; }
     if (fc.moneda !== opForm.moneda || opMedios.some(m => m.moneda !== opForm.moneda)) { setOpError("La factura y todos los medios deben estar en la misma moneda"); return; }
+    if (opMedios.some(m => ["cheque", "cheque_propio", "echeq"].includes(m.tipo))) { setOpError("Los pagos parciales directos con cheque o e-cheq todavía no están habilitados porque requieren reservar la cartera en la misma transacción"); return; }
     const bruto = Number(fc.monto_a_pagar);
     const retencion = Number(opRetencionGanancias);
     if (!Number.isFinite(bruto) || bruto <= 0 || bruto >= fc.saldo_pendiente - 0.005) { setOpError("El importe bruto debe ser positivo y menor al saldo pendiente; para cancelarlo usá Generar OP"); return; }
@@ -2997,10 +3039,10 @@ export default function FinanzasPage() {
         if (directPayments) (directPayments as any[]).filter((p: any) => !p.anulado).forEach((p: any) => { pagadoMap[p.factura_compra_id] = (pagadoMap[p.factura_compra_id] || 0) + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0); });
       }
       if (fcData) setCcDetailFCProv(fcData.map((f: any) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento, total: Number(f.total), pagado: pagadoMap[f.id] || 0, estado: f.estado, moneda: f.moneda ?? "ARS" })));
-      let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("proveedor_id" as any, prov.id).order("fecha", { ascending: false });
+      let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, factura_compra_id, retencion_ganancias_monto, conciliado, anulado, monto_original, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("proveedor_id" as any, prov.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData } = await qM;
-      if (mData) setCcDetailMovProv(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, factura_id: m.factura_id ?? null, conciliado: !!m.conciliado, cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
+      if (mData) setCcDetailMovProv(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, factura_id: m.factura_id ?? null, factura_compra_id: m.factura_compra_id ?? null, retencion_ganancias_monto: Number(m.retencion_ganancias_monto || 0), conciliado: !!m.conciliado, anulado: !!m.anulado, monto_original: m.monto_original == null ? null : Number(m.monto_original), cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
     } catch (err) { console.error("CC prov detail err:", err); } finally { setCcDetailProvLoading(false); }
   }
   async function openCobroMultiple() {
@@ -3111,8 +3153,7 @@ export default function FinanzasPage() {
   function exportFCCompraCSV(data: FacturaCompraRow[]) {
     const lines: string[] = ["Fecha;Vencimiento;Proveedor;Documento;Moneda;Importe;Pagado;Deuda"];
     data.forEach(f => {
-      const pagadoOP = f.op_vinculada && f.op_vinculada.estado !== "anulada" ? Number(f.op_vinculada.numero ? f.total : 0) : 0;
-      const pagado = (f.pago_directo || 0) + pagadoOP;
+      const pagado = (f.pago_directo || 0) + (f.pago_op || 0);
       const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : Math.max(0, f.total - pagado);
       lines.push(`${f.fecha};${f.fecha_vencimiento || ""};"${f.proveedor_nombre}";"${f.numero_factura}";${f.moneda};"${formatCurrency(f.total, f.moneda)}";"${formatCurrency(pagado, f.moneda)}";"${formatCurrency(saldo, f.moneda)}"`);
     });
@@ -3127,13 +3168,16 @@ export default function FinanzasPage() {
     ccDetailFCProv.forEach(f => {
       entries.push({ fecha: f.fecha, documento: f.numero_factura, moneda: f.moneda, debe: f.total, haber: 0 });
     });
-    ccDetailMovProv.forEach(m => {
+    ccDetailMovProv.filter(m => !m.anulado).forEach(m => {
       entries.push({ fecha: m.fecha, documento: m.descripcion, moneda: m.moneda, debe: 0, haber: m.monto });
     });
     entries.sort((a, b) => a.fecha.localeCompare(b.fecha));
-    let saldoAcum = 0;
+    const saldosAcumulados: Record<string, number> = {};
     const lines: string[] = ["Fecha,Proveedor,Documento,Moneda,Debe,Haber,Saldo"];
-    entries.forEach(e => { saldoAcum += e.debe - e.haber; lines.push(`${e.fecha},"${ccDetailProveedor!.razon_social}","${e.documento}",${e.moneda},${e.debe || ""},${e.haber || ""},${saldoAcum.toFixed(2)}`); });
+    entries.forEach(e => {
+      saldosAcumulados[e.moneda] = (saldosAcumulados[e.moneda] || 0) + e.debe - e.haber;
+      lines.push(`${e.fecha},"${ccDetailProveedor!.razon_social}","${e.documento}",${e.moneda},${e.debe || ""},${e.haber || ""},${saldosAcumulados[e.moneda].toFixed(2)}`);
+    });
     const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `CC_${ccDetailProveedor.razon_social.replace(/[^a-zA-Z0-9]/g, "_")}_${todayAR()}.csv`; a.click(); URL.revokeObjectURL(url);
@@ -3370,8 +3414,8 @@ export default function FinanzasPage() {
         base_retencion_ganancias: Number((mov as any).base_retencion_ganancias || 0),
         retencion_ganancias_pct: Number((mov as any).retencion_ganancias_pct || 0),
         retencion_ganancias_monto: Number((mov as any).retencion_ganancias_monto || 0),
-        monto_bruto: Number(mov.monto || 0),
-        neto: Number(mov.monto || 0) - Number((mov as any).retencion_ganancias_monto || 0),
+        monto_bruto: Number(mov.monto || 0) + Number(mov.retencion_ganancias_monto || 0),
+        neto: Number(mov.monto || 0),
         moneda: (mov.moneda || "ARS") as "ARS" | "USD",
         origen: "Pago parcial",
       })),
@@ -3577,7 +3621,8 @@ export default function FinanzasPage() {
                       {detail && <p className="text-xs text-zinc-500 mt-0.5">{detail}</p>}
                       {row.clientes?.razon_social && <p className="text-xs text-zinc-400">{row.clientes.razon_social}</p>}
                       {row.proveedores?.razon_social && <p className="text-xs text-zinc-400">{row.proveedores.razon_social}</p>}
-                      {row.factura_id && <p className="text-xs text-blue-500">FC vinculada</p>}
+                      {row.factura_id && <p className="text-xs text-blue-500">Factura de venta vinculada</p>}
+                      {row.factura_compra_id && <p className="text-xs text-violet-500">Factura de compra vinculada</p>}
                     </div>
                   );
                 }},
@@ -3596,7 +3641,7 @@ export default function FinanzasPage() {
                         <CheckCircle2 className="h-3.5 w-3.5" />
                       </button>
                     )}
-                    {!row.anulado && (
+                    {!row.anulado && !row.factura_compra_id && (
                       <>
                         <button onClick={() => openEditMov(row)} className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Editar">
                           <Pencil className="h-3.5 w-3.5" />
@@ -3606,9 +3651,11 @@ export default function FinanzasPage() {
                         </button>
                       </>
                     )}
-                    <button onClick={() => handleDeleteMov(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {!row.factura_compra_id && (
+                      <button onClick={() => handleDeleteMov(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 )},
               ]}
@@ -3723,19 +3770,19 @@ export default function FinanzasPage() {
                   )}
                   {!selectedMov.anulado && (
                     <>
-                      {!selectedMov.liquidacion_fx_id && (
+                      {!selectedMov.liquidacion_fx_id && !selectedMov.factura_compra_id && (
                         <button onClick={() => { const mov = selectedMov; setSelectedMov(null); openEditMov(mov); }}
                           className="flex items-center gap-1.5 rounded-lg border border-blue-300 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20">
                           <Pencil className="h-4 w-4" /> Editar
                         </button>
                       )}
-                      <button onClick={() => handleAnularMov(selectedMov.id)}
+                      {!selectedMov.factura_compra_id && <button onClick={() => handleAnularMov(selectedMov.id)}
                         className="flex items-center gap-1.5 rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20">
                         <Ban className="h-4 w-4" /> {selectedMov.liquidacion_fx_id ? "Anular liquidación FX" : "Anular"}
-                      </button>
+                      </button>}
                     </>
                   )}
-                  {!selectedMov.liquidacion_fx_id && (
+                  {!selectedMov.liquidacion_fx_id && !selectedMov.factura_compra_id && (
                     <button onClick={() => handleDeleteMov(selectedMov.id)}
                       className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
                       <Trash2 className="h-4 w-4" /> Eliminar
@@ -4027,7 +4074,7 @@ export default function FinanzasPage() {
                       </div>
                     );
                   }},
-                  { key: "neto", label: "Neto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.neto, row.moneda)}</span> },
+                  { key: "neto", label: "Total entregado", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.neto, row.moneda)}</span> },
                   { key: "medio_pago", label: "Medio", render: (row) => {
                     const medioLabel = (t: string) => t === "transferencia" ? "Transf." : t === "cheque" ? "Cheque" : t === "cheque_propio" ? "Ch. propio" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "tarjeta" ? "Tarjeta" : t === "efectivo" ? "Efectivo" : t;
                     if (row.medios_pago && row.medios_pago.length > 1) {
@@ -4302,8 +4349,9 @@ export default function FinanzasPage() {
                     { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago || "—"}</Badge> },
                     { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
                     { key: "saldo_cuenta_corriente", label: "Le debemos", className: "text-right", sortable: true, render: (row) => {
-                      const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
-                      return (<div className="text-right"><span className={`font-mono font-semibold text-red-600`}>{formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                      const saldoAFavor = row.saldo_cuenta_corriente < -0.005;
+                      const pct = row.limite_credito ? (Math.max(0, row.saldo_cuenta_corriente) / row.limite_credito) * 100 : 0;
+                      return (<div className="text-right"><span className={`font-mono font-semibold ${saldoAFavor ? "text-emerald-600" : "text-red-600"}`}>{saldoAFavor ? `A favor ${formatCurrency(Math.abs(row.saldo_cuenta_corriente))}` : formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
                     }},
                     { key: "cuit" as any, label: "Nos debe", className: "text-right", sortable: false, render: (row) => {
                       const saldoCli = row.cuit ? cuitToSaldoCliente[row.cuit] : undefined;
@@ -4326,7 +4374,10 @@ export default function FinanzasPage() {
                 <button onClick={() => setCcDetailProveedor(null)} className="flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"><X className="h-4 w-4" /> Volver</button>
                 <h2 className="text-lg font-semibold">{ccDetailProveedor.razon_social}</h2>
                 {ccDetailProveedor.cuit && <span className="font-mono text-xs text-zinc-500">CUIT: {ccDetailProveedor.cuit}</span>}
-                <span className="ml-auto font-mono text-lg font-bold text-red-600">Deuda: {formatCurrency(ccDetailProveedor.saldo_cuenta_corriente)}</span>
+                <span className={`ml-auto font-mono text-lg font-bold ${ccDetailProveedor.saldo_cuenta_corriente < -0.005 ? "text-emerald-600" : "text-red-600"}`}>
+                  {ccDetailProveedor.saldo_cuenta_corriente < -0.005 ? "Saldo a favor: " : "Deuda: "}
+                  {formatCurrency(Math.abs(ccDetailProveedor.saldo_cuenta_corriente))}
+                </span>
               </div>
               <div className="flex gap-2 mb-4">
                 <button onClick={() => { openOPModal(ccDetailProveedor.id); setCcDetailProveedor(null); setTab("ordenes_pago"); }} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">
@@ -4361,8 +4412,8 @@ export default function FinanzasPage() {
                       { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-sm">{formatDate(row.fecha)}</span> },
                       { key: "tipo", label: "Tipo", render: (row) => { const tc = tipoConfig[row.tipo] || { label: row.tipo, variant: "outline" as const, icon: Wallet }; return <Badge variant={tc.variant}>{tc.label}</Badge>; }},
                       { key: "descripcion", label: "Descripcion", render: (row) => <span className="text-sm text-zinc-600 dark:text-zinc-400 max-w-xs truncate block">{row.descripcion}</span> },
-                      { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right text-red-600">{formatCurrency(row.monto, row.moneda as "ARS" | "USD")}</span> },
-                      { key: "conciliado" as any, label: "Estado", render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Conciliado" : "Pendiente"}</Badge> },
+                      { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className={`font-mono font-semibold block text-right ${row.anulado ? "text-zinc-400 line-through" : "text-red-600"}`}>{formatCurrency(row.anulado && row.monto_original != null ? row.monto_original : row.monto, row.moneda as "ARS" | "USD")}</span> },
+                      { key: "conciliado" as any, label: "Estado", render: (row) => row.anulado ? <Badge variant="outline">Anulado</Badge> : <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Conciliado" : "Pendiente"}</Badge> },
                     ]}
                     data={ccDetailMovProv}
                     onRowClick={(row) => openMovDetail(row as any)}
@@ -5606,6 +5657,12 @@ export default function FinanzasPage() {
                     <span className="text-zinc-700 dark:text-white">Neto a pagar</span>
                     <span className="font-mono text-emerald-600 text-base">{formatCurrency(opNetoAPagar, opForm.moneda)}</span>
                   </div>
+                  {opSaldoFavor > 0.01 && (
+                    <div className="flex justify-between text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+                      <span>Crédito a nuestro favor en cuenta corriente</span>
+                      <span className="font-mono">{formatCurrency(opSaldoFavor, opForm.moneda)}</span>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -5643,9 +5700,9 @@ export default function FinanzasPage() {
                           className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                           <option value="transferencia">Transferencia</option>
                           <option value="deposito">Depósito</option>
-                          <option value="cheque">Cheque tercero</option>
-                          <option value="cheque_propio">Cheque propio</option>
-                          <option value="echeq">E-Cheq</option>
+                          {!pagoParcialDirecto && <option value="cheque">Cheque tercero</option>}
+                          {!pagoParcialDirecto && <option value="cheque_propio">Cheque propio</option>}
+                          {!pagoParcialDirecto && <option value="echeq">E-Cheq</option>}
                           <option value="efectivo">Efectivo</option>
                           <option value="tarjeta">Tarjeta</option>
                         </select>
@@ -5694,12 +5751,15 @@ export default function FinanzasPage() {
                   </div>
                   <div className="flex justify-between items-center mt-2 text-sm">
                     <span className="text-zinc-500">Total medios</span>
-                    <span className={`font-mono font-bold ${Math.abs(opNetoAPagar - opMedios.reduce((s, m) => s + m.monto, 0)) < 1 ? "text-emerald-600" : "text-red-500"}`}>
-                      {formatCurrency(opMedios.reduce((s, m) => s + m.monto, 0), opForm.moneda)}
+                    <span className={`font-mono font-bold ${opSaldoFavor > 0.01 || Math.abs(opDiferencia) < 1 ? "text-emerald-600" : "text-red-500"}`}>
+                      {formatCurrency(opTotalMedios, opForm.moneda)}
                     </span>
                   </div>
-                  {Math.abs(opNetoAPagar - opMedios.reduce((s, m) => s + m.monto, 0)) >= 1 && opMedios.reduce((s, m) => s + m.monto, 0) > 0 && (
-                    <p className="text-xs text-red-500 mt-1">Diferencia: {formatCurrency(opNetoAPagar - opMedios.reduce((s, m) => s + m.monto, 0), opForm.moneda)}</p>
+                  {opSaldoFavor > 0.01 && (
+                    <p className="text-xs text-emerald-600 mt-1">Crédito a nuestro favor en CC: {formatCurrency(opSaldoFavor, opForm.moneda)}</p>
+                  )}
+                  {opDiferencia >= 1 && opTotalMedios > 0 && (
+                    <p className="text-xs text-red-500 mt-1">Faltan: {formatCurrency(opDiferencia, opForm.moneda)}</p>
                   )}
                   {opMedios.length === 1 && opMedios[0].monto === 0 && opNetoAPagar > 0 && (
                     <button type="button" onClick={() => setOpMedios([{ ...opMedios[0], monto: Math.round(opNetoAPagar * 100) / 100 }])}
@@ -6207,9 +6267,15 @@ export default function FinanzasPage() {
                     </div>
                   )}
                   <div className="flex items-center justify-between text-base font-bold border-t border-zinc-200 dark:border-zinc-700 pt-2">
-                    <span className="text-zinc-700 dark:text-white">Neto a pagar</span>
+                    <span className="text-zinc-700 dark:text-white">Total entregado</span>
                     <span className="font-mono text-emerald-600">{formatCurrency(selectedOP.neto, selectedOP.moneda)}</span>
                   </div>
+                  {selectedOP.estado !== "anulada" && selectedOP.neto - Math.max(0, selectedOP.monto_bruto - selectedOP.retencion_ganancias_monto) > 0.01 && (
+                    <div className="flex items-center justify-between text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+                      <span>Crédito a nuestro favor</span>
+                      <span className="font-mono">{formatCurrency(selectedOP.neto - Math.max(0, selectedOP.monto_bruto - selectedOP.retencion_ganancias_monto), selectedOP.moneda)}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
