@@ -28,18 +28,21 @@ Te voy a pasar una o varias imágenes/PDFs de comprobantes de pago (transferenci
 
 Reglas IMPORTANTES:
 - Si hay VARIOS cheques en un mismo comprobante (recibo con listado de cheques, planilla de echeqs, etc.), creá una entrada SEPARADA por cada cheque con su número, banco, fecha y monto individual.
-- Si hay retenciones o percepciones impositivas (IIBB, Ganancias, IVA), creá entradas separadas con tipo "retencion_iibb", "retencion_ganancias" o "retencion_iva".
-- El monto debe ser un número (sin símbolos de moneda ni puntos de miles).
-- Si el monto tiene formato argentino (puntos para miles, coma para decimales), convertilo correctamente.
+- Si hay retenciones o percepciones impositivas (IIBB, Ganancias, IVA), creá entradas separadas con tipo "retencion_iibb", "retencion_ganancias" o "retencion_iva". NUNCA las clasifiques como "transferencia" aunque el comprobante diga "se transfiere" o "se deposita" — si dice "Retención" en el título o encabezado, es una retención.
+- El monto debe ser un número PLANO sin separadores de miles. Ejemplo: 1234567.89 (correcto). El punto es SIEMPRE separador decimal.
 - La fecha debe estar en formato YYYY-MM-DD.
 - Si un campo no existe en el comprobante, usá null.
-- La moneda por defecto es "ARS" salvo que se indique USD o dólares.
+- La moneda por defecto es "ARS" salvo que se indique USD o dólares. IMPORTANTE: si un cheque o echeq está en USD, poné moneda: "USD" — NO lo conviertas a ARS.
 - Devolvé SOLO el JSON, sin texto adicional ni markdown.
 - SIEMPRE devolvé el array "pagos" aunque sea un solo pago.
 - Para transferencias bancarias, buscá el monto en el campo "Importe" o "Monto". No confundas el CBU/CVU (22 dígitos) con el monto.
 - Si el comprobante muestra "Fecha de emisión" y "Fecha de cobro/acreditación", usá siempre la de cobro/acreditación.
-- Para echeqs, el número de cheque suele tener 8 dígitos y el ID digital es más largo. No los confundas.
-- Leé con mucho cuidado los montos: $1.234.567,89 = 1234567.89. Un punto seguido de 3 dígitos es separador de miles, una coma seguida de 2 dígitos es separador decimal.`;
+- Para cheques y echeqs:
+  - El número de cheque suele tener 8 dígitos. El ID digital del echeq es más largo (20+ caracteres). No los confundas.
+  - cheque_fecha es la FECHA DE VENCIMIENTO o FECHA DE COBRO del cheque (no la fecha de emisión). Si es un cheque diferido, la fecha de cobro es futura. SIEMPRE incluí este campo si aparece.
+  - Si dice "A la vista" o no tiene fecha de cobro, usá la fecha de emisión como cheque_fecha.
+- Leé con mucho cuidado los montos: $1.234.567,89 = 1234567.89. Un punto seguido de 3 dígitos es separador de miles, una coma seguida de 2 dígitos es separador decimal.
+- CÓMO DISTINGUIR RETENCIONES: Los certificados de retención de ARCA/AFIP o municipales dicen claramente "CONSTANCIA DE RETENCIÓN" o "Certificado de Retención" en el encabezado. Mirá el título del documento, no solo el cuerpo.`;
 
 export async function POST(request: NextRequest) {
   try {

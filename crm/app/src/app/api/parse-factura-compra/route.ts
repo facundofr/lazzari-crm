@@ -32,6 +32,9 @@ Te voy a pasar un PDF o imagen de una factura de compra o nota de pedido de prov
   "iva_porcentaje": 21,
   "iva": 25.92,
   "percepciones": 0,
+  "percepcion_iibb": null,
+  "percepcion_iva": null,
+  "percepcion_ganancias": null,
   "total": 149.37,
   "notas": "condiciones de pago u observaciones relevantes"
 }
@@ -49,11 +52,11 @@ Reglas:
 - Si la tabla tiene columnas como Código, Descripción, Cantidad, Precio, Bonificación, Subtotal — asegurate de mapear cada columna correctamente. No confundas la columna de bonificación con el precio ni el subtotal de línea con el precio unitario.
 - Verificá aritméticamente cantidad × precio unitario × (1 - descuento/100), subtotal, IVA, percepciones y total contra los totales impresos. Conservá los importes impresos como subtotal/iva/total y corregí únicamente un item evidentemente mal leído.
 - Si la lectura de un artículo te da un subtotal de línea que no cuadra con los totales del documento, releé ese renglón con más cuidado.
-- En documentos con separador de miles y decimales argentinos (1.234,56), convertí a número 1234.56. Nunca devuelvas números con formato local ni símbolos.
-- Los precios deben ser números (sin símbolos de moneda).
+- FORMATO NUMÉRICO OBLIGATORIO: Todos los montos deben ser números planos sin separadores de miles. Ejemplo: 1234567.89 (correcto), 1.234.567,89 (incorrecto), 1,234,567.89 (incorrecto). El punto es SIEMPRE separador decimal. Nunca devuelvas números con formato local ni símbolos de moneda.
+- Si un item tiene IVA 0% o es Exento/No Gravado, usá iva_porcentaje: 0. Agregá en notas si es "Exento", "No Gravado" o "IVA 0%" para distinguir.
 - Si un campo no existe en el documento, usá null para texto o 0 para números.
 - El número de factura debe incluir punto de venta si aparece (ej: 0001-00012345).
-- Si hay percepciones (IIBB, ganancias, IVA), sumalas en el campo "percepciones".
+- Percepciones: devolvé el total en "percepciones" y además desglosá en "percepcion_iibb" (número o null), "percepcion_iva" (número o null), "percepcion_ganancias" (número o null). Si no podés identificar el tipo, poné todo en "percepciones" y dejá los campos individuales en null.
 - La moneda por defecto es "ARS" salvo que se indique lo contrario.
 - Si el documento es una NOTA DE PEDIDO, COTIZACIÓN, PRESUPUESTO o PROFORMA (no es factura fiscal), devolvé tipo_comprobante como "Nota de Pedido".
 - Devolvé SOLO el JSON, sin texto adicional ni markdown.`;

@@ -23,13 +23,16 @@ Te voy a pasar un archivo HTML, PDF o imagen de una cotización o lista de un pr
 }
 
 Reglas:
-- Extraé TODOS los items/líneas del documento.
-- El precio_unitario debe ser neto (sin IVA) si es posible determinarlo.
-- Si los precios incluyen IVA y se puede separar, extraé el neto. Si no, dejá el precio tal cual e indicá iva_porcentaje: 0.
-- Si el monto tiene formato argentino (puntos para miles, coma para decimales), convertilo correctamente.
-- La moneda por defecto es "ARS" salvo que se indique USD o dólares.
-- Si un campo no existe en el documento, usá null para texto o 0 para números.
-- Devolvé SOLO el JSON, sin texto adicional ni markdown.`;
+- Extraé TODOS los items/líneas del documento sin excepción.
+- FORMATO NUMÉRICO OBLIGATORIO: Todos los montos deben ser números planos sin separadores de miles. Ejemplo: 1234567.89 (correcto). El punto es SIEMPRE separador decimal. Formato argentino: $1.234.567,89 = 1234567.89.
+- El precio_unitario debe ser neto (sin IVA) si es posible determinarlo. Pistas: si el documento dice "Precios + IVA" o "IVA incluido", dividí por 1.21 (o la alícuota que corresponda). Si dice "Neto", "s/IVA", o "más IVA", ya es neto.
+- Si no podés determinar si incluye IVA, dejá el precio tal cual y poné iva_porcentaje: null (el usuario lo verificará).
+- Si hay items con distintos IVA (21%, 10.5%, 0%), poné el iva_porcentaje correcto para cada uno.
+- La moneda por defecto es "ARS" salvo que se indique USD, dólares, U$S, o aparezca símbolo $.
+- Si un campo no existe en el documento, usá null.
+- Devolvé SOLO el JSON, sin texto adicional ni markdown.
+- Para tablas con muchas columnas: leé con cuidado cada celda. No confundas bonificación con precio, ni subtotal de línea con precio unitario.
+- Si hay variantes (tallas, medidas, presentaciones), incluí cada variante como un item separado con la variante en la descripción.`;
 
 export async function POST(request: NextRequest) {
   try {

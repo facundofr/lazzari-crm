@@ -730,6 +730,7 @@ export default function PresupuestosPage() {
           mensaje: aiMessage,
           cliente_id: newPR.cliente_id || null,
           moneda: newPR.moneda,
+          sociedad_id: sociedadActiva?.id || null,
           imagen: aiImage ? { data: aiImage.data, media_type: aiImage.media_type } : undefined,
         }),
       });
@@ -748,7 +749,7 @@ export default function PresupuestosPage() {
             cantidad: Number(item.cantidad) || 1,
             unidad: item.unidad || "UN",
             precio_costo: precioCosto,
-            costo_moneda: (item.moneda || newPR.moneda || "USD") as "ARS" | "USD" | "USD Divisa",
+            costo_moneda: (item.costo_moneda || item.moneda || newPR.moneda || "USD") as "ARS" | "USD" | "USD Divisa",
             markup_porcentaje: markup,
             precio_venta: precioVenta,
             iva_porcentaje: 21,
@@ -1510,6 +1511,15 @@ export default function PresupuestosPage() {
       // Only generate OCs for items that HAVE a proveedor assigned
       for (const provId of conProveedorIds) {
         const provItems = byProveedor[provId];
+
+        // Skip OC if ALL items for this proveedor have zero cost
+        const allZeroCost = provItems.every((it: any) => Number(it.precio_costo) === 0);
+        if (allZeroCost) {
+          console.warn(`Skipping OC for proveedor ${provId}: all ${provItems.length} item(s) have precio_costo = 0`);
+          toast.warning(`OC no generada para un proveedor: todos los items tienen costo $0`);
+          continue;
+        }
+
         const subtotal = provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
         const iva = compraSinIva ? 0 : provItems.reduce((sum, it) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
 
@@ -1572,7 +1582,11 @@ export default function PresupuestosPage() {
 
       // Also generate OC for items WITHOUT proveedor (so user can assign later)
       const sinProvItems = byProveedor["__sin_proveedor__"] || [];
-      if (sinProvItems.length > 0) {
+      const sinProvAllZeroCost = sinProvItems.length > 0 && sinProvItems.every((it: any) => Number(it.precio_costo) === 0);
+      if (sinProvAllZeroCost) {
+        console.warn(`Skipping OC sin proveedor: all ${sinProvItems.length} item(s) have precio_costo = 0`);
+        toast.warning(`OC sin proveedor no generada: todos los items tienen costo $0`);
+      } else if (sinProvItems.length > 0) {
         const subtotalSP = sinProvItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad), 0);
         const ivaSP = compraSinIva ? 0 : sinProvItems.reduce((sum: number, it: any) => sum + Number(it.precio_costo) * Number(it.cantidad) * ((Number(it.iva_porcentaje ?? 21)) / 100), 0);
         const costoMonedasSP = new Set(sinProvItems.map((it: any) => (it.costo_moneda || "ARS").startsWith("USD") ? "USD" : "ARS"));
@@ -2061,7 +2075,9 @@ export default function PresupuestosPage() {
       });
 
       if (allFullyRemitted) {
-        await supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", pr.id);
+        let remitidoUpdate = supabase.from("presupuestos").update({ estado: "remitido" } as any).eq("id", pr.id);
+        if (sociedadActiva?.id) remitidoUpdate = remitidoUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+        await remitidoUpdate;
       }
 
       setRemitidoIds((prev) => new Set([...prev, pr.id]));
