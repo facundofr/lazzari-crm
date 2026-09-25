@@ -12,7 +12,7 @@ import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/co
 import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
 import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles, Mail, MailCheck, Send } from "lucide-react";
-import { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
@@ -21,7 +21,7 @@ import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import * as XLSX from "xlsx";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import CargaMasivaFacturasCompra from "@/components/carga-masiva-facturas-compra";
-import { paymentDocumentFields } from "@/lib/payment-document-parser";
+import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/payment-document-parser";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
@@ -124,7 +124,9 @@ interface ProveedorOption {
   alias_bancario?: string | null;
   numero_cuenta?: string | null;
   titular_cuenta?: string | null;
+  cuit_titular_cuenta?: string | null;
   tipo_cuenta?: string | null;
+  dias_cuenta_corriente?: number | null;
 }
 
 interface OrdenPagoRow {
@@ -141,6 +143,7 @@ interface OrdenPagoRow {
   retencion_ganancias_pct: number;
   retencion_ganancias_monto: number;
   neto: number;
+  saldo_a_favor?: number;
   moneda: "ARS" | "USD";
   medio_pago: string;
   medios_pago?: OpMedioPago[];
@@ -199,9 +202,13 @@ interface FacturaCompraRow {
   archivo_nombre?: string;
   solo_iva?: boolean;
   cae?: string;
+  factura_origen_id?: string | null;
+  credito_aplicado?: number;
+  total_acreditado?: number;
   percepciones_detalle?: { tipo: string; monto: number; localidad?: string }[];
   op_vinculada?: { id: string; numero: string; estado: string; fecha: string; sobre_verde?: boolean; email_enviado_at?: string | null } | null;
   pago_directo?: number;
+  credito_nc?: number;
   pago_op?: number;
   ocs_vinculadas?: { numero: string }[];
 }
@@ -279,6 +286,8 @@ interface OpMedioPago {
   tipo: "cheque" | "cheque_propio" | "deposito" | "transferencia" | "echeq" | "efectivo" | "tarjeta";
   monto: number;
   fecha: string;
+  fecha_emision?: string;
+  fecha_cobro?: string;
   banco: string;
   /** Texto ingresado cuando se elige el banco "Otro". */
   banco_otro?: string;
@@ -318,6 +327,19 @@ const emptyOPForm = {
   sobre_verde: false,
 };
 
+function sumarDiasISO(fecha: string, dias: number) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) return null;
+  const date = new Date(`${fecha}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== fecha) return null;
+  date.setUTCDate(date.getUTCDate() + Math.max(0, Math.trunc(Number(dias) || 0)));
+  return date.toISOString().slice(0, 10);
+}
+
+function calcularFechaPactada(fechasFactura: string[], diasPactados: number) {
+  const fechaBase = fechasFactura.map(fecha => sumarDiasISO(fecha, 0)).filter((fecha): fecha is string => Boolean(fecha)).sort()[0];
+  return fechaBase ? sumarDiasISO(fechaBase, diasPactados) : null;
+}
+
 const emptyGastoManualForm = {
   descripcion: "",
   proveedor_id: "",
@@ -352,6 +374,7 @@ interface MovimientoRow {
   base_retencion_ganancias?: number;
   retencion_ganancias_pct?: number;
   retencion_ganancias_monto?: number;
+  nota_credito_compra_id?: string | null;
   clientes?: { razon_social: string } | null;
   proveedores?: { razon_social: string; cuit?: string | null } | null;
 }
@@ -512,6 +535,7 @@ export default function FinanzasPage() {
 
   // Movimiento detail panel
   const [selectedMov, setSelectedMov] = useState<MovimientoRow | null>(null);
+  const [detailFullscreen, setDetailFullscreen] = useState(false);
   const [relatedMovs, setRelatedMovs] = useState<MovimientoRow[]>([]);
   const [relatedFactura, setRelatedFactura] = useState<{ tipo: string; punto_venta: number; numero: number; total: number; estado: string; moneda: string } | null>(null);
 
@@ -623,6 +647,7 @@ export default function FinanzasPage() {
   const [pagoParcialFCId, setPagoParcialFCId] = useState<string | null>(null);
   const [opForm, setOpForm] = useState(emptyOPForm);
   const [opSaving, setOpSaving] = useState(false);
+  const opRequestKeyRef = useRef("");
   const [opError, setOpError] = useState("");
   const [opFiles, setOpFiles] = useState<File[]>([]);
   const [opParsingCount, setOpParsingCount] = useState(0);
@@ -1068,7 +1093,7 @@ export default function FinanzasPage() {
 
         // Fetch proveedores list for OP/gastos selectors
         try {
-          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, forma_pago, banco, cbu, alias_bancario, numero_cuenta, titular_cuenta, tipo_cuenta, alicuota_ganancias, concepto_retencion_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, exclusion_retencion_cert" as any).order("razon_social");
+          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, banco, cbu, alias_bancario, numero_cuenta, titular_cuenta, cuit_titular_cuenta, tipo_cuenta, alicuota_ganancias, concepto_retencion_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, exclusion_retencion_cert" as any).order("razon_social");
           if (sociedadActiva?.id) qProv = qProv.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: provData } = await qProv;
           if (provData) setProveedoresOptions(provData as unknown as ProveedorOption[]);
@@ -1126,6 +1151,7 @@ export default function FinanzasPage() {
               retencion_ganancias_pct: Number(r.retencion_ganancias_pct ?? 0),
               retencion_ganancias_monto: Number(r.retencion_ganancias_monto ?? 0),
               neto: Number(r.neto_a_pagar ?? r.neto ?? 0),
+              saldo_a_favor: Number(r.saldo_a_favor ?? 0),
               moneda: (r.moneda as "ARS" | "USD") ?? "ARS", medio_pago: r.medio_pago ?? "transferencia",
               medios_pago: r.medios_pago ? (typeof r.medios_pago === "string" ? JSON.parse(r.medios_pago) : r.medios_pago) : undefined,
               cheque_cruce_id: r.cheque_cruce_id, notas: r.notas ?? "",
@@ -1172,14 +1198,18 @@ export default function FinanzasPage() {
             const fcIds = fcData.map((r: any) => r.id);
             let directPayments: any[] = [];
             if (fcIds.length > 0) {
-              let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado").in("factura_compra_id", fcIds).eq("tipo", "pago");
+              let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado, nota_credito_compra_id").in("factura_compra_id", fcIds).eq("tipo", "pago");
               if (sociedadActiva?.id) qDirect = qDirect.eq("sociedad_id", sociedadActiva.id);
               const { data, error: directPaymentsError } = await qDirect;
               if (directPaymentsError) throw directPaymentsError;
               directPayments = data || [];
             }
             const directByFC = directPayments.reduce((acc: Record<string, number>, p: any) => {
-              if (!p.anulado) acc[p.factura_compra_id] = (acc[p.factura_compra_id] || 0) + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0);
+              if (!p.anulado && !p.nota_credito_compra_id) acc[p.factura_compra_id] = (acc[p.factura_compra_id] || 0) + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0);
+              return acc;
+            }, {});
+            const creditByFC = directPayments.reduce((acc: Record<string, number>, p: any) => {
+              if (!p.anulado && p.nota_credito_compra_id) acc[p.factura_compra_id] = (acc[p.factura_compra_id] || 0) + Number(p.monto || 0);
               return acc;
             }, {});
             setFacturasCompra(fcData.map((r: any) => ({
@@ -1199,6 +1229,9 @@ export default function FinanzasPage() {
               archivo_nombre: r.archivo_nombre ?? undefined,
               solo_iva: r.solo_iva ?? false,
               cae: r.cae ?? undefined,
+              factura_origen_id: r.factura_origen_id ?? null,
+              credito_aplicado: Number(r.credito_aplicado || 0),
+              total_acreditado: Number(r.total_acreditado || 0),
               percepciones_detalle: r.percepciones_detalle ? (typeof r.percepciones_detalle === "string" ? JSON.parse(r.percepciones_detalle) : r.percepciones_detalle) : undefined,
               // Una OP anulada no debe seguir bloqueando la factura: la FC
               // vuelve a estar disponible para generar una nueva OP.
@@ -1212,6 +1245,7 @@ export default function FinanzasPage() {
               })(),
               ocs_vinculadas: (r.factura_compra_ocs || []).map((link: any) => ({ numero: link.ordenes_compra?.numero || "—" })).filter((o: any) => o.numero !== "—"),
               pago_directo: directByFC[r.id] || 0,
+              credito_nc: creditByFC[r.id] || 0,
               pago_op: (r.op_facturas_compra || [])
                 .filter((link: any) => link?.ordenes_pago && link.ordenes_pago.estado !== "anulada")
                 .reduce((sum: number, link: any) => sum + Number(link.monto || 0), 0),
@@ -1585,7 +1619,8 @@ export default function FinanzasPage() {
       try {
         // FC pendientes (incluir subtotal/iva/percepciones para base sin IVA — Art. 23 RG 830)
         let q = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, subtotal, iva, percepciones, total, moneda")
-          .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"]);
+          .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"])
+          .not("tipo_comprobante", "ilike", "NC%");
         if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
         const { data, error: fcLoadError } = await q;
         if (fcLoadError) throw fcLoadError;
@@ -1637,6 +1672,7 @@ export default function FinanzasPage() {
           .select("base_retencion_ganancias, retencion_ganancias_monto, moneda, anulado")
           .eq("sociedad_id", sociedadActiva?.id).eq("proveedor_id", opForm.proveedor_id)
           .eq("tipo", "pago").not("factura_compra_id", "is", null)
+          .is("nota_credito_compra_id", null)
           .gte("fecha", `${mesActual}-01`).lt("fecha", mesSiguiente);
         if (directMonthlyError) throw directMonthlyError;
         const monthPayments = [...(mensualOPData || []), ...(directMonthly || []).filter((m: any) => !m.anulado)];
@@ -1660,6 +1696,9 @@ export default function FinanzasPage() {
   // 2. Base sin IVA de esta OP (Art. 23 RG 830: IVA se excluye de la base de retención)
   const opMontoBrutoFC = opFCPendientes.filter(f => f.selected).reduce((s, f) => s + f.monto_a_pagar, 0);
   const opMontoBruto = opForm.usar_monto_manual && opForm.monto_manual > 0 ? opForm.monto_manual : opMontoBrutoFC;
+  const opProveedor = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
+  const opDiasPactados = Math.max(0, Number(opProveedor?.dias_cuenta_corriente) || 0);
+  const opFechaPactada = calcularFechaPactada(opFCPendientes.filter(f => f.selected).map(f => f.fecha), opDiasPactados);
 
   // Base sin IVA: para cada FC, la proporción sin IVA del monto a pagar
   const opBaseSinIVA = (() => {
@@ -1740,6 +1779,7 @@ export default function FinanzasPage() {
   }
 
   function openOPModal(preloadProveedorId?: string, parcialFCId?: string) {
+    opRequestKeyRef.current = crypto.randomUUID();
     setPagoParcialDirecto(!!parcialFCId);
     setPagoParcialFCId(parcialFCId || null);
     setOpModalFullscreen(false);
@@ -1818,6 +1858,13 @@ export default function FinanzasPage() {
         };
       });
       setOpMedios(prev => [...prev, ...mapped]);
+      setOpFCPendientes((prev) => {
+        const allocation = parsedPaymentForSingleInvoice(mapped, prev);
+        if (!allocation) return prev;
+        return prev.map((invoice) => invoice.id === allocation.invoiceId
+          ? { ...invoice, selected: true, monto_a_pagar: allocation.amount }
+          : pagoParcialDirecto ? { ...invoice, selected: false, monto_a_pagar: 0 } : invoice);
+      });
     } catch (error) {
       setOpError(error instanceof Error ? error.message : (error as any)?.message || "No se pudo leer el comprobante. Completá los datos manualmente.");
     } finally {
@@ -1853,76 +1900,67 @@ export default function FinanzasPage() {
     const totalMediosVal = opMedios.reduce((s, m) => s + m.monto, 0);
     const selectedEcheqIds = opMedios.map(m => m.echeq_id).filter((id): id is string => Boolean(id));
     if (new Set(selectedEcheqIds).size !== selectedEcheqIds.length) { setOpError("Un mismo e-cheq no puede usarse en dos medios de la OP"); return; }
+    if (opMedios.some(m => ["cheque", "echeq"].includes(m.tipo) && !m.echeq_id)) { setOpError("Los cheques de terceros deben seleccionarse desde la cartera para reservarlos junto con la OP"); return; }
     if (opMedios.some(m => !Number.isFinite(m.monto) || m.monto < 0)) { setOpError("Los medios de pago no pueden tener importes negativos o inválidos"); return; }
     if (totalMediosVal <= 0) { setOpError("Ingresá al menos un medio de pago con monto mayor a 0"); return; }
     if (!Number.isFinite(opRetencionGanancias) || opRetencionGanancias < 0 || opRetencionGanancias > opMontoBruto) { setOpError("La retención debe estar entre cero y el importe bruto a pagar"); return; }
     const opDiffMedios = totalMediosVal - opNetoAPagar;
-    if (opDiffMedios < -1) {
+    if (opDiffMedios < -0.01) {
       setOpError("Los medios suman menos que el neto a pagar (faltan $" + Math.abs(opDiffMedios).toFixed(2) + "). Para un pago parcial, modificá primero «A pagar» en cada factura; así se recalcula la retención sobre lo que realmente cancelás."); return;
     }
     if (opDiffMedios > 0.01) {
       if (!confirm(`Los medios superan el neto a pagar en $${opDiffMedios.toFixed(2)}. El excedente quedará como crédito a nuestro favor en la CC del proveedor. ¿Continuar?`)) return;
-    } else if (Math.abs(opDiffMedios) > 0.001 && Math.abs(opDiffMedios) <= 1 && !confirm(`Hay una diferencia de $${Math.abs(opDiffMedios).toFixed(2)} entre los medios y el neto a pagar. ¿Continuar igual?`)) return;
+    }
     const montoBrutoEfectivo = opMontoBruto;
     const retencionEfectiva = opRetencionGanancias;
     const baseRetencionEfectiva = opBaseSinIVA;
 
     setOpSaving(true);
     setOpError("");
-    let registeredOP: string | null = null;
     try {
-      if (selectedEcheqIds.length) {
-        const { data: availableEcheqs, error: echeqLoadError } = await (supabase as any).from("echeqs")
-          .select("id, estado, monto, moneda").eq("sociedad_id", sociedadActiva.id).in("id", selectedEcheqIds);
-        if (echeqLoadError) throw new Error(`No se pudo verificar la cartera de e-cheqs: ${echeqLoadError.message}`);
-        for (const medio of opMedios.filter(m => m.echeq_id)) {
-          const cheque = (availableEcheqs || []).find((item: any) => item.id === medio.echeq_id);
-          if (!cheque || cheque.estado !== "en_cartera" || cheque.moneda !== medio.moneda || Math.round(Number(cheque.monto) * 100) !== Math.round(medio.monto * 100)) {
-            throw new Error("Un e-cheq ya no está disponible o no coincide con el importe y moneda del medio. Actualizá la cartera antes de generar la OP");
-          }
-        }
-      }
-      const provNombre = proveedoresOptions.find(p => p.id === opForm.proveedor_id)?.razon_social ?? "";
-      // Generate OP number atomically via PG function
-      const { data: opNumData, error: opNumErr } = await (supabase as any).rpc("next_op_number", { p_sociedad_id: sociedadActiva!.id });
-      if (opNumErr) throw new Error("Error al generar número de OP: " + opNumErr.message);
-      const opNumero = opNumData as string;
-
-      const insertData: Record<string, unknown> = {
-        numero: opNumero,
-        fecha: opForm.fecha,
-        proveedor_id: opForm.proveedor_id,
-        monto_bruto: montoBrutoEfectivo,
-        base_retencion_ganancias: baseRetencionEfectiva, // Base efectivamente pagada para acumulado mensual futuro
-        retencion_porcentaje: 0,
-        retencion_monto: 0,
-        retencion_ganancias_pct: opForm.aplica_ganancias ? opForm.retencion_ganancias_pct : 0,
-        retencion_ganancias_monto: retencionEfectiva,
-        neto_a_pagar: totalMediosVal,
-        moneda: opForm.moneda,
-        medio_pago: opMedios[0]?.tipo || "transferencia",
-        medios_pago: JSON.stringify(opMedios.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco === "Otro" ? (m.banco_otro?.trim() || "Otro") : m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion, echeq_id: m.echeq_id }))),
-        notas: opForm.notas,
-        // The OP is paid in full for the chosen amount. Its invoices may still
-        // have a balance; marking the OP pending would allow paying it twice.
-        estado: "pagada",
-        sobre_verde: opForm.sobre_verde || false,
-      };
-      if (profile?.id) insertData.created_by = profile.id;
-      insertData.sociedad_id = sociedadActiva.id;
-
-      const { data: opData, error } = await (supabase as any).from("ordenes_pago").insert(insertData).select("id").single();
+      if (!opRequestKeyRef.current) opRequestKeyRef.current = crypto.randomUUID();
+      const mediosPayload = opMedios.filter(m => m.monto > 0).map(m => ({
+        tipo: m.tipo,
+        monto: m.monto,
+        fecha: m.fecha,
+        fecha_emision: m.fecha_emision || null,
+        fecha_cobro: m.fecha_cobro || m.fecha,
+        banco: m.banco === "Otro" ? (m.banco_otro?.trim() || "Otro") : m.banco,
+        numero_cheque: m.numero_cheque,
+        moneda: m.moneda,
+        cotizacion: m.cotizacion,
+        echeq_id: m.echeq_id || null,
+      }));
+      const facturasPayload = selectedFCs.map(fc => ({ id: fc.id, monto: fc.monto_a_pagar }));
+      const { data: opData, error } = await (supabase as any).rpc("registrar_pago_proveedor_seguro", {
+        p_sociedad_id: sociedadActiva.id,
+        p_request_key: opRequestKeyRef.current,
+        p_modo: "op",
+        p_proveedor_id: opForm.proveedor_id,
+        p_fecha: opForm.fecha,
+        p_moneda: opForm.moneda,
+        p_facturas: facturasPayload,
+        p_medios: mediosPayload,
+        p_monto_bruto: montoBrutoEfectivo,
+        p_base_retencion: baseRetencionEfectiva,
+        p_retencion_pct: opForm.aplica_ganancias ? opForm.retencion_ganancias_pct : 0,
+        p_retencion_monto: retencionEfectiva,
+        p_notas: opForm.notas,
+        p_sobre_verde: opForm.sobre_verde || false,
+      });
       if (error) throw new Error(error.message || JSON.stringify(error));
-      registeredOP = opNumero;
+      const opId = opData?.orden_pago_id as string | undefined;
+      const opNumero = (opData?.numero as string | undefined) || "OP";
       const attachmentWarnings: string[] = [];
 
-      // Upload comprobantes (multiple files)
-      if (opFiles.length > 0 && opData?.id) {
+      // Los archivos son un adjunto no financiero: se cargan solo despues de
+      // que la saga contable termino. Si fallan, la OP queda integra y reintentable.
+      if (opFiles.length > 0 && opId) {
         const archivosArr: { url: string; nombre: string }[] = [];
         for (let fi = 0; fi < opFiles.length; fi++) {
           const file = opFiles[fi];
           const ext = file.name.split(".").pop() || "pdf";
-          const filePath = `${sociedadActiva?.id || "default"}/op-${opData.id}/comprobante-${fi}.${ext}`;
+          const filePath = `${sociedadActiva.id}/op-${opId}/comprobante-${fi}.${ext}`;
           const { error: upErr } = await supabase.storage.from("comprobantes").upload(filePath, file, { upsert: true });
           if (!upErr) {
             const { data: urlData } = supabase.storage.from("comprobantes").getPublicUrl(filePath);
@@ -1931,100 +1969,23 @@ export default function FinanzasPage() {
         }
         if (archivosArr.length > 0) {
           const updateData: Record<string, unknown> = { archivos: JSON.stringify(archivosArr) };
-          // El formulario carga archivos de la OP sin asignación explícita a
-          // un medio. No inventar vínculos por posición ni tras fallos de carga.
-          let opDocUpdate = (supabase as any).from("ordenes_pago").update(updateData).eq("id", opData.id);
-          if (sociedadActiva?.id) opDocUpdate = opDocUpdate.eq("sociedad_id", sociedadActiva.id);
+          const opDocUpdate = (supabase as any).from("ordenes_pago").update(updateData)
+            .eq("id", opId).eq("sociedad_id", sociedadActiva.id);
           const { error: attachmentError } = await opDocUpdate;
           if (attachmentError) attachmentWarnings.push(`No se pudo guardar la referencia de los archivos: ${attachmentError.message}`);
         }
       }
       setOpFiles([]);
-
-      // Link FCs + update saldo
-      if (opData?.id && selectedFCs.length > 0) {
-        let saldoAAsignar = montoBrutoEfectivo;
-        const links = selectedFCs.map(fc => {
-          const monto = Math.min(fc.monto_a_pagar, Math.max(0, saldoAAsignar));
-          saldoAAsignar -= monto;
-          return { orden_pago_id: opData.id, factura_compra_id: fc.id, monto };
-        }).filter((link: { monto: number }) => link.monto > 0);
-        const { error: linkErr } = await (supabase as any).from("op_facturas_compra").insert(links);
-        if (linkErr) throw new Error("Error al vincular FCs: " + linkErr.message);
-        // If monto_a_pagar == saldo_pendiente → pagada; else stays as está
-        for (const fc of selectedFCs) {
-          const linked = links.find((link: { factura_compra_id: string }) => link.factura_compra_id === fc.id);
-          if (linked && Math.round(linked.monto * 100) === Math.round(fc.saldo_pendiente * 100)) {
-            let fcUpdate = (supabase as any).from("facturas_compra").update({ estado: "pagada" }).eq("id", fc.id);
-            if (sociedadActiva?.id) fcUpdate = fcUpdate.eq("sociedad_id", sociedadActiva.id);
-            const { data: updatedFC, error: updateFCError } = await fcUpdate.select("id").maybeSingle();
-            if (updateFCError || !updatedFC) throw new Error(`La OP ${opData.numero || opData.id} fue creada, pero no se pudo actualizar la factura ${fc.id}. No vuelvas a generar el pago: revisá esta OP. ${updateFCError?.message || "No se modificó ninguna fila"}`);
-          }
-        }
-      }
-
-      // Create movimientos (pago + retenciones)
-      const movBase: Record<string, unknown> = {
-        proveedor_id: opForm.proveedor_id,
-        moneda: opForm.moneda,
-        fecha: opForm.fecha,
-        conciliado: true,
-      };
-      if (profile?.id) movBase.created_by = profile.id;
-      if (sociedadActiva?.id) (movBase as any).sociedad_id = sociedadActiva.id;
-
-      // Movimiento principal (neto a pagar)
-      const pagoDescripcion = opDiffMedios > 0.01
-        ? `${opNumero} — ${provNombre} — crédito a favor ${formatCurrency(opDiffMedios, opForm.moneda)}`
-        : `${opNumero} — ${provNombre}`;
-      const { error: movErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "pago", descripcion: pagoDescripcion, monto: totalMediosVal, orden_pago_id: opData.id } as any);
-      if (movErr) throw new Error("Error al crear movimiento: " + movErr.message);
-
-      // Movimiento retención ganancias
-      if (retencionEfectiva > 0) {
-        const { error: retErr } = await supabase.from("movimientos").insert({ ...movBase, tipo: "retencion_ganancias", descripcion: `${opNumero} — Ret. Ganancias — ${provNombre}`, monto: retencionEfectiva, orden_pago_id: opData.id } as any);
-        if (retErr) throw new Error("Error al crear movimiento retención: " + retErr.message);
-      }
-
-      // Process cheques: endorse received, create or mark emitted
-      for (const m of opMedios) {
-        if (!["cheque_propio", "cheque", "echeq"].includes(m.tipo)) continue;
-        if (m.tipo === "cheque_propio") {
-          if (m.echeq_id) {
-            // Existing emitted cheque — mark as entregado
-            let echeqUpdate = (supabase as any).from("echeqs").update({ estado: "entregado", destino_tipo: "proveedor", destino_id: opForm.proveedor_id, destino_nombre: provNombre }).eq("id", m.echeq_id).eq("estado", "pendiente");
-            if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
-            const { data: claimed, error: claimErr } = await echeqUpdate.select("id");
-            if (claimErr || claimed?.length !== 1) throw new Error(`No se pudo reservar el cheque propio ${m.numero_cheque || m.echeq_id}: ${claimErr?.message || "ya cambió de estado"}`);
-          } else {
-            // Create new emitted cheque
-            const newCheque: Record<string, unknown> = {
-              tipo_cheque: "fisico", direccion: "emitido", numero: m.numero_cheque || `CHQ-${Date.now()}`,
-              banco_emisor: m.banco === "Otro" ? (m.banco_otro?.trim() || "Otro") : (m.banco || null),
-              monto: m.monto, moneda: m.moneda, fecha_pago: m.fecha, estado: "entregado",
-              destino_tipo: "proveedor", destino_id: opForm.proveedor_id, destino_nombre: provNombre,
-            };
-            if (sociedadActiva?.id) newCheque.sociedad_id = sociedadActiva.id;
-            if (profile?.id) newCheque.user_id = profile.id;
-            const { error: newErr } = await (supabase as any).from("echeqs").insert(newCheque);
-            if (newErr) throw new Error("Error al registrar cheque propio: " + newErr.message);
-          }
-        } else if (m.echeq_id) {
-          // Received cheque (echeq or cheque tercero) — mark as endosado
-          const updateEstado = m.tipo === "cheque" ? "endosado" : "endosado";
-          let echeqUpdate = (supabase as any).from("echeqs").update({ estado: updateEstado, destino_tipo: "proveedor", destino_id: opForm.proveedor_id, destino_nombre: provNombre, fecha_endoso: todayAR() }).eq("id", m.echeq_id).eq("estado", "en_cartera");
-          if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
-          const { data: claimedEcheq, error: echeqError } = await echeqUpdate.select("id");
-          if (echeqError || claimedEcheq?.length !== 1) throw new Error(`No se pudo reservar el cheque ${m.numero_cheque || m.echeq_id}: ${echeqError?.message || "otro usuario cambió su estado"}. Revisá esta OP antes de entregarlo`);
-        }
-      }
-
       setOpModalOpen(false);
+      opRequestKeyRef.current = "";
       await fetchData();
+      if (Number(opData?.saldo_a_favor || 0) > 0) {
+        alert(`${opNumero} registrada. Crédito a nuestro favor: ${formatCurrency(Number(opData.saldo_a_favor), opForm.moneda)}.`);
+      }
       if (attachmentWarnings.length) alert(`${opNumero} registrada. Quedaron comprobantes pendientes de adjuntar desde el detalle de la OP:\n${attachmentWarnings.join("\n")}`);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : (err as any)?.message || "Error al crear la OP";
-      setOpError(registeredOP ? `${registeredOP} ya está registrada y necesita revisión: ${message}. No vuelvas a generar el pago.` : message);
+      setOpError(`${message}. Podés reintentar: la misma solicitud no duplica la OP.`);
     } finally {
       setOpSaving(false);
     }
@@ -2226,20 +2187,28 @@ export default function FinanzasPage() {
     const proveedorEmail = op.proveedor_email
       || proveedoresOptions.find((proveedor) => proveedor.id === op.proveedor_id)?.email
       || "";
+    let defaultEmail = proveedorEmail;
 
     // Fetch proveedor + contactos emails
     const suggested: { email: string; label?: string }[] = [];
     try {
       const { data: provData } = await supabase.from("proveedores").select("email").eq("id", op.proveedor_id).single();
-      if (provData?.email) suggested.push({ email: provData.email, label: "Proveedor" });
-      const { data: contactos } = await (supabase as any).from("contactos").select("nombre, email").eq("entity_type", "proveedor").eq("entity_id", op.proveedor_id);
+      const { data: contactos } = await (supabase as any).from("contactos")
+        .select("nombre, email, principal")
+        .eq("entity_type", "proveedor")
+        .eq("entity_id", op.proveedor_id)
+        .order("principal", { ascending: false });
       if (contactos) {
+        const principal = contactos.find((contacto: any) => contacto.principal && contacto.email);
+        if (principal?.email) defaultEmail = principal.email;
         for (const c of contactos) {
           if (c.email && !suggested.some(s => s.email === c.email)) {
-            suggested.push({ email: c.email, label: c.nombre || "Contacto" });
+            suggested.push({ email: c.email, label: c.principal ? `Principal: ${c.nombre || "Contacto"}` : (c.nombre || "Contacto") });
           }
         }
       }
+      const emailGeneral = provData?.email || proveedorEmail;
+      if (emailGeneral && !suggested.some(s => s.email === emailGeneral)) suggested.push({ email: emailGeneral, label: "Proveedor" });
     } catch { /* ignore */ }
 
     // Collect comprobantes from OP archivos
@@ -2253,7 +2222,7 @@ export default function FinanzasPage() {
     setEmailModal({
       open: true,
       id: op.id,
-      to: proveedorEmail,
+      to: defaultEmail,
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
       filename: `OP-${op.numero || op.id.slice(0, 8)}.pdf`,
@@ -2674,65 +2643,36 @@ export default function FinanzasPage() {
     setOpSaving(true);
     setOpError("");
     try {
-      const { data: fresh, error: freshError } = await (supabase as any).from("facturas_compra")
-        .select("id, proveedor_id, total, subtotal, percepciones, moneda, numero_factura, estado")
-        .eq("id", fc.id).eq("sociedad_id", sociedadActiva.id).single();
-      if (freshError || !fresh) throw new Error("No se pudo verificar la factura de compra");
-      if (fresh.proveedor_id !== opForm.proveedor_id) throw new Error("La factura no pertenece al proveedor seleccionado");
-      if (!["pendiente", "recibida"].includes(fresh.estado)) throw new Error("La factura cambió de estado. Reabrí el pago para verificar su saldo");
-      if (fresh.moneda !== opForm.moneda) throw new Error("La moneda de la factura cambió. Reabrí el pago");
-      const ratioSinIVA = Number(fresh.total) > 0
-        ? (Number(fresh.subtotal || 0) + Number(fresh.percepciones || 0)) / Number(fresh.total) : 0;
-      const base = Math.round(bruto * ratioSinIVA * 100) / 100;
-      if (!Number.isFinite(base) || Math.abs(base - opBaseSinIVA) > 0.005) throw new Error("La base de la factura cambió. Reabrí el pago para recalcular la retención");
+      if (!opRequestKeyRef.current) opRequestKeyRef.current = crypto.randomUUID();
       const pctGanancias = opForm.aplica_ganancias ? Number(opForm.retencion_ganancias_pct) : 0;
-      const [{ data: existing, error: existingError }, { data: links, error: linksError }] = await Promise.all([
-        (supabase as any).from("movimientos").select("monto, retencion_ganancias_monto, anulado")
-          .eq("factura_compra_id", fresh.id).eq("tipo", "pago").eq("sociedad_id", sociedadActiva.id),
-        (supabase as any).from("op_facturas_compra").select("monto, ordenes_pago(id, estado, sociedad_id)")
-          .eq("factura_compra_id", fresh.id),
-      ]);
-      if (existingError || linksError) throw new Error("No se pudieron verificar los pagos previos. No se registró ningún pago");
-      // El movimiento directo guarda neto + retención en la misma fila. La
-      // fila separada de retención NO se suma otra vez; OP usa su vínculo bruto.
-      const pagadoDirecto = (existing || []).filter((p: any) => !p.anulado)
-        .reduce((sum: number, p: any) => sum + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0), 0);
-      if ((links || []).some((link: any) => !link.ordenes_pago || link.ordenes_pago.sociedad_id !== sociedadActiva.id)) throw new Error("No se pudo verificar la OP vinculada. Revisá el historial de la factura");
-      const pagadoOP = (links || []).filter((p: any) => p.ordenes_pago.estado !== "anulada")
-        .reduce((sum: number, p: any) => sum + Number(p.monto || 0), 0);
-      const saldoActual = Number(fresh.total) - pagadoDirecto - pagadoOP;
-      if (!Number.isFinite(saldoActual) || bruto >= saldoActual - 0.005) throw new Error("El importe completa o supera el saldo actual; reabrí la factura y generá una OP para cancelarlo");
-      const paymentRows: Record<string, unknown>[] = [{
-        tipo: "pago",
-        proveedor_id: fresh.proveedor_id,
-        factura_compra_id: fresh.id,
-        monto: total,
-        base_retencion_ganancias: base,
-        retencion_ganancias_pct: pctGanancias,
-        retencion_ganancias_monto: retencion,
-        moneda: fresh.moneda || opForm.moneda,
-        fecha: opForm.fecha,
-        descripcion: `Pago parcial directo — ${fresh.numero_factura || "FC"} — ${opMedios.map((m) => m.tipo).join(" + ")}`,
-        conciliado: true,
-        sociedad_id: sociedadActiva.id,
-        created_by: profile?.id || null,
-      }];
-      if (retencion > 0) {
-        paymentRows.push({
-          tipo: "retencion_ganancias", proveedor_id: fresh.proveedor_id, factura_compra_id: fresh.id,
-          monto: retencion, moneda: fresh.moneda || opForm.moneda, fecha: opForm.fecha,
-          descripcion: `Pago parcial directo — Ret. Ganancias — ${fresh.numero_factura || "FC"}`,
-          base_retencion_ganancias: base, retencion_ganancias_pct: pctGanancias,
-          retencion_ganancias_monto: retencion, conciliado: true, sociedad_id: sociedadActiva.id,
-          created_by: profile?.id || null,
-        });
-      }
-      // Un INSERT con ambas filas es atómico: nunca queda solo pago o retención.
-      const { error } = await (supabase as any).from("movimientos").insert(paymentRows);
+      const mediosPayload = opMedios.filter(m => Number(m.monto) > 0).map(m => ({
+        tipo: m.tipo,
+        monto: Number(m.monto),
+        fecha: m.fecha,
+        moneda: m.moneda,
+        cotizacion: m.cotizacion,
+      }));
+      const { error } = await (supabase as any).rpc("registrar_pago_proveedor_seguro", {
+        p_sociedad_id: sociedadActiva.id,
+        p_request_key: opRequestKeyRef.current,
+        p_modo: "directo",
+        p_proveedor_id: opForm.proveedor_id,
+        p_fecha: opForm.fecha,
+        p_moneda: opForm.moneda,
+        p_facturas: [{ id: fc.id, monto: bruto }],
+        p_medios: mediosPayload,
+        p_monto_bruto: bruto,
+        p_base_retencion: opBaseSinIVA,
+        p_retencion_pct: pctGanancias,
+        p_retencion_monto: retencion,
+        p_notas: opForm.notas,
+        p_sobre_verde: false,
+      });
       if (error) throw error;
       setOpModalOpen(false);
       setPagoParcialDirecto(false);
       setPagoParcialFCId(null);
+      opRequestKeyRef.current = "";
       await fetchData();
     } catch (err: unknown) {
       setOpError(err instanceof Error ? err.message : "No se pudo registrar el pago parcial");
@@ -2759,9 +2699,10 @@ export default function FinanzasPage() {
     if (!confirm("¿Seguro que querés anular esta factura?")) return;
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
-    let fcAnular = (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id);
-    if (sociedadActiva?.id) fcAnular = fcAnular.eq("sociedad_id", sociedadActiva.id);
-    const { error } = await fcAnular;
+    const target = facturasCompra.find((factura) => factura.id === id);
+    const { error } = target?.factura_origen_id
+      ? await (supabase as any).rpc("anular_nota_credito_compra", { p_sociedad_id: sociedadActiva.id, p_nota_credito_id: id })
+      : await (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id).eq("sociedad_id", sociedadActiva.id);
       if (error) throw error;
       await fetchData();
     } catch (err) { console.error("Error anulando FC:", err); alert("Error al anular FC: " + (err instanceof Error ? err.message : String(err))); }
@@ -3018,7 +2959,7 @@ export default function FinanzasPage() {
       // Refresh saldo from view
       const { data: freshSaldo } = await (supabase as any).from("v_cuenta_corriente_proveedores").select("saldo").eq("id", prov.id).maybeSingle();
       if (freshSaldo) setCcDetailProveedor(prev => prev ? { ...prev, saldo_cuenta_corriente: freshSaldo.saldo ?? prev.saldo_cuenta_corriente } : prev);
-      let qFC = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, fecha_vencimiento, total, estado, moneda").eq("proveedor_id", prov.id).in("estado", ["pendiente", "pagada", "recibida"]).order("fecha", { ascending: false });
+      let qFC = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, fecha_vencimiento, total, estado, moneda").eq("proveedor_id", prov.id).in("estado", ["pendiente", "pagada", "recibida"]).not("tipo_comprobante", "ilike", "NC%").order("fecha", { ascending: false });
       if (sociedadActiva?.id) qFC = qFC.eq("sociedad_id", sociedadActiva.id);
       const { data: fcData } = await qFC;
       // Calculate paid per FC from op_facturas_compra (only non-anulada OPs)
@@ -3133,6 +3074,10 @@ export default function FinanzasPage() {
   }
 
   function fcToggleSelect(id: string) {
+    if (facturasCompra.find((factura) => factura.id === id)?.factura_origen_id) {
+      alert("Las notas de crédito aplicadas se anulan individualmente para revertir su crédito de forma segura.");
+      return;
+    }
     setFcSelectedIds(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   }
   async function handleBulkEstadoFC(nuevoEstado: string) {
@@ -3153,8 +3098,13 @@ export default function FinanzasPage() {
   function exportFCCompraCSV(data: FacturaCompraRow[]) {
     const lines: string[] = ["Fecha;Vencimiento;Proveedor;Documento;Moneda;Importe;Pagado;Deuda"];
     data.forEach(f => {
-      const pagado = (f.pago_directo || 0) + (f.pago_op || 0);
-      const saldo = (f.estado === "pagada" || f.estado === "anulada") ? 0 : Math.max(0, f.total - pagado);
+      const esNotaCredito = Boolean(f.factura_origen_id);
+      const pagado = esNotaCredito
+        ? (f.credito_aplicado || 0)
+        : (f.pago_directo || 0) + (f.pago_op || 0) + (f.credito_nc || 0);
+      const saldo = (esNotaCredito || f.estado === "pagada" || f.estado === "anulada")
+        ? 0
+        : Math.max(0, f.total - pagado);
       lines.push(`${f.fecha};${f.fecha_vencimiento || ""};"${f.proveedor_nombre}";"${f.numero_factura}";${f.moneda};"${formatCurrency(f.total, f.moneda)}";"${formatCurrency(pagado, f.moneda)}";"${formatCurrency(saldo, f.moneda)}"`);
     });
     const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
@@ -3286,7 +3236,7 @@ export default function FinanzasPage() {
 
   // ── Derived calculations ──
   const currentMonth = new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires", year: "numeric", month: "2-digit" }).slice(0, 7);
-  const movimientosMes = movimientos.filter((m) => m.fecha?.startsWith(currentMonth) && !m.anulado);
+  const movimientosMes = movimientos.filter((m) => m.fecha?.startsWith(currentMonth) && !m.anulado && !m.nota_credito_compra_id);
   const movimientosMesARS = movimientosMes.filter((m) => !m.moneda || m.moneda === "ARS");
   const movimientosMesUSD = movimientosMes.filter((m) => m.moneda === "USD");
   const tiposIngreso = ["cobro", "cheque_recibido", "deposito"];
@@ -3296,6 +3246,12 @@ export default function FinanzasPage() {
   const totalCobrosUSD = movimientosMesUSD.filter((m) => tiposIngreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
   const totalPagosUSD = movimientosMesUSD.filter((m) => tiposEgreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
   const sinConciliar = movimientos.filter((m) => !m.conciliado && !m.anulado).length;
+  const tarjetasOPMes = ordenesPago
+    .filter((op) => op.estado !== "anulada" && op.fecha?.startsWith(currentMonth))
+    .flatMap((op) => op.medios_pago || [])
+    .filter((medio) => medio.tipo === "tarjeta");
+  const tarjetasOPMesARS = tarjetasOPMes.filter((medio) => medio.moneda !== "USD").reduce((total, medio) => total + Number(medio.monto || 0), 0);
+  const tarjetasOPMesUSD = tarjetasOPMes.filter((medio) => medio.moneda === "USD").reduce((total, medio) => total + Number(medio.monto || 0), 0);
 
   // Caja: saldo inicial + ingresos - egresos = saldo final
   const saldoInicialARS = saldosCaja.find(s => s.moneda === "ARS")?.monto ?? 0;
@@ -3522,6 +3478,34 @@ export default function FinanzasPage() {
           </div>
         </Card>
 
+        <Card className="p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+              <CreditCard className="h-4 w-4 text-orange-500" />
+              Medios financieros
+            </h3>
+            <span className="text-xs text-zinc-400">Resumen operativo, separado de la caja bancaria</span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <button type="button" onClick={() => setTab("echeqs")} className="rounded-lg border border-zinc-200 p-3 text-left transition-colors hover:border-orange-300 hover:bg-orange-50/50 dark:border-zinc-700 dark:hover:border-orange-700 dark:hover:bg-orange-950/20">
+              <p className="text-xs font-medium text-zinc-500">Cheques en cartera</p>
+              <p className="mt-1 font-mono text-sm font-semibold text-zinc-900 dark:text-white">{formatCurrency(echeqsMontoCarteraARS)}</p>
+              {echeqsMontoCarteraUSD > 0 && <p className="font-mono text-xs text-zinc-500">{formatCurrency(echeqsMontoCarteraUSD, "USD")}</p>}
+            </button>
+            <button type="button" onClick={() => setTab("echeqs")} className="rounded-lg border border-zinc-200 p-3 text-left transition-colors hover:border-orange-300 hover:bg-orange-50/50 dark:border-zinc-700 dark:hover:border-orange-700 dark:hover:bg-orange-950/20">
+              <p className="text-xs font-medium text-zinc-500">Cheques emitidos pendientes</p>
+              <p className="mt-1 font-mono text-sm font-semibold text-zinc-900 dark:text-white">{formatCurrency(echeqsMontoEmitidosPendARS)}</p>
+              {echeqsMontoEmitidosPendUSD > 0 && <p className="font-mono text-xs text-zinc-500">{formatCurrency(echeqsMontoEmitidosPendUSD, "USD")}</p>}
+            </button>
+            <button type="button" onClick={() => setTab("ordenes_pago")} className="rounded-lg border border-zinc-200 p-3 text-left transition-colors hover:border-orange-300 hover:bg-orange-50/50 dark:border-zinc-700 dark:hover:border-orange-700 dark:hover:bg-orange-950/20">
+              <p className="text-xs font-medium text-zinc-500">Tarjetas en OP del mes</p>
+              <p className="mt-1 font-mono text-sm font-semibold text-zinc-900 dark:text-white">{formatCurrency(tarjetasOPMesARS)}</p>
+              {tarjetasOPMesUSD > 0 && <p className="font-mono text-xs text-zinc-500">{formatCurrency(tarjetasOPMesUSD, "USD")}</p>}
+            </button>
+          </div>
+          <p className="mt-3 text-xs text-zinc-500">Los pagos con tarjeta quedan reflejados en la orden de pago y su movimiento contable; no se suman al saldo de caja.</p>
+        </Card>
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <StatCard title="Saldo CC clientes" value={formatCurrency(ccClientes.reduce((a, c) => a + c.saldo_cuenta_corriente, 0))} icon={Wallet} iconColor="text-blue-600" />
           <StatCard title="Credito disponible" value={`${formatCurrency(totalDisponibleCreditoARS)}${totalDisponibleCreditoUSD > 0 ? ` + ${formatCurrency(totalDisponibleCreditoUSD, "USD")}` : ""}`} icon={CreditCard} iconColor="text-emerald-600" />
@@ -3669,17 +3653,18 @@ export default function FinanzasPage() {
         {/* ── Movimiento Detail Panel ── */}
         {selectedMov && (
           <>
-            <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setSelectedMov(null)} />
-            <div className="fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700">
+            <div className="fixed inset-0 z-50 bg-black/30" onClick={() => { setSelectedMov(null); setDetailFullscreen(false); }} />
+            <div className={detailFullscreen ? "fixed inset-4 z-50 overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-zinc-900" : "fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700"}>
               <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
                 <div className="flex items-center gap-2">
                   <Wallet className="h-5 w-5 text-orange-500" />
                   <h2 className="text-lg font-bold dark:text-white">Detalle movimiento</h2>
                   {(() => { const tc = tipoConfig[selectedMov.tipo] || { label: selectedMov.tipo, variant: "outline" as const }; return <Badge variant={tc.variant}>{tc.label}</Badge>; })()}
                 </div>
-                <button onClick={() => setSelectedMov(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                  <X className="h-4 w-4" />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => setDetailFullscreen((value) => !value)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={detailFullscreen ? "Reducir" : "Pantalla completa"}>{detailFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
+                  <button onClick={() => { setSelectedMov(null); setDetailFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+                </div>
               </div>
               <div className="p-6 space-y-5">
                 {/* Info principal */}
@@ -3935,6 +3920,7 @@ export default function FinanzasPage() {
                     <div className="text-right">
                       <span className="font-mono font-semibold text-red-600">{formatCurrency(row.total, row.moneda)}</span>
                       {(row.pago_directo ?? 0) > 0 && <p className="text-[10px] text-blue-500 mt-0.5">Pago directo: {formatCurrency(row.pago_directo || 0, row.moneda)}</p>}
+                      {(row.credito_nc ?? 0) > 0 && <p className="text-[10px] text-emerald-600 mt-0.5">Crédito aplicado: {formatCurrency(row.credito_nc || 0, row.moneda)}</p>}
                       {row.percepciones > 0 && (
                         <p className="text-[10px] text-zinc-400 mt-0.5">
                           {row.percepciones_detalle && row.percepciones_detalle.length > 0
@@ -3958,7 +3944,7 @@ export default function FinanzasPage() {
                             {row.op_vinculada.numero || "OP"}
                           </Badge>
                         </button>
-                      ) : (row.estado === "pendiente" || row.estado === "recibida") ? (
+                      ) : !row.factura_origen_id && (row.estado === "pendiente" || row.estado === "recibida") ? (
                         <div className="flex items-center gap-1">
                           <button onClick={() => handlePagarFC(row.id)} className="rounded px-2 py-1 text-xs text-orange-600 border border-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20 font-medium" title="Crear orden de pago">
                             + OP
@@ -4074,7 +4060,12 @@ export default function FinanzasPage() {
                       </div>
                     );
                   }},
-                  { key: "neto", label: "Total entregado", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold text-red-600 block text-right">{formatCurrency(row.neto, row.moneda)}</span> },
+                  { key: "neto", label: "Total entregado", className: "text-right", sortable: true, render: (row) => (
+                    <div className="text-right">
+                      <span className="font-mono font-semibold text-red-600 block">{formatCurrency(row.neto, row.moneda)}</span>
+                      {(row.saldo_a_favor || 0) > 0.005 && <span className="text-[10px] font-medium text-emerald-600">Crédito: {formatCurrency(row.saldo_a_favor || 0, row.moneda)}</span>}
+                    </div>
+                  ) },
                   { key: "medio_pago", label: "Medio", render: (row) => {
                     const medioLabel = (t: string) => t === "transferencia" ? "Transf." : t === "cheque" ? "Cheque" : t === "cheque_propio" ? "Ch. propio" : t === "echeq" ? "E-Cheq" : t === "deposito" ? "Depósito" : t === "tarjeta" ? "Tarjeta" : t === "efectivo" ? "Efectivo" : t;
                     if (row.medios_pago && row.medios_pago.length > 1) {
@@ -5453,6 +5444,10 @@ export default function FinanzasPage() {
                             {opProvCondicion === "RI" ? "Resp. Inscripto" : opProvCondicion || "Sin datos"}
                           </span>
                         )}
+                        <span className="text-xs text-zinc-500">
+                          {opProveedor?.forma_pago || "Condición sin especificar"} · {opDiasPactados === 0 ? "pago inmediato" : `${opDiasPactados} días pactados`}
+                          {opFechaPactada ? ` · fecha sugerida ${formatDate(opFechaPactada)}` : " · seleccioná una factura para calcular la fecha sugerida"}
+                        </span>
                       </div>
                     )}
                     {!opForm.proveedor_id && proveedorSearch.trim() && filteredProveedoresOP.length > 0 && (
@@ -5669,7 +5664,7 @@ export default function FinanzasPage() {
               {/* ── Datos bancarios del proveedor ── */}
               {opForm.proveedor_id && (() => {
                 const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
-                if (!prov || (!prov.cbu && !prov.alias_bancario && !prov.banco && !prov.numero_cuenta)) return null;
+                if (!prov || (!prov.cbu && !prov.alias_bancario && !prov.banco && !prov.numero_cuenta && !prov.titular_cuenta && !prov.cuit_titular_cuenta)) return null;
                 return (
                   <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 p-3">
                     <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 flex items-center gap-1 mb-2"><Landmark className="h-3.5 w-3.5" />Datos bancarios</p>
@@ -5680,6 +5675,7 @@ export default function FinanzasPage() {
                       {prov.alias_bancario && <div><span className="text-zinc-500">Alias</span><p className="font-mono font-medium select-all">{prov.alias_bancario}</p></div>}
                       {prov.numero_cuenta && <div><span className="text-zinc-500">N° cuenta</span><p className="font-mono font-medium">{prov.numero_cuenta}</p></div>}
                       {prov.titular_cuenta && <div className="col-span-2"><span className="text-zinc-500">Titular</span><p className="font-medium">{prov.titular_cuenta}</p></div>}
+                      {prov.cuit_titular_cuenta && <div className="col-span-2"><span className="text-zinc-500">CUIT/CUIL del titular</span><p className="font-mono font-medium select-all">{prov.cuit_titular_cuenta}</p></div>}
                     </div>
                   </div>
                 );
@@ -5711,8 +5707,12 @@ export default function FinanzasPage() {
                           <input type="number" value={m.monto || ""} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, monto: Number(e.target.value) } : x))}
                             placeholder="Monto" className="w-full rounded border border-zinc-200 pl-5 pr-2 py-1.5 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                         </div>
-                        <input type="date" value={m.fecha} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, fecha: e.target.value } : x))}
-                          className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                        <div className="grid w-36 gap-1">
+                          <label className="text-[10px] text-zinc-400">Cobro / acreditación</label>
+                          <input type="date" value={m.fecha_cobro || m.fecha} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, fecha: e.target.value, fecha_cobro: e.target.value } : x))}
+                            className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          {m.fecha_emision && <span className="text-[10px] text-zinc-500">Emitido: {formatDate(m.fecha_emision)}</span>}
+                        </div>
                         {(m.tipo !== "efectivo" && m.tipo !== "tarjeta") && (
                           <>
                             <select value={m.banco === "Otro" || (m.banco && !BANCOS_ARGENTINA.includes(m.banco)) ? "Otro" : m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value, banco_otro: e.target.value === "Otro" ? (x.banco === "Otro" ? x.banco_otro : x.banco) : undefined } : x))}
@@ -5849,8 +5849,8 @@ export default function FinanzasPage() {
       {/* ── FC Detail Panel ── */}
       {selectedFC && (
         <>
-          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => { setSelectedFC(null); setEditingFC(false); }} />
-          <div className="fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700">
+          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => { setSelectedFC(null); setEditingFC(false); setDetailFullscreen(false); }} />
+          <div className={detailFullscreen ? "fixed inset-4 z-50 overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-zinc-900" : "fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700"}>
             <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
               <div className="flex items-center gap-2">
                 <Receipt className="h-5 w-5 text-orange-500" />
@@ -5866,7 +5866,8 @@ export default function FinanzasPage() {
                     <Pencil className="h-4 w-4" />
                   </button>
                 )}
-                <button onClick={() => { setSelectedFC(null); setEditingFC(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+                <button onClick={() => setDetailFullscreen((value) => !value)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={detailFullscreen ? "Reducir" : "Pantalla completa"}>{detailFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
+                <button onClick={() => { setSelectedFC(null); setEditingFC(false); setDetailFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
               </div>
             </div>
             <div className="p-6 space-y-6">
@@ -6048,6 +6049,15 @@ export default function FinanzasPage() {
               )}
 
               {/* OP vinculada */}
+              {selectedFC.factura_origen_id && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Nota de crédito aplicada</p>
+                  <p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">Crédito: {formatCurrency(selectedFC.credito_aplicado || 0, selectedFC.moneda)}</p>
+                  <p className="mt-1 font-mono text-[10px] text-emerald-600">Factura origen: {selectedFC.factura_origen_id}</p>
+                </div>
+              )}
+
+              {/* OP vinculada */}
               {selectedFC.op_vinculada && (
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
                   <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
@@ -6095,7 +6105,7 @@ export default function FinanzasPage() {
 
               {/* Acciones */}
               <div className="flex flex-wrap gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
-                {(selectedFC.estado === "pendiente" || selectedFC.estado === "recibida") && !selectedFC.op_vinculada && (
+                {!selectedFC.factura_origen_id && (selectedFC.estado === "pendiente" || selectedFC.estado === "recibida") && !selectedFC.op_vinculada && (
                   <button onClick={() => handlePagarFC(selectedFC.id)}
                     className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
                     <DollarSign className="h-4 w-4" /> Crear OP
@@ -6137,8 +6147,8 @@ export default function FinanzasPage() {
       {/* ── OP Detail Panel ── */}
       {selectedOP && (
         <>
-          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => { setSelectedOP(null); setEditingOP(false); }} />
-          <div className="fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700">
+          <div className="fixed inset-0 z-50 bg-black/30" onClick={() => { setSelectedOP(null); setEditingOP(false); setDetailFullscreen(false); }} />
+          <div className={detailFullscreen ? "fixed inset-4 z-50 overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-zinc-900" : "fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700"}>
             <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
               <div className="flex items-center gap-2">
                 <FileText className="h-5 w-5 text-orange-500" />
@@ -6154,7 +6164,8 @@ export default function FinanzasPage() {
                     <Pencil className="h-4 w-4" />
                   </button>
                 )}
-                <button onClick={() => { setSelectedOP(null); setEditingOP(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+                <button onClick={() => setDetailFullscreen((value) => !value)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={detailFullscreen ? "Reducir" : "Pantalla completa"}>{detailFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
+                <button onClick={() => { setSelectedOP(null); setEditingOP(false); setDetailFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
               </div>
             </div>
 

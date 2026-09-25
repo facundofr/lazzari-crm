@@ -391,6 +391,7 @@ export interface Proveedor {
   aliasBancario?: string;
   numeroCuenta?: string;
   titularCuenta?: string;
+  cuitTitularCuenta?: string;
   tipoCuenta?: string;
   contactos: Contacto[];
   rubro: string;
@@ -419,10 +420,26 @@ export interface ListaPrecios {
   vigenciaHasta: string;
   estado: "vigente" | "vencida" | "borrador";
   items: ListaPreciosItem[];
+  reglas?: ListaPreciosRegla[];
   archivoOrigen?: string;
   notas: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ListaPreciosRegla {
+  id: string;
+  lista_id: string;
+  tipo: "global" | "categoria" | "cantidad";
+  nombre: string;
+  descuento: number;
+  categoria?: string | null;
+  cantidad_desde?: number | null;
+  cantidad_hasta?: number | null;
+  vigencia_desde?: string | null;
+  vigencia_hasta?: string | null;
+  prioridad: number;
+  activa: boolean;
 }
 
 export interface ListaPreciosItem {

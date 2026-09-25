@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
-import { formatDate, todayAR } from "@/lib/utils";
+import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import {
   ArrowLeftRight, CheckCircle2, Clock3, Edit3, Eye, Loader2,
   MapPin, Package, Plus, RotateCcw, Search, Shirt, X,
@@ -30,6 +30,8 @@ interface MuestraEnvio {
   sociedad_id: string;
   numero: string;
   fecha: string;
+  fecha_devolucion: string | null;
+  moneda: "ARS" | "USD";
   cliente_id: string;
   sucursal_id: string | null;
   estado: "en_cliente" | "parcial" | "devuelto";
@@ -45,6 +47,7 @@ interface MuestraItem {
   producto_id: string;
   cantidad: number;
   cantidad_devuelta: number;
+  precio_unitario: number | null;
 }
 
 interface ClienteOption { id: string; razon_social: string }
@@ -57,14 +60,15 @@ interface DraftItem {
   color: string;
   stock_total: number;
   cantidad: number;
+  precio_unitario: number | null;
 }
 
 const emptyProducto = { codigo: "", descripcion: "", talle: "", color: "", stock_total: 0 };
-const emptyDraftItem: DraftItem = { producto_id: "", codigo: "", descripcion: "", talle: "", color: "", stock_total: 1, cantidad: 1 };
+const emptyDraftItem: DraftItem = { producto_id: "", codigo: "", descripcion: "", talle: "", color: "", stock_total: 1, cantidad: 1, precio_unitario: null };
 
 const estadoConfig = {
-  en_cliente: { label: "En cliente", variant: "warning" as const },
-  parcial: { label: "Devolución parcial", variant: "info" as const },
+  en_cliente: { label: "Entregado", variant: "warning" as const },
+  parcial: { label: "Entregado · devolución parcial", variant: "info" as const },
   devuelto: { label: "Devuelto", variant: "success" as const },
 };
 
@@ -90,13 +94,14 @@ export default function MuestrasPage() {
   const [activeItemSearch, setActiveItemSearch] = useState<number | null>(null);
 
   const [envioModal, setEnvioModal] = useState(false);
-  const [envioForm, setEnvioForm] = useState({ fecha: todayAR(), cliente_id: "", sucursal_id: "", observaciones: "" });
+  const [envioForm, setEnvioForm] = useState({ fecha: todayAR(), cliente_id: "", sucursal_id: "", moneda: "ARS" as "ARS" | "USD", observaciones: "" });
   const [draftItems, setDraftItems] = useState<DraftItem[]>([{ ...emptyDraftItem }]);
 
   const [productoModal, setProductoModal] = useState(false);
   const [editingProductoId, setEditingProductoId] = useState<string | null>(null);
   const [productoForm, setProductoForm] = useState(emptyProducto);
   const [returnDraft, setReturnDraft] = useState<Record<string, number>>({});
+  const [returnDateDraft, setReturnDateDraft] = useState<Record<string, string>>({});
 
   const fetchData = useCallback(async () => {
     if (!sociedadId) { setLoading(false); return; }
@@ -170,7 +175,7 @@ export default function MuestrasPage() {
   });
 
   function openNuevoEnvio() {
-    setEnvioForm({ fecha: todayAR(), cliente_id: "", sucursal_id: "", observaciones: "" });
+    setEnvioForm({ fecha: todayAR(), cliente_id: "", sucursal_id: "", moneda: "ARS", observaciones: "" });
     setDraftItems([{ ...emptyDraftItem }]);
     setClientSearch("");
     setActiveItemSearch(null);
@@ -186,6 +191,7 @@ export default function MuestrasPage() {
       color: producto.color || "",
       stock_total: producto.stock_total,
       cantidad: Math.max(1, Math.min(item.cantidad || 1, Math.max(disponibles(producto), 1))),
+      precio_unitario: item.precio_unitario,
     } : item));
     setActiveItemSearch(null);
   }
@@ -271,16 +277,16 @@ export default function MuestrasPage() {
     setSaving(true);
     let envioId = "";
     try {
-      const resolvedItems: { producto_id: string; cantidad: number }[] = [];
+      const resolvedItems: { producto_id: string; cantidad: number; precio_unitario: number | null }[] = [];
       for (const item of cleanItems) {
         if (item.producto_id) {
-          resolvedItems.push({ producto_id: item.producto_id, cantidad: item.cantidad });
+          resolvedItems.push({ producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: item.precio_unitario });
           continue;
         }
         const existing = productos.find((producto) => producto.codigo.toLowerCase() === item.codigo.trim().toLowerCase());
         if (existing) {
           if (item.cantidad > disponibles(existing)) throw new Error(`Stock insuficiente para ${existing.codigo}`);
-          resolvedItems.push({ producto_id: existing.id, cantidad: item.cantidad });
+          resolvedItems.push({ producto_id: existing.id, cantidad: item.cantidad, precio_unitario: item.precio_unitario });
           continue;
         }
         const { data: created, error: createError } = await (supabase as any).from("muestra_productos").insert({
@@ -293,13 +299,14 @@ export default function MuestrasPage() {
           created_by: profile?.id || null,
         }).select("id").single();
         if (createError || !created?.id) throw createError || new Error(`No se pudo crear ${item.codigo}`);
-        resolvedItems.push({ producto_id: created.id, cantidad: item.cantidad });
+        resolvedItems.push({ producto_id: created.id, cantidad: item.cantidad, precio_unitario: item.precio_unitario });
       }
 
       const { data: envio, error: envioError } = await (supabase as any).from("muestra_envios").insert({
         sociedad_id: sociedadId,
         numero: "",
         fecha: envioForm.fecha,
+        moneda: envioForm.moneda,
         cliente_id: envioForm.cliente_id,
         sucursal_id: envioForm.sucursal_id || null,
         estado: "en_cliente",
@@ -309,7 +316,7 @@ export default function MuestrasPage() {
       if (envioError || !envio?.id) throw envioError || new Error("No se pudo crear el envío");
       envioId = envio.id;
       const { error: itemError } = await (supabase as any).from("muestra_envio_items").insert(
-        resolvedItems.map((item) => ({ envio_id: envioId, producto_id: item.producto_id, cantidad: item.cantidad, cantidad_devuelta: 0 }))
+        resolvedItems.map((item) => ({ envio_id: envioId, producto_id: item.producto_id, cantidad: item.cantidad, cantidad_devuelta: 0, precio_unitario: item.precio_unitario }))
       );
       if (itemError) throw itemError;
       toast.success("Muestras registradas en el cliente");
@@ -323,9 +330,10 @@ export default function MuestrasPage() {
     }
   }
 
-  async function registrarDevolucion(item: MuestraItem, cantidad: number) {
+  async function registrarDevolucion(item: MuestraItem, cantidad: number, fechaDevolucion: string) {
     const pendiente = item.cantidad - item.cantidad_devuelta;
     if (cantidad <= 0 || cantidad > pendiente) { toast.error("Ingresá una cantidad válida para devolver"); return; }
+    if (!fechaDevolucion) { toast.error("Indicá la fecha de devolución"); return; }
     setSaving(true);
     try {
       const { error } = await (supabase as any).from("muestra_envio_items")
@@ -338,10 +346,11 @@ export default function MuestrasPage() {
       const total = nextItems.reduce((sum, current) => sum + current.cantidad, 0);
       const devuelto = nextItems.reduce((sum, current) => sum + current.cantidad_devuelta, 0);
       const estado = devuelto === total ? "devuelto" : devuelto > 0 ? "parcial" : "en_cliente";
-      const { error: envioError } = await (supabase as any).from("muestra_envios").update({ estado }).eq("id", item.envio_id).eq("sociedad_id", sociedadId);
+      const { error: envioError } = await (supabase as any).from("muestra_envios").update({ estado, fecha_devolucion: fechaDevolucion }).eq("id", item.envio_id).eq("sociedad_id", sociedadId);
       if (envioError) throw envioError;
 
       setReturnDraft((prev) => ({ ...prev, [item.id]: 0 }));
+      setReturnDateDraft((prev) => ({ ...prev, [item.id]: todayAR() }));
       toast.success(devuelto === total ? "Envío devuelto por completo" : "Devolución registrada");
       await fetchData();
     } catch (error: any) {
@@ -369,7 +378,7 @@ export default function MuestrasPage() {
           <Card className={`overflow-hidden p-0 ${selectedEnvio && !panelFullscreen ? "w-3/5" : "w-full"}`}>
             <div className="flex flex-wrap items-center gap-3 border-b border-zinc-200 p-4 dark:border-zinc-800">
               <div className="relative min-w-[240px] flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={tab === "envios" ? "Buscar cliente, número o prenda..." : "Buscar prenda, código, talle o color..."} className={`${inputClass} pl-9`} /></div>
-              {tab === "envios" && <select value={estadoFilter} onChange={(e) => setEstadoFilter(e.target.value as typeof estadoFilter)} className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"><option value="todos">Todos los estados</option><option value="en_cliente">En cliente</option><option value="parcial">Devolución parcial</option><option value="devuelto">Devuelto</option></select>}
+              {tab === "envios" && <select value={estadoFilter} onChange={(e) => setEstadoFilter(e.target.value as typeof estadoFilter)} className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"><option value="todos">Todos los estados</option><option value="en_cliente">Entregado</option><option value="parcial">Entregado · devolución parcial</option><option value="devuelto">Devuelto</option></select>}
             </div>
 
             {loading ? <div className="flex justify-center py-20"><Loader2 className="animate-spin text-orange-500" /></div> : tab === "envios" ? (
@@ -385,7 +394,36 @@ export default function MuestrasPage() {
             )}
           </Card>
 
-          {selectedEnvio && <Card className={`${panelFullscreen ? "fixed inset-4 z-50 overflow-y-auto" : "sticky top-5 h-fit w-2/5"} p-0`}><div className="flex items-start justify-between border-b p-4 dark:border-zinc-800"><div><p className="font-mono text-xs text-zinc-500">{selectedEnvio.numero}</p><h2 className="mt-1 font-semibold">{clienteMap.get(selectedEnvio.cliente_id)}</h2></div><div className="flex items-center gap-1"><button onClick={() => eliminarEnvio(selectedEnvio)} title="Eliminar" className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={16} /></button><button onClick={() => setPanelFullscreen((value) => !value)} title={panelFullscreen ? "Reducir" : "Ampliar"} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100">{panelFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button onClick={() => { setSelectedEnvio(null); setPanelFullscreen(false); }} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100"><X size={18} /></button></div></div><div className="space-y-4 p-4"><div className="grid grid-cols-2 gap-3 text-sm"><div><p className="text-xs text-zinc-400">Fecha</p><p>{formatDate(selectedEnvio.fecha)}</p></div><div><p className="text-xs text-zinc-400">Sucursal / destino</p><p>{selectedEnvio.sucursal_id ? sucursalMap.get(selectedEnvio.sucursal_id)?.nombre : "Casa central"}</p></div></div>{selectedEnvio.observaciones && <p className="rounded-lg bg-zinc-50 p-3 text-sm text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{selectedEnvio.observaciones}</p>}<div><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Detalle de prendas enviadas</p><div className="space-y-2">{envioItems(selectedEnvio.id).map((item) => { const producto = productoMap.get(item.producto_id); const pendiente = item.cantidad - item.cantidad_devuelta; return <div key={item.id} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700"><div className="flex justify-between gap-3"><div><p className="text-sm font-medium">{producto?.descripcion || "Muestra"}</p><p className="text-xs text-zinc-400">{[producto?.codigo, producto?.talle && `Talle ${producto.talle}`, producto?.color].filter(Boolean).join(" · ")}</p></div><div className="text-right"><p className="text-sm font-bold">{pendiente} en cliente</p><p className="text-xs text-zinc-400">{item.cantidad_devuelta} de {item.cantidad} devueltas</p></div></div>{pendiente > 0 && <div className="mt-3 flex gap-2"><input type="number" min="1" max={pendiente} value={returnDraft[item.id] || ""} onChange={(e) => setReturnDraft((prev) => ({ ...prev, [item.id]: Number(e.target.value) }))} placeholder="Cantidad" className={`${inputClass} py-1.5`} /><button disabled={saving} onClick={() => registrarDevolucion(item, returnDraft[item.id] || 0)} className="flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"><RotateCcw size={13} /> Registrar devolución</button></div>}</div>; })}</div></div></div></Card>}
+          {selectedEnvio && (
+            <Card className={`${panelFullscreen ? "fixed inset-4 z-50 overflow-y-auto" : "sticky top-5 h-fit w-2/5"} p-0`}>
+              <div className="flex items-start justify-between border-b p-4 dark:border-zinc-800">
+                <div><p className="font-mono text-xs text-zinc-500">{selectedEnvio.numero}</p><h2 className="mt-1 font-semibold">{clienteMap.get(selectedEnvio.cliente_id)}</h2></div>
+                <div className="flex items-center gap-1"><button onClick={() => eliminarEnvio(selectedEnvio)} title="Eliminar" className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={16} /></button><button onClick={() => setPanelFullscreen((value) => !value)} title={panelFullscreen ? "Reducir" : "Ampliar"} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100">{panelFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button onClick={() => { setSelectedEnvio(null); setPanelFullscreen(false); }} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100"><X size={18} /></button></div>
+              </div>
+              <div className="space-y-4 p-4">
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div><p className="text-xs text-zinc-400">Fecha de entrega</p><p>{formatDate(selectedEnvio.fecha)}</p></div>
+                  <div><p className="text-xs text-zinc-400">Fecha de devolución</p><p>{selectedEnvio.fecha_devolucion ? formatDate(selectedEnvio.fecha_devolucion) : "Pendiente"}</p></div>
+                  <div><p className="text-xs text-zinc-400">Sucursal / destino</p><p>{selectedEnvio.sucursal_id ? sucursalMap.get(selectedEnvio.sucursal_id)?.nombre : "Casa central"}</p></div>
+                  <div><p className="text-xs text-zinc-400">Estado</p><Badge variant={estadoConfig[selectedEnvio.estado].variant}>{estadoConfig[selectedEnvio.estado].label}</Badge></div>
+                </div>
+                {selectedEnvio.observaciones && <p className="rounded-lg bg-zinc-50 p-3 text-sm text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{selectedEnvio.observaciones}</p>}
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Detalle de prendas entregadas</p>
+                  <div className="space-y-2">
+                    {envioItems(selectedEnvio.id).map((item) => {
+                      const producto = productoMap.get(item.producto_id);
+                      const pendiente = item.cantidad - item.cantidad_devuelta;
+                      return <div key={item.id} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                        <div className="flex justify-between gap-3"><div><p className="text-sm font-medium">{producto?.descripcion || "Muestra"}</p><p className="text-xs text-zinc-400">{[producto?.codigo, producto?.talle && `Talle ${producto.talle}`, producto?.color].filter(Boolean).join(" · ")}</p>{item.precio_unitario != null && <p className="mt-1 text-xs font-medium text-zinc-600 dark:text-zinc-300">Precio informado: {formatCurrency(Number(item.precio_unitario), selectedEnvio.moneda)}</p>}</div><div className="text-right"><p className="text-sm font-bold">{pendiente} en cliente</p><p className="text-xs text-zinc-400">{item.cantidad_devuelta} de {item.cantidad} devueltas</p></div></div>
+                        {pendiente > 0 && <div className="mt-3 grid gap-2 sm:grid-cols-[100px_150px_1fr]"><input type="number" min="1" max={pendiente} value={returnDraft[item.id] || ""} onChange={(e) => setReturnDraft((prev) => ({ ...prev, [item.id]: Number(e.target.value) }))} placeholder="Cantidad" className={`${inputClass} py-1.5`} /><input type="date" value={returnDateDraft[item.id] || todayAR()} onChange={(e) => setReturnDateDraft((prev) => ({ ...prev, [item.id]: e.target.value }))} className={`${inputClass} py-1.5`} /><button disabled={saving} onClick={() => registrarDevolucion(item, returnDraft[item.id] || 0, returnDateDraft[item.id] || todayAR())} className="flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"><RotateCcw size={13} /> Registrar devolución</button></div>}
+                      </div>;
+                    })}
+                  </div>
+                </div>
+              </div>
+            </Card>
+          )}
         </div>
       </main>
 
@@ -473,13 +511,20 @@ export default function MuestrasPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Fecha de envío</label>
+                  <label className={labelClass}>Fecha de entrega</label>
                   <input
                     type="date"
                     value={envioForm.fecha}
                     onChange={(event) => setEnvioForm((form) => ({ ...form, fecha: event.target.value }))}
                     className={inputClass}
                   />
+                </div>
+                <div>
+                  <label className={labelClass}>Moneda del precio opcional</label>
+                  <select value={envioForm.moneda} onChange={(event) => setEnvioForm((form) => ({ ...form, moneda: event.target.value as "ARS" | "USD" }))} className={inputClass}>
+                    <option value="ARS">ARS</option>
+                    <option value="USD">USD</option>
+                  </select>
                 </div>
               </div>
 
@@ -499,7 +544,7 @@ export default function MuestrasPage() {
                 </div>
 
                 <div className="overflow-visible rounded-lg border dark:border-zinc-700">
-                  <div className="hidden grid-cols-[135px_minmax(220px,1fr)_110px_120px_105px_95px_115px_40px] gap-2 border-b bg-zinc-50 px-3 py-2 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 lg:grid">
+                  <div className="hidden grid-cols-[125px_minmax(200px,1fr)_90px_105px_90px_85px_100px_115px_40px] gap-2 border-b bg-zinc-50 px-3 py-2 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 lg:grid">
                     <span>Código</span>
                     <span>Descripción</span>
                     <span>Talle</span>
@@ -507,6 +552,7 @@ export default function MuestrasPage() {
                     <span>Stock total</span>
                     <span>Disponible</span>
                     <span>Cant. enviar</span>
+                    <span>Precio opcional</span>
                     <span />
                   </div>
 
@@ -526,7 +572,7 @@ export default function MuestrasPage() {
 
                       return (
                         <div key={index} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700 lg:border-0 lg:p-0">
-                          <div className="grid gap-2 lg:grid-cols-[135px_minmax(220px,1fr)_110px_120px_105px_95px_115px_40px] lg:items-start">
+                          <div className="grid gap-2 lg:grid-cols-[125px_minmax(200px,1fr)_90px_105px_90px_85px_100px_115px_40px] lg:items-start">
                             <div className="relative">
                               <label className={`${labelClass} lg:hidden`}>Código</label>
                               <div className="relative">
@@ -593,6 +639,10 @@ export default function MuestrasPage() {
                             <div>
                               <label className={`${labelClass} lg:hidden`}>Cantidad a enviar</label>
                               <input type="number" min="1" max={available || undefined} value={draft.cantidad} onChange={(event) => updateDraftItem(index, { cantidad: Number(event.target.value) })} className={inputClass} />
+                            </div>
+                            <div>
+                              <label className={`${labelClass} lg:hidden`}>Precio opcional</label>
+                              <input type="number" min="0" step="0.01" value={draft.precio_unitario ?? ""} onChange={(event) => updateDraftItem(index, { precio_unitario: event.target.value === "" ? null : Number(event.target.value) })} placeholder="Sin precio" className={inputClass} />
                             </div>
                             <button type="button" disabled={draftItems.length === 1} onClick={() => setDraftItems((previous) => previous.filter((_, itemIndex) => itemIndex !== index))} className="rounded p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-30" title="Quitar ítem">
                               <Trash2 size={16} />

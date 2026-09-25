@@ -9,6 +9,8 @@ const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind
 const context = { exports: {} }; vm.runInNewContext(js, context);
 const reconcile = context.exports.reconcilePurchaseLines;
 const { assertCompleteInvoiceOrderSelection, canMarkPurchaseOrdersPaid } = context.exports;
+const componentSource = fs.readFileSync(path.join(__dirname, '../src/components/cargar-factura-oc.tsx'), 'utf8');
+const atomicMigration = fs.readFileSync(path.join(__dirname, '../supabase/migrations/20260925203000_factura_compra_oc_extra_atomica.sql'), 'utf8');
 test('Duplicados normalizan ceros, espacios y separador de punto de venta', () => {
   assert.equal(context.exports.canonicalPurchaseInvoiceNumber(' 1 / 123 '), context.exports.canonicalPurchaseInvoiceNumber('00001-00000123'));
 });
@@ -53,4 +55,26 @@ test('Factura anterior pendiente 80 + nueva pagada 20 no marca OC pagada', () =>
   assert.equal(canMarkPurchaseOrdersPaid([{estado:'pendiente_aprobacion'}],20,20),false);
   assert.equal(canMarkPurchaseOrdersPaid([{estado:'pagada'}],20,20),true);
   assert.equal(canMarkPurchaseOrdersPaid([{estado:'pagada'}],40,20),false);
+});
+test('Factura con extras delega todo el alta contable a una sola RPC', () => {
+  assert.match(componentSource, /rpc\(\s*["']registrar_factura_compra_con_oc_extra["']/);
+  assert.match(componentSource, /if \(atomicError\) throw new Error/);
+  assert.doesNotMatch(componentSource, /Error al crear OC extras/);
+  assert.doesNotMatch(componentSource, /if \(extraOCErr\) console\.error/);
+});
+test('RPC de extras valida sociedad, proveedor, moneda y bloquea las OC antes de insertar', () => {
+  assert.match(atomicMigration, /public\.user_sociedades/);
+  assert.match(atomicMigration, /sociedad_id = p_sociedad_id/);
+  assert.match(atomicMigration, /proveedor_id = v_proveedor_id/);
+  assert.match(atomicMigration, /moneda::text = v_moneda::text/);
+  assert.match(atomicMigration, /order by id\s+for update/);
+  assert.match(atomicMigration, /security definer\s+set search_path = pg_catalog/);
+});
+test('RPC inserta factura, OC extra, sus ítems y ambos vínculos dentro de la misma función', () => {
+  assert.match(atomicMigration, /insert into public\.facturas_compra \(/);
+  assert.match(atomicMigration, /insert into public\.facturas_compra_items \(/);
+  assert.match(atomicMigration, /insert into public\.ordenes_compra \(/);
+  assert.match(atomicMigration, /insert into public\.orden_compra_items \(/);
+  assert.equal((atomicMigration.match(/insert into public\.factura_compra_ocs/g) || []).length, 2);
+  assert.doesNotMatch(atomicMigration, /when others/);
 });

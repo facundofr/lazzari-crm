@@ -37,6 +37,8 @@ assert.deepEqual(groups.map(({ moneda, items: rows }) => [moneda, rows.map((item
 assert.deepEqual(calculateOwnStockPurchaseOrder(groups[0].items, false), { subtotal: 200, iva: 42, total: 242 });
 assert.deepEqual(calculateOwnStockPurchaseOrder(groups[1].items, false), { subtotal: 16, iva: 0.63, total: 16.63 });
 assert.deepEqual(calculateOwnStockPurchaseOrder(groups[0].items, true), { subtotal: 200, iva: 0, total: 200 });
+assert.equal(calculateOwnStockPurchaseOrder([{ cantidad: 3, precio_costo: 0 }], false).subtotal, 0,
+  "un grupo sin costo debe poder detectarse antes de crear su OC");
 
 const ocPage = fs.readFileSync(path.join(appRoot, "src/app/(crm)/ordenes-compra/page.tsx"), "utf8");
 assert.match(ocPage, /facturas_vinculadas_estado\?\.\.\.|facturas_vinculadas_estado\s*===\s*"desconocido"/,
@@ -65,6 +67,11 @@ assert.equal(linkedKnown.orders[0].facturas_vinculadas.length, 1);
 
 const budgetPage = fs.readFileSync(path.join(appRoot, "src/app/(crm)/presupuestos/page.tsx"), "utf8");
 assert.match(budgetPage, /groupOwnStockItemsByCurrency\(stockItems\)/, "el stock propio debe generar grupos separados por moneda");
+assert.match(budgetPage, /if \(totals\.subtotal <= 0\)/, "un grupo de stock propio con costo total cero no debe crear una OC");
+assert.match(budgetPage, /moneda,\s*estado: "enviada",[\s\S]{0,240}?observaciones: `Stock propio — OC interna generada/, "la OC interna debe quedar enviada y claramente identificada");
+assert.match(budgetPage, /Stock propio — genera OC interna/, "el selector debe explicar que stock propio genera una OC interna");
+assert.doesNotMatch(budgetPage, /Stock propio \(sin OC\)|stock propio — sin OC generada/, "la interfaz no debe contradecir la creación de la OC interna");
+assert.match(budgetPage, /stockItemsWithOC \+= currencyItems\.length/, "el mensaje final debe contar solo items cuya OC se creó");
 assert.match(budgetPage, /normalizePurchaseCurrency\(it\.costo_moneda\) === normalizePurchaseCurrency\(oc\.moneda\)/, "la sincronización debe limitar cada OC interna a su moneda");
 assert.match(budgetPage, /Generación parcial:/, "un resultado incompleto no puede anunciar éxito total");
 assert.match(budgetPage, /falló la carga de sus items y se limpió el encabezado/, "si fallan los items, debe informar la limpieza de la OC recién insertada");

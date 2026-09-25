@@ -24,6 +24,16 @@ interface ProveedorOption {
   cuit: string | null;
 }
 
+interface CreditOriginOption {
+  id: string;
+  numero_factura: string;
+  tipo_comprobante: string;
+  fecha: string;
+  total: number;
+  saldo_acreditable: number;
+  moneda: "ARS" | "USD";
+}
+
 interface FCItem {
   codigo?: string;
   tempId: string;
@@ -119,6 +129,12 @@ export default function CargarFacturaOC({
   const [alignmentLoading, setAlignmentLoading] = useState(false);
   const [alignmentError, setAlignmentError] = useState("");
   const [overrideOC, setOverrideOC] = useState(false);
+  const [facturaOrigenId, setFacturaOrigenId] = useState("");
+  const [creditoAplicado, setCreditoAplicado] = useState(0);
+  const [creditOrigins, setCreditOrigins] = useState<CreditOriginOption[]>([]);
+  const [creditOriginsLoading, setCreditOriginsLoading] = useState(false);
+  const [creditOriginsError, setCreditOriginsError] = useState("");
+  const creditRequestKeyRef = useRef<string | null>(null);
   // La IA devuelve el subtotal impreso. Se conserva una pasada para que el
   // efecto que recalcula desde renglones no lo pise inmediatamente (especialmente FC B).
   const parsedSubtotalRef = useRef<number | null>(null);
@@ -132,6 +148,8 @@ export default function CargarFacturaOC({
   }, [items, subtotal, ivaPorcentaje]);
   const total = useMemo(() => Math.round((subtotal + iva + percepciones) * 100) / 100, [subtotal, iva, percepciones]);
   const totalSinPercepciones = useMemo(() => Math.round((subtotal + iva) * 100) / 100, [subtotal, iva]);
+  const isCreditNote = /^NC(?:\s|$)/i.test(tipoComprobante.trim());
+  const selectedCreditOrigin = creditOrigins.find((invoice) => invoice.id === facturaOrigenId);
 
   // Check for duplicate invoices in real-time
   useEffect(() => {
@@ -148,6 +166,83 @@ export default function CargarFacturaOC({
     }, 500);
     return () => clearTimeout(timer);
   }, [numeroFactura, proveedorId, sociedadId]);
+
+  useEffect(() => {
+    if (!isCreditNote || !sociedadId || !proveedorId) {
+      setCreditOrigins([]);
+      setFacturaOrigenId("");
+      setCreditoAplicado(0);
+      setCreditOriginsError("");
+      return;
+    }
+    let cancelled = false;
+    setCreditOriginsLoading(true);
+    setCreditOriginsError("");
+    (async () => {
+      try {
+        const { data: invoices, error: invoicesError } = await (supabase as any)
+          .from("facturas_compra")
+          .select("id, numero_factura, tipo_comprobante, fecha, total, total_acreditado, moneda, estado")
+          .eq("sociedad_id", sociedadId)
+          .eq("proveedor_id", proveedorId)
+          .eq("moneda", moneda)
+          .neq("estado", "anulada")
+          .not("tipo_comprobante", "ilike", "NC%")
+          .order("fecha", { ascending: false });
+        if (invoicesError) throw invoicesError;
+        const ids = (invoices || []).map((invoice: any) => invoice.id);
+        const paidByInvoice: Record<string, number> = {};
+        if (ids.length) {
+          const [{ data: opLinks, error: opError }, { data: directPayments, error: directError }] = await Promise.all([
+            (supabase as any).from("op_facturas_compra")
+              .select("factura_compra_id, monto, ordenes_pago(id, estado, sociedad_id)")
+              .in("factura_compra_id", ids),
+            (supabase as any).from("movimientos")
+              .select("factura_compra_id, monto, retencion_ganancias_monto, anulado")
+              .eq("sociedad_id", sociedadId).eq("tipo", "pago").in("factura_compra_id", ids),
+          ]);
+          if (opError || directError) throw opError || directError;
+          for (const link of opLinks || []) {
+            if (link.ordenes_pago?.sociedad_id !== sociedadId || link.ordenes_pago?.estado === "anulada") continue;
+            paidByInvoice[link.factura_compra_id] = (paidByInvoice[link.factura_compra_id] || 0) + Number(link.monto || 0);
+          }
+          for (const payment of directPayments || []) {
+            if (payment.anulado) continue;
+            paidByInvoice[payment.factura_compra_id] = (paidByInvoice[payment.factura_compra_id] || 0)
+              + Number(payment.monto || 0) + Number(payment.retencion_ganancias_monto || 0);
+          }
+        }
+        const options = (invoices || []).map((invoice: any) => ({
+          id: invoice.id,
+          numero_factura: invoice.numero_factura || "S/N",
+          tipo_comprobante: invoice.tipo_comprobante || "FC",
+          fecha: invoice.fecha,
+          total: Number(invoice.total || 0),
+          saldo_acreditable: roundMoney(Math.max(0, Number(invoice.total || 0) - Number(paidByInvoice[invoice.id] || 0))),
+          moneda: (invoice.moneda || moneda) as "ARS" | "USD",
+        })).filter((invoice: CreditOriginOption) => invoice.saldo_acreditable > 0.005);
+        if (!cancelled) {
+          setCreditOrigins(options);
+          setFacturaOrigenId((current) => options.some((invoice: CreditOriginOption) => invoice.id === current) ? current : "");
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setCreditOrigins([]);
+          setFacturaOrigenId("");
+          setCreditOriginsError(loadError instanceof Error ? loadError.message : "No se pudieron cargar las facturas acreditables");
+        }
+      } finally {
+        if (!cancelled) setCreditOriginsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isCreditNote, sociedadId, proveedorId, moneda]);
+
+  useEffect(() => {
+    if (!isCreditNote || !selectedCreditOrigin) return;
+    const maxApplicable = Math.min(total, selectedCreditOrigin.saldo_acreditable);
+    setCreditoAplicado((current) => current > 0 ? Math.min(current, maxApplicable) : maxApplicable);
+  }, [isCreditNote, selectedCreditOrigin?.id, selectedCreditOrigin?.saldo_acreditable, total]);
 
   // Filter OCs by selected proveedor (unless showAllOCs is enabled)
   const [showAllOCs, setShowAllOCs] = useState(false);
@@ -484,7 +579,11 @@ export default function CargarFacturaOC({
     if (!proveedorId) { setError("Seleccioná un proveedor"); return; }
     if (!numeroFactura.trim()) { setError("Ingresá el número de factura"); return; }
     if (subtotal <= 0) { setError("El subtotal debe ser mayor a 0"); return; }
-    if (tipoFC === "mercaderia" && selectedOCIds.size === 0 && ocsFiltered.length > 0) { setError("Seleccioná al menos una orden de compra"); return; }
+    if (!isCreditNote && tipoFC === "mercaderia" && selectedOCIds.size === 0 && ocsFiltered.length > 0) { setError("Seleccioná al menos una orden de compra"); return; }
+    if (isCreditNote && !facturaOrigenId) { setError("Seleccioná la factura origen de la nota de crédito"); return; }
+    if (isCreditNote && (!Number.isFinite(creditoAplicado) || creditoAplicado <= 0 || !selectedCreditOrigin || creditoAplicado > selectedCreditOrigin.saldo_acreditable + 0.005 || creditoAplicado > total + 0.005)) {
+      setError("El monto aplicado debe ser positivo y no superar el total de la nota ni el saldo acreditable de la factura origen"); return;
+    }
     const isMercaderia = tipoFC === "mercaderia";
 
     setSaving(true);
@@ -511,7 +610,7 @@ export default function CargarFacturaOC({
       }
 
       let alignmentResult: Awaited<ReturnType<typeof validateOCAlignmentLive>> | null = null;
-      if (isMercaderia && selectedOCIds.size > 0) {
+      if (!isCreditNote && isMercaderia && selectedOCIds.size > 0) {
         alignmentResult = await validateOCAlignmentLive();
       }
 
@@ -587,81 +686,94 @@ export default function CargarFacturaOC({
         created_by: profileId,
       };
 
-      const { data: fcData, error: fcErr } = await (supabase as any)
-        .from("facturas_compra")
-        .insert(insertData)
-        .select("id")
-        .single();
+      const invoiceItems = items.map(it => ({
+        codigo: it.codigo || null,
+        descripcion: it.descripcion,
+        cantidad: it.cantidad,
+        precio_unitario: it.precio_unitario,
+        descuento_porcentaje: it.descuento_porcentaje,
+        unidad: it.unidad,
+        iva_porcentaje: it.iva_porcentaje,
+      }));
+      let fcData: { id: string } | null = null;
 
-      if (fcErr) throw new Error(fcErr.message);
-      savedFacturaId = fcData?.id || null;
-
-      // Insert items
-      if (items.length > 0 && fcData?.id) {
-        const itemsInsert = items.map(it => ({
-          factura_compra_id: fcData.id,
-          producto_id: null,
-          codigo: it.codigo || null,
+      if (isCreditNote) {
+        if (!creditRequestKeyRef.current) creditRequestKeyRef.current = crypto.randomUUID();
+        const { data: creditResult, error: creditError } = await (supabase as any).rpc(
+          "registrar_nota_credito_compra",
+          {
+            p_sociedad_id: sociedadId,
+            p_request_key: creditRequestKeyRef.current,
+            p_factura_origen_id: facturaOrigenId,
+            p_credito_aplicado: roundMoney(creditoAplicado),
+            p_factura: insertData,
+            p_items: invoiceItems,
+          }
+        );
+        if (creditError) throw new Error(`No se pudo aplicar la nota de crédito: ${creditError.message}`);
+        if (!creditResult?.factura_compra_id || creditResult?.factura_origen_id !== facturaOrigenId) {
+          throw new Error("La base no confirmó la relación con la factura origen. No se guardó nada.");
+        }
+        fcData = { id: creditResult.factura_compra_id };
+      } else if (generateExtrasOC && reconciliation?.extras.length) {
+        // La factura, sus renglones, los vínculos y la OC de extras forman una
+        // sola transacción. Si falla cualquier insert, PostgreSQL revierte todo.
+        const extraItems = reconciliation.extras.map(it => ({
+          codigo: it.codigo || "",
           descripcion: it.descripcion,
           cantidad: it.cantidad,
+          unidad: it.unidad || "u",
           precio_unitario: it.precio_unitario,
-          descuento_porcentaje: it.descuento_porcentaje,
-          unidad: it.unidad,
-          iva_porcentaje: it.iva_porcentaje,
-          sociedad_id: sociedadId,
+          iva_porcentaje: it.iva_porcentaje ?? 21,
         }));
-        const { error: itemsError } = await (supabase as any).from("facturas_compra_items").insert(itemsInsert);
-        if (itemsError) throw new Error(`Error al guardar los items: ${itemsError.message}`);
-      }
+        const { data: atomicResult, error: atomicError } = await (supabase as any).rpc(
+          "registrar_factura_compra_con_oc_extra",
+          {
+            p_sociedad_id: sociedadId,
+            p_factura: insertData,
+            p_items: invoiceItems,
+            p_orden_compra_ids: Array.from(selectedOCIds),
+            p_items_extra: extraItems,
+          }
+        );
+        if (atomicError) throw new Error(`No se pudo registrar la factura con su OC extra: ${atomicError.message}`);
+        if (!atomicResult?.factura_compra_id || !atomicResult?.orden_compra_extra_id) {
+          throw new Error("La base no confirmó la factura y la OC extra. No se guardó nada.");
+        }
+        fcData = { id: atomicResult.factura_compra_id };
+      } else {
+        const { data, error: fcErr } = await (supabase as any)
+          .from("facturas_compra")
+          .insert(insertData)
+          .select("id")
+          .single();
+        if (fcErr) throw new Error(fcErr.message);
+        fcData = data;
 
-      // Insert OC links (junction table)
-      if (isMercaderia && selectedOCIds.size > 0 && fcData?.id) {
-        const links = Array.from(selectedOCIds).map(ocId => ({
-          factura_compra_id: fcData.id,
-          orden_compra_id: ocId,
-        }));
-        const { error: linkErr } = await (supabase as any)
-          .from("factura_compra_ocs")
-          .insert(links);
-        if (linkErr) throw new Error(linkErr.message);
-      }
-
-      // OC por diferencia de FC: crear OC con items extras no cubiertos por OCs existentes
-      if (generateExtrasOC && reconciliation?.extras.length && fcData?.id) {
-        const extrasSubtotal = reconciliation.extras.reduce((s, it) => s + it.cantidad * it.precio_unitario, 0);
-        const extrasIva = reconciliation.extras.reduce((s, it) => s + it.cantidad * it.precio_unitario * ((it.iva_porcentaje ?? 21) / 100), 0);
-        const { data: extraOC, error: extraOCErr } = await (supabase as any).from("ordenes_compra").insert({
-          proveedor_id: proveedorId,
-          fecha: fecha || new Date().toISOString().slice(0, 10),
-          moneda,
-          estado: "enviada",
-          estado_pago: "pendiente",
-          subtotal: Math.round(extrasSubtotal * 100) / 100,
-          iva: Math.round(extrasIva * 100) / 100,
-          total: Math.round((extrasSubtotal + extrasIva) * 100) / 100,
-          sociedad_id: sociedadId,
-          presupuesto_origen_id: null,
-          observaciones: `OC generada automáticamente por extras de FC ${numeroFactura.trim()}`,
-          created_by: profileId,
-        }).select("id").single();
-        if (extraOCErr) console.error("Error al crear OC extras:", extraOCErr.message);
-        if (extraOC?.id) {
-          const extraItems = reconciliation.extras.map((it, idx) => ({
-            orden_id: extraOC.id,
-            codigo: it.codigo || "",
-            descripcion: it.descripcion,
-            cantidad: it.cantidad,
-            cantidad_recibida: it.cantidad,
-            unidad: it.unidad || "u",
-            precio_unitario: it.precio_unitario,
-            iva_porcentaje: it.iva_porcentaje ?? 21,
-            orden: idx,
+        if (items.length > 0 && fcData?.id) {
+          const itemsInsert = invoiceItems.map(it => ({
+            ...it,
+            factura_compra_id: fcData!.id,
+            producto_id: null,
+            sociedad_id: sociedadId,
           }));
-          await (supabase as any).from("orden_compra_items").insert(extraItems);
-          // Link extra OC to FC
-          await (supabase as any).from("factura_compra_ocs").insert({ factura_compra_id: fcData.id, orden_compra_id: extraOC.id });
+          const { error: itemsError } = await (supabase as any).from("facturas_compra_items").insert(itemsInsert);
+          if (itemsError) throw new Error(`Error al guardar los items: ${itemsError.message}`);
+        }
+
+        // Insert OC links (junction table)
+        if (isMercaderia && selectedOCIds.size > 0 && fcData?.id) {
+          const links = Array.from(selectedOCIds).map(ocId => ({
+            factura_compra_id: fcData!.id,
+            orden_compra_id: ocId,
+          }));
+          const { error: linkErr } = await (supabase as any)
+            .from("factura_compra_ocs")
+            .insert(links);
+          if (linkErr) throw new Error(linkErr.message);
         }
       }
+      savedFacturaId = fcData?.id || null;
 
       // Actualizar costos por identidad de artículo, conservando cantidades y recepciones.
       if (reconciliation && alignmentResult) {
@@ -758,7 +870,7 @@ export default function CargarFacturaOC({
         }
       }
 
-      alert(pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");
+      alert(isCreditNote ? "Nota de crédito registrada y aplicada a la factura origen" : pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");
       onSuccess();
     } catch (err: any) {
       setError(savedFacturaId ? `La factura ${numeroFactura} quedó registrada, pero falta completar una operación: ${err.message || "Error"}. Abrila desde Facturas de compra para revisarla; no vuelvas a cargarla.` : err.message || "Error al guardar");
@@ -995,6 +1107,57 @@ export default function CargarFacturaOC({
               <span className="text-zinc-500">IVA: <span className="font-mono font-medium">{formatCurrency(iva, moneda)}</span></span>
               <span className="font-bold text-zinc-900 dark:text-zinc-100">Total: <span className="font-mono text-orange-600">{formatCurrency(total, moneda)}</span></span>
             </div>
+
+            {isCreditNote && (
+              <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50/70 p-4 dark:border-blue-900 dark:bg-blue-950/20">
+                <div className="mb-3">
+                  <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">Aplicación de la nota de crédito</p>
+                  <p className="text-xs text-blue-700 dark:text-blue-300">Elegí la factura original. Solo se muestran comprobantes del mismo proveedor, sociedad y moneda con saldo pendiente.</p>
+                </div>
+                {creditOriginsError && <p className="mb-3 text-xs text-red-600">{creditOriginsError}</p>}
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="block text-[10px] uppercase text-zinc-500 mb-1">Factura origen</label>
+                    <select
+                      value={facturaOrigenId}
+                      disabled={creditOriginsLoading}
+                      onChange={(event) => {
+                        const id = event.target.value;
+                        setFacturaOrigenId(id);
+                        const origin = creditOrigins.find((invoice) => invoice.id === id);
+                        setCreditoAplicado(origin ? Math.min(total, origin.saldo_acreditable) : 0);
+                      }}
+                      className="w-full rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm dark:border-blue-800 dark:bg-zinc-900"
+                    >
+                      <option value="">{creditOriginsLoading ? "Cargando facturas..." : "Seleccionar factura"}</option>
+                      {creditOrigins.map((invoice) => (
+                        <option key={invoice.id} value={invoice.id}>
+                          {invoice.tipo_comprobante} {invoice.numero_factura} · saldo {formatCurrency(invoice.saldo_acreditable, invoice.moneda)}
+                        </option>
+                      ))}
+                    </select>
+                    {!creditOriginsLoading && !creditOriginsError && creditOrigins.length === 0 && (
+                      <p className="mt-1 text-xs text-zinc-500">No hay facturas con saldo acreditable para este proveedor y moneda.</p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-[10px] uppercase text-zinc-500 mb-1">Monto a aplicar</label>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      max={Math.min(total || 0, selectedCreditOrigin?.saldo_acreditable || 0)}
+                      value={creditoAplicado || ""}
+                      onChange={(event) => setCreditoAplicado(Number(event.target.value) || 0)}
+                      className="w-full rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-mono dark:border-blue-800 dark:bg-zinc-900"
+                    />
+                    {selectedCreditOrigin && (
+                      <p className="mt-1 text-xs text-zinc-500">Máximo aplicable: {formatCurrency(Math.min(total, selectedCreditOrigin.saldo_acreditable), moneda)}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Items editables */}
             {items.length > 0 && (

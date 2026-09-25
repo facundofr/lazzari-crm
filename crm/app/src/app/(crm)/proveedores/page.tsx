@@ -8,11 +8,13 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { formatCurrency } from "@/lib/utils";
 import { mockProveedores, mockListasPrecios } from "@/lib/mock-data";
 import { supabase } from "@/lib/supabase/client";
-import type { Proveedor, ListaPrecios, ListaPreciosItem } from "@/lib/types";
+import type { Proveedor, ListaPrecios, ListaPreciosItem, ListaPreciosRegla } from "@/lib/types";
+import { calculateNetPrice } from "@/lib/price-list-rules";
 import {
   Search, Filter, Download, MapPin, Phone, Mail, ListOrdered, Upload,
   AlertTriangle, ChevronDown, ChevronRight, Loader2, X, Pencil, Tag,
   Sparkles, FileUp, Check, Trash2, Eye,
+  Maximize2, Minimize2,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Modal } from "@/components/ui/modal";
@@ -70,6 +72,7 @@ function mapSupabaseProveedor(row: Record<string, unknown>): Proveedor {
     aliasBancario: (row.alias_bancario as string) ?? "",
     numeroCuenta: (row.numero_cuenta as string) ?? "",
     titularCuenta: (row.titular_cuenta as string) ?? "",
+    cuitTitularCuenta: (row.cuit_titular_cuenta as string) ?? "",
     tipoCuenta: (row.tipo_cuenta as string) ?? "",
     contactos: (Array.isArray(row.contactos) ? row.contactos : []).map((c: Record<string, unknown>) => ({
       id: c.id as string, nombre: c.nombre as string, cargo: c.cargo as string,
@@ -109,6 +112,15 @@ function mapSupabaseLista(row: Record<string, unknown>): ListaPrecios {
     vigenciaDesde: row.vigencia_desde as string,
     vigenciaHasta: row.vigencia_hasta as string,
     estado: row.estado as ListaPrecios["estado"],
+    reglas: (Array.isArray(row.lista_precios_reglas) ? row.lista_precios_reglas : []).map((rule: Record<string, unknown>) => ({
+      id: rule.id as string, lista_id: rule.lista_id as string,
+      tipo: rule.tipo as ListaPreciosRegla["tipo"], nombre: rule.nombre as string,
+      descuento: Number(rule.descuento), categoria: (rule.categoria as string) || null,
+      cantidad_desde: rule.cantidad_desde == null ? null : Number(rule.cantidad_desde),
+      cantidad_hasta: rule.cantidad_hasta == null ? null : Number(rule.cantidad_hasta),
+      vigencia_desde: (rule.vigencia_desde as string) || null, vigencia_hasta: (rule.vigencia_hasta as string) || null,
+      prioridad: Number(rule.prioridad) || 0, activa: rule.activa !== false,
+    })),
     items: items.map((item: Record<string, unknown>) => ({
       id: item.id as string, codigo: item.codigo as string, descripcion: item.descripcion as string,
       variante: (item.variante as string) || undefined,
@@ -151,6 +163,7 @@ const emptyForm = {
   alias_bancario: "",
   numero_cuenta: "",
   titular_cuenta: "",
+  cuit_titular_cuenta: "",
   tipo_cuenta: "",
   rubro: "",
   forma_pago: "Transferencia",
@@ -168,8 +181,22 @@ const emptyForm = {
   exclusion_retencion_cert: null as string | null,
 };
 
+const emptyRuleForm = {
+  tipo: "global" as ListaPreciosRegla["tipo"],
+  nombre: "",
+  descuento: 0,
+  categoria: "",
+  cantidad_desde: "",
+  cantidad_hasta: "",
+  vigencia_desde: "",
+  vigencia_hasta: "",
+  prioridad: 0,
+};
+
 export default function ProveedoresPage() {
-  const { sociedadActiva } = useUser();
+  const { sociedadActiva, role } = useUser();
+  const canManagePriceRules = role === "super_admin" || role === "admin" || role === "administrativo";
+  const canDeletePriceRules = role === "super_admin" || role === "admin";
   const [tab, setTab] = useState<"proveedores" | "listas">("proveedores");
   const [search, setSearch] = useState("");
   const [filterValues, setFilterValues] = useState<FilterValues>({
@@ -181,6 +208,9 @@ export default function ProveedoresPage() {
   const [view, setView] = useState<"table" | "cards">("table");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filterLista, setFilterLista] = useState<string>("todas");
+  const [ruleListId, setRuleListId] = useState<string | null>(null);
+  const [ruleForm, setRuleForm] = useState(emptyRuleForm);
+  const [ruleSaving, setRuleSaving] = useState(false);
 
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
   const [listas, setListas] = useState<ListaPrecios[]>([]);
@@ -188,6 +218,7 @@ export default function ProveedoresPage() {
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
+  const [modalFullscreen, setModalFullscreen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState("");
@@ -208,6 +239,7 @@ export default function ProveedoresPage() {
 
   // Detail
   const [selectedProv, setSelectedProv] = useState<Proveedor | null>(null);
+  const [panelFullscreen, setPanelFullscreen] = useState(false);
   type ProveedorContactoForm = { id?: string; nombre: string; cargo: string; email: string; telefono: string; whatsapp: string; principal: boolean; notas: string };
   const emptyProveedorContacto: ProveedorContactoForm = { nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", principal: false, notas: "" };
   const [proveedorContactoForm, setProveedorContactoForm] = useState<ProveedorContactoForm>(emptyProveedorContacto);
@@ -281,7 +313,7 @@ export default function ProveedoresPage() {
     setLoading(true);
     try {
       let provQuery = supabase.from("proveedores").select(`*, listas_precios(id, nombre, moneda, vigencia_hasta, estado)`).order("razon_social");
-      let listasQuery = supabase.from("listas_precios").select(`*, proveedores(razon_social), lista_precios_items(*)`).order("created_at", { ascending: false });
+      let listasQuery = supabase.from("listas_precios").select(`*, proveedores(razon_social), lista_precios_items(*), lista_precios_reglas(*)`).order("created_at", { ascending: false });
       if (sociedadActiva?.id) {
         provQuery = provQuery.eq("sociedad_id" as any, sociedadActiva.id);
         listasQuery = listasQuery.eq("sociedad_id" as any, sociedadActiva.id);
@@ -463,7 +495,7 @@ export default function ProveedoresPage() {
       email: p.email, telefono: p.telefono, direccion: p.direccion,
       localidad: p.localidad, provincia: p.provincia, rubro: p.rubro,
       banco: (p as any).banco ?? "", cbu: p.cbu ?? "", alias_bancario: p.aliasBancario ?? "", numero_cuenta: p.numeroCuenta ?? "",
-      titular_cuenta: (p as any).titularCuenta ?? "", tipo_cuenta: (p as any).tipoCuenta ?? "",
+      titular_cuenta: (p as any).titularCuenta ?? "", cuit_titular_cuenta: p.cuitTitularCuenta ?? "", tipo_cuenta: (p as any).tipoCuenta ?? "",
       forma_pago: p.formaPago, dias_cuenta_corriente: p.diasCuentaCorriente,
       limite_credito: p.limiteCredito, notas: p.notas,
       clasificacion_tags: p.clasificacionTags ?? [], marcas: p.marcas ?? "",
@@ -516,6 +548,51 @@ export default function ProveedoresPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleRuleSave(listaId: string) {
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) { toast.error("Seleccioná una sociedad antes de guardar la regla"); return; }
+    if (!ruleForm.nombre.trim()) { toast.warning("Indicá un nombre para la regla"); return; }
+    if (ruleForm.descuento < 0 || ruleForm.descuento > 100) { toast.warning("El descuento debe estar entre 0 y 100%"); return; }
+    if (ruleForm.tipo === "categoria" && !ruleForm.categoria.trim()) { toast.warning("Indicá la categoría"); return; }
+    if (ruleForm.tipo === "cantidad" && ruleForm.cantidad_desde === "" && ruleForm.cantidad_hasta === "") { toast.warning("Indicá al menos un límite de cantidad"); return; }
+    setRuleSaving(true);
+    try {
+      const payload = {
+        lista_id: listaId,
+        sociedad_id: sociedadId,
+        tipo: ruleForm.tipo,
+        nombre: ruleForm.nombre.trim(),
+        descuento: Number(ruleForm.descuento),
+        categoria: ruleForm.tipo === "global" ? null : (ruleForm.categoria.trim() || null),
+        cantidad_desde: ruleForm.tipo === "cantidad" && ruleForm.cantidad_desde !== "" ? Number(ruleForm.cantidad_desde) : null,
+        cantidad_hasta: ruleForm.tipo === "cantidad" && ruleForm.cantidad_hasta !== "" ? Number(ruleForm.cantidad_hasta) : null,
+        vigencia_desde: ruleForm.vigencia_desde || null,
+        vigencia_hasta: ruleForm.vigencia_hasta || null,
+        prioridad: Number(ruleForm.prioridad) || 0,
+        activa: true,
+      };
+      const { error } = await (supabase as any).from("lista_precios_reglas").insert(payload);
+      if (error) throw error;
+      setRuleForm(emptyRuleForm);
+      setRuleListId(null);
+      await fetchData();
+      toast.success("Regla de costo guardada");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "No se pudo guardar la regla");
+    } finally {
+      setRuleSaving(false);
+    }
+  }
+
+  async function handleRuleDelete(rule: ListaPreciosRegla) {
+    if (!sociedadActiva?.id || !confirm(`¿Eliminar la regla “${rule.nombre}”?`)) return;
+    const { error } = await (supabase as any).from("lista_precios_reglas").delete()
+      .eq("id", rule.id).eq("sociedad_id", sociedadActiva.id);
+    if (error) { toast.error(error.message); return; }
+    await fetchData();
+    toast.success("Regla eliminada");
   }
 
   function openAiUpload() {
@@ -872,6 +949,48 @@ export default function ProveedoresPage() {
                     {isExpanded && (
                       <div className="border-t border-zinc-200 dark:border-zinc-700">
                         {lista.notas && <div className="bg-zinc-50 dark:bg-zinc-800 px-5 py-2.5 text-sm text-zinc-500">{lista.notas}</div>}
+                        <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-700">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <h4 className="text-sm font-semibold text-zinc-800 dark:text-zinc-200">Reglas de costo</h4>
+                              <p className="text-xs text-zinc-500">Mayor prioridad gana; en empate: tramo, categoría y global. El neto manual se conserva como base.</p>
+                            </div>
+                            {canManagePriceRules && <button type="button" onClick={() => { setRuleListId(ruleListId === lista.id ? null : lista.id); setRuleForm(emptyRuleForm); }}
+                              className="rounded-lg border border-orange-300 px-3 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-50 dark:border-orange-800 dark:hover:bg-orange-950/20">
+                              {ruleListId === lista.id ? "Cancelar" : "Agregar regla"}
+                            </button>}
+                          </div>
+                          {(lista.reglas || []).length > 0 ? (
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {[...(lista.reglas || [])].sort((a, b) => b.prioridad - a.prioridad || a.nombre.localeCompare(b.nombre)).map(rule => (
+                                <div key={rule.id} className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+                                  <Badge variant={rule.tipo === "cantidad" ? "purple" : rule.tipo === "categoria" ? "info" : "outline"}>{rule.tipo}</Badge>
+                                  <span className="font-medium">{rule.nombre}</span>
+                                  <span className="font-mono text-emerald-600">-{rule.descuento}%</span>
+                                  {rule.categoria && <span className="text-zinc-500">{rule.categoria}</span>}
+                                  {rule.tipo === "cantidad" && <span className="text-zinc-500">{rule.cantidad_desde ?? 0}–{rule.cantidad_hasta ?? "∞"} un.</span>}
+                                  <span className="text-zinc-400">P{rule.prioridad}</span>
+                                  {(rule.vigencia_desde || rule.vigencia_hasta) && <span className="text-zinc-400">{rule.vigencia_desde || "…"} → {rule.vigencia_hasta || "…"}</span>}
+                                  {canDeletePriceRules && <button type="button" onClick={() => handleRuleDelete(rule)} className="rounded p-0.5 text-zinc-400 hover:text-red-500" title="Eliminar regla"><Trash2 className="h-3 w-3" /></button>}
+                                </div>
+                              ))}
+                            </div>
+                          ) : <p className="mt-2 text-xs italic text-zinc-400">Sin reglas: se usa el precio neto manual de cada ítem.</p>}
+
+                          {ruleListId === lista.id && (
+                            <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-orange-200 bg-orange-50/40 p-3 sm:grid-cols-4 dark:border-orange-900/50 dark:bg-orange-950/10">
+                              <div className="col-span-2"><label className="text-xs text-zinc-500">Nombre *</label><input value={ruleForm.nombre} onChange={e => setRuleForm({ ...ruleForm, nombre: e.target.value })} placeholder="Ej. Mayorista septiembre" className="mt-1 w-full rounded-lg border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+                              <div><label className="text-xs text-zinc-500">Tipo</label><select value={ruleForm.tipo} onChange={e => setRuleForm({ ...ruleForm, tipo: e.target.value as ListaPreciosRegla["tipo"] })} className="mt-1 w-full rounded-lg border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800"><option value="global">Global</option><option value="categoria">Categoría</option><option value="cantidad">Tramo cantidad</option></select></div>
+                              <div><label className="text-xs text-zinc-500">Descuento %</label><input type="number" min="0" max="100" step="0.01" value={ruleForm.descuento} onChange={e => setRuleForm({ ...ruleForm, descuento: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+                              {ruleForm.tipo !== "global" && <div><label className="text-xs text-zinc-500">Categoría {ruleForm.tipo === "cantidad" && "(opcional)"}</label><input value={ruleForm.categoria} onChange={e => setRuleForm({ ...ruleForm, categoria: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>}
+                              {ruleForm.tipo === "cantidad" && <><div><label className="text-xs text-zinc-500">Cantidad desde</label><input type="number" min="0" value={ruleForm.cantidad_desde} onChange={e => setRuleForm({ ...ruleForm, cantidad_desde: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div><div><label className="text-xs text-zinc-500">Cantidad hasta</label><input type="number" min="0" value={ruleForm.cantidad_hasta} onChange={e => setRuleForm({ ...ruleForm, cantidad_hasta: e.target.value })} placeholder="Sin límite" className="mt-1 w-full rounded-lg border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div></>}
+                              <div><label className="text-xs text-zinc-500">Vigente desde</label><input type="date" value={ruleForm.vigencia_desde} onChange={e => setRuleForm({ ...ruleForm, vigencia_desde: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+                              <div><label className="text-xs text-zinc-500">Vigente hasta</label><input type="date" value={ruleForm.vigencia_hasta} onChange={e => setRuleForm({ ...ruleForm, vigencia_hasta: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+                              <div><label className="text-xs text-zinc-500">Prioridad</label><input type="number" value={ruleForm.prioridad} onChange={e => setRuleForm({ ...ruleForm, prioridad: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-300 px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+                              <div className="flex items-end"><button type="button" disabled={ruleSaving} onClick={() => handleRuleSave(lista.id)} className="w-full rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">{ruleSaving ? "Guardando…" : "Guardar regla"}</button></div>
+                            </div>
+                          )}
+                        </div>
                         <DataTable<ListaPreciosItem>
                           columns={[
                             { key: "codigo", label: "Codigo", render: (row) => <span className="font-mono text-xs font-bold">{row.codigo}</span> },
@@ -881,7 +1000,7 @@ export default function ProveedoresPage() {
                             { key: "unidad", label: "Un.", render: (row) => <span className="text-zinc-400">{row.unidad}</span> },
                             { key: "precio", label: "P. Lista", className: "text-right", render: (row) => <span className="font-mono block text-right text-zinc-400 line-through">{lista.moneda === "USD" ? `USD ${row.precio.toFixed(2)}` : formatCurrency(row.precio)}</span> },
                             { key: "descuento", label: "Desc.", className: "text-right", render: (row) => row.descuento ? <span className="text-emerald-600 font-medium">{row.descuento}%</span> : <span className="text-zinc-300">—</span> },
-                            { key: "precioNeto", label: "P. Neto", className: "text-right", render: (row) => <span className="font-mono font-semibold block text-right">{lista.moneda === "USD" ? `USD ${row.precioNeto.toFixed(2)}` : formatCurrency(row.precioNeto)}</span> },
+                            { key: "precioNeto", label: "P. Neto", className: "text-right", render: (row) => { const result = calculateNetPrice({ precio: row.precio, precio_neto: row.precioNeto, descuento: row.descuento, categoria: row.categoria, variante: row.variante }, lista.reglas || []); return <div className="text-right"><span className="font-mono font-semibold block">{lista.moneda === "USD" ? `USD ${result.netPrice.toFixed(2)}` : formatCurrency(result.netPrice)}</span>{result.rule && <span className="text-[10px] text-emerald-600" title={`Base manual: ${result.baseNet}`}>{result.rule.nombre} (-{result.ruleDiscount}%)</span>}</div>; } },
                           ]}
                           data={lista.items}
                         />
@@ -898,8 +1017,8 @@ export default function ProveedoresPage() {
       {/* Detail panel */}
       {selectedProv && (
         <>
-          <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setSelectedProv(null)} />
-          <div className="fixed right-0 top-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-xl dark:bg-zinc-900">
+          <div className="fixed inset-0 z-40 bg-black/20" onClick={() => { setSelectedProv(null); setPanelFullscreen(false); }} />
+          <div className={panelFullscreen ? "fixed inset-4 z-50 overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-zinc-900" : "fixed right-0 top-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-xl dark:bg-zinc-900"}>
             <div className="flex items-center justify-between border-b border-zinc-200 p-6 dark:border-zinc-700">
               <div>
                 <h2 className="text-lg font-bold text-zinc-900 dark:text-white">{selectedProv.razonSocial}</h2>
@@ -907,7 +1026,8 @@ export default function ProveedoresPage() {
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={() => { openEdit(selectedProv); setSelectedProv(null); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100"><Pencil className="h-4 w-4" /></button>
-                <button onClick={() => setSelectedProv(null)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
+                <button onClick={() => setPanelFullscreen((value) => !value)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Pantalla completa"}>{panelFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
+                <button onClick={() => { setSelectedProv(null); setPanelFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
               </div>
             </div>
             <div className="p-6 space-y-6">
@@ -933,13 +1053,14 @@ export default function ProveedoresPage() {
                   )}
                 </div>
               </div>
-              {(selectedProv.cbu || selectedProv.aliasBancario || selectedProv.numeroCuenta || (selectedProv as any).titularCuenta || (selectedProv as any).tipoCuenta || (selectedProv as any).banco) && (
+              {(selectedProv.cbu || selectedProv.aliasBancario || selectedProv.numeroCuenta || selectedProv.titularCuenta || selectedProv.cuitTitularCuenta || selectedProv.tipoCuenta || (selectedProv as any).banco) && (
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                   <h3 className="text-sm font-semibold mb-3">Datos bancarios</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div><p className="text-xs text-zinc-500">Banco</p><p className="text-sm font-medium">{(selectedProv as any).banco || "—"}</p></div>
-                    <div><p className="text-xs text-zinc-500">Titular</p><p className="text-sm font-medium">{(selectedProv as any).titularCuenta || "—"}</p></div>
-                    <div><p className="text-xs text-zinc-500">Tipo de cuenta</p><p className="text-sm font-medium">{(selectedProv as any).tipoCuenta || "—"}</p></div>
+                    <div><p className="text-xs text-zinc-500">Titular</p><p className="text-sm font-medium">{selectedProv.titularCuenta || "—"}</p></div>
+                    <div><p className="text-xs text-zinc-500">CUIT/CUIL del titular</p><p className="text-sm font-mono font-medium">{selectedProv.cuitTitularCuenta || "—"}</p></div>
+                    <div><p className="text-xs text-zinc-500">Tipo de cuenta</p><p className="text-sm font-medium">{selectedProv.tipoCuenta || "—"}</p></div>
                     <div className="col-span-2"><p className="text-xs text-zinc-500">CBU / CVU</p><p className="text-sm font-mono font-medium">{selectedProv.cbu || "—"}</p></div>
                     <div><p className="text-xs text-zinc-500">Alias</p><p className="text-sm font-medium">{selectedProv.aliasBancario || "—"}</p></div>
                     <div><p className="text-xs text-zinc-500">N° de cuenta</p><p className="text-sm font-medium">{selectedProv.numeroCuenta || "—"}</p></div>
@@ -997,11 +1118,14 @@ export default function ProveedoresPage() {
       {/* Create/Edit Modal */}
       {modalOpen && (
         <>
-          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setModalOpen(false)} />
-          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
+          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => { setModalOpen(false); setModalFullscreen(false); }} />
+          <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl transition-all dark:bg-zinc-900 ${modalFullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[90vh] w-full max-w-2xl"}`}>
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-lg font-bold">{editingId ? "Editar proveedor" : "Nuevo proveedor"}</h2>
-              <button onClick={() => setModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
+              <div className="flex items-center gap-1">
+                <button onClick={() => setModalFullscreen((value) => !value)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={modalFullscreen ? "Reducir" : "Pantalla completa"}>{modalFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
+                <button onClick={() => { setModalOpen(false); setModalFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
+              </div>
             </div>
             {formError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">{formError}</div>}
             <div className="grid grid-cols-2 gap-4">
@@ -1052,6 +1176,7 @@ export default function ProveedoresPage() {
               <div><label className="text-xs font-medium text-zinc-500">CBU / CVU</label><input value={form.cbu} onChange={(e) => setForm({ ...form, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Alias</label><input value={form.alias_bancario} onChange={(e) => setForm({ ...form, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Titular</label><input value={(form as any).titular_cuenta} onChange={(e) => setForm({ ...form, titular_cuenta: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div><label className="text-xs font-medium text-zinc-500">CUIT/CUIL del titular</label><input inputMode="numeric" maxLength={13} value={form.cuit_titular_cuenta} onChange={(e) => setForm({ ...form, cuit_titular_cuenta: e.target.value.replace(/[^\d-]/g, "") })} placeholder="XX-XXXXXXXX-X" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Tipo de cuenta</label><select value={(form as any).tipo_cuenta} onChange={(e) => setForm({ ...form, tipo_cuenta: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"><option value="">Seleccionar...</option><option value="CC">Cuenta corriente (CC)</option><option value="CA">Caja de ahorro (CA)</option><option value="CVU">CVU</option></select></div>
               <div><label className="text-xs font-medium text-zinc-500">N° de cuenta</label><input value={form.numero_cuenta} onChange={(e) => setForm({ ...form, numero_cuenta: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div className="col-span-2"><label className="text-xs font-medium text-zinc-500">Notas</label><textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={3} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>

@@ -27,6 +27,7 @@ import { PendientesWidget } from "@/components/presupuestos/pendientes-widget";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalizePurchaseCurrency } from "@/lib/own-stock-purchase-orders";
+import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
 
 /** Number input that allows typing decimals (e.g. "10.") without losing the dot */
 function NumInput({ value, onChange, className, ...props }: { value: number | string; onChange: (n: number) => void; className?: string } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "type">) {
@@ -118,7 +119,7 @@ function ProveedorItemPicker({ value, stockPropio, options, onChange }: {
           </button>
           <button type="button" onMouseDown={e => { e.preventDefault(); onChange("", "Stock propio", true); setOpen(false); }}
             className="w-full text-left px-3 py-1.5 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30">
-            Stock propio (sin OC)
+            Stock propio — genera OC interna
           </button>
           {filtered.map(p => (
             <button key={p.id} type="button" onMouseDown={e => { e.preventDefault(); onChange(p.id, p.razon_social, false); setOpen(false); }}
@@ -294,6 +295,14 @@ interface NewPRItem {
   stock_propio: boolean;
   lista_item_id: string;
   costo_moneda: "ARS" | "USD" | "USD Divisa";
+  price_rule_source?: {
+    precio: number;
+    precio_neto_base: number;
+    descuento: number;
+    categoria: string;
+    variante?: string;
+    reglas: PriceListRule[];
+  };
 }
 
 // Autocomplete result from lista_precios_items
@@ -306,6 +315,9 @@ interface ProductSuggestion {
   unidad: string;
   precio_neto: number;
   precio: number;
+  precio_neto_base: number;
+  descuento: number;
+  reglas: PriceListRule[];
   proveedor_nombre: string;
   proveedor_id: string;
   lista_nombre: string;
@@ -319,20 +331,12 @@ interface PriceTier {
   min: number;
   max: number;
   precio_neto: number;
+  precio: number;
+  precio_neto_base: number;
+  descuento: number;
+  categoria: string;
+  reglas: PriceListRule[];
   moneda: string;
-}
-
-/** Parsea variantes tipo "1-9 un", "10-49", "50+", "hasta 20" → rango */
-function parseQuantityRange(variante?: string | null): { min: number; max: number } | null {
-  if (!variante) return null;
-  const s = variante.trim();
-  const rangeMatch = s.match(/^(\d+)\s*[-–a]\s*(\d+)/);
-  if (rangeMatch) return { min: parseInt(rangeMatch[1]), max: parseInt(rangeMatch[2]) };
-  const plusMatch = s.match(/^(\d+)\s*\+/);
-  if (plusMatch) return { min: parseInt(plusMatch[1]), max: Infinity };
-  const hastaMatch = s.match(/hasta\s+(\d+)/i);
-  if (hastaMatch) return { min: 1, max: parseInt(hastaMatch[1]) };
-  return null;
 }
 
 function calcItemTotals(item: NewPRItem) {
@@ -431,7 +435,10 @@ export default function PresupuestosPage() {
     setEmailModal({
       open: true,
       id: pr.id,
-      to: emailFact.split(",")[0]?.trim() || contactoEmail || clientEmail,
+      // En presupuestos el contacto elegido es quien solicitó la cotización.
+      // Se propone primero, conservando facturación y el email general como
+      // alternativas editables en el compositor.
+      to: contactoEmail || emailFact.split(",")[0]?.trim() || clientEmail,
       subject: applyTemplateVars(template.asunto, vars),
       body: applyTemplateVars(template.cuerpo, vars),
       filename: `${pr.numero}.pdf`,
@@ -601,31 +608,39 @@ export default function PresupuestosPage() {
       const { data, error } = await supabase
         .from("lista_precios_items")
         .select(`
-          id, codigo, descripcion, variante, categoria, unidad, precio, precio_neto, lista_id,
+          id, codigo, descripcion, variante, categoria, unidad, precio, precio_neto, descuento, lista_id,
           listas_precios:lista_id(nombre, moneda, proveedor_id, proveedores:proveedor_id(razon_social))
         `)
         .or(`codigo.ilike.%${query}%,descripcion.ilike.%${query}%`)
+        .eq("sociedad_id" as any, sociedadActiva?.id || "")
         .limit(20);
 
       if (error || !data) { setProductSearchResults([]); return; }
 
+      const listIds = [...new Set((data as any[]).map(item => item.lista_id).filter(Boolean))];
+      let rulesByList: Record<string, PriceListRule[]> = {};
+      if (listIds.length > 0 && sociedadActiva?.id) {
+        const { data: rules } = await (supabase as any).from("lista_precios_reglas").select("*")
+          .in("lista_id", listIds).eq("sociedad_id", sociedadActiva.id).eq("activa", true);
+        rulesByList = (rules || []).reduce((acc: Record<string, PriceListRule[]>, rule: PriceListRule) => {
+          (acc[rule.lista_id] ||= []).push(rule);
+          return acc;
+        }, {});
+      }
+
       const mapped: ProductSuggestion[] = data
         .filter((d: any) => d.listas_precios)
-        .map((d: any) => ({
-          id: d.id,
-          codigo: d.codigo ?? "",
-          descripcion: d.descripcion ?? "",
-          variante: d.variante ?? undefined,
-          categoria: d.categoria ?? "",
-          unidad: d.unidad ?? "UN",
-          precio_neto: d.precio_neto ?? d.precio ?? 0,
-          precio: d.precio ?? 0,
-          proveedor_nombre: d.listas_precios?.proveedores?.razon_social ?? "—",
-          proveedor_id: d.listas_precios?.proveedor_id ?? "",
-          lista_nombre: d.listas_precios?.nombre ?? "",
-          lista_id: d.lista_id ?? "",
-          moneda: d.listas_precios?.moneda ?? "ARS",
-        }));
+        .map((d: any) => {
+          const reglas = rulesByList[d.lista_id] || [];
+          const calculated = calculateNetPrice({ precio: d.precio, precio_neto: d.precio_neto, descuento: d.descuento, categoria: d.categoria, variante: d.variante }, reglas, null, todayAR());
+          return {
+            id: d.id, codigo: d.codigo ?? "", descripcion: d.descripcion ?? "", variante: d.variante ?? undefined,
+            categoria: d.categoria ?? "", unidad: d.unidad ?? "UN", precio_neto: calculated.netPrice,
+            precio_neto_base: calculated.baseNet, descuento: Number(d.descuento) || 0, reglas, precio: d.precio ?? 0,
+            proveedor_nombre: d.listas_precios?.proveedores?.razon_social ?? "—", proveedor_id: d.listas_precios?.proveedor_id ?? "",
+            lista_nombre: d.listas_precios?.nombre ?? "", lista_id: d.lista_id ?? "", moneda: d.listas_precios?.moneda ?? "ARS",
+          };
+        });
       setProductSearchResults(mapped);
     } catch {
       setProductSearchResults([]);
@@ -642,11 +657,13 @@ export default function PresupuestosPage() {
 
   async function handleProductSelect(suggestion: ProductSuggestion) {
     const idx = productSearchIdx;
+    const selectedQuantity = Number(newPR.items[idx]?.cantidad) || 1;
+    const selectedNet = calculateNetPrice({ precio: suggestion.precio, precio_neto: suggestion.precio_neto_base, descuento: suggestion.descuento, categoria: suggestion.categoria, variante: suggestion.variante }, suggestion.reglas, selectedQuantity, todayAR()).netPrice;
     setNewPR((prev) => {
       const items = [...prev.items];
       const markup = items[idx].markup_porcentaje || prev.markup_general;
       const costoMoneda = (suggestion.moneda || "USD") as "ARS" | "USD";
-      const costoConv = convertCosto(suggestion.precio_neto, costoMoneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
+      const costoConv = convertCosto(selectedNet, costoMoneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
       const precioVenta = Number((costoConv * (1 + markup / 100)).toFixed(2));
       items[idx] = {
         ...items[idx],
@@ -654,7 +671,7 @@ export default function PresupuestosPage() {
         descripcion: suggestion.descripcion,
         categoria: suggestion.categoria,
         unidad: suggestion.unidad,
-        precio_costo: suggestion.precio_neto,
+        precio_costo: selectedNet,
         costo_moneda: costoMoneda,
         markup_porcentaje: markup,
         precio_venta: precioVenta,
@@ -662,6 +679,7 @@ export default function PresupuestosPage() {
         proveedor_id: suggestion.proveedor_id,
         stock_propio: false,
         lista_item_id: suggestion.id,
+        price_rule_source: { precio: suggestion.precio, precio_neto_base: suggestion.precio_neto_base, descuento: suggestion.descuento, categoria: suggestion.categoria, variante: suggestion.variante, reglas: suggestion.reglas },
       };
       return { ...prev, items };
     });
@@ -672,8 +690,9 @@ export default function PresupuestosPage() {
       try {
         const { data: siblings } = await supabase
           .from("lista_precios_items")
-          .select("id, variante, precio_neto, precio")
+          .select("id, variante, categoria, descuento, precio_neto, precio")
           .eq("lista_id" as any, suggestion.lista_id)
+          .eq("sociedad_id" as any, sociedadActiva?.id || "")
           .eq("codigo", suggestion.codigo);
 
         if (siblings && siblings.length > 1) {
@@ -681,7 +700,8 @@ export default function PresupuestosPage() {
             .map((s) => {
               const range = parseQuantityRange(s.variante);
               if (!range) return null;
-              return { lista_item_id: s.id, variante: s.variante || "", min: range.min, max: range.max, precio_neto: s.precio_neto ?? s.precio ?? 0, moneda: suggestion.moneda };
+              const calculated = calculateNetPrice({ precio: s.precio, precio_neto: s.precio_neto, descuento: s.descuento, categoria: s.categoria, variante: s.variante }, suggestion.reglas, range.min, todayAR());
+              return { lista_item_id: s.id, variante: s.variante || "", min: range.min, max: range.max, precio_neto: calculated.netPrice, precio: Number(s.precio) || 0, precio_neto_base: calculated.baseNet, descuento: Number(s.descuento) || 0, categoria: s.categoria || "", reglas: suggestion.reglas, moneda: suggestion.moneda };
             })
             .filter(Boolean)
             .sort((a, b) => a!.min - b!.min) as PriceTier[];
@@ -1057,18 +1077,28 @@ export default function PresupuestosPage() {
 
       // Auto-switch precio por escalon cuando cambia la cantidad
       if (field === "cantidad") {
+        if (item.price_rule_source) {
+          const source = item.price_rule_source;
+          item.precio_costo = calculateNetPrice({ precio: source.precio, precio_neto: source.precio_neto_base, descuento: source.descuento, categoria: source.categoria, variante: source.variante }, source.reglas, Number(value), todayAR()).netPrice;
+        }
         const tiers = priceTiersMap[index];
         if (tiers && tiers.length > 0) {
           const qty = Number(value);
           const matchingTier = tiers.find((t) => qty >= t.min && qty <= t.max);
-          if (matchingTier && matchingTier.precio_neto !== item.precio_costo) {
-            item.precio_costo = matchingTier.precio_neto;
+          const effectiveTierPrice = matchingTier ? calculateNetPrice({ precio: matchingTier.precio, precio_neto: matchingTier.precio_neto_base, descuento: matchingTier.descuento, categoria: matchingTier.categoria, variante: matchingTier.variante }, matchingTier.reglas, qty, todayAR()).netPrice : null;
+          if (matchingTier && effectiveTierPrice !== null && effectiveTierPrice !== item.precio_costo) {
+            item.precio_costo = effectiveTierPrice;
             item.lista_item_id = matchingTier.lista_item_id;
+            item.price_rule_source = { precio: matchingTier.precio, precio_neto_base: matchingTier.precio_neto_base, descuento: matchingTier.descuento, categoria: matchingTier.categoria, variante: matchingTier.variante, reglas: matchingTier.reglas };
             const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
             item.precio_venta = Number((costoConv * (1 + item.markup_porcentaje / 100)).toFixed(2));
             // Notificar el cambio de escalon (via setTimeout para salir del setState)
             setTimeout(() => toast.success(`Precio actualizado: ${matchingTier.variante}`), 0);
           }
+        }
+        if (item.price_rule_source) {
+          const costoConv = convertCosto(item.precio_costo, item.costo_moneda, prev.moneda, prev.tipo_cambio, prev.tipo_cambio_divisas);
+          item.precio_venta = Number((costoConv * (1 + item.markup_porcentaje / 100)).toFixed(2));
         }
       }
 
@@ -1506,6 +1536,7 @@ export default function PresupuestosPage() {
 
       let ocsCreated = 0;
       let ocCreationFailed = false;
+      let stockItemsWithOC = 0;
       const today = todayAR();
 
       // Only generate OCs for items that HAVE a proveedor assigned
@@ -1575,9 +1606,63 @@ export default function PresupuestosPage() {
         ocsCreated++;
       }
 
-      // Stock propio: no genera OC. El usuario puede cambiar a proveedor externo después si necesita.
-      if (stockItemsCount > 0) {
-        toast.info(`${stockItemsCount} item(s) de stock propio — sin OC generada`);
+      // Stock propio no tiene proveedor externo, pero necesita una OC interna
+      // real para entrar al circuito de recepción. Se separa por moneda de costo.
+      if (stockItems.length > 0) {
+        for (const { moneda, items: currencyItems } of groupOwnStockItemsByCurrency(stockItems)) {
+          const totals = calculateOwnStockPurchaseOrder(currencyItems, compraSinIva);
+          if (totals.subtotal <= 0) {
+            console.warn(`Skipping internal stock OC ${moneda}: total cost is zero`);
+            toast.warning(`OC interna de stock propio ${moneda} no generada: el costo total es $0`);
+            continue;
+          }
+
+          const { data: stockOC, error: stockOCErr } = await supabase
+            .from("ordenes_compra")
+            .insert({
+              proveedor_id: null,
+              presupuesto_origen_id: prId,
+              sociedad_id: sociedadId,
+              fecha: today,
+              moneda,
+              estado: "enviada",
+              ...totals,
+              observaciones: `Stock propio — OC interna generada desde ${prNumero}`,
+              created_by: prCreatedBy ?? profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
+            } as any)
+            .select()
+            .single();
+          if (stockOCErr || !stockOC) {
+            console.error("Error creating internal stock OC:", JSON.stringify(stockOCErr));
+            toast.error(`No se pudo crear la OC interna de stock propio ${moneda}: ${stockOCErr?.message ?? "sin respuesta"}`);
+            ocCreationFailed = true;
+            continue;
+          }
+
+          const stockOCItems = currencyItems.map((it: any, idx: number) => ({
+            orden_id: stockOC.id,
+            codigo: it.codigo || "",
+            descripcion: it.descripcion || "Sin descripción",
+            cantidad: Number(it.cantidad) || 1,
+            unidad: it.unidad || "u",
+            precio_unitario: Number(it.precio_costo) || 0,
+            iva_porcentaje: compraSinIva ? 0 : Number(it.iva_porcentaje ?? 21),
+            orden: idx + 1,
+            cantidad_recibida: 0,
+          }));
+          const { error: stockItemsErr } = await supabase.from("orden_compra_items").insert(stockOCItems as any);
+          if (stockItemsErr) {
+            console.error("Error inserting internal stock OC items:", JSON.stringify(stockItemsErr));
+            const { data: deletedOC, error: cleanupError } = await supabase.from("ordenes_compra").delete().eq("id", stockOC.id).eq("sociedad_id" as any, sociedadId).select("id").maybeSingle();
+            toast.error(cleanupError || !deletedOC
+              ? `OC ${stockOC.numero ?? ""} ${moneda} quedó incompleta (sin items) y no se pudo limpiar. Contactá soporte con ID ${stockOC.id}.`
+              : `No se generó la OC interna ${moneda}: falló la carga de sus items y se limpió el encabezado.`);
+            ocCreationFailed = true;
+            continue;
+          }
+          ocsCreated++;
+          stockItemsWithOC += currencyItems.length;
+        }
       }
 
       // Also generate OC for items WITHOUT proveedor (so user can assign later)
@@ -1651,7 +1736,7 @@ export default function PresupuestosPage() {
       if (sinProveedorCount > 0 && sinProvItems.length > 0) {
         toast.info(`${sinProveedorCount} item(s) sin proveedor — OC creada en borrador para asignar proveedor`);
       }
-      if (stockItemsCount > 0 && !ocCreationFailed) toast.info(`${stockItemsCount} item(s) de stock propio: OC(s) interna(s) creada(s) como enviada(s), listas para recibir`);
+      if (stockItemsWithOC > 0) toast.info(`${stockItemsWithOC} item(s) de stock propio: OC(s) interna(s) creada(s) como enviada(s), listas para recibir`);
     } catch (err) {
       console.error("Error generating OCs:", err);
       toast.warning("PR aprobado pero hubo un error al generar las OC");
@@ -4239,15 +4324,15 @@ export default function PresupuestosPage() {
           const pr = presupuestos.find(p => p.id === emailModal.id);
           if (!pr) return [];
           const suggestions: { email: string; label?: string }[] = [];
+          const contactoEmail = (pr as any).contactoEmail;
+          const clienteEmail = (pr as any).clienteEmail;
+          if (contactoEmail && !suggestions.some(s => s.email === contactoEmail)) suggestions.push({ email: contactoEmail, label: (pr as any).contactoNombre || "Solicitante" });
           const emailFact = (pr as any).clienteEmailFacturacion;
           if (emailFact) {
             for (const e of emailFact.split(",").map((s: string) => s.trim()).filter(Boolean)) {
               if (!suggestions.some(s => s.email === e)) suggestions.push({ email: e, label: "Facturación" });
             }
           }
-          const contactoEmail = (pr as any).contactoEmail;
-          const clienteEmail = (pr as any).clienteEmail;
-          if (contactoEmail && !suggestions.some(s => s.email === contactoEmail)) suggestions.push({ email: contactoEmail, label: (pr as any).contactoNombre || "Solicitante" });
           if (clienteEmail && !suggestions.some(s => s.email === clienteEmail)) suggestions.push({ email: clienteEmail, label: "Email cliente" });
           const creadorEmail = (pr as any).creadorEmail;
           if (creadorEmail && !suggestions.some(s => s.email === creadorEmail)) suggestions.push({ email: creadorEmail, label: `Creador: ${(pr as any).creadorNombre || ""}` });

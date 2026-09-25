@@ -11,7 +11,9 @@ Te voy a pasar una o varias imágenes/PDFs de comprobantes de pago (transferenci
       "tipo": "transferencia" | "deposito" | "cheque" | "echeq" | "efectivo" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva" | "otro",
       "monto": 123456.78,
       "moneda": "ARS" | "USD",
-      "fecha": "YYYY-MM-DD (IMPORTANTE: usar la fecha de COBRO/ACREDITACIÓN/PAGO, NO la fecha de emisión del comprobante. Si hay ambas, usar la de cobro/acreditación)",
+      "fecha": "YYYY-MM-DD fecha operativa principal; usar cobro/acreditación/pago",
+      "fecha_emision": "YYYY-MM-DD fecha en que se emitió o generó el comprobante",
+      "fecha_cobro": "YYYY-MM-DD fecha efectiva de cobro/acreditación/pago",
       "referencia": "número de operación, CBU, o referencia bancaria",
       "banco": "nombre del banco si aparece",
       "ordenante": "nombre del pagador/ordenante si aparece",
@@ -36,7 +38,8 @@ Reglas IMPORTANTES:
 - Devolvé SOLO el JSON, sin texto adicional ni markdown.
 - SIEMPRE devolvé el array "pagos" aunque sea un solo pago.
 - Para transferencias bancarias, buscá el monto en el campo "Importe" o "Monto". No confundas el CBU/CVU (22 dígitos) con el monto.
-- Si el comprobante muestra "Fecha de emisión" y "Fecha de cobro/acreditación", usá siempre la de cobro/acreditación.
+- Si el comprobante muestra "Fecha de emisión" y "Fecha de cobro/acreditación", extraé AMBAS en fecha_emision y fecha_cobro. fecha debe repetir fecha_cobro para compatibilidad.
+- Si sólo hay una fecha inequívoca, completá fecha y el campo específico que corresponda. No inventes la otra.
 - Para cheques y echeqs:
   - El número de cheque suele tener 8 dígitos. El ID digital del echeq es más largo (20+ caracteres). No los confundas.
   - cheque_fecha es la FECHA DE VENCIMIENTO o FECHA DE COBRO del cheque (no la fecha de emisión). Si es un cheque diferido, la fecha de cobro es futura. SIEMPRE incluí este campo si aparece.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown, RefreshCw, Maximize2, Minimize2 } from "lucide-react";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
@@ -60,6 +60,7 @@ const MEDIO_TIPOS = [
   { value: "transferencia", label: "Transferencia bancaria" },
   { value: "efectivo", label: "Efectivo" },
   { value: "cheque_recibido", label: "Cheque" },
+  { value: "echeq", label: "E-Cheq" },
   { value: "deposito", label: "Depósito" },
 ];
 
@@ -96,7 +97,7 @@ function buildDesc(prefix: string, ref: string, obs: string, opRef: string): str
 
 // ── Component ────────────────────────────────────────────
 export default function CobroMasivoLiquidacion({
-  facturas, clienteId, clienteNombre, sociedadId, profileId, moneda, onClose, onSuccess,
+  facturas, clienteId, clienteNombre, sociedadId, moneda, onClose, onSuccess,
 }: Props) {
   const [opReferencia, setOpReferencia] = useState("");
   const [medios, setMedios] = useState<MedioPago[]>([newMedio()]);
@@ -104,6 +105,7 @@ export default function CobroMasivoLiquidacion({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
+  const requestKeyRef = useRef("");
 
   // ── Tipo de cambio (solo para facturas USD) ──
   const isUSD = moneda === "USD";
@@ -166,12 +168,18 @@ export default function CobroMasivoLiquidacion({
 
       // Build medios array (one movimiento per medio)
       const mediosPayload = medios.filter(m => num(m.monto) > 0).map(m => ({
-        tipo: m.tipo,
+        tipo: m.tipo === "echeq" ? "cheque_recibido" : m.tipo,
         monto: num(m.monto),
         descripcion: buildDesc(
           `Cobro${clienteNombre ? ` — ${clienteNombre}` : ""}${cotizSuffix}`,
           m.referencia, m.observaciones, opReferencia
         ),
+        ...((m.tipo === "cheque_recibido" || m.tipo === "echeq") ? {
+          tipo_cheque: m.tipo === "echeq" ? "echeq" : "fisico",
+          cheque_numero: m.cheque_numero || m.referencia || "",
+          cheque_banco: m.cheque_banco || "",
+          cheque_fecha_pago: m.cheque_fecha_pago || m.fecha || fechaPago,
+        } : {}),
       }));
 
       // Build retenciones array (one movimiento per retención)
@@ -198,40 +206,19 @@ export default function CobroMasivoLiquidacion({
         saldo: f.saldo,
       }));
 
-      // Single consolidated RPC call
-      const { data, error: rpcErr } = await (supabase as any).rpc("registrar_cobro_masivo", {
+      if (!requestKeyRef.current) requestKeyRef.current = crypto.randomUUID();
+
+      // Una unica RPC confirma movimientos, aplicaciones y cheques en cartera.
+      const { data, error: rpcErr } = await (supabase as any).rpc("registrar_cobro_masivo_seguro", {
         p_cliente_id: clienteId,
         p_facturas: facturasPayload,
         p_medios: mediosPayload,
         p_retenciones: retencionesPayload,
         p_fecha: fechaPago,
         p_sociedad_id: sociedadId,
-        p_created_by: profileId,
+        p_request_key: requestKeyRef.current,
       });
       if (rpcErr) throw new Error(rpcErr.message);
-
-      // Create echeq records for cheque payments
-      const chequeMedios = medios.filter(m => m.tipo === "cheque_recibido" && num(m.monto) > 0);
-      for (const chq of chequeMedios) {
-        const echeqRow = {
-          numero: chq.cheque_numero || chq.referencia || `CHQ-${Date.now()}`,
-          tipo_cheque: "echeq",
-          banco_emisor: chq.cheque_banco || null,
-          monto: num(chq.monto),
-          moneda: moneda,
-          fecha_emision: chq.fecha || null,
-          fecha_pago: chq.cheque_fecha_pago || chq.fecha || todayStr(),
-          estado: "en_cartera",
-          direccion: "recibido",
-          origen_tipo: "cliente",
-          origen_id: clienteId,
-          origen_nombre: clienteNombre,
-          sociedad_id: sociedadId,
-          user_id: profileId,
-          observaciones: chq.observaciones || null,
-        };
-        await (supabase as any).from("echeqs").insert(echeqRow);
-      }
 
       const movCount = data?.movimientos_count || mediosPayload.length + retencionesPayload.length;
       alert(`Cobro registrado: ${movCount} movimiento${movCount > 1 ? "s" : ""} para ${facturas.length} factura${facturas.length > 1 ? "s" : ""}`);
@@ -402,7 +389,7 @@ export default function CobroMasivoLiquidacion({
                       <Trash2 size={16} />
                     </button>
                   )}
-                  {medio.tipo === "cheque_recibido" && (
+                  {(medio.tipo === "cheque_recibido" || medio.tipo === "echeq") && (
                     <div className="w-full flex flex-wrap gap-2 mt-1">
                       <div className="w-48">
                         <label className="block text-[10px] uppercase text-zinc-400 mb-1">Banco emisor</label>

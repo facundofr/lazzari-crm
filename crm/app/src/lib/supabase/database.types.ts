@@ -1546,6 +1546,7 @@ export type Database = {
           created_at: string
           created_by: string | null
           cuit: string
+          cuit_titular_cuenta: string | null
           cbu: string | null
           dias_cuenta_corriente: number
           direccion: string | null
@@ -1573,6 +1574,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           cuit: string
+          cuit_titular_cuenta?: string | null
           cbu?: string | null
           dias_cuenta_corriente?: number
           direccion?: string | null
@@ -1600,6 +1602,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           cuit?: string
+          cuit_titular_cuenta?: string | null
           cbu?: string | null
           dias_cuenta_corriente?: number
           direccion?: string | null

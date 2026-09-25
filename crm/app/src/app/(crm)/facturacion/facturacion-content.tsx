@@ -66,7 +66,7 @@ interface FacturaRow {
   email_enviado_a?: string | null;
   email_resend_id?: string | null;
   email_estado?: "sent" | "delivered" | "bounced" | "complained" | "delivery_delayed" | null;
-  clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; email_facturacion?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string; dias_cuenta_corriente?: number | null } | null;
+  clientes: { razon_social: string; cuit: string; condicion_iva?: string; email?: string; email_facturacion?: string; telefono?: string; direccion?: string; localidad?: string; provincia?: string; dias_cuenta_corriente?: number | null; limite_credito?: number | null; saldo_cuenta_corriente?: number | null } | null;
   _clienteNombre?: string;
   _fechaVencCalc?: string;
   _prNumero?: string;
@@ -80,6 +80,8 @@ interface ClienteOption {
   razon_social: string;
   cuit: string;
   condicion_iva: string | null;
+  limite_credito?: number | null;
+  saldo_cuenta_corriente?: number | null;
 }
 
 interface EmitItem {
@@ -91,6 +93,11 @@ interface EmitItem {
 
 function formatComprobante(tipo: string, pv: number, num: number) {
   return `${tipo} ${String(pv).padStart(4, "0")}-${String(num).padStart(8, "0")}`;
+}
+
+function clienteAlcanzoLimite(cliente: { limite_credito?: number | null; saldo_cuenta_corriente?: number | null } | null | undefined) {
+  const limite = Number(cliente?.limite_credito || 0);
+  return limite > 0 && Number(cliente?.saldo_cuenta_corriente || 0) >= limite;
 }
 
 export function FacturacionContent({ embedded = false, autoSelectId }: { embedded?: boolean; autoSelectId?: string }) {
@@ -534,7 +541,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     try {
       let query = supabase
         .from("facturas")
-        .select(`*, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia, dias_cuenta_corriente), presupuestos:presupuesto_id(numero, cotizacion_modalidad, oc_cliente_fecha)`)
+        .select(`*, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia, dias_cuenta_corriente, limite_credito, saldo_cuenta_corriente), presupuestos:presupuesto_id(numero, cotizacion_modalidad, oc_cliente_fecha)`)
         .order("created_at", { ascending: false });
 
       if (sociedadActiva?.id) {
@@ -655,7 +662,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     setEmitClienteSearch("");
     setEmitOpen(true);
     // Fetch clientes
-    const q = supabase.from("clientes").select("id, razon_social, cuit, condicion_iva").eq("activo", true).order("razon_social");
+    const q = supabase.from("clientes").select("id, razon_social, cuit, condicion_iva, limite_credito, saldo_cuenta_corriente").eq("activo", true).order("razon_social");
     (sociedadActiva?.id ? q.eq("sociedad_id" as any, sociedadActiva.id) : q)
       .then(({ data }) => { if (data) setClientes(data as ClienteOption[]); });
     // Auto-fill next correlative number
@@ -1016,6 +1023,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [cobroCotizFetching, setCobroCotizFetching] = useState(false);
   const [cobroParsing, setCobroParsing] = useState(false);
   const cobroFileRef = useRef<HTMLInputElement>(null);
+  const cobroRequestKeyRef = useRef("");
 
   async function handleParseComprobante(files: FileList | File[]) {
     setCobroParsing(true);
@@ -1142,6 +1150,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         setFxCobro({clienteId:factura.cliente_id,documents:[{id:factura.id,numero:formatComprobante(factura.tipo,factura.punto_venta,factura.numero),saldo:saldoReal,total:Number(factura.total),subtotal:Number(factura.subtotal),cotizacion:Number(factura.tipo_cambio)||undefined}]});
         return;
       }
+      cobroRequestKeyRef.current = crypto.randomUUID();
       setCobroModalId(factura.id);
       setCobroLineas([{ tipo: "transferencia", monto: String(Math.max(0, Math.round(saldoReal * 100) / 100)), descripcion: "" }]);
     } catch(error) {
@@ -1180,6 +1189,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     if (!cobroModalId || lineasValidas.length === 0) return;
     const factura = facturas.find(f => f.id === cobroModalId);
     if (!factura) return;
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     if(factura.moneda!=="ARS"){alert("Los cobros de facturas USD deben registrarse desde la liquidación con tipo de cambio.");return;}
     const totalLineas = lineasValidas.reduce((s, l) => s + Number(l.monto), 0);
     const saldo = Number(factura.total) - Number(factura.total_acreditado || 0) - cobroPrevios;
@@ -1190,7 +1200,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     }
     setCobroSaving(true);
     try {
-      const userId = (await supabase.auth.getUser()).data.user?.id || null;
+      if (!cobroRequestKeyRef.current) cobroRequestKeyRef.current = crypto.randomUUID();
       const lineasPayload = lineasValidas.map(l => {
         let desc = l.descripcion || `Cobro ${formatComprobante(factura.tipo, factura.punto_venta, factura.numero)}`;
         // Append cheque details to description
@@ -1198,40 +1208,30 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           const parts = [l.cheque_banco, l.cheque_numero ? `N° ${l.cheque_numero}` : null, l.cheque_fecha, l.cheque_id_digital ? `ID: ${l.cheque_id_digital}` : null].filter(Boolean);
           desc = (l.descripcion ? l.descripcion + " — " : "") + parts.join(" · ");
         }
-        return { tipo: l.tipo === "echeq" ? "cheque_recibido" : l.tipo, monto: Number(l.monto), descripcion: desc };
+        return {
+          tipo: l.tipo === "echeq" ? "cheque_recibido" : l.tipo,
+          monto: Number(l.monto),
+          descripcion: desc,
+          ...(l.tipo === "cheque_recibido" || l.tipo === "echeq" ? {
+            tipo_cheque: l.tipo === "echeq" ? "echeq" : "fisico",
+            cheque_numero: l.cheque_numero || "",
+            cheque_banco: l.cheque_banco || "",
+            cheque_fecha_pago: l.cheque_fecha || cobroFecha,
+            cheque_id_digital: l.cheque_id_digital || "",
+          } : {}),
+        };
       });
-      const { data: rpcResult, error: rpcErr } = await (supabase as any).rpc("registrar_cobro", {
+      const { data: rpcResult, error: rpcErr } = await (supabase as any).rpc("registrar_cobro_seguro", {
         p_factura_id: cobroModalId,
         p_lineas: lineasPayload,
         p_fecha: cobroFecha,
-        p_sociedad_id: sociedadActiva?.id || null,
-        p_created_by: userId,
+        p_sociedad_id: sociedadActiva.id,
+        p_request_key: cobroRequestKeyRef.current,
       });
       if (rpcErr) throw rpcErr;
 
-      // Auto-create echeqs for cheque/echeq lines
-      const chequeLineas = lineasValidas.filter(l => l.tipo === "cheque_recibido" || l.tipo === "echeq");
-      for (const cl of chequeLineas) {
-        const echeqRow: Record<string, unknown> = {
-          direccion: "recibido",
-          tipo_cheque: cl.tipo === "echeq" ? "echeq" : "fisico",
-          numero: cl.cheque_numero || `CHQ-${Date.now()}`,
-          banco_emisor: cl.cheque_banco || null,
-          monto: Number(cl.monto),
-          moneda: "ARS",
-          fecha_pago: cl.cheque_fecha || cobroFecha,
-          estado: "en_cartera",
-          origen_tipo: "cliente",
-          origen_nombre: factura.clientes?.razon_social || factura._clienteNombre || "",
-          observaciones: cl.descripcion || null,
-        };
-        if (cl.cheque_id_digital) (echeqRow as any).echeq_id_digital = cl.cheque_id_digital;
-        if (sociedadActiva?.id) echeqRow.sociedad_id = sociedadActiva.id;
-        if (userId) echeqRow.user_id = userId;
-        await (supabase as any).from("echeqs").insert(echeqRow);
-      }
-
       setCobroModalId(null);
+      cobroRequestKeyRef.current = "";
       await fetchData();
       if (detailFactura?.id === cobroModalId) {
         setDetailFactura(prev => prev ? { ...prev, estado: rpcResult?.pagada ? "pagada" : "parcial" } : null);
@@ -1643,7 +1643,16 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                   </div>
                 </div>
               )},
-              { key: "clientes", label: "Cliente", sortable: true, sortKey: "_clienteNombre", render: (r) => <span className="font-medium">{r.clientes?.razon_social || "\u2014"}</span> },
+              { key: "clientes", label: "Cliente", sortable: true, sortKey: "_clienteNombre", render: (r) => (
+                <div>
+                  <span className="font-medium">{r.clientes?.razon_social || "\u2014"}</span>
+                  {clienteAlcanzoLimite(r.clientes) && (
+                    <p className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-amber-600 dark:text-amber-400" title="Aviso informativo; no bloquea la emisión">
+                      <AlertTriangle className="h-3 w-3" /> Límite de crédito alcanzado
+                    </p>
+                  )}
+                </div>
+              )},
               { key: "oc_cliente", label: "OC", render: (r) => r.oc_cliente
                 ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{r.oc_cliente}{r.oc_cliente_fecha && <small className="ml-1 font-sans text-zinc-400">({formatDate(r.oc_cliente_fecha)})</small>}</span>
                 : <span className="text-zinc-300">{"\u2014"}</span>
@@ -2006,6 +2015,11 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                         )}
                       </div>
                     )}
+                    {emitData.cliente_id !== "consumidor_final" && clienteAlcanzoLimite(clientes.find(c => c.id === emitData.cliente_id)) && (
+                      <p className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+                        <AlertTriangle className="h-3.5 w-3.5" /> Límite de crédito alcanzado; podés continuar con la emisión.
+                      </p>
+                    )}
                   </div>
                   <div className="col-span-2">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">PV</label>
@@ -2353,6 +2367,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">{detailFactura.clientes?.razon_social}</p>
                 {detailFactura.clientes?.cuit && <p className="text-xs text-zinc-500 mt-0.5">CUIT: {detailFactura.clientes.cuit}</p>}
                 {detailFactura.clientes?.condicion_iva && <p className="text-xs text-zinc-400">{detailFactura.clientes.condicion_iva}</p>}
+                {clienteAlcanzoLimite(detailFactura.clientes) && (
+                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-300">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <span>Límite de crédito alcanzado. Aviso informativo: la factura y sus acciones continúan habilitadas.</span>
+                  </div>
+                )}
               </div>
 
               {/* Solicitante */}
