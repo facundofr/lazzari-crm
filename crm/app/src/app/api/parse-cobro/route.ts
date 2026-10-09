@@ -55,6 +55,31 @@ Reglas IMPORTANTES:
 - Leé con mucho cuidado los montos: $1.234.567,89 = 1234567.89. Un punto seguido de 3 dígitos es separador de miles, una coma seguida de 2 dígitos es separador decimal.
 - CÓMO DISTINGUIR RETENCIONES: Los certificados de retención de ARCA/AFIP o municipales dicen claramente "CONSTANCIA DE RETENCIÓN" o "Certificado de Retención" en el encabezado. Mirá el título del documento, no solo el cuerpo.`;
 
+// Solo se agrega cuando el archivo es la orden de pago que nos manda un CLIENTE.
+// Pide además qué facturas paga y cuánto, para repartir depósito y retenciones.
+const ORDEN_PAGO_CLIENTE_PROMPT = `CONTEXTO: este archivo es una ORDEN DE PAGO / AVISO DE PAGO que un CLIENTE nos envía (nosotros cobramos).
+Además de "orden_pago_cliente" y "pagos", agregá al JSON estos campos:
+
+  "pagador": { "razon_social": "nombre del cliente que paga", "cuit": "CUIT del cliente que paga, solo dígitos" },
+  "fecha_orden": "YYYY-MM-DD fecha de la orden de pago",
+  "facturas_pagadas": [
+    { "tipo": "FA" | "FB" | "FCEA" | "NC" | "ND" | null, "punto_venta": 15, "numero": 7, "comprobante": "texto tal cual figura, ej. 0001500000007", "importe_pagado": 1277198.10, "saldo": 1277198.10, "moneda": "ARS" | "USD" }
+  ]
+
+Reglas para facturas_pagadas:
+- Una entrada por cada comprobante de la sección "Conceptos abonados", "Comprobantes cancelados", "Detalle" o similar.
+- Los números suelen venir pegados: "0001500000007" = punto de venta 15, número 7 (5 dígitos de punto de venta + 8 de número). "0015-00000007" = punto de venta 15, número 7.
+- importe_pagado es la columna "Pago" / "Importe pagado" (lo que se cancela de esa factura), no el total de la orden.
+- Las notas de crédito restan: usá tipo "NC" e importe_pagado positivo.
+
+Reglas para retenciones en "pagos":
+- Cada retención lleva "certificado" y, si el certificado detalla importes por comprobante ("Comprobantes origen" o similar), agregá
+  "detalle": [ { "punto_venta": 15, "numero": 7, "importe": 18471.80 } ].
+- Si la retención no detalla comprobantes, no inventes el detalle.
+- No dupliques: una retención que aparece en el resumen de la orden y también en su constancia es UNA sola entrada.
+
+`;
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -116,9 +141,10 @@ export async function POST(request: NextRequest) {
     }
 
     const contextoOrdenPago = contexto === "orden_pago_proveedor";
+    const contextoOrdenPagoCliente = contexto === "orden_pago_cliente";
     contentBlocks.push({
       type: "text",
-      text: `${contextoOrdenPago ? `CONTEXTO OBLIGATORIO: estos archivos fueron adjuntados al crear una orden de pago a un proveedor. Son comprobantes salientes generados por nuestra empresa. Todo cheque o eCheq hallado aquí es PROPIO/EMITIDO, nunca un cheque recibido de terceros: devolvé direccion "emitido". Si es electrónico/digital, devolvé tipo "echeq" y tipo_cheque "echeq".\n\n` : ""}${files.length > 1
+      text: `${contextoOrdenPagoCliente ? ORDEN_PAGO_CLIENTE_PROMPT : ""}${contextoOrdenPago ? `CONTEXTO OBLIGATORIO: estos archivos fueron adjuntados al crear una orden de pago a un proveedor. Son comprobantes salientes generados por nuestra empresa. Todo cheque o eCheq hallado aquí es PROPIO/EMITIDO, nunca un cheque recibido de terceros: devolvé direccion "emitido". Si es electrónico/digital, devolvé tipo "echeq" y tipo_cheque "echeq".\n\n` : ""}${files.length > 1
         ? `Hay ${files.length} comprobantes adjuntos. Extraé TODOS los pagos de TODOS los archivos y devolvé el JSON con el array "pagos".`
         : "Extraé todos los pagos de este comprobante y devolvé el JSON con el array \"pagos\". Si hay múltiples cheques, crealos como entradas separadas."}`,
     });

@@ -16,7 +16,8 @@ import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
 import { useFiscalDateLimits } from "@/lib/use-fiscal-date-limits";
 import { beginInvoiceIntent, postInvoiceIntent } from "@/lib/invoice-intent";
 import { useFceCheck, fceTotalArs } from "@/lib/use-fce-check";
-import { parseDecimalInput } from "@/lib/decimal-input";
+import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
+import { buildOrdenPagoPlan, comprobanteKey, type OpParsed } from "@/lib/orden-pago-plan";
 import { creditNoteTotals, creditNoteTypeForInvoice, freeAmountCreditItem, isInvoiceA, type SalesCreditNoteMode } from "@/lib/sales-credit-note";
 import { supabase } from "@/lib/supabase/client";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
@@ -96,6 +97,37 @@ interface EmitItem {
 
 function formatComprobante(tipo: string, pv: number, num: number) {
   return `${tipo} ${String(pv).padStart(4, "0")}-${String(num).padStart(8, "0")}`;
+}
+
+/**
+ * Buscador de facturas: coincide por cliente, CUIT, número de factura,
+ * presupuesto (PR) u orden de compra del cliente.
+ * Ej.: "corteva", "FA 0015-00000054", "54", "PR-2026-1231", "1231", "4300506128".
+ */
+/** Importe escrito por el usuario ("1.241.525,27", "1241525.27"…); inválido o vacío = 0. */
+function montoNum(v: string | number | null | undefined): number {
+  const n = parseDecimalInput(v ?? "");
+  return Number.isFinite(n) ? n : 0;
+}
+
+function facturaCoincideBusqueda(
+  f: { tipo: string; punto_venta: number; numero: number; oc_cliente?: string | null; _prNumero?: string; clientes?: { razon_social?: string | null; cuit?: string | null } | null },
+  busqueda: string,
+): boolean {
+  const q = busqueda.trim().toLowerCase();
+  if (!q) return true;
+  const soloDigitos = (t: string) => t.replace(/\D/g, "");
+  const comprobante = formatComprobante(f.tipo, f.punto_venta, f.numero);
+  const campos = [f.clientes?.razon_social, f.clientes?.cuit, comprobante, f._prNumero, f.oc_cliente]
+    .filter((c): c is string => !!c)
+    .map(c => c.toLowerCase());
+  if (campos.some(c => c.includes(q))) return true;
+  const qDigitos = soloDigitos(q);
+  if (!qDigitos) return false;
+  // "54" o "FA 15-54": el último grupo de dígitos es el número de la factura.
+  const ultimoGrupo = q.match(/\d+/g)?.pop();
+  if (ultimoGrupo && Number(ultimoGrupo) === Number(f.numero)) return true;
+  return campos.some(c => soloDigitos(c).includes(qDigitos));
 }
 
 function clienteAlcanzoLimite(cliente: { limite_credito?: number | null; saldo_cuenta_corriente?: number | null } | null | undefined) {
@@ -536,10 +568,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const filteredFacturas = useMemo(() => facturas.filter((f) => {
     if (!fvIsAll && !Array.from(fvSelectedEstados).some(grp => (ESTADO_GROUPS[grp] || [grp]).includes(f.estado))) return false;
     if (fvTipoFilter && f.tipo !== fvTipoFilter) return false;
-    if (clienteSearch.trim()) {
-      const nombre = (f.clientes?.razon_social || "").toLowerCase();
-      if (!nombre.includes(clienteSearch.trim().toLowerCase())) return false;
-    }
+    if (clienteSearch.trim() && !facturaCoincideBusqueda(f, clienteSearch)) return false;
     if (fvEnvioFilter === "enviada" && !f.email_enviado_at) return false;
     if (fvEnvioFilter === "no_enviada" && f.email_enviado_at) return false;
     return true;
@@ -1021,7 +1050,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   // ── Copy & PDF ─────────────────────────────────────────────────
   // Cobro modal
   const [cobroModalId, setCobroModalId] = useState<string | null>(null);
-  const [fxCobro, setFxCobro] = useState<{clienteId:string; documents:{id:string;numero:string;saldo:number;total:number;subtotal?:number;cotizacion?:number}[]} | null>(null);
+  const [fxCobro, setFxCobro] = useState<{clienteId:string; documents:{id:string;numero:string;saldo:number;total:number;subtotal?:number;cotizacion?:number}[]; ordenPago?: OpParsed; ordenPagoAvisos?: string[]} | null>(null);
+  // Cobro de todas las facturas de una orden de pago: primero las de pesos y después las de dólares.
+  const [opSecuencia, setOpSecuencia] = useState<{ parsed: OpParsed; clienteId: string; clienteNombre: string; ars: LiquidacionFactura[]; usd: {id:string;numero:string;saldo:number;total:number;subtotal?:number;cotizacion?:number}[]; avisos: string[] } | null>(null);
+  const [opSecuenciaPaso, setOpSecuenciaPaso] = useState<"ars" | "usd" | null>(null);
   type CobroLinea = { tipo: "cobro" | "transferencia" | "efectivo" | "tarjeta" | "cheque_recibido" | "echeq" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva"; monto: string; descripcion: string; cheque_numero?: string; cheque_banco?: string; cheque_fecha?: string; cheque_id_digital?: string };
   const [cobroLineas, setCobroLineas] = useState<CobroLinea[]>([{ tipo: "transferencia", monto: "", descripcion: "" }]);
   const [cobroFecha, setCobroFecha] = useState(todayAR());
@@ -1035,15 +1067,87 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const cobroFileRef = useRef<HTMLInputElement>(null);
   const cobroRequestKeyRef = useRef("");
 
+  // Busca en el sistema todas las facturas que figuran en la orden de pago y arma el
+  // cobro: las pendientes en pesos (paso 1) y en dólares (paso 2). Las ya cobradas o
+  // no encontradas se informan y no se tocan. Nada se registra sin confirmar.
+  async function iniciarCobroOrdenPago(parsed: OpParsed, clienteId: string) {
+    if (!sociedadActiva?.id || !clienteId) { alert("No se pudo identificar el cliente o la sociedad."); return; }
+    const claves = (parsed.facturas_pagadas || [])
+      .filter(f => !String(f.tipo || "").toUpperCase().startsWith("NC"))
+      .map(f => ({ clave: comprobanteKey(f.punto_venta, f.numero, f.comprobante), texto: f.comprobante || `${f.punto_venta}-${f.numero}` }))
+      .filter((c): c is { clave: string; texto: string } => !!c.clave);
+    if (!claves.length) { alert("La IA no encontró el detalle de facturas en la orden de pago."); return; }
+    try {
+      const numeros = Array.from(new Set(claves.map(c => Number(c.clave.split("-")[1]))));
+      const { data, error } = await (supabase as any).from("facturas")
+        .select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, tipo_cambio, estado, cliente_id, clientes(razon_social)")
+        .eq("sociedad_id", sociedadActiva.id).eq("cliente_id", clienteId).in("numero", numeros);
+      if (error) throw error;
+      const filas = ((data || []) as any[]).filter(f => f.estado !== "anulada" && claves.some(c => c.clave === `${Number(f.punto_venta)}-${Number(f.numero)}`));
+      const cobrado = await fetchCobradoMap(filas.map(f => ({ id: f.id, moneda: f.moneda || "ARS" })));
+      const ars: LiquidacionFactura[] = [];
+      const usd: {id:string;numero:string;saldo:number;total:number;subtotal?:number;cotizacion?:number}[] = [];
+      const avisos: string[] = [];
+      for (const c of claves) {
+        const f = filas.find(x => `${Number(x.punto_venta)}-${Number(x.numero)}` === c.clave);
+        if (!f) { avisos.push(`${c.texto}: no está en el sistema para este cliente (o está anulada). Revisala.`); continue; }
+        const numero = formatComprobante(f.tipo, f.punto_venta, f.numero);
+        const saldo = Math.round((Number(f.total) - Number(f.total_acreditado || 0) - (cobrado[f.id] || 0)) * 100) / 100;
+        if (saldo <= 0.01) { avisos.push(`${numero}: ya figura cobrada, no se vuelve a cobrar.`); continue; }
+        if ((f.moneda || "ARS") === "USD") usd.push({ id: f.id, numero, saldo, total: Number(f.total), subtotal: Number(f.subtotal || 0), cotizacion: Number(f.tipo_cambio) || undefined });
+        else ars.push({ id: f.id, numero, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), saldo, moneda: "ARS" });
+      }
+      if (!ars.length && !usd.length) { alert(`No hay facturas pendientes para cobrar en esta orden de pago.\n\n${avisos.join("\n")}`); return; }
+      const clienteNombre = filas[0]?.clientes?.razon_social || "";
+      setFxCobro(null); setCobroModalId(null); setCmLiquidacionOpen(false); setCmOpen(false);
+      setOpSecuencia({ parsed, clienteId, clienteNombre, ars, usd, avisos });
+      if (ars.length) setOpSecuenciaPaso("ars");
+      else abrirPasoUsd({ parsed, clienteId, clienteNombre, ars, usd, avisos });
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "No se pudieron buscar las facturas de la orden de pago.");
+    }
+  }
+
+  function avisosPaso(sec: NonNullable<typeof opSecuencia>, paso: "ars" | "usd"): string[] {
+    const pasos = (sec.ars.length ? 1 : 0) + (sec.usd.length ? 1 : 0);
+    const lineas: string[] = [];
+    if (pasos === 2) lineas.push(paso === "ars" ? "Paso 1 de 2: facturas en pesos. Al confirmar se abre el cobro de las facturas en dólares." : "Paso 2 de 2: facturas en dólares.");
+    return [...lineas, ...sec.avisos];
+  }
+
+  function abrirPasoUsd(sec: NonNullable<typeof opSecuencia>) {
+    setOpSecuenciaPaso("usd");
+    setFxCobro({ clienteId: sec.clienteId, documents: sec.usd, ordenPago: sec.parsed, ordenPagoAvisos: avisosPaso(sec, "usd") });
+  }
+
   async function handleParseComprobante(files: FileList | File[]) {
     setCobroParsing(true);
     try {
       const formData = new FormData();
       for (const file of Array.from(files)) formData.append("file", file);
+      formData.append("contexto", "orden_pago_cliente");
       const res = await fetch("/api/parse-cobro", { method: "POST", body: formData });
       const json = await res.json();
       if (!json.success || !json.data) { alert(json.error || "No se pudo leer el comprobante"); return; }
-      const pagos: any[] = json.data.pagos || (json.data.tipo ? [json.data] : []);
+      let pagos: any[] = json.data.pagos || (json.data.tipo ? [json.data] : []);
+      // Si es una orden de pago que también paga otras facturas, usar solo la parte de esta.
+      const facturaCobro = facturas.find(x => x.id === cobroModalId);
+      if (facturaCobro && Array.isArray(json.data.facturas_pagadas) && json.data.facturas_pagadas.length) {
+        const plan = buildOrdenPagoPlan(json.data as OpParsed, [{ id: facturaCobro.id, numero: formatComprobante(facturaCobro.tipo, facturaCobro.punto_venta, facturaCobro.numero) }]);
+        if (plan.incluidas.length) {
+          const original = (tipo: string) => pagos.find(p => String(p.tipo || "").toLowerCase() === tipo) || {};
+          pagos = [
+            ...plan.medios.map(m => ({ ...original(m.tipo), tipo: m.tipo, monto: m.monto, fecha: m.fecha, referencia: m.referencia, banco: m.banco })),
+            ...plan.retenciones.map(r => ({ ...original(r.tipo), tipo: r.tipo, monto: r.monto, referencia: r.certificado })),
+          ];
+          if (plan.otras.length && window.confirm(`Esta orden de pago también paga: ${plan.otras.map(o => `${o.comprobante} (${formatCurrency(o.importe, "ARS")})`).join(", ")}.\n\n¿Querés cobrar todas las facturas de la orden juntas?\n\nAceptar = cobrar todas · Cancelar = solo esta factura`)) {
+            void iniciarCobroOrdenPago(json.data as OpParsed, facturaCobro.cliente_id);
+            return;
+          }
+          const avisos = [...plan.otras.map(o => `La orden también paga ${o.comprobante} por ${formatCurrency(o.importe, "ARS")}: cobrala aparte.`), ...plan.avisos];
+          if (avisos.length) alert(`Se cargó solo la parte de esta factura.\n\n${avisos.join("\n")}`);
+        }
+      }
       if (pagos.length === 0) { alert("No se detectaron pagos en el comprobante"); return; }
 
       // Map API tipo → CobroLinea tipo
@@ -1072,7 +1176,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         }
         return {
           tipo,
-          monto: p.monto ? String(p.monto) : "",
+          monto: p.monto ? toDecimalInput(Number(p.monto)) : "",
           descripcion: descParts.join(" — "),
           cheque_numero: p.cheque_numero || "",
           cheque_banco: p.banco || "",
@@ -1163,7 +1267,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       }
       cobroRequestKeyRef.current = crypto.randomUUID();
       setCobroModalId(factura.id);
-      setCobroLineas([{ tipo: "transferencia", monto: String(Math.max(0, Math.round(saldoReal * 100) / 100)), descripcion: "" }]);
+      setCobroLineas([{ tipo: "transferencia", monto: toDecimalInput(Math.max(0, Math.round(saldoReal * 100) / 100)), descripcion: "" }]);
     } catch(error) {
       alert(error instanceof Error?error.message:"No se pudo verificar el saldo de la factura.");
     } finally {
@@ -1183,7 +1287,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     const netoProporcional = Math.round(netoFactura * ratio * 100) / 100;
     // Crear líneas: neto como transferencia + retenciones vacías para que el usuario complete
     const lineas: CobroLinea[] = [
-      { tipo: "transferencia", monto: String(Math.max(0, Math.round(saldo * 100) / 100)), descripcion: "" },
+      { tipo: "transferencia", monto: toDecimalInput(Math.max(0, Math.round(saldo * 100) / 100)), descripcion: "" },
     ];
     if (ivaProporcional > 0) {
       lineas.push({ tipo: "retencion_iva", monto: "", descripcion: `IVA factura: ${formatCurrency(ivaProporcional, f.moneda as "ARS" | "USD")}` });
@@ -1196,13 +1300,13 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   }
 
   async function handleRegistrarCobro() {
-    const lineasValidas = cobroLineas.filter(l => Number(l.monto) > 0);
+    const lineasValidas = cobroLineas.filter(l => montoNum(l.monto) > 0);
     if (!cobroModalId || lineasValidas.length === 0) return;
     const factura = facturas.find(f => f.id === cobroModalId);
     if (!factura) return;
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     if(factura.moneda!=="ARS"){alert("Los cobros de facturas USD deben registrarse desde la liquidación con tipo de cambio.");return;}
-    const totalLineas = lineasValidas.reduce((s, l) => s + Number(l.monto), 0);
+    const totalLineas = lineasValidas.reduce((s, l) => s + montoNum(l.monto), 0);
     const saldo = Number(factura.total) - Number(factura.total_acreditado || 0) - cobroPrevios;
     const saldoComp = saldo;
     if (totalLineas > saldoComp + 0.01) {
@@ -1221,7 +1325,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         }
         return {
           tipo: l.tipo === "echeq" ? "cheque_recibido" : l.tipo,
-          monto: Number(l.monto),
+          monto: montoNum(l.monto),
           descripcion: desc,
           ...(l.tipo === "cheque_recibido" || l.tipo === "echeq" ? {
             tipo_cheque: l.tipo === "echeq" ? "echeq" : "fisico",
@@ -1604,7 +1708,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
             <input value={clienteSearch} onChange={(e) => setClienteSearch(e.target.value)}
-              placeholder="Buscar por cliente..."
+              placeholder="Buscar por cliente, factura, PR u OC..."
               className="w-full rounded-lg border border-zinc-200 pl-9 pr-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
           </div>
           <select value={fvTipoFilter} onChange={(e) => setFvTipoFilter(e.target.value)}
@@ -2542,15 +2646,32 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       {fxCobro && sociedadActiva?.id && <FxSettlementDialog
         kind="cobro" counterpartyId={fxCobro.clienteId} sociedadId={sociedadActiva.id}
         documents={fxCobro.documents}
-        onClose={()=>setFxCobro(null)}
-        onSuccess={()=>{setFxCobro(null);setCobroModalId(null);setCmOpen(false);setCmLiquidacionOpen(false);fetchData();}}
+        ordenPago={fxCobro.ordenPago}
+        ordenPagoAvisos={fxCobro.ordenPagoAvisos}
+        onCobrarOrdenCompleta={opSecuencia ? undefined : (orden)=>{void iniciarCobroOrdenPago(orden, fxCobro.clienteId);}}
+        onClose={()=>{setFxCobro(null);setOpSecuencia(null);setOpSecuenciaPaso(null);}}
+        onSuccess={()=>{setFxCobro(null);setCobroModalId(null);setCmOpen(false);setCmLiquidacionOpen(false);setOpSecuencia(null);setOpSecuenciaPaso(null);fetchData();}}
       />}
+      {opSecuencia && opSecuenciaPaso === "ars" && (
+        <CobroMasivoLiquidacion
+          facturas={opSecuencia.ars}
+          clienteId={opSecuencia.clienteId}
+          clienteNombre={opSecuencia.clienteNombre}
+          sociedadId={sociedadActiva?.id || ""}
+          profileId={profile?.id || null}
+          moneda="ARS"
+          ordenPago={opSecuencia.parsed}
+          ordenPagoAvisos={avisosPaso(opSecuencia, "ars")}
+          onClose={() => { setOpSecuencia(null); setOpSecuenciaPaso(null); }}
+          onSuccess={() => { if (opSecuencia.usd.length) abrirPasoUsd(opSecuencia); else { setOpSecuencia(null); setOpSecuenciaPaso(null); } fetchData(); }}
+        />
+      )}
       {cobroModalId && (() => {
         const f = facturas.find(ff => ff.id === cobroModalId);
         if (!f) return null;
         const saldo = Number(f.total) - Number(f.total_acreditado || 0) - cobroPrevios;
-        const totalLineas = cobroLineas.reduce((s, l) => s + Number(l.monto || 0), 0);
-        const lineasValidas = cobroLineas.some(l => Number(l.monto) > 0);
+        const totalLineas = cobroLineas.reduce((s, l) => s + montoNum(l.monto), 0);
+        const lineasValidas = cobroLineas.some(l => montoNum(l.monto) > 0);
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
             <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
@@ -2651,7 +2772,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                             <option value="retencion_iva">Ret. IVA</option>
                             <option value="cobro">Otro</option>
                           </select>
-                          <input type="number" step="0.01" placeholder="Monto" value={linea.monto}
+                          <input type="text" inputMode="decimal" placeholder="Monto" value={linea.monto}
                             onChange={(e) => {
                               const newVal = e.target.value;
                               setCobroLineas(prev => {
@@ -2660,8 +2781,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                                 const isRetencion = updated[idx]?.tipo.startsWith("retencion_");
                                 const firstPayIdx = updated.findIndex(l => l.tipo === "transferencia" || l.tipo === "efectivo" || l.tipo === "cheque_recibido" || l.tipo === "echeq");
                                 if (isRetencion && firstPayIdx >= 0 && firstPayIdx !== idx) {
-                                  const totalRet = updated.reduce((s, l, i) => i !== firstPayIdx ? s + Number(l.monto || 0) : s, 0);
-                                  updated[firstPayIdx] = { ...updated[firstPayIdx], monto: String(Math.max(0, Math.round((saldo - totalRet) * 100) / 100)) };
+                                  const totalRet = updated.reduce((s, l, i) => i !== firstPayIdx ? s + montoNum(l.monto) : s, 0);
+                                  updated[firstPayIdx] = { ...updated[firstPayIdx], monto: toDecimalInput(Math.max(0, Math.round((saldo - totalRet) * 100) / 100)) };
                                 }
                                 return updated;
                               });
@@ -2888,6 +3009,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           moneda={(cmFCs.find(f => f.selected)?.moneda as "ARS" | "USD") || "ARS"}
           onClose={() => setCmLiquidacionOpen(false)}
           onSuccess={() => { setCmLiquidacionOpen(false); setCmOpen(false); fetchData(); }}
+          onCobrarOrdenCompleta={(orden) => { void iniciarCobroOrdenPago(orden, cmClienteId); }}
         />
       )}
 

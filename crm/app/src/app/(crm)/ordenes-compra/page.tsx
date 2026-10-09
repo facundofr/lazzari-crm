@@ -16,9 +16,10 @@ import {
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
   PackageCheck, MessageSquare, Edit3, Plus, Minus,
   Maximize2, Upload, Trash2, RefreshCw,
-  Search, CreditCard, Lock,
+  Search, CreditCard, Lock, Sparkles,
 } from "lucide-react";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
+import ConciliacionCompras from "@/components/conciliacion-compras";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -206,6 +207,7 @@ export default function OrdenesCompraPage() {
   // Cargar factura modal
   const [cargarFCOpen, setCargarFCOpen] = useState(false);
   const [cargarFCPreselectedId, setCargarFCPreselectedId] = useState<string | undefined>();
+  const [conciliarOpen, setConciliarOpen] = useState(false);
 
   // Email modal
   const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
@@ -2012,6 +2014,13 @@ export default function OrdenesCompraPage() {
       {/* Secondary action bar */}
       {canManageCompras && <div className="px-4 sm:px-8 pt-2 flex justify-end gap-3">
         <button
+          onClick={() => setConciliarOpen(true)}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-orange-600 text-white hover:bg-orange-700 transition-colors"
+        >
+          <Sparkles className="h-4 w-4" />
+          Conciliar facturas (IA)
+        </button>
+        <button
           onClick={() => { setCargarFCPreselectedId(undefined); setCargarFCOpen(true); }}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
         >
@@ -3545,6 +3554,16 @@ export default function OrdenesCompraPage() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Conciliación de facturas de compra con IA */}
+      {conciliarOpen && (
+        <ConciliacionCompras
+          sociedadId={sociedadActiva?.id || ""}
+          profileId={profile?.id || null}
+          onClose={() => setConciliarOpen(false)}
+          onSuccess={() => { setConciliarOpen(false); fetchData(); }}
+        />
       )}
 
       {/* Modal cargar factura de compra */}

@@ -4,6 +4,8 @@ import { useState, useMemo, useEffect, useRef } from "react";
 import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown, RefreshCw, Maximize2, Minimize2, Upload, Sparkles, Loader2, FileCheck2 } from "lucide-react";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
+import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
+import { buildOrdenPagoPlan, type OpParsed } from "@/lib/orden-pago-plan";
 
 // ── Types ────────────────────────────────────────────────
 export interface LiquidacionFactura {
@@ -48,12 +50,19 @@ interface Props {
   moneda: "ARS" | "USD";
   onClose: () => void;
   onSuccess: () => void;
+  /** Orden de pago ya leída por IA: se aplica al abrir (cobro de todas las facturas de una OP). */
+  ordenPago?: OpParsed;
+  /** Mensajes del paso a paso cuando se cobran todas las facturas de una OP. */
+  ordenPagoAvisos?: string[];
+  /** Si la OP paga otras facturas, ofrece cobrarlas todas juntas. */
+  onCobrarOrdenCompleta?: (ordenPago: OpParsed) => void;
 }
 
 // ── Helpers ──────────────────────────────────────────────
 const uid = () => Math.random().toString(36).slice(2, 9);
 const todayStr = () => todayAR();
-const num = (v: string) => parseFloat(v) || 0;
+// Acepta "1.241.525,27", "1241525,27" o "1241525.27". Vacío o inválido = 0.
+const num = (v: string) => { const n = parseDecimalInput(v); return Number.isFinite(n) ? n : 0; };
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
 const MEDIO_TIPOS = [
@@ -96,7 +105,7 @@ function buildDesc(prefix: string, ref: string, obs: string, opRef: string): str
 
 // ── Component ────────────────────────────────────────────
 export default function CobroMasivoLiquidacion({
-  facturas, clienteId, clienteNombre, sociedadId, moneda, onClose, onSuccess,
+  facturas, clienteId, clienteNombre, sociedadId, moneda, onClose, onSuccess, ordenPago, ordenPagoAvisos, onCobrarOrdenCompleta,
 }: Props) {
   const [opReferencia, setOpReferencia] = useState("");
   const [medios, setMedios] = useState<MedioPago[]>([newMedio()]);
@@ -107,6 +116,7 @@ export default function CobroMasivoLiquidacion({
   const [opFiles, setOpFiles] = useState<File[]>([]);
   const [parsingOP, setParsingOP] = useState(false);
   const [opParseMessage, setOpParseMessage] = useState("");
+  const [opConOtras, setOpConOtras] = useState<OpParsed | null>(null);
   const requestKeyRef = useRef("");
 
   // ── Tipo de cambio (solo para facturas USD) ──
@@ -121,7 +131,7 @@ export default function CobroMasivoLiquidacion({
       const res = await fetch(`/api/cotizacion-bna?modalidad=${modalidad}`);
       if (res.ok) {
         const data = await res.json();
-        setCotizacion(String(data.valor_venta));
+        setCotizacion(toDecimalInput(Number(data.valor_venta)));
         setCotizModalidad(modalidad);
       }
     } catch { /* ignore */ } finally { setFetchingCotiz(false); }
@@ -166,46 +176,61 @@ export default function CobroMasivoLiquidacion({
     try {
       const form = new FormData();
       files.forEach((file) => form.append("file", file));
+      form.append("contexto", "orden_pago_cliente");
       const response = await fetch("/api/parse-cobro", { method: "POST", body: form });
       const json = await response.json();
       if (!response.ok || !json.success) throw new Error(json.error || "No se pudo leer la orden de pago");
 
-      const parsed = json.data || {};
-      const payments: any[] = Array.isArray(parsed.pagos) ? parsed.pagos : [];
-      const parsedMedios: MedioPago[] = [];
-      const parsedRetenciones: RetencionLinea[] = [];
-      for (const payment of payments) {
-        const tipo = String(payment.tipo || "").toLowerCase();
-        const monto = Number(payment.monto || 0);
-        if (!(monto > 0)) continue;
-        if (tipo.startsWith("retencion_") || tipo.startsWith("percepcion_")) {
-          parsedRetenciones.push({
-            _id: uid(),
-            tipo: RETENCION_TIPOS.some((option) => option.value === tipo) ? tipo : "ajuste",
-            organismo: String(payment.organismo || payment.destinatario || ""),
-            certificado: String(payment.certificado || payment.referencia || ""),
-            monto: String(monto),
-            observaciones: String(payment.notas || payment.concepto || ""),
-          });
-          continue;
-        }
+      aplicarOrdenPago((json.data || {}) as OpParsed);
+    } catch (parseError) {
+      setOpParseMessage(parseError instanceof Error ? parseError.message : "No se pudo leer la orden de pago");
+    } finally {
+      setParsingOP(false);
+    }
+  }
+
+  function aplicarOrdenPago(ordenLeida: OpParsed) {
+    try {
+      const parsed = ordenLeida as OpParsed & { pagos?: any[] };
+      // Solo lo que corresponde a las facturas de esta liquidación: si la OP también
+      // paga otras facturas (por ejemplo en dólares), su parte queda informada aparte.
+      const plan = buildOrdenPagoPlan(parsed, facturas.map((f) => ({ id: f.id, numero: f.numero })));
+      const originales: any[] = Array.isArray(parsed.pagos) ? parsed.pagos : [];
+      const original = (tipo: string, monto: number) => originales.find((p) => String(p.tipo || "").toLowerCase() === tipo && Math.abs(Number(p.monto || 0) - monto) < 0.01)
+        || originales.find((p) => String(p.tipo || "").toLowerCase() === tipo) || {};
+      const parsedRetenciones: RetencionLinea[] = plan.retenciones.map((r) => {
+        const p = original(r.tipo, r.monto);
+        return {
+          _id: uid(),
+          tipo: RETENCION_TIPOS.some((option) => option.value === r.tipo) ? r.tipo : "ajuste",
+          organismo: String(r.organismo || p.organismo || p.destinatario || ""),
+          certificado: String(r.certificado || p.certificado || p.referencia || ""),
+          monto: toDecimalInput(r.monto),
+          observaciones: String(p.notas || p.concepto || ""),
+        };
+      });
+      const parsedMedios: MedioPago[] = plan.medios.map((m) => {
+        const p = original(m.tipo, m.monto);
+        const tipo = m.tipo;
         // Todo cheque recibido se presume electrónico. Solo el operador puede
         // cambiarlo a físico con la casilla explícita antes de confirmar.
         const normalizedType = tipo === "cheque" || tipo === "echeq"
           ? "echeq"
           : MEDIO_TIPOS.some((option) => option.value === tipo) ? tipo : "transferencia";
-        parsedMedios.push({
+        return {
           _id: uid(),
           tipo: normalizedType,
-          monto: String(monto),
-          fecha: String(payment.fecha_cobro || payment.fecha || todayStr()),
-          referencia: String(payment.referencia || payment.cheque_numero || payment.cheque_id_digital || ""),
-          observaciones: String(payment.notas || payment.concepto || ""),
-          cheque_banco: String(payment.banco || ""),
-          cheque_numero: String(payment.cheque_numero || payment.cheque_id_digital || ""),
-          cheque_fecha_pago: String(payment.cheque_fecha || payment.fecha_cobro || payment.fecha || ""),
-        });
-      }
+          monto: toDecimalInput(m.monto),
+          fecha: String(m.fecha || p.fecha_cobro || p.fecha || todayStr()),
+          referencia: String(m.referencia || p.cheque_numero || p.cheque_id_digital || ""),
+          observaciones: String(p.notas || p.concepto || ""),
+          cheque_banco: String(m.banco || p.banco || ""),
+          cheque_numero: String(p.cheque_numero || p.cheque_id_digital || ""),
+          cheque_fecha_pago: String(p.cheque_fecha || p.fecha_cobro || p.fecha || ""),
+        };
+      });
+      setOpConOtras(plan.otras.length && !ordenPagoAvisos ? ordenLeida : null);
+      const otrasLineas = ordenPagoAvisos ? ordenPagoAvisos : plan.otras.map((o) => `La orden también paga ${o.comprobante} por ${formatCurrency(o.importe, "ARS")}: cobrala aparte (${formatCurrency(o.medios, "ARS")} del pago + ${formatCurrency(o.retenciones.reduce((s, r) => s + r.monto, 0), "ARS")} de retenciones).`);
 
       if (parsedMedios.length) {
         setMedios((current) => current.length === 1 && !current[0].monto && !current[0].referencia ? parsedMedios : [...current, ...parsedMedios]);
@@ -213,13 +238,20 @@ export default function CobroMasivoLiquidacion({
       if (parsedRetenciones.length) setRetenciones((current) => [...current, ...parsedRetenciones]);
       if (parsed.orden_pago_cliente) setOpReferencia(String(parsed.orden_pago_cliente));
       if (!parsedMedios.length && !parsedRetenciones.length) throw new Error("La IA no encontró medios de pago ni retenciones en el archivo.");
-      setOpParseMessage(`IA completó ${parsedMedios.length} medio${parsedMedios.length === 1 ? "" : "s"} y ${parsedRetenciones.length} retención${parsedRetenciones.length === 1 ? "" : "es"}. Revisá los datos antes de confirmar.`);
+      setOpParseMessage([`IA completó ${parsedMedios.length} medio${parsedMedios.length === 1 ? "" : "s"} y ${parsedRetenciones.length} retención${parsedRetenciones.length === 1 ? "" : "es"}. Revisá los datos antes de confirmar.`, ...otrasLineas, ...plan.avisos].join(" "));
     } catch (parseError) {
-      setOpParseMessage(parseError instanceof Error ? parseError.message : "No se pudo leer la orden de pago");
-    } finally {
-      setParsingOP(false);
+      setOpParseMessage(parseError instanceof Error ? parseError.message : "No se pudo aplicar la orden de pago");
     }
   }
+
+  // Orden de pago recibida ya leída: se aplica una sola vez al abrir.
+  const ordenPagoAplicada = useRef(false);
+  useEffect(() => {
+    if (!ordenPago || ordenPagoAplicada.current) return;
+    ordenPagoAplicada.current = true;
+    aplicarOrdenPago(ordenPago);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordenPago]);
 
   // ── Confirm & register ──
   async function handleConfirmar() {
@@ -395,6 +427,7 @@ export default function CobroMasivoLiquidacion({
               </div>
             )}
             {opParseMessage && <p className={`mt-2 text-xs ${opParseMessage.startsWith("IA completó") ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{opParseMessage}</p>}
+            {opConOtras && onCobrarOrdenCompleta && <button type="button" onClick={() => onCobrarOrdenCompleta(opConOtras)} className="mt-2 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white">Cobrar todas las facturas de esta orden de pago</button>}
           </section>
 
           {/* ── 2b. Tipo de cambio (solo USD) ── */}
@@ -419,7 +452,7 @@ export default function CobroMasivoLiquidacion({
                 </div>
                 <div className="w-40">
                   <label className="block text-[10px] uppercase text-zinc-400 mb-1">Cotización ($/US$)</label>
-                  <input type="number" step="0.01" min="0" placeholder="Ej: 1250.00"
+                  <input type="text" inputMode="decimal" placeholder="Ej: 1.250,00"
                     value={cotizacion} onChange={e => setCotizacion(e.target.value)}
                     className="w-full px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
                 </div>
@@ -452,7 +485,7 @@ export default function CobroMasivoLiquidacion({
                   </div>
                   <div className="w-36">
                     <label className="block text-[10px] uppercase text-zinc-400 mb-1">Importe</label>
-                    <input type="number" step="0.01" min="0" placeholder="0.00"
+                    <input type="text" inputMode="decimal" placeholder="0,00"
                       value={medio.monto} onChange={e => updateMedio(medio._id, "monto", e.target.value)}
                       className="w-full px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
                   </div>
@@ -555,7 +588,7 @@ export default function CobroMasivoLiquidacion({
                     </div>
                     <div className="w-32">
                       <label className="block text-[10px] uppercase text-zinc-400 mb-1">Importe</label>
-                      <input type="number" step="0.01" min="0" placeholder="0.00"
+                      <input type="text" inputMode="decimal" placeholder="0,00"
                         value={ret.monto} onChange={e => updateRetencion(ret._id, "monto", e.target.value)}
                         className="w-full px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
                     </div>
@@ -594,7 +627,7 @@ export default function CobroMasivoLiquidacion({
                 <span className="flex items-center gap-1.5">
                   <button type="button" title="Copiar monto" onClick={() => { navigator.clipboard.writeText(totalEsperado.toFixed(2)); }}
                     className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600"><Copy size={13} /></button>
-                  <button type="button" title="Completar en medio de pago" onClick={() => { if (medios.length > 0) { const remaining = r2(totalEsperado - medios.slice(1).reduce((s, m2) => s + num(m2.monto), 0)); updateMedio(medios[0]._id, "monto", String(Math.max(0, remaining))); } }}
+                  <button type="button" title="Completar en medio de pago" onClick={() => { if (medios.length > 0) { const remaining = r2(totalEsperado - medios.slice(1).reduce((s, m2) => s + num(m2.monto), 0)); updateMedio(medios[0]._id, "monto", toDecimalInput(Math.max(0, remaining))); } }}
                     className="p-1 rounded hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-400 hover:text-orange-600"><ArrowDown size={13} /></button>
                   <span className="font-mono">{fc(totalEsperado, isUSD ? "ARS" : m)}</span>
                 </span>
@@ -607,7 +640,7 @@ export default function CobroMasivoLiquidacion({
                 <span className="flex items-center gap-1.5">
                   <button type="button" title="Copiar pendiente" onClick={() => { navigator.clipboard.writeText(Math.abs(diferencia).toFixed(2)); }}
                     className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600"><Copy size={13} /></button>
-                  <button type="button" title="Completar en medio de pago" onClick={() => { if (medios.length > 0 && diferencia > 0.01) { const remaining = r2(totalEsperado - medios.slice(1).reduce((s, m2) => s + num(m2.monto), 0)); updateMedio(medios[0]._id, "monto", String(Math.max(0, remaining))); } }}
+                  <button type="button" title="Completar en medio de pago" onClick={() => { if (medios.length > 0 && diferencia > 0.01) { const remaining = r2(totalEsperado - medios.slice(1).reduce((s, m2) => s + num(m2.monto), 0)); updateMedio(medios[0]._id, "monto", toDecimalInput(Math.max(0, remaining))); } }}
                     className="p-1 rounded hover:bg-orange-100 dark:hover:bg-orange-900/30 text-orange-400 hover:text-orange-600"><ArrowDown size={13} /></button>
                   <span className="font-mono">{fc(diferencia, isUSD ? "ARS" : m)}</span>
                 </span>

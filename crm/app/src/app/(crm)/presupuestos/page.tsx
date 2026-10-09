@@ -1845,7 +1845,8 @@ export default function PresupuestosPage() {
 
       const { data: newPRRow, error: insertError } = await supabase
         .from("presupuestos")
-        .insert({ ...rest, estado: "pendiente", version: 1 } as any)
+        // La OC del cliente, su fecha y el adjunto son de la operación original: el duplicado arranca sin ellos.
+        .insert({ ...rest, estado: "pendiente", version: 1, oc_cliente: null, oc_cliente_fecha: null, archivo_url: null, archivo_nombre: null } as any)
         .select()
         .single();
 
@@ -3055,30 +3056,48 @@ export default function PresupuestosPage() {
                 </div>
                 <div>
                   <p className="text-xs text-zinc-500">OC del cliente</p>
-                  {(selected as any).ocCliente ? (
-                    <p className="text-sm font-medium font-mono text-blue-600 dark:text-blue-400">{(selected as any).ocCliente}</p>
-                  ) : (
-                    <button
-                      onClick={async () => {
-                        const oc = prompt("Número de OC del cliente:");
-                        if (oc && oc.trim()) {
-                          let ocClienteUpdate = supabase.from("presupuestos").update({ oc_cliente: oc.trim() } as any).eq("id", selected.id);
-                          if (sociedadActiva?.id) ocClienteUpdate = ocClienteUpdate.eq("sociedad_id" as any, sociedadActiva.id);
-                          const { data: updated, error } = await ocClienteUpdate.select("oc_cliente").maybeSingle();
-                          if (error || !updated) {
-                            toast.error(`No se pudo guardar la OC${error?.message ? `: ${error.message}` : ". Verificá tus permisos y la sociedad activa."}`);
-                            return;
-                          }
-                          setSelected({ ...selected, ocCliente: oc.trim() } as any);
-                          await fetchPresupuestos();
-                          toast.success("OC del cliente guardada");
-                        }
-                      }}
-                      className="text-sm text-orange-500 hover:text-orange-600 underline underline-offset-2"
-                    >
-                      + Adjuntar OC
-                    </button>
-                  )}
+                  {(() => {
+                    const ocActual: string = (selected as any).ocCliente || "";
+                    const exOcs = String(selected.notasInternas || "").split("\n").filter(l => l.startsWith("EX OC:"));
+                    // Editable siempre, en cualquier estado. Si se reemplaza una OC, la anterior queda
+                    // registrada en las notas internas como "EX OC: ..." para no perder la trazabilidad.
+                    const editarOc = async () => {
+                      const ingresada = prompt(ocActual ? `OC actual: ${ocActual}\n\nNuevo número de OC del cliente (la actual queda registrada como EX OC):` : "Número de OC del cliente:", ocActual);
+                      if (ingresada === null) return;
+                      const nueva = ingresada.trim();
+                      if (nueva === ocActual) return;
+                      const cambios: Record<string, unknown> = { oc_cliente: nueva || null };
+                      let notas = String(selected.notasInternas || "");
+                      if (ocActual) {
+                        const quien = profile?.full_name ? ` por ${profile.full_name}` : "";
+                        notas = `${notas ? `${notas}\n` : ""}EX OC: ${ocActual} (reemplazada el ${formatDate(todayAR())}${quien})`;
+                        cambios.notas_internas = notas;
+                      }
+                      let ocClienteUpdate = supabase.from("presupuestos").update(cambios as any).eq("id", selected.id);
+                      if (sociedadActiva?.id) ocClienteUpdate = ocClienteUpdate.eq("sociedad_id" as any, sociedadActiva.id);
+                      const { data: updated, error } = await ocClienteUpdate.select("oc_cliente").maybeSingle();
+                      if (error || !updated) {
+                        toast.error(`No se pudo guardar la OC${error?.message ? `: ${error.message}` : ". Verificá tus permisos y la sociedad activa."}`);
+                        return;
+                      }
+                      setSelected({ ...selected, ocCliente: nueva, notasInternas: notas } as any);
+                      await fetchPresupuestos();
+                      toast.success(ocActual ? `OC actualizada. La anterior quedó como EX OC: ${ocActual}` : "OC del cliente guardada");
+                    };
+                    return (
+                      <div>
+                        {ocActual ? (
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium font-mono text-blue-600 dark:text-blue-400">{ocActual}</p>
+                            <button onClick={editarOc} className="text-xs text-orange-500 hover:text-orange-600 underline underline-offset-2" title="Cambiar la OC del cliente">Editar</button>
+                          </div>
+                        ) : (
+                          <button onClick={editarOc} className="text-sm text-orange-500 hover:text-orange-600 underline underline-offset-2">+ Adjuntar OC</button>
+                        )}
+                        {exOcs.map((l, k) => <p key={k} className="mt-0.5 text-[11px] text-zinc-400 font-mono">{l}</p>)}
+                      </div>
+                    );
+                  })()}
                   <div className="mt-2">
                     <label className="text-[11px] text-zinc-400">Fecha de la OC</label>
                     <input type="date" value={(selected as any).ocClienteFecha || ""}
