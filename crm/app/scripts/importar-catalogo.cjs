@@ -69,10 +69,14 @@ function leerCatalogo(texto) {
       moneda: MONEDAS[(f[col("moneda")] || "").trim().toLowerCase()],
       costo: numero(f[col("costo")]),
       margen: col("margen") >= 0 ? numero(f[col("margen")]) : null,
+      ...(col("marca") >= 0 ? { marca: (f[col("marca")] || "").trim() || null } : {}),
+      ...(col("rubro") >= 0 ? { rubro: (f[col("rubro")] || "").trim() || null } : {}),
       precio_venta: numero(f[col("precio_venta")]),
     };
     const linea = i + 2;
-    if (!a.proveedor || !a.codigo || !a.descripcion) return errores.push(`Línea ${linea}: falta proveedor, código o descripción`);
+    if (a.codigo === "—" || a.codigo === "-") a.codigo = "";
+    // Sin código de proveedor se acepta si trae codigo_interno (ej.: MED-001).
+    if (!a.proveedor || !a.descripcion || (!a.codigo && !a.codigo_interno)) return errores.push(`Línea ${linea}: falta proveedor, descripción o código`);
     if (!a.moneda) return errores.push(`Línea ${linea}: moneda desconocida «${f[col("moneda")]}»`);
     if (a.costo === null || a.precio_venta === null) return errores.push(`Línea ${linea}: costo o precio inválido`);
     const k = claveDe(a);
@@ -102,7 +106,8 @@ function compararCatalogo(articulos, existentes) {
     if (!e) { nuevos.push(a); continue; }
     vistos.add(e.id);
     const cambioPrecio = e.moneda !== a.moneda || !igual(e.costo, a.costo) || !igual(e.precio_venta, a.precio_venta);
-    const cambioDatos = cambioPrecio || (a.margen !== null && !igual(e.margen ?? 0, a.margen)) || (a.codigo_interno && e.codigo_interno !== a.codigo_interno);
+    const cambioDatos = cambioPrecio || (a.margen !== null && !igual(e.margen ?? 0, a.margen)) || (a.codigo_interno && e.codigo_interno !== a.codigo_interno)
+      || ("marca" in a && (e.marca || null) !== a.marca) || ("rubro" in a && (e.rubro || null) !== a.rubro);
     if (!e.activo) reactivan.push({ antes: e, ahora: a, cambioPrecio });
     else if (cambioDatos) cambian.push({ antes: e, ahora: a, cambioPrecio });
     else iguales.push(a);
@@ -174,9 +179,13 @@ async function main() {
     if (error) throw new Error(`Error cargando nuevos: ${error.message}`);
   }
   const hist = [];
-  for (const c of [...r.cambian, ...r.reactivan]) {
-    const { error } = await db.from("catalogo_costos").update({ ...c.ahora, activo: true, actualizado_at: ahora }).eq("id", c.antes.id);
-    if (error) throw new Error(`Error actualizando ${c.ahora.codigo}: ${error.message}`);
+  const actualizar = [...r.cambian, ...r.reactivan];
+  for (const lote of lotes(actualizar)) {
+    const { error } = await db.from("catalogo_costos").upsert(lote.map(c => ({ id: c.antes.id, ...c.ahora, activo: true, actualizado_at: ahora })), { onConflict: "id" });
+    if (error) throw new Error(`Error actualizando: ${error.message}`);
+    process.stdout.write(".");
+  }
+  for (const c of actualizar) {
     if (c.cambioPrecio || !c.antes.activo) hist.push({
       catalogo_id: c.antes.id, cambio: c.antes.activo ? "precio" : "reactivado",
       moneda_anterior: c.antes.moneda, costo_anterior: c.antes.costo, precio_venta_anterior: c.antes.precio_venta,

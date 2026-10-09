@@ -3250,15 +3250,16 @@ export default function ClientesPage() {
                 placeholder="Ej: 30"
               />
               <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Moneda predeterminada</label>
+                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Moneda y tipo de dólar predeterminado</label>
                 <div className="flex gap-2">
                   {["ARS", "USD", "USD Divisa"].map(m => (
                     <button key={m} type="button" onClick={() => setForm({ ...form, moneda_predeterminada: m })}
                       className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${form.moneda_predeterminada === m ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"}`}>
-                      {m}
+                      {m === "ARS" ? "Pesos" : m === "USD" ? "USD billete" : "USD divisa"}
                     </button>
                   ))}
                 </div>
+                <p className="text-[11px] text-zinc-500">Los presupuestos de este cliente toman este tipo de dólar automáticamente y avisan si se cotiza con otro.</p>
               </div>
               <div className="space-y-1.5">
                 <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Vendedor asignado</label>

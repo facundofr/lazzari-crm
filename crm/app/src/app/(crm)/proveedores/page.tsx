@@ -61,6 +61,7 @@ function mapSupabaseProveedor(row: Record<string, unknown>): Proveedor {
   return {
     id: row.id as string,
     razonSocial: row.razon_social as string,
+    nombreFantasia: (row.nombre_fantasia as string) ?? "",
     cuit: row.cuit as string,
     condicionIva: (row.condicion_iva as Proveedor["condicionIva"]) ?? "RI",
     email: row.email as string,
@@ -153,6 +154,7 @@ const CONCEPTOS_RG830: Record<string, string> = {
 
 const emptyForm = {
   razon_social: "",
+  nombre_fantasia: "",
   cuit: "",
   condicion_iva: "RI",
   email: "",
@@ -607,7 +609,7 @@ export default function ProveedoresPage() {
     // Text search
     if (search) {
       const q = search.toLowerCase();
-      if (!p.razonSocial.toLowerCase().includes(q) && !p.cuit.includes(search) && !p.rubro.toLowerCase().includes(q)) return false;
+      if (!p.razonSocial.toLowerCase().includes(q) && !String((p as any).nombreFantasia || "").toLowerCase().includes(q) && !p.cuit.includes(search) && !p.rubro.toLowerCase().includes(q)) return false;
     }
     // Smart filters
     if (filterValues.rubro && (filterValues.rubro as string) !== "" && p.rubro !== filterValues.rubro) return false;
@@ -647,7 +649,7 @@ export default function ProveedoresPage() {
   function openEdit(p: Proveedor) {
     setEditingId(p.id);
     setForm({
-      razon_social: p.razonSocial, cuit: p.cuit, condicion_iva: p.condicionIva,
+      razon_social: p.razonSocial, nombre_fantasia: (p as any).nombreFantasia ?? "", cuit: p.cuit, condicion_iva: p.condicionIva,
       email: p.email, telefono: p.telefono, direccion: p.direccion,
       localidad: p.localidad, provincia: p.provincia, rubro: p.rubro,
       banco: (p as any).banco ?? "", cbu: p.cbu ?? "", alias_bancario: p.aliasBancario ?? "", numero_cuenta: p.numeroCuenta ?? "",
@@ -998,7 +1000,7 @@ export default function ProveedoresPage() {
                         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600 font-bold text-xs">{row.razonSocial.split(" ").map(w => w[0]).join("").slice(0, 2)}</div>
                         <div>
                           <div className="flex items-center gap-2"><p className="font-medium text-zinc-900 dark:text-white">{row.razonSocial}</p>{row.esTransportista && <Badge variant="orange">Transportista</Badge>}{!row.activo && <Badge variant="outline">Inactivo</Badge>}</div>
-                          <p className="text-xs text-zinc-400">{row.cuit}</p>
+                          <p className="text-xs text-zinc-400">{(row as any).nombreFantasia ? <span className="font-medium text-zinc-600 dark:text-zinc-300">{(row as any).nombreFantasia} · </span> : null}{row.cuit}</p>
                         </div>
                       </div>
                     )},
@@ -1315,6 +1317,11 @@ export default function ProveedoresPage() {
               <div className="col-span-2">
                 <label className="text-xs font-medium text-zinc-500">Razon social *</label>
                 <input value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+              </div>
+              <div className="col-span-2">
+                <label className="text-xs font-medium text-zinc-500">Nombre de fantasía / comercial</label>
+                <input value={form.nombre_fantasia || ""} onChange={(e) => setForm({ ...form, nombre_fantasia: e.target.value })} placeholder="Ej.: Conoflex (como figura en la lista de costos)" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+                <p className="mt-1 text-[11px] text-zinc-400">La razón social la completa ARCA con el CUIT. El nombre comercial no figura en ARCA: cargalo acá una vez y la lista de costos reconoce al proveedor sola.</p>
               </div>
               <div>
                 <label className="text-xs font-medium text-zinc-500">CUIT *</label>

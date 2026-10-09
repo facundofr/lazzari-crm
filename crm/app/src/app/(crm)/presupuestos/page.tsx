@@ -24,6 +24,7 @@ import { createPortal } from "react-dom";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { useUser } from "@/lib/auth-context";
 import { PendientesWidget } from "@/components/presupuestos/pendientes-widget";
+import CatalogoPicker from "@/components/presupuestos/catalogo-picker";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalizePurchaseCurrency } from "@/lib/own-stock-purchase-orders";
@@ -295,6 +296,7 @@ interface NewPRItem {
   stock_propio: boolean;
   lista_item_id: string;
   costo_moneda: "ARS" | "USD" | "USD Divisa";
+  descuento_porcentaje?: number;   // descuento del artículo (%), sobre el precio de lista
   price_rule_source?: {
     precio: number;
     precio_neto_base: number;
@@ -339,8 +341,20 @@ interface PriceTier {
   moneda: string;
 }
 
-function calcItemTotals(item: NewPRItem) {
-  const subtotal = item.cantidad * item.precio_venta;
+// precio_venta en el formulario = precio de LISTA (costo + markup).
+// Precio neto = lista − descuento del artículo − descuento general (ambos antes del IVA).
+// En la base se guarda el NETO en precio_venta (así facturación, PDF y OC siguen igual)
+// y la lista y el descuento en precio_lista / descuento_porcentaje.
+const MARGEN_MINIMO = 15;
+const GASTOS_PORCENTAJE = 7; // gastos e impuestos aproximados sobre la venta
+function precioNeto(item: NewPRItem, descGeneral = 0): number {
+  const dl = Math.min(100, Math.max(0, Number(item.descuento_porcentaje) || 0));
+  const dg = Math.min(100, Math.max(0, Number(descGeneral) || 0));
+  return Math.round(item.precio_venta * (1 - dl / 100) * (1 - dg / 100) * 100) / 100;
+}
+
+function calcItemTotals(item: NewPRItem, descGeneral = 0) {
+  const subtotal = item.cantidad * precioNeto(item, descGeneral);
   const iva = subtotal * (item.iva_porcentaje / 100);
   return { subtotal, iva, total: subtotal + iva };
 }
@@ -378,6 +392,25 @@ function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, 
 
 export default function PresupuestosPage() {
   const { profile, sociedadActiva } = useUser();
+  const [showCatalogo, setShowCatalogo] = useState(false);
+  const [descGeneral, setDescGeneral] = useState(0);
+  const [catalogoFila, setCatalogoFila] = useState<number | null>(null); // fila desde la que se abrió la lista (lupa)
+  // Ancho de columnas de la tabla de ítems (se arrastra el borde del título; se recuerda en este navegador)
+  const COLS_DEFAULT: Record<string, number> = { codigo: 128, descripcion: 280, proveedor: 176, cantidad: 80, costo: 144, markup: 80, venta: 104, desc: 76, iva: 76, subtotal: 120 };
+  const [colW, setColW] = useState<Record<string, number>>(COLS_DEFAULT);
+  useEffect(() => {
+    try { const g = JSON.parse(localStorage.getItem("pr_col_widths") || "null"); if (g && typeof g === "object") setColW((w) => ({ ...w, ...g })); } catch { /* sin preferencias guardadas */ }
+  }, []);
+  function empezarResize(col: string, e: React.MouseEvent) {
+    e.preventDefault(); e.stopPropagation();
+    const x0 = e.clientX, w0 = colW[col] || COLS_DEFAULT[col] || 100;
+    const mover = (ev: MouseEvent) => setColW((w) => ({ ...w, [col]: Math.max(50, Math.min(700, w0 + ev.clientX - x0)) }));
+    const soltar = () => {
+      window.removeEventListener("mousemove", mover); window.removeEventListener("mouseup", soltar);
+      setColW((w) => { try { localStorage.setItem("pr_col_widths", JSON.stringify(w)); } catch { /* ignore */ } return w; });
+    };
+    window.addEventListener("mousemove", mover); window.addEventListener("mouseup", soltar);
+  }
   const { toast } = useToast();
   const canDeletePresupuestos = profile?.role === "super_admin" || profile?.role === "admin";
   const allEstados: PRStatus[] = ["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido", "facturado"];
@@ -457,6 +490,7 @@ export default function PresupuestosPage() {
 
   // Nuevo PR modal
   const [showNewPR, setShowNewPR] = useState(false);
+  useEffect(() => { if (!showNewPR) setDescGeneral(0); }, [showNewPR]);
   const [newPRSaving, setNewPRSaving] = useState(false);
   const [postCreatePR, setPostCreatePR] = useState<Presupuesto | null>(null); // PR recién creado
   const [esSolicitud, setEsSolicitud] = useState(false); // Crear como solicitud
@@ -1182,6 +1216,43 @@ export default function PresupuestosPage() {
     }
     prWarningBypassRef.current = false; // Reset for next time
 
+    // Alertas (no bloquean): margen real bajo el mínimo y tipo de dólar distinto al del cliente.
+    {
+      const bajos: string[] = [];
+      let netoTot = 0, costoTot = 0;
+      for (const it of validItems) {
+        const costoConv = convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas);
+        const neto = precioNeto(it, descGeneral);
+        netoTot += neto * it.cantidad; costoTot += costoConv * it.cantidad;
+        if (costoConv > 0 && neto > 0 && ((neto / costoConv) - 1) * 100 < MARGEN_MINIMO) bajos.push(`${it.codigo || it.descripcion.slice(0, 30)} (${(((neto / costoConv) - 1) * 100).toFixed(1)}%)`);
+      }
+      const margenTot = costoTot > 0 ? ((netoTot / costoTot) - 1) * 100 : null;
+      const avisos: string[] = [];
+      if (bajos.length || (margenTot !== null && margenTot < MARGEN_MINIMO)) {
+        avisos.push(`Margen real total: ${margenTot === null ? "—" : margenTot.toFixed(1) + "%"} (mínimo ${MARGEN_MINIMO}%).` + (bajos.length ? `\nArtículos bajo el mínimo: ${bajos.slice(0, 8).join(", ")}${bajos.length > 8 ? "…" : ""}` : ""));
+      }
+      const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
+      const pref = cli?.moneda_predeterminada === "USD" ? "billetes" : cli?.moneda_predeterminada === "USD Divisa" ? "divisas" : null;
+      if (newPR.moneda === "USD" && pref && newPR.cotizacion_modalidad && newPR.cotizacion_modalidad !== pref) {
+        avisos.push(`Este cliente cotiza en USD ${pref === "divisas" ? "divisa" : "billete"} y el presupuesto está en USD ${newPR.cotizacion_modalidad === "divisas" ? "divisa" : "billete"}.`);
+      }
+      if (avisos.length) {
+        if (!window.confirm(`Atención:\n\n${avisos.join("\n\n")}\n\n¿Guardar igual?`)) return;
+        if (bajos.length || (margenTot !== null && margenTot < MARGEN_MINIMO)) {
+          // Queda registrado para el futuro centro de alertas.
+          (supabase as any).from("notificaciones").insert({
+            sociedad_id: sociedadActiva?.id || null,
+            tipo: "margen_bajo",
+            titulo: `Presupuesto con margen real ${margenTot === null ? "—" : margenTot.toFixed(1) + "%"}${cli?.razon_social ? ` — ${cli.razon_social}` : ""}`,
+            detalle: avisos.join("\n"),
+            referencia_tipo: "presupuesto",
+            referencia_id: editingPRId || null,
+            creado_por: profile?.id || null,
+          }).then(() => undefined, () => undefined);
+        }
+      }
+    }
+
     setNewPRSaving(true);
     try {
       // En un PR manual, el precio ingresado por el usuario ya es el precio final.
@@ -1190,7 +1261,7 @@ export default function PresupuestosPage() {
       let subtotal = 0;
       let ivaTotal = 0;
       const itemsWithTotals = validItems.map((it, idx) => {
-        const t = calcItemTotals(it);
+        const t = calcItemTotals(it, descGeneral);
         subtotal += t.subtotal;
         ivaTotal += isManualPR ? 0 : t.iva;
         return {
@@ -1213,7 +1284,9 @@ export default function PresupuestosPage() {
         unidad: it.unidad ?? "u",
         precio_costo: it.precio_costo ?? 0,
         markup_porcentaje: it.markup_porcentaje ?? 0,
-        precio_venta: it.precio_venta ?? 0,
+        precio_venta: precioNeto(it, descGeneral),
+        precio_lista: it.precio_venta ?? 0,
+        descuento_porcentaje: Number(it.descuento_porcentaje) || 0,
         iva_porcentaje: it.iva_porcentaje ?? 21,
         // subtotal, iva y total los recalcula Supabase desde el precio de venta exacto.
         orden: it.orden,
@@ -1239,6 +1312,7 @@ export default function PresupuestosPage() {
             moneda: newPR.moneda,
             tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
             tipo_cambio_divisas: newPR.moneda === "USD" && newPR.tipo_cambio_divisas > 0 ? newPR.tipo_cambio_divisas : null,
+            descuento_general_porcentaje: descGeneral || 0,
             cotizacion_modalidad: newPR.moneda === "USD" ? newPR.cotizacion_modalidad : null,
             observaciones: newPR.observaciones,
             notas_internas: newPR.notas_internas,
@@ -1289,6 +1363,7 @@ export default function PresupuestosPage() {
             moneda: newPR.moneda,
             tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
             tipo_cambio_divisas: newPR.moneda === "USD" && newPR.tipo_cambio_divisas > 0 ? newPR.tipo_cambio_divisas : null,
+            descuento_general_porcentaje: descGeneral || 0,
             cotizacion_modalidad: newPR.moneda === "USD" ? newPR.cotizacion_modalidad : null,
             observaciones: newPR.observaciones,
             notas_internas: newPR.notas_internas,
@@ -1946,12 +2021,13 @@ export default function PresupuestosPage() {
       if (error || !fullPR) { toast.error("Error al cargar presupuesto"); return; }
 
       const prMoneda = fullPR.moneda || "USD";
+      setDescGeneral(Number(fullPR.descuento_general_porcentaje) || 0);
       const prTc = Number(fullPR.tipo_cambio) || 0;
       const items: NewPRItem[] = (fullPR.presupuesto_items || [])
         .sort((a: any, b: any) => (a.orden || 0) - (b.orden || 0))
         .map((it: any) => {
           const costo = Number(it.precio_costo) || 0;
-          const pv = Number(it.precio_venta) || 0;
+          const pv = Number(it.precio_lista ?? it.precio_venta) || 0;
           let markup = Number(it.markup_porcentaje) || 0;
           // Back-calculate markup if DB has null/0 but precio_venta and precio_costo exist
           if (!markup && costo > 0 && pv > 0) {
@@ -1970,6 +2046,7 @@ export default function PresupuestosPage() {
           precio_costo: costo,
           markup_porcentaje: markup,
           precio_venta: pv,
+          descuento_porcentaje: Number(it.descuento_porcentaje) || 0,
           iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
           proveedor_nombre: it.proveedor_nombre || "",
           proveedor_id: it.proveedor_id || "",
@@ -2320,7 +2397,7 @@ export default function PresupuestosPage() {
   let newPRSub = 0;
   let newPRIva = 0;
   newPR.items.forEach((it) => {
-    const t = calcItemTotals(it);
+    const t = calcItemTotals(it, descGeneral);
     newPRSub += t.subtotal;
     newPRIva += newPR.modalidad_emision === "manual" ? 0 : t.iva;
   });
@@ -3643,6 +3720,27 @@ export default function PresupuestosPage() {
               )}
             </div>
           </div>}
+          {newPR.moneda === "USD" && newPR.cliente_id && (() => {
+            const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
+            if (!cli) return null;
+            const pref: "divisas" | "billetes" | null = cli.moneda_predeterminada === "USD" ? "billetes" : cli.moneda_predeterminada === "USD Divisa" ? "divisas" : null;
+            const actual = (newPR.cotizacion_modalidad || "divisas") as "divisas" | "billetes";
+            const nombre = (m: string) => (m === "divisas" ? "USD divisa" : "USD billete");
+            const guardar = async () => {
+              const valor = actual === "divisas" ? "USD Divisa" : "USD";
+              const { error } = await (supabase as any).from("clientes").update({ moneda_predeterminada: valor }).eq("id", cli.id);
+              if (error) { toast.error(`No se pudo guardar: ${error.message}`); return; }
+              setClientes((prev) => prev.map((c) => (c.id === cli.id ? ({ ...c, moneda_predeterminada: valor } as any) : c)));
+              toast.success(`${cli.razon_social}: queda ${nombre(actual)} como predeterminado`);
+            };
+            return (
+              <div className={`rounded-lg border px-3 py-2 text-xs ${pref && pref !== actual ? "border-amber-400 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300" : "border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400"}`}>
+                Tipo de dólar del cliente: <b>{pref ? nombre(pref) : "sin definir"}</b>
+                {pref && pref !== actual && <> · <b>¡Este presupuesto está en {nombre(actual)}!</b> <button type="button" onClick={() => fetchCotizBna(pref)} className="underline">Pasar a {nombre(pref)}</button></>}
+                {pref !== actual && <> · <button type="button" onClick={guardar} className="underline">Guardar {nombre(actual)} como predeterminado del cliente</button></>}
+              </div>
+            );
+          })()}
           <Input
             label="Markup general %"
             type="number"
@@ -3699,6 +3797,20 @@ export default function PresupuestosPage() {
               >
                 <Plus className="h-3.5 w-3.5" /> Agregar item
               </button>
+              <button
+                type="button"
+                onClick={() => { setColW(COLS_DEFAULT); try { localStorage.removeItem("pr_col_widths"); } catch { /* ignore */ } }}
+                title="Volver al ancho original de las columnas"
+                className="rounded-lg border border-zinc-300 px-2.5 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+              >
+                Restablecer columnas
+              </button>
+              <button
+                onClick={() => { setCatalogoFila(null); setShowCatalogo(true); }}
+                className="flex items-center gap-1.5 rounded-lg border border-orange-300 px-3 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-300 dark:hover:bg-orange-950/30 transition-colors"
+              >
+                <Search className="h-3.5 w-3.5" /> Lista de costos
+              </button>
             </div>
             <button
               onClick={() => setShowAIPanel(!showAIPanel)}
@@ -3707,6 +3819,33 @@ export default function PresupuestosPage() {
               <Sparkles className="h-3 w-3" /> IA: armar desde mensaje
             </button>
           </div>
+
+          <CatalogoPicker
+            open={showCatalogo}
+            onClose={() => { setShowCatalogo(false); setCatalogoFila(null); }}
+            prMoneda={newPR.moneda}
+            tc={newPR.tipo_cambio}
+            tcDivisas={newPR.tipo_cambio_divisas}
+            proveedoresCRM={proveedoresOptions}
+            sociedadId={sociedadActiva?.id}
+            onPedirTc={() => {
+              const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
+              fetchCotizBna(cli?.moneda_predeterminada === "USD" ? "billetes" : "divisas");
+            }}
+            onAgregar={(nuevos) => setNewPR((p) => {
+              // Abierta desde la lupa de una fila: lo elegido reemplaza esa fila (y el resto se inserta debajo).
+              if (catalogoFila !== null && p.items[catalogoFila] && nuevos.length) {
+                const items = [...p.items];
+                items.splice(catalogoFila, 1, ...nuevos);
+                return { ...p, items };
+              }
+              return {
+              ...p,
+              // Las líneas vacías (sin código ni descripción) se reemplazan por lo elegido en la lista.
+              items: [...p.items.filter((it) => it.codigo.trim() || it.descripcion.trim()), ...nuevos],
+            };
+            })}
+          />
 
           {/* AI Panel */}
           {showAIPanel && (
@@ -3774,19 +3913,17 @@ export default function PresupuestosPage() {
             </div>
           )}
           <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
-            <table className="min-w-[1240px] w-full table-fixed text-sm">
+            <table className="w-full table-fixed text-sm [&_td]:border-r [&_td]:border-zinc-200 dark:[&_td]:border-zinc-700 [&_th]:border-r [&_th]:border-zinc-300 dark:[&_th]:border-zinc-600" style={{ minWidth: 70 + Object.values(colW).reduce((x, y) => x + y, 0) }}>
               <thead>
                 <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
                   <th className="w-7"></th>
-                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-32">Codigo</th>
-                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-[280px]">Descripcion</th>
-                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-44">Proveedor</th>
-                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">Cant.</th>
-                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-36">P. Costo</th>
-                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">Markup%</th>
-                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Venta</th>
-                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">IVA%</th>
-                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-28">Subtotal</th>
+                  {([["codigo", "Codigo", "text-left"], ["descripcion", "Descripcion", "text-left"], ["proveedor", "Proveedor", "text-left"], ["cantidad", "Cant.", "text-right"], ["costo", "P. Costo", "text-right"], ["markup", "Markup%", "text-right"], ["venta", "P. Lista", "text-right"], ["desc", "Desc.%", "text-right"], ["iva", "IVA%", "text-right"], ["subtotal", "Subtotal", "text-right"]] as const).map(([col, label, align]) => (
+                    <th key={col} style={{ width: colW[col] }} className={`relative px-2 py-2 ${align} text-xs font-semibold text-zinc-500`}>
+                      {label}
+                      <span onMouseDown={(e) => empezarResize(col, e)} title="Arrastrá para cambiar el ancho"
+                        className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-orange-400/60" />
+                    </th>
+                  ))}
                   <th className="px-2 py-2 w-8"></th>
                 </tr>
               </thead>
@@ -3829,7 +3966,7 @@ export default function PresupuestosPage() {
                           <input value={item.codigo} onChange={(e) => updateNewPRItem(idx, "codigo", e.target.value)}
                             placeholder="Codigo"
                             className="w-full rounded border border-zinc-200 px-2 py-1 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
-                          <button type="button" onClick={() => openProductSearch(idx)} title="Buscar producto"
+                          <button type="button" onClick={() => { setCatalogoFila(idx); setShowCatalogo(true); }} title="Buscar en la lista de costos"
                             className="shrink-0 rounded border border-zinc-200 p-1 text-zinc-400 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-300 dark:border-zinc-700 dark:hover:bg-orange-950/30 dark:hover:text-orange-400 transition-colors">
                             <Search className="h-3.5 w-3.5" />
                           </button>
@@ -3907,6 +4044,18 @@ export default function PresupuestosPage() {
                         </div>
                       </td>
                       <td className="px-2 py-1.5">
+                        <NumInput value={item.descuento_porcentaje || 0}
+                          onChange={(n) => setNewPR((p) => ({ ...p, items: p.items.map((x, i) => i === idx ? { ...x, descuento_porcentaje: Math.min(100, Math.max(0, n)) } : x) }))}
+                          className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                        {(() => {
+                          const neto = precioNeto(item, descGeneral);
+                          if (!(costoConvForm > 0) || !(neto > 0)) return null;
+                          const m = ((neto / costoConvForm) - 1) * 100;
+                          const color = m < MARGEN_MINIMO ? "text-red-600" : m < MARGEN_MINIMO + 5 ? "text-amber-600" : "text-emerald-600";
+                          return <div className={`mt-0.5 text-right text-[10px] font-semibold ${color}`} title="Margen real sobre el costo, con descuentos">mg {m.toFixed(1)}%</div>;
+                        })()}
+                      </td>
+                      <td className="px-2 py-1.5">
                         <select value={item.iva_porcentaje} onChange={(e) => updateNewPRItem(idx, "iva_porcentaje", Number(e.target.value))}
                           onKeyDown={(e) => {
                             // Auto-add new item when Tab on last field of last item
@@ -3936,7 +4085,7 @@ export default function PresupuestosPage() {
                         </select>
                       </td>
                       <td className="px-2 py-1.5 text-right font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-200 whitespace-nowrap">
-                        {formatCurrency(calcItemTotals(item).subtotal, newPR.moneda)}
+                        {formatCurrency(calcItemTotals(item, descGeneral).subtotal, newPR.moneda)}
                       </td>
                       <td className="px-2 py-1.5">
                         {newPR.items.length > 1 && (
@@ -3961,7 +4110,47 @@ export default function PresupuestosPage() {
           </button>
           {/* Items totals preview */}
           <div className="flex justify-end mt-3">
-            <div className="w-56 space-y-1 text-sm rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800/50">
+            <div className="w-72 space-y-1 text-sm rounded-lg bg-zinc-50 p-3 dark:bg-zinc-800/50">
+              {(() => {
+                let lista = 0, conDescArt = 0, costo = 0;
+                for (const it of newPR.items) {
+                  lista += it.cantidad * it.precio_venta;
+                  conDescArt += it.cantidad * precioNeto(it, 0);
+                  costo += it.cantidad * convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas);
+                }
+                const descArt = lista - conDescArt;
+                const descGen = conDescArt - newPRSub;
+                const margen = costo > 0 && newPRSub > 0 ? ((newPRSub / costo) - 1) * 100 : null;
+                // Margen neto: descontando ~7 % de gastos e impuestos sobre la venta.
+                const margenNeto = costo > 0 && newPRSub > 0 ? (((newPRSub * (1 - GASTOS_PORCENTAJE / 100)) / costo) - 1) * 100 : null;
+                const colorNeto = margenNeto === null ? "text-zinc-400" : margenNeto < MARGEN_MINIMO ? "text-red-600" : margenNeto < MARGEN_MINIMO + 5 ? "text-amber-600" : "text-emerald-600";
+                const color = margen === null ? "text-zinc-400" : margen < MARGEN_MINIMO ? "text-red-600" : margen < MARGEN_MINIMO + 5 ? "text-amber-600" : "text-emerald-600";
+                return <>
+                  {(descArt > 0.004 || descGeneral > 0) && <div className="flex justify-between"><span className="text-zinc-500">Precio de lista</span><span className="font-mono">{formatCurrency(lista, newPR.moneda)}</span></div>}
+                  {descArt > 0.004 && <div className="flex justify-between"><span className="text-zinc-500">Desc. por artículo</span><span className="font-mono text-red-600">−{formatCurrency(descArt, newPR.moneda)}</span></div>}
+                  <div className="flex justify-between items-center gap-2">
+                    <span className="text-zinc-500">Descuento general</span>
+                    <span className="flex items-center gap-1">
+                      {descGen > 0.004 && <span className="font-mono text-xs text-red-600">−{formatCurrency(descGen, newPR.moneda)}</span>}
+                      <NumInput value={descGeneral} onChange={(n) => setDescGeneral(Math.min(100, Math.max(0, n)))}
+                        className="w-14 rounded border border-zinc-200 px-1 py-0.5 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none" />
+                      <span className="text-xs text-zinc-500">%</span>
+                    </span>
+                  </div>
+                  <div className={`flex justify-between text-xs ${color}`} title="Solo interno: no aparece en el PDF">
+                    <span>Margen real (interno)</span><span className="font-mono font-semibold">{margen === null ? "—" : `${margen.toFixed(1)}%`}</span>
+                  </div>
+                  <div className={`flex justify-between text-xs ${colorNeto}`} title={`Margen real menos ${GASTOS_PORCENTAJE}% de gastos e impuestos sobre la venta. Solo interno.`}>
+                    <span>Margen neto (−{GASTOS_PORCENTAJE}% gastos)</span><span className="font-mono font-semibold">{margenNeto === null ? "—" : `${margenNeto.toFixed(1)}%`}</span>
+                  </div>
+                  {costo > 0 && newPRSub > 0 && (
+                    <div className="mt-1 space-y-0.5 border-t border-dashed border-zinc-300 pt-1 text-xs dark:border-zinc-600" title="Solo interno: ganancia en plata, sin IVA">
+                      <div className={`flex justify-between ${color}`}><span>Ganancia (sin IVA)</span><span className="font-mono font-semibold">{formatCurrency(newPRSub - costo, newPR.moneda)}</span></div>
+                      <div className={`flex justify-between ${colorNeto}`}><span>Ganancia neta (−{GASTOS_PORCENTAJE}% gastos)</span><span className="font-mono font-semibold">{formatCurrency(newPRSub * (1 - GASTOS_PORCENTAJE / 100) - costo, newPR.moneda)}</span></div>
+                    </div>
+                  )}
+                </>;
+              })()}
               {newPR.modalidad_emision !== "manual" && <>
                 <div className="flex justify-between"><span className="text-zinc-500">Subtotal</span><span className="font-mono">{formatCurrency(newPRSub, newPR.moneda)}</span></div>
                 <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(newPRIva, newPR.moneda)}</span></div>
