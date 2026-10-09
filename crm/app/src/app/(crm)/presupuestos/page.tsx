@@ -23,7 +23,6 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { useUser } from "@/lib/auth-context";
-import { PendientesWidget } from "@/components/presupuestos/pendientes-widget";
 import CatalogoPicker from "@/components/presupuestos/catalogo-picker";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
@@ -2468,10 +2467,6 @@ export default function PresupuestosPage() {
             <CalendarClock className="h-4 w-4" />
             Seguimiento
           </button>
-          <div className="h-6 w-px bg-zinc-200 dark:bg-zinc-700 shrink-0" />
-          <PendientesWidget
-            presupuestoOptions={presupuestos.map((p) => ({ id: p.id, numero: p.numero }))}
-          />
         </div>
 
         {/* Totals by estado */}

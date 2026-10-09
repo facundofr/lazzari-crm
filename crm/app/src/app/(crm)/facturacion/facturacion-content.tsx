@@ -2625,6 +2625,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                       )}
                     </>
                   )}
+                  {/* Factura ya cobrada: igual se puede emitir la NC; el importe queda a favor del cliente. */}
+                  {detailFactura.estado === "pagada" && ["FA", "FB", "FCEA", "FCEB"].includes(detailFactura.tipo) && (
+                    <button onClick={() => openNcModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-blue-950/30">
+                      <FileText className="h-4 w-4" /> Emitir Nota de Crédito <span className="text-xs text-zinc-400">(queda a favor del cliente)</span>
+                    </button>
+                  )}
                   {detailFactura.estado === "anulada" && !detailFactura.cae && (
                     <>
                       <button onClick={() => handleRevertirAnulacion(detailFactura.id)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">

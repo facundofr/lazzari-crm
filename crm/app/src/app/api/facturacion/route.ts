@@ -576,6 +576,9 @@ export async function POST(req: NextRequest) {
     if (isNCND && !factura_origen_id) return NextResponse.json({error:"La nota requiere una factura origen válida. No se emitió."},{status:400});
     let cbtesAsoc: { Tipo: number; PtoVta: number; Nro: number; Cuit: number; CbteFch: string }[] | undefined;
     let comprobanteAsociado = "";
+    // NC/ND MiPyME (203/208): ARCA exige el opcional 22 "Anulación" (S/N).
+    // "S" solo cuando la FCE fue rechazada y la nota la anula por completo.
+    let fceAnulacion: "S" | "N" | null = null;
     if (isNCND && factura_origen_id) {
       const { data: origen, error: origenError } = await (supabase as any)
         .from("facturas")
@@ -607,11 +610,22 @@ export async function POST(req: NextRequest) {
             ptoVta: Number(origen.punto_venta),
             numero: Number(origen.numero),
           });
-          if (!["PendienteRecepcion", "Recepcionado"].includes(status.estado)) {
+          if (status.estado === "Rechazado") {
+            // FCE rechazada por el cliente: corresponde una NC MiPyME de anulación por el total.
+            if (nota_credito_modo !== "total") {
+              return NextResponse.json({
+                error: "El cliente RECHAZÓ esta FCE en ARCA. Corresponde una nota de crédito TOTAL de anulación: elegí «Total» y volvé a emitir. No se emitió ninguna nota.",
+                fce_estado: status.estado,
+              }, {status:409});
+            }
+            fceAnulacion = "S";
+          } else if (!["PendienteRecepcion", "Recepcionado"].includes(status.estado)) {
             return NextResponse.json({
-              error: `La FCE figura ${status.estado} en el Registro FCE. La nota MiPyME común solo puede ajustar el importe antes de su aceptación o rechazo; no se emitió ninguna nota.`,
+              error: `La FCE figura ${status.estado} en el Registro FCE: ya fue aceptada, y ARCA no permite modificar su importe con una nota MiPyME. No se emitió ninguna nota.`,
               fce_estado: status.estado,
             }, {status:409});
+          } else {
+            fceAnulacion = "N";
           }
         } catch (error) {
           return NextResponse.json({
@@ -703,6 +717,7 @@ export async function POST(req: NextRequest) {
       DocNro: Number(docNro),
       CbteFch: today,
       ...(fceData ? {FchVtoPago:fceData.vencimiento.replace(/-/g,""),Opcionales:[{Id:2101,Valor:fceData.cbu},{Id:27,Valor:fceData.transmision}]} : {}),
+      ...(fceAnulacion ? {Opcionales:[{Id:22,Valor:fceAnulacion}]} : {}),
       ImpTotal: totalFinal,
       ImpTotConc: 0,
       ImpNeto: totalNeto,
