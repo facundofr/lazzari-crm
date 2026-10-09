@@ -155,6 +155,47 @@ const COLOR: Record<Confianza, string> = {
 };
 const ETIQUETA: Record<Confianza, string> = { alta: "Seguro", media: "Revisar", baja: "Alternativa", ninguna: "No está", manual: "Elegido" };
 
+/** Campo que se va escribiendo y muestra solo las opciones que contienen esas letras (sin importar acentos). */
+function Autocompletar({ opciones, placeholder, onElegir, className = "", chico = false }: { opciones: Array<{ valor: string; texto: string }>; placeholder: string; onElegir: (valor: string) => void; className?: string; chico?: boolean }) {
+  const [q, setQ] = useState("");
+  const [abierto, setAbierto] = useState(false);
+  const [marcado, setMarcado] = useState(0);
+  const ref = useRef<HTMLInputElement>(null);
+  const [pos, setPos] = useState<React.CSSProperties>({});
+  const norm = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const filtradas = useMemo(() => {
+    const n = norm(q.trim());
+    const base = n ? opciones.filter(o => norm(o.texto).includes(n)) : opciones;
+    return [...base].sort((a, b) => (n ? Number(!norm(a.texto).startsWith(n)) - Number(!norm(b.texto).startsWith(n)) : 0)).slice(0, 50);
+  }, [q, opciones]);
+  function ubicar() {
+    const r = ref.current?.getBoundingClientRect();
+    if (!r) return;
+    const arriba = window.innerHeight - r.bottom < 220 && r.top > 220;
+    setPos({ position: "fixed", left: r.left, width: Math.max(r.width, 240), zIndex: 10000, ...(arriba ? { bottom: window.innerHeight - r.top + 2 } : { top: r.bottom + 2 }) });
+  }
+  function elegir(v: string) { onElegir(v); setQ(""); setAbierto(false); }
+  return <>
+    <input ref={ref} value={q} placeholder={placeholder}
+      onChange={e => { setQ(e.target.value); setMarcado(0); ubicar(); setAbierto(true); }}
+      onFocus={() => { ubicar(); setAbierto(true); }}
+      onBlur={() => setTimeout(() => setAbierto(false), 150)}
+      onKeyDown={e => {
+        if (e.key === "ArrowDown") { e.preventDefault(); setMarcado(m => Math.min(m + 1, filtradas.length - 1)); }
+        else if (e.key === "ArrowUp") { e.preventDefault(); setMarcado(m => Math.max(m - 1, 0)); }
+        else if (e.key === "Enter" && filtradas[marcado]) { e.preventDefault(); elegir(filtradas[marcado].valor); }
+        else if (e.key === "Escape") setAbierto(false);
+      }}
+      className={`rounded border px-2 ${chico ? "py-0.5 text-[10px]" : "py-1 text-xs"} dark:bg-zinc-800 dark:text-white ${className}`} />
+    {abierto && typeof document !== "undefined" && createPortal(
+      <div style={pos} className="max-h-56 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+        {filtradas.map((o, i) => <button key={o.valor} type="button" onMouseDown={e => { e.preventDefault(); elegir(o.valor); }} onMouseEnter={() => setMarcado(i)}
+          className={`block w-full px-3 py-1.5 text-left text-xs dark:text-zinc-200 ${i === marcado ? "bg-orange-100 dark:bg-orange-900/40" : "hover:bg-orange-50 dark:hover:bg-orange-900/20"}`}>{o.texto}</button>)}
+        {!filtradas.length && <p className="px-3 py-2 text-xs text-zinc-400">{opciones.length ? "Sin coincidencias" : "Cargando…"}</p>}
+      </div>, document.body)}
+  </>;
+}
+
 export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivisas, onAgregar, onPedirTc, proveedoresCRM, sociedadId }: Props) {
   const [mensaje, setMensaje] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
@@ -387,10 +428,11 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
                     <label className="text-[11px] text-zinc-500">{titulo}</label>
                     {prefs[k].length > 0 && <label className="flex items-center gap-1 text-[11px] text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={prefs[kSolo]} onChange={e => setPrefs(p => ({ ...p, [kSolo]: e.target.checked }))} /> {txtSolo}</label>}
                   </div>
-                  <select value="" onChange={e => { const v = e.target.value; if (v) setPrefs(p => ({ ...p, [k]: p[k].includes(v) ? p[k] : [...p[k], v] })); }} className="mt-1 w-full rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                    <option value="">{opciones.length ? `Agregar ${titulo.toLowerCase()}…` : "Cargando…"}</option>
-                    {opciones.filter(o => !prefs[k].includes(o)).map(o => <option key={o} value={o}>{o}</option>)}
-                  </select>
+                  <Autocompletar
+                    opciones={opciones.filter(o => !prefs[k].includes(o)).map(o => ({ valor: o, texto: o }))}
+                    placeholder={`Escribí para buscar ${titulo.toLowerCase()}…`}
+                    onElegir={v => setPrefs(p => ({ ...p, [k]: p[k].includes(v) ? p[k] : [...p[k], v] }))}
+                    className="mt-1 w-full border-zinc-200 dark:border-zinc-700" />
                   {prefs[k].length > 0 && <div className="mt-1 flex flex-wrap gap-1">{prefs[k].map(v => <span key={v} className="flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-orange-800 dark:bg-orange-900/40 dark:text-orange-200">{v}<button onClick={() => setPrefs(p => ({ ...p, [k]: p[k].filter(x => x !== v) }))}><X className="h-3 w-3" /></button></span>)}</div>}
                   {prefs[k].length > 0 && !prefs[kSolo] && <p className="mt-0.5 text-[10px] text-zinc-400">Se prefieren; si no lo tienen, busca en el resto.</p>}
                 </div>
@@ -435,10 +477,11 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
                       {l.nota && <p className="mt-0.5 text-[10px] text-amber-700 dark:text-amber-400">{l.nota}</p>}
                       {c && <div className={`mt-1 flex items-center gap-1 text-[10px] ${proveedorId(c.proveedor) ? "text-zinc-500" : "text-red-600"}`}>
                         <span className="whitespace-nowrap">{proveedorId(c.proveedor) ? `“${c.proveedor}” de la lista =` : `⚠ “${c.proveedor}” no está vinculado →`}</span>
-                        <select value={proveedorId(c.proveedor)} onChange={e => vincular(c.proveedor, e.target.value)} className={`max-w-[220px] rounded border px-1 py-0.5 text-[10px] dark:bg-zinc-800 ${proveedorId(c.proveedor) ? "border-zinc-200 dark:border-zinc-700" : "border-red-200 dark:border-red-800"}`}>
-                          <option value="">Elegí el proveedor del CRM…</option>
-                          {[...(provIds.length ? provIds : (proveedoresCRM || []))].sort((a, b) => a.razon_social.localeCompare(b.razon_social, "es")).map(p => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
-                        </select>
+                        <Autocompletar chico
+                          opciones={[...(provIds.length ? provIds : (proveedoresCRM || []))].sort((a, b) => a.razon_social.localeCompare(b.razon_social, "es")).map(p => ({ valor: p.id, texto: p.razon_social }))}
+                          placeholder={proveedorId(c.proveedor) ? ((provIds.length ? provIds : (proveedoresCRM || [])).find(p => p.id === proveedorId(c.proveedor))?.razon_social || "Cambiar…") : "Escribí el proveedor del CRM…"}
+                          onElegir={v => vincular(c.proveedor, v)}
+                          className={`w-[200px] ${proveedorId(c.proveedor) ? "border-zinc-200 placeholder:text-zinc-700 dark:border-zinc-700 dark:placeholder:text-zinc-300" : "border-red-200 dark:border-red-800"}`} />
                       </div>}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-right">{c ? fmt(c.costo, c.moneda) : "—"}</td>

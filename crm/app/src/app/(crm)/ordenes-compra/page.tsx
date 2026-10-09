@@ -3574,10 +3574,10 @@ export default function OrdenesCompraPage() {
           // Las OC en borrador también deben poder seleccionarse para cargar una
           // factura: el circuito de recepción/activación es independiente del
           // vínculo contable de la factura y, de lo contrario, quedan invisibles.
-          ordenes={ordenes.filter(o => o.proveedor_id && o.estado !== "cancelada" && o.estado_pago !== "pagada").map(o => ({
+          ordenes={ordenes.filter(o => o.estado !== "cancelada" && o.estado_pago !== "pagada").map(o => ({
             id: o.id,
             numero: o.numero,
-            proveedor_id: o.proveedor_id!,
+            proveedor_id: o.proveedor_id || "",
             proveedor_nombre: o.proveedores?.razon_social || "Sin proveedor",
             total: o.total,
             moneda: o.moneda,

@@ -9,6 +9,7 @@ Te voy a pasar un PDF o imagen de una factura de compra o nota de pedido de prov
 {
   "proveedor": {
     "razon_social": "nombre o razón social del emisor",
+    "nombre_fantasia": "nombre comercial o marca del emisor que aparece en el logo/encabezado, si es distinto de la razón social; si no, \"\"",
     "cuit": "XX-XXXXXXXX-X o solo números"
   },
   "fecha": "YYYY-MM-DD",

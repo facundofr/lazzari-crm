@@ -6340,10 +6340,10 @@ export default function FinanzasPage() {
           sociedadId={sociedadActiva?.id || ""}
           profileId={profile?.id || null}
           showTipoToggle
-          ordenes={ocOptions.filter(o => o.proveedor_id && !["borrador", "cancelada"].includes(o.estado || "") && (o as any).estado_pago !== "pagada").map(o => ({
+          ordenes={ocOptions.filter(o => !["borrador", "cancelada"].includes(o.estado || "") && (o as any).estado_pago !== "pagada").map(o => ({
             id: o.id,
             numero: o.numero,
-            proveedor_id: o.proveedor_id,
+            proveedor_id: o.proveedor_id || "",
             proveedor_nombre: o.proveedores?.razon_social || "Sin proveedor",
             total: o.total,
             moneda: o.moneda,

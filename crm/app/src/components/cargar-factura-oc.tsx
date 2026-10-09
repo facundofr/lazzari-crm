@@ -53,6 +53,7 @@ interface OCItemForMatch extends PurchaseLine {
 
 const emptyNuevoProveedor = {
   razon_social: "",
+  nombre_fantasia: "",
   cuit: "",
   condicion_iva: "RI",
   rubro: "",
@@ -100,6 +101,8 @@ export default function CargarFacturaOC({
   const [nuevoProveedor, setNuevoProveedor] = useState(emptyNuevoProveedor);
   const [nuevoProveedorSaving, setNuevoProveedorSaving] = useState(false);
   const [nuevoProveedorError, setNuevoProveedorError] = useState("");
+  // Datos del emisor leídos de la factura, para precargar el alta del proveedor.
+  const proveedorFacturaRef = useRef<{ cuit: string; razon_social: string; nombre_fantasia?: string } | null>(null);
   const [tipoComprobante, setTipoComprobante] = useState("FC A");
   const [numeroFactura, setNumeroFactura] = useState("");
   const [fecha, setFecha] = useState(todayAR());
@@ -260,7 +263,8 @@ export default function CargarFacturaOC({
   const ocsFiltered = useMemo(() => {
     const q = ocSearch.trim().toLowerCase();
     return ordenes.filter((oc) => {
-      if (!showAllOCs && proveedorId && oc.proveedor_id !== proveedorId) return false;
+      // Las OC sin proveedor (sistema anterior) se pueden elegir siempre: al guardar quedan con el de la factura.
+      if (!showAllOCs && proveedorId && oc.proveedor_id && oc.proveedor_id !== proveedorId) return false;
       if (q && !`${oc.numero} ${oc.proveedor_nombre} ${oc.estado}`.toLowerCase().includes(q)) return false;
       return true;
     });
@@ -430,8 +434,8 @@ export default function CargarFacturaOC({
     void loadProveedores();
   }, [sociedadId]);
 
-  async function lookupNuevoProveedor() {
-    const cuit = nuevoProveedor.cuit.replace(/\D/g, "");
+  async function lookupNuevoProveedor(cuitDirecto?: string) {
+    const cuit = (cuitDirecto ?? nuevoProveedor.cuit).replace(/\D/g, "");
     if (cuit.length !== 11) { setNuevoProveedorError("El CUIT debe tener 11 dígitos"); return; }
     setCuitLoading(true);
     setNuevoProveedorError("");
@@ -468,9 +472,13 @@ export default function CargarFacturaOC({
   }
 
   function openNuevoProveedor() {
-    setNuevoProveedor({ ...emptyNuevoProveedor, razon_social: proveedorSearch.trim() });
+    const fact = proveedorFacturaRef.current;
+    const cuitFact = (fact?.cuit || "").replace(/\D/g, "");
+    setNuevoProveedor({ ...emptyNuevoProveedor, razon_social: proveedorSearch.trim() || fact?.razon_social || "", nombre_fantasia: fact?.nombre_fantasia || "", cuit: cuitFact });
     setNuevoProveedorError("");
     setNuevoProveedorOpen(true);
+    // Con el CUIT de la factura se traen solos los datos de ARCA (razón social, IVA, domicilio).
+    if (cuitFact.length === 11) void lookupNuevoProveedor(cuitFact);
   }
 
   async function handleCrearProveedor() {
@@ -486,6 +494,7 @@ export default function CargarFacturaOC({
         .insert({
           ...nuevoProveedor,
           razon_social: nuevoProveedor.razon_social.trim(),
+          nombre_fantasia: nuevoProveedor.nombre_fantasia.trim() || null,
           cuit: nuevoProveedor.cuit.trim(),
           cuit_titular_cuenta: nuevoProveedor.cuit.trim(),
           sociedad_id: sociedadId,
@@ -596,6 +605,7 @@ export default function CargarFacturaOC({
         setItems([]);
       }
 
+      proveedorFacturaRef.current = d.proveedor ? { cuit: String(d.proveedor.cuit || ""), razon_social: String(d.proveedor.razon_social || ""), nombre_fantasia: String(d.proveedor.nombre_fantasia || "") } : null;
       // Match proveedor by CUIT
       if (d.proveedor?.cuit) {
         await loadProveedores();
@@ -646,8 +656,16 @@ export default function CargarFacturaOC({
       throw new Error("No se pudieron verificar los importes actuales de las OC. No se guardó nada.");
     }
 
-    if (freshOCs.some((oc: any) => oc.proveedor_id !== proveedorId || ["cancelada", "borrador"].includes(oc.estado))) {
+    if (freshOCs.some((oc: any) => (oc.proveedor_id && oc.proveedor_id !== proveedorId) || ["cancelada", "borrador"].includes(oc.estado))) {
       throw new Error("Las OC deben estar activas y pertenecer al proveedor de la factura.");
+    }
+    // OC sin proveedor: se les asigna el proveedor de la factura.
+    const sinProveedor = freshOCs.filter((oc: any) => !oc.proveedor_id).map((oc: any) => oc.id);
+    if (sinProveedor.length) {
+      const { error: provError } = await (supabase as any).from("ordenes_compra").update({ proveedor_id: proveedorId })
+        .eq("sociedad_id", sociedadId).in("id", sinProveedor).is("proveedor_id", null);
+      if (provError) throw new Error(`No se pudo asignar el proveedor a la OC: ${provError.message}`);
+      freshOCs.forEach((oc: any) => { if (!oc.proveedor_id) oc.proveedor_id = proveedorId; });
     }
     const currencies = new Set(freshOCs.map((oc: any) => oc.moneda));
     const liveCurrencyMismatch = currencies.size !== 1 || !currencies.has(moneda);
@@ -772,6 +790,13 @@ export default function CargarFacturaOC({
           verifiedPresupuestos.set(pr.id, pr);
         }
         generateExtrasOC = createExtrasOC && reconciliation.extras.length > 0;
+        // Si sobran artículos y no se marcó la opción, se pregunta (nunca se traba la carga).
+        if (!createExtrasOC && reconciliation.extras.length > 0) {
+          const lista = reconciliation.extras.slice(0, 12).map((it: any) => `• ${it.cantidad} × ${it.codigo ? `[${it.codigo}] ` : ""}${it.descripcion}`).join("\n");
+          const mas = reconciliation.extras.length > 12 ? `\n… y ${reconciliation.extras.length - 12} más` : "";
+          generateExtrasOC = window.confirm(`Hay ${reconciliation.extras.length} artículo(s) de la factura que no están en las OC elegidas:\n\n${lista}${mas}\n\n¿Querés crear una OC nueva con los artículos sobrantes?\n\nAceptar = crear la OC · Cancelar = cargar la factura igual, sin OC para esos artículos`);
+          if (generateExtrasOC) setCreateExtrasOC(true);
+        }
       }
 
       // Insert FC
@@ -1526,8 +1551,9 @@ export default function CargarFacturaOC({
             <div className="max-h-[72vh] overflow-y-auto p-6">
               {nuevoProveedorError && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400">{nuevoProveedorError}</div>}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Razón social *</label><input value={nuevoProveedor.razon_social} onChange={e => setNuevoProveedor({ ...nuevoProveedor, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">CUIT *</label><div className="mt-1 flex gap-2"><input value={nuevoProveedor.cuit} onChange={e => setNuevoProveedor({ ...nuevoProveedor, cuit: e.target.value })} placeholder="XX-XXXXXXXX-X" className="min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-mono dark:border-zinc-600 dark:bg-zinc-800" /><button type="button" onClick={lookupNuevoProveedor} disabled={cuitLoading} className="inline-flex items-center gap-1 rounded-lg border border-blue-300 px-3 text-xs font-semibold text-blue-600 hover:bg-blue-50 disabled:opacity-50">{cuitLoading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />} AFIP</button></div></div>
+                <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Razón social *</label><input value={nuevoProveedor.razon_social} onChange={e => setNuevoProveedor({ ...nuevoProveedor, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Nombre de fantasía <span className="font-normal text-zinc-400">(como figura en la lista de costos, ej. "Segutécnica")</span></label><input value={nuevoProveedor.nombre_fantasia} onChange={e => setNuevoProveedor({ ...nuevoProveedor, nombre_fantasia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div><label className="text-xs font-medium text-zinc-500">CUIT *</label><div className="mt-1 flex gap-2"><input value={nuevoProveedor.cuit} onChange={e => setNuevoProveedor({ ...nuevoProveedor, cuit: e.target.value })} placeholder="XX-XXXXXXXX-X" className="min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-mono dark:border-zinc-600 dark:bg-zinc-800" /><button type="button" onClick={() => lookupNuevoProveedor()} disabled={cuitLoading} className="inline-flex items-center gap-1 rounded-lg border border-blue-300 px-3 text-xs font-semibold text-blue-600 hover:bg-blue-50 disabled:opacity-50">{cuitLoading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />} AFIP</button></div></div>
                 <div><label className="text-xs font-medium text-zinc-500">Condición IVA</label><select value={nuevoProveedor.condicion_iva} onChange={e => setNuevoProveedor({ ...nuevoProveedor, condicion_iva: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"><option value="RI">Responsable Inscripto</option><option value="Monotributo">Monotributo</option><option value="Exento">Exento</option></select></div>
                 <div><label className="text-xs font-medium text-zinc-500">Rubro</label><input value={nuevoProveedor.rubro} onChange={e => setNuevoProveedor({ ...nuevoProveedor, rubro: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
                 <div><label className="text-xs font-medium text-zinc-500">Email</label><input type="email" value={nuevoProveedor.email} onChange={e => setNuevoProveedor({ ...nuevoProveedor, email: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>

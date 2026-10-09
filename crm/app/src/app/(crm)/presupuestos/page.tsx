@@ -4025,7 +4025,7 @@ export default function PresupuestosPage() {
                             }
                             setNewPR((prev) => {
                               const items = prev.items.map((it, i) => {
-                                if (i === idx) return { ...it, proveedor_id: isOwnSociedad ? "" : provId, proveedor_nombre: isOwnSociedad ? "Stock propio" : provNombre, stock_propio: esStockPropio || !!isOwnSociedad, proveedor_lista: lista || it.proveedor_lista };
+                                if (i === idx) return { ...it, proveedor_id: isOwnSociedad ? "" : provId, proveedor_nombre: isOwnSociedad ? "Stock propio" : provNombre, stock_propio: esStockPropio || !!isOwnSociedad, proveedor_lista: provId ? (lista || it.proveedor_lista) : "" };
                                 const suLista = (it.proveedor_lista || (!it.proveedor_id && !it.stock_propio ? it.proveedor_nombre : "") || "").trim();
                                 if (recordar && suLista === lista && !it.stock_propio) return { ...it, proveedor_id: provId, proveedor_nombre: provNombre, proveedor_lista: lista };
                                 return it;

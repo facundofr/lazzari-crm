@@ -128,7 +128,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
 
   async function abrirNuevoProv(row: QueueRow) {
     const cuit = onlyDigits(row.data?.proveedor?.cuit);
-    const base: NuevoProv = { rowId: row.id, cuit, razon_social: String(row.data?.proveedor?.razon_social || "").trim(), nombre_fantasia: "", condicion_iva: "RI", direccion: "", localidad: "", provincia: "", rubro: "" };
+    const base: NuevoProv = { rowId: row.id, cuit, razon_social: String(row.data?.proveedor?.razon_social || "").trim(), nombre_fantasia: String(row.data?.proveedor?.nombre_fantasia || "").trim(), condicion_iva: "RI", direccion: "", localidad: "", provincia: "", rubro: "" };
     setNuevoProv(base); setProvError(""); setArcaMsg("");
     if (cuit.length !== 11) return;
     setArcaLoading(true);
