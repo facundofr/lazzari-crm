@@ -68,6 +68,9 @@ export interface MatchResult {
 /** Equivalencias de producto: producto de factura → productos de OC que son el mismo artículo. */
 export type Equivalencias = Record<string, string[]>;
 
+/** Talle comodín para "talle especial" (ver opciones.tallesEspeciales de matchPurchaseLines). */
+export const TALLE_ESPECIAL = "ESP";
+
 const LETTER_SIZES = ["XXXXL", "XXXL", "XXL", "4XL", "3XL", "2XL", "XL", "XS", "S", "M", "L"];
 const NORMALIZE_SIZE: Record<string, string> = { XXL: "2XL", XXXL: "3XL", XXXXL: "4XL", "2L": "2XL", "3L": "3XL", "4L": "4XL" }; // "T4L" es un error común por 4XL
 
@@ -95,7 +98,14 @@ export function parseVariant(descripcion: string): Variant {
     .replace(/\bm\s*\/\s*l\b/gi, " manga larga ");
   let talle: string | null = null;
 
-  const patterns: RegExp[] = [
+  // "Talle especial", "T. ESP", "TALLES ESPECIALES": el proveedor agrupa varios talles grandes bajo un mismo precio.
+  const especial = /\b(?:talles?|t\.?)\s*(?:especial(?:es)?|esp\.?)(?=\s|$|[^a-z])/i;
+  if (especial.test(text)) {
+    talle = TALLE_ESPECIAL;
+    text = text.replace(especial, " ");
+  }
+
+  const patterns: RegExp[] = talle ? [] : [
     // "TALLE 40", "TALLE XL", "Talle: 3XL"
     /\btalle\s*:?\s*(\d{1,3}|\d?x{0,3}[sml]|xs)\b/i,
     // "T40", "T 40", "TXL", "T2XL", "T M"
@@ -172,12 +182,12 @@ export function productGroups(invoice: InvoiceLineInput[], ocs: OcLineInput[]) {
  * Equivalencias por similitud de palabras (sin IA). Para cada producto de factura
  * toma los productos de OC con la mejor similitud, si comparten talles.
  */
-export function heuristicEquivalences(invoice: InvoiceLineInput[], ocs: OcLineInput[]): Equivalencias {
+export function heuristicEquivalences(invoice: InvoiceLineInput[], ocs: OcLineInput[], tallesEspeciales: string[] = []): Equivalencias {
   const { factura, oc } = productGroups(invoice, ocs);
   const out: Equivalencias = {};
   for (const f of factura) {
     const scored = oc
-      .map(o => ({ o, score: productSimilarity(f.producto, o.producto), talles: f.talles.filter(t => o.talles.includes(t)).length }))
+      .map(o => ({ o, score: productSimilarity(f.producto, o.producto), talles: f.talles.filter(t => o.talles.some(ot => tallesCompatibles(t, ot, tallesEspeciales))).length }))
       .filter(x => x.score >= 0.5 && (x.talles > 0 || (!f.talles.length && !x.o.talles.length)));
     if (!scored.length) continue;
     const best = Math.max(...scored.map(x => x.score));
@@ -227,12 +237,39 @@ const sameCode = (a?: string | null, b?: string | null) => !!a && !!b && normali
  * - `codigos`: equivalencias aprendidas código de proveedor → producto de OC (opcional).
  * - `manual`: asignaciones forzadas por el usuario: invoiceKey → [{ ocLineId, cantidad }] o "__extra__".
  */
+export interface MatchOptions {
+  /** Talles que el proveedor factura como "talle especial" (ej. ["3XL","4XL","5XL"]). */
+  tallesEspeciales?: string[];
+  /** Diferencia de precio (%) que se acepta como verde. */
+  toleranciaPct?: number;
+}
+
+/** ¿Son compatibles el talle de la factura y el de la OC? Nunca se mezcla un talle con otro distinto. */
+export function tallesCompatibles(tf: string | null, to: string | null, especiales: string[] = []): boolean {
+  if (!tf && !to) return true;
+  if (tf === to) return true;
+  const esp = new Set(especiales.map(t => normalizeSize(String(t).trim().toUpperCase())));
+  if (tf === TALLE_ESPECIAL && to) return esp.has(to);
+  if (to === TALLE_ESPECIAL && tf) return esp.has(tf);
+  return false;
+}
+
+/** Precio dentro de la tolerancia del proveedor. */
+export function precioAceptable(factura: number, oc: number, toleranciaPct = 0): boolean {
+  if (samePrice(factura, oc)) return true;
+  if (!(toleranciaPct > 0) || !(oc > 0)) return false;
+  return Math.abs(factura - oc) / oc <= toleranciaPct / 100 + 1e-9;
+}
+
 export function matchPurchaseLines(
   invoice: InvoiceLineInput[],
   ocs: OcLineInput[],
   equivalencias: Equivalencias,
   manual: Record<string, Array<{ ocLineId: string; cantidad: number }> | "__extra__"> = {},
+  opciones: MatchOptions = {},
 ): MatchResult {
+  const especiales = opciones.tallesEspeciales || [];
+  const tol = Number(opciones.toleranciaPct) || 0;
   const remaining = new Map(ocs.map(o => [o.id, Math.max(0, Number(o.cantidad) || 0)]));
   const ocVariant = new Map(ocs.map(o => [o.id, parseVariant(o.descripcion)]));
   const asignaciones: Asignacion[] = [];
@@ -244,7 +281,7 @@ export function matchPurchaseLines(
     asignaciones.push({
       invoiceKey: l.key, ocLineId: o.id, ocId: o.ocId, ocNumero: o.ocNumero, cantidad,
       precioFactura: l.precio, precioOc: o.precio, diferencia: round2((l.precio - o.precio) * cantidad),
-      semaforo: samePrice(l.precio, o.precio) && !nota ? "verde" : "amarillo", origen,
+      semaforo: precioAceptable(l.precio, o.precio, tol) && !nota ? "verde" : "amarillo", origen,
       ...(nota ? { nota } : {}),
     });
   };
@@ -259,7 +296,7 @@ export function matchPurchaseLines(
       .filter(o => {
         const ov = ocVariant.get(o.id)!;
         if (!productos.has(ov.producto)) return false;
-        if ((v.talle || ov.talle) && v.talle !== ov.talle) return false; // nunca otro talle
+        if (!tallesCompatibles(v.talle, ov.talle, especiales)) return false; // nunca otro talle (salvo "talle especial")
         if (v.genero && ov.genero && v.genero !== ov.genero) return false;
         if (articleAttributes(o.descripcion).ignifugo !== ign) return false; // otra tela, otro artículo
         return true;
@@ -322,7 +359,7 @@ export function matchPurchaseLines(
     const ordered = candidates.get(l.key)!
       .filter(({ o }) => (remaining.get(o.id) || 0) > 0)
       .sort((a, b) => {
-        const pa = samePrice(l.precio, a.o.precio) ? 0 : 1, pb = samePrice(l.precio, b.o.precio) ? 0 : 1;
+        const pa = precioAceptable(l.precio, a.o.precio, tol) ? 0 : 1, pb = precioAceptable(l.precio, b.o.precio, tol) ? 0 : 1;
         return pa - pb || a.o.ocFecha.localeCompare(b.o.ocFecha) || a.o.ocNumero.localeCompare(b.o.ocNumero);
       });
     for (const { o, origen } of ordered) {

@@ -485,9 +485,12 @@ export default function CobroMasivoLiquidacion({
                   </div>
                   <div className="w-36">
                     <label className="block text-[10px] uppercase text-zinc-400 mb-1">Importe</label>
+                    <div className="flex items-center gap-1">
                     <input type="text" inputMode="decimal" placeholder="0,00"
                       value={medio.monto} onChange={e => updateMedio(medio._id, "monto", e.target.value)}
                       className="w-full px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
+                    <button type="button" title="Completar con lo que falta cobrar" onClick={() => { const otros = medios.reduce((s, m2) => m2._id === medio._id ? s : s + num(m2.monto), 0); updateMedio(medio._id, "monto", toDecimalInput(Math.max(0, r2(totalEsperado - otros)))); }} className="shrink-0 rounded p-1 text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/40"><Sparkles size={14} /></button>
+                    </div>
                   </div>
                   <div className="w-32">
                     <label className="block text-[10px] uppercase text-zinc-400 mb-1">Fecha</label>

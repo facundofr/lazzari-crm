@@ -10,10 +10,11 @@ import { createPortal } from "react-dom";
 import { X, Loader2, Sparkles, Search, FileUp, Check, AlertTriangle } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { convertirAMonedaPR, normalizarProveedor, buscarProveedorCRM, type CatalogoItemParaPR } from "@/components/presupuestos/catalogo-picker";
+import { Autocompletar } from "@/components/ui/autocompletar";
+import { buscarCandidatos, normalizar, SIN_PREFS, type Prefs, type CatalogoCandidato as Cand } from "@/lib/catalogo-busqueda";
 
 const db = supabase as any;
 
-type Cand = { id: string; proveedor: string; codigo: string; codigo_interno: string | null; descripcion: string; moneda: string; costo: number; precio_venta: number; marca?: string | null };
 type Confianza = "alta" | "media" | "baja" | "ninguna" | "manual";
 type Linea = { id: string; descripcion: string; cantidad: number; talle: string; codigo: string; candidatos: Cand[]; elegido: number | null; confianza: Confianza; nota: string; incluir: boolean; buscar: string; buscando?: boolean };
 
@@ -27,79 +28,6 @@ interface Props {
   onPedirTc?: () => void;
   proveedoresCRM?: Array<{ id: string; razon_social: string }>;
   sociedadId?: string;
-}
-
-const STOP = new Set(["con", "para", "de", "del", "la", "el", "los", "las", "p", "y", "en", "x", "un", "una", "por", "tipo", "modelo", "mod", "color", "c", "s", "talle", "t"]);
-const ABREV: Record<string, string> = { ant: "anteojo", g: "guante", gte: "guante", gtes: "guante", guantes: "guante", anteojos: "anteojo", barbijos: "barbijo", cascos: "casco", botines: "botin", endourales: "endoaural", endoaurales: "endoaural", endourale: "endoaural" };
-
-function normalizar(t: string) {
-  return String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
-    .replace(/([a-z]{4,})(\d)/g, "$1 $2").replace(/[^a-z0-9]+/g, " ").trim();
-}
-function tokens(t: string) {
-  return normalizar(t).split(" ").map(w => ABREV[w] || w).filter(w => w.length >= 2 && !STOP.has(w));
-}
-const esCodigo = (w: string) => /\d/.test(w) && /[a-z]/.test(w) || /^\d{3,}$/.test(w);
-
-function puntaje(c: Cand, toks: string[]) {
-  const texto = ` ${normalizar(`${c.descripcion} ${c.codigo} ${c.codigo_interno || ""} ${c.marca || ""} ${c.proveedor}`)} `;
-  let p = 0;
-  for (const w of toks) {
-    const raiz = w.length > 5 ? w.slice(0, w.length - 1) : w;
-    if (texto.includes(` ${w} `)) p += esCodigo(w) ? 5 : 2;
-    else if (texto.includes(raiz)) p += esCodigo(w) ? 3 : 1;
-  }
-  return p;
-}
-
-const COLS = "id, proveedor, codigo, codigo_interno, descripcion, moneda, costo, precio_venta, marca";
-
-type Prefs = { provs: string[]; soloProvs: boolean; marcas: string[]; soloMarcas: boolean };
-const SIN_PREFS: Prefs = { provs: [], soloProvs: false, marcas: [], soloMarcas: false };
-
-async function buscarCandidatos(texto: string, codigo = "", max = 15, prefs: Prefs = SIN_PREFS): Promise<Cand[]> {
-  const toks = [...new Set(tokens(`${codigo} ${texto}`))];
-  if (!toks.length) return [];
-  const limpio = (w: string) => w.replace(/[,()%*\\]/g, "");
-  const consultas: any[] = [];
-  const codigos = toks.filter(esCodigo);
-  const palabras = toks.filter(w => !esCodigo(w)).sort((a, b) => b.length - a.length);
-  const base = (soloPref = false) => {
-    let q = db.from("catalogo_costos").select(COLS).eq("activo", true);
-    if (prefs.provs.length && (prefs.soloProvs || soloPref)) q = q.in("proveedor", prefs.provs);
-    if (prefs.marcas.length && prefs.soloMarcas) q = q.in("marca", prefs.marcas);
-    return q;
-  };
-  const y = (ws: string[], lim: number, soloPref = false) => {
-    let q = base(soloPref);
-    for (const w of ws) q = q.or(`descripcion.ilike.%${limpio(w)}%,codigo.ilike.%${limpio(w)}%,codigo_interno.ilike.%${limpio(w)}%,marca.ilike.%${limpio(w)}%,proveedor.ilike.%${limpio(w)}%`);
-    return q.limit(lim);
-  };
-  if (codigo.trim()) consultas.push(base().or(`codigo.ilike.%${limpio(codigo.trim())}%,codigo_interno.ilike.%${limpio(codigo.trim())}%`).limit(20));
-  if (codigos.length) consultas.push(y(codigos, 60));
-  if (codigos.length && palabras.length) consultas.push(y([codigos[0], palabras[0]], 60));
-  if (palabras.length >= 2) consultas.push(y(palabras.slice(0, 3), 80));
-  if (palabras.length >= 2) consultas.push(y(palabras.slice(0, 2), 120));
-  if (palabras.length) consultas.push(y([palabras[0]], 400));
-  if (palabras.length >= 2) consultas.push(y([palabras[1]], 200));
-  // Con proveedores preferidos: se busca también solo dentro de ellos, para que siempre aparezcan.
-  if (prefs.provs.length && !prefs.soloProvs) {
-    if (palabras.length) consultas.push(y([palabras[0]], 150, true));
-    if (palabras.length >= 2) consultas.push(y(palabras.slice(0, 2), 100, true));
-    if (codigos.length) consultas.push(y(codigos, 60, true));
-  }
-  const res = await Promise.all(consultas.map(q => q.then((r: any) => r.data || [], () => [])));
-  const porId = new Map<string, Cand>();
-  for (const lista of res) for (const r of lista) porId.set(r.id, { ...r, costo: Number(r.costo), precio_venta: Number(r.precio_venta) });
-  const ordenados = [...porId.values()].map(c => ({ c, p: puntaje(c, toks) })).filter(x => x.p > 0)
-    .sort((a, b) => b.p - a.p || a.c.costo - b.c.costo);
-  // Primero el mejor de cada proveedor (para que no quede afuera ninguno que lo tenga), después el resto.
-  const mejorTope = ordenados[0]?.p || 0;
-  const porProv = new Map<string, { c: Cand; p: number }>();
-  for (const x of ordenados) if (!porProv.has(x.c.proveedor) && x.p >= mejorTope * (prefs.provs.includes(x.c.proveedor) ? 0.35 : 0.6)) porProv.set(x.c.proveedor, x);
-  const salida = [...porProv.values()];
-  for (const x of ordenados) if (salida.length < max && !salida.includes(x)) salida.push(x);
-  return salida.sort((a, b) => b.p - a.p || a.c.costo - b.c.costo).slice(0, Math.max(max, porProv.size)).map(x => x.c);
 }
 
 function separarTalle(desc: string): { descripcion: string; talle: string } {
@@ -154,47 +82,6 @@ const COLOR: Record<Confianza, string> = {
   manual: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300",
 };
 const ETIQUETA: Record<Confianza, string> = { alta: "Seguro", media: "Revisar", baja: "Alternativa", ninguna: "No está", manual: "Elegido" };
-
-/** Campo que se va escribiendo y muestra solo las opciones que contienen esas letras (sin importar acentos). */
-function Autocompletar({ opciones, placeholder, onElegir, className = "", chico = false }: { opciones: Array<{ valor: string; texto: string }>; placeholder: string; onElegir: (valor: string) => void; className?: string; chico?: boolean }) {
-  const [q, setQ] = useState("");
-  const [abierto, setAbierto] = useState(false);
-  const [marcado, setMarcado] = useState(0);
-  const ref = useRef<HTMLInputElement>(null);
-  const [pos, setPos] = useState<React.CSSProperties>({});
-  const norm = (t: string) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const filtradas = useMemo(() => {
-    const n = norm(q.trim());
-    const base = n ? opciones.filter(o => norm(o.texto).includes(n)) : opciones;
-    return [...base].sort((a, b) => (n ? Number(!norm(a.texto).startsWith(n)) - Number(!norm(b.texto).startsWith(n)) : 0)).slice(0, 50);
-  }, [q, opciones]);
-  function ubicar() {
-    const r = ref.current?.getBoundingClientRect();
-    if (!r) return;
-    const arriba = window.innerHeight - r.bottom < 220 && r.top > 220;
-    setPos({ position: "fixed", left: r.left, width: Math.max(r.width, 240), zIndex: 10000, ...(arriba ? { bottom: window.innerHeight - r.top + 2 } : { top: r.bottom + 2 }) });
-  }
-  function elegir(v: string) { onElegir(v); setQ(""); setAbierto(false); }
-  return <>
-    <input ref={ref} value={q} placeholder={placeholder}
-      onChange={e => { setQ(e.target.value); setMarcado(0); ubicar(); setAbierto(true); }}
-      onFocus={() => { ubicar(); setAbierto(true); }}
-      onBlur={() => setTimeout(() => setAbierto(false), 150)}
-      onKeyDown={e => {
-        if (e.key === "ArrowDown") { e.preventDefault(); setMarcado(m => Math.min(m + 1, filtradas.length - 1)); }
-        else if (e.key === "ArrowUp") { e.preventDefault(); setMarcado(m => Math.max(m - 1, 0)); }
-        else if (e.key === "Enter" && filtradas[marcado]) { e.preventDefault(); elegir(filtradas[marcado].valor); }
-        else if (e.key === "Escape") setAbierto(false);
-      }}
-      className={`rounded border px-2 ${chico ? "py-0.5 text-[10px]" : "py-1 text-xs"} dark:bg-zinc-800 dark:text-white ${className}`} />
-    {abierto && typeof document !== "undefined" && createPortal(
-      <div style={pos} className="max-h-56 overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
-        {filtradas.map((o, i) => <button key={o.valor} type="button" onMouseDown={e => { e.preventDefault(); elegir(o.valor); }} onMouseEnter={() => setMarcado(i)}
-          className={`block w-full px-3 py-1.5 text-left text-xs dark:text-zinc-200 ${i === marcado ? "bg-orange-100 dark:bg-orange-900/40" : "hover:bg-orange-50 dark:hover:bg-orange-900/20"}`}>{o.texto}</button>)}
-        {!filtradas.length && <p className="px-3 py-2 text-xs text-zinc-400">{opciones.length ? "Sin coincidencias" : "Cargando…"}</p>}
-      </div>, document.body)}
-  </>;
-}
 
 export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivisas, onAgregar, onPedirTc, proveedoresCRM, sociedadId }: Props) {
   const [mensaje, setMensaje] = useState("");

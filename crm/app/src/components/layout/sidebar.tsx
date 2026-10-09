@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
+  Lightbulb,
   LayoutDashboard,
   Users,
   FileText,
@@ -26,6 +27,7 @@ import {
   Calendar,
   Shirt,
   Zap,
+  Scissors,
 } from "lucide-react";
 import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -41,9 +43,11 @@ const navigation = [
   { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
   { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
   { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras" },
+  { name: "Oportunidades", href: "/oportunidades", icon: Lightbulb, module: "clientes" },
   { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
   // ── Compras & logistica ──
   { name: "Compras", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
+  { name: "Personalización", href: "/personalizacion", icon: Scissors, module: "ordenes_compra" },
   { name: "Remitos", href: "/remitos", icon: Receipt, module: "remitos" },
   { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
   // ── Admin ──

@@ -21,6 +21,7 @@ import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import * as XLSX from "xlsx";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import CargaMasivaFacturasCompra from "@/components/carga-masiva-facturas-compra";
+import PlanPagos from "@/components/plan-pagos";
 import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/payment-document-parser";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
@@ -756,6 +757,7 @@ export default function FinanzasPage() {
   const [facturasCompra, setFacturasCompra] = useState<FacturaCompraRow[]>([]);
   const [fcModalOpen, setFcModalOpen] = useState(false);
   const [fcMassModalOpen, setFcMassModalOpen] = useState(false);
+  const [planPagosOpen, setPlanPagosOpen] = useState(false);
   const [fcForm, setFcForm] = useState(emptyFCForm);
   const [fcSaving, setFcSaving] = useState(false);
   const [fcError, setFcError] = useState("");
@@ -4258,14 +4260,17 @@ export default function FinanzasPage() {
                 <button onClick={() => exportFCCompraCSV(filteredFC)} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors">
                   <Download className="h-4 w-4" /> Exportar CSV
                 </button>
+                <button onClick={() => setPlanPagosOpen(true)} className="flex items-center gap-1.5 rounded-lg border border-orange-500 px-3 py-2 text-sm font-medium text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors">
+                  <Landmark className="h-4 w-4" /> Plan de pagos
+                </button>
                 <button onClick={() => { setTab("ordenes_pago"); openOPModal(); }} className="flex items-center gap-1.5 rounded-lg border border-orange-500 px-3 py-2 text-sm font-medium text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors">
                   <FileText className="h-4 w-4" /> Nueva OP
                 </button>
-                <button onClick={openFCModal} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
-                  <Plus className="h-4 w-4" /> Nueva factura de compra
+                <button onClick={openFCModal} title="Cargar una factura a mano, sin leerla con IA" className="flex items-center gap-1.5 rounded-lg border border-orange-500 px-3 py-2 text-sm font-medium text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors">
+                  <Plus className="h-4 w-4" /> Carga manual
                 </button>
-                <button onClick={() => setFcMassModalOpen(true)} className="flex items-center gap-1.5 rounded-lg border border-orange-500 px-3 py-2 text-sm font-medium text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors">
-                  <Upload className="h-4 w-4" /> Carga masiva con IA
+                <button onClick={() => setFcMassModalOpen(true)} title="Una o varias facturas, de uno o varios proveedores: la IA las lee y, si hay OC con renglones, las concilia línea por línea" className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
+                  <Upload className="h-4 w-4" /> Cargar facturas (IA)
                 </button>
               </div>
             </div>
@@ -4451,9 +4456,14 @@ export default function FinanzasPage() {
                   {formatCurrency(ordenesPago.filter(o => o.estado === "pendiente").reduce((s, o) => s + o.neto, 0))}
                 </span>
               </p>
-              <button onClick={() => openOPModal()} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
-                <Plus className="h-4 w-4" /> Nueva OP
-              </button>
+              <div className="flex gap-2">
+                <button onClick={() => setPlanPagosOpen(true)} title="Pagar a varios proveedores juntos: retenciones calculadas, resumen para el banco y carga masiva de comprobantes" className="flex items-center gap-1.5 rounded-lg border border-orange-500 px-3 py-2 text-sm font-medium text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors">
+                  <Landmark className="h-4 w-4" /> Plan de pagos
+                </button>
+                <button onClick={() => openOPModal()} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
+                  <Plus className="h-4 w-4" /> Nueva OP
+                </button>
+              </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 mb-3">
               <div className="relative min-w-[240px] flex-1 max-w-md">
@@ -5969,7 +5979,8 @@ export default function FinanzasPage() {
                                       const val = Math.min(Number(e.target.value), fc.saldo_pendiente);
                                       setOpFCPendientes(prev => prev.map(f => f.id === fc.id ? { ...f, monto_a_pagar: val } : f));
                                     }}
-                                    className="w-28 text-right rounded border border-zinc-200 px-2 py-1 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" /></span>
+                                    className="w-28 text-right rounded border border-zinc-200 px-2 py-1 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                                  <button type="button" title="Completar con el saldo de la factura" onClick={() => setOpFCPendientes(prev => prev.map(f => f.id === fc.id ? { ...f, monto_a_pagar: fc.saldo_pendiente } : f))} className="shrink-0 rounded p-1 text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/40"><Sparkles className="h-3.5 w-3.5" /></button></span>
                                 ) : <span className="text-xs text-zinc-300">—</span>}
                               </td>
                             </tr>
@@ -5999,6 +6010,9 @@ export default function FinanzasPage() {
                                     onChange={(e) => { const val = Math.max(0, Math.min(Number(e.target.value), nc.disponible)); setOpNCDisponibles(prev => prev.map(n => n.id === nc.id ? { ...n, monto_a_aplicar: val } : n)); }}
                                     className="w-28 text-right rounded border border-emerald-200 px-2 py-1 text-xs font-mono text-emerald-700 dark:border-emerald-800 dark:bg-zinc-800" />
                                 ) : <span className="text-xs text-zinc-300">—</span>}
+                                {nc.selected && (
+                                  <button type="button" title="Aplicar todo lo disponible" onClick={() => setOpNCDisponibles(prev => prev.map(n => n.id === nc.id ? { ...n, monto_a_aplicar: nc.disponible } : n))} className="shrink-0 rounded p-1 text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/40"><Sparkles className="h-3.5 w-3.5" /></button>
+                                )}
                               </td>
                             </tr>
                           ))}
@@ -6209,6 +6223,7 @@ export default function FinanzasPage() {
                           <input type="number" value={m.monto || ""} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, monto: Number(e.target.value) } : x))}
                             placeholder="Monto" className="w-full rounded border border-zinc-200 pl-5 pr-2 py-1.5 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                         </div>
+                        <button type="button" title="Completar con lo que falta del neto a pagar" onClick={() => setOpMedios(prev => { const otros = prev.reduce((s, x, i) => i === idx ? s : s + (Number(x.monto) || 0), 0); return prev.map((x, i) => i === idx ? { ...x, monto: Math.max(0, Math.round((opNetoAPagar - otros) * 100) / 100) } : x); })} className="shrink-0 rounded p-1 text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/40 self-center"><Sparkles className="h-3.5 w-3.5" /></button>
                         <div className="grid w-36 gap-1">
                           <label className="text-[10px] text-zinc-400">Cobro / acreditación</label>
                           <input type="date" value={m.fecha_cobro || m.fecha} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, fecha: e.target.value, fecha_cobro: e.target.value } : x))}
@@ -6353,6 +6368,10 @@ export default function FinanzasPage() {
           onClose={() => setFcModalOpen(false)}
           onSuccess={() => { setFcModalOpen(false); fetchData(); }}
         />
+      )}
+
+      {planPagosOpen && sociedadActiva?.id && (
+        <PlanPagos sociedadId={sociedadActiva.id} onClose={() => { setPlanPagosOpen(false); fetchData(); }} />
       )}
 
       {fcMassModalOpen && (

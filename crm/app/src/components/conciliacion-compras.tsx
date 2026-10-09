@@ -11,7 +11,7 @@
  *    - "Confirmar": la factura va a aprobación/pagos y las OC quedan facturadas.
  *    - "Conciliación parcial": queda guardada SIN ir a pagos, para retomarla después.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X, Loader2, Sparkles, Check, AlertTriangle, Upload, Trash2, RotateCcw, Pencil, Maximize2, Minimize2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
@@ -28,10 +28,13 @@ interface Props {
   sociedadId: string;
   profileId: string | null;
   onClose: () => void;
-  onSuccess: () => void;
+  /** Recibe los números de las facturas guardadas. */
+  onSuccess: (guardadas?: string[]) => void;
+  /** Facturas ya leídas (desde la carga masiva): se cargan sin volver a pasar por la IA. */
+  inicial?: { proveedorId?: string; facturas: Array<{ file: File; data: any }> };
 }
 
-interface Proveedor { id: string; razon_social: string; cuit: string | null }
+interface Proveedor { id: string; razon_social: string; cuit: string | null; talles_especiales?: string[] | null; tolerancia_precio_pct?: number | null }
 
 interface ItemFactura {
   codigo: string;
@@ -63,7 +66,7 @@ interface FacturaCarga {
   cuit: string;
 }
 
-interface OcLinea extends OcLineInput { moneda: string; ocEstado: string }
+interface OcLinea extends OcLineInput { moneda: string; ocEstado: string; descripcionOc?: string }
 type Manual = Record<string, Array<{ ocLineId: string; cantidad: number }> | "__extra__">;
 type Confianza = "alta" | "media" | "baja";
 
@@ -78,7 +81,39 @@ function tipoComprobante(raw: string): string {
 const precioNeto = (it: ItemFactura) => round2(it.precio_unitario * (1 - (it.descuento_porcentaje || 0) / 100));
 const lineKey = (f: FacturaCarga, i: number) => `${f.localId}:${i}`;
 
-export default function ConciliacionCompras({ sociedadId, profileId, onClose, onSuccess }: Props) {
+/** Arma una factura de la conciliación con los datos que devolvió /api/parse-factura-compra. */
+function facturaDesdeDatos(file: File, d: any): FacturaCarga {
+  const ivaPct = d.iva_porcentaje != null ? Number(d.iva_porcentaje) || 0 : 21;
+  return {
+    localId: `f${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+    dbId: null,
+    file,
+    archivoNombre: file.name,
+    numero: String(d.numero_factura || ""),
+    tipo: tipoComprobante(d.tipo_comprobante),
+    fecha: d.fecha || todayAR(),
+    vencimiento: d.fecha_vencimiento || "",
+    cae: d.cae || "",
+    moneda: d.moneda === "USD" ? "USD" : "ARS",
+    subtotal: Number(d.subtotal) || 0,
+    iva: Number(d.iva) || 0,
+    ivaPorcentaje: ivaPct,
+    percepciones: Number(d.percepciones) || 0,
+    total: Number(d.total) || 0,
+    cuit: String(d.proveedor?.cuit || "").replace(/\D/g, ""),
+    items: (Array.isArray(d.items) ? d.items : []).map((it: any) => ({
+      codigo: String(it.codigo || ""),
+      descripcion: String(it.descripcion || ""),
+      cantidad: it.cantidad == null ? 1 : Number(it.cantidad) || 0,
+      precio_unitario: Number(it.precio_unitario) || 0,
+      descuento_porcentaje: Math.max(0, Math.min(100, Number(it.descuento_porcentaje ?? d.descuento_general_porcentaje) || 0)),
+      iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : ivaPct,
+      unidad: it.unidad || "UN",
+    })).filter((it: ItemFactura) => it.descripcion && it.cantidad > 0),
+  };
+}
+
+export default function ConciliacionCompras({ sociedadId, profileId, onClose, onSuccess, inicial }: Props) {
   const [fullscreen, setFullscreen] = useState(true);
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
   const [proveedorId, setProveedorId] = useState("");
@@ -110,18 +145,33 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
   useEffect(() => {
     if (!sociedadId) return;
     (async () => {
-      const { data } = await db.from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social");
+      let { data, error: e } = await db.from("proveedores").select("id, razon_social, cuit, talles_especiales, tolerancia_precio_pct").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social");
+      if (e) ({ data } = await db.from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"));
       setProveedores((data || []) as Proveedor[]);
     })();
   }, [sociedadId]);
 
   const proveedor = proveedores.find(p => p.id === proveedorId) || null;
+  // Reglas del proveedor: talles que factura como "talle especial" y diferencia de precio aceptada.
+  const opcionesMatch = useMemo(() => ({
+    tallesEspeciales: proveedor?.talles_especiales || [],
+    toleranciaPct: Number(proveedor?.tolerancia_precio_pct ?? 0) || 0,
+  }), [proveedor?.talles_especiales, proveedor?.tolerancia_precio_pct]);
   const proveedoresFiltrados = useMemo(() => {
     const q = busquedaProv.trim().toLowerCase();
     if (!q) return proveedores.slice(0, 30);
     const digits = q.replace(/\D/g, "");
     return proveedores.filter(p => p.razon_social.toLowerCase().includes(q) || (digits.length >= 3 && (p.cuit || "").replace(/\D/g, "").includes(digits))).slice(0, 30);
   }, [proveedores, busquedaProv]);
+
+  // ── Facturas que llegan ya leídas desde la carga masiva ──
+  const inicialCargado = useRef(false);
+  useEffect(() => {
+    if (!inicial || inicialCargado.current) return;
+    inicialCargado.current = true;
+    setFacturas(inicial.facturas.map(f => facturaDesdeDatos(f.file, f.data || {})));
+    if (inicial.proveedorId) setProveedorId(inicial.proveedorId);
+  }, [inicial]);
 
   // ── Conciliaciones parciales del proveedor ──
   useEffect(() => {
@@ -145,35 +195,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
         const res = await fetch("/api/parse-factura-compra", { method: "POST", body: fd });
         const json = await res.json();
         if (!res.ok || !json.success) throw new Error(json.error || "No se pudo leer");
-        const d = json.data || {};
-        const ivaPct = d.iva_porcentaje != null ? Number(d.iva_porcentaje) || 0 : 21;
-        nuevas.push({
-          localId: `f${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
-          dbId: null,
-          file,
-          archivoNombre: file.name,
-          numero: String(d.numero_factura || ""),
-          tipo: tipoComprobante(d.tipo_comprobante),
-          fecha: d.fecha || todayAR(),
-          vencimiento: d.fecha_vencimiento || "",
-          cae: d.cae || "",
-          moneda: d.moneda === "USD" ? "USD" : "ARS",
-          subtotal: Number(d.subtotal) || 0,
-          iva: Number(d.iva) || 0,
-          ivaPorcentaje: ivaPct,
-          percepciones: Number(d.percepciones) || 0,
-          total: Number(d.total) || 0,
-          cuit: String(d.proveedor?.cuit || "").replace(/\D/g, ""),
-          items: (Array.isArray(d.items) ? d.items : []).map((it: any) => ({
-            codigo: String(it.codigo || ""),
-            descripcion: String(it.descripcion || ""),
-            cantidad: it.cantidad == null ? 1 : Number(it.cantidad) || 0,
-            precio_unitario: Number(it.precio_unitario) || 0,
-            descuento_porcentaje: Math.max(0, Math.min(100, Number(it.descuento_porcentaje ?? d.descuento_general_porcentaje) || 0)),
-            iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : ivaPct,
-            unidad: it.unidad || "UN",
-          })).filter((it: ItemFactura) => it.descripcion && it.cantidad > 0),
-        });
+        nuevas.push(facturaDesdeDatos(file, json.data || {}));
       } catch (e: any) {
         setError(prev => `${prev ? prev + " · " : ""}${file.name}: ${e?.message || "error al leer"}`);
       }
@@ -234,16 +256,17 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
     setCargandoOcs(true);
     try {
       const { data: ocs, error: e1 } = await db.from("ordenes_compra")
-        .select("id, numero, fecha, estado, moneda, estado_facturacion")
+        .select("id, numero, fecha, estado, moneda, estado_facturacion, saldo_cerrado")
         .eq("sociedad_id", sociedadId).eq("proveedor_id", proveedorId)
         .neq("estado", "cancelada").order("fecha");
       if (e1) throw e1;
       // No se filtra por estado_facturacion: una conciliación parcial retomada puede haber completado una OC.
-      const abiertas = ocs || [];
+      // Las OC con el saldo cerrado ya no esperan facturas.
+      const abiertas = (ocs || []).filter((o: any) => !o.saldo_cerrado);
       const ids = abiertas.map((o: any) => o.id);
       if (!ids.length) { setOcLineas([]); return { lineas: [], legacy: new Set() }; }
       const [{ data: lineas, error: e2 }, { data: links }, { data: conAsig }] = await Promise.all([
-        db.from("orden_compra_items_pendientes").select("id, orden_id, codigo, descripcion, cantidad_pendiente, precio_unitario").in("orden_id", ids),
+        db.from("orden_compra_items_pendientes").select("id, orden_id, codigo, descripcion, cantidad_pendiente, precio_unitario, codigo_proveedor, descripcion_proveedor, talle").in("orden_id", ids),
         db.from("factura_compra_ocs").select("orden_compra_id").in("orden_compra_id", ids),
         db.from("factura_compra_asignaciones").select("orden_compra_id").in("orden_compra_id", ids),
       ]);
@@ -260,7 +283,10 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
         const o: any = byId.get(l.orden_id);
         return {
           id: l.id, ocId: l.orden_id, ocNumero: o?.numero || String(l.orden_id).slice(0, 8), ocFecha: o?.fecha || "",
-          codigo: l.codigo, descripcion: l.descripcion,
+          // Si la OC ya se ordenó contra la lista del proveedor, se compara con cómo lo llama el proveedor.
+          codigo: l.codigo_proveedor || l.codigo,
+          descripcion: l.descripcion_proveedor ? `${l.descripcion_proveedor}${l.talle ? ` TALLE ${l.talle}` : ""}` : l.descripcion,
+          descripcionOc: l.descripcion,
           cantidad: round2(Number(l.cantidad_pendiente) + (propias.get(l.id) || 0)),
           precio: Number(l.precio_unitario) || 0, moneda: o?.moneda || "ARS", ocEstado: o?.estado || "",
         };
@@ -296,7 +322,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
       const eq: Equivalencias = {}; const conf: Record<string, Confianza> = {}; const mot: Record<string, string> = {};
       const res = await fetch("/api/conciliar-compra", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ proveedor: proveedor?.razon_social || "", factura: lineasFactura, ocs: usables }),
+        body: JSON.stringify({ proveedor: proveedor?.razon_social || "", factura: lineasFactura, ocs: usables, tallesEspeciales: opcionesMatch.tallesEspeciales }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "No se pudo conciliar");
@@ -309,14 +335,14 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
       // Segunda pasada: si quedaron líneas sin OC y OC con pendientes, se le pregunta a la IA
       // solo por lo que sobró (a veces un mismo artículo de la factura va a dos OC con nombres distintos).
       if (json.ia) {
-        const r1 = matchPurchaseLines(lineasFactura, usables, eq, manual);
+        const r1 = matchPurchaseLines(lineasFactura, usables, eq, manual, opcionesMatch);
         if (r1.sinAsignar.length && r1.pendientesOc.length) {
           const restoF = r1.sinAsignar.map(x => ({ ...lineasFactura.find(l => l.key === x.invoiceKey)!, cantidad: x.cantidad }));
           const restoO = r1.pendientesOc.map(p => ({ ...usables.find(o => o.id === p.ocLineId)!, cantidad: p.cantidad }));
           try {
             const res2 = await fetch("/api/conciliar-compra", {
               method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ proveedor: proveedor?.razon_social || "", factura: restoF, ocs: restoO }),
+              body: JSON.stringify({ proveedor: proveedor?.razon_social || "", factura: restoF, ocs: restoO, tallesEspeciales: opcionesMatch.tallesEspeciales }),
             });
             const j2 = await res2.json();
             if (res2.ok && j2.ia) for (const [prod, os] of Object.entries(j2.equivalencias || {}) as Array<[string, string[]]>) {
@@ -338,8 +364,8 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
   }
 
   const resultado: MatchResult | null = useMemo(
-    () => (conciliado ? matchPurchaseLines(lineasFactura, ocsUsables, equivalencias, manual) : null),
-    [conciliado, lineasFactura, ocsUsables, equivalencias, manual],
+    () => (conciliado ? matchPurchaseLines(lineasFactura, ocsUsables, equivalencias, manual, opcionesMatch) : null),
+    [conciliado, lineasFactura, ocsUsables, equivalencias, manual, opcionesMatch],
   );
 
   const asigPorLinea = useMemo(() => {
@@ -440,7 +466,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
         : `Listo: ${guardadas.join(", ")} conciliada(s) y enviada(s) a aprobación.`
           + (aceptarCostos ? `\n\nCostos actualizados en presupuestos: ${prActualizados} artículo(s) (se mantuvo el precio de venta y se recalculó el margen).` : "")
           + (sinPr.length ? `\n\nNo se encontró en el presupuesto de origen (revisalo a mano): ${sinPr.join("; ")}` : ""));
-      onSuccess();
+      onSuccess(guardadas);
     } catch (e: any) {
       setError(guardadas.length
         ? `Se guardaron ${guardadas.join(", ")}, pero falló la siguiente: ${e?.message}. No vuelvas a cargar las que ya se guardaron.`
@@ -704,7 +730,7 @@ onAplicar: (valor: Manual[string] | null) => void;
   const opciones = ocsUsables
     .map(o => ({ o, libre: round2(o.cantidad - (usadoPorOtras.get(o.id) || 0)), mismoTalle: !!v.talle && parseVariant(o.descripcion).talle === v.talle }))
     .filter(x => x.libre > 0 || cant[x.o.id])
-    .filter(x => !filtro || `${x.o.ocNumero} ${x.o.descripcion}`.toLowerCase().includes(filtro.toLowerCase()))
+    .filter(x => !filtro || `${x.o.ocNumero} ${x.o.descripcion} ${x.o.descripcionOc || ""}`.toLowerCase().includes(filtro.toLowerCase()))
     .sort((a, b) => Number(b.mismoTalle) - Number(a.mismoTalle) || a.o.ocFecha.localeCompare(b.o.ocFecha))
     .slice(0, 60);
   const total = Object.values(cant).reduce((s, x) => s + (parseDecimalInput(x) || 0), 0);
@@ -719,7 +745,7 @@ onAplicar: (valor: Manual[string] | null) => void;
         {opciones.map(({ o, libre, mismoTalle }) => (
           <div key={o.id} className="flex items-center gap-2 py-1">
             <span className="font-mono text-xs w-20 shrink-0">{o.ocNumero}</span>
-            <span className={`flex-1 ${mismoTalle ? "" : "text-zinc-500"}`}>{o.descripcion}</span>
+            <span className={`flex-1 ${mismoTalle ? "" : "text-zinc-500"}`}>{o.descripcion}{o.descripcionOc && o.descripcionOc !== o.descripcion && <span className="block text-[10px] text-zinc-400">En la OC: {o.descripcionOc}</span>}</span>
             <span className="text-xs text-zinc-500 w-24 text-right">{formatCurrency(o.precio)}</span>
             <span className="text-xs text-zinc-500 w-16 text-right">libre {libre}</span>
             <input value={cant[o.id] || ""} onChange={e => setCant(p => ({ ...p, [o.id]: e.target.value }))} inputMode="decimal"

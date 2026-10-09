@@ -1,5 +1,6 @@
 "use client";
 
+import { AvisoBCRA } from "@/components/clientes/bcra-card";
 import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -3522,6 +3523,7 @@ export default function PresupuestosPage() {
                   ))}
                 </div>
               )}
+              {newPR.cliente_id && <div className="mt-2"><AvisoBCRA clienteId={newPR.cliente_id} /></div>}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -3620,6 +3622,7 @@ export default function PresupuestosPage() {
                 )}
               </div>
             )}
+            {newPR.cliente_id && <div className="mt-2"><AvisoBCRA clienteId={newPR.cliente_id} /></div>}
           </div>
           <Select
             label="Vendedor *"

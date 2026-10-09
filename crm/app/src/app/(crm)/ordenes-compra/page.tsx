@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import ConciliacionCompras from "@/components/conciliacion-compras";
+import LimpiezaOC from "@/components/limpieza-oc";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -78,6 +79,8 @@ interface OCRow {
   orden_compra_items: { codigo: string | null; descripcion: string | null; cantidad: number; cantidad_recibida: number }[];
   facturas_vinculadas?: { id: string; numero_factura: string; tipo_comprobante: string; estado: string; total: number; moneda: string; archivo_url: string | null; archivo_nombre?: string | null }[];
   facturas_vinculadas_estado?: "conocido" | "desconocido";
+  estado_facturacion?: string | null;
+  saldo_cerrado?: boolean | null;
 }
 
 const ocPagada = (oc: OCRow) => {
@@ -85,6 +88,31 @@ const ocPagada = (oc: OCRow) => {
   const facturas = (oc.facturas_vinculadas || []).filter((factura) => factura.estado !== "anulada");
   return facturas.length > 0 && facturas.every((factura) => factura.estado === "pagada");
 };
+
+// ── Tres datos independientes por OC: mercadería, factura y pago (se calculan solos) ──
+type Eje = "pendiente" | "parcial" | "completo";
+const ejeMercaderia = (oc: OCRow): Eje => {
+  if (oc.saldo_cerrado) return "completo";
+  const total = oc.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
+  const recibido = oc.orden_compra_items.reduce((a, i) => a + Number(i.cantidad_recibida), 0);
+  if (oc.estado === "recibida" || (total > 0 && recibido >= total)) return "completo";
+  if (recibido > 0 || oc.estado === "recibida_parcial") return "parcial";
+  return "pendiente";
+};
+const ejeFactura = (oc: OCRow): Eje => {
+  const fcs = (oc.facturas_vinculadas || []).filter((f) => f.estado !== "anulada" && !/^NC/i.test(f.tipo_comprobante || ""));
+  if (oc.estado_facturacion === "facturada") return "completo";
+  if (oc.estado_facturacion === "parcial") return oc.saldo_cerrado ? "completo" : "parcial";
+  if (!fcs.length) return "pendiente";
+  const facturado = fcs.reduce((s, f) => s + Number(f.total || 0), 0);
+  return oc.saldo_cerrado || facturado >= Number(oc.total || 0) * 0.99 ? "completo" : "parcial";
+};
+const ejePago = (oc: OCRow): Eje => {
+  if (ocPagada(oc)) return "completo";
+  return (oc.facturas_vinculadas || []).some((f) => f.estado === "pagada") ? "parcial" : "pendiente";
+};
+const ocCompleta = (oc: OCRow) => oc.estado !== "cancelada" && ejeMercaderia(oc) === "completo" && ejeFactura(oc) === "completo" && ejePago(oc) === "completo";
+type FiltroOC = "todas" | "por_recibir" | "por_facturar" | "por_pagar" | "completas" | "borrador" | "cancelada";
 
 const ocPagadaConTarjeta = (oc: OCRow) => oc.estado_pago === "pagada" && oc.medio_pago === "tarjeta";
 
@@ -185,7 +213,7 @@ function ProveedorPicker({ value, options, onChange, placeholder = "Buscar prove
 export default function OrdenesCompraPage() {
   const { sociedadActiva, profile } = useUser();
   const canManageCompras = profile?.role === "super_admin" || profile?.role === "admin" || profile?.role === "administrativo" || profile?.role === "vendedor";
-  const [filter, setFilter] = useState<OCStatus | "todas" | "pago_pendiente" | "pagada" | "recibida_parcial" | "cancelada">("todas");
+  const [filter, setFilter] = useState<FiltroOC>("todas");
   const [search, setSearch] = useState("");
   const [operadorFilter, setOperadorFilter] = useState("");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
@@ -208,6 +236,7 @@ export default function OrdenesCompraPage() {
   const [cargarFCOpen, setCargarFCOpen] = useState(false);
   const [cargarFCPreselectedId, setCargarFCPreselectedId] = useState<string | undefined>();
   const [conciliarOpen, setConciliarOpen] = useState(false);
+  const [limpiezaOpen, setLimpiezaOpen] = useState(false);
 
   // Email modal
   const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
@@ -1936,11 +1965,13 @@ export default function OrdenesCompraPage() {
   // ── Computed ─────────────────────────────────────────────────────
   const filtered = ordenes.filter((oc) => {
     if (filter !== "todas") {
-      if (filter === "pagada") {
-        if (!ocPagada(oc)) return false;
-      } else if (filter === "pago_pendiente") {
-        if (ocPagada(oc) || oc.estado === "cancelada") return false;
-      } else if (oc.estado !== filter) return false;
+      const activa = oc.estado !== "cancelada" && oc.estado !== "borrador";
+      if (filter === "por_recibir" && !(activa && ejeMercaderia(oc) !== "completo")) return false;
+      if (filter === "por_facturar" && !(activa && ejeFactura(oc) !== "completo")) return false;
+      if (filter === "por_pagar" && !(activa && ejePago(oc) !== "completo")) return false;
+      if (filter === "completas" && !ocCompleta(oc)) return false;
+      if (filter === "borrador" && oc.estado !== "borrador") return false;
+      if (filter === "cancelada" && oc.estado !== "cancelada") return false;
     }
     if (search.trim()) {
       const needle = search.trim().toLocaleLowerCase("es");
@@ -2013,6 +2044,14 @@ export default function OrdenesCompraPage() {
 
       {/* Secondary action bar */}
       {canManageCompras && <div className="px-4 sm:px-8 pt-2 flex justify-end gap-3">
+        <button
+          onClick={() => setLimpiezaOpen(true)}
+          title="Traducir los renglones escritos a mano al artículo de la lista del proveedor, y cerrar saldos que no van a llegar"
+          className="flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg border border-orange-500 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/30 transition-colors"
+        >
+          <Sparkles className="h-4 w-4" />
+          Ordenar OC abiertas
+        </button>
         <button
           onClick={() => setConciliarOpen(true)}
           className="flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-orange-600 text-white hover:bg-orange-700 transition-colors"
@@ -2089,8 +2128,14 @@ export default function OrdenesCompraPage() {
 
         {/* Filter tabs */}
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {(["todas", "recibida_parcial", "recibida", "pago_pendiente", "pagada", "cancelada"] as const).map((status) => {
-            const count = status === "todas" ? ordenes.length : ordenes.filter((oc) => status === "pagada" ? ocPagada(oc) : status === "pago_pendiente" ? !ocPagada(oc) && oc.estado !== "cancelada" : oc.estado === status).length;
+          {(["todas", "por_recibir", "por_facturar", "por_pagar", "completas", "borrador", "cancelada"] as const).map((status) => {
+            const activa = (oc: OCRow) => oc.estado !== "cancelada" && oc.estado !== "borrador";
+            const count = status === "todas" ? ordenes.length : ordenes.filter((oc) =>
+              status === "por_recibir" ? activa(oc) && ejeMercaderia(oc) !== "completo"
+              : status === "por_facturar" ? activa(oc) && ejeFactura(oc) !== "completo"
+              : status === "por_pagar" ? activa(oc) && ejePago(oc) !== "completo"
+              : status === "completas" ? ocCompleta(oc)
+              : oc.estado === status).length;
             if (status !== "todas" && count === 0) return null;
             return (
               <button
@@ -2102,7 +2147,7 @@ export default function OrdenesCompraPage() {
                     : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700"
                 }`}
               >
-                {status === "todas" ? "Todas" : status === "pagada" ? "Pagadas" : status === "pago_pendiente" ? "Pago pendiente" : (statusConfig[status] || { label: status }).label}
+                {({ todas: "Todas", por_recibir: "Por recibir", por_facturar: "Por facturar", por_pagar: "Por pagar", completas: "Completas", borrador: "Borradores", cancelada: "Canceladas" } as Record<FiltroOC, string>)[status]}
                 <span className={`rounded-full px-1.5 py-0.5 text-xs ${filter === status ? "bg-white/20" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"}`}>
                   {count}
                 </span>
@@ -2234,7 +2279,8 @@ export default function OrdenesCompraPage() {
                     return <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Pagada · Tarjeta</Badge>;
                   }
                   if (ocPagada(row)) return <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada</Badge>;
-                  return <Badge variant="warning">Pendiente</Badge>;
+                  if (ejePago(row) === "parcial") return <Badge variant="info">Pagada parcial</Badge>;
+                  return <Badge variant="warning">Por pagar</Badge>;
                 },
               },
               {
@@ -2276,7 +2322,7 @@ export default function OrdenesCompraPage() {
               },
               {
                 key: "id",
-                label: "Recepcion",
+                label: "Mercadería",
                 sortable: true,
                 sortValue: (row) => {
                   const totalQty = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
@@ -2291,8 +2337,11 @@ export default function OrdenesCompraPage() {
 
                   // Determine traffic-light color
                   let dotColor = "bg-red-500"; // Sin recepcion
-                  let label = "Sin recepcion";
-                  if (row.estado === "recibida" || (totalQty > 0 && recibido >= totalQty)) {
+                  let label = "Por recibir";
+                  if (row.saldo_cerrado && !(totalQty > 0 && recibido >= totalQty)) {
+                    dotColor = "bg-zinc-400";
+                    label = "Saldo cerrado";
+                  } else if (row.estado === "recibida" || (totalQty > 0 && recibido >= totalQty)) {
                     dotColor = "bg-emerald-500";
                     label = "Completo";
                   } else if (recibido > 0 || row.estado === "recibida_parcial") {
@@ -2331,16 +2380,19 @@ export default function OrdenesCompraPage() {
               },
               {
                 key: "observaciones",
-                label: "FC",
+                label: "Factura",
                 sortable: true,
                 sortValue: (row) => (row.facturas_vinculadas || []).filter(f => f.estado !== "anulada").length,
                 render: (row) => {
                   const fcs = (row.facturas_vinculadas || []).filter(f => f.estado !== "anulada");
                   if (row.estado === "cancelada") return <span className="text-zinc-300">{"\u2014"}</span>;
                   if (row.facturas_vinculadas_estado === "desconocido") return <span title="No se pudieron verificar los vínculos de facturas" className="text-amber-500"><AlertTriangle className="h-4 w-4" /></span>;
-                  return fcs.length > 0
-                    ? <span title="Factura compra cargada" className="text-emerald-500"><Check className="h-4 w-4" /></span>
-                    : <span title="Sin factura compra" className="text-zinc-300"><X className="h-3.5 w-3.5" /></span>;
+                  const ef = ejeFactura(row);
+                  return ef === "completo"
+                    ? <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Facturada</Badge>
+                    : ef === "parcial"
+                      ? <Badge variant="info" className="whitespace-nowrap">Facturada parcial{fcs.length ? ` (${fcs.length})` : ""}</Badge>
+                      : <Badge variant="outline">Sin factura</Badge>;
                 },
               },
               {
@@ -2853,6 +2905,37 @@ export default function OrdenesCompraPage() {
                     : ocPagada(detailOC)
                       ? <Badge variant="success">Pagada</Badge>
                       : null}
+                  {detailOC.estado !== "cancelada" && detailOC.estado !== "borrador" && (() => {
+                    const txt = (e: Eje, a: string, b: string, c: string) => e === "completo" ? c : e === "parcial" ? b : a;
+                    const v = (e: Eje) => (e === "completo" ? "success" : e === "parcial" ? "info" : "warning") as "success" | "info" | "warning";
+                    const m = ejeMercaderia(detailOC), f = ejeFactura(detailOC), pg = ejePago(detailOC);
+                    return <span className="hidden items-center gap-1 sm:flex">
+                      <Badge variant={v(m)}>{detailOC.saldo_cerrado ? "Saldo cerrado" : txt(m, "Por recibir", "Recibida parcial", "Recibida")}</Badge>
+                      <Badge variant={v(f)}>{txt(f, "Sin factura", "Facturada parcial", "Facturada")}</Badge>
+                      <Badge variant={v(pg)}>{txt(pg, "Por pagar", "Pagada parcial", "Pagada")}</Badge>
+                    </span>;
+                  })()}
+                  {canManageCompras && detailOC.estado !== "cancelada" && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const cerrar = !detailOC.saldo_cerrado;
+                        let motivo: string | null = null;
+                        if (cerrar) {
+                          motivo = window.prompt(`Cerrar el saldo de ${detailOC.numero}: lo que falta deja de figurar como pendiente (se puede reabrir).\n\nMotivo (opcional):`, "El proveedor no va a entregar el resto");
+                          if (motivo === null) return;
+                        }
+                        const { error } = await (supabase as any).rpc("cerrar_saldo_oc", { p_sociedad_id: sociedadActiva?.id, p_oc_id: detailOC.id, p_cerrar: cerrar, p_motivo: motivo });
+                        if (error) { alert(error.message); return; }
+                        setDetailOC({ ...detailOC, saldo_cerrado: cerrar });
+                        fetchData();
+                      }}
+                      title={detailOC.saldo_cerrado ? "Volver a esperar lo que falta" : "El proveedor no va a entregar/facturar el resto"}
+                      className="rounded-lg border border-zinc-200 px-2 py-0.5 text-[11px] text-zinc-600 hover:border-amber-400 hover:text-amber-700 dark:border-zinc-700 dark:text-zinc-300"
+                    >
+                      {detailOC.saldo_cerrado ? "Reabrir saldo" : "Cerrar saldo"}
+                    </button>
+                  )}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
@@ -3554,6 +3637,11 @@ export default function OrdenesCompraPage() {
             </div>
           </div>
         </>
+      )}
+
+      {/* Limpieza de OC abiertas */}
+      {limpiezaOpen && (
+        <LimpiezaOC sociedadId={sociedadActiva?.id || ""} onClose={() => { setLimpiezaOpen(false); fetchData(); }} />
       )}
 
       {/* Conciliación de facturas de compra con IA */}

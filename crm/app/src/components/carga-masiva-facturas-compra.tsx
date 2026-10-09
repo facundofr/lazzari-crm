@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, FileUp, Loader2, X, AlertTriangle, UserPlus, PlayCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
+import ConciliacionCompras from "@/components/conciliacion-compras";
 import { formatCurrency } from "@/lib/utils";
 import { canonicalPurchaseInvoiceNumber } from "@/lib/purchase-invoice-reconciliation";
 import { canonicalCondicionIva } from "@/lib/fiscal-condition";
@@ -102,10 +103,36 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
     void parseOne(next).finally(() => { parsingRef.current = false; setRows(prev => [...prev]); });
   }, [rows]);
 
-  async function openReview(row: QueueRow) {
+  // ── Un solo circuito: si el proveedor tiene OC con renglones pendientes, la factura se concilia línea por línea
+  //    (junto con las demás del mismo proveedor). Si no (OC viejas sin detalle, NC, gastos), va a la carga simple.
+  const [conciliar, setConciliar] = useState<{ proveedorId: string; rows: QueueRow[] } | null>(null);
+  const renglonesCache = useRef<Record<string, boolean>>({});
+  async function proveedorTieneRenglonesOc(provId: string): Promise<boolean> {
+    if (provId in renglonesCache.current) return renglonesCache.current[provId];
+    let tiene = false;
+    try {
+      const { data: ocs } = await (supabase as any).from("ordenes_compra").select("id, saldo_cerrado")
+        .eq("sociedad_id", sociedadId).eq("proveedor_id", provId).neq("estado", "cancelada");
+      const ids = (ocs || []).filter((o: any) => !o.saldo_cerrado).map((o: any) => o.id);
+      if (ids.length) {
+        const { data } = await (supabase as any).from("orden_compra_items_pendientes").select("id").in("orden_id", ids).gt("cantidad_pendiente", 0).limit(1);
+        tiene = !!data?.length;
+      }
+    } catch { tiene = false; }
+    renglonesCache.current[provId] = tiene;
+    return tiene;
+  }
+  const esNotaODebito = (row: QueueRow) => /^(NC|ND)/.test(tipoLabel(row.file, row.data || {}));
+
+  async function openReview(row: QueueRow, forzarSimple = false) {
     setSaving(true);
     try {
       if (!sociedadId) throw new Error("Seleccioná una sociedad");
+      if (!forzarSimple && row.provider && row.state === "ready" && !esNotaODebito(row) && await proveedorTieneRenglonesOc(row.provider.id)) {
+        const grupo = rowsRef.current.filter(r => r.state === "ready" && r.provider?.id === row.provider!.id && !r.duplicada && !esNotaODebito(r));
+        setConciliar({ proveedorId: row.provider.id, rows: grupo.length ? grupo : [row] });
+        return;
+      }
       const { data, error } = await (supabase as any).from("ordenes_compra")
         .select("id, numero, proveedor_id, total, moneda, estado, fecha, proveedores(razon_social)")
         .eq("sociedad_id", sociedadId).in("estado", ["pendiente", "enviada", "confirmada", "recibida_parcial", "recibida"]);
@@ -192,6 +219,22 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
   const guardadas = rows.filter(r => r.state === "saved").length;
   const leyendo = rows.filter(r => r.state === "pending" || r.state === "parsing").length;
 
+  if (conciliar) return <ConciliacionCompras sociedadId={sociedadId} profileId={profileId}
+    inicial={{ proveedorId: conciliar.proveedorId, facturas: conciliar.rows.map(r => ({ file: r.file, data: r.data || {} })) }}
+    onClose={() => { setConciliar(null); setEnSecuencia(false); }}
+    onSuccess={(guardadas) => {
+      const nums = new Set((guardadas || []).map(n => canonicalPurchaseInvoiceNumber(n)));
+      const ids = new Set(conciliar.rows.filter(r => !guardadas || nums.has(canonicalPurchaseInvoiceNumber(r.data?.numero_factura || ""))).map(r => r.id));
+      setRows(prev => prev.map(r => ids.has(r.id) ? { ...r, state: "saved" } : r));
+      delete dupCache.current[conciliar.proveedorId];
+      delete renglonesCache.current[conciliar.proveedorId];
+      setConciliar(null);
+      if (enSecuencia) {
+        const next = rowsRef.current.find(r => !ids.has(r.id) && r.state === "ready" && r.provider && !r.duplicada);
+        if (next) void openReview(next); else setEnSecuencia(false);
+      }
+    }} />;
+
   if (review) return <CargarFacturaOC key={review.row.id} sociedadId={sociedadId} profileId={profileId}
     ordenes={review.orders} initialImport={{ data: review.row.data || {}, file: review.row.file }}
     preselectedOCId={review.orders.some(o => o.id === review.row.oc?.id) ? review.row.oc?.id : undefined}
@@ -258,7 +301,8 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
                 </td>
                 <td className="px-2 whitespace-nowrap text-right">
                   {sinProv && <button disabled={saving} onClick={() => abrirNuevoProv(row)} className="mr-1 inline-flex items-center gap-1 rounded bg-amber-500 px-2 py-1 text-white"><UserPlus className="h-3 w-3" /> Crear proveedor</button>}
-                  {row.state === "ready" && <button disabled={saving} onClick={() => openReview(row)} className="rounded bg-orange-500 px-2 py-1 text-white">{row.duplicada ? "Ver igual" : "Revisar"}</button>}
+                  {row.state === "ready" && <button disabled={saving} onClick={() => openReview(row)} className="rounded bg-orange-500 px-2 py-1 text-white" title="Si el proveedor tiene OC con renglones, se concilia línea por línea">{row.duplicada ? "Ver igual" : "Revisar"}</button>}
+                  {row.state === "ready" && row.provider && !row.duplicada && <button disabled={saving} onClick={() => openReview(row, true)} className="ml-1 text-[10px] text-zinc-500 underline hover:text-orange-600" title="Cargar sin conciliar por renglón (vinculando la OC por importe)">simple</button>}
                   {row.state === "error" && <><button disabled={busy} onClick={() => setRows(prev => prev.map(r => r.id === row.id ? { ...r, state: "pending" } : r))} className="mr-1 rounded border px-2 py-1">Reintentar</button><button disabled={busy} onClick={() => openReview(row)} className="rounded border px-2 py-1">Cargar a mano</button></>}
                   {row.state !== "parsing" && row.state !== "saved" && <button disabled={busy} onClick={() => setRows(prev => prev.filter(r => r.id !== row.id))} className="ml-1 text-zinc-400 hover:text-red-500" title="Quitar"><X className="inline h-3.5 w-3.5" /></button>}
                 </td>

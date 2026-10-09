@@ -100,6 +100,10 @@ function mapSupabaseProveedor(row: Record<string, unknown>): Proveedor {
     exclusionRetencionDesde: (row.exclusion_retencion_desde as string) ?? null,
     exclusionRetencionHasta: (row.exclusion_retencion_hasta as string) ?? null,
     exclusionRetencionCert: (row.exclusion_retencion_cert as string) ?? null,
+    tallesEspeciales: Array.isArray(row.talles_especiales) ? (row.talles_especiales as string[]) : [],
+    toleranciaPrecioPct: row.tolerancia_precio_pct != null ? Number(row.tolerancia_precio_pct) : 1,
+    esPersonalizador: (row.es_personalizador as boolean) ?? false,
+    tipoPersonalizacion: (row.tipo_personalizacion as string) ?? "",
   } as Proveedor & { conceptoRetencionGanancias: string; alicuotaGanancias: number | null; exclusionRetencion: boolean; exclusionRetencionDesde: string | null; exclusionRetencionHasta: string | null; exclusionRetencionCert: string | null };
 }
 
@@ -184,6 +188,12 @@ const emptyForm = {
   exclusion_retencion_desde: null as string | null,
   exclusion_retencion_hasta: null as string | null,
   exclusion_retencion_cert: null as string | null,
+  // Compras: talles que factura como "talle especial" (separados por coma) y tolerancia de precio (%)
+  talles_especiales: "",
+  tolerancia_precio_pct: 1,
+  // Personalización (bordados / estampados)
+  es_personalizador: false,
+  tipo_personalizacion: "" as "" | "bordado" | "estampado" | "ambos",
 };
 
 const emptyRuleForm = {
@@ -665,6 +675,10 @@ export default function ProveedoresPage() {
       exclusion_retencion_desde: (p as any).exclusionRetencionDesde ?? null,
       exclusion_retencion_hasta: (p as any).exclusionRetencionHasta ?? null,
       exclusion_retencion_cert: (p as any).exclusionRetencionCert ?? null,
+      talles_especiales: ((p as any).tallesEspeciales ?? []).join(", "),
+      tolerancia_precio_pct: (p as any).toleranciaPrecioPct ?? 1,
+      es_personalizador: Boolean((p as any).esPersonalizador),
+      tipo_personalizacion: (p as any).tipoPersonalizacion ?? "",
     });
     setFormError("");
     setModalOpen(true);
@@ -688,7 +702,14 @@ export default function ProveedoresPage() {
     // Para pagos y eCheq la identidad fiscal siempre es la del proveedor.
     // Conservamos la columna histórica por compatibilidad, pero nunca pedimos
     // ni guardamos un CUIT bancario distinto.
-    const proveedorPayload = { ...form, condicion_iva: condicionIva, cuit_titular_cuenta: form.cuit.trim() };
+    const proveedorPayload = {
+      ...form,
+      condicion_iva: condicionIva,
+      cuit_titular_cuenta: form.cuit.trim(),
+      talles_especiales: [...new Set(String(form.talles_especiales || "").split(/[,;\s]+/).map((t) => t.trim().toUpperCase()).filter(Boolean))],
+      tolerancia_precio_pct: Math.max(0, Math.min(50, Number(form.tolerancia_precio_pct) || 0)),
+      tipo_personalizacion: form.es_personalizador ? (form.tipo_personalizacion || "ambos") : null,
+    };
     setSaving(true);
     setFormError("");
     try {
@@ -1351,6 +1372,26 @@ export default function ProveedoresPage() {
                   <p className="text-[10px] text-zinc-400">Aparecerá automáticamente en el catálogo de Transportes.</p>
                 </div>
               </div>
+              <div className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-700">
+                <button type="button" onClick={() => setForm({ ...form, es_personalizador: !form.es_personalizador })}
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${form.es_personalizador ? "bg-orange-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
+                  <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${form.es_personalizador ? "translate-x-4.5" : "translate-x-0.5"}`} />
+                </button>
+                <div className="flex-1">
+                  <p className="text-xs font-medium text-zinc-700 dark:text-zinc-200">Taller de personalización</p>
+                  <p className="text-[10px] text-zinc-400">Bordador / estampador: aparece en Personalización.</p>
+                </div>
+                {form.es_personalizador && (
+                  <select value={form.tipo_personalizacion || "ambos"} onChange={(e) => setForm({ ...form, tipo_personalizacion: e.target.value as typeof form.tipo_personalizacion })}
+                    className="rounded-lg border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+                    <option value="bordado">Bordador</option>
+                    <option value="estampado">Estampador</option>
+                    <option value="ambos">Ambos</option>
+                  </select>
+                )}
+              </div>
+              <div><label className="text-xs font-medium text-zinc-500">Talles especiales <span className="font-normal text-zinc-400">(los que factura como “talle especial”)</span></label><input value={form.talles_especiales} onChange={(e) => setForm({ ...form, talles_especiales: e.target.value })} placeholder="ej: 3XL, 4XL, 5XL, 52, 54" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div><label className="text-xs font-medium text-zinc-500">Tolerancia de precio en facturas (%)</label><input type="number" min={0} max={50} step="0.5" value={form.tolerancia_precio_pct} onChange={(e) => setForm({ ...form, tolerancia_precio_pct: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Telefono</label><input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Direccion</label><input value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { AvisoBCRA } from "@/components/clientes/bcra-card";
 import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1970,6 +1971,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 </div>
                 <div><label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha común *</label><input type="date" value={fmFecha} min={minFecha} max={todayAR()} onChange={e => setFmFecha(e.target.value)} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" /></div>
               </div>
+              {fmClienteId && <AvisoBCRA clienteId={fmClienteId} />}
               {fmLoading && <div className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando presupuestos...</div>}
               {fmPRs.length > 0 && <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-3 bg-zinc-50 dark:bg-zinc-800/60 text-sm"><span className="font-medium dark:text-white">{fmPRs.filter(p => p.selected).length} de {fmPRs.length} seleccionados</span><button onClick={() => setFmPRs(p => p.map(x => ({ ...x, selected: !p.every(y => y.selected) })))} className="text-indigo-600 hover:underline text-xs">{fmPRs.every(p => p.selected) ? "Quitar todos" : "Seleccionar todos"}</button></div>
@@ -2004,6 +2006,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             {emitStep === "form" && (
               <div className="p-6 space-y-5">
                 {emitError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{emitError}</div>}
+                {emitData.cliente_id && emitData.cliente_id !== "consumidor_final" && <AvisoBCRA clienteId={emitData.cliente_id} />}
 
                 {/* Toggle ARCA / Manual */}
                 <div className="space-y-1.5">
@@ -2794,6 +2797,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                               });
                             }}
                             className="w-32 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-sm font-mono dark:text-white" />
+                          {!linea.tipo.startsWith("retencion_") && (
+                            <button type="button" title="Completar con el saldo pendiente" onClick={() => setCobroLineas(prev => { const otros = prev.reduce((s, l, i) => i === idx ? s : s + montoNum(l.monto), 0); return prev.map((l, i) => i === idx ? { ...l, monto: toDecimalInput(Math.max(0, Math.round((saldo - otros) * 100) / 100)) } : l); })} className="shrink-0 rounded p-1 text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/40"><Sparkles className="h-3.5 w-3.5" /></button>
+                          )}
                           {cobroLineas.length > 1 && (
                             <button onClick={() => setCobroLineas(prev => prev.filter((_, i) => i !== idx))}
                               className="p-1 rounded text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30">

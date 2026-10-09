@@ -17,7 +17,8 @@ export async function POST(request: NextRequest) {
     if (factura.length > 400 || ocs.length > 1500) return Response.json({ error: "Demasiadas líneas para conciliar de una vez" }, { status: 400 });
 
     const grupos = productGroups(factura, ocs);
-    const respaldo = heuristicEquivalences(factura, ocs);
+    const tallesEspeciales = (Array.isArray(body?.tallesEspeciales) ? body.tallesEspeciales : []).map((t: unknown) => String(t));
+    const respaldo = heuristicEquivalences(factura, ocs, tallesEspeciales);
     const apiKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
     if (!apiKey) {
       return Response.json({ success: true, ia: false, aviso: "IA no configurada: se usó similitud de palabras.", equivalencias: respaldo, confianza: {}, motivo: {}, grupos });

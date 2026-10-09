@@ -5,6 +5,7 @@ import { X, Loader2, Sparkles, Check, Search, Plus, Trash2, Maximize2, Minimize2
 import { formatCurrency, todayAR } from "@/lib/utils";
 import { reconcilePurchaseLines, inspectPurchaseLineMatch, purchaseLineKey, canonicalPurchaseInvoiceNumber, assertCompleteInvoiceOrderSelection, canMarkPurchaseOrdersPaid, markupForFixedSalePrice, type PurchaseLine } from "@/lib/purchase-invoice-reconciliation";
 import { supabase } from "@/lib/supabase/client";
+import { parseVariant, tallesCompatibles } from "@/lib/purchase-matching";
 
 // ── Types ────────────────────────────────────────────────
 export interface OCParaVincular {
@@ -49,6 +50,19 @@ interface OCItemForMatch extends PurchaseLine {
   id: string;
   orden_id: string;
   ocNumero: string;
+  codigo_proveedor?: string | null;
+  descripcion_proveedor?: string | null;
+  talle?: string | null;
+}
+
+/** Cómo llama el proveedor al renglón de la OC (si la OC ya se ordenó contra su lista). Solo para comparar. */
+function comoLoLlamaElProveedor(o: OCItemForMatch): OCItemForMatch {
+  if (!o.codigo_proveedor && !o.descripcion_proveedor) return o;
+  return {
+    ...o,
+    codigo: o.codigo_proveedor || o.codigo,
+    descripcion: o.descripcion_proveedor ? `${o.descripcion_proveedor}${o.talle ? ` TALLE ${o.talle}` : ""}` : o.descripcion,
+  };
 }
 
 const emptyNuevoProveedor = {
@@ -318,7 +332,7 @@ export default function CargarFacturaOC({
       const ids = selectedOCKey.split("|");
       const { data, error: itemsError } = await (supabase as any)
         .from("orden_compra_items")
-        .select("id, orden_id, codigo, descripcion, cantidad, precio_unitario, iva_porcentaje, unidad")
+        .select("id, orden_id, codigo, descripcion, cantidad, precio_unitario, iva_porcentaje, unidad, codigo_proveedor, descripcion_proveedor, talle")
         .in("orden_id", ids);
       if (cancelled) return;
       if (itemsError) {
@@ -342,25 +356,104 @@ export default function CargarFacturaOC({
     return () => { cancelled = true; };
   }, [selectedOCKey, ordenes]);
 
+  // ── Memoria del proveedor: equivalencias aprendidas en cargas anteriores ──
+  const [equivalenciasProv, setEquivalenciasProv] = useState<Record<string, string[]>>({});
+  useEffect(() => {
+    if (!proveedorId || !sociedadId) { setEquivalenciasProv({}); return; }
+    let cancelado = false;
+    (supabase as any).from("proveedor_equivalencias").select("producto_factura, producto_oc")
+      .eq("sociedad_id", sociedadId).eq("proveedor_id", proveedorId)
+      .then(({ data }: any) => {
+        if (cancelado) return;
+        const m: Record<string, string[]> = {};
+        for (const e of (data || []) as Array<{ producto_factura: string; producto_oc: string }>) (m[e.producto_factura] ||= []).push(e.producto_oc);
+        setEquivalenciasProv(m);
+      });
+    return () => { cancelado = true; };
+  }, [proveedorId, sociedadId]);
+
+  // Para comparar se usa el nombre del proveedor; para guardar, siempre el renglón original.
+  const ocItemsComparables = useMemo(() => selectedOCItems.map(comoLoLlamaElProveedor), [selectedOCItems]);
+
   const itemComparisons = useMemo(() => items.map((item) => {
     const manualTarget = manualItemMatches[item.tempId];
-    if (manualTarget === "__extra__") return { item, status: "unmatched" as const, matched: null, manual: true };
+    if (manualTarget === "__extra__") return { item, status: "unmatched" as const, matched: null, manual: true, aprendido: false };
     if (manualTarget) {
       const matched = selectedOCItems.find((candidate) => candidate.id === manualTarget) || null;
-      return { item, status: matched ? "matched" as const : "unmatched" as const, matched, manual: true };
+      return { item, status: matched ? "matched" as const : "unmatched" as const, matched, manual: true, aprendido: false };
     }
-    const inspection = inspectPurchaseLineMatch(selectedOCItems, item);
-    return {
-      item,
-      status: inspection.status,
-      matched: inspection.status === "matched" && inspection.candidates.length === 1
-        ? selectedOCItems.find((candidate) => candidate.id === inspection.candidates[0].id) || null
-        : null,
-      manual: false,
-    };
-  }), [items, selectedOCItems, manualItemMatches]);
+    const inspection = inspectPurchaseLineMatch(ocItemsComparables, item);
+    if (inspection.status === "matched" && inspection.candidates.length === 1) {
+      return { item, status: "matched" as const, matched: selectedOCItems.find((candidate) => candidate.id === inspection.candidates[0].id) || null, manual: false, aprendido: false };
+    }
+    // Equivalencia aprendida de este proveedor (mismo artículo con otro nombre, mismo talle).
+    const v = parseVariant(item.descripcion);
+    const aprendidos = equivalenciasProv[v.producto] || [];
+    if (aprendidos.length) {
+      const cand = ocItemsComparables.filter((o) => {
+        const ov = parseVariant(o.descripcion);
+        return aprendidos.includes(ov.producto) && tallesCompatibles(v.talle, ov.talle);
+      });
+      if (cand.length === 1) {
+        return { item, status: "matched" as const, matched: selectedOCItems.find((c) => c.id === cand[0].id) || null, manual: false, aprendido: true };
+      }
+    }
+    return { item, status: inspection.status, matched: null, manual: false, aprendido: false };
+  }), [items, selectedOCItems, ocItemsComparables, manualItemMatches, equivalenciasProv]);
+
+  // Vínculos efectivos para guardar: los automáticos (incluidos los aprendidos) + los manuales.
+  const asignacionesEfectivas = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const c of itemComparisons) if (!c.manual && c.status === "matched" && c.matched) m[c.item.tempId] = c.matched.id;
+    return { ...m, ...manualItemMatches };
+  }, [itemComparisons, manualItemMatches]);
 
   const unresolvedItemCount = itemComparisons.filter((comparison) => comparison.status !== "matched").length;
+
+  // ── Sugerencias de la IA para los artículos que no coinciden por código/nombre ──
+  const [aiMatching, setAiMatching] = useState(false);
+  const [aiMotivos, setAiMotivos] = useState<Record<string, string>>({});
+  const [aiMatchMsg, setAiMatchMsg] = useState("");
+  const aiRunKey = useRef("");
+  async function sugerirConIA() {
+    const pendientes = itemComparisons.filter((c) => c.status !== "matched" && !manualItemMatches[c.item.tempId]);
+    if (!pendientes.length || !selectedOCItems.length) return;
+    setAiMatching(true); setAiMatchMsg("");
+    try {
+      const factura = pendientes.map((c) => ({ key: c.item.tempId, codigo: c.item.codigo || null, descripcion: c.item.descripcion, cantidad: Number(c.item.cantidad) || 0, precio: Number(c.item.precio_unitario) || 0 }));
+      const ocs = selectedOCItems.map((o) => ({ id: o.id, ocId: o.orden_id, ocNumero: o.ocNumero, ocFecha: "", codigo: o.codigo || null, descripcion: o.descripcion, cantidad: Number(o.cantidad) || 0, precio: Number(o.precio_unitario) || 0 }));
+      const res = await fetch("/api/conciliar-compra", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ proveedor: selectedProvNombre, factura, ocs }) });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || "La IA no respondió");
+      const nuevos: Record<string, string> = {}; const mot: Record<string, string> = {};
+      for (const c of pendientes) {
+        const v = parseVariant(c.item.descripcion);
+        const prodsOC: string[] = j.equivalencias?.[v.producto] || [];
+        if (!prodsOC.length) continue;
+        const usados = new Set(Object.values({ ...manualItemMatches, ...nuevos }));
+        const cands = selectedOCItems.filter((o) => prodsOC.includes(parseVariant(o.descripcion).producto) && !usados.has(o.id));
+        const elegido = cands.find((o) => !v.talle || parseVariant(o.descripcion).talle === v.talle) || cands[0];
+        if (!elegido) continue;
+        nuevos[c.item.tempId] = elegido.id;
+        mot[c.item.tempId] = `Sugerido por IA (confianza ${j.confianza?.[v.producto] || "media"})${j.motivo?.[v.producto] ? ` · ${j.motivo[v.producto]}` : ""}`;
+      }
+      setManualItemMatches((cur) => ({ ...cur, ...nuevos }));
+      setAiMotivos((m) => ({ ...m, ...mot }));
+      const n = Object.keys(nuevos).length;
+      setAiMatchMsg(n ? `La IA vinculó ${n} artículo(s). Revisalos.` : "La IA no encontró equivalencias en esta OC.");
+    } catch (e) {
+      setAiMatchMsg(e instanceof Error ? e.message : "No se pudo consultar a la IA");
+    } finally { setAiMatching(false); }
+  }
+  // Se ejecuta sola una vez por combinación de OC + artículos.
+  useEffect(() => {
+    if (ocItemsLoading || !selectedOCItems.length || aiMatching) return;
+    const key = `${selectedOCKey}::${items.map((i) => i.tempId).join(",")}`;
+    if (aiRunKey.current === key) return;
+    if (!itemComparisons.some((c) => c.status !== "matched" && !manualItemMatches[c.item.tempId])) return;
+    aiRunKey.current = key;
+    void sugerirConIA();
+  }, [ocItemsLoading, selectedOCItems, selectedOCKey, items]);
 
   async function fetchLinkedInvoicesForOCs(ids: string[]) {
     const [{ data: junctionLinks, error: junctionError }, { data: legacyInvoices, error: legacyError }] = await Promise.all([
@@ -759,7 +852,7 @@ export default function CargarFacturaOC({
           alignmentResult.freshOCs.flatMap((oc: any) => oc.orden_compra_items || []),
           items,
           previousItems,
-          manualItemMatches,
+          asignacionesEfectivas,
         );
         for (const oc of alignmentResult.freshOCs) {
           const costChanges = reconciliation.costs.filter(change =>
@@ -791,7 +884,7 @@ export default function CargarFacturaOC({
         }
         generateExtrasOC = createExtrasOC && reconciliation.extras.length > 0;
         // Si sobran artículos y no se marcó la opción, se pregunta (nunca se traba la carga).
-        if (!createExtrasOC && reconciliation.extras.length > 0) {
+        if (!createExtrasOC && reconciliation.extras.length > 0 && selectedOCItems.length > 0) {
           const lista = reconciliation.extras.slice(0, 12).map((it: any) => `• ${it.cantidad} × ${it.codigo ? `[${it.codigo}] ` : ""}${it.descripcion}`).join("\n");
           const mas = reconciliation.extras.length > 12 ? `\n… y ${reconciliation.extras.length - 12} más` : "";
           generateExtrasOC = window.confirm(`Hay ${reconciliation.extras.length} artículo(s) de la factura que no están en las OC elegidas:\n\n${lista}${mas}\n\n¿Querés crear una OC nueva con los artículos sobrantes?\n\nAceptar = crear la OC · Cancelar = cargar la factura igual, sin OC para esos artículos`);
@@ -1006,6 +1099,23 @@ export default function CargarFacturaOC({
             .eq("id", ocId).eq("sociedad_id", sociedadId);
           if (paymentError) throw paymentError;
         }
+      }
+
+      // Memoria del proveedor: lo que vinculaste a mano queda aprendido para la próxima factura.
+      if (!isCreditNote && proveedorId) {
+        try {
+          const eqs = Object.entries(manualItemMatches)
+            .filter(([, target]) => target && target !== "__extra__")
+            .map(([tempId, target]) => {
+              const it = items.find((i) => i.tempId === tempId);
+              const oc = ocItemsComparables.find((o) => o.id === target);
+              if (!it || !oc) return null;
+              const pf = parseVariant(it.descripcion).producto, po = parseVariant(oc.descripcion).producto;
+              return pf && po ? { producto_factura: pf, producto_oc: po, codigo_proveedor: it.codigo || null } : null;
+            })
+            .filter(Boolean);
+          if (eqs.length) await (supabase as any).rpc("aprender_equivalencias", { p_sociedad_id: sociedadId, p_proveedor_id: proveedorId, p_equivalencias: eqs });
+        } catch { /* aprender es opcional: nunca frena la carga */ }
       }
 
       alert(isCreditNote ? (facturaOrigenId ? "Nota de crédito registrada y aplicada a la factura elegida" : "Nota de crédito registrada: queda como crédito disponible del proveedor") : pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");
@@ -1445,7 +1555,8 @@ export default function CargarFacturaOC({
                     <p className="text-[11px] text-zinc-500">Las coincidencias seguras se aplican solas. Podés corregir cualquier vínculo manualmente.</p>
                   </div>
                   {!ocItemsLoading && !ocItemsError && (
-                    <div className="flex gap-2 text-[10px] font-medium">
+                    <div className="flex flex-wrap items-center gap-2 text-[10px] font-medium">
+                      {selectedOCItems.length > 0 && unresolvedItemCount > 0 && <button type="button" onClick={() => { aiRunKey.current = "manual"; void sugerirConIA(); }} disabled={aiMatching} className="inline-flex items-center gap-1 rounded-full border border-violet-300 px-2 py-1 text-violet-700 hover:bg-violet-50 disabled:opacity-50 dark:border-violet-800 dark:text-violet-300">{aiMatching ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />} {aiMatching ? "La IA está comparando…" : "Sugerir con IA"}</button>}
                       <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">{itemComparisons.length - unresolvedItemCount} coinciden</span>
                       {unresolvedItemCount > 0 && <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{unresolvedItemCount} para revisar</span>}
                     </div>
@@ -1456,15 +1567,18 @@ export default function CargarFacturaOC({
                   <div className="flex items-center gap-2 py-3 text-xs text-zinc-500"><Loader2 size={14} className="animate-spin" />Comparando artículos...</div>
                 ) : ocItemsError ? (
                   <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{ocItemsError}</div>
+                ) : selectedOCItems.length === 0 ? (
+                  <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-300">La OC elegida no tiene artículos cargados (por ejemplo, viene del sistema anterior). La factura se vincula por importe y no hace falta asignar artículos.</div>
                 ) : (
                   <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                    {aiMatchMsg && <p className="text-[11px] font-medium text-violet-700 dark:text-violet-300">{aiMatchMsg}</p>}
                     {itemComparisons.map((comparison) => {
                       const assignedId = manualItemMatches[comparison.item.tempId] || "";
                       const isMatched = comparison.status === "matched";
                       const statusText = comparison.manual
                         ? (assignedId === "__extra__" ? "Marcado fuera de OC" : "Asignación manual")
                         : comparison.status === "matched"
-                          ? "Coincidencia automática"
+                          ? (comparison.aprendido ? "Coincidencia aprendida de cargas anteriores" : "Coincidencia automática")
                           : comparison.status === "ambiguous"
                             ? "Hay varias coincidencias posibles"
                             : "No encontrado en las OC";
@@ -1473,7 +1587,8 @@ export default function CargarFacturaOC({
                           <div className="min-w-0">
                             <p className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-100">{comparison.item.codigo ? `[${comparison.item.codigo}] ` : ""}{comparison.item.descripcion}</p>
                             <p className="text-[10px] text-zinc-500">Factura: {comparison.item.cantidad} {comparison.item.unidad || "UN"}</p>
-                            <p className={`mt-1 text-[10px] font-semibold ${isMatched ? "text-emerald-600" : "text-amber-700 dark:text-amber-300"}`}>{statusText}</p>
+                            <p className={`mt-1 text-[10px] font-semibold ${isMatched ? "text-emerald-600" : "text-amber-700 dark:text-amber-300"}`}>{aiMotivos[comparison.item.tempId] && assignedId && assignedId !== "__extra__" ? "Sugerido por IA" : statusText}</p>
+                            {aiMotivos[comparison.item.tempId] && assignedId && assignedId !== "__extra__" && <p className="text-[10px] text-violet-700 dark:text-violet-300">{aiMotivos[comparison.item.tempId]}</p>}
                           </div>
                           <select
                             value={assignedId}
@@ -1492,7 +1607,7 @@ export default function CargarFacturaOC({
                   </div>
                 )}
 
-                {!ocItemsLoading && !ocItemsError && unresolvedItemCount > 0 && (
+                {!ocItemsLoading && !ocItemsError && selectedOCItems.length > 0 && unresolvedItemCount > 0 && (
                   <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-zinc-200 bg-white p-3 text-xs dark:border-zinc-700 dark:bg-zinc-900">
                     <input type="checkbox" checked={createExtrasOC} onChange={(event) => setCreateExtrasOC(event.target.checked)} className="mt-0.5 accent-orange-600" />
                     <span><strong>Crear una OC adicional con las cantidades no asignadas</strong><span className="mt-0.5 block font-normal text-zinc-500">Opcional. Si no la marcás, la factura se carga igual y los artículos quedan informados como no vinculados.</span></span>

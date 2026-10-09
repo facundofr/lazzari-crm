@@ -2,15 +2,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const page = readFileSync(new URL("../src/app/(crm)/muestras/page.tsx", import.meta.url), "utf8");
-const migration = readFileSync(new URL("../supabase/migrations/20260925150000_muestras_delivery_fields.sql", import.meta.url), "utf8");
+const migration = readFileSync(new URL("../supabase/migrations/20261010100000_compras_pagos_personalizacion_muestras_bcra.sql", import.meta.url), "utf8");
 
-assert.match(page, /fecha_devolucion/, "la UI debe leer y guardar la fecha de devolución");
-assert.match(page, /precio_unitario/, "la entrega debe admitir un precio opcional por muestra");
-assert.match(page, /moneda: \"ARS\" as \"ARS\" \| \"USD\"/, "el precio opcional debe declarar su moneda");
-assert.match(page, /label: \"Entregado\"/, "el estado visible inicial debe ser Entregado");
-assert.match(page, /registrarDevolucion\(item, returnDraft\[item\.id\] \|\| 0, returnDateDraft/, "la devolución debe exigir y persistir una fecha");
-assert.match(migration, /add column if not exists fecha_devolucion date/, "la migración debe agregar fecha_devolucion");
-assert.match(migration, /add column if not exists precio_unitario numeric\(15,2\)/, "la migración debe agregar precio opcional");
-assert.match(migration, /check \(moneda in \('ARS', 'USD'\)\)/, "la moneda debe quedar restringida");
+assert.match(page, /fecha_devolucion/, "la UI debe guardar la fecha de devolución / cierre");
+assert.match(page, /precio_unitario/, "la entrega debe admitir un valor opcional por muestra");
+assert.match(page, /moneda: "ARS" as "ARS" \| "USD"/, "el valor opcional debe declarar su moneda");
+assert.match(page, /label: "En el cliente"/, "el estado inicial visible es En el cliente");
+assert.match(page, /producto_id: null/, "los renglones nuevos no dependen del inventario de muestras");
+assert.match(page, /cantidad_vendida/, "debe poder registrarse 'Se la quedó'");
+assert.match(page, /cantidad_baja/, "debe poder registrarse baja / regalo");
+assert.match(page, /DIAS_ALERTA = 30/, "aviso a los 30 días");
+assert.match(migration, /alter column producto_id drop not null/i, "la migración permite renglones libres");
+assert.match(migration, /'cerrado'/, "la migración agrega el estado Cerrado");
 
-console.log("OK: muestras admite entrega, precio opcional y devolución fechada.");
+console.log("OK: muestras con renglones libres, valor opcional, Devolvió / Se la quedó / Baja y aviso de 30 días.");

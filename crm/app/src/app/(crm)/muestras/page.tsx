@@ -1,685 +1,447 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+/**
+ * Muestras: prendas que le dejamos a un cliente para que las vea.
+ *
+ * Sin inventario previo: cada renglón es un artículo de la lista de costos (se busca escribiendo)
+ * o un texto libre. Cada renglón termina en uno de tres destinos:
+ *   · Devolvió  · Se la quedó (para cobrar)  · Baja / regalo
+ * El envío queda "En el cliente", "Devolución parcial", "Devuelto" o "Cerrado" (todo resuelto).
+ * Aviso cuando una muestra lleva más de 30 días en el cliente.
+ * Los envíos viejos (con inventario) se siguen viendo: toman la descripción del producto.
+ */
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/layout/header";
-import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
-import {
-  ArrowLeftRight, CheckCircle2, Clock3, Edit3, Eye, Loader2,
-  MapPin, Package, Plus, RotateCcw, Search, Shirt, X,
-  Maximize2, Minimize2, Trash2,
-} from "lucide-react";
+import { Autocompletar } from "@/components/ui/autocompletar";
+import { traerTodo } from "@/lib/paginar";
+import { buscarCandidatos, type CatalogoCandidato } from "@/lib/catalogo-busqueda";
+import { AlertTriangle, Check, Eye, Gift, Loader2, Plus, RotateCcw, Search, ShoppingBag, Trash2, X } from "lucide-react";
 
-interface MuestraProducto {
-  id: string;
-  sociedad_id: string;
-  codigo: string;
-  descripcion: string;
-  talle: string | null;
-  color: string | null;
-  stock_total: number;
-  activo: boolean;
-}
+const db = supabase as any;
+const DIAS_ALERTA = 30;
 
-interface MuestraEnvio {
-  id: string;
-  sociedad_id: string;
-  numero: string;
-  fecha: string;
-  fecha_devolucion: string | null;
-  moneda: "ARS" | "USD";
-  cliente_id: string;
-  sucursal_id: string | null;
-  estado: "en_cliente" | "parcial" | "devuelto";
-  observaciones: string | null;
-  created_by: string | null;
-  created_by_profile?: { full_name: string } | null;
-  created_at: string;
-}
-
-interface MuestraItem {
-  id: string;
-  envio_id: string;
-  producto_id: string;
-  cantidad: number;
-  cantidad_devuelta: number;
-  precio_unitario: number | null;
-}
-
-interface ClienteOption { id: string; razon_social: string }
-interface SucursalOption { id: string; cliente_id: string; nombre: string; direccion: string | null; localidad: string | null }
-interface DraftItem {
-  producto_id: string;
-  codigo: string;
-  descripcion: string;
-  talle: string;
-  color: string;
-  stock_total: number;
-  cantidad: number;
-  precio_unitario: number | null;
-}
-
-const emptyProducto = { codigo: "", descripcion: "", talle: "", color: "", stock_total: 0 };
-const emptyDraftItem: DraftItem = { producto_id: "", codigo: "", descripcion: "", talle: "", color: "", stock_total: 1, cantidad: 1, precio_unitario: null };
-
-const estadoConfig = {
-  en_cliente: { label: "Entregado", variant: "warning" as const },
-  parcial: { label: "Entregado · devolución parcial", variant: "info" as const },
-  devuelto: { label: "Devuelto", variant: "success" as const },
+type EstadoEnvio = "en_cliente" | "parcial" | "devuelto" | "cerrado";
+const ESTADO: Record<EstadoEnvio, { label: string; variant: "warning" | "info" | "success" | "default" }> = {
+  en_cliente: { label: "En el cliente", variant: "warning" },
+  parcial: { label: "Devolución parcial", variant: "info" },
+  devuelto: { label: "Devuelto", variant: "success" },
+  cerrado: { label: "Cerrado", variant: "default" },
 };
+
+interface Envio {
+  id: string; numero: string; fecha: string; fecha_devolucion: string | null; moneda: "ARS" | "USD"; cliente_id: string; sucursal_id: string | null;
+  estado: EstadoEnvio; observaciones: string | null; created_by_profile?: { full_name: string } | null;
+}
+interface Item {
+  id: string; envio_id: string; producto_id: string | null; codigo: string | null; descripcion: string | null; talle: string | null; color: string | null;
+  cantidad: number; cantidad_devuelta: number; cantidad_vendida: number; cantidad_baja: number; precio_unitario: number | null; nota: string | null;
+}
+interface Draft { codigo: string; descripcion: string; talle: string; color: string; cantidad: number; precio: string; catalogo_id: string | null }
+const draftVacio = (): Draft => ({ codigo: "", descripcion: "", talle: "", color: "", cantidad: 1, precio: "", catalogo_id: null });
+
+const pendienteDe = (i: Item) => Math.max(0, i.cantidad - i.cantidad_devuelta - (i.cantidad_vendida || 0) - (i.cantidad_baja || 0));
+const inputClass = "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white";
+const diasDesde = (fecha: string) => Math.floor((Date.now() - new Date(`${fecha}T12:00:00`).getTime()) / 86400000);
+const esUSD = (moneda: string) => String(moneda || "").toUpperCase().startsWith("USD");
+
+/** Campo de artículo: escribís y busca en la lista de costos; si no está, queda el texto libre. */
+function ArticuloInput({ value, onTexto, onElegir }: { value: string; onTexto: (t: string) => void; onElegir: (c: CatalogoCandidato) => void }) {
+  const [resultados, setResultados] = useState<CatalogoCandidato[]>([]);
+  const [abierto, setAbierto] = useState(false);
+  const [buscando, setBuscando] = useState(false);
+  const ultimo = useRef("");
+  useEffect(() => {
+    const q = value.trim();
+    if (q.length < 3 || q === ultimo.current) return;
+    const t = setTimeout(async () => {
+      ultimo.current = q;
+      setBuscando(true);
+      try { setResultados(await buscarCandidatos(q, "", 12)); } catch { setResultados([]); }
+      setBuscando(false);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [value]);
+  return (
+    <div className="relative">
+      <input value={value} onChange={e => { onTexto(e.target.value); setAbierto(true); }} onFocus={() => setAbierto(true)} onBlur={() => setTimeout(() => setAbierto(false), 180)}
+        placeholder="Escribí el artículo (se busca en la lista) o texto libre" className={inputClass} />
+      {buscando && <Loader2 className="absolute right-2 top-2.5 h-4 w-4 animate-spin text-orange-500" />}
+      {abierto && resultados.length > 0 && value.trim().length >= 3 && (
+        <div className="absolute z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+          {resultados.map(c => (
+            <button key={c.id} type="button" onMouseDown={e => { e.preventDefault(); onElegir(c); setAbierto(false); }} className="block w-full border-b border-zinc-100 px-3 py-1.5 text-left text-xs hover:bg-orange-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-orange-900/20">
+              <span className="font-medium">{c.descripcion}</span>
+              <span className="block text-[10px] text-zinc-500">{c.proveedor} · {c.codigo_interno || c.codigo} · venta {formatCurrency(c.precio_venta, esUSD(c.moneda) ? "USD" : "ARS")}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function MuestrasPage() {
   const { sociedadActiva, profile } = useUser();
   const { toast } = useToast();
   const sociedadId = sociedadActiva?.id;
 
-  const [tab, setTab] = useState<"envios" | "inventario">("envios");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [envios, setEnvios] = useState<Envio[]>([]);
+  const [items, setItems] = useState<Item[]>([]);
+  const [productos, setProductos] = useState<Map<string, { descripcion: string; codigo: string; talle: string | null; color: string | null }>>(new Map());
+  const [clientes, setClientes] = useState<Array<{ id: string; razon_social: string }>>([]);
+  const [sucursales, setSucursales] = useState<Array<{ id: string; cliente_id: string; nombre: string }>>([]);
+  const [filtro, setFiltro] = useState<"abiertos" | "viejos" | EstadoEnvio | "todos">("abiertos");
   const [search, setSearch] = useState("");
-  const [estadoFilter, setEstadoFilter] = useState<"todos" | MuestraEnvio["estado"]>("todos");
-  const [productos, setProductos] = useState<MuestraProducto[]>([]);
-  const [envios, setEnvios] = useState<MuestraEnvio[]>([]);
-  const [items, setItems] = useState<MuestraItem[]>([]);
-  const [clientes, setClientes] = useState<ClienteOption[]>([]);
-  const [sucursales, setSucursales] = useState<SucursalOption[]>([]);
-  const [selectedEnvio, setSelectedEnvio] = useState<MuestraEnvio | null>(null);
-  const [panelFullscreen, setPanelFullscreen] = useState(false);
-  const [clientSearch, setClientSearch] = useState("");
-  const [clientDropdownOpen, setClientDropdownOpen] = useState(false);
-  const [activeItemSearch, setActiveItemSearch] = useState<number | null>(null);
-
-  const [envioModal, setEnvioModal] = useState(false);
-  const [envioForm, setEnvioForm] = useState({ fecha: todayAR(), cliente_id: "", sucursal_id: "", moneda: "ARS" as "ARS" | "USD", observaciones: "" });
-  const [draftItems, setDraftItems] = useState<DraftItem[]>([{ ...emptyDraftItem }]);
-
-  const [productoModal, setProductoModal] = useState(false);
-  const [editingProductoId, setEditingProductoId] = useState<string | null>(null);
-  const [productoForm, setProductoForm] = useState(emptyProducto);
-  const [returnDraft, setReturnDraft] = useState<Record<string, number>>({});
-  const [returnDateDraft, setReturnDateDraft] = useState<Record<string, string>>({});
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [modal, setModal] = useState(false);
+  const [form, setForm] = useState({ fecha: todayAR(), cliente_id: "", sucursal_id: "", moneda: "ARS" as "ARS" | "USD", observaciones: "" });
+  const [drafts, setDrafts] = useState<Draft[]>([draftVacio()]);
+  const [cantidades, setCantidades] = useState<Record<string, number>>({});
+  const [fechas, setFechas] = useState<Record<string, string>>({});
 
   const fetchData = useCallback(async () => {
     if (!sociedadId) { setLoading(false); return; }
     setLoading(true);
     try {
-      const [prodRes, envRes, itemRes, cliRes, sucRes] = await Promise.all([
-        (supabase as any).from("muestra_productos").select("*").eq("sociedad_id", sociedadId).order("descripcion"),
-        (supabase as any).from("muestra_envios").select("*, created_by_profile:created_by(full_name)").eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).order("created_at", { ascending: false }),
-        (supabase as any).from("muestra_envio_items").select("*"),
-        (supabase as any).from("clientes").select("id, razon_social").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
-        (supabase as any).from("cliente_sucursales").select("id, cliente_id, nombre, direccion, localidad").eq("activo", true).order("principal", { ascending: false }),
+      const [envRes, cliRes, sucRes, prodRes] = await Promise.all([
+        db.from("muestra_envios").select("*, created_by_profile:created_by(full_name)").eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).order("created_at", { ascending: false }),
+        db.from("clientes").select("id, razon_social").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
+        db.from("cliente_sucursales").select("id, cliente_id, nombre").eq("activo", true).order("principal", { ascending: false }),
+        db.from("muestra_productos").select("id, codigo, descripcion, talle, color").eq("sociedad_id", sociedadId),
       ]);
-      const firstError = [prodRes.error, envRes.error, itemRes.error, cliRes.error, sucRes.error].find(Boolean);
-      if (firstError) throw firstError;
-      setProductos(prodRes.data || []);
-      setEnvios(envRes.data || []);
-      // Los items y sucursales no tienen sociedad_id propio: se restringen
-      // por sus entidades padre para no mezclar sociedades.
-      const envioIds = new Set((envRes.data || []).map((envio: any) => envio.id));
-      const clienteIds = new Set((cliRes.data || []).map((cliente: any) => cliente.id));
-      setItems((itemRes.data || []).filter((item: any) => envioIds.has(item.envio_id)));
-      setClientes(cliRes.data || []);
-      setSucursales((sucRes.data || []).filter((sucursal: any) => clienteIds.has(sucursal.cliente_id)));
-    } catch (error: any) {
-      console.error("Error cargando muestras:", error);
-      toast.error(`No se pudieron cargar las muestras: ${error.message}`);
+      const err = [envRes, cliRes, sucRes, prodRes].find(r => r.error)?.error;
+      if (err) throw err;
+      const lista: Envio[] = envRes.data || [];
+      const ids = lista.map(e => e.id);
+      const todos: Item[] = [];
+      for (let i = 0; i < ids.length; i += 150) {
+        const lote = ids.slice(i, i + 150);
+        const data = await traerTodo(() => db.from("muestra_envio_items").select("*").in("envio_id", lote).order("id"));
+        todos.push(...data.map((x: any) => ({
+          ...x, cantidad_devuelta: x.cantidad_devuelta || 0, cantidad_vendida: x.cantidad_vendida || 0, cantidad_baja: x.cantidad_baja || 0,
+          precio_unitario: x.precio_unitario != null ? Number(x.precio_unitario) : null,
+        })));
+      }
+      setEnvios(lista);
+      setItems(todos);
+      setProductos(new Map((prodRes.data || []).map((p: any) => [p.id, p])));
+      const cli = cliRes.data || [];
+      const cliIds = new Set(cli.map((c: any) => c.id));
+      setClientes(cli);
+      setSucursales((sucRes.data || []).filter((s: any) => cliIds.has(s.cliente_id)));
+    } catch (e: any) {
+      toast.error(`No se pudieron cargar las muestras: ${e.message}`);
     } finally {
       setLoading(false);
     }
   }, [sociedadId, toast]);
+  useEffect(() => { void fetchData(); }, [fetchData]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
-
-  useEffect(() => {
-    if (!selectedEnvio) return;
-    const fresh = envios.find((envio) => envio.id === selectedEnvio.id);
-    if (fresh) setSelectedEnvio(fresh);
-  }, [envios, selectedEnvio?.id]);
-
-  const clienteMap = useMemo(() => new Map(clientes.map((cliente) => [cliente.id, cliente.razon_social])), [clientes]);
-  const sucursalMap = useMemo(() => new Map(sucursales.map((sucursal) => [sucursal.id, sucursal])), [sucursales]);
-  const productoMap = useMemo(() => new Map(productos.map((producto) => [producto.id, producto])), [productos]);
-
-  const asignadoPorProducto = useMemo(() => {
-    const result = new Map<string, number>();
-    items.forEach((item) => result.set(item.producto_id, (result.get(item.producto_id) || 0) + item.cantidad - item.cantidad_devuelta));
-    return result;
+  const clienteMap = useMemo(() => new Map(clientes.map(c => [c.id, c.razon_social])), [clientes]);
+  const itemsPorEnvio = useMemo(() => {
+    const m = new Map<string, Item[]>();
+    for (const i of items) { const l = m.get(i.envio_id) || []; l.push(i); m.set(i.envio_id, l); }
+    return m;
   }, [items]);
+  const itemsDe = useCallback((envioId: string) => itemsPorEnvio.get(envioId) || [], [itemsPorEnvio]);
+  const nombreItem = (i: Item) => i.descripcion || productos.get(i.producto_id || "")?.descripcion || "Muestra";
+  const talleItem = (i: Item) => i.talle || productos.get(i.producto_id || "")?.talle || "";
+  const pendienteEnvio = (id: string) => itemsDe(id).reduce((s, i) => s + pendienteDe(i), 0);
+  const valorPendiente = (id: string) => itemsDe(id).reduce((s, i) => s + pendienteDe(i) * (i.precio_unitario || 0), 0);
+  const esViejo = (e: Envio) => pendienteEnvio(e.id) > 0 && diasDesde(e.fecha) > DIAS_ALERTA;
 
-  const disponibles = (producto: MuestraProducto) => producto.stock_total - (asignadoPorProducto.get(producto.id) || 0);
-  const totalPrendas = productos.filter((p) => p.activo).reduce((sum, p) => sum + p.stock_total, 0);
-  const totalEnClientes = items.reduce((sum, item) => sum + item.cantidad - item.cantidad_devuelta, 0);
+  const abiertos = envios.filter(e => pendienteEnvio(e.id) > 0);
+  const viejos = envios.filter(esViejo);
+  const prendasAfuera = abiertos.reduce((s, e) => s + pendienteEnvio(e.id), 0);
+  const valorAfuera = { ARS: 0, USD: 0 };
+  for (const e of abiertos) valorAfuera[e.moneda === "USD" ? "USD" : "ARS"] += valorPendiente(e.id);
+  const vendidas = items.reduce((s, i) => s + (i.cantidad_vendida || 0), 0);
 
-  const envioItems = (envioId: string) => items.filter((item) => item.envio_id === envioId);
-  const cantidadPendienteEnvio = (envioId: string) => envioItems(envioId).reduce((sum, item) => sum + item.cantidad - item.cantidad_devuelta, 0);
-  const cantidadTotalEnvio = (envioId: string) => envioItems(envioId).reduce((sum, item) => sum + item.cantidad, 0);
-
-  const filteredEnvios = envios.filter((envio) => {
-    if (estadoFilter !== "todos" && envio.estado !== estadoFilter) return false;
+  const filtrados = envios.filter(e => {
+    if (filtro === "abiertos" && pendienteEnvio(e.id) <= 0) return false;
+    if (filtro === "viejos" && !esViejo(e)) return false;
+    if ((["en_cliente", "parcial", "devuelto", "cerrado"] as string[]).includes(filtro) && e.estado !== filtro) return false;
     if (!search.trim()) return true;
-    const needle = search.toLowerCase();
-    const itemText = envioItems(envio.id).map((item) => productoMap.get(item.producto_id)?.descripcion || "").join(" ").toLowerCase();
-    return envio.numero.toLowerCase().includes(needle)
-      || (clienteMap.get(envio.cliente_id) || "").toLowerCase().includes(needle)
-      || itemText.includes(needle);
+    const q = search.toLowerCase();
+    return `${e.numero} ${clienteMap.get(e.cliente_id) || ""} ${itemsDe(e.id).map(nombreItem).join(" ")}`.toLowerCase().includes(q);
   });
+  const sel = envios.find(e => e.id === selectedId) || null;
 
-  const filteredProductos = productos.filter((producto) => {
-    const needle = search.toLowerCase();
-    return !needle || [producto.codigo, producto.descripcion, producto.talle || "", producto.color || ""].join(" ").toLowerCase().includes(needle);
-  });
-
-  function openNuevoEnvio() {
-    setEnvioForm({ fecha: todayAR(), cliente_id: "", sucursal_id: "", moneda: "ARS", observaciones: "" });
-    setDraftItems([{ ...emptyDraftItem }]);
-    setClientSearch("");
-    setActiveItemSearch(null);
-    setEnvioModal(true);
+  // ── Alta ──
+  function abrirNuevo() {
+    setForm({ fecha: todayAR(), cliente_id: "", sucursal_id: "", moneda: "ARS", observaciones: "" });
+    setDrafts([draftVacio()]);
+    setModal(true);
+  }
+  const setDraft = (i: number, c: Partial<Draft>) => setDrafts(prev => prev.map((d, j) => j === i ? { ...d, ...c } : d));
+  function elegirDelCatalogo(i: number, c: CatalogoCandidato) {
+    const usd = esUSD(c.moneda);
+    const mismaMoneda = usd === (form.moneda === "USD");
+    // Si todavía no hay precios cargados, la moneda del envío sigue a la de la lista.
+    const primero = !drafts.some((d, j) => j !== i && d.precio);
+    if (primero && !mismaMoneda) setForm(f => ({ ...f, moneda: usd ? "USD" : "ARS" }));
+    setDraft(i, { descripcion: c.descripcion, codigo: c.codigo_interno || c.codigo, catalogo_id: c.id, precio: mismaMoneda || primero ? String(c.precio_venta || "") : "" });
   }
 
-  function seleccionarProducto(index: number, producto: MuestraProducto) {
-    setDraftItems((prev) => prev.map((item, itemIndex) => itemIndex === index ? {
-      producto_id: producto.id,
-      codigo: producto.codigo,
-      descripcion: producto.descripcion,
-      talle: producto.talle || "",
-      color: producto.color || "",
-      stock_total: producto.stock_total,
-      cantidad: Math.max(1, Math.min(item.cantidad || 1, Math.max(disponibles(producto), 1))),
-      precio_unitario: item.precio_unitario,
-    } : item));
-    setActiveItemSearch(null);
-  }
-
-  function updateDraftItem(index: number, patch: Partial<DraftItem>, detach = false) {
-    setDraftItems((prev) => prev.map((item, itemIndex) => itemIndex === index
-      ? { ...item, ...(detach ? { producto_id: "" } : {}), ...patch }
-      : item));
-  }
-
-  async function eliminarEnvio(envio: MuestraEnvio) {
-    if (!confirm(`¿Eliminar ${envio.numero}? Las prendas volverán a quedar disponibles.`)) return;
-    setSaving(true);
-    try {
-      const { error } = await (supabase as any).from("muestra_envios").delete().eq("id", envio.id).eq("sociedad_id", sociedadId);
-      if (error) throw error;
-      setSelectedEnvio(null);
-      setPanelFullscreen(false);
-      toast.success("Registro de muestras eliminado");
-      await fetchData();
-    } catch (error: any) {
-      toast.error(`No se pudo eliminar: ${error.message}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function openNuevoProducto(producto?: MuestraProducto) {
-    if (producto) {
-      setEditingProductoId(producto.id);
-      setProductoForm({ codigo: producto.codigo, descripcion: producto.descripcion, talle: producto.talle || "", color: producto.color || "", stock_total: producto.stock_total });
-    } else {
-      setEditingProductoId(null);
-      setProductoForm(emptyProducto);
-    }
-    setProductoModal(true);
-  }
-
-  async function handleSaveProducto() {
+  async function crearEnvio() {
     if (!sociedadId) return;
-    if (!productoForm.codigo.trim() || !productoForm.descripcion.trim()) { toast.error("Completá código y descripción"); return; }
-    if (productoForm.stock_total < 0) { toast.error("La cantidad total no puede ser negativa"); return; }
-    setSaving(true);
-    try {
-      const payload = {
-        sociedad_id: sociedadId,
-        codigo: productoForm.codigo.trim().toUpperCase(),
-        descripcion: productoForm.descripcion.trim(),
-        talle: productoForm.talle.trim() || null,
-        color: productoForm.color.trim() || null,
-        stock_total: Number(productoForm.stock_total),
-        created_by: profile?.id || null,
-      };
-      const mutation = editingProductoId
-        ? (supabase as any).from("muestra_productos").update({ ...payload, created_by: undefined }).eq("id", editingProductoId).eq("sociedad_id", sociedadId)
-        : (supabase as any).from("muestra_productos").insert(payload);
-      const { error } = await mutation;
-      if (error) throw error;
-      toast.success(editingProductoId ? "Muestra actualizada" : "Muestra agregada al inventario");
-      setProductoModal(false);
-      await fetchData();
-    } catch (error: any) {
-      toast.error(`No se pudo guardar: ${error.message}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleCreateEnvio() {
-    if (!sociedadId) return;
-    if (!envioForm.cliente_id) { toast.error("Seleccioná un cliente"); return; }
-    const cleanItems = draftItems.filter((item) => item.codigo.trim() && item.descripcion.trim() && item.cantidad > 0);
-    if (cleanItems.length === 0) { toast.error("Agregá al menos una muestra"); return; }
-    const itemKeys = cleanItems.map((item) => item.producto_id || item.codigo.trim().toLowerCase());
-    if (new Set(itemKeys).size !== cleanItems.length) { toast.error("No repitas la misma muestra en el envío"); return; }
-    const unavailable = cleanItems.find((item) => {
-      if (!item.producto_id) return item.stock_total < item.cantidad;
-      const producto = productoMap.get(item.producto_id);
-      return !producto || item.cantidad > disponibles(producto);
-    });
-    if (unavailable) { toast.error("La cantidad a enviar no puede superar el stock disponible"); return; }
-
+    if (!form.cliente_id) { toast.error("Elegí el cliente"); return; }
+    const renglones = drafts.filter(d => d.descripcion.trim() && d.cantidad > 0);
+    if (!renglones.length) { toast.error("Agregá al menos una prenda"); return; }
     setSaving(true);
     let envioId = "";
     try {
-      const resolvedItems: { producto_id: string; cantidad: number; precio_unitario: number | null }[] = [];
-      for (const item of cleanItems) {
-        if (item.producto_id) {
-          resolvedItems.push({ producto_id: item.producto_id, cantidad: item.cantidad, precio_unitario: item.precio_unitario });
-          continue;
-        }
-        const existing = productos.find((producto) => producto.codigo.toLowerCase() === item.codigo.trim().toLowerCase());
-        if (existing) {
-          if (item.cantidad > disponibles(existing)) throw new Error(`Stock insuficiente para ${existing.codigo}`);
-          resolvedItems.push({ producto_id: existing.id, cantidad: item.cantidad, precio_unitario: item.precio_unitario });
-          continue;
-        }
-        const { data: created, error: createError } = await (supabase as any).from("muestra_productos").insert({
-          sociedad_id: sociedadId,
-          codigo: item.codigo.trim().toUpperCase(),
-          descripcion: item.descripcion.trim(),
-          talle: item.talle.trim() || null,
-          color: item.color.trim() || null,
-          stock_total: Math.max(Number(item.stock_total) || 0, Number(item.cantidad) || 0),
-          created_by: profile?.id || null,
-        }).select("id").single();
-        if (createError || !created?.id) throw createError || new Error(`No se pudo crear ${item.codigo}`);
-        resolvedItems.push({ producto_id: created.id, cantidad: item.cantidad, precio_unitario: item.precio_unitario });
-      }
-
-      const { data: envio, error: envioError } = await (supabase as any).from("muestra_envios").insert({
-        sociedad_id: sociedadId,
-        numero: "",
-        fecha: envioForm.fecha,
-        moneda: envioForm.moneda,
-        cliente_id: envioForm.cliente_id,
-        sucursal_id: envioForm.sucursal_id || null,
-        estado: "en_cliente",
-        observaciones: envioForm.observaciones.trim() || null,
-        created_by: profile?.id || null,
+      const { data: envio, error } = await db.from("muestra_envios").insert({
+        sociedad_id: sociedadId, numero: "", fecha: form.fecha, moneda: form.moneda, cliente_id: form.cliente_id,
+        sucursal_id: form.sucursal_id || null, estado: "en_cliente", observaciones: form.observaciones.trim() || null, created_by: profile?.id || null,
       }).select("id").single();
-      if (envioError || !envio?.id) throw envioError || new Error("No se pudo crear el envío");
+      if (error || !envio?.id) throw error || new Error("No se pudo crear el envío");
       envioId = envio.id;
-      const { error: itemError } = await (supabase as any).from("muestra_envio_items").insert(
-        resolvedItems.map((item) => ({ envio_id: envioId, producto_id: item.producto_id, cantidad: item.cantidad, cantidad_devuelta: 0, precio_unitario: item.precio_unitario }))
-      );
-      if (itemError) throw itemError;
+      const { error: e2 } = await db.from("muestra_envio_items").insert(renglones.map(d => ({
+        envio_id: envioId, producto_id: null, codigo: d.codigo.trim() || null, descripcion: d.descripcion.trim(), talle: d.talle.trim().toUpperCase() || null,
+        color: d.color.trim() || null, catalogo_id: d.catalogo_id, cantidad: Math.round(d.cantidad), cantidad_devuelta: 0,
+        precio_unitario: d.precio ? Number(String(d.precio).replace(",", ".")) || null : null,
+      })));
+      if (e2) throw e2;
       toast.success("Muestras registradas en el cliente");
-      setEnvioModal(false);
+      setModal(false);
+      setSelectedId(envioId);
       await fetchData();
-    } catch (error: any) {
-      if (envioId) await (supabase as any).from("muestra_envios").delete().eq("id", envioId).eq("sociedad_id", sociedadId);
-      toast.error(`No se pudo registrar el envío: ${error.message}`);
+    } catch (e: any) {
+      if (envioId) await db.from("muestra_envios").delete().eq("id", envioId).eq("sociedad_id", sociedadId);
+      const msg = String(e?.message || "");
+      toast.error(/producto_id|descripcion|column/i.test(msg) ? "Falta correr la actualización de la base de datos (Muestras)." : `No se pudo registrar: ${msg}`);
     } finally {
       setSaving(false);
     }
   }
 
-  async function registrarDevolucion(item: MuestraItem, cantidad: number, fechaDevolucion: string) {
-    const pendiente = item.cantidad - item.cantidad_devuelta;
-    if (cantidad <= 0 || cantidad > pendiente) { toast.error("Ingresá una cantidad válida para devolver"); return; }
-    if (!fechaDevolucion) { toast.error("Indicá la fecha de devolución"); return; }
+  // ── Resolver renglones ──
+  async function resolver(item: Item, destino: "devuelta" | "vendida" | "baja") {
+    const pend = pendienteDe(item);
+    const cant = Math.min(pend, Math.max(1, Math.round(cantidades[item.id] || pend)));
+    if (!cant || !sociedadId) return;
     setSaving(true);
     try {
-      const { error } = await (supabase as any).from("muestra_envio_items")
-        .update({ cantidad_devuelta: item.cantidad_devuelta + cantidad }).eq("id", item.id).eq("envio_id", item.envio_id);
+      const cambios = destino === "devuelta" ? { cantidad_devuelta: item.cantidad_devuelta + cant }
+        : destino === "vendida" ? { cantidad_vendida: (item.cantidad_vendida || 0) + cant }
+        : { cantidad_baja: (item.cantidad_baja || 0) + cant };
+      const { error } = await db.from("muestra_envio_items").update(cambios).eq("id", item.id).eq("envio_id", item.envio_id);
       if (error) throw error;
-
-      const nextItems = envioItems(item.envio_id).map((current) => current.id === item.id
-        ? { ...current, cantidad_devuelta: current.cantidad_devuelta + cantidad }
-        : current);
-      const total = nextItems.reduce((sum, current) => sum + current.cantidad, 0);
-      const devuelto = nextItems.reduce((sum, current) => sum + current.cantidad_devuelta, 0);
-      const estado = devuelto === total ? "devuelto" : devuelto > 0 ? "parcial" : "en_cliente";
-      const { error: envioError } = await (supabase as any).from("muestra_envios").update({ estado, fecha_devolucion: fechaDevolucion }).eq("id", item.envio_id).eq("sociedad_id", sociedadId);
-      if (envioError) throw envioError;
-
-      setReturnDraft((prev) => ({ ...prev, [item.id]: 0 }));
-      setReturnDateDraft((prev) => ({ ...prev, [item.id]: todayAR() }));
-      toast.success(devuelto === total ? "Envío devuelto por completo" : "Devolución registrada");
+      const nuevos = itemsDe(item.envio_id).map(i => i.id === item.id ? { ...i, ...cambios } : i);
+      const total = nuevos.reduce((s, i) => s + i.cantidad, 0);
+      const pendiente = nuevos.reduce((s, i) => s + pendienteDe(i), 0);
+      const devuelto = nuevos.reduce((s, i) => s + i.cantidad_devuelta, 0);
+      const estado: EstadoEnvio = pendiente === 0 ? (devuelto === total ? "devuelto" : "cerrado") : pendiente < total ? "parcial" : "en_cliente";
+      const fecha = fechas[item.id] || todayAR();
+      const { error: e2 } = await db.from("muestra_envios").update({ estado, ...(destino === "devuelta" || pendiente === 0 ? { fecha_devolucion: fecha } : {}) }).eq("id", item.envio_id).eq("sociedad_id", sociedadId);
+      if (e2) throw e2;
+      toast.success(destino === "devuelta" ? "Devolución registrada" : destino === "vendida" ? "Anotada para cobrar: armale el presupuesto o la factura" : "Anotada como baja / regalo");
+      setCantidades(prev => { const n = { ...prev }; delete n[item.id]; return n; });
       await fetchData();
-    } catch (error: any) {
-      toast.error(`No se pudo registrar la devolución: ${error.message}`);
+    } catch (e: any) {
+      toast.error(`No se pudo guardar: ${e.message}`);
     } finally {
       setSaving(false);
     }
   }
 
-  const inputClass = "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white";
-  const labelClass = "mb-1 block text-xs font-medium text-zinc-600 dark:text-zinc-400";
+  async function eliminar(envio: Envio) {
+    if (!sociedadId || !confirm(`¿Eliminar ${envio.numero}?`)) return;
+    const { error } = await db.from("muestra_envios").delete().eq("id", envio.id).eq("sociedad_id", sociedadId);
+    if (error) { toast.error(`No se pudo eliminar: ${error.message}`); return; }
+    toast.success("Registro eliminado");
+    setSelectedId(null);
+    await fetchData();
+  }
+
+  const card = "rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900";
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
-      <Header title="Muestras" subtitle={`${envios.length} registros de muestras`} action={{ label: "Registrar entrega", onClick: openNuevoEnvio }} />
-      <main className="mx-auto max-w-7xl space-y-5 px-4 py-6 sm:px-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex gap-2 overflow-x-auto">
-            {(["todos", "en_cliente", "parcial", "devuelto"] as const).map((estado) => { const count = estado === "todos" ? envios.length : envios.filter((envio) => envio.estado === estado).length; const label = estado === "todos" ? "Todos" : estadoConfig[estado].label; return <button key={estado} onClick={() => { setTab("envios"); setEstadoFilter(estado); setSelectedEnvio(null); }} className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-4 py-2 text-sm font-medium ${tab === "envios" && estadoFilter === estado ? "border-orange-500 bg-orange-500 text-white" : "border-zinc-200 bg-white text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900"}`}>{label}<span className={`rounded-full px-1.5 py-0.5 text-xs ${tab === "envios" && estadoFilter === estado ? "bg-white/20" : "bg-zinc-100 dark:bg-zinc-800"}`}>{count}</span></button>; })}
+      <Header title="Muestras" subtitle="Prendas que dejamos a clientes para que las vean" action={{ label: "Registrar entrega", onClick: abrirNuevo }} />
+      <main className="mx-auto max-w-7xl space-y-4 px-4 py-6 sm:px-6">
+        <div className="grid gap-3 sm:grid-cols-4">
+          <div className={card}><p className="text-xs text-zinc-500">Envíos abiertos</p><p className="text-2xl font-bold dark:text-white">{abiertos.length}</p></div>
+          <div className={card}><p className="text-xs text-zinc-500">Prendas en la calle</p><p className="text-2xl font-bold dark:text-white">{prendasAfuera}</p></div>
+          <div className={card}><p className="text-xs text-zinc-500">Valor en la calle</p><p className="text-lg font-bold dark:text-white">{formatCurrency(valorAfuera.ARS)}{valorAfuera.USD ? <span className="block text-sm">{formatCurrency(valorAfuera.USD, "USD")}</span> : null}</p></div>
+          <button onClick={() => setFiltro("viejos")} className={`rounded-xl border p-4 text-left ${viejos.length ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30" : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"}`}>
+            <p className="text-xs text-zinc-500">Más de {DIAS_ALERTA} días en el cliente</p>
+            <p className={`text-2xl font-bold ${viejos.length ? "text-amber-700 dark:text-amber-400" : "dark:text-white"}`}>{viejos.length}</p>
+          </button>
+        </div>
+        {vendidas > 0 && (
+          <p className="rounded-lg bg-orange-50 px-3 py-2 text-xs text-orange-800 dark:bg-orange-950/30 dark:text-orange-300">
+            <ShoppingBag className="mr-1 inline h-3.5 w-3.5" /> Los clientes se quedaron {vendidas} muestra(s): acordate de presupuestarlas o facturarlas.
+          </p>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          {([["abiertos", "Abiertos"], ["viejos", `+${DIAS_ALERTA} días`], ["en_cliente", "En el cliente"], ["parcial", "Devolución parcial"], ["cerrado", "Cerrados"], ["devuelto", "Devueltos"], ["todos", "Todos"]] as const).map(([k, l]) => (
+            <button key={k} onClick={() => setFiltro(k)} className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${filtro === k ? "border-orange-500 bg-orange-500 text-white" : "border-zinc-200 bg-white text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}>{l}</button>
+          ))}
+          <div className="relative ml-auto w-full sm:w-72">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente, número o prenda…" className={`${inputClass} pl-9`} />
           </div>
-          <div className="flex items-center gap-2"><span className="text-xs text-zinc-500">{totalEnClientes} en clientes · {totalPrendas - totalEnClientes} disponibles</span><button onClick={() => { setTab(tab === "inventario" ? "envios" : "inventario"); setSelectedEnvio(null); }} className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${tab === "inventario" ? "border-orange-500 bg-orange-50 text-orange-600 dark:bg-orange-950/30" : "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"}`}><Package size={15} /> Inventario</button>{tab === "inventario" && <button onClick={() => openNuevoProducto()} className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white"><Plus size={15} /> Nueva prenda</button>}</div>
         </div>
 
-        <div className="flex gap-5">
-          <Card className={`overflow-hidden p-0 ${selectedEnvio && !panelFullscreen ? "w-3/5" : "w-full"}`}>
-            <div className="flex flex-wrap items-center gap-3 border-b border-zinc-200 p-4 dark:border-zinc-800">
-              <div className="relative min-w-[240px] flex-1"><Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={tab === "envios" ? "Buscar cliente, número o prenda..." : "Buscar prenda, código, talle o color..."} className={`${inputClass} pl-9`} /></div>
-              {tab === "envios" && <select value={estadoFilter} onChange={(e) => setEstadoFilter(e.target.value as typeof estadoFilter)} className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"><option value="todos">Todos los estados</option><option value="en_cliente">Entregado</option><option value="parcial">Entregado · devolución parcial</option><option value="devuelto">Devuelto</option></select>}
-            </div>
-
-            {loading ? <div className="flex justify-center py-20"><Loader2 className="animate-spin text-orange-500" /></div> : tab === "envios" ? (
-              <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900"><th className="px-4 py-3">Fecha</th><th className="px-4 py-3">N°</th><th className="px-4 py-3">Cliente</th><th className="px-4 py-3">Destino</th><th className="px-4 py-3">Prendas</th><th className="px-4 py-3">Estado</th><th className="px-4 py-3"></th></tr></thead><tbody>
-                {filteredEnvios.map((envio) => { const cfg = estadoConfig[envio.estado]; const sucursal = envio.sucursal_id ? sucursalMap.get(envio.sucursal_id) : null; return <tr key={envio.id} onClick={() => setSelectedEnvio(envio)} className="cursor-pointer border-b border-zinc-100 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900/50"><td className="px-4 py-3 text-zinc-500">{formatDate(envio.fecha)}</td><td className="px-4 py-3 font-mono text-xs">{envio.numero}</td><td className="px-4 py-3 font-medium">{clienteMap.get(envio.cliente_id) || "—"}</td><td className="px-4 py-3 text-zinc-500">{sucursal?.nombre || "Casa central"}</td><td className="px-4 py-3"><span className="font-semibold">{cantidadPendienteEnvio(envio.id)}</span><span className="text-zinc-400"> / {cantidadTotalEnvio(envio.id)}</span></td><td className="px-4 py-3"><Badge variant={cfg.variant}>{cfg.label}</Badge></td><td className="px-4 py-3"><Eye size={15} className="text-zinc-400" /></td></tr>; })}
-                {filteredEnvios.length === 0 && <tr><td colSpan={7} className="px-4 py-16 text-center text-zinc-400">No hay envíos de muestras</td></tr>}
-              </tbody></table></div>
-            ) : (
-              <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b bg-zinc-50 text-left text-xs uppercase tracking-wide text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900"><th className="px-4 py-3">Código</th><th className="px-4 py-3">Prenda</th><th className="px-4 py-3">Talle</th><th className="px-4 py-3">Color</th><th className="px-4 py-3 text-center">Total</th><th className="px-4 py-3 text-center">En clientes</th><th className="px-4 py-3 text-center">Disponible</th><th className="px-4 py-3"></th></tr></thead><tbody>
-                {filteredProductos.map((producto) => { const asignado = asignadoPorProducto.get(producto.id) || 0; const disponible = disponibles(producto); return <tr key={producto.id} className="border-b border-zinc-100 dark:border-zinc-800"><td className="px-4 py-3 font-mono text-xs">{producto.codigo}</td><td className="px-4 py-3 font-medium">{producto.descripcion}</td><td className="px-4 py-3">{producto.talle || "—"}</td><td className="px-4 py-3">{producto.color || "—"}</td><td className="px-4 py-3 text-center font-semibold">{producto.stock_total}</td><td className="px-4 py-3 text-center text-orange-600">{asignado}</td><td className={`px-4 py-3 text-center font-bold ${disponible > 0 ? "text-emerald-600" : "text-red-500"}`}>{disponible}</td><td className="px-4 py-3"><button onClick={() => openNuevoProducto(producto)} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"><Edit3 size={15} /></button></td></tr>; })}
-                {filteredProductos.length === 0 && <tr><td colSpan={8} className="px-4 py-16 text-center text-zinc-400">Todavía no hay prendas de muestra cargadas</td></tr>}
-              </tbody></table></div>
+        <div className="flex flex-col gap-4 lg:flex-row">
+          <div className={`overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 ${sel ? "lg:w-3/5" : "w-full"}`}>
+            {loading ? <div className="flex justify-center py-16"><Loader2 className="animate-spin text-orange-500" /></div> : (
+              <table className="w-full text-sm">
+                <thead className="bg-zinc-50 text-left text-xs text-zinc-500 dark:bg-zinc-800/50">
+                  <tr><th className="px-3 py-2">Fecha</th><th className="px-3">Número</th><th className="px-3">Cliente</th><th className="px-3 text-right">En el cliente</th><th className="px-3 text-right">Valor</th><th className="px-3">Estado</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {filtrados.map(e => {
+                    const pend = pendienteEnvio(e.id), tot = itemsDe(e.id).reduce((s, i) => s + i.cantidad, 0), viejo = esViejo(e), est = ESTADO[e.estado] || ESTADO.en_cliente;
+                    return (
+                      <tr key={e.id} onClick={() => setSelectedId(e.id)} className={`cursor-pointer border-t border-zinc-100 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-800/40 ${selectedId === e.id ? "bg-orange-50 dark:bg-orange-950/20" : ""}`}>
+                        <td className="whitespace-nowrap px-3 py-2 text-zinc-500">
+                          {formatDate(e.fecha)}
+                          {viejo && <span className="ml-1 text-[10px] font-semibold text-amber-600" title={`${diasDesde(e.fecha)} días en el cliente`}><AlertTriangle className="inline h-3 w-3" /> {diasDesde(e.fecha)}d</span>}
+                        </td>
+                        <td className="px-3 font-mono text-xs">{e.numero}</td>
+                        <td className="px-3">{clienteMap.get(e.cliente_id) || "—"}</td>
+                        <td className="px-3 text-right"><b>{pend}</b><span className="text-zinc-400"> / {tot}</span></td>
+                        <td className="px-3 text-right">{valorPendiente(e.id) ? formatCurrency(valorPendiente(e.id), e.moneda) : "—"}</td>
+                        <td className="px-3"><Badge variant={est.variant}>{est.label}</Badge></td>
+                        <td className="px-3"><Eye size={15} className="text-zinc-400" /></td>
+                      </tr>
+                    );
+                  })}
+                  {!filtrados.length && <tr><td colSpan={7} className="py-10 text-center text-sm text-zinc-400">No hay muestras con este filtro.</td></tr>}
+                </tbody>
+              </table>
             )}
-          </Card>
+          </div>
 
-          {selectedEnvio && (
-            <Card className={`${panelFullscreen ? "fixed inset-4 z-50 overflow-y-auto" : "sticky top-5 h-fit w-2/5"} p-0`}>
-              <div className="flex items-start justify-between border-b p-4 dark:border-zinc-800">
-                <div><p className="font-mono text-xs text-zinc-500">{selectedEnvio.numero}</p><h2 className="mt-1 font-semibold">{clienteMap.get(selectedEnvio.cliente_id)}</h2></div>
-                <div className="flex items-center gap-1"><button onClick={() => eliminarEnvio(selectedEnvio)} title="Eliminar" className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={16} /></button><button onClick={() => setPanelFullscreen((value) => !value)} title={panelFullscreen ? "Reducir" : "Ampliar"} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100">{panelFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button onClick={() => { setSelectedEnvio(null); setPanelFullscreen(false); }} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100"><X size={18} /></button></div>
-              </div>
-              <div className="space-y-4 p-4">
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div><p className="text-xs text-zinc-400">Fecha de entrega</p><p>{formatDate(selectedEnvio.fecha)}</p></div>
-                  <div><p className="text-xs text-zinc-400">Fecha de devolución</p><p>{selectedEnvio.fecha_devolucion ? formatDate(selectedEnvio.fecha_devolucion) : "Pendiente"}</p></div>
-                  <div><p className="text-xs text-zinc-400">Sucursal / destino</p><p>{selectedEnvio.sucursal_id ? sucursalMap.get(selectedEnvio.sucursal_id)?.nombre : "Casa central"}</p></div>
-                  <div><p className="text-xs text-zinc-400">Estado</p><Badge variant={estadoConfig[selectedEnvio.estado].variant}>{estadoConfig[selectedEnvio.estado].label}</Badge></div>
-                </div>
-                {selectedEnvio.observaciones && <p className="rounded-lg bg-zinc-50 p-3 text-sm text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">{selectedEnvio.observaciones}</p>}
+          {sel && (
+            <div className="h-fit rounded-xl border border-zinc-200 bg-white lg:sticky lg:top-5 lg:w-2/5 dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="flex items-start justify-between border-b border-zinc-200 p-4 dark:border-zinc-800">
                 <div>
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Detalle de prendas entregadas</p>
-                  <div className="space-y-2">
-                    {envioItems(selectedEnvio.id).map((item) => {
-                      const producto = productoMap.get(item.producto_id);
-                      const pendiente = item.cantidad - item.cantidad_devuelta;
-                      return <div key={item.id} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
-                        <div className="flex justify-between gap-3"><div><p className="text-sm font-medium">{producto?.descripcion || "Muestra"}</p><p className="text-xs text-zinc-400">{[producto?.codigo, producto?.talle && `Talle ${producto.talle}`, producto?.color].filter(Boolean).join(" · ")}</p>{item.precio_unitario != null && <p className="mt-1 text-xs font-medium text-zinc-600 dark:text-zinc-300">Precio informado: {formatCurrency(Number(item.precio_unitario), selectedEnvio.moneda)}</p>}</div><div className="text-right"><p className="text-sm font-bold">{pendiente} en cliente</p><p className="text-xs text-zinc-400">{item.cantidad_devuelta} de {item.cantidad} devueltas</p></div></div>
-                        {pendiente > 0 && <div className="mt-3 grid gap-2 sm:grid-cols-[100px_150px_1fr]"><input type="number" min="1" max={pendiente} value={returnDraft[item.id] || ""} onChange={(e) => setReturnDraft((prev) => ({ ...prev, [item.id]: Number(e.target.value) }))} placeholder="Cantidad" className={`${inputClass} py-1.5`} /><input type="date" value={returnDateDraft[item.id] || todayAR()} onChange={(e) => setReturnDateDraft((prev) => ({ ...prev, [item.id]: e.target.value }))} className={`${inputClass} py-1.5`} /><button disabled={saving} onClick={() => registrarDevolucion(item, returnDraft[item.id] || 0, returnDateDraft[item.id] || todayAR())} className="flex items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"><RotateCcw size={13} /> Registrar devolución</button></div>}
-                      </div>;
-                    })}
-                  </div>
+                  <p className="font-mono text-xs text-zinc-500">{sel.numero}</p>
+                  <h3 className="font-semibold dark:text-white">{clienteMap.get(sel.cliente_id) || "—"}</h3>
+                  <p className="text-xs text-zinc-500">
+                    Entregadas el {formatDate(sel.fecha)} · hace {diasDesde(sel.fecha)} días
+                    {sel.sucursal_id ? ` · ${sucursales.find(s => s.id === sel.sucursal_id)?.nombre || ""}` : ""}
+                    {sel.created_by_profile?.full_name ? ` · ${sel.created_by_profile.full_name}` : ""}
+                    {sel.fecha_devolucion ? ` · última devolución/cierre: ${formatDate(sel.fecha_devolucion)}` : ""}
+                  </p>
+                  {sel.observaciones && <p className="mt-1 text-xs text-zinc-600 dark:text-zinc-300">{sel.observaciones}</p>}
+                </div>
+                <button onClick={() => setSelectedId(null)}><X className="h-5 w-5 text-zinc-400" /></button>
+              </div>
+              <div className="space-y-3 p-4">
+                {itemsDe(sel.id).map(i => {
+                  const pend = pendienteDe(i);
+                  return (
+                    <div key={i.id} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-medium dark:text-white">
+                            {nombreItem(i)}
+                            {talleItem(i) && <span className="ml-1 rounded bg-zinc-100 px-1 text-[10px] dark:bg-zinc-800">T {talleItem(i)}</span>}
+                            {i.color && <span className="ml-1 text-[10px] text-zinc-500">{i.color}</span>}
+                          </p>
+                          <p className="text-[11px] text-zinc-500">
+                            {i.cantidad} entregada(s)
+                            {i.cantidad_devuelta ? ` · ${i.cantidad_devuelta} devuelta(s)` : ""}
+                            {i.cantidad_vendida ? ` · ${i.cantidad_vendida} se la quedó` : ""}
+                            {i.cantidad_baja ? ` · ${i.cantidad_baja} baja/regalo` : ""}
+                            {i.precio_unitario ? ` · ${formatCurrency(i.precio_unitario, sel.moneda)} c/u` : ""}
+                          </p>
+                        </div>
+                        {pend > 0 ? <Badge variant="warning">{pend} en el cliente</Badge> : <Badge variant="success">Resuelto</Badge>}
+                      </div>
+                      {pend > 0 && (
+                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                          <input type="number" min={1} max={pend} value={cantidades[i.id] || pend} onChange={e => setCantidades(prev => ({ ...prev, [i.id]: Number(e.target.value) }))}
+                            title="Cantidad" className="w-16 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          <input type="date" value={fechas[i.id] || todayAR()} max={todayAR()} onChange={e => setFechas(prev => ({ ...prev, [i.id]: e.target.value }))}
+                            title="Fecha" className="rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                          <button disabled={saving} onClick={() => resolver(i, "devuelta")} className="inline-flex items-center gap-1 rounded-lg border border-emerald-400 px-2 py-1 text-xs font-medium text-emerald-700 disabled:opacity-50 dark:text-emerald-400"><RotateCcw className="h-3 w-3" /> Devolvió</button>
+                          <button disabled={saving} onClick={() => resolver(i, "vendida")} className="inline-flex items-center gap-1 rounded-lg border border-orange-400 px-2 py-1 text-xs font-medium text-orange-700 disabled:opacity-50 dark:text-orange-300"><ShoppingBag className="h-3 w-3" /> Se la quedó</button>
+                          <button disabled={saving} onClick={() => resolver(i, "baja")} className="inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-2 py-1 text-xs text-zinc-600 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300"><Gift className="h-3 w-3" /> Baja / regalo</button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div className="flex items-center justify-between pt-1">
+                  <button onClick={() => eliminar(sel)} className="inline-flex items-center gap-1 text-xs text-red-600"><Trash2 className="h-3.5 w-3.5" /> Eliminar registro</button>
+                  {valorPendiente(sel.id) > 0 && <span className="text-xs text-zinc-500">Valor en el cliente: <b>{formatCurrency(valorPendiente(sel.id), sel.moneda)}</b></span>}
                 </div>
               </div>
-            </Card>
+            </div>
           )}
         </div>
       </main>
 
-      {envioModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="max-h-[96vh] w-full max-w-7xl overflow-y-auto rounded-xl bg-white shadow-2xl dark:bg-zinc-900">
-            <div className="flex items-center justify-between border-b p-5 dark:border-zinc-800">
-              <div>
-                <h2 className="text-lg font-bold">Nueva muestra</h2>
-                <p className="text-sm text-zinc-500">Completá los datos y las prendas igual que al cargar un presupuesto.</p>
-              </div>
-              <button onClick={() => setEnvioModal(false)} className="rounded p-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800">
-                <X className="text-zinc-400" />
-              </button>
+      {modal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3">
+          <div className="flex max-h-[92vh] w-full max-w-4xl flex-col rounded-xl bg-white shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
+              <h2 className="text-lg font-bold dark:text-white">Registrar entrega de muestras</h2>
+              <button onClick={() => setModal(false)}><X className="h-5 w-5 text-zinc-400" /></button>
             </div>
-
-            <div className="space-y-6 p-5">
-              <div className="rounded-lg bg-zinc-50 px-3 py-2 text-sm text-zinc-500 dark:bg-zinc-800/70">
-                Creado por: <span className="font-semibold text-zinc-800 dark:text-zinc-100">{profile?.full_name || "Usuario actual"}</span>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="relative">
-                  <label className={labelClass}>Cliente *</label>
-                  <div className="relative">
-                    <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
-                    <input
-                      value={clientSearch}
-                      onFocus={() => setClientDropdownOpen(true)}
-                      onChange={(event) => {
-                        setClientSearch(event.target.value);
-                        setClientDropdownOpen(true);
-                        if (envioForm.cliente_id) {
-                          setEnvioForm((form) => ({ ...form, cliente_id: "", sucursal_id: "" }));
-                        }
-                      }}
-                      placeholder="Buscar cliente..."
-                      className={`${inputClass} pl-9`}
-                    />
-                  </div>
-                  {clientDropdownOpen && (
-                    <div className="absolute z-30 mt-1 max-h-52 w-full overflow-y-auto rounded-lg border bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-800">
-                      {clientes
-                        .filter((cliente) => cliente.razon_social.toLowerCase().includes(clientSearch.toLowerCase()))
-                        .slice(0, 25)
-                        .map((cliente) => (
-                          <button
-                            type="button"
-                            key={cliente.id}
-                            onClick={() => {
-                              setEnvioForm((form) => ({ ...form, cliente_id: cliente.id, sucursal_id: "" }));
-                              setClientSearch(cliente.razon_social);
-                              setClientDropdownOpen(false);
-                            }}
-                            className="block w-full px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
-                          >
-                            {cliente.razon_social}
-                          </button>
-                        ))}
-                    </div>
-                  )}
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+              <div className="grid gap-3 md:grid-cols-4">
+                <div className="md:col-span-2">
+                  <label className="text-xs text-zinc-500">Cliente {form.cliente_id && <b className="text-zinc-800 dark:text-zinc-100">· {clienteMap.get(form.cliente_id)}</b>}</label>
+                  <Autocompletar opciones={clientes.map(c => ({ valor: c.id, texto: c.razon_social }))} placeholder={form.cliente_id ? "Cambiar cliente…" : "Escribí el cliente…"}
+                    onElegir={v => setForm(f => ({ ...f, cliente_id: v, sucursal_id: "" }))} className={inputClass} />
                 </div>
-
                 <div>
-                  <label className={labelClass}>Vendedor / operador</label>
-                  <input value={profile?.full_name || "Usuario actual"} readOnly className={`${inputClass} bg-zinc-50 dark:bg-zinc-800`} />
-                </div>
-
-                <div>
-                  <label className={labelClass}>Sucursal / destino</label>
-                  <select
-                    value={envioForm.sucursal_id}
-                    onChange={(event) => setEnvioForm((form) => ({ ...form, sucursal_id: event.target.value }))}
-                    className={inputClass}
-                  >
+                  <label className="text-xs text-zinc-500">Sucursal</label>
+                  <select value={form.sucursal_id} onChange={e => setForm(f => ({ ...f, sucursal_id: e.target.value }))} className={inputClass} disabled={!form.cliente_id}>
                     <option value="">Casa central</option>
-                    {sucursales
-                      .filter((sucursal) => sucursal.cliente_id === envioForm.cliente_id)
-                      .map((sucursal) => (
-                        <option key={sucursal.id} value={sucursal.id}>
-                          {sucursal.nombre}{sucursal.localidad ? ` — ${sucursal.localidad}` : ""}
-                        </option>
-                      ))}
+                    {sucursales.filter(s => s.cliente_id === form.cliente_id).map(s => <option key={s.id} value={s.id}>{s.nombre}</option>)}
                   </select>
                 </div>
-
-                <div>
-                  <label className={labelClass}>Fecha de entrega</label>
-                  <input
-                    type="date"
-                    value={envioForm.fecha}
-                    onChange={(event) => setEnvioForm((form) => ({ ...form, fecha: event.target.value }))}
-                    className={inputClass}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Moneda del precio opcional</label>
-                  <select value={envioForm.moneda} onChange={(event) => setEnvioForm((form) => ({ ...form, moneda: event.target.value as "ARS" | "USD" }))} className={inputClass}>
-                    <option value="ARS">ARS</option>
-                    <option value="USD">USD</option>
-                  </select>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="text-xs text-zinc-500">Fecha</label><input type="date" value={form.fecha} onChange={e => setForm(f => ({ ...f, fecha: e.target.value }))} className={inputClass} /></div>
+                  <div><label className="text-xs text-zinc-500">Moneda</label><select value={form.moneda} onChange={e => setForm(f => ({ ...f, moneda: e.target.value as "ARS" | "USD" }))} className={inputClass}><option value="ARS">$</option><option value="USD">US$</option></select></div>
                 </div>
               </div>
-
-              <div>
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold">Ítems de la muestra</p>
-                    <p className="text-xs text-zinc-500">Buscá una prenda existente o cargala directamente en esta grilla.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setDraftItems((previous) => [...previous, { ...emptyDraftItem }])}
-                    className="flex items-center gap-1 rounded-lg bg-orange-500 px-3 py-2 text-xs font-medium text-white"
-                  >
-                    <Plus size={14} /> Agregar ítem
-                  </button>
-                </div>
-
-                <div className="overflow-visible rounded-lg border dark:border-zinc-700">
-                  <div className="hidden grid-cols-[125px_minmax(200px,1fr)_90px_105px_90px_85px_100px_115px_40px] gap-2 border-b bg-zinc-50 px-3 py-2 text-xs font-semibold uppercase text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 lg:grid">
-                    <span>Código</span>
-                    <span>Descripción</span>
-                    <span>Talle</span>
-                    <span>Color</span>
-                    <span>Stock total</span>
-                    <span>Disponible</span>
-                    <span>Cant. enviar</span>
-                    <span>Precio opcional</span>
-                    <span />
-                  </div>
-
-                  <div className="space-y-3 p-3">
-                    {draftItems.map((draft, index) => {
-                      const selected = productoMap.get(draft.producto_id);
-                      const available = selected ? disponibles(selected) : Number(draft.stock_total) || 0;
-                      const itemNeedle = `${draft.codigo} ${draft.descripcion}`.trim().toLowerCase();
-                      const suggestions = productos.filter((producto) => {
-                        if (!producto.activo || disponibles(producto) <= 0) return false;
-                        if (!itemNeedle) return true;
-                        return [producto.codigo, producto.descripcion, producto.talle || "", producto.color || ""]
-                          .join(" ")
-                          .toLowerCase()
-                          .includes(itemNeedle);
-                      }).slice(0, 12);
-
-                      return (
-                        <div key={index} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700 lg:border-0 lg:p-0">
-                          <div className="grid gap-2 lg:grid-cols-[125px_minmax(200px,1fr)_90px_105px_90px_85px_100px_115px_40px] lg:items-start">
-                            <div className="relative">
-                              <label className={`${labelClass} lg:hidden`}>Código</label>
-                              <div className="relative">
-                                <input
-                                  value={draft.codigo}
-                                  onFocus={() => setActiveItemSearch(index)}
-                                  onChange={(event) => {
-                                    updateDraftItem(index, { codigo: event.target.value }, true);
-                                    setActiveItemSearch(index);
-                                  }}
-                                  placeholder="Código"
-                                  className={`${inputClass} pr-8`}
-                                />
-                                <Search size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400" />
-                              </div>
-                              {activeItemSearch === index && suggestions.length > 0 && (
-                                <div className="absolute z-40 mt-1 max-h-56 min-w-[430px] overflow-y-auto rounded-lg border bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-800">
-                                  {suggestions.map((producto) => (
-                                    <button
-                                      type="button"
-                                      key={producto.id}
-                                      onClick={() => seleccionarProducto(index, producto)}
-                                      className="flex w-full items-center justify-between gap-4 px-3 py-2 text-left text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700"
-                                    >
-                                      <span>
-                                        <span className="font-mono text-xs text-zinc-500">{producto.codigo}</span>
-                                        <span className="ml-2 font-medium">{producto.descripcion}</span>
-                                        <span className="ml-2 text-xs text-zinc-400">{[producto.talle, producto.color].filter(Boolean).join(" · ")}</span>
-                                      </span>
-                                      <span className="whitespace-nowrap text-xs text-emerald-600">{disponibles(producto)} disp.</span>
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-
-                            <div>
-                              <label className={`${labelClass} lg:hidden`}>Descripción</label>
-                              <input
-                                value={draft.descripcion}
-                                onFocus={() => setActiveItemSearch(index)}
-                                onChange={(event) => updateDraftItem(index, { descripcion: event.target.value }, true)}
-                                placeholder="Descripción de la prenda"
-                                readOnly={Boolean(selected)}
-                                className={`${inputClass} ${selected ? "bg-zinc-50 dark:bg-zinc-800" : ""}`}
-                              />
-                            </div>
-                            <div>
-                              <label className={`${labelClass} lg:hidden`}>Talle</label>
-                              <input value={draft.talle} onChange={(event) => updateDraftItem(index, { talle: event.target.value })} placeholder="Talle" readOnly={Boolean(selected)} className={`${inputClass} ${selected ? "bg-zinc-50 dark:bg-zinc-800" : ""}`} />
-                            </div>
-                            <div>
-                              <label className={`${labelClass} lg:hidden`}>Color</label>
-                              <input value={draft.color} onChange={(event) => updateDraftItem(index, { color: event.target.value })} placeholder="Color" readOnly={Boolean(selected)} className={`${inputClass} ${selected ? "bg-zinc-50 dark:bg-zinc-800" : ""}`} />
-                            </div>
-                            <div>
-                              <label className={`${labelClass} lg:hidden`}>Stock total</label>
-                              <input type="number" min="1" value={draft.stock_total} onChange={(event) => updateDraftItem(index, { stock_total: Number(event.target.value) })} readOnly={Boolean(selected)} className={`${inputClass} ${selected ? "bg-zinc-50 dark:bg-zinc-800" : ""}`} />
-                            </div>
-                            <div>
-                              <label className={`${labelClass} lg:hidden`}>Disponible</label>
-                              <div className="rounded-lg bg-zinc-50 px-3 py-2 text-center text-sm font-semibold text-emerald-600 dark:bg-zinc-800">{available}</div>
-                            </div>
-                            <div>
-                              <label className={`${labelClass} lg:hidden`}>Cantidad a enviar</label>
-                              <input type="number" min="1" max={available || undefined} value={draft.cantidad} onChange={(event) => updateDraftItem(index, { cantidad: Number(event.target.value) })} className={inputClass} />
-                            </div>
-                            <div>
-                              <label className={`${labelClass} lg:hidden`}>Precio opcional</label>
-                              <input type="number" min="0" step="0.01" value={draft.precio_unitario ?? ""} onChange={(event) => updateDraftItem(index, { precio_unitario: event.target.value === "" ? null : Number(event.target.value) })} placeholder="Sin precio" className={inputClass} />
-                            </div>
-                            <button type="button" disabled={draftItems.length === 1} onClick={() => setDraftItems((previous) => previous.filter((_, itemIndex) => itemIndex !== index))} className="rounded p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-30" title="Quitar ítem">
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                          <p className="mt-1 text-[11px] text-zinc-400">
-                            {selected ? "Inventario de muestras existente" : "La prenda se agregará al inventario al guardar"}
-                          </p>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <button type="button" onClick={() => setDraftItems((previous) => [...previous, { ...emptyDraftItem }])} className="mt-3 flex items-center gap-1 rounded-lg border border-dashed border-zinc-300 px-3 py-2 text-xs text-zinc-500 hover:border-orange-400 hover:text-orange-600 dark:border-zinc-700">
-                  <Plus size={14} /> Agregar ítem
-                </button>
-              </div>
-
-              <div>
-                <label className={labelClass}>Observaciones</label>
-                <textarea value={envioForm.observaciones} onChange={(event) => setEnvioForm((form) => ({ ...form, observaciones: event.target.value }))} placeholder="Persona que recibió, motivo del envío, indicaciones internas..." rows={3} className={inputClass} />
-              </div>
+              <table className="w-full text-xs">
+                <thead className="text-left text-zinc-500"><tr><th className="py-1">Artículo</th><th className="w-16">Talle</th><th className="w-24">Color</th><th className="w-16 text-right">Cant.</th><th className="w-28 text-right">Valor c/u (opcional)</th><th className="w-6"></th></tr></thead>
+                <tbody>
+                  {drafts.map((d, i) => (
+                    <tr key={i} className="align-top">
+                      <td className="py-1 pr-1">
+                        <ArticuloInput value={d.descripcion} onTexto={t => setDraft(i, { descripcion: t, catalogo_id: null, codigo: "" })} onElegir={c => elegirDelCatalogo(i, c)} />
+                        {d.catalogo_id && <span className="text-[10px] text-emerald-600">De la lista · {d.codigo}</span>}
+                      </td>
+                      <td className="py-1 pr-1"><input value={d.talle} onChange={e => setDraft(i, { talle: e.target.value })} className={inputClass} /></td>
+                      <td className="py-1 pr-1"><input value={d.color} onChange={e => setDraft(i, { color: e.target.value })} className={inputClass} /></td>
+                      <td className="py-1 pr-1"><input type="number" min={1} value={d.cantidad} onChange={e => setDraft(i, { cantidad: Number(e.target.value) || 0 })} className={`${inputClass} text-right`} /></td>
+                      <td className="py-1 pr-1"><input value={d.precio} onChange={e => setDraft(i, { precio: e.target.value })} inputMode="decimal" placeholder="0" className={`${inputClass} text-right`} /></td>
+                      <td className="py-2"><button onClick={() => setDrafts(prev => prev.length > 1 ? prev.filter((_, j) => j !== i) : [draftVacio()])} className="text-zinc-400 hover:text-red-500"><Trash2 className="h-4 w-4" /></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <button onClick={() => setDrafts(prev => [...prev, draftVacio()])} className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs dark:border-zinc-700 dark:text-zinc-200"><Plus className="h-3.5 w-3.5" /> Otra prenda</button>
+              <div><label className="text-xs text-zinc-500">Observaciones</label><textarea value={form.observaciones} onChange={e => setForm(f => ({ ...f, observaciones: e.target.value }))} rows={2} className={inputClass} /></div>
             </div>
-
-            <div className="flex justify-end gap-2 border-t p-5 dark:border-zinc-800">
-              <button onClick={() => setEnvioModal(false)} className="rounded-lg border px-4 py-2 text-sm dark:border-zinc-700">Cancelar</button>
-              <button onClick={handleCreateEnvio} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-600 px-5 py-2 text-sm font-medium text-white disabled:opacity-50">
-                {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                Guardar muestra
+            <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
+              <button onClick={() => setModal(false)} className="rounded-lg border px-3 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">Cancelar</button>
+              <button onClick={crearEnvio} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Registrar
               </button>
             </div>
           </div>
         </div>
       )}
-
-      {productoModal && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"><div className="w-full max-w-lg rounded-xl bg-white shadow-2xl dark:bg-zinc-900"><div className="flex items-center justify-between border-b p-5 dark:border-zinc-800"><div><h2 className="text-lg font-bold">{editingProductoId ? "Editar muestra" : "Nueva muestra"}</h2><p className="text-sm text-zinc-500">Inventario separado del stock comercial</p></div><button onClick={() => setProductoModal(false)}><X className="text-zinc-400" /></button></div><div className="grid grid-cols-2 gap-4 p-5"><div><label className={labelClass}>Código *</label><input value={productoForm.codigo} onChange={(e) => setProductoForm((form) => ({ ...form, codigo: e.target.value }))} placeholder="M-001" className={inputClass} /></div><div><label className={labelClass}>Cantidad total *</label><input type="number" min="0" value={productoForm.stock_total} onChange={(e) => setProductoForm((form) => ({ ...form, stock_total: Number(e.target.value) }))} className={inputClass} /></div><div className="col-span-2"><label className={labelClass}>Prenda / descripción *</label><input value={productoForm.descripcion} onChange={(e) => setProductoForm((form) => ({ ...form, descripcion: e.target.value }))} placeholder="Ej: Remera corporativa manga corta" className={inputClass} /></div><div><label className={labelClass}>Talle</label><input value={productoForm.talle} onChange={(e) => setProductoForm((form) => ({ ...form, talle: e.target.value }))} placeholder="S, M, L, XL..." className={inputClass} /></div><div><label className={labelClass}>Color</label><input value={productoForm.color} onChange={(e) => setProductoForm((form) => ({ ...form, color: e.target.value }))} placeholder="Negro" className={inputClass} /></div></div><div className="flex justify-end gap-2 border-t p-5 dark:border-zinc-800"><button onClick={() => setProductoModal(false)} className="rounded-lg border px-4 py-2 text-sm dark:border-zinc-700">Cancelar</button><button onClick={handleSaveProducto} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{saving ? <Loader2 size={16} className="animate-spin" /> : <Package size={16} />} Guardar</button></div></div></div>}
     </div>
   );
 }
