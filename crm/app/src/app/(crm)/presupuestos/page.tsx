@@ -24,6 +24,7 @@ import { createPortal } from "react-dom";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { useUser } from "@/lib/auth-context";
 import CatalogoPicker from "@/components/presupuestos/catalogo-picker";
+import CotizacionExpress from "@/components/presupuestos/cotizacion-express";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalizePurchaseCurrency } from "@/lib/own-stock-purchase-orders";
@@ -501,6 +502,7 @@ export default function PresupuestosPage() {
 
   // AI presupuesto
   const [showAIPanel, setShowAIPanel] = useState(false);
+  const [showExpress, setShowExpress] = useState(false);
   const [aiMessage, setAiMessage] = useState("");
   const [aiImage, setAiImage] = useState<{ data: string; media_type: string; name: string } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -3808,12 +3810,30 @@ export default function PresupuestosPage() {
               </button>
             </div>
             <button
-              onClick={() => setShowAIPanel(!showAIPanel)}
+              onClick={() => setShowExpress(true)}
               className="flex items-center gap-1 rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-400 dark:hover:bg-orange-950/50 transition-colors"
             >
-              <Sparkles className="h-3 w-3" /> IA: armar desde mensaje
+              <Sparkles className="h-3 w-3" /> Cotización express (IA)
             </button>
           </div>
+
+          <CotizacionExpress
+            open={showExpress}
+            onClose={() => setShowExpress(false)}
+            prMoneda={newPR.moneda}
+            tc={newPR.tipo_cambio}
+            tcDivisas={newPR.tipo_cambio_divisas}
+            proveedoresCRM={proveedoresOptions}
+            sociedadId={sociedadActiva?.id}
+            onPedirTc={() => {
+              const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
+              fetchCotizBna(cli?.moneda_predeterminada === "USD" ? "billetes" : "divisas");
+            }}
+            onAgregar={(nuevos) => setNewPR((p) => ({
+              ...p,
+              items: [...p.items.filter((it) => it.codigo.trim() || it.descripcion.trim()), ...nuevos],
+            }))}
+          />
 
           <CatalogoPicker
             open={showCatalogo}
