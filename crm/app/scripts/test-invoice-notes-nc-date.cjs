@@ -10,7 +10,7 @@ const pdf = read("src/lib/pdf-templates.ts");
 assert.match(facturacion, /const \[ncFecha, setNcFecha\] = useState\(todayAR\(\)\)/);
 assert.match(facturacion, /useFiscalDateLimits\(ncOpen && !ncManual && Boolean\(ncFactura\)/);
 assert.match(facturacion, /value=\{ncFecha\}/);
-assert.match(facturacion, /factura_origen_id: ncFactura\.id,\s*fecha: ncFecha/);
+assert.match(facturacion, /factura_origen_id: ncFactura\.id,\s*nota_credito_modo: ncMode,\s*fecha: ncFecha/);
 assert.match(facturacion, /fecha: ncFecha,\s*cae: null/);
 
 assert.match(pdf, /observaciones\?: string \| null/);

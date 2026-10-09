@@ -21,8 +21,8 @@ function respond(index,data,ok=true){requests[index].resolve({ok,json:async()=>d
  props=[false,'soc-b','client-b','2026-09-11'];render();props=[true,'soc-b','client-b','2026-09-11'];assert.equal(render().ready,false);
  for(const file of ['src/app/(crm)/ventas/page.tsx','src/app/(crm)/facturacion/facturacion-content.tsx']){const ui=fs.readFileSync(file,'utf8');for(const token of ['fceBlocked','fce_cbu','fce_transmision','fceExpectedTipo','Reintentar verificación FCE'])assert.ok(ui.includes(token),`${file}: ${token}`);}
  const billing=fs.readFileSync('src/app/(crm)/facturacion/facturacion-content.tsx','utf8');
- for(const token of ['ncEsFce','código ARCA 203','código ARCA 208','disabled={ncEsFce}']) assert.ok(billing.includes(token),`facturación NC FCE: ${token}`);
- assert.match(billing,/setNcManual\(\(factura\.tipo !== "FCEA" && factura\.tipo !== "FCEB"\)/);
+ for(const token of ['ncEsFce','código ARCA','disabled={ncEsFce}','nota_credito_modo: ncMode','Importe libre','Por ítems']) assert.ok(billing.includes(token),`facturación NC: ${token}`);
+ assert.match(billing,/setNcManual\(!\["FCEA", "FCEB"\]\.includes\(factura\.tipo\)/);
  const ventas=fs.readFileSync('src/app/(crm)/ventas/page.tsx','utf8');assert.ok(ventas.includes('visibilitychange'));assert.ok(ventas.includes('ventas-presupuestos-'));assert.ok(ventas.includes('v.presupuesto.estado !== "facturar"'));
  console.log('OK: FCE UI race guards, society/client/date isolation, malformed threshold fails closed, retry, reopen, required fields and filter refresh wiring. No network or real invoices.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

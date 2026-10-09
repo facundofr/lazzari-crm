@@ -9,6 +9,7 @@ import { createSupabaseServer } from "@/lib/supabase/server";
 import { consultarObligacionFce, consultarComprobanteFce } from "@/lib/arca-wsfecred-node";
 import { fceRequired, validateFceFields, withFceMetadata, type FceInvoiceData } from "@/lib/fce-invoice";
 import { fiscalPayloadHash, validEmissionKey, reserveFiscalEmission, finishFiscalEmission } from "@/lib/fiscal-emission-guard";
+import { assertSafeFiscalEnvironment } from "@/lib/fiscal-environment";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -198,8 +199,6 @@ async function validateFacturaInput(
 // POST /api/facturacion — Emitir factura via ARCA
 export async function POST(req: NextRequest) {
   try {
-    await loadArca();
-
     const body = await req.json();
     const {
       tipo,           // "FA" | "FB" | "NCA" | "NCB"
@@ -222,11 +221,14 @@ export async function POST(req: NextRequest) {
       numero_manual,  // optional number — invoice number for manual mode
       fecha,          // optional date string YYYY-MM-DD — custom invoice date (defaults to today)
       factura_origen_id, // optional UUID — original invoice for NC/ND (CbtesAsoc)
+      nota_credito_modo, // "total" | "items" | "amount"
     } = body;
 
     if (!sociedad_id || typeof sociedad_id !== "string") {
       return NextResponse.json({ error: "sociedad_id es requerido para emitir una factura" }, { status: 400 });
     }
+    assertSafeFiscalEnvironment();
+    await loadArca();
     let supabase: any;
     try { supabase = await authorizeFacturaRequest(req, sociedad_id); }
     catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "No autorizado" }, { status: 403 }); }
@@ -570,12 +572,14 @@ export async function POST(req: NextRequest) {
 
     // Build CbtesAsoc for NC/ND (required by ARCA)
     const isNCND = ["NCA", "NCB", "NCEA", "NCEB", "NDA", "NDB"].includes(tipo);
+    const isSalesCreditNote = ["NCA", "NCB", "NCEA", "NCEB"].includes(tipo);
     if (isNCND && !factura_origen_id) return NextResponse.json({error:"La nota requiere una factura origen válida. No se emitió."},{status:400});
     let cbtesAsoc: { Tipo: number; PtoVta: number; Nro: number; Cuit: number; CbteFch: string }[] | undefined;
+    let comprobanteAsociado = "";
     if (isNCND && factura_origen_id) {
       const { data: origen, error: origenError } = await (supabase as any)
         .from("facturas")
-        .select("tipo, punto_venta, numero, fecha")
+        .select("tipo, punto_venta, numero, fecha, estado")
         .eq("id", factura_origen_id)
         .eq("sociedad_id", sociedad_id)
         .eq("cliente_id", cliente_id)
@@ -583,13 +587,16 @@ export async function POST(req: NextRequest) {
         .single();
       if (origenError || !origen) return NextResponse.json({ error: "La factura origen no pertenece al mismo cliente, sociedad y moneda" }, { status: 400 });
       const isFceNote = tipo === "NCEA" || tipo === "NCEB";
-      const expectedFceOrigin = tipo === "NCEA" ? "FCEA" : tipo === "NCEB" ? "FCEB" : null;
+      const expectedOrigin: Record<string, string> = {
+        NCA: "FA", NCB: "FB", NCEA: "FCEA", NCEB: "FCEB", NDA: "FA", NDB: "FB",
+      };
+      const expectedFceOrigin = expectedOrigin[tipo] || null;
       const isFceOrigin = origen.tipo === "FCEA" || origen.tipo === "FCEB";
-      if (isFceNote && origen.tipo !== expectedFceOrigin) {
-        return NextResponse.json({error:`La ${tipo} debe asociarse a su ${expectedFceOrigin}. Revisá la factura origen; no se emitió ninguna nota.`},{status:400});
+      if (expectedFceOrigin && origen.tipo !== expectedFceOrigin) {
+        return NextResponse.json({error:`La ${tipo} debe asociarse a una ${expectedFceOrigin}. Revisá la factura original; no se emitió ninguna nota.`},{status:400});
       }
       if (!isFceNote && isFceOrigin) {
-        return NextResponse.json({error:"Una FCE debe ajustarse con su nota MiPyME correspondiente (código ARCA 203 para A o 208 para B). No se emitió ninguna nota."},{status:409});
+        return NextResponse.json({error:"Una FCE debe ajustarse con la nota MiPyME correspondiente (código ARCA 203 para A o 208 para B). No se emitió ninguna nota."},{status:409});
       }
       if (isFceNote) {
         try {
@@ -615,6 +622,7 @@ export async function POST(req: NextRequest) {
       if (origen) {
         const origenTipo = CBTE_TIPO_MAP[origen.tipo];
         if (origenTipo) {
+          comprobanteAsociado = `${origen.tipo} ${String(origen.punto_venta).padStart(4, "0")}-${String(origen.numero).padStart(8, "0")}`;
           cbtesAsoc = [{
             Tipo: origenTipo,
             PtoVta: Number(origen.punto_venta),
@@ -635,6 +643,51 @@ export async function POST(req: NextRequest) {
     const emissionHash = fiscalPayloadHash({ body, production, cuit: arcaConfig.cuit });
     const attempt = await reserveFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, ptoVta, body);
     if (!attempt.acquired) {
+      if (isSalesCreditNote && attempt.state === "authorized" && attempt.response?.factura) {
+        const authorized = attempt.response.factura as Record<string, unknown>;
+        const { data: reconciled, error: reconcileError } = await supabase.rpc("registrar_nota_credito_venta_autorizada", {
+          p_sociedad_id: sociedad_id,
+          p_request_key: emissionKey,
+          p_factura_origen_id: factura_origen_id,
+          p_factura: {
+            tipo,
+            nota_credito_modo: ["total", "items", "amount"].includes(nota_credito_modo) ? nota_credito_modo : "items",
+            punto_venta: ptoVta,
+            numero: authorized.numero,
+            cliente_id,
+            fecha: fechaFacturaInput,
+            cae: authorized.cae,
+            cae_vencimiento: authorized.cae_vencimiento,
+            subtotal: totalNeto,
+            iva: totalIva,
+            total: totalFinal,
+            moneda: isUSD ? "USD" : "ARS",
+            tipo_cambio: isUSD ? tc : null,
+            cotizacion_modalidad: isUSD ? inheritedRateModality : null,
+            observaciones: comprobanteAsociado ? `Comprobante asociado: ${comprobanteAsociado}` : null,
+            nota_interna: nota_interna || null,
+          },
+          p_items: items.map((item: any, index: number) => ({...item, orden: index})),
+        });
+        if (reconcileError || !reconciled?.factura_id) {
+          return NextResponse.json({
+            ...attempt.response,
+            warning: "La NC fue autorizada por ARCA, pero todavía no se pudo aplicar localmente. Reintentá con el mismo formulario; no vuelvas a emitir.",
+            reconciliation_required: true,
+          }, { status: 200 });
+        }
+        const completed = {
+          ...attempt.response,
+          reconciliation_required: false,
+          warning: Number(reconciled.saldo_a_favor || 0) > 0
+            ? `La NC supera el saldo de la factura. Quedó ${Number(reconciled.saldo_a_favor).toLocaleString("es-AR", {minimumFractionDigits:2})} a favor del cliente.`
+            : undefined,
+          factura: {...authorized, id: reconciled.factura_id},
+          aplicacion: reconciled,
+        };
+        await finishFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, "completed", 200, completed);
+        return NextResponse.json(completed);
+      }
       if (attempt.response && attempt.status) return NextResponse.json(attempt.response, { status: attempt.status });
       return NextResponse.json({ error: "Esta emisión ya está en curso o pendiente de conciliación con ARCA. No se enviará nuevamente.", emission_key: emissionKey }, { status: 409 });
     }
@@ -710,6 +763,61 @@ export async function POST(req: NextRequest) {
     let savedNote = requestedRateOverride ? `${nota_interna || ""}\nCotización modificada por augusto@lazzari.com.ar antes de emitir: ${tc} ARS/USD. Fecha indicada: ${String(body.cotizacion_fecha || "sin especificar").slice(0,10)}. Registro: ${new Date().toISOString()}`.trim() : String(nota_interna || "");
     if (arcaWarnings.length) savedNote += `\nObservaciones ARCA: ${arcaWarnings.join("; ")}`;
     if (fceData) savedNote = withFceMetadata(savedNote,fceData);
+
+    if (isSalesCreditNote) {
+      const { data: applied, error: applyError } = await supabase.rpc("registrar_nota_credito_venta_autorizada", {
+        p_sociedad_id: sociedad_id,
+        p_request_key: emissionKey,
+        p_factura_origen_id: factura_origen_id,
+        p_factura: {
+          tipo,
+          nota_credito_modo: ["total", "items", "amount"].includes(nota_credito_modo) ? nota_credito_modo : "items",
+          punto_venta: ptoVta,
+          numero: cbteNro,
+          cliente_id,
+          fecha: fechaFacturaInput,
+          cae,
+          cae_vencimiento: caeFchVto,
+          subtotal: totalNeto,
+          iva: totalIva,
+          total: totalFinal,
+          moneda: isUSD ? "USD" : "ARS",
+          tipo_cambio: isUSD ? tc : null,
+          cotizacion_modalidad: isUSD ? inheritedRateModality : null,
+          observaciones: comprobanteAsociado ? `Comprobante asociado: ${comprobanteAsociado}` : null,
+          nota_interna: savedNote || null,
+        },
+        p_items: items.map((item: any, index: number) => ({...item, orden: index})),
+      });
+      if (applyError || !applied?.factura_id) {
+        console.error("NC autorizada sin aplicación local:", applyError);
+        return NextResponse.json({
+          success: true,
+          warning: "La NC fue autorizada por ARCA pero no pudo aplicarse localmente. Reintentá con el mismo formulario; no vuelvas a emitir.",
+          reconciliation_required: true,
+          factura: { numero: cbteNro, cae, cae_vencimiento: caeFchVto, total: totalFinal, comprobante: `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(cbteNro).padStart(8, "0")}` },
+          emission_key: emissionKey,
+        });
+      }
+      const completedResponse = {
+        success: true,
+        reconciliation_required: false,
+        warning: Number(applied.saldo_a_favor || 0) > 0
+          ? `La NC supera el saldo de la factura. Quedó ${Number(applied.saldo_a_favor).toLocaleString("es-AR", {minimumFractionDigits:2})} a favor del cliente.`
+          : arcaWarnings.join("; ") || undefined,
+        factura: {
+          id: applied.factura_id,
+          numero: cbteNro,
+          cae,
+          cae_vencimiento: caeFchVto,
+          total: totalFinal,
+          comprobante: `${tipo} ${String(ptoVta).padStart(4, "0")}-${String(cbteNro).padStart(8, "0")}`,
+        },
+        aplicacion: applied,
+      };
+      await finishFiscalEmission(supabase, sociedad_id, emissionKey, emissionHash, "completed", 200, completedResponse);
+      return NextResponse.json(completedResponse);
+    }
 
     // Save factura to database
     const { data: factura, error: insertError } = await supabase
