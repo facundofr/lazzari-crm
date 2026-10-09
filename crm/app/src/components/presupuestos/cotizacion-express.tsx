@@ -5,7 +5,7 @@
  * y se arma la lista de artículos buscando cada uno en la lista de costos (catalogo_costos).
  * La IA solo sugiere: todo se revisa en la tabla antes de agregarlo al presupuesto.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Loader2, Sparkles, Search, FileUp, Check, AlertTriangle } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
@@ -54,29 +54,52 @@ function puntaje(c: Cand, toks: string[]) {
 
 const COLS = "id, proveedor, codigo, codigo_interno, descripcion, moneda, costo, precio_venta, marca";
 
-async function buscarCandidatos(texto: string, codigo = ""): Promise<Cand[]> {
+type Prefs = { provs: string[]; soloProvs: boolean; marcas: string[]; soloMarcas: boolean };
+const SIN_PREFS: Prefs = { provs: [], soloProvs: false, marcas: [], soloMarcas: false };
+
+async function buscarCandidatos(texto: string, codigo = "", max = 15, prefs: Prefs = SIN_PREFS): Promise<Cand[]> {
   const toks = [...new Set(tokens(`${codigo} ${texto}`))];
   if (!toks.length) return [];
   const limpio = (w: string) => w.replace(/[,()%*\\]/g, "");
   const consultas: any[] = [];
   const codigos = toks.filter(esCodigo);
   const palabras = toks.filter(w => !esCodigo(w)).sort((a, b) => b.length - a.length);
-  const y = (ws: string[], lim: number) => {
+  const base = (soloPref = false) => {
     let q = db.from("catalogo_costos").select(COLS).eq("activo", true);
-    for (const w of ws) q = q.or(`descripcion.ilike.%${limpio(w)}%,codigo.ilike.%${limpio(w)}%,codigo_interno.ilike.%${limpio(w)}%,marca.ilike.%${limpio(w)}%`);
+    if (prefs.provs.length && (prefs.soloProvs || soloPref)) q = q.in("proveedor", prefs.provs);
+    if (prefs.marcas.length && prefs.soloMarcas) q = q.in("marca", prefs.marcas);
+    return q;
+  };
+  const y = (ws: string[], lim: number, soloPref = false) => {
+    let q = base(soloPref);
+    for (const w of ws) q = q.or(`descripcion.ilike.%${limpio(w)}%,codigo.ilike.%${limpio(w)}%,codigo_interno.ilike.%${limpio(w)}%,marca.ilike.%${limpio(w)}%,proveedor.ilike.%${limpio(w)}%`);
     return q.limit(lim);
   };
-  if (codigo.trim()) consultas.push(db.from("catalogo_costos").select(COLS).eq("activo", true).or(`codigo.ilike.%${limpio(codigo.trim())}%,codigo_interno.ilike.%${limpio(codigo.trim())}%`).limit(20));
+  if (codigo.trim()) consultas.push(base().or(`codigo.ilike.%${limpio(codigo.trim())}%,codigo_interno.ilike.%${limpio(codigo.trim())}%`).limit(20));
   if (codigos.length) consultas.push(y(codigos, 60));
   if (codigos.length && palabras.length) consultas.push(y([codigos[0], palabras[0]], 60));
   if (palabras.length >= 2) consultas.push(y(palabras.slice(0, 3), 80));
   if (palabras.length >= 2) consultas.push(y(palabras.slice(0, 2), 120));
-  if (palabras.length) consultas.push(y([palabras[0]], 150));
+  if (palabras.length) consultas.push(y([palabras[0]], 400));
+  if (palabras.length >= 2) consultas.push(y([palabras[1]], 200));
+  // Con proveedores preferidos: se busca también solo dentro de ellos, para que siempre aparezcan.
+  if (prefs.provs.length && !prefs.soloProvs) {
+    if (palabras.length) consultas.push(y([palabras[0]], 150, true));
+    if (palabras.length >= 2) consultas.push(y(palabras.slice(0, 2), 100, true));
+    if (codigos.length) consultas.push(y(codigos, 60, true));
+  }
   const res = await Promise.all(consultas.map(q => q.then((r: any) => r.data || [], () => [])));
   const porId = new Map<string, Cand>();
   for (const lista of res) for (const r of lista) porId.set(r.id, { ...r, costo: Number(r.costo), precio_venta: Number(r.precio_venta) });
-  return [...porId.values()].map(c => ({ c, p: puntaje(c, toks) })).filter(x => x.p > 0)
-    .sort((a, b) => b.p - a.p || a.c.costo - b.c.costo).slice(0, 10).map(x => x.c);
+  const ordenados = [...porId.values()].map(c => ({ c, p: puntaje(c, toks) })).filter(x => x.p > 0)
+    .sort((a, b) => b.p - a.p || a.c.costo - b.c.costo);
+  // Primero el mejor de cada proveedor (para que no quede afuera ninguno que lo tenga), después el resto.
+  const mejorTope = ordenados[0]?.p || 0;
+  const porProv = new Map<string, { c: Cand; p: number }>();
+  for (const x of ordenados) if (!porProv.has(x.c.proveedor) && x.p >= mejorTope * (prefs.provs.includes(x.c.proveedor) ? 0.35 : 0.6)) porProv.set(x.c.proveedor, x);
+  const salida = [...porProv.values()];
+  for (const x of ordenados) if (salida.length < max && !salida.includes(x)) salida.push(x);
+  return salida.sort((a, b) => b.p - a.p || a.c.costo - b.c.costo).slice(0, Math.max(max, porProv.size)).map(x => x.c);
 }
 
 function separarTalle(desc: string): { descripcion: string; talle: string } {
@@ -141,6 +164,10 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
   const [progreso, setProgreso] = useState("");
   const [error, setError] = useState("");
   const [notas, setNotas] = useState("");
+  const [catProvs, setCatProvs] = useState<string[]>([]);
+  const [catMarcas, setCatMarcas] = useState<string[]>([]);
+  const [prefs, setPrefs] = useState<Prefs>(SIN_PREFS);
+  const [indicaciones, setIndicaciones] = useState("");
   const [provIds, setProvIds] = useState<Array<{ id: string; razon_social: string; nombre_fantasia?: string | null }>>([]);
   const [vinculos, setVinculos] = useState<Record<string, string>>({});
   const tcPedido = useRef(false);
@@ -159,6 +186,20 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
     })();
   }, [open, sociedadId]);
 
+  useEffect(() => {
+    if (!open || catProvs.length) return;
+    (async () => {
+      const sp = new Set<string>(), sm = new Set<string>();
+      for (let desde = 0; desde < 80000; desde += 1000) {
+        const { data } = await db.from("catalogo_costos").select("proveedor, marca").eq("activo", true).range(desde, desde + 999);
+        (data || []).forEach((r: any) => { if (r.proveedor) sp.add(r.proveedor); if (r.marca) sm.add(r.marca); });
+        if (!data || data.length < 1000) break;
+      }
+      setCatProvs([...sp].sort((a, b) => a.localeCompare(b, "es")));
+      setCatMarcas([...sm].sort((a, b) => a.localeCompare(b, "es")));
+    })();
+  }, [open, catProvs.length]);
+
   const proveedorId = (nombre: string) => {
     if (vinculos[nombre]) return vinculos[nombre];
     const nf = normalizarProveedor(nombre);
@@ -166,6 +207,13 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
     if (nf && f) return f.id;
     return buscarProveedorCRM(nombre, provIds.length ? provIds : (proveedoresCRM || []));
   };
+
+  async function vincular(nombreLista: string, idCRM: string) {
+    if (!idCRM) return;
+    setVinculos(v => ({ ...v, [nombreLista]: idCRM }));
+    if (sociedadId) await db.from("catalogo_proveedores").upsert({ sociedad_id: sociedadId, proveedor_lista: nombreLista, proveedor_id: idCRM }, { onConflict: "sociedad_id,proveedor_lista" });
+    await db.from("proveedores").update({ nombre_fantasia: nombreLista }).eq("id", idCRM).is("nombre_fantasia", null);
+  }
 
   const sinTc = useMemo(() => lineas.some(l => l.incluir && l.elegido !== null && convertirAMonedaPR(1, l.candidatos[l.elegido]?.moneda || prMoneda, prMoneda, tc, tcDivisas) === null), [lineas, prMoneda, tc, tcDivisas]);
   useEffect(() => { if (sinTc && onPedirTc && !tcPedido.current) { tcPedido.current = true; onPedirTc(); } }, [sinTc, onPedirTc]);
@@ -216,14 +264,14 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
       const base: Linea[] = pedidos.map((p, i) => ({ id: String(i), ...p, candidatos: [], elegido: null, confianza: "ninguna", nota: "", incluir: true, buscar: "" }));
       for (let i = 0; i < base.length; i += 6) {
         setProgreso(`Buscando en la lista de costos… ${Math.min(i + 6, base.length)} de ${base.length}`);
-        await Promise.all(base.slice(i, i + 6).map(async l => { l.candidatos = await buscarCandidatos(`${l.descripcion}`, l.codigo); }));
+        await Promise.all(base.slice(i, i + 6).map(async l => { l.candidatos = await buscarCandidatos(`${l.descripcion}`, l.codigo, 15, prefs); }));
       }
 
       // 2) la IA elige el candidato correcto en cada línea
       setProgreso("La IA está eligiendo el artículo de cada línea…");
       const res = await fetch("/api/cotizacion-express", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modo: "elegir", pedidos: base.map(l => ({ id: l.id, descripcion: l.descripcion, talle: l.talle, codigo: l.codigo, candidatos: l.candidatos.map(c => ({ proveedor: c.proveedor, codigo: c.codigo_interno || c.codigo, descripcion: c.descripcion, marca: c.marca, moneda: c.moneda, costo: c.costo })) })) }),
+        body: JSON.stringify({ modo: "elegir", pedidos: base.map(l => ({ id: l.id, descripcion: l.descripcion, talle: l.talle, codigo: l.codigo, candidatos: l.candidatos.map(c => { const cp = convertirAMonedaPR(c.costo, c.moneda, prMoneda, tc, tcDivisas); return { proveedor: c.proveedor, codigo: c.codigo_interno || c.codigo, descripcion: c.descripcion, marca: c.marca, moneda: c.moneda, costo: c.costo, costo_comparable: cp === null ? null : Math.round(cp * 100) / 100 }; }) })), moneda_comparable: prMoneda === "ARS" ? "ARS" : "USD", preferencias: { proveedores: prefs.provs, solo_proveedores: prefs.soloProvs, marcas: prefs.marcas, solo_marcas: prefs.soloMarcas, indicaciones: indicaciones.trim() } }),
       });
       const d = await res.json().catch(() => ({}));
       const porId = new Map<string, any>((d.elecciones || []).map((e: any) => [String(e.id), e]));
@@ -239,11 +287,29 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
     }
   }
 
-  async function rebuscar(id: string, texto: string) {
-    if (!texto.trim()) return;
-    setLineas(ls => ls.map(l => l.id === id ? { ...l, buscando: true } : l));
-    const cands = await buscarCandidatos(texto);
-    setLineas(ls => ls.map(l => l.id === id ? { ...l, buscando: false, candidatos: cands, elegido: cands.length ? 0 : null, confianza: cands.length ? "manual" : "ninguna", nota: cands.length ? "" : "Sin resultados" } : l));
+  // Buscador por línea: se abre debajo de la fila, busca mientras escribís y elegís con un clic.
+  const [abierto, setAbierto] = useState<string | null>(null);
+  const [busq, setBusq] = useState("");
+  const [resultados, setResultados] = useState<Cand[]>([]);
+  const [cargandoBusq, setCargandoBusq] = useState(false);
+  const [filtroProv, setFiltroProv] = useState("");
+  useEffect(() => {
+    if (!abierto || busq.trim().length < 2) { setResultados([]); return; }
+    let cancelado = false;
+    const t = setTimeout(async () => {
+      setCargandoBusq(true);
+      const r = await buscarCandidatos(busq, "", 80);
+      if (!cancelado) { setResultados(r); setCargandoBusq(false); }
+    }, 300);
+    return () => { cancelado = true; clearTimeout(t); };
+  }, [abierto, busq]);
+  function abrirBusqueda(l: Linea) {
+    if (abierto === l.id) { setAbierto(null); return; }
+    setAbierto(l.id); setFiltroProv(""); setBusq(l.buscar || l.descripcion);
+  }
+  function elegirResultado(id: string, c: Cand) {
+    setLineas(ls => ls.map(l => l.id === id ? { ...l, candidatos: [c, ...l.candidatos.filter(k => k.id !== c.id)], elegido: 0, confianza: "manual", nota: "", buscar: busq } : l));
+    setAbierto(null);
   }
 
   const upd = (id: string, cambios: Partial<Linea>) => setLineas(ls => ls.map(l => l.id === id ? { ...l, ...cambios } : l));
@@ -264,7 +330,7 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
       out.push({
         codigo: c.codigo_interno || c.codigo, descripcion: desc(c.descripcion), categoria: "", cantidad: l.cantidad, unidad: "UN",
         precio_costo: c.costo, markup_porcentaje: costoPR > 0 ? Math.round(((ventaPR / costoPR) - 1) * 10000) / 100 : 0,
-        precio_venta: Math.round(ventaPR * 100) / 100, iva_porcentaje: 21, proveedor_nombre: c.proveedor, proveedor_id: proveedorId(c.proveedor),
+        precio_venta: Math.round(ventaPR * 100) / 100, iva_porcentaje: 21, proveedor_nombre: c.proveedor, proveedor_id: proveedorId(c.proveedor), proveedor_lista: c.proveedor,
         stock_propio: false, lista_item_id: "", costo_moneda: c.moneda === "ARS" ? "ARS" : c.moneda === "USD divisa" ? "USD Divisa" : "USD",
       });
     }
@@ -312,6 +378,27 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
             className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
           />
           {(archivo || imagen) && <button onClick={() => { setArchivo(null); setImagen(null); }} className="text-xs text-zinc-500 hover:text-red-600">Quitar archivo</button>}
+          <div className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+            <p className="mb-2 text-xs font-semibold text-zinc-700 dark:text-zinc-200">Preferencias (opcional)</p>
+            <div className="grid gap-3 md:grid-cols-2">
+              {([["provs", "soloProvs", "Proveedores", catProvs, "Solo estos (centralizar la cotización)"], ["marcas", "soloMarcas", "Marcas", catMarcas, "Solo estas marcas"]] as const).map(([k, kSolo, titulo, opciones, txtSolo]) => (
+                <div key={k}>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] text-zinc-500">{titulo}</label>
+                    {prefs[k].length > 0 && <label className="flex items-center gap-1 text-[11px] text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={prefs[kSolo]} onChange={e => setPrefs(p => ({ ...p, [kSolo]: e.target.checked }))} /> {txtSolo}</label>}
+                  </div>
+                  <select value="" onChange={e => { const v = e.target.value; if (v) setPrefs(p => ({ ...p, [k]: p[k].includes(v) ? p[k] : [...p[k], v] })); }} className="mt-1 w-full rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                    <option value="">{opciones.length ? `Agregar ${titulo.toLowerCase()}…` : "Cargando…"}</option>
+                    {opciones.filter(o => !prefs[k].includes(o)).map(o => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                  {prefs[k].length > 0 && <div className="mt-1 flex flex-wrap gap-1">{prefs[k].map(v => <span key={v} className="flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-orange-800 dark:bg-orange-900/40 dark:text-orange-200">{v}<button onClick={() => setPrefs(p => ({ ...p, [k]: p[k].filter(x => x !== v) }))}><X className="h-3 w-3" /></button></span>)}</div>}
+                  {prefs[k].length > 0 && !prefs[kSolo] && <p className="mt-0.5 text-[10px] text-zinc-400">Se prefieren; si no lo tienen, busca en el resto.</p>}
+                </div>
+              ))}
+            </div>
+            <label className="mt-3 block text-[11px] text-zinc-500">Otras indicaciones para la IA</label>
+            <input value={indicaciones} onChange={e => setIndicaciones(e.target.value)} placeholder="Ej: lo más económico · calzado con puntera de composite · todo en color naranja · priorizar stock nacional" className="mt-1 w-full rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+          </div>
           {error && <p className="flex items-center gap-1 text-sm text-red-600"><AlertTriangle className="h-4 w-4" /> {error}</p>}
           {progreso && <p className="flex items-center gap-2 text-sm text-orange-600"><Loader2 className="h-4 w-4 animate-spin" /> {progreso}</p>}
         </div>}
@@ -329,34 +416,67 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
                 <tr>
                   <th className="px-2 py-2"><input type="checkbox" checked={lineas.every(l => l.incluir)} onChange={e => setLineas(ls => ls.map(l => ({ ...l, incluir: e.target.checked })))} /></th>
                   <th className="px-2">Pedido del cliente</th><th className="px-2 w-16">Cant.</th><th className="px-2">Artículo de la lista</th>
-                  <th className="px-2 text-right">Costo</th><th className="px-2 text-right">Venta ({prMoneda === "ARS" ? "$" : "US$"})</th><th className="px-2">Estado</th><th className="px-2">Buscar otro</th>
+                  <th className="px-2 text-right">Costo</th><th className="px-2 text-right">Venta ({prMoneda === "ARS" ? "$" : "US$"})</th><th className="px-2">Estado</th><th className="px-2">Cambiar</th>
                 </tr>
               </thead>
               <tbody>
                 {lineas.map((l, i) => {
                   const c = l.elegido !== null ? l.candidatos[l.elegido] : null;
                   const venta = c ? convertirAMonedaPR(c.precio_venta, c.moneda, prMoneda, tc, tcDivisas) : null;
-                  return <tr key={l.id} className={`border-t border-zinc-100 align-top dark:border-zinc-800 dark:text-zinc-200 ${i % 2 ? "bg-zinc-50 dark:bg-zinc-800/40" : ""} ${l.incluir ? "" : "opacity-40"}`}>
+                  return <Fragment key={l.id}><tr className={`border-t border-zinc-100 align-top dark:border-zinc-800 dark:text-zinc-200 ${i % 2 ? "bg-zinc-50 dark:bg-zinc-800/40" : ""} ${l.incluir ? "" : "opacity-40"}`}>
                     <td className="px-2 py-2"><input type="checkbox" checked={l.incluir} onChange={e => upd(l.id, { incluir: e.target.checked })} /></td>
                     <td className="max-w-[220px] px-2 py-2">{l.descripcion}{l.talle && <span className="ml-1 rounded bg-zinc-200 px-1 text-[10px] dark:bg-zinc-700">T {l.talle}</span>}{l.codigo && <span className="block text-[10px] text-zinc-400">cód. {l.codigo}</span>}</td>
                     <td className="px-2 py-1.5"><input type="number" min={0} step="any" value={l.cantidad} onChange={e => upd(l.id, { cantidad: Number(e.target.value) || 0 })} className="w-16 rounded border border-zinc-200 px-1 py-0.5 text-right dark:border-zinc-700 dark:bg-zinc-800" /></td>
                     <td className="px-2 py-1.5">
                       <select value={l.elegido ?? ""} onChange={e => upd(l.id, { elegido: e.target.value === "" ? null : Number(e.target.value), confianza: e.target.value === "" ? "ninguna" : "manual", nota: "" })} className="w-full max-w-[420px] rounded border border-zinc-200 px-1 py-1 dark:border-zinc-700 dark:bg-zinc-800">
                         <option value="">— Sin artículo (cargar precio a mano) —</option>
-                        {l.candidatos.map((k, j) => <option key={k.id} value={j}>{k.proveedor} · {k.codigo_interno || k.codigo} · {k.descripcion} · {fmt(k.costo, k.moneda)}</option>)}
+                        {l.candidatos.map((k, j) => { const cp = convertirAMonedaPR(k.costo, k.moneda, prMoneda, tc, tcDivisas); return <option key={k.id} value={j}>{k.proveedor} · {k.codigo_interno || k.codigo} · {k.descripcion} · {fmt(k.costo, k.moneda)}{cp !== null && (k.moneda.toUpperCase().startsWith("USD") !== (prMoneda === "USD")) ? ` (≈ ${fmt(cp, prMoneda)})` : ""}</option>; })}
                       </select>
                       {l.nota && <p className="mt-0.5 text-[10px] text-amber-700 dark:text-amber-400">{l.nota}</p>}
+                      {c && <div className={`mt-1 flex items-center gap-1 text-[10px] ${proveedorId(c.proveedor) ? "text-zinc-500" : "text-red-600"}`}>
+                        <span className="whitespace-nowrap">{proveedorId(c.proveedor) ? `“${c.proveedor}” de la lista =` : `⚠ “${c.proveedor}” no está vinculado →`}</span>
+                        <select value={proveedorId(c.proveedor)} onChange={e => vincular(c.proveedor, e.target.value)} className={`max-w-[220px] rounded border px-1 py-0.5 text-[10px] dark:bg-zinc-800 ${proveedorId(c.proveedor) ? "border-zinc-200 dark:border-zinc-700" : "border-red-200 dark:border-red-800"}`}>
+                          <option value="">Elegí el proveedor del CRM…</option>
+                          {[...(provIds.length ? provIds : (proveedoresCRM || []))].sort((a, b) => a.razon_social.localeCompare(b.razon_social, "es")).map(p => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
+                        </select>
+                      </div>}
                     </td>
                     <td className="whitespace-nowrap px-2 py-2 text-right">{c ? fmt(c.costo, c.moneda) : "—"}</td>
                     <td className="whitespace-nowrap px-2 py-2 text-right font-semibold">{venta !== null && c ? fmt(venta, prMoneda) : "—"}</td>
                     <td className="px-2 py-2"><span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-medium ${COLOR[l.confianza]}`}>{ETIQUETA[l.confianza]}</span></td>
                     <td className="px-2 py-1.5">
-                      <div className="flex items-center gap-1">
-                        <input value={l.buscar} onChange={e => upd(l.id, { buscar: e.target.value })} onKeyDown={e => { if (e.key === "Enter") void rebuscar(l.id, l.buscar); }} placeholder="palabras o código" className="w-28 rounded border border-zinc-200 px-1 py-0.5 dark:border-zinc-700 dark:bg-zinc-800" />
-                        <button onClick={() => rebuscar(l.id, l.buscar)} className="text-zinc-500 hover:text-orange-600">{l.buscando ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}</button>
-                      </div>
+                      <button onClick={() => abrirBusqueda(l)} className={`flex items-center gap-1 rounded border px-2 py-1 whitespace-nowrap ${abierto === l.id ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950/30" : "border-zinc-200 text-zinc-600 hover:border-orange-400 hover:text-orange-600 dark:border-zinc-700 dark:text-zinc-300"}`}>
+                        <Search className="h-3.5 w-3.5" /> {abierto === l.id ? "Cerrar" : "Buscar"}
+                      </button>
                     </td>
-                  </tr>;
+                  </tr>
+                  {abierto === l.id && <tr className="bg-orange-50/60 dark:bg-orange-950/20"><td colSpan={8} className="px-3 py-2">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <Search className="h-4 w-4 text-orange-500" />
+                      <input autoFocus value={busq} onChange={e => setBusq(e.target.value)} placeholder="Palabras, código o proveedor (ej: endoaural segutecnica)" className="min-w-[260px] flex-1 rounded border border-orange-300 px-2 py-1 text-xs dark:border-orange-800 dark:bg-zinc-800 dark:text-white" />
+                      {cargandoBusq && <Loader2 className="h-4 w-4 animate-spin text-orange-500" />}
+                      {[...new Set(resultados.map(r => r.proveedor))].length > 1 && <select value={filtroProv} onChange={e => setFiltroProv(e.target.value)} className="rounded border border-zinc-200 px-1 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+                        <option value="">Todos los proveedores</option>
+                        {[...new Set(resultados.map(r => r.proveedor))].sort().map(pv => <option key={pv} value={pv}>{pv}</option>)}
+                      </select>}
+                      <span className="text-[10px] text-zinc-500">{resultados.length} resultados · clic para elegir</span>
+                    </div>
+                    <div className="max-h-64 overflow-auto rounded border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
+                      {resultados.filter(r => !filtroProv || r.proveedor === filtroProv).map((r, j) => {
+                        const cp = convertirAMonedaPR(r.costo, r.moneda, prMoneda, tc, tcDivisas);
+                        const vp = convertirAMonedaPR(r.precio_venta, r.moneda, prMoneda, tc, tcDivisas);
+                        return <button key={r.id} onClick={() => elegirResultado(l.id, r)} className={`grid w-full grid-cols-[150px_110px_1fr_110px_110px] gap-2 border-b border-zinc-100 px-2 py-1.5 text-left text-xs hover:bg-orange-100 dark:border-zinc-800 dark:hover:bg-orange-900/30 ${j % 2 ? "bg-zinc-50 dark:bg-zinc-800/40" : ""}`}>
+                          <span className="truncate font-medium" title={r.proveedor}>{r.proveedor}</span>
+                          <span className="truncate text-zinc-500">{r.codigo_interno || r.codigo}</span>
+                          <span className="truncate" title={r.descripcion}>{r.descripcion}</span>
+                          <span className="text-right">{fmt(r.costo, r.moneda)}{cp !== null && r.moneda.toUpperCase().startsWith("USD") !== (prMoneda === "USD") ? <span className="block text-[10px] text-zinc-400">≈ {fmt(cp, prMoneda)}</span> : null}</span>
+                          <span className="text-right font-semibold">{vp !== null ? fmt(vp, prMoneda) : "—"}</span>
+                        </button>;
+                      })}
+                      {!cargandoBusq && busq.trim().length >= 2 && !resultados.length && <p className="p-3 text-center text-xs text-zinc-400">Sin resultados. Probá con menos palabras o con el código.</p>}
+                    </div>
+                  </td></tr>}
+                  </Fragment>;
                 })}
               </tbody>
             </table>

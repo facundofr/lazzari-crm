@@ -57,9 +57,11 @@ function NumInput({ value, onChange, className, ...props }: { value: number | st
 }
 
 /** Compact proveedor picker for PR item rows — searchable with portal dropdown */
-function ProveedorItemPicker({ value, stockPropio, options, onChange }: {
+function ProveedorItemPicker({ value, stockPropio, options, onChange, nombreLista }: {
   value: string;
   stockPropio: boolean;
+  /** Proveedor como figura en la lista de costos, cuando todavía no está vinculado con uno del CRM. */
+  nombreLista?: string;
   options: { id: string; razon_social: string }[];
   onChange: (provId: string, provNombre: string, esStockPropio: boolean) => void;
 }) {
@@ -107,9 +109,9 @@ function ProveedorItemPicker({ value, stockPropio, options, onChange }: {
           type="button"
           onClick={() => { setQ(""); setOpen(true); }}
           className="w-full text-left rounded border border-zinc-200 px-1.5 py-1 text-xs truncate dark:border-zinc-700 dark:bg-zinc-800 dark:text-white hover:border-orange-300"
-          title={label || "Sin proveedor"}
+          title={label || (nombreLista ? `En la lista figura "${nombreLista}". Elegí a qué proveedor del CRM corresponde y queda guardado.` : "Sin proveedor")}
         >
-          {label || <span className="text-zinc-400">Sin proveedor</span>}
+          {label || (nombreLista ? <span className="font-medium text-red-600">⚠ {nombreLista}</span> : <span className="text-zinc-400">Sin proveedor</span>)}
         </button>
       )}
       {open && typeof document !== "undefined" && createPortal(
@@ -296,6 +298,7 @@ interface NewPRItem {
   stock_propio: boolean;
   lista_item_id: string;
   costo_moneda: "ARS" | "USD" | "USD Divisa";
+  proveedor_lista?: string;        // proveedor como figura en la lista de costos (no se guarda en la base)
   descuento_porcentaje?: number;   // descuento del artículo (%), sobre el precio de lista
   price_rule_source?: {
     precio: number;
@@ -3512,7 +3515,7 @@ export default function PresupuestosPage() {
                   {filteredClientes.length === 0 ? (
                     <div className="px-3 py-2 text-sm text-zinc-400">Sin resultados</div>
                   ) : filteredClientes.slice(0, 20).map((c) => (
-                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; const td = tipoDocPorCondicion(c.condicion_iva); const monedaCliente = (c as any).moneda_predeterminada as string | undefined; const monOvr: Record<string,unknown> = {}; if (monedaCliente === "USD" || monedaCliente === "USD Divisa") { monOvr.moneda = "USD"; monOvr.cotizacion_modalidad = monedaCliente === "USD" ? "billetes" : "divisas"; } else if (monedaCliente === "ARS") { monOvr.moneda = "ARS"; } setNewPR((p) => { const markup = mg ?? p.markup_general; const mon = (monOvr.moneda as string) || p.moneda; return { ...p, cliente_id: c.id, markup_general: markup, ...monOvr, ...td, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number((convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio, p.tipo_cambio_divisas) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); if (monOvr.moneda === "USD") fetchCotizBna((monOvr.cotizacion_modalidad as "divisas"|"billetes") || "divisas"); }}
+                    <button key={c.id} onClick={() => { const mg = c.markup_predeterminado != null ? Number(c.markup_predeterminado) : undefined; const td = tipoDocPorCondicion(c.condicion_iva); const monedaCliente = (c as any).moneda_predeterminada as string | undefined; const monOvr: Record<string,unknown> = {}; if (monedaCliente === "USD" || monedaCliente === "USD Divisa") { monOvr.moneda = "USD"; monOvr.cotizacion_modalidad = monedaCliente === "USD" ? "billetes" : "divisas"; } else if (monedaCliente === "ARS") { monOvr.moneda = "ARS"; } setNewPR((p) => { const markup = mg ?? p.markup_general; const mon = (monOvr.moneda as string) || p.moneda; return { ...p, cliente_id: c.id, markup_general: markup, ...monOvr, ...td, items: p.items.map((it) => it.proveedor_lista ? it : ({ ...it, markup_porcentaje: markup, precio_venta: Number((convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio, p.tipo_cambio_divisas) * (1 + markup / 100)).toFixed(2)) })) }; }); setClientSearch(c.razon_social); setClientDropdownOpen(false); if (monOvr.moneda === "USD") fetchCotizBna((monOvr.cotizacion_modalidad as "divisas"|"billetes") || "divisas"); }}
                       className={`flex w-full items-center px-3 py-2 text-left text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 ${c.id === newPR.cliente_id ? "bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400" : "text-zinc-700 dark:text-zinc-300"}`}>
                       {c.razon_social}{((c as any).moneda_predeterminada === "USD" || (c as any).moneda_predeterminada === "USD Divisa") && <span className="ml-1 text-[10px] text-blue-500">{(c as any).moneda_predeterminada === "USD" ? "USD Billete" : "USD Divisa"}</span>}{c.markup_predeterminado != null && <span className="ml-auto text-xs text-zinc-400">{c.markup_predeterminado}%</span>}
                     </button>
@@ -3603,7 +3606,7 @@ export default function PresupuestosPage() {
                         setNewPR((p) => {
                           const markup = mg ?? p.markup_general;
                           const mon = monedaOverride.moneda ?? p.moneda;
-                          return { ...p, cliente_id: c.id, markup_general: markup, ...td, ...monedaOverride, items: p.items.map((it) => ({ ...it, markup_porcentaje: markup, precio_venta: Number((convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio, p.tipo_cambio_divisas) * (1 + markup / 100)).toFixed(2)) })) };
+                          return { ...p, cliente_id: c.id, markup_general: markup, ...td, ...monedaOverride, items: p.items.map((it) => it.proveedor_lista ? it : ({ ...it, markup_porcentaje: markup, precio_venta: Number((convertCosto(it.precio_costo, it.costo_moneda, mon, p.tipo_cambio, p.tipo_cambio_divisas) * (1 + markup / 100)).toFixed(2)) })) };
                         });
                         setClientSearch(c.razon_social);
                         setClientDropdownOpen(false);
@@ -4008,15 +4011,36 @@ export default function PresupuestosPage() {
                           value={item.proveedor_id || ""}
                           stockPropio={!!item.stock_propio}
                           options={proveedoresOptions}
+                          nombreLista={!item.proveedor_id && !item.stock_propio ? (item.proveedor_lista || item.proveedor_nombre || "") : ""}
                           onChange={(provId, provNombre, esStockPropio) => {
                             // Auto-detect own sociedad as stock propio
                             const ownNames = ["lazzari", "grupo la", "augusto lazzari"];
                             const isOwnSociedad = !esStockPropio && provNombre && ownNames.some(n => provNombre.toLowerCase().includes(n));
+                            // Memoria: el nombre de la lista de costos queda vinculado al proveedor del CRM elegido.
+                            const lista = (item.proveedor_lista || (!item.proveedor_id && !item.stock_propio ? item.proveedor_nombre : "") || "").trim();
+                            let recordar = false;
+                            if (lista && provId && !esStockPropio && !isOwnSociedad && provId !== item.proveedor_id) {
+                              recordar = !item.proveedor_id
+                                || window.confirm(`¿De ahora en más "${lista}" de la lista de costos es siempre ${provNombre}?\n\nAceptar = guardarlo para siempre (y cambiarlo en todas las filas de este presupuesto)\nCancelar = cambiar solo esta fila`);
+                            }
                             setNewPR((prev) => {
-                              const items = [...prev.items];
-                              items[idx] = { ...items[idx], proveedor_id: isOwnSociedad ? "" : provId, proveedor_nombre: isOwnSociedad ? "Stock propio" : provNombre, stock_propio: esStockPropio || !!isOwnSociedad };
+                              const items = prev.items.map((it, i) => {
+                                if (i === idx) return { ...it, proveedor_id: isOwnSociedad ? "" : provId, proveedor_nombre: isOwnSociedad ? "Stock propio" : provNombre, stock_propio: esStockPropio || !!isOwnSociedad, proveedor_lista: lista || it.proveedor_lista };
+                                const suLista = (it.proveedor_lista || (!it.proveedor_id && !it.stock_propio ? it.proveedor_nombre : "") || "").trim();
+                                if (recordar && suLista === lista && !it.stock_propio) return { ...it, proveedor_id: provId, proveedor_nombre: provNombre, proveedor_lista: lista };
+                                return it;
+                              });
                               return { ...prev, items };
                             });
+                            if (recordar && sociedadActiva?.id) {
+                              void (async () => {
+                                const db = supabase as any;
+                                const { error } = await db.from("catalogo_proveedores").upsert({ sociedad_id: sociedadActiva.id, proveedor_lista: lista, proveedor_id: provId }, { onConflict: "sociedad_id,proveedor_lista" });
+                                if (error) { toast.error(`No se pudo guardar el vínculo: ${error.message}`); return; }
+                                await db.from("proveedores").update({ nombre_fantasia: lista }).eq("id", provId).is("nombre_fantasia", null);
+                                toast.success(`Guardado: "${lista}" de la lista = ${provNombre}`);
+                              })();
+                            }
                             if (isOwnSociedad) toast.info("Proveedor propio detectado → marcado como stock propio");
                           }}
                         />

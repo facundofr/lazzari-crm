@@ -39,7 +39,8 @@ Elegí el candidato que sea EL MISMO artículo. Reglas:
 - Respetá marca y modelo cuando el pedido los nombra (3M H700 ≠ Libus; H520 ≠ H540; Tychem 2000 ≠ Tyvek).
 - Atributos que cambian el artículo: reflectivo, con/sin válvula, carbón activado, claro/oscuro, para químicos/polvo, material (vaqueta, nitrilo, PU), dieléctrico, ignífugo.
 - El talle NO cambia el artículo si el candidato no indica talle; si los candidatos vienen por talle, elegí el talle pedido.
-- Si hay varios iguales de distintos proveedores, elegí el de menor costo comparable.
+- Si vienen PREFERENCIAS DEL VENDEDOR (proveedores, marcas, indicaciones), respetalas primero.
+- Si no hay preferencia que decida, y el MISMO artículo lo tienen varios proveedores, elegí el de menor "comparable" (costo ya pasado a la moneda del presupuesto). Nunca compares costos en monedas distintas. En "nota" poné el proveedor alternativo y su comparable (ej "también Segufer US$ 9,08").
 - "confianza": "alta" (mismo artículo seguro), "media" (muy probable, falta confirmar un detalle), "baja" (parecido, alternativa), "ninguna" (ningún candidato sirve → indice null).
 - "nota": corta, solo si hay algo que el vendedor deba revisar (ej "no se encontró con reflectivo", "alternativa de otra marca").
 Respondé SOLO JSON: {"elecciones":[{"id":"","indice":0,"confianza":"alta","nota":""}]}`;
@@ -70,9 +71,15 @@ export async function POST(request: NextRequest) {
       const resultados = await Promise.all(tandas.map(async t => {
         const texto = t.map(p => [
           `### id=${p.id} | PEDIDO: ${p.descripcion}${p.talle ? ` | talle ${p.talle}` : ""}${p.codigo ? ` | código ${p.codigo}` : ""}`,
-          ...p.candidatos.map((c: any, i: number) => `${i}. [${c.proveedor}] ${c.codigo || ""} | ${c.descripcion}${c.marca ? ` | marca ${c.marca}` : ""} | ${c.moneda} ${c.costo}`),
+          ...p.candidatos.map((c: any, i: number) => `${i}. [${c.proveedor}] ${c.codigo || ""} | ${c.descripcion}${c.marca ? ` | marca ${c.marca}` : ""} | costo ${c.moneda} ${c.costo}${c.costo_comparable != null ? ` | comparable ${body.moneda_comparable || ""} ${c.costo_comparable}` : ""}`),
         ].join("\n")).join("\n\n");
-        try { const out = await ask(client, SYS_ELEGIR, [{ type: "text", text: texto }]); return Array.isArray(out.elecciones) ? out.elecciones : []; }
+        const pr = body.preferencias || {};
+        const pref = [
+          pr.proveedores?.length ? `Proveedores ${pr.solo_proveedores ? "OBLIGATORIOS (centralizar la cotización: solo estos)" : "PREFERIDOS (si tienen el mismo artículo o uno equivalente aceptable, elegilos aunque sean algo más caros)"}: ${pr.proveedores.join(", ")}` : "",
+          pr.marcas?.length ? `Marcas ${pr.solo_marcas ? "OBLIGATORIAS" : "PREFERIDAS"}: ${pr.marcas.join(", ")}` : "",
+          pr.indicaciones ? `Indicaciones del vendedor (tienen prioridad sobre el menor costo): ${String(pr.indicaciones).slice(0, 1000)}` : "",
+        ].filter(Boolean).join("\n");
+        try { const out = await ask(client, SYS_ELEGIR, [{ type: "text", text: (pref ? `PREFERENCIAS DEL VENDEDOR:\n${pref}\n\n` : "") + texto }]); return Array.isArray(out.elecciones) ? out.elecciones : []; }
         catch { return []; }
       }));
       return Response.json({ elecciones: resultados.flat() });

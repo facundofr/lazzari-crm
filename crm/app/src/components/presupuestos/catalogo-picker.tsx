@@ -39,6 +39,8 @@ export interface CatalogoItemParaPR {
   stock_propio: boolean;
   lista_item_id: string;
   costo_moneda: "ARS" | "USD" | "USD Divisa";
+  /** Nombre del proveedor tal como figura en la lista de costos (para vincularlo con el del CRM). */
+  proveedor_lista?: string;
 }
 
 interface Props {
@@ -167,6 +169,13 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
     })();
   }, [open, proveedores.length]);
 
+  // Los vínculos se releen cada vez que se abre (pueden haberse cambiado desde el presupuesto).
+  useEffect(() => {
+    if (!open || !sociedadId) return;
+    db.from("catalogo_proveedores").select("proveedor_lista, proveedor_id").eq("sociedad_id", sociedadId)
+      .then(({ data: vs }: any) => setVinculos(Object.fromEntries((vs || []).map((v: any) => [v.proveedor_lista, v.proveedor_id]))));
+  }, [open, sociedadId]);
+
   // Búsqueda: todas las palabras tienen que aparecer (en código, descripción o proveedor)
   useEffect(() => {
     if (!open) return;
@@ -268,6 +277,7 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
         iva_porcentaje: 21,
         proveedor_nombre: row.proveedor,
         proveedor_id: proveedorId(row.proveedor),
+        proveedor_lista: row.proveedor,
         stock_propio: false,
         lista_item_id: "",
         costo_moneda: row.moneda === "ARS" ? "ARS" : row.moneda === "USD divisa" ? "USD Divisa" : "USD",
