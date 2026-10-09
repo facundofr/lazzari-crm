@@ -1367,6 +1367,13 @@ export default function FinanzasPage() {
               if (!p.anulado && p.nota_credito_compra_id) acc[p.factura_compra_id] = (acc[p.factura_compra_id] || 0) + Number(p.monto || 0);
               return acc;
             }, {});
+            // Crédito disponible de cada NC (total − aplicaciones vigentes): resta del saldo del proveedor.
+            const ncIdsCC = fcData.filter((r: any) => String(r.tipo_comprobante || "").toUpperCase().startsWith("NC") && r.estado !== "anulada").map((r: any) => r.id);
+            const aplicadoPorNC: Record<string, number> = {};
+            if (ncIdsCC.length > 0) {
+              const { data: ncMovs } = await (supabase as any).from("movimientos").select("nota_credito_compra_id, monto, anulado").in("nota_credito_compra_id", ncIdsCC);
+              (ncMovs || []).forEach((m: any) => { if (!m.anulado) aplicadoPorNC[m.nota_credito_compra_id] = (aplicadoPorNC[m.nota_credito_compra_id] || 0) + Number(m.monto || 0); });
+            }
             const facturasCompraMapeadas: FacturaCompraRow[] = fcData.map((r: any) => ({
               id: r.id, numero_factura: r.numero_factura,
               proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? "—",
@@ -1419,6 +1426,13 @@ export default function FinanzasPage() {
                 acc[factura.proveedor_id][factura.moneda] += saldo;
                 return acc;
               }, {});
+            for (const nc of facturasCompraMapeadas) {
+              if (nc.estado === "anulada" || !String(nc.tipo_comprobante || "").toUpperCase().startsWith("NC")) continue;
+              const disponible = Math.max(0, Number(nc.total || 0) - (aplicadoPorNC[nc.id] || 0));
+              if (disponible <= 0.005) continue;
+              saldosProveedor[nc.proveedor_id] ||= { ARS: 0, USD: 0 };
+              saldosProveedor[nc.proveedor_id][nc.moneda] -= disponible;
+            }
             setCcProveedores((prev) => prev.map((proveedor) => ({
               ...proveedor,
               saldo_cuenta_corriente: saldosProveedor[proveedor.id]?.ARS || 0,
@@ -1886,6 +1900,14 @@ export default function FinanzasPage() {
     })();
     return () => { cancelled = true; };
   }, [opForm.proveedor_id, opForm.fecha, opModalOpen, sociedadActiva?.id]);
+
+  // La moneda de la OP sigue a las facturas elegidas (si son todas USD, la OP se muestra en US$).
+  useEffect(() => {
+    const sel = opFCPendientes.filter(f => f.selected);
+    if (!sel.length || opForm.usar_monto_manual) return;
+    const monedas = [...new Set(sel.map(f => f.moneda))];
+    if (monedas.length === 1 && monedas[0] !== opForm.moneda) setOpForm(prev => ({ ...prev, moneda: monedas[0] as typeof prev.moneda }));
+  }, [opFCPendientes, opForm.usar_monto_manual, opForm.moneda]);
 
   // 2. Base sin IVA de esta OP (Art. 23 RG 830: IVA se excluye de la base de retención)
   const opMontoBrutoFC = sumPaymentMoney(opFCPendientes.filter(f => f.selected).map(f => f.monto_a_pagar));
@@ -3233,7 +3255,23 @@ export default function FinanzasPage() {
         const { data: directPayments } = await qDirectPay;
         if (directPayments) (directPayments as any[]).filter((p: any) => !p.anulado).forEach((p: any) => { pagadoMap[p.factura_compra_id] = (pagadoMap[p.factura_compra_id] || 0) + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0); });
       }
-      if (fcData) setCcDetailFCProv(fcData.map((f: any) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento, total: Number(f.total), pagado: pagadoMap[f.id] || 0, estado: f.estado, moneda: f.moneda ?? "ARS" })));
+      // NC con crédito disponible: se muestran como renglón negativo (a nuestro favor)
+      let ncRows: any[] = [];
+      try {
+        let qNC = (supabase as any).from("facturas_compra").select("id, numero_factura, tipo_comprobante, fecha, total, moneda").eq("proveedor_id", prov.id).neq("estado", "anulada").ilike("tipo_comprobante", "NC%");
+        if (sociedadActiva?.id) qNC = qNC.eq("sociedad_id", sociedadActiva.id);
+        const { data: ncData } = await qNC;
+        const ids = (ncData || []).map((n: any) => n.id);
+        const aplicado: Record<string, number> = {};
+        if (ids.length) {
+          const { data: ncMovs } = await (supabase as any).from("movimientos").select("nota_credito_compra_id, monto, anulado").in("nota_credito_compra_id", ids);
+          (ncMovs || []).forEach((m: any) => { if (!m.anulado) aplicado[m.nota_credito_compra_id] = (aplicado[m.nota_credito_compra_id] || 0) + Number(m.monto || 0); });
+        }
+        ncRows = (ncData || []).map((n: any) => ({ n, disp: Math.max(0, Number(n.total || 0) - (aplicado[n.id] || 0)) }))
+          .filter((x: any) => x.disp > 0.005)
+          .map(({ n, disp }: any) => ({ id: n.id, numero_factura: `${n.tipo_comprobante || "NC"} ${n.numero_factura || ""} · crédito disponible`, fecha: n.fecha, fecha_vencimiento: null, total: -disp, pagado: 0, estado: "recibida", moneda: n.moneda ?? "ARS" }));
+      } catch { ncRows = []; }
+      if (fcData) setCcDetailFCProv([...ncRows, ...fcData.map((f: any) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento, total: Number(f.total), pagado: pagadoMap[f.id] || 0, estado: f.estado, moneda: f.moneda ?? "ARS" }))]);
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, factura_compra_id, retencion_ganancias_monto, conciliado, anulado, monto_original, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("proveedor_id" as any, prov.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData } = await qM;
@@ -5925,12 +5963,13 @@ export default function FinanzasPage() {
                               <td className="p-2 text-right font-mono text-xs font-medium dark:text-white">{formatCurrency(fc.saldo_pendiente, fc.moneda as "ARS"|"USD")}</td>
                               <td className="p-2 text-right">
                                 {fc.selected ? (
+                                  <span className="inline-flex items-center gap-1"><span className="text-[10px] font-semibold text-zinc-500">{fc.moneda === "USD" ? "US$" : "$"}</span>
                                   <input type="number" value={fc.monto_a_pagar || ""}
                                     onChange={(e) => {
                                       const val = Math.min(Number(e.target.value), fc.saldo_pendiente);
                                       setOpFCPendientes(prev => prev.map(f => f.id === fc.id ? { ...f, monto_a_pagar: val } : f));
                                     }}
-                                    className="w-28 text-right rounded border border-zinc-200 px-2 py-1 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                                    className="w-28 text-right rounded border border-zinc-200 px-2 py-1 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" /></span>
                                 ) : <span className="text-xs text-zinc-300">—</span>}
                               </td>
                             </tr>

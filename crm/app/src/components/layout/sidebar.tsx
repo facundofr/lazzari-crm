@@ -25,6 +25,7 @@ import {
   ArrowRightLeft,
   Calendar,
   Shirt,
+  Zap,
 } from "lucide-react";
 import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -216,12 +217,13 @@ export function Sidebar() {
         {/* Versión publicada: permite comprobar visualmente qué release está cargado */}
         <div
           className={cn(
-            "mt-1 px-3 text-[10px] font-medium tracking-wide text-zinc-400 dark:text-zinc-500",
-            collapsed && !mobileSidebarOpen ? "text-center" : "text-right"
+            "mt-1 px-3 flex items-center gap-1 text-[10px] font-bold tracking-wide text-red-600 dark:text-red-500",
+            collapsed && !mobileSidebarOpen ? "justify-center" : "justify-end"
           )}
           title={`Versión publicada ${APP_VERSION_LABEL}`}
           data-testid="app-version"
         >
+          <Zap className="h-3 w-3 fill-yellow-400 text-yellow-500" aria-hidden />
           {collapsed && !mobileSidebarOpen ? APP_VERSION_LABEL.replace("1.1.", "") : APP_VERSION_LABEL}
         </div>
 
