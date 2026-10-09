@@ -14,7 +14,7 @@ function setup(estado, response = { data: { id: 'fc-one' }, error: null }) {
 }
 (async () => {
   for (const estado of ['pagada', 'aprobada', 'recibida', 'anulada', 'desconocido']) { const {ctx,state} = setup(estado); ctx.startEditFC(ctx.selectedFC); await ctx.handleSaveFC(); assert.equal(state.opened,false); assert.equal(state.writes,0); }
-  for (const estado of ['pendiente','borrador']) { const {ctx,state} = setup(estado); ctx.startEditFC(ctx.selectedFC); await ctx.handleSaveFC(); assert.equal(state.opened,true); assert.equal(state.closed,true); assert.ok(state.filters.some(([k,v]) => k==='estado' && v===estado)); assert.ok(state.filters.some(([k,v]) => k==='sociedad_id' && v==='soc-one')); }
+  for (const estado of ['pendiente','pendiente_aprobacion']) { const {ctx,state} = setup(estado); ctx.startEditFC(ctx.selectedFC); await ctx.handleSaveFC(); assert.equal(state.opened,true); assert.equal(state.closed,true); assert.ok(state.filters.some(([k,v]) => k==='estado' && v===estado)); assert.ok(state.filters.some(([k,v]) => k==='sociedad_id' && v==='soc-one')); }
   const {ctx,state} = setup('pendiente',{data:null,error:null}); await ctx.handleSaveFC(); assert.equal(state.closed,false); assert.match(state.alerts[0], /cambió de estado/);
   assert.notEqual(Math.round(100 * 100), Math.round(100.50 * 100));
   console.log('OK: edición FC aprobada/pagada bloqueada, comparación de estado al guardar y saldo de centavos; simulados sin red.');

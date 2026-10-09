@@ -67,6 +67,8 @@ const estadoLabelMap: Record<string, string> = {
   vencido: "Vencidos",
 };
 
+const DASHBOARD_ALERT_LIMIT = 5;
+
 function calcChange(current: number, previous: number): number | undefined {
   if (!previous || previous === 0) return undefined;
   return Math.round(((current - previous) / previous) * 100);
@@ -83,10 +85,12 @@ export default function DashboardPage() {
   const { profile, sociedadActiva } = useUser();
   const [loading, setLoading] = useState(true);
   const [kpi, setKpi] = useState({ ventasMes: 0, ventasMesAnterior: 0, presupuestosActivos: 0, presupuestosPendientes: 0, tasaConversion: 0, tasaConversionAnterior: 0, cobranzasMes: 0, cobranzasPendientes: 0, clientesActivos: 0, stockBajo: 0, facturadoMes: 0, margenPromedio: 0, alertasSinLeer: 0 });
+  const [facturadoMonedas, setFacturadoMonedas] = useState({ ARS: 0, USD: 0, anteriorARS: 0 });
   const [presupuestosPorEstado, setPresupuestosPorEstado] = useState<{ estado: string; cantidad: number; color: string }[]>([]);
   const [ventasPorMes, setVentasPorMes] = useState<{ mes: string; monto: number }[]>([]);
   const [presupuestos, setPresupuestos] = useState<typeof mockPresupuestos>([]);
   const [alerts, setAlerts] = useState<typeof mockAlerts>([]);
+  const [showAllAlerts, setShowAllAlerts] = useState(false);
   const [topClientes, setTopClientes] = useState<typeof mockTopClientes>([]);
   const [activity, setActivity] = useState<typeof mockActivity>([]);
   const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>([]);
@@ -103,9 +107,11 @@ export default function DashboardPage() {
       setTopClientes([]);
       setPresupuestos([]);
       setAlerts([]);
+      setShowAllAlerts(false);
       setActivity([]);
       setGastosFijos([]);
       setObjetivos([]);
+      setFacturadoMonedas({ ARS: 0, USD: 0, anteriorARS: 0 });
       try {
         // Build queries with optional sociedad filter
         let qPresupuestosEstado = supabase.from("presupuestos").select("estado").neq("eliminado" as any, true);
@@ -119,9 +125,9 @@ export default function DashboardPage() {
           .from("facturas")
           .select("cliente_id, clientes(razon_social), total")
           .neq("estado", "anulada");
-        let qFacturasMensuales = supabase
+        let qFacturasMensuales = (supabase as any)
           .from("facturas")
-          .select("fecha, total")
+          .select("fecha, total, moneda, tipo")
           .neq("estado", "anulada");
 
         qPresupuestosEstado = qPresupuestosEstado.eq("sociedad_id" as any, sociedadActiva!.id);
@@ -222,10 +228,12 @@ export default function DashboardPage() {
         if (!facturasResult.error && facturasResult.data?.length) {
           const monthNames = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
           const byMonth: Record<string, number> = {};
-          facturasResult.data.forEach((f: { fecha: string; total: number }) => {
-            const d = new Date(f.fecha);
-            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-            byMonth[key] = (byMonth[key] || 0) + Number(f.total);
+          const ncTipos = new Set(["NCA", "NCB", "NCEA", "NCEB"]);
+          const signedTotal = (f: { total: number; tipo?: string | null }) => Number(f.total || 0) * (ncTipos.has(String(f.tipo || "").toUpperCase()) ? -1 : 1);
+          facturasResult.data.forEach((f: { fecha: string; total: number; moneda?: string | null; tipo?: string | null }) => {
+            const key = String(f.fecha || "").slice(0, 7);
+            if (!key || (f.moneda || "ARS") !== "ARS") return;
+            byMonth[key] = (byMonth[key] || 0) + signedTotal(f);
           });
           const sorted = Object.entries(byMonth)
             .sort(([a], [b]) => a.localeCompare(b))
@@ -235,8 +243,24 @@ export default function DashboardPage() {
               monto,
             }));
           setVentasPorMes(sorted);
+
+          const currentMonth = todayAR().slice(0, 7);
+          const [year, month] = currentMonth.split("-").map(Number);
+          const previousMonth = new Date(year, month - 2, 1).toISOString().slice(0, 7);
+          const totals = facturasResult.data.reduce((acc: { ARS: number; USD: number; anteriorARS: number }, f: { fecha: string; total: number; moneda?: string | null; tipo?: string | null }) => {
+            const key = String(f.fecha || "").slice(0, 7);
+            const currency = (f.moneda || "ARS") === "USD" ? "USD" : "ARS";
+            const amount = signedTotal(f);
+            if (key === currentMonth) acc[currency] += amount;
+            if (key === previousMonth && currency === "ARS") acc.anteriorARS += amount;
+            return acc;
+          }, { ARS: 0, USD: 0, anteriorARS: 0 });
+          setFacturadoMonedas(totals);
+          setKpi((current) => ({ ...current, facturadoMes: totals.ARS }));
         } else if (!facturasResult.error) {
           setVentasPorMes([]);
+          setFacturadoMonedas({ ARS: 0, USD: 0, anteriorARS: 0 });
+          setKpi((current) => ({ ...current, facturadoMes: 0 }));
         }
 
         // --- Ultimos presupuestos ---
@@ -337,7 +361,7 @@ export default function DashboardPage() {
     );
   }
 
-  const facturadoChange = calcChange(kpi.facturadoMes, kpi.ventasMesAnterior);
+  const facturadoChange = calcChange(facturadoMonedas.ARS, facturadoMonedas.anteriorARS);
   const conversionChange = calcChange(kpi.tasaConversion, kpi.tasaConversionAnterior);
 
   const firstName = profile?.full_name?.split(" ")[0] || "Usuario";
@@ -356,6 +380,8 @@ export default function DashboardPage() {
     o.activo && o.periodoInicio <= today && o.periodoFin >= today &&
     (isAdmin || !o.usuarioId || o.usuarioId === profile?.id)
   );
+  const visibleAlerts = showAllAlerts ? alerts : alerts.slice(0, DASHBOARD_ALERT_LIMIT);
+  const hiddenAlertsCount = Math.max(alerts.length - DASHBOARD_ALERT_LIMIT, 0);
 
   return (
     <>
@@ -393,7 +419,7 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             title="Facturado este mes"
-            value={formatCurrency(kpi.facturadoMes)}
+            value={`${formatCurrency(facturadoMonedas.ARS)} / ${formatCurrency(facturadoMonedas.USD, "USD")}`}
             change={facturadoChange}
             changeLabel="vs. mes anterior"
             icon={DollarSign}
@@ -487,7 +513,8 @@ export default function DashboardPage() {
                 <div className="px-6 pb-5 space-y-4">
                   {objetivosActivos.map((obj) => {
                     // Para vendedores: calcular progreso como % del facturado vs target
-                    const progreso = obj.montoTarget > 0 ? Math.min(Math.round((facturadoMes / obj.montoTarget) * 100), 999) : 0;
+                    const facturadoObjetivo = obj.moneda === "USD" ? facturadoMonedas.USD : facturadoMes;
+                    const progreso = obj.montoTarget > 0 ? Math.min(Math.round((facturadoObjetivo / obj.montoTarget) * 100), 999) : 0;
                     return (
                       <div key={obj.id} className="space-y-1.5">
                         <div className="flex items-center justify-between">
@@ -509,7 +536,7 @@ export default function DashboardPage() {
                         </div>
                         {isAdmin && (
                           <p className="text-[10px] text-zinc-500">
-                            {formatCurrency(facturadoMes, obj.moneda)} / {formatCurrency(obj.montoTarget, obj.moneda)}
+                            {formatCurrency(facturadoObjetivo, obj.moneda)} / {formatCurrency(obj.montoTarget, obj.moneda)}
                           </p>
                         )}
                       </div>
@@ -526,10 +553,10 @@ export default function DashboardPage() {
           <Card className="lg:col-span-2">
             <CardHeader>
               <CardTitle>Facturacion mensual</CardTitle>
-              <span className="text-xs text-zinc-400">Ultimos 6 meses</span>
+              <span className="text-xs text-zinc-400">Últimos 6 meses · ARS neto de NC</span>
             </CardHeader>
             <div className="h-56 px-2">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                 <BarChart data={ventasPorMes} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
                   <XAxis dataKey="mes" tick={{ fontSize: 12, fill: "#a1a1aa" }} />
@@ -547,7 +574,7 @@ export default function DashboardPage() {
               <CardTitle>Presupuestos por estado</CardTitle>
             </CardHeader>
             <div className="h-48">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                 <PieChart>
                   <Pie
                     data={presupuestosPorEstado}
@@ -607,13 +634,13 @@ export default function DashboardPage() {
           </Card>
 
           {/* Alertas */}
-          <Card>
+          <Card className="self-start">
             <CardHeader>
               <CardTitle>Alertas</CardTitle>
               <Badge variant="danger">{alerts.filter((a) => !a.read).length} nuevas</Badge>
             </CardHeader>
-            <div className="space-y-3">
-              {alerts.map((alert) => {
+            <div className="max-h-[30rem] space-y-3 overflow-y-auto pr-1">
+              {visibleAlerts.map((alert) => {
                 const Icon = alertIcons[alert.type] || AlertTriangle;
                 const moduleLink = alert.module === "presupuestos" ? "/presupuestos" : alert.module === "stock" ? "/stock" : `/${alert.module}`;
                 return (
@@ -632,7 +659,20 @@ export default function DashboardPage() {
                   </Link>
                 );
               })}
+              {alerts.length === 0 && (
+                <p className="py-6 text-center text-sm text-zinc-500">No hay alertas nuevas.</p>
+              )}
             </div>
+            {hiddenAlertsCount > 0 && (
+              <button
+                type="button"
+                aria-expanded={showAllAlerts}
+                onClick={() => setShowAllAlerts((current) => !current)}
+                className="mt-4 w-full border-t border-zinc-100 pt-3 text-center text-xs font-medium text-orange-500 transition-colors hover:text-orange-600 dark:border-zinc-800"
+              >
+                {showAllAlerts ? "Mostrar menos" : `Ver ${hiddenAlertsCount} alertas más`}
+              </button>
+            )}
           </Card>
         </div>
 

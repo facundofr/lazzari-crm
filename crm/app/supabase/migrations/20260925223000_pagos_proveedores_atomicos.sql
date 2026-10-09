@@ -48,7 +48,11 @@ grant select on public.pago_solicitudes, public.saldos_favor_proveedor to authen
 drop policy if exists pago_solicitudes_read on public.pago_solicitudes;
 create policy pago_solicitudes_read on public.pago_solicitudes
   for select to authenticated using (
-    exists (
+    not exists (
+      select 1 from public.user_sociedades us
+      where us.user_id = auth.uid()
+    )
+    or exists (
       select 1 from public.user_sociedades us
       where us.user_id = auth.uid()
         and us.sociedad_id = pago_solicitudes.sociedad_id
@@ -58,7 +62,11 @@ create policy pago_solicitudes_read on public.pago_solicitudes
 drop policy if exists saldos_favor_proveedor_read on public.saldos_favor_proveedor;
 create policy saldos_favor_proveedor_read on public.saldos_favor_proveedor
   for select to authenticated using (
-    exists (
+    not exists (
+      select 1 from public.user_sociedades us
+      where us.user_id = auth.uid()
+    )
+    or exists (
       select 1 from public.user_sociedades us
       where us.user_id = auth.uid()
         and us.sociedad_id = saldos_favor_proveedor.sociedad_id
@@ -117,10 +125,16 @@ begin
       where p.id = auth.uid()
         and p.role in ('super_admin', 'admin', 'administrativo')
     )
-    or not exists (
-      select 1 from public.user_sociedades us
-      where us.user_id = auth.uid()
-        and us.sociedad_id = p_sociedad_id
+    or (
+      exists (
+        select 1 from public.user_sociedades us
+        where us.user_id = auth.uid()
+      )
+      and not exists (
+        select 1 from public.user_sociedades us
+        where us.user_id = auth.uid()
+          and us.sociedad_id = p_sociedad_id
+      )
     ) then
     raise exception 'No tenes permiso para pagar en esta sociedad';
   end if;
@@ -343,7 +357,7 @@ begin
       v_op_numero, p_fecha, p_proveedor_id, p_monto_bruto,
       coalesce(p_base_retencion, 0), 0, 0, coalesce(p_retencion_pct, 0),
       coalesce(p_retencion_monto, 0), v_total_medios, 'ARS',
-      p_medios->0->>'tipo', p_medios::text, nullif(trim(p_notas), ''),
+      p_medios->0->>'tipo', p_medios, nullif(trim(p_notas), ''),
       'pagada', coalesce(p_sobre_verde, false), v_saldo_favor,
       p_sociedad_id, auth.uid()
     ) returning id into v_op_id;
@@ -434,7 +448,8 @@ begin
           fecha_emision, fecha_pago, estado, destino_tipo, destino_id,
           destino_nombre, sociedad_id, user_id
         ) values (
-          'fisico', 'emitido', v_numero_cheque,
+          case when coalesce(v_medio->>'tipo_cheque', '') = 'echeq' then 'echeq' else 'fisico' end,
+          'emitido', v_numero_cheque,
           nullif(trim(v_medio->>'banco'), ''), (v_medio->>'monto')::numeric,
           'ARS', nullif(v_medio->>'fecha_emision', '')::date,
           coalesce(nullif(v_medio->>'fecha_cobro', '')::date, p_fecha),

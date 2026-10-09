@@ -1,5 +1,24 @@
 export type PurchaseCurrency = "ARS" | "USD";
 
+export const OWN_STOCK_PROVIDER_LABEL = "Stock propio";
+
+export function isOwnStockPurchaseOrder(order: {
+  proveedor_id?: string | null;
+  observaciones?: string | null;
+}) {
+  if (order.proveedor_id) return false;
+  return /^stock propio(?:\s|—|-|$)/i.test(String(order.observaciones || "").trim());
+}
+
+export function purchaseOrderProviderLabel(order: {
+  proveedor_id?: string | null;
+  observaciones?: string | null;
+  proveedores?: { razon_social?: string | null } | null;
+}) {
+  return order.proveedores?.razon_social
+    || (isOwnStockPurchaseOrder(order) ? OWN_STOCK_PROVIDER_LABEL : "Sin proveedor");
+}
+
 export function normalizePurchaseCurrency(value: unknown): PurchaseCurrency {
   return String(value || "ARS").trim().toUpperCase().startsWith("USD") ? "USD" : "ARS";
 }

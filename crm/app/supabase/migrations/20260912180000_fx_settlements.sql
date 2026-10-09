@@ -39,7 +39,8 @@ revoke all on public.liquidaciones_fx, public.aplicaciones_fx from anon, authent
 grant select on public.liquidaciones_fx, public.aplicaciones_fx to authenticated;
 drop policy if exists fx_read on public.liquidaciones_fx;
 create policy fx_read on public.liquidaciones_fx for select to authenticated using (
- exists(select 1 from public.user_sociedades us where us.user_id=auth.uid() and us.sociedad_id=liquidaciones_fx.sociedad_id)
+ not exists(select 1 from public.user_sociedades us where us.user_id=auth.uid())
+ or exists(select 1 from public.user_sociedades us where us.user_id=auth.uid() and us.sociedad_id=liquidaciones_fx.sociedad_id)
 );
 drop policy if exists fx_app_read on public.aplicaciones_fx;
 create policy fx_app_read on public.aplicaciones_fx for select to authenticated using (
@@ -87,7 +88,10 @@ declare
  v_today date:=(now() at time zone 'America/Argentina/Buenos_Aires')::date;
 begin
  if auth.uid() is null or not exists(select 1 from profiles where id=auth.uid() and role in ('super_admin','admin','administrativo'))
-  or not exists(select 1 from user_sociedades where user_id=auth.uid() and sociedad_id=p_sociedad_id) then
+  or (
+   exists(select 1 from user_sociedades where user_id=auth.uid())
+   and not exists(select 1 from user_sociedades where user_id=auth.uid() and sociedad_id=p_sociedad_id)
+  ) then
   raise exception 'No tenés permiso para operar esta sociedad';
  end if;
  if p_request_key is null or p_counterparty_id is null or p_kind is null or p_kind not in ('cobro','pago')
@@ -150,7 +154,7 @@ begin
  if p_kind='pago' then
   v_num:='OP-FX-'||v_id::text;
   insert into ordenes_pago(numero,fecha,proveedor_id,monto_bruto,base_retencion_ganancias,retencion_ganancias_monto,neto_a_pagar,moneda,medio_pago,medios_pago,estado,sociedad_id,created_by,notas)
-  values(v_num,p_fecha,p_counterparty_id,v_bruto,v_base,v_gan,v_neto,'ARS',p_medios->0->>'tipo',p_medios::text,'pagada',p_sociedad_id,auth.uid(),'Liquidación USD/ARS. Retenciones ingresadas según certificados. TC '||p_cotizacion||' del '||p_cotizacion_fecha)
+  values(v_num,p_fecha,p_counterparty_id,v_bruto,v_base,v_gan,v_neto,'ARS',p_medios->0->>'tipo',p_medios,'pagada',p_sociedad_id,auth.uid(),'Liquidación USD/ARS. Retenciones ingresadas según certificados. TC '||p_cotizacion||' del '||p_cotizacion_fecha)
   returning id into v_op;
   update liquidaciones_fx set orden_pago_id=v_op where id=v_id;
   insert into op_facturas_compra(orden_pago_id,factura_compra_id,monto)
@@ -206,7 +210,10 @@ language plpgsql security definer set search_path=public as $$
 declare l liquidaciones_fx%rowtype; a aplicaciones_fx%rowtype; v_paid numeric;
 begin
  if auth.uid() is null or not exists(select 1 from profiles where id=auth.uid() and role in ('super_admin','admin','administrativo'))
-  or not exists(select 1 from user_sociedades where user_id=auth.uid() and sociedad_id=p_sociedad_id) then raise exception 'Sin permiso para esta sociedad'; end if;
+  or (
+   exists(select 1 from user_sociedades where user_id=auth.uid())
+   and not exists(select 1 from user_sociedades where user_id=auth.uid() and sociedad_id=p_sociedad_id)
+  ) then raise exception 'Sin permiso para esta sociedad'; end if;
  select * into l from liquidaciones_fx where id=p_id and sociedad_id=p_sociedad_id;
  if not found then raise exception 'Liquidación inexistente'; end if;
  perform pg_advisory_xact_lock(hashtextextended(p_sociedad_id::text||l.counterparty_id::text,0));

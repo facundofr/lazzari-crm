@@ -3,7 +3,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { X, Loader2, Sparkles, Check, Search, Plus, Trash2, Maximize2, Minimize2, AlertTriangle } from "lucide-react";
 import { formatCurrency, todayAR } from "@/lib/utils";
-import { reconcilePurchaseLines, purchaseLineKey, canonicalPurchaseInvoiceNumber, assertCompleteInvoiceOrderSelection, canMarkPurchaseOrdersPaid, type PurchaseLine } from "@/lib/purchase-invoice-reconciliation";
+import { reconcilePurchaseLines, inspectPurchaseLineMatch, purchaseLineKey, canonicalPurchaseInvoiceNumber, assertCompleteInvoiceOrderSelection, canMarkPurchaseOrdersPaid, markupForFixedSalePrice, type PurchaseLine } from "@/lib/purchase-invoice-reconciliation";
 import { supabase } from "@/lib/supabase/client";
 
 // ── Types ────────────────────────────────────────────────
@@ -43,6 +43,12 @@ interface FCItem {
   descuento_porcentaje: number;
   iva_porcentaje: number;
   unidad: string;
+}
+
+interface OCItemForMatch extends PurchaseLine {
+  id: string;
+  orden_id: string;
+  ocNumero: string;
 }
 
 const emptyNuevoProveedor = {
@@ -111,6 +117,11 @@ export default function CargarFacturaOC({
   // ── OC selection ──
   const [selectedOCIds, setSelectedOCIds] = useState<Set<string>>(new Set(preselectedOCId ? [preselectedOCId] : []));
   const [ocSearch, setOcSearch] = useState("");
+  const [selectedOCItems, setSelectedOCItems] = useState<OCItemForMatch[]>([]);
+  const [ocItemsLoading, setOCItemsLoading] = useState(false);
+  const [ocItemsError, setOCItemsError] = useState("");
+  const [manualItemMatches, setManualItemMatches] = useState<Record<string, string>>({});
+  const [createExtrasOC, setCreateExtrasOC] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [pagadaSinOP, setPagadaSinOP] = useState(false);
   const [cuitLoading, setCuitLoading] = useState(false);
@@ -271,15 +282,81 @@ export default function CargarFacturaOC({
   const alreadyInvoiced = useMemo(() => roundMoney(linkedInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0)), [linkedInvoices]);
   const remainingOC = roundMoney(ocTotal - alreadyInvoiced);
   const alignmentDifference = roundMoney(remainingOC - totalSinPercepciones);
-  const currencyMismatch = (ocCurrencies.size > 0 && !ocCurrencies.has(moneda)) || linkedInvoices.some((invoice) => invoice.moneda !== moneda);
+  const selectedOCCurrencyMismatch = ocCurrencies.size > 0 && !ocCurrencies.has(moneda);
+  const linkedInvoiceCurrencyMismatch = linkedInvoices.some((invoice) => invoice.moneda !== moneda);
+  const currencyMismatch = selectedOCCurrencyMismatch || linkedInvoiceCurrencyMismatch;
+  const canAdaptOCCurrency = selectedOCCurrencyMismatch && ocCurrencies.size === 1 && !linkedInvoiceCurrencyMismatch;
   const exceedsOC = alignmentDifference < -0.01;
   // Un excedente genera una OC abierta al guardar; solo una diferencia de
   // moneda requiere confirmación explícita para tocar la OC vinculada.
-  const needsOverride = currencyMismatch;
   const alignmentBlocked = selectedOCs.length > 0 && (
     Boolean(alignmentError)
-    || currencyMismatch
+    || linkedInvoiceCurrencyMismatch
+    || (selectedOCCurrencyMismatch && !overrideOC)
   );
+
+  useEffect(() => {
+    setOverrideOC(false);
+  }, [selectedOCKey, moneda]);
+
+  useEffect(() => {
+    if (!selectedOCKey) {
+      setSelectedOCItems([]);
+      setManualItemMatches({});
+      setOCItemsError("");
+      setCreateExtrasOC(false);
+      return;
+    }
+    let cancelled = false;
+    setOCItemsLoading(true);
+    setOCItemsError("");
+    (async () => {
+      const ids = selectedOCKey.split("|");
+      const { data, error: itemsError } = await (supabase as any)
+        .from("orden_compra_items")
+        .select("id, orden_id, codigo, descripcion, cantidad, precio_unitario, iva_porcentaje, unidad")
+        .in("orden_id", ids);
+      if (cancelled) return;
+      if (itemsError) {
+        setSelectedOCItems([]);
+        setOCItemsError("No se pudieron cargar los artículos de las OC para compararlos.");
+        return;
+      }
+      const numeroById = new Map(ordenes.map((oc) => [oc.id, oc.numero]));
+      const mapped = (data || []).map((item: any) => ({
+        ...item,
+        cantidad: Number(item.cantidad || 0),
+        precio_unitario: Number(item.precio_unitario || 0),
+        ocNumero: numeroById.get(item.orden_id) || "OC",
+      })) as OCItemForMatch[];
+      setSelectedOCItems(mapped);
+      const validIds = new Set(mapped.map((item) => item.id));
+      setManualItemMatches((current) => Object.fromEntries(
+        Object.entries(current).filter(([, target]) => target === "__extra__" || validIds.has(target))
+      ));
+    })().finally(() => { if (!cancelled) setOCItemsLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedOCKey, ordenes]);
+
+  const itemComparisons = useMemo(() => items.map((item) => {
+    const manualTarget = manualItemMatches[item.tempId];
+    if (manualTarget === "__extra__") return { item, status: "unmatched" as const, matched: null, manual: true };
+    if (manualTarget) {
+      const matched = selectedOCItems.find((candidate) => candidate.id === manualTarget) || null;
+      return { item, status: matched ? "matched" as const : "unmatched" as const, matched, manual: true };
+    }
+    const inspection = inspectPurchaseLineMatch(selectedOCItems, item);
+    return {
+      item,
+      status: inspection.status,
+      matched: inspection.status === "matched" && inspection.candidates.length === 1
+        ? selectedOCItems.find((candidate) => candidate.id === inspection.candidates[0].id) || null
+        : null,
+      manual: false,
+    };
+  }), [items, selectedOCItems, manualItemMatches]);
+
+  const unresolvedItemCount = itemComparisons.filter((comparison) => comparison.status !== "matched").length;
 
   async function fetchLinkedInvoicesForOCs(ids: string[]) {
     const [{ data: junctionLinks, error: junctionError }, { data: legacyInvoices, error: legacyError }] = await Promise.all([
@@ -351,7 +428,6 @@ export default function CargarFacturaOC({
 
   useEffect(() => {
     void loadProveedores();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sociedadId]);
 
   async function lookupNuevoProveedor() {
@@ -411,6 +487,7 @@ export default function CargarFacturaOC({
           ...nuevoProveedor,
           razon_social: nuevoProveedor.razon_social.trim(),
           cuit: nuevoProveedor.cuit.trim(),
+          cuit_titular_cuenta: nuevoProveedor.cuit.trim(),
           sociedad_id: sociedadId,
           created_by: profileId,
         })
@@ -489,6 +566,8 @@ export default function CargarFacturaOC({
       if (d.notas) setNotas(d.notas);
 
       // Auto-fill items
+      setManualItemMatches({});
+      setCreateExtrasOC(false);
       if (d.items && Array.isArray(d.items) && d.items.length > 0) {
         setItems(d.items.map((it: any, idx: number) => ({
           tempId: `ai-${Date.now()}-${idx}`,
@@ -500,6 +579,8 @@ export default function CargarFacturaOC({
           iva_porcentaje: isNotaPedido ? 0 : (it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21),
           unidad: it.unidad || "UN",
         })));
+      } else {
+        setItems([]);
       }
 
       // Match proveedor by CUIT
@@ -556,7 +637,8 @@ export default function CargarFacturaOC({
       throw new Error("Las OC deben estar activas y pertenecer al proveedor de la factura.");
     }
     const currencies = new Set(freshOCs.map((oc: any) => oc.moneda));
-    if (currencies.size !== 1 || !currencies.has(moneda)) {
+    const liveCurrencyMismatch = currencies.size !== 1 || !currencies.has(moneda);
+    if (liveCurrencyMismatch && !(overrideOC && currencies.size === 1)) {
       throw new Error(`La factura está en ${moneda} y las OC seleccionadas están en otra moneda.`);
     }
 
@@ -589,7 +671,7 @@ export default function CargarFacturaOC({
     setSaving(true);
     setError("");
     let savedFacturaId: string | null = null;
-    let generateExtrasOC = false;
+    let generateExtrasOC = createExtrasOC;
 
     try {
       // Evitar duplicar una factura del mismo proveedor y número dentro de la
@@ -616,6 +698,7 @@ export default function CargarFacturaOC({
 
       let reconciliation: ReturnType<typeof reconcilePurchaseLines> | null = null;
       const verifiedPresupuestos = new Map<string, any>();
+      const verifiedMarkupByItemId = new Map<string, number>();
       if (alignmentResult) {
         const previousInvoices = await fetchLinkedInvoicesForOCs(Array.from(selectedOCIds));
         let previousItems: PurchaseLine[] = [];
@@ -639,29 +722,41 @@ export default function CargarFacturaOC({
           }
           previousItems = data || [];
         }
-        reconciliation = reconcilePurchaseLines(alignmentResult.freshOCs.flatMap((oc: any) => oc.orden_compra_items || []), items, previousItems);
+        reconciliation = reconcilePurchaseLines(
+          alignmentResult.freshOCs.flatMap((oc: any) => oc.orden_compra_items || []),
+          items,
+          previousItems,
+          manualItemMatches,
+        );
         for (const oc of alignmentResult.freshOCs) {
-          const costChanges = reconciliation.costs.filter(change => change.line.orden_id === oc.id && Math.abs(Number(change.line.precio_unitario) - change.cost) >= 0.005);
+          const costChanges = reconciliation.costs.filter(change =>
+            change.line.orden_id === oc.id
+            && (
+              overrideOC
+              || Math.abs(Number(change.line.precio_unitario) - change.cost) >= 0.005
+              || Number(change.line.iva_porcentaje ?? 21) !== change.vat
+            )
+          );
           if (!costChanges.length) continue;
           if (!oc.presupuesto_origen_id && /Consolidado de|\[PR_ITEMS:/i.test(oc.observaciones || "")) {
             throw new Error(`La OC ${oc.numero} consolida varios presupuestos y la factura modifica sus costos. Falta la distribución automática por presupuesto: conciliá primero los costos de esta OC y de sus PR de origen, y después cargá la factura. Esta factura no se guardó.`);
           }
           if (!oc.presupuesto_origen_id) continue;
           const { data: pr, error: prError } = await (supabase as any).from("presupuestos")
-            .select("id, observaciones, presupuesto_items(id, codigo, descripcion, cantidad, precio_costo)")
+            .select("id, observaciones, moneda, tipo_cambio, tipo_cambio_divisas, presupuesto_items(id, codigo, descripcion, cantidad, precio_costo, costo_moneda, markup_porcentaje, precio_venta)")
             .eq("id", oc.presupuesto_origen_id).eq("sociedad_id", sociedadId).single();
           if (prError || !pr) throw new Error(`No se pudo comprobar el presupuesto de la OC ${oc.numero}. No se guardó la factura.`);
           for (const change of costChanges) {
             const matching = (pr.presupuesto_items || []).filter((it: PurchaseLine) => purchaseLineKey(it) === purchaseLineKey(change.line) || ((!it.codigo || !change.line.codigo) && purchaseLineKey({ ...it, codigo: null }) === purchaseLineKey({ ...change.line, codigo: null })));
             if (matching.length !== 1) throw new Error(`El artículo «${change.line.descripcion}» no tiene una correspondencia única en el presupuesto de ${oc.numero}. Corregí el código o la vinculación antes de guardar la factura.`);
+            const prItem = matching[0] as any;
+            const recalculatedMarkup = markupForFixedSalePrice(Number(prItem.precio_venta || 0), change.cost, moneda, pr.moneda, Number(pr.tipo_cambio || 0), Number(pr.tipo_cambio_divisas || 0));
+            if (recalculatedMarkup === null) throw new Error(`No se puede recalcular el markup de «${change.line.descripcion}» sin un costo, precio de venta y tipo de cambio válidos. No se guardó la factura.`);
+            verifiedMarkupByItemId.set(prItem.id, recalculatedMarkup);
           }
           verifiedPresupuestos.set(pr.id, pr);
         }
-        if (reconciliation.extras.length) {
-          const detail = reconciliation.extras.map(it => `${it.cantidad} ${it.unidad || "UN"} · ${it.descripcion}`).join("\n");
-          if (!window.confirm(`Estos artículos/cantidades no están pendientes en las OC seleccionadas:\n\n${detail}\n\n¿Generar una OC adicional por los extras?`)) return;
-          generateExtrasOC = true;
-        }
+        generateExtrasOC = createExtrasOC && reconciliation.extras.length > 0;
       }
 
       // Insert FC
@@ -794,19 +889,23 @@ export default function CargarFacturaOC({
           });
           const orderNet = roundMoney(orderItems.reduce((sum: number, it: any) => sum + Number(it.cantidad) * Number(it.precio_unitario), 0));
           const orderVat = roundMoney(orderItems.reduce((sum: number, it: any) => sum + Number(it.cantidad) * Number(it.precio_unitario) * Number(it.iva_porcentaje ?? 21) / 100, 0));
-          const historyText = history.length ? `\n[${new Date().toLocaleString("es-AR")}] FC ${numeroFactura.trim()}: ${history.join("; ")}` : "";
+          const currencyHistory = overrideOC && oc.moneda !== moneda ? `Moneda ${oc.moneda} → ${moneda}` : "";
+          const historyParts = [currencyHistory, ...history].filter(Boolean);
+          const historyText = historyParts.length ? `\n[${new Date().toLocaleString("es-AR")}] FC ${numeroFactura.trim()}: ${historyParts.join("; ")}` : "";
           const { error: headerError } = await (supabase as any).from("ordenes_compra")
-            .update({ subtotal: orderNet, iva: orderVat, total: roundMoney(orderNet + orderVat), observaciones: `${oc.observaciones || ""}${historyText}` })
+            .update({ moneda, subtotal: orderNet, iva: orderVat, total: roundMoney(orderNet + orderVat), observaciones: `${oc.observaciones || ""}${historyText}` })
             .eq("id", oc.id).eq("sociedad_id", sociedadId);
           if (headerError) throw headerError;
-          if (oc.presupuesto_origen_id && history.length) {
+          if (oc.presupuesto_origen_id && (history.length || overrideOC)) {
             const pr = verifiedPresupuestos.get(oc.presupuesto_origen_id);
             if (!pr) continue;
             for (const change of changes) {
               const matching = (pr?.presupuesto_items || []).filter((it: PurchaseLine) => purchaseLineKey(it) === purchaseLineKey(change.line) || ((!it.codigo || !change.line.codigo) && purchaseLineKey({ ...it, codigo: null }) === purchaseLineKey({ ...change.line, codigo: null })));
               if (matching.length !== 1) continue;
+              const recalculatedMarkup = verifiedMarkupByItemId.get(matching[0].id);
+              if (recalculatedMarkup === undefined) throw new Error(`No se pudo verificar el markup actualizado de «${change.line.descripcion}».`);
               const { error: costError } = await (supabase as any).from("presupuesto_items")
-                .update({ precio_costo: change.cost, costo_moneda: moneda }).eq("id", matching[0].id).eq("presupuesto_id", pr.id);
+                .update({ precio_costo: change.cost, costo_moneda: moneda, markup_porcentaje: recalculatedMarkup }).eq("id", matching[0].id).eq("presupuesto_id", pr.id);
               if (costError) throw costError;
             }
             const { error: historyError } = await (supabase as any).from("presupuestos")
@@ -1162,11 +1261,12 @@ export default function CargarFacturaOC({
             {/* Items editables */}
             {items.length > 0 && (
               <div className="mt-4">
-                <div className="mb-2 flex items-center justify-between"><p className="text-[10px] uppercase text-zinc-400">Items detectados y editables ({items.length})</p><button type="button" onClick={() => setItems((prev) => [...prev, { tempId: uid(), descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, iva_porcentaje: ivaPorcentaje, unidad: "UN" }])} className="inline-flex items-center gap-1 text-xs font-medium text-orange-600"><Plus size={13} /> Agregar item</button></div>
+                <div className="mb-2 flex items-center justify-between"><p className="text-[10px] uppercase text-zinc-400">Items detectados y editables ({items.length})</p><button type="button" onClick={() => setItems((prev) => [...prev, { tempId: uid(), codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, iva_porcentaje: ivaPorcentaje, unidad: "UN" }])} className="inline-flex items-center gap-1 text-xs font-medium text-orange-600"><Plus size={13} /> Agregar item</button></div>
                 <div className="max-h-64 overflow-auto">
-                  <table className="w-full min-w-[780px] text-xs">
+                  <table className="w-full min-w-[900px] text-xs">
                     <thead>
                       <tr className="bg-zinc-50 dark:bg-zinc-800 text-zinc-500">
+                        <th className="px-1 py-1 text-left w-32">Código</th>
                         <th className="px-1 py-1 text-left">Descripción</th>
                         <th className="px-1 py-1 text-right w-20">Cant.</th>
                         <th className="px-1 py-1 text-right w-28">P. Unit.</th>
@@ -1179,6 +1279,7 @@ export default function CargarFacturaOC({
                     <tbody>
                       {items.map((it, index) => (
                         <tr key={it.tempId} className="border-b border-zinc-100 dark:border-zinc-800">
+                          <td className="px-1 py-1"><input value={it.codigo || ""} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, codigo: e.target.value } : item))} placeholder="Sin código" className="w-32 rounded border border-zinc-200 bg-transparent px-2 py-1.5 font-mono dark:border-zinc-700" /></td>
                           <td className="px-1 py-1"><input value={it.descripcion} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, descripcion: e.target.value } : item))} className="w-full rounded border border-zinc-200 bg-transparent px-2 py-1.5 dark:border-zinc-700" /></td>
                           <td className="px-1 py-1"><input type="number" min="0" step="0.01" value={it.cantidad} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, cantidad: Number(e.target.value) || 0 } : item))} className="w-20 rounded border border-zinc-200 bg-transparent px-2 py-1.5 text-right font-mono dark:border-zinc-700" /></td>
                           <td className="px-1 py-1"><input type="number" min="0" step="0.01" value={it.precio_unitario} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, precio_unitario: Number(e.target.value) || 0 } : item))} className="w-28 rounded border border-zinc-200 bg-transparent px-2 py-1.5 text-right font-mono dark:border-zinc-700" /></td>
@@ -1265,11 +1366,22 @@ export default function CargarFacturaOC({
                   <div className="flex items-center gap-2 rounded-lg bg-zinc-50 p-3 text-xs text-zinc-500 dark:bg-zinc-800"><Loader2 size={14} className="animate-spin" />Verificando importes ya facturados...</div>
                 ) : alignmentBlocked ? (
                   <div className="space-y-2">
-                    <div className={`flex items-start gap-2 rounded-lg border p-3 text-xs ${overrideOC ? "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300" : "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"}`}>
+                    <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
                       <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-                      <span>{alignmentError || (currencyMismatch ? `La factura está en ${moneda} y la OC en ${[...ocCurrencies].join("/")}. Corregí la moneda de la factura o de la OC antes de continuar.` : `El comprobante supera el saldo de las OC en ${formatCurrency(Math.abs(alignmentDifference), moneda)}.`)}</span>
+                      <div className="flex-1 space-y-2">
+                        <p>{alignmentError || (linkedInvoiceCurrencyMismatch ? "La OC ya tiene facturas vinculadas en otra moneda y no se puede convertir automáticamente." : currencyMismatch ? `La factura está en ${moneda} y la OC en ${[...ocCurrencies].join("/")}.` : `El comprobante supera el saldo de las OC en ${formatCurrency(Math.abs(alignmentDifference), moneda)}.`)}</p>
+                        {canAdaptOCCurrency && !alignmentError && (
+                          <button type="button" onClick={() => setOverrideOC(true)} className="rounded-md border border-red-300 bg-white px-3 py-1.5 font-semibold text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950/50 dark:text-red-200">
+                            Adaptar OC y costos a {moneda}
+                          </button>
+                        )}
+                      </div>
                     </div>
-
+                  </div>
+                ) : overrideOC && selectedOCCurrencyMismatch ? (
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+                    <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                    <span>Confirmaste adaptar la OC de {[...ocCurrencies].join("/")} a {moneda}. Al guardar se actualizarán su moneda, costos y totales con los valores de esta factura.</span>
                   </div>
                 ) : Math.abs(alignmentDifference) <= 0.01 ? (
                   <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"><Check size={15} />Importe conciliado: comprobante y OC coinciden.</div>
@@ -1277,6 +1389,70 @@ export default function CargarFacturaOC({
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
                     {alignmentDifference < 0 ? "El comprobante supera el importe actual de las OC. Se actualizarán los costos de artículos coincidentes; las cantidades adicionales crearán una OC independiente sin PR." : `Factura parcial: saldo estimado ${formatCurrency(alignmentDifference, moneda)}. Los costos finales se concilian al confirmar.`}
                   </div>
+                )}
+              </div>
+            )}
+
+            {selectedOCIds.size > 0 && items.length > 0 && (
+              <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50/70 p-3 dark:border-zinc-700 dark:bg-zinc-800/40">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-100">Comparación de artículos: factura vs. OC</p>
+                    <p className="text-[11px] text-zinc-500">Las coincidencias seguras se aplican solas. Podés corregir cualquier vínculo manualmente.</p>
+                  </div>
+                  {!ocItemsLoading && !ocItemsError && (
+                    <div className="flex gap-2 text-[10px] font-medium">
+                      <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">{itemComparisons.length - unresolvedItemCount} coinciden</span>
+                      {unresolvedItemCount > 0 && <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{unresolvedItemCount} para revisar</span>}
+                    </div>
+                  )}
+                </div>
+
+                {ocItemsLoading ? (
+                  <div className="flex items-center gap-2 py-3 text-xs text-zinc-500"><Loader2 size={14} className="animate-spin" />Comparando artículos...</div>
+                ) : ocItemsError ? (
+                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{ocItemsError}</div>
+                ) : (
+                  <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                    {itemComparisons.map((comparison) => {
+                      const assignedId = manualItemMatches[comparison.item.tempId] || "";
+                      const isMatched = comparison.status === "matched";
+                      const statusText = comparison.manual
+                        ? (assignedId === "__extra__" ? "Marcado fuera de OC" : "Asignación manual")
+                        : comparison.status === "matched"
+                          ? "Coincidencia automática"
+                          : comparison.status === "ambiguous"
+                            ? "Hay varias coincidencias posibles"
+                            : "No encontrado en las OC";
+                      return (
+                        <div key={comparison.item.tempId} className={`grid gap-2 rounded-lg border p-2.5 md:grid-cols-[minmax(0,1fr)_minmax(260px,1fr)] ${isMatched ? "border-emerald-200 bg-white dark:border-emerald-900/60 dark:bg-zinc-900" : "border-amber-200 bg-amber-50/60 dark:border-amber-900/60 dark:bg-amber-950/10"}`}>
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-medium text-zinc-800 dark:text-zinc-100">{comparison.item.codigo ? `[${comparison.item.codigo}] ` : ""}{comparison.item.descripcion}</p>
+                            <p className="text-[10px] text-zinc-500">Factura: {comparison.item.cantidad} {comparison.item.unidad || "UN"}</p>
+                            <p className={`mt-1 text-[10px] font-semibold ${isMatched ? "text-emerald-600" : "text-amber-700 dark:text-amber-300"}`}>{statusText}</p>
+                          </div>
+                          <select
+                            value={assignedId}
+                            onChange={(event) => setManualItemMatches((current) => ({ ...current, [comparison.item.tempId]: event.target.value }))}
+                            className="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-2 text-xs dark:border-zinc-600 dark:bg-zinc-800"
+                          >
+                            <option value="">{isMatched ? "Usar coincidencia automática" : "Sin asignar — no está en la OC"}</option>
+                            <option value="__extra__">Confirmar que no está en las OC</option>
+                            {selectedOCItems.map((ocItem) => (
+                              <option key={ocItem.id} value={ocItem.id}>{ocItem.ocNumero} · {ocItem.codigo ? `[${ocItem.codigo}] ` : ""}{ocItem.descripcion} · {ocItem.cantidad} {ocItem.unidad || "UN"}</option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {!ocItemsLoading && !ocItemsError && unresolvedItemCount > 0 && (
+                  <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-zinc-200 bg-white p-3 text-xs dark:border-zinc-700 dark:bg-zinc-900">
+                    <input type="checkbox" checked={createExtrasOC} onChange={(event) => setCreateExtrasOC(event.target.checked)} className="mt-0.5 accent-orange-600" />
+                    <span><strong>Crear una OC adicional con las cantidades no asignadas</strong><span className="mt-0.5 block font-normal text-zinc-500">Opcional. Si no la marcás, la factura se carga igual y los artículos quedan informados como no vinculados.</span></span>
+                  </label>
                 )}
               </div>
             )}

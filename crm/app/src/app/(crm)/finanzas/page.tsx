@@ -15,7 +15,7 @@ import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, Chec
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
-import { generateOrdenPagoPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
+import { generateOrdenPagoPDF, generateReciboPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import * as XLSX from "xlsx";
@@ -23,6 +23,8 @@ import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factur
 import CargaMasivaFacturasCompra from "@/components/carga-masiva-facturas-compra";
 import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/payment-document-parser";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
+import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
+import { roundPaymentMoney, sumPaymentMoney } from "@/lib/payment-money";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -41,7 +43,7 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   retencion_suss: { label: "Ret. SUSS", variant: "warning", icon: Wallet },
 };
 
-type FinanzasTab = "movimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones";
+type FinanzasTab = "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones";
 
 // ── Echeq types ──
 interface EcheqRow {
@@ -295,6 +297,11 @@ interface OpMedioPago {
   moneda: "ARS" | "USD";
   cotizacion: number;
   echeq_id?: string; // if selecting from cartera
+  /** Un e-cheq sin id es propio/emitido; los de terceros siempre vienen de cartera. */
+  origen_cheque?: "propio" | "cartera";
+  /** Siempre deriva del CUIT fiscal del proveedor seleccionado. */
+  beneficiario_cuit?: string | null;
+  beneficiario_nombre?: string | null;
   comprobante_url?: string;
   comprobante_nombre?: string;
 }
@@ -388,6 +395,42 @@ interface CCRow {
   forma_pago: string;
   limite_credito: number;
   saldo_cuenta_corriente: number;
+  saldo_ars?: number;
+  saldo_usd?: number;
+}
+
+interface ReciboClienteRow {
+  id: string;
+  fecha: string;
+  cliente_id: string;
+  cliente_nombre: string;
+  descripcion: string;
+  medio: string;
+  monto: number;
+  moneda: "ARS" | "USD";
+  conciliado: boolean;
+}
+
+interface VencimientoDeudaRow {
+  id: string;
+  operacion: "venta" | "compra";
+  entidad_tipo: "cliente" | "proveedor";
+  entidad_id: string;
+  entidad_nombre: string;
+  documento: string;
+  fecha: string;
+  vencimiento: string;
+  total: number;
+  saldo: number;
+  moneda: "ARS" | "USD";
+}
+
+function saldoPendienteFacturaCompra(factura: Pick<FacturaCompraRow, "total" | "total_acreditado" | "credito_nc" | "pago_directo" | "pago_op">): number {
+  // Las NC nuevas dejan dos rastros del mismo crédito: total_acreditado en la
+  // factura origen y un movimiento con nota_credito_compra_id. Nunca deben
+  // descontarse ambos; max() también cubre registros históricos con uno solo.
+  const creditoNota = Math.max(Number(factura.total_acreditado || 0), Number(factura.credito_nc || 0));
+  return Math.max(0, Number(factura.total || 0) - creditoNota - Number(factura.pago_directo || 0) - Number(factura.pago_op || 0));
 }
 
 interface ExtractoMovimientoRow {
@@ -564,6 +607,14 @@ export default function FinanzasPage() {
 
   // Data state — initialised with mock data as fallback
   const [movimientos, setMovimientos] = useState<MovimientoRow[]>([]);
+  const [recibosClientes, setRecibosClientes] = useState<ReciboClienteRow[]>([]);
+  const [reciboSearch, setReciboSearch] = useState("");
+  const [resumenFinanciero, setResumenFinanciero] = useState<"caja" | "balance" | null>(null);
+  const [deudasVenta, setDeudasVenta] = useState<VencimientoDeudaRow[]>([]);
+  const [vencOperacion, setVencOperacion] = useState<"" | "venta" | "compra">("");
+  const [vencEntidadTipo, setVencEntidadTipo] = useState<"" | "cliente" | "proveedor">("");
+  const [vencMoneda, setVencMoneda] = useState<"" | "ARS" | "USD">("");
+  const [vencEntidad, setVencEntidad] = useState("");
   const [ccClientes, setCcClientes] = useState<CCRow[]>([]);
   const [ccProveedores, setCcProveedores] = useState<CCRow[]>([]);
   const [ccClienteSearch, setCcClienteSearch] = useState("");
@@ -638,6 +689,8 @@ export default function FinanzasPage() {
 
   // OP state
   const [ordenesPago, setOrdenesPago] = useState<OrdenPagoRow[]>([]);
+  const [opSearch, setOpSearch] = useState("");
+  const [opEnvioFilter, setOpEnvioFilter] = useState<"todos" | "enviada" | "no_enviada">("todos");
   const [opFilterRetencion, setOpFilterRetencion] = useState(false);
   const [opFilterDesde, setOpFilterDesde] = useState("");
   const [opFilterHasta, setOpFilterHasta] = useState("");
@@ -657,7 +710,7 @@ export default function FinanzasPage() {
   const [opManualGanancias, setOpManualGanancias] = useState(false); // user manually toggled retención
   const [opMontoRetencionManual, setOpMontoRetencionManual] = useState<number | null>(null); // manual override of retention amount
   // FC pendientes del proveedor para vincular a la OP
-  interface OpFCPendiente { id: string; numero: string; fecha: string; total: number; subtotal: number; iva: number; percepciones: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number }
+  interface OpFCPendiente { id: string; numero: string; tipo_comprobante: string; fecha: string; total: number; subtotal: number; iva: number; percepciones: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number }
   const [opFCPendientes, setOpFCPendientes] = useState<OpFCPendiente[]>([]);
   const [opMedios, setOpMedios] = useState<OpMedioPago[]>([makeOpMedio()]);
   const [opMonthlyBase, setOpMonthlyBase] = useState(0); // Acumulado mensual de bases sin IVA (de OPs previas)
@@ -716,6 +769,7 @@ export default function FinanzasPage() {
   const [editFCForm, setEditFCForm] = useState<{ numero_factura: string; fecha: string; fecha_vencimiento: string; subtotal: number; iva: number; percepciones: number; moneda: "ARS" | "USD"; notas: string; cae: string }>({ numero_factura: "", fecha: "", fecha_vencimiento: "", subtotal: 0, iva: 0, percepciones: 0, moneda: "ARS", notas: "", cae: "" });
   const [savingFC, setSavingFC] = useState(false);
   const [fcSearchQuery, setFcSearchQuery] = useState("");
+  const [fcEnvioFilter, setFcEnvioFilter] = useState<"todos" | "enviada" | "no_enviada">("todos");
   const FC_ESTADO_GROUPS: Record<string, string[]> = {
     emitida_all: ["pendiente_aprobacion", "pendiente", "pagada", "recibida"],
     pendiente_all: ["pendiente_aprobacion", "pendiente"],
@@ -918,9 +972,11 @@ export default function FinanzasPage() {
           .order("fecha", { ascending: false });
         if (sociedadActiva?.id) qMov = qMov.eq("sociedad_id" as any, sociedadActiva.id);
 
-        let qCcCli = (supabase as any).from("v_cuenta_corriente_clientes").select("*");
+        // Las cuentas corrientes se arman desde comprobantes y pagos reales más
+        // abajo. No dependemos de vistas materializadas que pueden quedar viejas.
+        let qCcCli = (supabase as any).from("clientes").select("id, razon_social, cuit, dias_cuenta_corriente, forma_pago, limite_credito");
         if (sociedadActiva?.id) qCcCli = qCcCli.eq("sociedad_id", sociedadActiva.id);
-        let qCcProv = (supabase as any).from("v_cuenta_corriente_proveedores").select("*");
+        let qCcProv = (supabase as any).from("proveedores").select("id, razon_social, cuit, rubro, dias_cuenta_corriente, forma_pago, limite_credito");
         if (sociedadActiva?.id) qCcProv = qCcProv.eq("sociedad_id", sociedadActiva.id);
         let qExt = (supabase as any).from("extractos_bancarios").select(`*, extracto_movimientos(*)`).order("created_at", { ascending: false });
         if (sociedadActiva?.id) qExt = qExt.eq("sociedad_id", sociedadActiva.id);
@@ -975,7 +1031,9 @@ export default function FinanzasPage() {
             dias_cuenta_corriente: r.dias_cuenta_corriente,
             forma_pago: r.forma_pago,
             limite_credito: r.limite_credito,
-            saldo_cuenta_corriente: r.saldo ?? r.saldo_cuenta_corriente ?? 0,
+            saldo_cuenta_corriente: 0,
+            saldo_ars: 0,
+            saldo_usd: 0,
           })));
         } else if (ccCliRes.error) {
           setCcClientes(
@@ -1000,7 +1058,9 @@ export default function FinanzasPage() {
             dias_cuenta_corriente: r.dias_cuenta_corriente,
             forma_pago: r.forma_pago,
             limite_credito: r.limite_credito,
-            saldo_cuenta_corriente: r.saldo ?? r.saldo_cuenta_corriente ?? 0,
+            saldo_cuenta_corriente: 0,
+            saldo_ars: 0,
+            saldo_usd: 0,
           })));
         } else if (ccProvRes.error) {
           setCcProveedores(
@@ -1089,6 +1149,98 @@ export default function FinanzasPage() {
 
         if (saldosRes.data) {
           setSaldosCaja(saldosRes.data.map((s: any) => ({ id: s.id, moneda: s.moneda, monto: Number(s.monto) })));
+        }
+
+        // Recibos: todo cobro persistido a un cliente queda consultable como
+        // recibo. Se usa movimientos (la fuente contable) y no estado del modal.
+        const movimientosReales = ((movRes.data || []) as MovimientoRow[]).filter((mov) => !mov.anulado);
+        const tiposCobro = new Set(["cobro", "cheque_recibido", "transferencia", "efectivo", "deposito"]);
+        setRecibosClientes(movimientosReales
+          .filter((mov) => Boolean(mov.cliente_id) && tiposCobro.has(mov.tipo))
+          .map((mov) => ({
+            id: mov.id,
+            fecha: mov.fecha,
+            cliente_id: mov.cliente_id || "",
+            cliente_nombre: mov.clientes?.razon_social || "Cliente sin nombre",
+            descripcion: mov.descripcion || "Cobro de cliente",
+            medio: tipoConfig[mov.tipo]?.label || mov.tipo,
+            monto: Number(mov.monto || 0),
+            moneda: (mov.moneda === "USD" ? "USD" : "ARS") as "ARS" | "USD",
+            conciliado: Boolean(mov.conciliado),
+          })));
+
+        // Saldos de venta autoritativos para vencimientos y CC clientes.
+        // Las notas de crédito se aplican vía total_acreditado y no se vuelven a
+        // sumar como una deuda independiente.
+        try {
+          if (movRes.error) throw movRes.error;
+          let qFacturasVenta = (supabase as any).from("facturas")
+            .select("id, cliente_id, tipo, punto_venta, numero, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado")
+            .neq("estado", "anulada");
+          if (sociedadActiva?.id) qFacturasVenta = qFacturasVenta.eq("sociedad_id", sociedadActiva.id);
+          const { data: facturasVenta, error: facturasVentaError } = await qFacturasVenta;
+          if (facturasVentaError) throw facturasVentaError;
+          const facturasPositivas = (facturasVenta || []).filter((factura: any) => !String(factura.tipo || "").toUpperCase().startsWith("NC"));
+          const facturaIds = facturasPositivas.map((factura: any) => factura.id);
+          const cobradoPorFactura: Record<string, number> = {};
+          const movimientosAplicados = new Set<string>();
+          if (facturaIds.length > 0) {
+            let qAplicaciones = (supabase as any).from("cobro_aplicaciones")
+              .select("movimiento_id, factura_id, monto, movimientos!inner(anulado, sociedad_id)")
+              .in("factura_id", facturaIds);
+            if (sociedadActiva?.id) qAplicaciones = qAplicaciones.eq("movimientos.sociedad_id", sociedadActiva.id);
+            const { data: aplicaciones, error: aplicacionesError } = await qAplicaciones;
+            if (aplicacionesError) throw aplicacionesError;
+            (aplicaciones || []).forEach((aplicacion: any) => {
+              const movimiento = Array.isArray(aplicacion.movimientos) ? aplicacion.movimientos[0] : aplicacion.movimientos;
+              if (movimiento && !movimiento.anulado) {
+                if (aplicacion.movimiento_id) movimientosAplicados.add(aplicacion.movimiento_id);
+                cobradoPorFactura[aplicacion.factura_id] = (cobradoPorFactura[aplicacion.factura_id] || 0) + Number(aplicacion.monto || 0);
+              }
+            });
+          }
+          // Los cobros consolidados ya fueron contabilizados por sus aplicaciones.
+          // Solo sumamos aquí los movimientos directos para no descontarlos dos veces.
+          movimientosReales.forEach((mov) => {
+            if (mov.factura_id && !movimientosAplicados.has(mov.id)) {
+              cobradoPorFactura[mov.factura_id] = (cobradoPorFactura[mov.factura_id] || 0) + Number(mov.monto || 0);
+            }
+          });
+          const nombreClientePorId = new Map<string, string>(
+            (ccCliRes.data || []).map((cliente: any) => [cliente.id, cliente.razon_social || "Cliente sin nombre"])
+          );
+          const deudas: VencimientoDeudaRow[] = facturasPositivas.map((factura: any): VencimientoDeudaRow => {
+            const total = Number(factura.total || 0);
+            const saldo = Math.max(0, total - Number(factura.total_acreditado || 0) - Number(cobradoPorFactura[factura.id] || 0));
+            return {
+              id: `venta-${factura.id}`,
+              operacion: "venta",
+              entidad_tipo: "cliente",
+              entidad_id: factura.cliente_id,
+              entidad_nombre: nombreClientePorId.get(factura.cliente_id) || "Cliente sin nombre",
+              documento: `${factura.tipo || "FC"} ${String(factura.punto_venta || 0).padStart(4, "0")}-${String(factura.numero || 0).padStart(8, "0")}`,
+              fecha: factura.fecha,
+              vencimiento: factura.fecha_vencimiento || factura.fecha,
+              total,
+              saldo,
+              moneda: factura.moneda === "USD" ? "USD" : "ARS",
+            };
+          }).filter((deuda: VencimientoDeudaRow) => deuda.saldo > 0.01);
+          setDeudasVenta(deudas);
+          const saldoPorCliente = deudas.reduce((acc: Record<string, { ARS: number; USD: number }>, deuda: VencimientoDeudaRow) => {
+            acc[deuda.entidad_id] ||= { ARS: 0, USD: 0 };
+            acc[deuda.entidad_id][deuda.moneda] += deuda.saldo;
+            return acc;
+          }, {});
+          setCcClientes((prev) => prev.map((cliente) => ({
+            ...cliente,
+            saldo_cuenta_corriente: saldoPorCliente[cliente.id]?.ARS || 0,
+            saldo_ars: saldoPorCliente[cliente.id]?.ARS || 0,
+            saldo_usd: saldoPorCliente[cliente.id]?.USD || 0,
+          })));
+        } catch (error) {
+          console.error("Error calculando vencimientos y CC de clientes:", error);
+          setDeudasVenta([]);
         }
 
         // Fetch proveedores list for OP/gastos selectors
@@ -1212,7 +1364,7 @@ export default function FinanzasPage() {
               if (!p.anulado && p.nota_credito_compra_id) acc[p.factura_compra_id] = (acc[p.factura_compra_id] || 0) + Number(p.monto || 0);
               return acc;
             }, {});
-            setFacturasCompra(fcData.map((r: any) => ({
+            const facturasCompraMapeadas: FacturaCompraRow[] = fcData.map((r: any) => ({
               id: r.id, numero_factura: r.numero_factura,
               proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? "—",
               orden_compra_id: r.orden_compra_id, oc_numero: r.ordenes_compra?.numero ?? undefined,
@@ -1236,9 +1388,14 @@ export default function FinanzasPage() {
               // Una OP anulada no debe seguir bloqueando la factura: la FC
               // vuelve a estar disponible para generar una nueva OP.
               op_vinculada: (() => {
-                const link = (r.op_facturas_compra || []).find((l: any) =>
+                const linksActivos = (r.op_facturas_compra || []).filter((l: any) =>
                   l?.ordenes_pago && l.ordenes_pago.estado !== "anulada"
                 );
+                // Si hubo pagos parciales, alcanza con que una de sus OP haya
+                // sido enviada. Además mostramos esa misma OP en la acción de
+                // correo para que el filtro y el indicador sean coherentes.
+                const link = linksActivos.find((l: any) => l.ordenes_pago.email_enviado_at)
+                  || linksActivos[0];
                 return link?.ordenes_pago
                   ? { id: link.ordenes_pago.id, numero: link.ordenes_pago.numero, estado: link.ordenes_pago.estado, fecha: link.ordenes_pago.fecha, sobre_verde: !!link.ordenes_pago.sobre_verde, email_enviado_at: link.ordenes_pago.email_enviado_at ?? null }
                   : null;
@@ -1249,6 +1406,21 @@ export default function FinanzasPage() {
               pago_op: (r.op_facturas_compra || [])
                 .filter((link: any) => link?.ordenes_pago && link.ordenes_pago.estado !== "anulada")
                 .reduce((sum: number, link: any) => sum + Number(link.monto || 0), 0),
+            }));
+            setFacturasCompra(facturasCompraMapeadas);
+            const saldosProveedor = facturasCompraMapeadas
+              .filter((factura) => factura.estado !== "anulada" && !String(factura.tipo_comprobante || "").toUpperCase().startsWith("NC"))
+              .reduce((acc: Record<string, { ARS: number; USD: number }>, factura) => {
+                const saldo = saldoPendienteFacturaCompra(factura);
+                acc[factura.proveedor_id] ||= { ARS: 0, USD: 0 };
+                acc[factura.proveedor_id][factura.moneda] += saldo;
+                return acc;
+              }, {});
+            setCcProveedores((prev) => prev.map((proveedor) => ({
+              ...proveedor,
+              saldo_cuenta_corriente: saldosProveedor[proveedor.id]?.ARS || 0,
+              saldo_ars: saldosProveedor[proveedor.id]?.ARS || 0,
+              saldo_usd: saldosProveedor[proveedor.id]?.USD || 0,
             })));
           } else {
             setFacturasCompra([]);
@@ -1618,7 +1790,7 @@ export default function FinanzasPage() {
     (async () => {
       try {
         // FC pendientes (incluir subtotal/iva/percepciones para base sin IVA — Art. 23 RG 830)
-        let q = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, subtotal, iva, percepciones, total, moneda")
+        let q = (supabase as any).from("facturas_compra").select("id, numero_factura, tipo_comprobante, fecha, subtotal, iva, percepciones, total, moneda")
           .eq("proveedor_id", opForm.proveedor_id).in("estado", ["pendiente", "recibida"])
           .not("tipo_comprobante", "ilike", "NC%");
         if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
@@ -1651,7 +1823,7 @@ export default function FinanzasPage() {
           const pagado = pagadoPorFC[fc.id] || 0;
           const saldo = Math.max(0, Number(fc.total) - pagado);
           const esDirecta = pagoParcialDirecto && pagoParcialFCId === fc.id;
-          return { id: fc.id, numero: fc.numero_factura || "S/N", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: esDirecta, monto_a_pagar: esDirecta ? saldo : 0 };
+          return { id: fc.id, numero: fc.numero_factura || "S/N", tipo_comprobante: fc.tipo_comprobante || "FC", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: esDirecta, monto_a_pagar: esDirecta ? saldo : 0 };
         }).filter((fc: any) => fc.saldo_pendiente > 0));
 
         // Acumulado mensual de PAGOS (OPs) a este proveedor — Art. 26 RG 830
@@ -1691,11 +1863,11 @@ export default function FinanzasPage() {
       finally { if (!cancelled) setOpFCLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [opForm.proveedor_id, opForm.fecha, opModalOpen, sociedadActiva?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [opForm.proveedor_id, opForm.fecha, opModalOpen, sociedadActiva?.id]);
 
   // 2. Base sin IVA de esta OP (Art. 23 RG 830: IVA se excluye de la base de retención)
-  const opMontoBrutoFC = opFCPendientes.filter(f => f.selected).reduce((s, f) => s + f.monto_a_pagar, 0);
-  const opMontoBruto = opForm.usar_monto_manual && opForm.monto_manual > 0 ? opForm.monto_manual : opMontoBrutoFC;
+  const opMontoBrutoFC = sumPaymentMoney(opFCPendientes.filter(f => f.selected).map(f => f.monto_a_pagar));
+  const opMontoBruto = roundPaymentMoney(opForm.usar_monto_manual && opForm.monto_manual > 0 ? opForm.monto_manual : opMontoBrutoFC);
   const opProveedor = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
   const opDiasPactados = Math.max(0, Number(opProveedor?.dias_cuenta_corriente) || 0);
   const opFechaPactada = calcularFechaPactada(opFCPendientes.filter(f => f.selected).map(f => f.fecha), opDiasPactados);
@@ -1705,14 +1877,14 @@ export default function FinanzasPage() {
     if (opForm.usar_monto_manual && opForm.monto_manual > 0) {
       // Monto manual: descontar IVA estimado (el usuario puede ajustar el % manualmente)
       const ivaPct = opForm.iva_manual_pct ?? 21;
-      return Math.round(opForm.monto_manual / (1 + ivaPct / 100) * 100) / 100;
+      return roundPaymentMoney(opForm.monto_manual / (1 + ivaPct / 100));
     }
-    return opFCPendientes.filter(f => f.selected).reduce((s, f) => {
+    return roundPaymentMoney(opFCPendientes.filter(f => f.selected).reduce((s, f) => {
       if (f.total <= 0) return s;
       // Proporción sin IVA: (subtotal + percepciones) / total × monto_a_pagar
       const ratioSinIVA = (f.subtotal + f.percepciones) / f.total;
-      return s + Math.round(f.monto_a_pagar * ratioSinIVA * 100) / 100;
-    }, 0);
+      return s + roundPaymentMoney(f.monto_a_pagar * ratioSinIVA);
+    }, 0));
   })();
 
   // 3. Auto-calcular retención ganancias según RG 830
@@ -1736,10 +1908,7 @@ export default function FinanzasPage() {
     // AFIP puede devolver "RI" o la descripción completa. Normalizamos para
     // no dejar pasar una retención por diferencias de formato; Monotributo,
     // Exento y Consumidor Final no son sujetos en este circuito.
-    const condicionNormalizada = String(opProvCondicion || "").trim().toUpperCase();
-    const esResponsableInscripto = condicionNormalizada === "RI"
-      || condicionNormalizada === "RESPONSABLE INSCRIPTO"
-      || condicionNormalizada === "RESPONSABLE INSCRIPTO IVA";
+    const esResponsableInscripto = isResponsableInscripto(opProvCondicion);
     if (esResponsableInscripto && retencionConfig.aplica_ganancias) {
       // Art. 26: acumular bases sin IVA del mes + esta OP
       const acumuladoMensual = opMonthlyBase + opBaseSinIVA;
@@ -1750,16 +1919,46 @@ export default function FinanzasPage() {
       }
     }
     setOpForm(prev => ({ ...prev, aplica_ganancias, retencion_ganancias_pct }));
-  }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase, opForm.proveedor_id, opForm.fecha, opManualGanancias]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [opProvCondicion, opBaseSinIVA, retencionConfig, opMonthlyBase, opForm.proveedor_id, opForm.fecha, opManualGanancias]);
 
   // ── OP handlers ──
   const filteredOPs = useMemo(() => {
     let list = ordenesPago;
+    const query = opSearch.trim().toLocaleLowerCase();
+    if (query) {
+      list = list.filter((op) => [
+        op.numero,
+        op.proveedor_nombre,
+        op.proveedor_cuit,
+        op.medio_pago,
+        op.notas,
+        op.estado,
+        op.fecha,
+      ].some((value) => String(value || "").toLocaleLowerCase().includes(query)));
+    }
     if (opFilterRetencion) list = list.filter(o => o.retencion_ganancias_monto > 0);
+    if (opEnvioFilter === "enviada") list = list.filter(o => Boolean(o.email_enviado_at));
+    if (opEnvioFilter === "no_enviada") list = list.filter(o => !o.email_enviado_at);
     if (opFilterDesde) list = list.filter(o => o.fecha >= opFilterDesde);
     if (opFilterHasta) list = list.filter(o => o.fecha <= opFilterHasta);
     return list;
-  }, [ordenesPago, opFilterRetencion, opFilterDesde, opFilterHasta]);
+  }, [ordenesPago, opSearch, opEnvioFilter, opFilterRetencion, opFilterDesde, opFilterHasta]);
+
+  function handleGenerarRecibo(recibo: ReciboClienteRow) {
+    if (!sociedadActiva) return;
+    const html = generateReciboPDF({
+      numero: recibo.id,
+      fecha: recibo.fecha,
+      cliente: recibo.cliente_nombre,
+      descripcion: recibo.descripcion,
+      medio: recibo.medio,
+      monto: recibo.monto,
+      moneda: recibo.moneda,
+      conciliado: recibo.conciliado,
+    }, getSociedadPDF(sociedadActiva));
+    const numeroCorto = recibo.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase();
+    openPDFWindow(html, `Recibo-${numeroCorto || "cliente"}.pdf`);
+  }
 
   function exportOPRetencionesCSV() {
     const rows = filteredOPs.filter(o => o.retencion_ganancias_monto > 0 && o.estado !== "anulada");
@@ -1829,13 +2028,13 @@ export default function FinanzasPage() {
   // Art. 29: si la retención es menor al mínimo, no retener
   // Allow manual override of the final amount
   const opRetencionGanancias = opMontoRetencionManual !== null
-    ? Math.round(opMontoRetencionManual * 100) / 100
+    ? roundPaymentMoney(opMontoRetencionManual)
     : opRetencionGananciaBruta < retencionConfig.minimo_retencion_ganancias
       ? 0
-      : Math.round(opRetencionGananciaBruta * 100) / 100;
-  const opNetoAPagar = opMontoBruto - opRetencionGanancias;
-  const opTotalMedios = opMedios.reduce((s, m) => s + m.monto, 0);
-  const opDiferencia = opNetoAPagar - opTotalMedios;
+      : roundPaymentMoney(opRetencionGananciaBruta);
+  const opNetoAPagar = roundPaymentMoney(opMontoBruto - opRetencionGanancias);
+  const opTotalMedios = sumPaymentMoney(opMedios.map(m => m.monto));
+  const opDiferencia = roundPaymentMoney(opNetoAPagar - opTotalMedios);
   const opSaldoFavor = Math.max(0, -opDiferencia);
 
   async function handleParseComprobante(f: File) {
@@ -1844,20 +2043,34 @@ export default function FinanzasPage() {
     try {
       const formData = new FormData();
       formData.append("file", f);
+      formData.append("contexto", "orden_pago_proveedor");
       const res = await fetch("/api/parse-cobro", { method: "POST", body: formData });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "No se pudo leer el comprobante. Podés completar los medios de pago manualmente.");
       const pagos: any[] = json.data.pagos || (json.data.tipo ? [json.data] : []);
       if (pagos.length === 0) return;
       const mapped: OpMedioPago[] = pagos.map(d => {
-        const fields = paymentDocumentFields(d);
+        const fields = paymentDocumentFields(d, { context: "orden_pago_proveedor" });
+        const tipo = fields.tipo === "cheque" && fields.direccion === "emitido" ? "cheque_propio" : fields.tipo;
         return {
           ...makeOpMedio(fields.moneda),
           ...fields,
+          tipo,
+          // En una OP el comprobante adjunto acredita un pago saliente. Si la IA
+          // detecta un e-cheq, se trata de uno propio emitido; uno recibido de un
+          // cliente solo puede ingresarse seleccionandolo desde cartera.
+          origen_cheque: tipo === "echeq" || tipo === "cheque_propio" ? "propio" : undefined,
           banco_otro: "",
         };
       });
-      setOpMedios(prev => [...prev, ...mapped]);
+      setOpMedios(prev => {
+        const hasOnlyEmptyDefault = prev.length === 1
+          && prev[0].monto === 0
+          && !prev[0].banco
+          && !prev[0].numero_cheque
+          && !prev[0].echeq_id;
+        return hasOnlyEmptyDefault ? mapped : [...prev, ...mapped];
+      });
       setOpFCPendientes((prev) => {
         const allocation = parsedPaymentForSingleInvoice(mapped, prev);
         if (!allocation) return prev;
@@ -1872,14 +2085,46 @@ export default function FinanzasPage() {
     }
   }
 
+  async function loadOPPurchaseInvoiceRows(opId: string): Promise<{ numero: string; fecha: string; monto: number; detalle?: string }[]> {
+    const { data, error } = await (supabase as any)
+      .from("op_facturas_compra")
+      .select("factura_compra_id, monto, facturas_compra!inner(id, numero_factura, fecha, total, tipo, notas)")
+      .eq("orden_pago_id", opId);
+    if (error) throw error;
+
+    const seenInvoiceIds = new Set<string>();
+    return (data || []).map((link: any) => {
+      const invoice = Array.isArray(link.facturas_compra) ? link.facturas_compra[0] : link.facturas_compra;
+      if (!invoice?.id) throw new Error("La OP tiene un documento vinculado que ya no existe.");
+      if (seenInvoiceIds.has(invoice.id)) throw new Error(`La factura ${invoice.numero_factura || "sin número"} está vinculada dos veces a la misma OP.`);
+      seenInvoiceIds.add(invoice.id);
+
+      const invoiceNotes = String(invoice.notas || "");
+      const isTransport = /^Factura de transporte\s*(?:[—-]|$)/i.test(invoiceNotes);
+      const detalle = isTransport
+        ? invoiceNotes.replace(/^Factura de transporte\s*[—-]?\s*/i, "").trim()
+        : "";
+      return {
+        numero: invoice.numero_factura || "\u2014",
+        fecha: invoice.fecha,
+        monto: Number(link.monto ?? invoice.total),
+        ...(detalle ? { detalle } : {}),
+      };
+    });
+  }
+
   async function handleCreateOP() {
     if (!sociedadActiva?.id) { setOpError("No se pudo determinar la sociedad activa"); return; }
     if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
     const selectedFCs = opFCPendientes.filter(f => f.selected);
     if (opDatosError) { setOpError(opDatosError); return; }
+    if (new Set(selectedFCs.map((invoice) => invoice.id)).size !== selectedFCs.length) {
+      setOpError("La misma factura fue seleccionada dos veces. Volvé a abrir la OP y reintentá.");
+      return;
+    }
     if (opFCLoading || opCondicionLoading || opParsingCount > 0) { setOpError("Esperá a que termine la carga de facturas, condición fiscal y comprobantes antes de generar la OP."); return; }
     if (!opProvCondicion) { setOpError("Falta verificar la condición fiscal del proveedor. Completala en su ficha antes de generar la OP."); return; }
-    if (!["RI", "RESPONSABLE INSCRIPTO", "RESPONSABLE INSCRIPTO IVA", "MONOTRIBUTISTA", "MT", "EXENTO", "EX", "CONSUMIDOR FINAL", "CF", "NO RESPONSABLE"].includes(opProvCondicion.trim().toUpperCase())) {
+    if (!isKnownCondicionIva(opProvCondicion)) {
       setOpError("La condición fiscal del proveedor no está reconocida. Revisá su ficha antes de generar la OP."); return;
     }
     if (selectedFCs.length > 0 && selectedFCs.every(f => f.moneda === "USD")) {
@@ -1897,10 +2142,15 @@ export default function FinanzasPage() {
     if (opMontoBruto <= 0) { setOpError("El monto a pagar debe ser mayor a 0"); return; }
     // Partial payments are selected per invoice BEFORE calculating retention.
     // Never prorate the final retention: monthly thresholds are not linear.
-    const totalMediosVal = opMedios.reduce((s, m) => s + m.monto, 0);
+    const totalMediosVal = sumPaymentMoney(opMedios.map(m => m.monto));
     const selectedEcheqIds = opMedios.map(m => m.echeq_id).filter((id): id is string => Boolean(id));
     if (new Set(selectedEcheqIds).size !== selectedEcheqIds.length) { setOpError("Un mismo e-cheq no puede usarse en dos medios de la OP"); return; }
-    if (opMedios.some(m => ["cheque", "echeq"].includes(m.tipo) && !m.echeq_id)) { setOpError("Los cheques de terceros deben seleccionarse desde la cartera para reservarlos junto con la OP"); return; }
+    if (opMedios.some(m => (m.tipo === "cheque" || (m.tipo === "echeq" && m.origen_cheque !== "propio")) && !m.echeq_id)) { setOpError("Los cheques de terceros deben seleccionarse desde la cartera para reservarlos junto con la OP"); return; }
+    const proveedorPago = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
+    const proveedorCuitPago = String(proveedorPago?.cuit || "").replace(/\D/g, "");
+    if (opMedios.some(m => ["cheque", "cheque_propio", "echeq"].includes(m.tipo)) && proveedorCuitPago.length !== 11) {
+      setOpError("El proveedor no tiene un CUIT válido de 11 dígitos. Corregilo en Proveedores antes de emitir el cheque o eCheq."); return;
+    }
     if (opMedios.some(m => !Number.isFinite(m.monto) || m.monto < 0)) { setOpError("Los medios de pago no pueden tener importes negativos o inválidos"); return; }
     if (totalMediosVal <= 0) { setOpError("Ingresá al menos un medio de pago con monto mayor a 0"); return; }
     if (!Number.isFinite(opRetencionGanancias) || opRetencionGanancias < 0 || opRetencionGanancias > opMontoBruto) { setOpError("La retención debe estar entre cero y el importe bruto a pagar"); return; }
@@ -1911,17 +2161,20 @@ export default function FinanzasPage() {
     if (opDiffMedios > 0.01) {
       if (!confirm(`Los medios superan el neto a pagar en $${opDiffMedios.toFixed(2)}. El excedente quedará como crédito a nuestro favor en la CC del proveedor. ¿Continuar?`)) return;
     }
-    const montoBrutoEfectivo = opMontoBruto;
-    const retencionEfectiva = opRetencionGanancias;
-    const baseRetencionEfectiva = opBaseSinIVA;
+    const montoBrutoEfectivo = roundPaymentMoney(opMontoBruto);
+    const retencionEfectiva = roundPaymentMoney(opRetencionGanancias);
+    const baseRetencionEfectiva = roundPaymentMoney(opBaseSinIVA);
 
     setOpSaving(true);
     setOpError("");
     try {
       if (!opRequestKeyRef.current) opRequestKeyRef.current = crypto.randomUUID();
       const mediosPayload = opMedios.filter(m => m.monto > 0).map(m => ({
-        tipo: m.tipo,
-        monto: m.monto,
+        // La RPC representa todos los cheques emitidos por la sociedad como
+        // cheque_propio. tipo_cheque conserva si es fisico o electronico.
+        tipo: m.tipo === "echeq" && m.origen_cheque === "propio" && !m.echeq_id ? "cheque_propio" : m.tipo,
+        tipo_cheque: m.tipo === "echeq" ? "echeq" : "fisico",
+        monto: roundPaymentMoney(m.monto),
         fecha: m.fecha,
         fecha_emision: m.fecha_emision || null,
         fecha_cobro: m.fecha_cobro || m.fecha,
@@ -1930,8 +2183,10 @@ export default function FinanzasPage() {
         moneda: m.moneda,
         cotizacion: m.cotizacion,
         echeq_id: m.echeq_id || null,
+        beneficiario_cuit: proveedorCuitPago || null,
+        beneficiario_nombre: proveedorPago?.razon_social || null,
       }));
-      const facturasPayload = selectedFCs.map(fc => ({ id: fc.id, monto: fc.monto_a_pagar }));
+      const facturasPayload = selectedFCs.map(fc => ({ id: fc.id, monto: roundPaymentMoney(fc.monto_a_pagar) }));
       const { data: opData, error } = await (supabase as any).rpc("registrar_pago_proveedor_seguro", {
         p_sociedad_id: sociedadActiva.id,
         p_request_key: opRequestKeyRef.current,
@@ -2003,89 +2258,17 @@ export default function FinanzasPage() {
         await fetchData();
         return;
       }
-      // Get OP details for movimiento cleanup
-      let opQuery = (supabase as any).from("ordenes_pago").select("numero, proveedor_id").eq("id", id);
-      if (sociedadActiva?.id) opQuery = opQuery.eq("sociedad_id", sociedadActiva.id);
-      const { data: opRow, error: opReadError } = await opQuery.single();
-      if (opReadError) throw opReadError;
-      let opUpdate = (supabase as any).from("ordenes_pago").update({ estado: "anulada" }).eq("id", id);
-      if (sociedadActiva?.id) opUpdate = opUpdate.eq("sociedad_id", sociedadActiva.id);
-      const { error } = await opUpdate;
-      if (error) throw error;
-
-      // No borrar movimientos: la anulación debe conservar el rastro contable.
-      // Se marcan como anulados para excluirlos de saldos y conciliaciones.
-      // Prefer orden_pago_id link; fallback to description pattern for legacy data.
-      let movQuery = (supabase as any).from("movimientos").select("id, monto, descripcion, anulado")
-        .eq("orden_pago_id", id);
-      if (sociedadActiva?.id) movQuery = movQuery.eq("sociedad_id", sociedadActiva.id);
-      let { data: movimientosAnular, error: movReadError } = await movQuery;
-      if (movReadError) throw movReadError;
-      // Fallback for old movimientos without orden_pago_id.
-      if ((!movimientosAnular || movimientosAnular.length === 0) && opRow?.numero && opRow?.proveedor_id) {
-        let movFallback = (supabase as any).from("movimientos").select("id, monto, descripcion, anulado")
-          .like("descripcion", `${opRow.numero} — %`).eq("proveedor_id", opRow.proveedor_id);
-        if (sociedadActiva?.id) movFallback = movFallback.eq("sociedad_id", sociedadActiva.id);
-        const { data: legacyMovimientos, error: fallbackError } = await movFallback;
-        if (fallbackError) throw fallbackError;
-        movimientosAnular = legacyMovimientos;
-      }
-      const anuladoAt = new Date().toISOString();
-      for (const movimiento of movimientosAnular || []) {
-        if (movimiento.anulado) continue;
-        let anularMovimiento = (supabase as any).from("movimientos").update({
-          anulado: true,
-          monto_original: Number(movimiento.monto),
-          monto: 0,
-          anulado_at: anuladoAt,
-          anulado_por: profile?.id ?? null,
-          conciliado: false,
-          descripcion: `[ANULADO] ${String(movimiento.descripcion || "").replace(/^\[ANULADO\]\s*/, "")}`,
-        }).eq("id", movimiento.id);
-        if (sociedadActiva?.id) anularMovimiento = anularMovimiento.eq("sociedad_id", sociedadActiva.id);
-        const { error: movError } = await anularMovimiento;
-        if (movError) throw movError;
-      }
-
-      // Un e-cheq endosado por esta OP vuelve a estar disponible en cartera.
-      let opMediosQuery = (supabase as any).from("ordenes_pago").select("medios_pago").eq("id", id);
-      if (sociedadActiva?.id) opMediosQuery = opMediosQuery.eq("sociedad_id", sociedadActiva.id);
-      const { data: opMediosRow } = await opMediosQuery.single();
-      let mediosAnulados: any[] = [];
-      try { mediosAnulados = typeof opMediosRow?.medios_pago === "string" ? JSON.parse(opMediosRow.medios_pago) : (opMediosRow?.medios_pago || []); } catch { mediosAnulados = []; }
-      for (const medio of mediosAnulados) {
-        if (!medio?.echeq_id) continue;
-        let echeqUpdate = (supabase as any).from("echeqs").update({ estado: "en_cartera", destino_nombre: null }).eq("id", medio.echeq_id);
-        if (sociedadActiva?.id) echeqUpdate = echeqUpdate.eq("sociedad_id", sociedadActiva.id);
-        const { error: echeqErr } = await echeqUpdate;
-        if (echeqErr) console.error("Error restaurando echeq:", echeqErr);
-      }
-
-      // Revertir FCs vinculadas a pendiente si quedaron como pagadas
-      const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id").eq("orden_pago_id", id);
-      if (links && links.length > 0) {
-        for (const link of links) {
-          const { data: allPayments } = await (supabase as any)
-            .from("op_facturas_compra").select("monto, orden_pago_id")
-            .eq("factura_compra_id", link.factura_compra_id);
-          const { data: anuladas } = await (supabase as any)
-            .from("ordenes_pago").select("id, sociedad_id").in("id", (allPayments || []).map((p: any) => p.orden_pago_id)).eq("estado", "anulada");
-          const anuladasSociedad = sociedadActiva?.id ? (anuladas || []).filter((a: any) => a.sociedad_id === sociedadActiva.id) : (anuladas || []);
-          const anuladasSet = new Set(anuladasSociedad.map((a: any) => a.id));
-          const totalVigente = (allPayments || []).filter((p: any) => !anuladasSet.has(p.orden_pago_id)).reduce((s: number, p: any) => s + Number(p.monto), 0);
-          let fcQuery = (supabase as any).from("facturas_compra").select("total, estado").eq("id", link.factura_compra_id);
-          if (sociedadActiva?.id) fcQuery = fcQuery.eq("sociedad_id", sociedadActiva.id);
-          const { data: fc } = await fcQuery.single();
-          if (fc && fc.estado === "pagada" && totalVigente < Number(fc.total) - 1) {
-            let fcUpdate = (supabase as any).from("facturas_compra").update({ estado: "pendiente" }).eq("id", link.factura_compra_id);
-            if (sociedadActiva?.id) fcUpdate = fcUpdate.eq("sociedad_id", sociedadActiva.id);
-            await fcUpdate;
-          }
-        }
-      }
+      const { error } = await (supabase as any).rpc("anular_orden_pago_segura", {
+        p_orden_pago_id: id,
+        p_sociedad_id: sociedadActiva.id,
+      });
+      if (error) throw new Error(error.message || "No se pudo anular la orden de pago");
 
       await fetchData();
-    } catch (err) { alert("Error anulando OP: " + (err instanceof Error ? err.message : String(err))); }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : (err as any)?.message || "No se pudo anular la orden de pago";
+      alert("Error anulando OP: " + message);
+    }
   }
 
   async function handlePagarOP(id: string) {
@@ -2136,20 +2319,13 @@ export default function FinanzasPage() {
     } catch { /* ignore */ }
 
     // Fetch linked FCs
-    let fcsRows: { numero: string; fecha: string; monto: number }[] = [];
+    let fcsRows: { numero: string; fecha: string; monto: number; detalle?: string }[] = [];
     try {
-      const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto").eq("orden_pago_id", op.id);
-      if (links && links.length > 0) {
-        const fcIds = links.map((l: any) => l.factura_compra_id);
-        const { data: fcs } = await (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, total").in("id", fcIds);
-        if (fcs && fcs.length > 0) {
-          fcsRows = fcs.map((fc: any) => {
-            const link = links.find((l: any) => l.factura_compra_id === fc.id);
-            return { numero: fc.numero_factura || "\u2014", fecha: fc.fecha, monto: Number(link?.monto ?? fc.total) };
-          });
-        }
-      }
-    } catch { /* ignore */ }
+      fcsRows = await loadOPPurchaseInvoiceRows(op.id);
+    } catch (error) {
+      alert(`No se pudo reconstruir el detalle de ${op.numero || "la OP"}: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
 
     // Build medios array
     const medios = op.medios_pago && op.medios_pago.length > 0
@@ -2617,14 +2793,13 @@ export default function FinanzasPage() {
   async function handleRegistrarPagoParcialDirecto() {
     const selected = opFCPendientes.filter(f => f.selected);
     const fc = selected.length === 1 ? selected[0] : null;
-    const total = opMedios.reduce((sum, medio) => sum + Number(medio.monto), 0);
+    const total = sumPaymentMoney(opMedios.map(medio => Number(medio.monto)));
     if (!fc) { setOpError("Seleccioná una sola factura para registrar el pago parcial directo"); return; }
     if (!sociedadActiva?.id) { setOpError("No se pudo determinar la sociedad activa"); return; }
     if (opDatosError) { setOpError(opDatosError); return; }
     if (opFCLoading || opCondicionLoading || opParsingCount > 0) { setOpError("Esperá a que terminen de verificarse facturas, condición fiscal y comprobantes"); return; }
     if (!opProvCondicion || !opForm.proveedor_id) { setOpError("Falta verificar la condición fiscal del proveedor"); return; }
-    const knownConditions = ["RI", "RESPONSABLE INSCRIPTO", "RESPONSABLE INSCRIPTO IVA", "MONOTRIBUTISTA", "MT", "EXENTO", "EX", "CONSUMIDOR FINAL", "CF", "NO RESPONSABLE"];
-    if (!knownConditions.includes(String(opProvCondicion).trim().toUpperCase())) { setOpError("La condición fiscal del proveedor no está reconocida. Revisá su ficha antes de registrar el pago"); return; }
+    if (!isKnownCondicionIva(opProvCondicion)) { setOpError("La condición fiscal del proveedor no está reconocida. Revisá su ficha antes de registrar el pago"); return; }
     if (fc.moneda === "USD") {
       setOpModalOpen(false);
       setFxPago({proveedorId: opForm.proveedor_id, documents: [{id:fc.id,numero:fc.numero,saldo:fc.saldo_pendiente,total:fc.total,subtotal:fc.subtotal,cotizacion:undefined}]});
@@ -2634,8 +2809,8 @@ export default function FinanzasPage() {
     if (opForm.usar_monto_manual) { setOpError("Para un pago parcial directo indicá el importe bruto en «A pagar» de la factura"); return; }
     if (fc.moneda !== opForm.moneda || opMedios.some(m => m.moneda !== opForm.moneda)) { setOpError("La factura y todos los medios deben estar en la misma moneda"); return; }
     if (opMedios.some(m => ["cheque", "cheque_propio", "echeq"].includes(m.tipo))) { setOpError("Los pagos parciales directos con cheque o e-cheq todavía no están habilitados porque requieren reservar la cartera en la misma transacción"); return; }
-    const bruto = Number(fc.monto_a_pagar);
-    const retencion = Number(opRetencionGanancias);
+    const bruto = roundPaymentMoney(Number(fc.monto_a_pagar));
+    const retencion = roundPaymentMoney(Number(opRetencionGanancias));
     if (!Number.isFinite(bruto) || bruto <= 0 || bruto >= fc.saldo_pendiente - 0.005) { setOpError("El importe bruto debe ser positivo y menor al saldo pendiente; para cancelarlo usá Generar OP"); return; }
     if (!Number.isFinite(retencion) || retencion < 0 || retencion > bruto) { setOpError("La retención debe estar entre cero y el bruto a pagar"); return; }
     if (opMedios.some(m => !Number.isFinite(Number(m.monto)) || Number(m.monto) < 0) || total <= 0) { setOpError("Ingresá medios de pago válidos, sin importes negativos"); return; }
@@ -2647,7 +2822,7 @@ export default function FinanzasPage() {
       const pctGanancias = opForm.aplica_ganancias ? Number(opForm.retencion_ganancias_pct) : 0;
       const mediosPayload = opMedios.filter(m => Number(m.monto) > 0).map(m => ({
         tipo: m.tipo,
-        monto: Number(m.monto),
+        monto: roundPaymentMoney(Number(m.monto)),
         fecha: m.fecha,
         moneda: m.moneda,
         cotizacion: m.cotizacion,
@@ -2659,12 +2834,12 @@ export default function FinanzasPage() {
         p_proveedor_id: opForm.proveedor_id,
         p_fecha: opForm.fecha,
         p_moneda: opForm.moneda,
-        p_facturas: [{ id: fc.id, monto: bruto }],
+        p_facturas: [{ id: fc.id, monto: roundPaymentMoney(bruto) }],
         p_medios: mediosPayload,
         p_monto_bruto: bruto,
-        p_base_retencion: opBaseSinIVA,
+        p_base_retencion: roundPaymentMoney(opBaseSinIVA),
         p_retencion_pct: pctGanancias,
-        p_retencion_monto: retencion,
+        p_retencion_monto: roundPaymentMoney(retencion),
         p_notas: opForm.notas,
         p_sobre_verde: false,
       });
@@ -2926,39 +3101,42 @@ export default function FinanzasPage() {
   async function fetchCCDetailCliente(cliente: CCRow) {
     setCcDetailCliente(cliente); setCcDetailLoading(true); setCcDetailFacturas([]); setCcDetailMovimientos([]);
     try {
-      // Refresh saldo from view
-      const { data: freshSaldo } = await (supabase as any).from("v_cuenta_corriente_clientes").select("saldo").eq("id", cliente.id).maybeSingle();
-      if (freshSaldo) setCcDetailCliente(prev => prev ? { ...prev, saldo_cuenta_corriente: freshSaldo.saldo ?? prev.saldo_cuenta_corriente } : prev);
-      let qF = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado").eq("cliente_id", cliente.id).in("estado", ["emitida", "pagada", "parcial"]).order("fecha", { ascending: false });
+      let qF = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado").eq("cliente_id", cliente.id).in("estado", ["emitida", "pagada", "parcial", "vencida"]).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qF = qF.eq("sociedad_id" as any, sociedadActiva.id);
-      const { data: fData } = await qF;
+      const { data: fData, error: fError } = await qF;
+      if (fError) throw fError;
+      const facturasPositivas = (fData || []).filter((factura: any) => !String(factura.tipo || "").toUpperCase().startsWith("NC"));
       // Fetch cobrado per factura from movimientos + cobro_aplicaciones
       let cobradoMap: Record<string, number> = {};
-      if (fData && fData.length > 0) {
-        const fIds = fData.map((f: any) => f.id);
-        let qCobros = (supabase as any).from("movimientos").select("factura_id, monto, anulado").in("factura_id", fIds);
+      if (facturasPositivas.length > 0) {
+        const fIds = facturasPositivas.map((f: any) => f.id);
+        let qCobros = (supabase as any).from("movimientos").select("id, factura_id, monto, anulado").in("factura_id", fIds);
         if (sociedadActiva?.id) qCobros = qCobros.eq("sociedad_id", sociedadActiva.id);
-        const { data: cobros } = await qCobros;
-        if (cobros) (cobros as any[]).filter((m: any) => !m.anulado).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
+        const { data: cobros, error: cobrosError } = await qCobros;
+        if (cobrosError) throw cobrosError;
         // Also count consolidated cobros via cobro_aplicaciones
-        let qAplic = (supabase as any).from("cobro_aplicaciones").select("factura_id, monto, movimientos!inner(anulado)").in("factura_id", fIds);
-        if (sociedadActiva?.id) qAplic = qAplic.eq("sociedad_id", sociedadActiva.id);
-        const { data: aplicaciones } = await qAplic;
-        if (aplicaciones) (aplicaciones as any[]).filter((a: any) => { const mov = Array.isArray(a.movimientos) ? a.movimientos[0] : a.movimientos; return mov && !mov.anulado; }).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
+        let qAplic = (supabase as any).from("cobro_aplicaciones").select("movimiento_id, factura_id, monto, movimientos!inner(anulado, sociedad_id)").in("factura_id", fIds);
+        if (sociedadActiva?.id) qAplic = qAplic.eq("movimientos.sociedad_id", sociedadActiva.id);
+        const { data: aplicaciones, error: aplicacionesError } = await qAplic;
+        if (aplicacionesError) throw aplicacionesError;
+        const movimientosAplicados = new Set<string>();
+        if (aplicaciones) (aplicaciones as any[]).filter((a: any) => { const mov = Array.isArray(a.movimientos) ? a.movimientos[0] : a.movimientos; return mov && !mov.anulado; }).forEach((a: any) => {
+          if (a.movimiento_id) movimientosAplicados.add(a.movimiento_id);
+          cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto);
+        });
+        if (cobros) (cobros as any[]).filter((m: any) => !m.anulado && !movimientosAplicados.has(m.id)).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
       }
-      if (fData) setCcDetailFacturas(fData.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.fecha_vencimiento ?? null, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: f.estado })));
+      setCcDetailFacturas(facturasPositivas.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.fecha_vencimiento ?? null, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: f.estado })));
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
-      const { data: mData } = await qM;
+      const { data: mData, error: mError } = await qM;
+      if (mError) throw mError;
       if (mData) setCcDetailMovimientos(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, factura_id: m.factura_id ?? null, conciliado: !!m.conciliado, cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
     } catch (err) { console.error("CC detail err:", err); } finally { setCcDetailLoading(false); }
   }
   async function fetchCCDetailProveedor(prov: CCRow) {
     setCcDetailProveedor(prov); setCcDetailProvLoading(true); setCcDetailFCProv([]); setCcDetailMovProv([]);
     try {
-      // Refresh saldo from view
-      const { data: freshSaldo } = await (supabase as any).from("v_cuenta_corriente_proveedores").select("saldo").eq("id", prov.id).maybeSingle();
-      if (freshSaldo) setCcDetailProveedor(prev => prev ? { ...prev, saldo_cuenta_corriente: freshSaldo.saldo ?? prev.saldo_cuenta_corriente } : prev);
       let qFC = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, fecha_vencimiento, total, estado, moneda").eq("proveedor_id", prov.id).in("estado", ["pendiente", "pagada", "recibida"]).not("tipo_comprobante", "ilike", "NC%").order("fecha", { ascending: false });
       if (sociedadActiva?.id) qFC = qFC.eq("sociedad_id", sociedadActiva.id);
       const { data: fcData } = await qFC;
@@ -2994,19 +3172,26 @@ export default function FinanzasPage() {
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       const { data, error } = await q;
       if (error) throw error;
-      if (data && data.length > 0) {
-        const ids = data.map((f: any) => f.id);
-        let qCobMovs = (supabase as any).from("movimientos").select("factura_id, monto, anulado").in("factura_id", ids);
+      const facturasCobrables = (data || []).filter((factura: any) => !String(factura.tipo || "").toUpperCase().startsWith("NC"));
+      if (facturasCobrables.length > 0) {
+        const ids = facturasCobrables.map((f: any) => f.id);
+        let qCobMovs = (supabase as any).from("movimientos").select("id, factura_id, monto, anulado").in("factura_id", ids);
         if (sociedadActiva?.id) qCobMovs = qCobMovs.eq("sociedad_id", sociedadActiva.id);
-        const { data: movs } = await qCobMovs;
+        const { data: movs, error: movsError } = await qCobMovs;
+        if (movsError) throw movsError;
         const cobradoMap: Record<string, number> = {};
-        (movs || []).filter((m: any) => !m.anulado).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
-        let qCobAplic = (supabase as any).from("cobro_aplicaciones").select("factura_id, monto, movimientos!inner(anulado)").in("factura_id", ids);
-        if (sociedadActiva?.id) qCobAplic = qCobAplic.eq("sociedad_id", sociedadActiva.id);
-        const { data: aplicaciones } = await qCobAplic;
-        if (aplicaciones) (aplicaciones as any[]).filter((a: any) => { const mov = Array.isArray(a.movimientos) ? a.movimientos[0] : a.movimientos; return mov && !mov.anulado; }).forEach((a: any) => { cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto); });
-        setCobroMultiFCs(data.map((f: any) => { const cobrado = cobradoMap[f.id] || 0; const saldo = Math.max(0, Number(f.total) - Number(f.total_acreditado || 0) - cobrado); return { id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", tipo_cambio: Number(f.tipo_cambio) || undefined, saldo, selected: false }; }).filter((f: CobroMultiFC) => f.saldo > 0.01));
-      }
+        let qCobAplic = (supabase as any).from("cobro_aplicaciones").select("movimiento_id, factura_id, monto, movimientos!inner(anulado, sociedad_id)").in("factura_id", ids);
+        if (sociedadActiva?.id) qCobAplic = qCobAplic.eq("movimientos.sociedad_id", sociedadActiva.id);
+        const { data: aplicaciones, error: aplicacionesError } = await qCobAplic;
+        if (aplicacionesError) throw aplicacionesError;
+        const movimientosAplicados = new Set<string>();
+        if (aplicaciones) (aplicaciones as any[]).filter((a: any) => { const mov = Array.isArray(a.movimientos) ? a.movimientos[0] : a.movimientos; return mov && !mov.anulado; }).forEach((a: any) => {
+          if (a.movimiento_id) movimientosAplicados.add(a.movimiento_id);
+          cobradoMap[a.factura_id] = (cobradoMap[a.factura_id] || 0) + Number(a.monto);
+        });
+        (movs || []).filter((m: any) => !m.anulado && !movimientosAplicados.has(m.id)).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
+        setCobroMultiFCs(facturasCobrables.map((f: any) => { const cobrado = cobradoMap[f.id] || 0; const saldo = Math.max(0, Number(f.total) - Number(f.total_acreditado || 0) - cobrado); return { id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", tipo_cambio: Number(f.tipo_cambio) || undefined, saldo, selected: false }; }).filter((f: CobroMultiFC) => f.saldo > 0.01));
+      } else setCobroMultiFCs([]);
     } catch (err) { setCobroMultiFCs([]); alert(err instanceof Error ? err.message : "No se pudieron verificar los saldos."); }
   }
   function cobroMultiOpenLiquidacion() {
@@ -3245,7 +3430,6 @@ export default function FinanzasPage() {
   const totalPagosARS = movimientosMesARS.filter((m) => tiposEgreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
   const totalCobrosUSD = movimientosMesUSD.filter((m) => tiposIngreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
   const totalPagosUSD = movimientosMesUSD.filter((m) => tiposEgreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const sinConciliar = movimientos.filter((m) => !m.conciliado && !m.anulado).length;
   const tarjetasOPMes = ordenesPago
     .filter((op) => op.estado !== "anulada" && op.fecha?.startsWith(currentMonth))
     .flatMap((op) => op.medios_pago || [])
@@ -3320,8 +3504,39 @@ export default function FinanzasPage() {
   const balVencidoCobrarARS = balanceData ? sumBands(balanceData.cobrar, "ARS", ["vencido"]) : 0;
   const balVencidoPagarARS = balanceData ? sumBands(balanceData.pagar, "ARS", ["vencido"]) : 0;
 
+  const deudasCompra = useMemo<VencimientoDeudaRow[]>(() => facturasCompra
+    .filter((factura) => factura.estado !== "anulada" && !String(factura.tipo_comprobante || "").toUpperCase().startsWith("NC"))
+    .map((factura) => ({
+      id: `compra-${factura.id}`,
+      operacion: "compra" as const,
+      entidad_tipo: "proveedor" as const,
+      entidad_id: factura.proveedor_id,
+      entidad_nombre: factura.proveedor_nombre,
+      documento: factura.numero_factura,
+      fecha: factura.fecha,
+      vencimiento: factura.fecha_vencimiento || factura.fecha,
+      total: factura.total,
+      saldo: saldoPendienteFacturaCompra(factura),
+      moneda: factura.moneda,
+    }))
+    .filter((deuda) => deuda.saldo > 0.01), [facturasCompra]);
+
+  const vencimientosFiltrados = useMemo(() => [...deudasVenta, ...deudasCompra]
+    .filter((deuda) => !vencOperacion || deuda.operacion === vencOperacion)
+    .filter((deuda) => !vencEntidadTipo || deuda.entidad_tipo === vencEntidadTipo)
+    .filter((deuda) => !vencMoneda || deuda.moneda === vencMoneda)
+    .filter((deuda) => !vencEntidad.trim() || deuda.entidad_nombre.toLocaleLowerCase().includes(vencEntidad.trim().toLocaleLowerCase()))
+    .sort((a, b) => a.vencimiento.localeCompare(b.vencimiento)), [deudasVenta, deudasCompra, vencOperacion, vencEntidadTipo, vencMoneda, vencEntidad]);
+
+  const recibosFiltrados = useMemo(() => recibosClientes.filter((recibo) => {
+    const query = reciboSearch.trim().toLocaleLowerCase();
+    return !query || recibo.cliente_nombre.toLocaleLowerCase().includes(query) || recibo.descripcion.toLocaleLowerCase().includes(query);
+  }), [recibosClientes, reciboSearch]);
+
   const tabs: { id: FinanzasTab; label: string }[] = [
     { id: "movimientos", label: "Movimientos" },
+    { id: "recibos", label: "Recibos" },
+    { id: "vencimientos", label: "Vencimientos" },
     { id: "facturacion", label: "Fact. Ventas" },
     { id: "facturas_compra", label: "Fact. Compra" },
     { id: "ordenes_pago", label: "Órdenes de pago" },
@@ -3408,6 +3623,27 @@ export default function FinanzasPage() {
       <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setEditingMovId(null); setMovForm(emptyMovForm); setMovClienteSearch(""); setMovProvSearch(""); setFormError(""); setModalOpen(true); } }} />
       <div className="p-4 sm:p-8 space-y-6">
         {cargaLentaAviso}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setResumenFinanciero((actual) => actual === "caja" ? null : "caja")}
+            aria-expanded={resumenFinanciero === "caja"}
+            className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${resumenFinanciero === "caja" ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300" : "border-zinc-200 bg-white text-zinc-700 hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}
+          >
+            <Landmark className="h-4 w-4" /> Caja
+          </button>
+          <button
+            type="button"
+            onClick={() => setResumenFinanciero((actual) => actual === "balance" ? null : "balance")}
+            aria-expanded={resumenFinanciero === "balance"}
+            className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${resumenFinanciero === "balance" ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300" : "border-zinc-200 bg-white text-zinc-700 hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}
+          >
+            <Target className="h-4 w-4" /> Balance
+          </button>
+          <span className="text-xs text-zinc-400">Abrí sólo el resumen que necesites; el resto del módulo queda visible.</span>
+        </div>
+
+        {resumenFinanciero === "caja" && (<>
         {/* ── Resumen de Caja ── */}
         <Card className="p-4">
           <div className="flex items-center justify-between mb-3">
@@ -3505,15 +3741,10 @@ export default function FinanzasPage() {
           </div>
           <p className="mt-3 text-xs text-zinc-500">Los pagos con tarjeta quedan reflejados en la orden de pago y su movimiento contable; no se suman al saldo de caja.</p>
         </Card>
-
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <StatCard title="Saldo CC clientes" value={formatCurrency(ccClientes.reduce((a, c) => a + c.saldo_cuenta_corriente, 0))} icon={Wallet} iconColor="text-blue-600" />
-          <StatCard title="Credito disponible" value={`${formatCurrency(totalDisponibleCreditoARS)}${totalDisponibleCreditoUSD > 0 ? ` + ${formatCurrency(totalDisponibleCreditoUSD, "USD")}` : ""}`} icon={CreditCard} iconColor="text-emerald-600" />
-          <StatCard title="Sin conciliar" value={`${sinConciliar} movimientos`} icon={Clock} iconColor="text-amber-500" />
-        </div>
+        </>)}
 
         {/* ── Balance Debe / Haber ── */}
-        {balanceData && (
+        {resumenFinanciero === "balance" && balanceData && (
           <Card className="p-4">
             <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
               <Target className="h-4 w-4 text-orange-500" />
@@ -3647,6 +3878,91 @@ export default function FinanzasPage() {
               onRowClick={(row) => openMovDetail(row)}
             />
           </Card>
+          </>
+        )}
+
+        {/* ── Recibos de clientes ── */}
+        {tab === "recibos" && (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Recibos de clientes</h2>
+                <p className="text-sm text-zinc-500">Historial persistente de los cobros registrados.</p>
+              </div>
+              <div className="relative w-full max-w-sm">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                <input value={reciboSearch} onChange={(event) => setReciboSearch(event.target.value)} placeholder="Buscar cliente o detalle..." className="w-full rounded-lg border border-zinc-200 py-2 pl-9 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <StatCard title="Recibos registrados" value={String(recibosFiltrados.length)} icon={Receipt} iconColor="text-blue-600" />
+              <StatCard title="Cobrado ARS" value={formatCurrency(recibosFiltrados.filter((recibo) => recibo.moneda === "ARS").reduce((sum, recibo) => sum + recibo.monto, 0))} icon={ArrowDownLeft} iconColor="text-emerald-600" />
+              <StatCard title="Cobrado USD" value={formatCurrency(recibosFiltrados.filter((recibo) => recibo.moneda === "USD").reduce((sum, recibo) => sum + recibo.monto, 0), "USD")} icon={ArrowDownLeft} iconColor="text-emerald-600" />
+            </div>
+            <Card className="overflow-hidden p-0">
+              <DataTable<ReciboClienteRow>
+                columns={[
+                  { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span>{formatDate(row.fecha)}</span> },
+                  { key: "cliente_nombre", label: "Cliente", sortable: true, render: (row) => <span className="font-medium">{row.cliente_nombre}</span> },
+                  { key: "descripcion", label: "Detalle", render: (row) => <span className="block max-w-md truncate text-sm text-zinc-500">{row.descripcion}</span> },
+                  { key: "medio", label: "Medio", render: (row) => <Badge variant="outline">{row.medio}</Badge> },
+                  { key: "monto", label: "Importe", className: "text-right", sortable: true, render: (row) => <span className="block text-right font-mono font-semibold text-emerald-600">{formatCurrency(row.monto, row.moneda)}</span> },
+                  { key: "conciliado", label: "Estado", render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Conciliado" : "Pendiente"}</Badge> },
+                  { key: "actions", label: "", sortable: false, render: (row) => (
+                    <button type="button" onClick={() => handleGenerarRecibo(row)} className="inline-flex items-center gap-1 rounded-md border border-zinc-200 px-2 py-1 text-xs font-medium text-zinc-600 hover:border-orange-300 hover:text-orange-600 dark:border-zinc-700 dark:text-zinc-300" title="Descargar recibo en PDF">
+                      <Download className="h-3.5 w-3.5" /> PDF
+                    </button>
+                  )},
+                ]}
+                data={recibosFiltrados}
+                emptyMessage="Todavía no hay cobros de clientes registrados"
+              />
+            </Card>
+          </>
+        )}
+
+        {/* ── Vencimientos de deuda ── */}
+        {tab === "vencimientos" && (
+          <>
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Vencimientos de deuda</h2>
+              <p className="text-sm text-zinc-500">Saldos abiertos calculados desde facturas, notas de crédito, cobros y pagos reales.</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-4">
+              <select value={vencOperacion} onChange={(event) => setVencOperacion(event.target.value as "" | "venta" | "compra")} className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                <option value="">Compra y venta</option><option value="venta">Venta / a cobrar</option><option value="compra">Compra / a pagar</option>
+              </select>
+              <select value={vencEntidadTipo} onChange={(event) => setVencEntidadTipo(event.target.value as "" | "cliente" | "proveedor")} className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                <option value="">Clientes y proveedores</option><option value="cliente">Clientes</option><option value="proveedor">Proveedores</option>
+              </select>
+              <select value={vencMoneda} onChange={(event) => setVencMoneda(event.target.value as "" | "ARS" | "USD")} className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                <option value="">ARS y USD</option><option value="ARS">ARS</option><option value="USD">USD</option>
+              </select>
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                <input value={vencEntidad} onChange={(event) => setVencEntidad(event.target.value)} placeholder="Cliente o proveedor..." className="w-full rounded-lg border border-zinc-200 py-2 pl-9 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <StatCard title="A cobrar ARS" value={formatCurrency(vencimientosFiltrados.filter((item) => item.operacion === "venta" && item.moneda === "ARS").reduce((sum, item) => sum + item.saldo, 0))} icon={ArrowDownLeft} iconColor="text-emerald-600" />
+              <StatCard title="A pagar ARS" value={formatCurrency(vencimientosFiltrados.filter((item) => item.operacion === "compra" && item.moneda === "ARS").reduce((sum, item) => sum + item.saldo, 0))} icon={ArrowUpRight} iconColor="text-red-600" />
+              <StatCard title="Documentos vencidos" value={String(vencimientosFiltrados.filter((item) => item.vencimiento < todayAR()).length)} icon={AlertTriangle} iconColor="text-amber-600" />
+            </div>
+            <Card className="overflow-hidden p-0">
+              <DataTable<VencimientoDeudaRow>
+                columns={[
+                  { key: "vencimiento", label: "Vencimiento", sortable: true, render: (row) => <span className={row.vencimiento < todayAR() ? "font-semibold text-red-600" : ""}>{formatDate(row.vencimiento)}</span> },
+                  { key: "operacion", label: "Operación", sortable: true, render: (row) => <Badge variant={row.operacion === "venta" ? "success" : "danger"}>{row.operacion === "venta" ? "Venta" : "Compra"}</Badge> },
+                  { key: "entidad_tipo", label: "Tipo", render: (row) => <Badge variant="outline">{row.entidad_tipo === "cliente" ? "Cliente" : "Proveedor"}</Badge> },
+                  { key: "entidad_nombre", label: "Entidad", sortable: true, render: (row) => <span className="font-medium">{row.entidad_nombre}</span> },
+                  { key: "documento", label: "Documento", render: (row) => <span className="font-mono text-xs">{row.documento}</span> },
+                  { key: "moneda", label: "Moneda", render: (row) => <Badge variant="outline">{row.moneda}</Badge> },
+                  { key: "saldo", label: "Saldo", className: "text-right", sortable: true, render: (row) => <span className={`block text-right font-mono font-semibold ${row.operacion === "venta" ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(row.saldo, row.moneda)}</span> },
+                ]}
+                data={vencimientosFiltrados}
+                emptyMessage="No hay saldos abiertos con estos filtros"
+              />
+            </Card>
           </>
         )}
 
@@ -3794,6 +4110,8 @@ export default function FinanzasPage() {
               const q = fcSearchQuery.toLowerCase();
               if (!f.proveedor_nombre.toLowerCase().includes(q) && !f.numero_factura.toLowerCase().includes(q)) return false;
             }
+            if (fcEnvioFilter === "enviada" && !f.op_vinculada?.email_enviado_at) return false;
+            if (fcEnvioFilter === "no_enviada" && f.op_vinculada?.email_enviado_at) return false;
             return true;
           });
           return (
@@ -3874,7 +4192,13 @@ export default function FinanzasPage() {
                 <option value="NCEA">NCEA</option>
                 <option value="NCEB">NCEB</option>
               </select>
-              {(fcSearchQuery || !fcIsAll || fcTipoFilter) && (
+              <select value={fcEnvioFilter} onChange={(e) => setFcEnvioFilter(e.target.value as "todos" | "enviada" | "no_enviada")}
+                className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                <option value="todos">Envío de OP: todas</option>
+                <option value="enviada">Enviadas</option>
+                <option value="no_enviada">No enviadas</option>
+              </select>
+              {(fcSearchQuery || !fcIsAll || fcTipoFilter || fcEnvioFilter !== "todos") && (
                 <span className="text-xs text-zinc-500">{filteredFC.length} de {facturasCompra.length}</span>
               )}
             </div>
@@ -4018,16 +4342,26 @@ export default function FinanzasPage() {
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-2 mb-3">
+              <div className="relative min-w-[240px] flex-1 max-w-md">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                <input value={opSearch} onChange={(event) => setOpSearch(event.target.value)} placeholder="Buscar número, proveedor, CUIT, medio o estado..." className="w-full rounded-lg border border-zinc-300 py-1.5 pl-9 pr-3 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+              </div>
               <button
                 onClick={() => setOpFilterRetencion(!opFilterRetencion)}
                 className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${opFilterRetencion ? "border-violet-500 bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300" : "border-zinc-300 text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400"}`}
               >
                 <ShieldCheck className="inline h-3 w-3 mr-1" />Con retención
               </button>
+              <select value={opEnvioFilter} onChange={(e) => setOpEnvioFilter(e.target.value as "todos" | "enviada" | "no_enviada")}
+                className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-white">
+                <option value="todos">Envío: todas</option>
+                <option value="enviada">Enviadas</option>
+                <option value="no_enviada">No enviadas</option>
+              </select>
               <input type="date" value={opFilterDesde} onChange={e => setOpFilterDesde(e.target.value)} className="rounded-lg border border-zinc-300 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" placeholder="Desde" title="Desde" />
               <input type="date" value={opFilterHasta} onChange={e => setOpFilterHasta(e.target.value)} className="rounded-lg border border-zinc-300 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" placeholder="Hasta" title="Hasta" />
-              {(opFilterDesde || opFilterHasta || opFilterRetencion) && (
-                <button onClick={() => { setOpFilterRetencion(false); setOpFilterDesde(""); setOpFilterHasta(""); }} className="text-xs text-zinc-400 hover:text-zinc-600">Limpiar</button>
+              {(opSearch || opFilterDesde || opFilterHasta || opFilterRetencion || opEnvioFilter !== "todos") && (
+                <button onClick={() => { setOpSearch(""); setOpEnvioFilter("todos"); setOpFilterRetencion(false); setOpFilterDesde(""); setOpFilterHasta(""); }} className="text-xs text-zinc-400 hover:text-zinc-600">Limpiar</button>
               )}
               {opFilterRetencion && (
                 <button onClick={exportOPRetencionesCSV} className="ml-auto rounded-lg border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-700 dark:bg-violet-950 dark:text-violet-300 flex items-center gap-1">
@@ -4225,7 +4559,7 @@ export default function FinanzasPage() {
                       { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
                       { key: "saldo_cuenta_corriente", label: "Nos debe", className: "text-right", sortable: true, render: (row) => {
                         const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
-                        return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(row.saldo_cuenta_corriente)}</span>{row.limite_credito > 0 && row.saldo_cuenta_corriente > row.limite_credito && <p className="mt-1 text-xs text-red-600 dark:text-red-400">Límite de crédito excedido</p>}<div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.max(0, Math.min(pct, 100))}%` }} /></div></div>);
+                        return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(Number(row.saldo_ars || 0))}</span>{Number(row.saldo_usd || 0) > 0 && <p className="font-mono text-xs text-zinc-500">{formatCurrency(Number(row.saldo_usd), "USD")}</p>}{row.limite_credito > 0 && row.saldo_cuenta_corriente > row.limite_credito && <p className="mt-1 text-xs text-red-600 dark:text-red-400">Límite de crédito excedido</p>}<div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.max(0, Math.min(pct, 100))}%` }} /></div></div>);
                       }},
                       { key: "cuit" as any, label: "Le debemos", className: "text-right", sortable: false, render: (row) => {
                         const saldoProv = row.cuit ? cuitToSaldoProveedor[row.cuit] : undefined;
@@ -4253,7 +4587,10 @@ export default function FinanzasPage() {
                   </button>
                   <h2 className="text-lg font-semibold">{ccDetailCliente.razon_social}</h2>
                   {ccDetailCliente.cuit && <span className="font-mono text-xs text-zinc-500">CUIT: {ccDetailCliente.cuit}</span>}
-                  <span className="ml-auto font-mono text-lg font-bold text-red-600">Deuda: {formatCurrency(ccDetailCliente.saldo_cuenta_corriente)}</span>
+                  <div className="ml-auto text-right font-mono font-bold text-red-600">
+                    <p>Deuda ARS: {formatCurrency(Number(ccDetailCliente.saldo_ars || 0))}</p>
+                    {Number(ccDetailCliente.saldo_usd || 0) > 0 && <p className="text-sm">Deuda USD: {formatCurrency(Number(ccDetailCliente.saldo_usd), "USD")}</p>}
+                  </div>
                 </div>
                 <div className="flex gap-2 mb-4">
                   <button onClick={openCobroMultiple} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700">
@@ -4342,7 +4679,7 @@ export default function FinanzasPage() {
                     { key: "saldo_cuenta_corriente", label: "Le debemos", className: "text-right", sortable: true, render: (row) => {
                       const saldoAFavor = row.saldo_cuenta_corriente < -0.005;
                       const pct = row.limite_credito ? (Math.max(0, row.saldo_cuenta_corriente) / row.limite_credito) * 100 : 0;
-                      return (<div className="text-right"><span className={`font-mono font-semibold ${saldoAFavor ? "text-emerald-600" : "text-red-600"}`}>{saldoAFavor ? `A favor ${formatCurrency(Math.abs(row.saldo_cuenta_corriente))}` : formatCurrency(row.saldo_cuenta_corriente)}</span><div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                      return (<div className="text-right"><span className={`font-mono font-semibold ${saldoAFavor ? "text-emerald-600" : "text-red-600"}`}>{saldoAFavor ? `A favor ${formatCurrency(Math.abs(Number(row.saldo_ars || 0)))}` : formatCurrency(Number(row.saldo_ars || 0))}</span>{Number(row.saldo_usd || 0) > 0 && <p className="font-mono text-xs text-zinc-500">{formatCurrency(Number(row.saldo_usd), "USD")}</p>}<div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
                     }},
                     { key: "cuit" as any, label: "Nos debe", className: "text-right", sortable: false, render: (row) => {
                       const saldoCli = row.cuit ? cuitToSaldoCliente[row.cuit] : undefined;
@@ -4365,10 +4702,10 @@ export default function FinanzasPage() {
                 <button onClick={() => setCcDetailProveedor(null)} className="flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"><X className="h-4 w-4" /> Volver</button>
                 <h2 className="text-lg font-semibold">{ccDetailProveedor.razon_social}</h2>
                 {ccDetailProveedor.cuit && <span className="font-mono text-xs text-zinc-500">CUIT: {ccDetailProveedor.cuit}</span>}
-                <span className={`ml-auto font-mono text-lg font-bold ${ccDetailProveedor.saldo_cuenta_corriente < -0.005 ? "text-emerald-600" : "text-red-600"}`}>
-                  {ccDetailProveedor.saldo_cuenta_corriente < -0.005 ? "Saldo a favor: " : "Deuda: "}
-                  {formatCurrency(Math.abs(ccDetailProveedor.saldo_cuenta_corriente))}
-                </span>
+                <div className={`ml-auto text-right font-mono font-bold ${ccDetailProveedor.saldo_cuenta_corriente < -0.005 ? "text-emerald-600" : "text-red-600"}`}>
+                  <p>{ccDetailProveedor.saldo_cuenta_corriente < -0.005 ? "Saldo a favor ARS: " : "Deuda ARS: "}{formatCurrency(Math.abs(Number(ccDetailProveedor.saldo_ars || 0)))}</p>
+                  {Number(ccDetailProveedor.saldo_usd || 0) > 0 && <p className="text-sm">Deuda USD: {formatCurrency(Number(ccDetailProveedor.saldo_usd), "USD")}</p>}
+                </div>
               </div>
               <div className="flex gap-2 mb-4">
                 <button onClick={() => { openOPModal(ccDetailProveedor.id); setCcDetailProveedor(null); setTab("ordenes_pago"); }} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">
@@ -5440,8 +5777,8 @@ export default function FinanzasPage() {
                         <button onClick={() => { setOpForm({ ...opForm, proveedor_id: "" }); setProveedorSearch(""); setOpProvCondicion(null); setOpManualGanancias(false); }} className="text-zinc-400 hover:text-zinc-600"><X className="h-3 w-3" /></button>
                         {opCondicionLoading && <span className="flex items-center gap-1 text-xs text-zinc-400"><Loader2 className="h-3 w-3 animate-spin" />AFIP…</span>}
                         {!opCondicionLoading && opProvCondicion !== null && (
-                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${opProvCondicion === "RI" ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"}`}>
-                            {opProvCondicion === "RI" ? "Resp. Inscripto" : opProvCondicion || "Sin datos"}
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isResponsableInscripto(opProvCondicion) ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" : "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300"}`}>
+                            {isResponsableInscripto(opProvCondicion) ? "Resp. Inscripto" : canonicalCondicionIva(opProvCondicion) || opProvCondicion || "Sin datos"}
                           </span>
                         )}
                         <span className="text-xs text-zinc-500">
@@ -5551,7 +5888,7 @@ export default function FinanzasPage() {
                       ) : null;
                     })()}
                     {/* Acumulado mensual */}
-                    {opProvCondicion === "RI" && retencionConfig.aplica_ganancias && (
+                    {isResponsableInscripto(opProvCondicion) && retencionConfig.aplica_ganancias && (
                       <div className="text-[10px] text-violet-600 dark:text-violet-400 space-y-0.5">
                         <div className="flex justify-between"><span>Acumulado mes (base sin IVA):</span><span className="font-mono">{formatCurrency(opMonthlyBase, opForm.moneda)}</span></div>
                         <div className="flex justify-between"><span>+ Esta OP:</span><span className="font-mono">{formatCurrency(opBaseSinIVA, opForm.moneda)}</span></div>
@@ -5664,7 +6001,7 @@ export default function FinanzasPage() {
               {/* ── Datos bancarios del proveedor ── */}
               {opForm.proveedor_id && (() => {
                 const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
-                if (!prov || (!prov.cbu && !prov.alias_bancario && !prov.banco && !prov.numero_cuenta && !prov.titular_cuenta && !prov.cuit_titular_cuenta)) return null;
+                if (!prov || (!prov.cuit && !prov.cbu && !prov.alias_bancario && !prov.banco && !prov.numero_cuenta && !prov.titular_cuenta)) return null;
                 return (
                   <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/50 dark:bg-blue-950/20 p-3">
                     <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 flex items-center gap-1 mb-2"><Landmark className="h-3.5 w-3.5" />Datos bancarios</p>
@@ -5675,7 +6012,7 @@ export default function FinanzasPage() {
                       {prov.alias_bancario && <div><span className="text-zinc-500">Alias</span><p className="font-mono font-medium select-all">{prov.alias_bancario}</p></div>}
                       {prov.numero_cuenta && <div><span className="text-zinc-500">N° cuenta</span><p className="font-mono font-medium">{prov.numero_cuenta}</p></div>}
                       {prov.titular_cuenta && <div className="col-span-2"><span className="text-zinc-500">Titular</span><p className="font-medium">{prov.titular_cuenta}</p></div>}
-                      {prov.cuit_titular_cuenta && <div className="col-span-2"><span className="text-zinc-500">CUIT/CUIL del titular</span><p className="font-mono font-medium select-all">{prov.cuit_titular_cuenta}</p></div>}
+                      {prov.cuit && <div className="col-span-2"><span className="text-zinc-500">CUIT del proveedor (cheque / eCheq)</span><p className="font-mono font-medium select-all">{prov.cuit}</p></div>}
                     </div>
                   </div>
                 );
@@ -5692,7 +6029,16 @@ export default function FinanzasPage() {
                   <div className="space-y-2">
                     {opMedios.map((m, idx) => (
                       <div key={m.tempId} className="flex items-start gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
-                        <select value={m.tipo} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, tipo: e.target.value as OpMedioPago["tipo"], echeq_id: undefined } : x))}
+                        <select value={m.tipo} onChange={(e) => setOpMedios(prev => prev.map((x, i) => {
+                          if (i !== idx) return x;
+                          const tipo = e.target.value as OpMedioPago["tipo"];
+                          return {
+                            ...x,
+                            tipo,
+                            echeq_id: undefined,
+                            origen_cheque: tipo === "echeq" || tipo === "cheque_propio" ? "propio" : tipo === "cheque" ? "cartera" : undefined,
+                          };
+                        }))}
                           className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                           <option value="transferencia">Transferencia</option>
                           <option value="deposito">Depósito</option>
@@ -5726,21 +6072,39 @@ export default function FinanzasPage() {
                               placeholder="N° cheque" className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                           </>
                         )}
-                        {/* Picker de cheques: echeq y cheque tercero eligen de recibidos en_cartera; cheque_propio de emitidos pendiente */}
+                        {/* Un e-cheq manual se emite ahora; solo los cheques elegidos de cartera son de terceros. */}
                         {(m.tipo === "echeq" || m.tipo === "cheque" || m.tipo === "cheque_propio") && (() => {
                           const available = m.tipo === "cheque_propio"
                             ? echeqs.filter(e => e.direccion === "emitido" && e.estado === "pendiente" && e.moneda === m.moneda)
-                            : echeqs.filter(e => (e.direccion === "recibido" || !e.direccion) && e.estado === "en_cartera" && e.moneda === m.moneda);
+                            : echeqs.filter(e => (e.direccion === "recibido" || !e.direccion)
+                              && e.estado === "en_cartera"
+                              && e.moneda === m.moneda
+                              && (m.tipo === "echeq" ? e.tipo_cheque === "echeq" : e.tipo_cheque !== "echeq"));
                           return available.length > 0 ? (
                             <select value={m.echeq_id || ""} onChange={(e) => {
                               const sel = available.find(x => x.id === e.target.value);
-                              setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, echeq_id: e.target.value || undefined, monto: sel ? sel.monto : x.monto, banco: sel?.banco_emisor || x.banco, numero_cheque: sel?.numero || x.numero_cheque } : x));
+                              setOpMedios(prev => prev.map((x, i) => i === idx ? {
+                                ...x,
+                                echeq_id: e.target.value || undefined,
+                                origen_cheque: e.target.value ? (m.tipo === "cheque_propio" ? "propio" : "cartera") : (m.tipo === "echeq" || m.tipo === "cheque_propio" ? "propio" : "cartera"),
+                                monto: sel ? sel.monto : x.monto,
+                                banco: sel?.banco_emisor || x.banco,
+                                numero_cheque: sel?.numero || x.numero_cheque,
+                              } : x));
                             }} className="max-w-[180px] rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                              <option value="">{m.tipo === "cheque_propio" ? "Nuevo cheque" : "Manual"}</option>
+                              <option value="" disabled={m.tipo === "cheque"}>{m.tipo === "echeq" ? "Emitido manualmente" : m.tipo === "cheque_propio" ? "Nuevo cheque" : "Elegí de cartera"}</option>
                               {available.map(e => <option key={e.id} value={e.id}>{e.numero} — {formatCurrency(e.monto, (e.moneda as "ARS" | "USD") || "ARS")}{e.banco_emisor ? ` (${e.banco_emisor})` : ""}</option>)}
                             </select>
-                          ) : m.tipo === "cheque_propio" ? (
-                            <span className="text-[10px] text-zinc-400 self-center">Se creará al confirmar</span>
+                          ) : m.tipo === "cheque_propio" || m.tipo === "echeq" ? (
+                            <span className="text-[10px] text-zinc-400 self-center">Se registrará como emitido al confirmar</span>
+                          ) : m.tipo === "cheque" ? (
+                            <span className="text-[10px] text-red-500 self-center">No hay cheques de terceros disponibles en cartera</span>
+                          ) : null;
+                        })()}
+                        {["cheque", "cheque_propio", "echeq"].includes(m.tipo) && (() => {
+                          const proveedor = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
+                          return proveedor?.cuit ? (
+                            <span className="self-center whitespace-nowrap text-[10px] font-medium text-blue-600 dark:text-blue-300">CUIT: {proveedor.cuit}</span>
                           ) : null;
                         })()}
                         {opMedios.length > 1 && (
@@ -6815,20 +7179,7 @@ export default function FinanzasPage() {
           } catch { /* ignore */ }
 
           // Fetch linked FCs
-          let fcsRows: { numero: string; fecha: string; monto: number }[] = [];
-          try {
-            const { data: links } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto").eq("orden_pago_id", op.id);
-            if (links && links.length > 0) {
-              const fcIds = links.map((l: any) => l.factura_compra_id);
-              const { data: fcs } = await (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, total").in("id", fcIds);
-              if (fcs && fcs.length > 0) {
-                fcsRows = fcs.map((fc: any) => {
-                  const link = links.find((l: any) => l.factura_compra_id === fc.id);
-                  return { numero: fc.numero_factura || "\u2014", fecha: fc.fecha, monto: Number(link?.monto ?? fc.total) };
-                });
-              }
-            }
-          } catch { /* ignore */ }
+          const fcsRows = await loadOPPurchaseInvoiceRows(op.id);
 
           const medios = op.medios_pago && op.medios_pago.length > 0
             ? op.medios_pago.map(m => ({ tipo: m.tipo, monto: m.monto, fecha: m.fecha, banco: m.banco, numero_cheque: m.numero_cheque, moneda: m.moneda, cotizacion: m.cotizacion }))

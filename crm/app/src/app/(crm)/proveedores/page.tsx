@@ -14,12 +14,13 @@ import {
   Search, Filter, Download, MapPin, Phone, Mail, ListOrdered, Upload,
   AlertTriangle, ChevronDown, ChevronRight, Loader2, X, Pencil, Tag,
   Sparkles, FileUp, Check, Trash2, Eye,
-  Maximize2, Minimize2,
+  Maximize2, Minimize2, Power,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 import { useUser } from "@/lib/auth-context";
+import { canonicalCondicionIva } from "@/lib/fiscal-condition";
 
 const CLASIFICACION_TAGS = [
   "Buen precio", "Precio alto", "Entrega rapida", "Entrega lenta",
@@ -88,6 +89,7 @@ function mapSupabaseProveedor(row: Record<string, unknown>): Proveedor {
     clasificacionTags: Array.isArray(row.clasificacion_tags) ? (row.clasificacion_tags as string[]) : [],
     marcas: (row.marcas as string) ?? "",
     clasificacionNota: (row.clasificacion_nota as string) ?? "",
+    esTransportista: (row.es_transportista as boolean) ?? false,
     activo: (row.activo as boolean) ?? true,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
@@ -173,6 +175,7 @@ const emptyForm = {
   clasificacion_tags: [] as string[],
   marcas: "",
   clasificacion_nota: "",
+  es_transportista: false,
   concepto_retencion_ganancias: "" as string,
   alicuota_ganancias: null as number | null,
   exclusion_retencion: false,
@@ -197,6 +200,8 @@ export default function ProveedoresPage() {
   const { sociedadActiva, role } = useUser();
   const canManagePriceRules = role === "super_admin" || role === "admin" || role === "administrativo";
   const canDeletePriceRules = role === "super_admin" || role === "admin";
+  const canManageProveedores = role === "super_admin" || role === "admin" || role === "administrativo";
+  const canDeleteProveedores = role === "super_admin" || role === "admin";
   const [tab, setTab] = useState<"proveedores" | "listas">("proveedores");
   const [search, setSearch] = useState("");
   const [filterValues, setFilterValues] = useState<FilterValues>({
@@ -204,6 +209,7 @@ export default function ProveedoresPage() {
     provincia: "",
     saldo: {},
     formaPago: "",
+    estadoProveedor: "activo",
   });
   const [view, setView] = useState<"table" | "cards">("table");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -228,9 +234,9 @@ export default function ProveedoresPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const crearNombre = params.get("crear");
-    if (crearNombre) {
+    if (params.has("crear")) {
       setEditingId(null);
-      setForm({ ...emptyForm, razon_social: crearNombre });
+      setForm({ ...emptyForm, razon_social: crearNombre || "", es_transportista: params.get("tipo") === "transportista" });
       setFormError("");
       setModalOpen(true);
       window.history.replaceState({}, "", window.location.pathname);
@@ -245,6 +251,7 @@ export default function ProveedoresPage() {
   const [proveedorContactoForm, setProveedorContactoForm] = useState<ProveedorContactoForm>(emptyProveedorContacto);
   const [editingProveedorContacto, setEditingProveedorContacto] = useState(false);
   const [savingProveedorContacto, setSavingProveedorContacto] = useState(false);
+  const [mutatingProveedorId, setMutatingProveedorId] = useState<string | null>(null);
 
   // AI Upload
   const [aiModalOpen, setAiModalOpen] = useState(false);
@@ -404,6 +411,133 @@ export default function ProveedoresPage() {
     toast.success("Contacto eliminado");
   }
 
+  async function updateProveedorActivo(proveedor: Proveedor, activo: boolean) {
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) throw new Error("Seleccioná una sociedad antes de cambiar el estado");
+
+    const { data, error } = await (supabase as any)
+      .from("proveedores")
+      .update({ activo })
+      .eq("id", proveedor.id)
+      .eq("sociedad_id", sociedadId)
+      .select("id");
+    if (error) throw error;
+    if (!data?.length) throw new Error("No se pudo actualizar el proveedor en la sociedad seleccionada");
+
+    setProveedores((prev) => prev.map((p) => p.id === proveedor.id ? { ...p, activo } : p));
+    setSelectedProv((prev) => prev?.id === proveedor.id ? { ...prev, activo } : prev);
+    toast.info(activo ? "Proveedor reactivado" : "Proveedor desactivado");
+  }
+
+  async function handleToggleProveedorActivo(proveedor: Proveedor) {
+    if (!canManageProveedores) {
+      toast.error("No tenés permiso para cambiar el estado del proveedor");
+      return;
+    }
+    if (proveedor.activo && !confirm(`¿Desactivar a “${proveedor.razonSocial}”? Dejará de estar disponible para nuevas operaciones.`)) return;
+
+    setMutatingProveedorId(proveedor.id);
+    try {
+      await updateProveedorActivo(proveedor, !proveedor.activo);
+    } catch (err) {
+      console.error("Error toggling proveedor:", err);
+      toast.error(err instanceof Error ? err.message : "No se pudo cambiar el estado del proveedor");
+    } finally {
+      setMutatingProveedorId(null);
+    }
+  }
+
+  async function handleDeleteProveedor(proveedor: Proveedor) {
+    const sociedadId = sociedadActiva?.id;
+    if (!canDeleteProveedores) {
+      toast.error("No tenés permiso para eliminar proveedores");
+      return;
+    }
+    if (!sociedadId) {
+      toast.error("Seleccioná una sociedad antes de eliminar el proveedor");
+      return;
+    }
+
+    setMutatingProveedorId(proveedor.id);
+    try {
+      const dependencyDefinitions = [
+        { table: "productos", column: "proveedor_id", label: "artículo" },
+        { table: "listas_precios", column: "proveedor_id", label: "lista de precios" },
+        { table: "ordenes_compra", column: "proveedor_id", label: "orden de compra" },
+        { table: "facturas_compra", column: "proveedor_id", label: "factura de compra" },
+        { table: "ordenes_pago", column: "proveedor_id", label: "orden de pago" },
+        { table: "movimientos", column: "proveedor_id", label: "movimiento financiero" },
+        { table: "presupuesto_items", column: "proveedor_id", label: "ítem de presupuesto" },
+        { table: "extracto_movimientos", column: "match_proveedor_id", label: "movimiento de extracto" },
+        { table: "lineas_credito", column: "proveedor_id", label: "línea de crédito" },
+        { table: "pago_solicitudes", column: "proveedor_id", label: "registro de pago" },
+        { table: "saldos_favor_proveedor", column: "proveedor_id", label: "saldo a favor" },
+      ];
+
+      const dependencyResults = await Promise.all(dependencyDefinitions.map(async (definition) => {
+        const { count, error } = await (supabase as any)
+          .from(definition.table)
+          .select("id", { count: "exact", head: true })
+          .eq(definition.column, proveedor.id);
+        if (error) throw new Error(`No se pudo verificar ${definition.label}: ${error.message}`);
+        return { ...definition, count: count ?? 0 };
+      }));
+
+      const dependencies = dependencyResults.filter((result) => result.count > 0);
+      if (dependencies.length > 0) {
+        const detail = dependencies
+          .map((result) => `${result.count} ${result.label}${result.count === 1 ? "" : "s"}`)
+          .join(", ");
+        if (!proveedor.activo) {
+          alert(`No se puede eliminar este proveedor porque conserva historial asociado: ${detail}. Ya se encuentra desactivado.`);
+          return;
+        }
+        if (confirm(`No se puede eliminar este proveedor porque conserva historial asociado: ${detail}.\n\n¿Querés desactivarlo para impedir nuevas operaciones?`)) {
+          await updateProveedorActivo(proveedor, false);
+        }
+        return;
+      }
+
+      if (!confirm(`¿Eliminar definitivamente a “${proveedor.razonSocial}”? Esta acción no se puede deshacer.`)) return;
+
+      const { data, error } = await (supabase as any)
+        .from("proveedores")
+        .delete()
+        .eq("id", proveedor.id)
+        .eq("sociedad_id", sociedadId)
+        .select("id");
+      if (error) throw error;
+      if (!data?.length) throw new Error("No se eliminó ningún proveedor");
+
+      const { error: contactosError } = await (supabase as any)
+        .from("contactos")
+        .delete()
+        .eq("entity_type", "proveedor")
+        .eq("entity_id", proveedor.id);
+      if (contactosError) console.error("No se pudieron limpiar los contactos del proveedor eliminado:", contactosError);
+
+      setSelectedProv(null);
+      setPanelFullscreen(false);
+      toast.success("Proveedor eliminado definitivamente");
+      await fetchData();
+    } catch (err: any) {
+      console.error("Error deleting proveedor:", err);
+      if (err?.code === "23503" && proveedor.activo) {
+        if (confirm("La base detectó historial relacionado y bloqueó la eliminación. ¿Querés desactivar el proveedor?")) {
+          try {
+            await updateProveedorActivo(proveedor, false);
+            return;
+          } catch (toggleError) {
+            console.error("Error deactivating proveedor:", toggleError);
+          }
+        }
+      }
+      toast.error(err instanceof Error ? err.message : "No se pudo eliminar el proveedor");
+    } finally {
+      setMutatingProveedorId(null);
+    }
+  }
+
   // Build filter configs dynamically from current data
   const filterConfigs: FilterConfig[] = [
     {
@@ -449,6 +583,24 @@ export default function ProveedoresPage() {
         { value: "Tarjeta", label: "Tarjeta" },
       ],
     },
+    {
+      key: "estadoProveedor",
+      label: "Estado",
+      type: "select",
+      options: [
+        { value: "activo", label: "Activos" },
+        { value: "inactivo", label: "Inactivos" },
+      ],
+    },
+    {
+      key: "tipoProveedor",
+      label: "Tipo",
+      type: "select",
+      options: [
+        { value: "transportista", label: "Transportistas" },
+        { value: "general", label: "Otros proveedores" },
+      ],
+    },
   ];
 
   const filteredProveedores = proveedores.filter((p) => {
@@ -462,6 +614,10 @@ export default function ProveedoresPage() {
     if (filterValues.provincia && (filterValues.provincia as string) !== "" && p.provincia !== filterValues.provincia) return false;
     if (filterValues.condicionIva && (filterValues.condicionIva as string) !== "" && p.condicionIva !== filterValues.condicionIva) return false;
     if (filterValues.formaPago && (filterValues.formaPago as string) !== "" && p.formaPago !== filterValues.formaPago) return false;
+    if (filterValues.estadoProveedor === "activo" && !p.activo) return false;
+    if (filterValues.estadoProveedor === "inactivo" && p.activo) return false;
+    if (filterValues.tipoProveedor === "transportista" && !p.esTransportista) return false;
+    if (filterValues.tipoProveedor === "general" && p.esTransportista) return false;
     const saldoRange = filterValues.saldo as { min?: number; max?: number } | undefined;
     if (saldoRange) {
       if (saldoRange.min !== undefined && p.saldoCuentaCorriente < saldoRange.min) return false;
@@ -495,11 +651,12 @@ export default function ProveedoresPage() {
       email: p.email, telefono: p.telefono, direccion: p.direccion,
       localidad: p.localidad, provincia: p.provincia, rubro: p.rubro,
       banco: (p as any).banco ?? "", cbu: p.cbu ?? "", alias_bancario: p.aliasBancario ?? "", numero_cuenta: p.numeroCuenta ?? "",
-      titular_cuenta: (p as any).titularCuenta ?? "", cuit_titular_cuenta: p.cuitTitularCuenta ?? "", tipo_cuenta: (p as any).tipoCuenta ?? "",
+      titular_cuenta: (p as any).titularCuenta ?? "", cuit_titular_cuenta: p.cuit ?? "", tipo_cuenta: (p as any).tipoCuenta ?? "",
       forma_pago: p.formaPago, dias_cuenta_corriente: p.diasCuentaCorriente,
       limite_credito: p.limiteCredito, notas: p.notas,
       clasificacion_tags: p.clasificacionTags ?? [], marcas: p.marcas ?? "",
       clasificacion_nota: p.clasificacionNota ?? "",
+      es_transportista: Boolean(p.esTransportista),
       concepto_retencion_ganancias: (p as any).conceptoRetencionGanancias ?? "",
       alicuota_ganancias: (p as any).alicuotaGanancias ?? null,
       exclusion_retencion: (p as any).exclusionRetencion ?? false,
@@ -521,16 +678,25 @@ export default function ProveedoresPage() {
       setFormError("Seleccioná una sociedad antes de guardar el proveedor");
       return;
     }
+    const condicionIva = canonicalCondicionIva(form.condicion_iva);
+    if (!condicionIva) {
+      setFormError("La condición IVA no es válida");
+      return;
+    }
+    // Para pagos y eCheq la identidad fiscal siempre es la del proveedor.
+    // Conservamos la columna histórica por compatibilidad, pero nunca pedimos
+    // ni guardamos un CUIT bancario distinto.
+    const proveedorPayload = { ...form, condicion_iva: condicionIva, cuit_titular_cuenta: form.cuit.trim() };
     setSaving(true);
     setFormError("");
     try {
       if (editingId) {
-        let updateQuery = supabase.from("proveedores").update(form as any).eq("id", editingId);
+        let updateQuery = supabase.from("proveedores").update(proveedorPayload as any).eq("id", editingId);
         updateQuery = updateQuery.eq("sociedad_id" as any, sociedadId);
         const { error } = await updateQuery;
         if (error) throw error;
       } else {
-        const insertData = { ...form } as any;
+        const insertData = { ...proveedorPayload } as any;
         insertData.sociedad_id = sociedadId;
         const { error } = await supabase.from("proveedores").insert(insertData);
         if (error) throw error;
@@ -830,7 +996,10 @@ export default function ProveedoresPage() {
                     { key: "razonSocial", label: "Proveedor", sortable: true, render: (row) => (
                       <div className="flex items-center gap-3">
                         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600 font-bold text-xs">{row.razonSocial.split(" ").map(w => w[0]).join("").slice(0, 2)}</div>
-                        <div><p className="font-medium text-zinc-900 dark:text-white">{row.razonSocial}</p><p className="text-xs text-zinc-400">{row.cuit}</p></div>
+                        <div>
+                          <div className="flex items-center gap-2"><p className="font-medium text-zinc-900 dark:text-white">{row.razonSocial}</p>{row.esTransportista && <Badge variant="orange">Transportista</Badge>}{!row.activo && <Badge variant="outline">Inactivo</Badge>}</div>
+                          <p className="text-xs text-zinc-400">{row.cuit}</p>
+                        </div>
                       </div>
                     )},
                     { key: "rubro", label: "Rubro", sortable: true, render: (row) => <Badge variant="info">{row.rubro}</Badge> },
@@ -845,9 +1014,17 @@ export default function ProveedoresPage() {
                     { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right text-red-600">{formatCurrency(row.saldoCuentaCorriente, "ARS")}</span> },
                     { key: "limiteCredito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limiteCredito, "ARS")}</span> },
                     { key: "actions", label: "", sortable: false, render: (row) => (
-                      <button onClick={(e) => { e.stopPropagation(); openEdit(row); }} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Editar">
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="flex justify-end gap-1">
+                        {canManageProveedores && <button onClick={(e) => { e.stopPropagation(); handleToggleProveedorActivo(row); }} disabled={mutatingProveedorId === row.id} className={`rounded p-1.5 hover:bg-zinc-100 disabled:opacity-50 ${row.activo ? "text-zinc-400 hover:text-amber-600" : "text-emerald-600 hover:text-emerald-700"}`} title={row.activo ? "Desactivar" : "Reactivar"}>
+                          <Power className="h-3.5 w-3.5" />
+                        </button>}
+                        {canManageProveedores && <button onClick={(e) => { e.stopPropagation(); openEdit(row); }} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Editar">
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>}
+                        {canDeleteProveedores && <button onClick={(e) => { e.stopPropagation(); handleDeleteProveedor(row); }} disabled={mutatingProveedorId === row.id} className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50" title="Eliminar">
+                          {mutatingProveedorId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                        </button>}
+                      </div>
                     )},
                   ]}
                   data={filteredProveedores}
@@ -865,7 +1042,11 @@ export default function ProveedoresPage() {
                           <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-blue-600 font-bold text-sm">{prov.razonSocial.split(" ").map(w => w[0]).join("").slice(0, 2)}</div>
                           <div><p className="font-semibold text-zinc-900 dark:text-white">{prov.razonSocial}</p><p className="text-xs text-zinc-400">{prov.cuit}</p></div>
                         </div>
-                        <Badge variant="info">{prov.rubro.split(" ")[0]}</Badge>
+                        <div className="flex flex-col items-end gap-1">
+                          {prov.esTransportista && <Badge variant="orange">Transportista</Badge>}
+                          {!prov.activo && <Badge variant="outline">Inactivo</Badge>}
+                          <Badge variant="info">{prov.rubro.split(" ")[0]}</Badge>
+                        </div>
                       </div>
                       <div className="mt-4 space-y-2 text-sm text-zinc-500">
                         <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5" /> {prov.localidad}, {prov.provincia}</div>
@@ -1021,11 +1202,13 @@ export default function ProveedoresPage() {
           <div className={panelFullscreen ? "fixed inset-4 z-50 overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-zinc-900" : "fixed right-0 top-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-xl dark:bg-zinc-900"}>
             <div className="flex items-center justify-between border-b border-zinc-200 p-6 dark:border-zinc-700">
               <div>
-                <h2 className="text-lg font-bold text-zinc-900 dark:text-white">{selectedProv.razonSocial}</h2>
+                <div className="flex items-center gap-2"><h2 className="text-lg font-bold text-zinc-900 dark:text-white">{selectedProv.razonSocial}</h2>{selectedProv.esTransportista && <Badge variant="orange">Transportista</Badge>}{!selectedProv.activo && <Badge variant="outline">Inactivo</Badge>}</div>
                 <p className="text-sm text-zinc-500">{selectedProv.cuit}</p>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => { openEdit(selectedProv); setSelectedProv(null); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100"><Pencil className="h-4 w-4" /></button>
+                {canManageProveedores && <button onClick={() => handleToggleProveedorActivo(selectedProv)} disabled={mutatingProveedorId === selectedProv.id} className={`rounded-lg p-2 hover:bg-zinc-100 disabled:opacity-50 ${selectedProv.activo ? "text-zinc-400 hover:text-amber-600" : "text-emerald-600 hover:text-emerald-700"}`} title={selectedProv.activo ? "Desactivar proveedor" : "Reactivar proveedor"}><Power className="h-4 w-4" /></button>}
+                {canManageProveedores && <button onClick={() => { openEdit(selectedProv); setSelectedProv(null); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100" title="Editar"><Pencil className="h-4 w-4" /></button>}
+                {canDeleteProveedores && <button onClick={() => handleDeleteProveedor(selectedProv)} disabled={mutatingProveedorId === selectedProv.id} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50" title="Eliminar proveedor">{mutatingProveedorId === selectedProv.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}</button>}
                 <button onClick={() => setPanelFullscreen((value) => !value)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Pantalla completa"}>{panelFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
                 <button onClick={() => { setSelectedProv(null); setPanelFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
               </div>
@@ -1059,7 +1242,7 @@ export default function ProveedoresPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div><p className="text-xs text-zinc-500">Banco</p><p className="text-sm font-medium">{(selectedProv as any).banco || "—"}</p></div>
                     <div><p className="text-xs text-zinc-500">Titular</p><p className="text-sm font-medium">{selectedProv.titularCuenta || "—"}</p></div>
-                    <div><p className="text-xs text-zinc-500">CUIT/CUIL del titular</p><p className="text-sm font-mono font-medium">{selectedProv.cuitTitularCuenta || "—"}</p></div>
+                    <div><p className="text-xs text-zinc-500">CUIT del proveedor</p><p className="text-sm font-mono font-medium">{selectedProv.cuit || "—"}</p></div>
                     <div><p className="text-xs text-zinc-500">Tipo de cuenta</p><p className="text-sm font-medium">{selectedProv.tipoCuenta || "—"}</p></div>
                     <div className="col-span-2"><p className="text-xs text-zinc-500">CBU / CVU</p><p className="text-sm font-mono font-medium">{selectedProv.cbu || "—"}</p></div>
                     <div><p className="text-xs text-zinc-500">Alias</p><p className="text-sm font-medium">{selectedProv.aliasBancario || "—"}</p></div>
@@ -1145,13 +1328,22 @@ export default function ProveedoresPage() {
               <div><label className="text-xs font-medium text-zinc-500">Condición IVA</label>
                 <select value={form.condicion_iva} onChange={(e) => setForm({ ...form, condicion_iva: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
                   <option value="RI">Responsable Inscripto</option>
-                  <option value="Monotributista">Monotributista</option>
+                  <option value="Monotributo">Monotributo</option>
                   <option value="Exento">Exento</option>
-                  <option value="No Responsable">No Responsable</option>
-                  <option value="Consumidor Final">Consumidor Final</option>
+                  <option value="CF">Consumidor Final</option>
                 </select>
               </div>
               <div><label className="text-xs font-medium text-zinc-500">Rubro</label><input value={form.rubro} onChange={(e) => setForm({ ...form, rubro: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div className="flex items-center rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-700">
+                <button type="button" onClick={() => setForm({ ...form, es_transportista: !form.es_transportista })}
+                  className={`relative mr-3 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${form.es_transportista ? "bg-orange-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
+                  <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${form.es_transportista ? "translate-x-4.5" : "translate-x-0.5"}`} />
+                </button>
+                <div>
+                  <p className="text-xs font-medium text-zinc-700 dark:text-zinc-200">Es transportista</p>
+                  <p className="text-[10px] text-zinc-400">Aparecerá automáticamente en el catálogo de Transportes.</p>
+                </div>
+              </div>
               <div><label className="text-xs font-medium text-zinc-500">Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Telefono</label><input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Direccion</label><input value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
@@ -1176,7 +1368,13 @@ export default function ProveedoresPage() {
               <div><label className="text-xs font-medium text-zinc-500">CBU / CVU</label><input value={form.cbu} onChange={(e) => setForm({ ...form, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Alias</label><input value={form.alias_bancario} onChange={(e) => setForm({ ...form, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div><label className="text-xs font-medium text-zinc-500">Titular</label><input value={(form as any).titular_cuenta} onChange={(e) => setForm({ ...form, titular_cuenta: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div><label className="text-xs font-medium text-zinc-500">CUIT/CUIL del titular</label><input inputMode="numeric" maxLength={13} value={form.cuit_titular_cuenta} onChange={(e) => setForm({ ...form, cuit_titular_cuenta: e.target.value.replace(/[^\d-]/g, "") })} placeholder="XX-XXXXXXXX-X" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800" /></div>
+              <div>
+                <label className="text-xs font-medium text-zinc-500">CUIT para pagos y eCheq</label>
+                <div className="mt-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-800">
+                  <p className="text-sm font-mono font-medium">{form.cuit || "Completá el CUIT del proveedor"}</p>
+                  <p className="mt-0.5 text-[10px] text-zinc-400">Se usa automáticamente el CUIT fiscal del proveedor.</p>
+                </div>
+              </div>
               <div><label className="text-xs font-medium text-zinc-500">Tipo de cuenta</label><select value={(form as any).tipo_cuenta} onChange={(e) => setForm({ ...form, tipo_cuenta: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"><option value="">Seleccionar...</option><option value="CC">Cuenta corriente (CC)</option><option value="CA">Caja de ahorro (CA)</option><option value="CVU">CVU</option></select></div>
               <div><label className="text-xs font-medium text-zinc-500">N° de cuenta</label><input value={form.numero_cuenta} onChange={(e) => setForm({ ...form, numero_cuenta: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
               <div className="col-span-2"><label className="text-xs font-medium text-zinc-500">Notas</label><textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={3} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useRef } from "react";
-import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown, RefreshCw, Maximize2, Minimize2 } from "lucide-react";
+import { X, Plus, Trash2, AlertCircle, Copy, ArrowDown, RefreshCw, Maximize2, Minimize2, Upload, Sparkles, Loader2, FileCheck2 } from "lucide-react";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 
@@ -59,8 +59,7 @@ const r2 = (n: number) => Math.round(n * 100) / 100;
 const MEDIO_TIPOS = [
   { value: "transferencia", label: "Transferencia bancaria" },
   { value: "efectivo", label: "Efectivo" },
-  { value: "cheque_recibido", label: "Cheque" },
-  { value: "echeq", label: "E-Cheq" },
+  { value: "echeq", label: "Cheque / E-Cheq" },
   { value: "deposito", label: "Depósito" },
 ];
 
@@ -105,6 +104,9 @@ export default function CobroMasivoLiquidacion({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
+  const [opFiles, setOpFiles] = useState<File[]>([]);
+  const [parsingOP, setParsingOP] = useState(false);
+  const [opParseMessage, setOpParseMessage] = useState("");
   const requestKeyRef = useRef("");
 
   // ── Tipo de cambio (solo para facturas USD) ──
@@ -141,7 +143,7 @@ export default function CobroMasivoLiquidacion({
   const totalSaldoARS = isUSD && cotizNum > 0 ? r2(totalSaldo * cotizNum) : totalSaldo;
   const totalEsperado = r2(totalSaldoARS - totalRetenciones);
   const diferencia = r2(totalMedios - totalEsperado);
-  const canConfirm = Math.abs(diferencia) < 0.01 && totalMedios > 0 && !saving && (!isUSD || cotizNum > 0);
+  const canConfirm = Math.abs(diferencia) < 0.01 && totalMedios > 0 && !saving && !parsingOP && (!isUSD || cotizNum > 0);
 
   // ── Medio handlers ──
   const addMedio = () => setMedios(p => [...p, newMedio()]);
@@ -154,6 +156,70 @@ export default function CobroMasivoLiquidacion({
   const removeRetencion = (id: string) => setRetenciones(p => p.filter(r => r._id !== id));
   const updateRetencion = (id: string, field: string, value: string) =>
     setRetenciones(p => p.map(r => r._id === id ? { ...r, [field]: value } : r));
+
+  async function parseClientPaymentOrder(files: File[]) {
+    if (!files.length) return;
+    setParsingOP(true);
+    setOpParseMessage("");
+    setError("");
+    setOpFiles(files);
+    try {
+      const form = new FormData();
+      files.forEach((file) => form.append("file", file));
+      const response = await fetch("/api/parse-cobro", { method: "POST", body: form });
+      const json = await response.json();
+      if (!response.ok || !json.success) throw new Error(json.error || "No se pudo leer la orden de pago");
+
+      const parsed = json.data || {};
+      const payments: any[] = Array.isArray(parsed.pagos) ? parsed.pagos : [];
+      const parsedMedios: MedioPago[] = [];
+      const parsedRetenciones: RetencionLinea[] = [];
+      for (const payment of payments) {
+        const tipo = String(payment.tipo || "").toLowerCase();
+        const monto = Number(payment.monto || 0);
+        if (!(monto > 0)) continue;
+        if (tipo.startsWith("retencion_") || tipo.startsWith("percepcion_")) {
+          parsedRetenciones.push({
+            _id: uid(),
+            tipo: RETENCION_TIPOS.some((option) => option.value === tipo) ? tipo : "ajuste",
+            organismo: String(payment.organismo || payment.destinatario || ""),
+            certificado: String(payment.certificado || payment.referencia || ""),
+            monto: String(monto),
+            observaciones: String(payment.notas || payment.concepto || ""),
+          });
+          continue;
+        }
+        // Todo cheque recibido se presume electrónico. Solo el operador puede
+        // cambiarlo a físico con la casilla explícita antes de confirmar.
+        const normalizedType = tipo === "cheque" || tipo === "echeq"
+          ? "echeq"
+          : MEDIO_TIPOS.some((option) => option.value === tipo) ? tipo : "transferencia";
+        parsedMedios.push({
+          _id: uid(),
+          tipo: normalizedType,
+          monto: String(monto),
+          fecha: String(payment.fecha_cobro || payment.fecha || todayStr()),
+          referencia: String(payment.referencia || payment.cheque_numero || payment.cheque_id_digital || ""),
+          observaciones: String(payment.notas || payment.concepto || ""),
+          cheque_banco: String(payment.banco || ""),
+          cheque_numero: String(payment.cheque_numero || payment.cheque_id_digital || ""),
+          cheque_fecha_pago: String(payment.cheque_fecha || payment.fecha_cobro || payment.fecha || ""),
+        });
+      }
+
+      if (parsedMedios.length) {
+        setMedios((current) => current.length === 1 && !current[0].monto && !current[0].referencia ? parsedMedios : [...current, ...parsedMedios]);
+      }
+      if (parsedRetenciones.length) setRetenciones((current) => [...current, ...parsedRetenciones]);
+      if (parsed.orden_pago_cliente) setOpReferencia(String(parsed.orden_pago_cliente));
+      if (!parsedMedios.length && !parsedRetenciones.length) throw new Error("La IA no encontró medios de pago ni retenciones en el archivo.");
+      setOpParseMessage(`IA completó ${parsedMedios.length} medio${parsedMedios.length === 1 ? "" : "s"} y ${parsedRetenciones.length} retención${parsedRetenciones.length === 1 ? "" : "es"}. Revisá los datos antes de confirmar.`);
+    } catch (parseError) {
+      setOpParseMessage(parseError instanceof Error ? parseError.message : "No se pudo leer la orden de pago");
+    } finally {
+      setParsingOP(false);
+    }
+  }
 
   // ── Confirm & register ──
   async function handleConfirmar() {
@@ -298,13 +364,37 @@ export default function CobroMasivoLiquidacion({
             <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-3">
               Orden de pago del cliente <span className="text-zinc-400 font-normal">(opcional)</span>
             </h3>
-            <input
-              type="text"
-              placeholder="N° de orden de pago o referencia del cliente"
-              value={opReferencia}
-              onChange={e => setOpReferencia(e.target.value)}
-              className="w-full max-w-md px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm"
-            />
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                type="text"
+                placeholder="N° de orden de pago o referencia del cliente"
+                value={opReferencia}
+                onChange={e => setOpReferencia(e.target.value)}
+                className="w-full max-w-md px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm"
+              />
+              <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-300 ${parsingOP ? "pointer-events-none opacity-60" : ""}`}>
+                {parsingOP ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Upload className="h-4 w-4" /><Sparkles className="h-3.5 w-3.5" /></>}
+                {parsingOP ? "Leyendo con IA..." : "Adjuntar OP y leer con IA"}
+                <input
+                  type="file"
+                  multiple
+                  accept="application/pdf,image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  disabled={parsingOP}
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files || []);
+                    void parseClientPaymentOrder(files);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+            {opFiles.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {opFiles.map((file) => <span key={`${file.name}-${file.size}`} className="inline-flex items-center gap-1 rounded bg-zinc-100 px-2 py-1 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"><FileCheck2 className="h-3.5 w-3.5" />{file.name}</span>)}
+              </div>
+            )}
+            {opParseMessage && <p className={`mt-2 text-xs ${opParseMessage.startsWith("IA completó") ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{opParseMessage}</p>}
           </section>
 
           {/* ── 2b. Tipo de cambio (solo USD) ── */}
@@ -355,7 +445,7 @@ export default function CobroMasivoLiquidacion({
                 <div key={medio._id} className="flex flex-wrap items-end gap-2 p-3 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg">
                   <div className="w-44">
                     <label className="block text-[10px] uppercase text-zinc-400 mb-1">Forma de pago</label>
-                    <select value={medio.tipo} onChange={e => updateMedio(medio._id, "tipo", e.target.value)}
+                    <select value={medio.tipo === "cheque_recibido" ? "echeq" : medio.tipo} onChange={e => updateMedio(medio._id, "tipo", e.target.value)}
                       className="w-full px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
                       {MEDIO_TIPOS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
                     </select>
@@ -409,6 +499,15 @@ export default function CobroMasivoLiquidacion({
                           value={medio.cheque_fecha_pago} onChange={e => updateMedio(medio._id, "cheque_fecha_pago", e.target.value)}
                           className="w-full px-2 py-1.5 rounded border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
                       </div>
+                      <label className="flex items-center gap-2 self-end rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                        <input
+                          type="checkbox"
+                          checked={medio.tipo === "cheque_recibido"}
+                          onChange={(e) => updateMedio(medio._id, "tipo", e.target.checked ? "cheque_recibido" : "echeq")}
+                          className="h-4 w-4 rounded border-zinc-300 text-orange-600 focus:ring-orange-500"
+                        />
+                        Cheque físico
+                      </label>
                     </div>
                   )}
                 </div>

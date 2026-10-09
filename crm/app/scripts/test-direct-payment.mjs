@@ -10,8 +10,9 @@ const handler = source.slice(start, end);
 assert.match(handler, /rpc\("registrar_pago_proveedor_seguro"/);
 assert.match(handler, /p_modo:\s*"directo"/);
 assert.match(handler, /p_request_key:\s*opRequestKeyRef\.current/);
-assert.match(handler, /p_facturas:\s*\[\{ id: fc\.id, monto: bruto \}\]/);
-assert.match(handler, /p_retencion_monto:\s*retencion/);
+assert.match(handler, /p_facturas:\s*\[\{ id: fc\.id, monto: roundPaymentMoney\(bruto\) \}\]/);
+assert.match(handler, /p_retencion_monto:\s*roundPaymentMoney\(retencion\)/);
+assert.match(handler, /p_base_retencion:\s*roundPaymentMoney\(opBaseSinIVA\)/);
 assert.doesNotMatch(handler, /from\("movimientos"\)\.insert/);
 assert.doesNotMatch(handler, /from\("facturas_compra"\)/);
 
@@ -26,5 +27,7 @@ assert.match(sql, /'retencion_ganancias'/);
 assert.match(sql, /unique \(sociedad_id, request_key\)/);
 assert.match(sql, /v_existing\.payload <> v_payload/);
 assert.match(sql, /us\.sociedad_id = p_sociedad_id/);
+assert.doesNotMatch(sql, /p_medios::text/);
+assert.match(sql, /p_medios->0->>'tipo',\s*p_medios,/);
 
 console.log("OK pago directo: RPC unica, saldo bajo lock, pago+retencion atomicos, sociedad e idempotencia.");

@@ -6,6 +6,7 @@ const EXTRACTION_PROMPT = `Sos un experto en lectura de comprobantes bancarios a
 Te voy a pasar una o varias imágenes/PDFs de comprobantes de pago (transferencias bancarias, depósitos, recibos de cobro, cheques, echeqs, retenciones, etc.). Tu tarea es extraer TODOS los pagos individuales que aparecen y devolver un JSON con esta estructura:
 
 {
+  "orden_pago_cliente": "número o referencia general de la orden de pago del cliente, si aparece",
   "pagos": [
     {
       "tipo": "transferencia" | "deposito" | "cheque" | "echeq" | "efectivo" | "retencion_iibb" | "retencion_ganancias" | "retencion_iva" | "otro",
@@ -19,10 +20,14 @@ Te voy a pasar una o varias imágenes/PDFs de comprobantes de pago (transferenci
       "ordenante": "nombre del pagador/ordenante si aparece",
       "destinatario": "nombre del beneficiario si aparece",
       "cuit_ordenante": "CUIT del ordenante si aparece",
+      "organismo": "organismo que practicó la retención, si corresponde",
+      "certificado": "número de certificado de retención, si corresponde",
       "concepto": "descripción o concepto del pago si aparece",
       "cheque_numero": "número del cheque si es cheque/echeq",
       "cheque_fecha": "YYYY-MM-DD fecha de vencimiento del cheque si corresponde",
       "cheque_id_digital": "ID del echeq si corresponde",
+      "tipo_cheque": "echeq" | "fisico" | null,
+      "direccion": "emitido" | "recibido" | null,
       "notas": "cualquier otra información relevante"
     }
   ]
@@ -37,10 +42,13 @@ Reglas IMPORTANTES:
 - La moneda por defecto es "ARS" salvo que se indique USD o dólares. IMPORTANTE: si un cheque o echeq está en USD, poné moneda: "USD" — NO lo conviertas a ARS.
 - Devolvé SOLO el JSON, sin texto adicional ni markdown.
 - SIEMPRE devolvé el array "pagos" aunque sea un solo pago.
+- Si el documento es una orden de pago del cliente, extraé su número o referencia general en "orden_pago_cliente". No lo confundas con el número individual de una transferencia o cheque.
 - Para transferencias bancarias, buscá el monto en el campo "Importe" o "Monto". No confundas el CBU/CVU (22 dígitos) con el monto.
 - Si el comprobante muestra "Fecha de emisión" y "Fecha de cobro/acreditación", extraé AMBAS en fecha_emision y fecha_cobro. fecha debe repetir fecha_cobro para compatibilidad.
 - Si sólo hay una fecha inequívoca, completá fecha y el campo específico que corresponda. No inventes la otra.
 - Para cheques y echeqs:
+  - Si el documento dice E-Cheq, ECHEQ, cheque electrónico, cheque digital o muestra un ID digital, usá tipo "echeq" y tipo_cheque "echeq". No lo clasifiques como "cheque" físico.
+  - direccion describe si el instrumento fue emitido por quien paga ("emitido") o recibido de un tercero ("recibido"). No confundas esta dirección con el destinatario del pago.
   - El número de cheque suele tener 8 dígitos. El ID digital del echeq es más largo (20+ caracteres). No los confundas.
   - cheque_fecha es la FECHA DE VENCIMIENTO o FECHA DE COBRO del cheque (no la fecha de emisión). Si es un cheque diferido, la fecha de cobro es futura. SIEMPRE incluí este campo si aparece.
   - Si dice "A la vista" o no tiene fecha de cobro, usá la fecha de emisión como cheque_fecha.
@@ -50,6 +58,7 @@ Reglas IMPORTANTES:
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
+    const contexto = String(formData.get("contexto") || "");
     // Support multiple files
     const files: File[] = [];
     const allEntries = formData.getAll("file");
@@ -106,11 +115,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const contextoOrdenPago = contexto === "orden_pago_proveedor";
     contentBlocks.push({
       type: "text",
-      text: files.length > 1
+      text: `${contextoOrdenPago ? `CONTEXTO OBLIGATORIO: estos archivos fueron adjuntados al crear una orden de pago a un proveedor. Son comprobantes salientes generados por nuestra empresa. Todo cheque o eCheq hallado aquí es PROPIO/EMITIDO, nunca un cheque recibido de terceros: devolvé direccion "emitido". Si es electrónico/digital, devolvé tipo "echeq" y tipo_cheque "echeq".\n\n` : ""}${files.length > 1
         ? `Hay ${files.length} comprobantes adjuntos. Extraé TODOS los pagos de TODOS los archivos y devolvé el JSON con el array "pagos".`
-        : "Extraé todos los pagos de este comprobante y devolvé el JSON con el array \"pagos\". Si hay múltiples cheques, crealos como entradas separadas.",
+        : "Extraé todos los pagos de este comprobante y devolvé el JSON con el array \"pagos\". Si hay múltiples cheques, crealos como entradas separadas."}`,
     });
 
     const stream = client.messages.stream({
@@ -133,6 +143,25 @@ export async function POST(request: NextRequest) {
     }
 
     const parsed = JSON.parse(jsonText);
+
+    if (contextoOrdenPago && Array.isArray(parsed.pagos)) {
+      parsed.pagos = parsed.pagos.map((pago: Record<string, unknown>) => {
+        const tipo = typeof pago.tipo === "string" ? pago.tipo.toLocaleLowerCase() : pago.tipo;
+        if (tipo !== "cheque" && tipo !== "echeq") return pago;
+        const chequeHint = [pago.tipo_cheque, pago.cheque_id_digital, pago.concepto, pago.notas]
+          .filter(Boolean)
+          .join(" ")
+          .toLocaleLowerCase();
+        const esEcheq = tipo === "echeq" || Boolean(pago.cheque_id_digital)
+          || /(?:e[ -]?cheq|cheque (?:electr[oó]nico|digital))/.test(chequeHint);
+        return {
+          ...pago,
+          tipo: esEcheq ? "echeq" : "cheque",
+          tipo_cheque: esEcheq ? "echeq" : (pago.tipo_cheque || "fisico"),
+          direccion: "emitido",
+        };
+      });
+    }
 
     // Normalize: if old format (no pagos array), wrap it
     if (!parsed.pagos && parsed.tipo) {

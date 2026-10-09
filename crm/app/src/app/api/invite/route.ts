@@ -1,8 +1,20 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextRequest } from "next/server";
+import { Resend } from "resend";
 import { createSupabaseServer } from "@/lib/supabase/server";
+import { isValidEmail, normalizeEmail } from "@/lib/email";
 
 const VALID_ROLES = ["super_admin", "admin", "vendedor", "administrativo", "viewer"];
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  })[char] || char);
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -25,8 +37,10 @@ export async function POST(request: NextRequest) {
       return Response.json({ error: "Service role key no configurada" }, { status: 500 });
     }
 
-    const { email, nombre, role, sociedad_ids } = await request.json();
-    if (!email?.trim()) return Response.json({ error: "Email es obligatorio" }, { status: 400 });
+    const { email: rawEmail, nombre, role, sociedad_ids } = await request.json();
+    const email = normalizeEmail(rawEmail);
+    if (!email) return Response.json({ error: "Email es obligatorio" }, { status: 400 });
+    if (!isValidEmail(email)) return Response.json({ error: "El email no tiene un formato válido" }, { status: 400 });
     if (!nombre?.trim()) return Response.json({ error: "Nombre es obligatorio" }, { status: 400 });
 
     // Validate role
@@ -39,53 +53,115 @@ export async function POST(request: NextRequest) {
     const supabaseAdmin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       serviceKey,
-      { auth: { autoRefreshToken: false, persistSession: false } }
+      { auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false } }
     );
 
-    // Invite user — this sends an email with a magic link automatically
-    const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
-      email.trim(),
-      { data: { full_name: nombre.trim() } }
-    );
-
-    if (createError) {
-      if (createError.message?.includes("already been registered")) {
-        return Response.json({ error: "Ya existe un usuario con ese email" }, { status: 409 });
-      }
-      throw createError;
+    // Supabase's automatic mailer can reject an otherwise valid company address
+    // after already creating the auth user. Generate the invite token separately and
+    // send it through the same verified Resend account used by the CRM instead.
+    let existingUser = null;
+    const perPage = 200;
+    for (let page = 1; page <= 10; page++) {
+      const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage });
+      if (error) throw error;
+      existingUser = data.users.find((candidate) => normalizeEmail(candidate.email) === email) || null;
+      if (existingUser || data.users.length < perPage) break;
+    }
+    if (existingUser?.email_confirmed_at) {
+      return Response.json({ error: "Ya existe un usuario confirmado con ese email" }, { status: 409 });
     }
 
-    if (!newUser.user) throw new Error("No se pudo crear el usuario");
+    const { data: inviteData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
+      type: "invite",
+      email,
+      options: { data: { full_name: nombre.trim() } },
+    });
+    if (linkError) throw linkError;
 
-    // Update profile with role and name (trigger creates profile row on user creation)
-    // Retry a few times since the trigger may not have fired yet
-    let profileUpdated = false;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const { error: profileError } = await supabaseAdmin
-        .from("profiles")
-        .update({ role: validRole, full_name: nombre.trim() } as any)
-        .eq("id", newUser.user.id);
-      if (!profileError) { profileUpdated = true; break; }
-      // Wait for trigger to create the profile row
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    if (!profileUpdated) {
-      console.error("Could not update profile for new user", newUser.user.id);
-    }
+    const invitedUser = inviteData.user || existingUser;
+    const tokenHash = inviteData.properties?.hashed_token;
+    if (!invitedUser || !tokenHash) throw new Error("No se pudo generar la invitación");
 
-    // Assign sociedades if provided
-    if (sociedad_ids?.length) {
-      const rows = sociedad_ids.map((sid: string) => ({
-        user_id: newUser.user!.id,
+    // Upsert instead of assuming the auth trigger has already finished. This also
+    // repairs users left half-created by the previous mailer flow.
+    const { error: profileError } = await supabaseAdmin.from("profiles").upsert({
+      id: invitedUser.id,
+      email,
+      full_name: nombre.trim(),
+      role: validRole,
+      active: true,
+    } as any, { onConflict: "id" });
+    if (profileError) throw profileError;
+
+    // An empty selection intentionally means unrestricted (all sociedades).
+    const uniqueSociedadIds = Array.isArray(sociedad_ids)
+      ? [...new Set(sociedad_ids.filter((sid): sid is string => typeof sid === "string" && sid.length > 0))]
+      : [];
+    const { error: clearSocError } = await (supabaseAdmin as any)
+      .from("user_sociedades")
+      .delete()
+      .eq("user_id", invitedUser.id);
+    if (clearSocError) throw clearSocError;
+    if (uniqueSociedadIds.length) {
+      const rows = uniqueSociedadIds.map((sid) => ({
+        user_id: invitedUser.id,
         sociedad_id: sid,
       }));
       const { error: socError } = await (supabaseAdmin as any).from("user_sociedades").insert(rows);
-      if (socError) console.error("Error assigning sociedades:", socError);
+      if (socError) throw socError;
+    }
+
+    const appOrigin = new URL(request.url).origin;
+    const inviteUrl = new URL("/auth/confirm", appOrigin);
+    inviteUrl.searchParams.set("token_hash", tokenHash);
+    inviteUrl.searchParams.set("type", "invite");
+    inviteUrl.searchParams.set("next", "/auth/aceptar-invitacion");
+
+    const resendKey = process.env.RESEND_API_KEY;
+    if (!resendKey) {
+      return Response.json({
+        success: true,
+        invite_sent: false,
+        recovered: Boolean(existingUser),
+        warning: "El acceso quedó creado, pero falta configurar RESEND_API_KEY para enviar la invitación.",
+        user: { id: invitedUser.id, email },
+      });
+    }
+
+    const configuredFrom = process.env.EMAIL_FROM || "notificaciones@lazzari.com.ar";
+    const from = configuredFrom.includes("<") ? configuredFrom : `Lazzari CRM <${configuredFrom}>`;
+    const safeName = escapeHtml(nombre.trim());
+    const resend = new Resend(resendKey);
+    const { error: sendError } = await resend.emails.send({
+      from,
+      to: [email],
+      subject: "Tu acceso a Lazzari CRM",
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;color:#18181b">
+          <h2 style="color:#ff4500">Bienvenido a Lazzari CRM</h2>
+          <p>Hola ${safeName},</p>
+          <p>Se creó tu acceso al sistema. Usá el siguiente botón para definir tu contraseña:</p>
+          <p style="margin:28px 0"><a href="${escapeHtml(inviteUrl.toString())}" style="background:#ff4500;color:white;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:600">Activar mi cuenta</a></p>
+          <p style="font-size:12px;color:#71717a">Si no esperabas esta invitación, podés ignorar este mensaje.</p>
+        </div>`,
+    });
+
+    if (sendError) {
+      console.error("Error sending CRM invite:", sendError);
+      return Response.json({
+        success: true,
+        invite_sent: false,
+        recovered: Boolean(existingUser),
+        warning: `El acceso quedó creado, pero no se pudo enviar la invitación: ${sendError.message}`,
+        user: { id: invitedUser.id, email },
+      });
     }
 
     return Response.json({
       success: true,
-      user: { id: newUser.user.id, email: newUser.user.email },
+      invite_sent: true,
+      recovered: Boolean(existingUser),
+      user: { id: invitedUser.id, email },
     });
   } catch (error: unknown) {
     console.error("Error inviting user:", error);

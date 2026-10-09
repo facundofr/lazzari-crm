@@ -93,12 +93,30 @@ interface LibroIVACompraRow {
   moneda: string;
 }
 
+interface ComparativaMensualRow {
+  periodo: string;
+  mes: string;
+  moneda: "ARS" | "USD";
+  ventas: number;
+  compras: number;
+  venta_pr: number;
+  costo_pr: number;
+}
+
 const COLORS = ["#f97316", "#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#eab308"];
+
+function costoEnMonedaPresupuesto(costo: number, costoMoneda: string, prMoneda: string, tipoCambio: number, tipoCambioDivisas: number): number {
+  const costoEsUsd = costoMoneda === "USD" || costoMoneda === "USD Divisa";
+  const tc = tipoCambio > 0 ? tipoCambio : tipoCambioDivisas;
+  if (costoEsUsd && prMoneda === "ARS") return tc > 0 ? costo * tc : costo;
+  if (costoMoneda === "ARS" && prMoneda === "USD") return tc > 0 ? costo / tc : costo;
+  return costo;
+}
 
 export default function ReportesPage() {
   const { sociedadActiva, profile } = useUser();
   const isAdmin = profile?.role && ["super_admin", "admin", "administrativo"].includes(profile.role);
-  const [activeTab, setActiveTab] = useState<"comercial" | "comisiones" | "articulos" | "libro_iva">("comercial");
+  const [activeTab, setActiveTab] = useState<"comercial" | "compras_ventas" | "comisiones" | "articulos" | "libro_iva">("comercial");
   const [monedaReporte, setMonedaReporte] = useState<"original" | "ARS" | "USD">("original");
   const [tipoCambioReporte, setTipoCambioReporte] = useState<number>(1200);
   const [loading, setLoading] = useState(true);
@@ -112,6 +130,9 @@ export default function ReportesPage() {
   const [articulosLoading, setArticulosLoading] = useState(true);
   const [articulosSortBy, setArticulosSortBy] = useState<"cantidad" | "monto">("cantidad");
   const [articulosFuente, setArticulosFuente] = useState<"facturas" | "presupuestos" | "ambos">("facturas");
+  const [comparativaMensual, setComparativaMensual] = useState<ComparativaMensualRow[]>([]);
+  const [comparativaLoading, setComparativaLoading] = useState(true);
+  const [comparativaMoneda, setComparativaMoneda] = useState<"ARS" | "USD">("ARS");
 
   // Libro IVA
   const [libroIVALoading, setLibroIVALoading] = useState(false);
@@ -222,6 +243,85 @@ export default function ReportesPage() {
     }
     fetchData();
   }, [sociedadActiva]);
+
+  // ── Compras vs ventas y costo vs venta de PR ──────────────────
+  useEffect(() => {
+    async function fetchComparativa() {
+      setComparativaLoading(true);
+      try {
+        let ventasQuery = (supabase as any).from("facturas")
+          .select("fecha, tipo, total, moneda, estado")
+          .neq("estado", "anulada");
+        let comprasQuery = (supabase as any).from("facturas_compra")
+          .select("fecha, tipo_comprobante, total, moneda, estado")
+          .neq("estado", "anulada");
+        let prsQuery = (supabase as any).from("presupuestos")
+          .select("fecha, subtotal, moneda, estado, tipo_cambio, tipo_cambio_divisas, presupuesto_items(cantidad, precio_costo, costo_moneda)")
+          .in("estado", ["aprobado", "facturado"]);
+        if (sociedadActiva?.id) {
+          ventasQuery = ventasQuery.eq("sociedad_id", sociedadActiva.id);
+          comprasQuery = comprasQuery.eq("sociedad_id", sociedadActiva.id);
+          prsQuery = prsQuery.eq("sociedad_id", sociedadActiva.id);
+        }
+        const [ventasResult, comprasResult, prsResult] = await Promise.all([ventasQuery, comprasQuery, prsQuery]);
+        if (ventasResult.error) throw ventasResult.error;
+        if (comprasResult.error) throw comprasResult.error;
+        if (prsResult.error) throw prsResult.error;
+
+        const byMonth = new Map<string, ComparativaMensualRow>();
+        const ensure = (periodo: string, monedaRaw: string) => {
+          const moneda = monedaRaw === "USD" ? "USD" : "ARS";
+          const key = `${periodo}-${moneda}`;
+          if (!byMonth.has(key)) {
+            const [year, month] = periodo.split("-");
+            byMonth.set(key, {
+              periodo,
+              mes: new Date(Number(year), Number(month) - 1).toLocaleDateString("es-AR", { month: "short", year: "2-digit" }),
+              moneda,
+              ventas: 0,
+              compras: 0,
+              venta_pr: 0,
+              costo_pr: 0,
+            });
+          }
+          return byMonth.get(key)!;
+        };
+
+        (ventasResult.data || []).forEach((factura: any) => {
+          const row = ensure(String(factura.fecha || "").slice(0, 7), factura.moneda);
+          const signo = String(factura.tipo || "").toUpperCase().startsWith("NC") ? -1 : 1;
+          row.ventas += signo * Number(factura.total || 0);
+        });
+        (comprasResult.data || []).forEach((factura: any) => {
+          const row = ensure(String(factura.fecha || "").slice(0, 7), factura.moneda);
+          const signo = String(factura.tipo_comprobante || "").toUpperCase().startsWith("NC") ? -1 : 1;
+          row.compras += signo * Number(factura.total || 0);
+        });
+        (prsResult.data || []).forEach((pr: any) => {
+          const row = ensure(String(pr.fecha || "").slice(0, 7), pr.moneda);
+          row.venta_pr += Number(pr.subtotal || 0);
+          row.costo_pr += (pr.presupuesto_items || []).reduce((sum: number, item: any) => {
+            const costoUnitario = costoEnMonedaPresupuesto(
+              Number(item.precio_costo || 0),
+              item.costo_moneda || "ARS",
+              pr.moneda || "ARS",
+              Number(pr.tipo_cambio || 0),
+              Number(pr.tipo_cambio_divisas || 0),
+            );
+            return sum + Number(item.cantidad || 0) * costoUnitario;
+          }, 0);
+        });
+
+        setComparativaMensual(Array.from(byMonth.values()).filter((row) => /^\d{4}-\d{2}$/.test(row.periodo)).sort((a, b) => a.periodo.localeCompare(b.periodo)).slice(-24));
+      } catch (error) {
+        console.error("Error cargando comparativa de compras y ventas:", error);
+        setComparativaMensual([]);
+      } finally {
+        setComparativaLoading(false);
+      }
+    }
+    fetchComparativa();
+  }, [sociedadActiva?.id]);
 
   // ── Fetch comisiones data ──────────────────────────────────────
   useEffect(() => {
@@ -529,6 +629,10 @@ export default function ReportesPage() {
     [comisionesData]
   );
 
+  const comparativaVisible = comparativaMensual.filter((row) => row.moneda === comparativaMoneda).slice(-12);
+  const comparativaActual = comparativaVisible[comparativaVisible.length - 1];
+  const margenPRActual = Number(comparativaActual?.venta_pr || 0) - Number(comparativaActual?.costo_pr || 0);
+
   // ── Multi-currency conversion ──────────────────────────────────
   const convertMonto = useCallback(
     (monto: number, monedaOriginal: string): number => {
@@ -574,8 +678,8 @@ export default function ReportesPage() {
       <Header title="Reportes" subtitle="Analisis comercial y operativo" />
 
       {/* Tab navigation */}
-      <div className="px-8 pt-6">
-        <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-fit">
+      <div className="overflow-x-auto px-4 pt-6 sm:px-8">
+        <div className="flex w-max gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800">
           <button
             onClick={() => setActiveTab("comercial")}
             className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
@@ -587,6 +691,19 @@ export default function ReportesPage() {
             <span className="flex items-center gap-2">
               <TrendingUp className="h-4 w-4" />
               Analisis comercial
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab("compras_ventas")}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === "compras_ventas"
+                ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
+                : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            }`}
+          >
+            <span className="flex items-center gap-2">
+              <DollarSign className="h-4 w-4" />
+              Compras vs ventas
             </span>
           </button>
           {isAdmin && (
@@ -634,6 +751,7 @@ export default function ReportesPage() {
       </div>
 
       {/* Currency selector */}
+      {activeTab !== "compras_ventas" && (
       <div className="px-8 pt-4 flex flex-wrap items-center gap-3">
         <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Moneda:</span>
         <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-600 overflow-hidden">
@@ -670,6 +788,7 @@ export default function ReportesPage() {
           </div>
         )}
       </div>
+      )}
 
       {/* Tab: Analisis comercial */}
       {activeTab === "comercial" && (
@@ -817,6 +936,78 @@ export default function ReportesPage() {
           </div>
         </Card>
       </div>
+      )}
+
+      {/* Tab: Compras vs ventas */}
+      {activeTab === "compras_ventas" && (
+        <div className="space-y-6 p-4 sm:p-8">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Compras, ventas y margen comercial</h2>
+              <p className="text-sm text-zinc-500">Facturación real por mes y costo vs venta tomado de PR aprobados o facturados.</p>
+            </div>
+            <div className="flex overflow-hidden rounded-lg border border-zinc-300 dark:border-zinc-600">
+              {(["ARS", "USD"] as const).map((moneda) => (
+                <button key={moneda} onClick={() => setComparativaMoneda(moneda)} className={`px-4 py-2 text-sm font-medium ${comparativaMoneda === moneda ? "bg-orange-500 text-white" : "bg-white text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>{moneda}</button>
+              ))}
+            </div>
+          </div>
+
+          {comparativaLoading ? (
+            <div className="flex items-center justify-center p-16"><Loader2 className="h-8 w-8 animate-spin text-orange-500" /></div>
+          ) : (
+            <>
+              <div className="grid gap-4 sm:grid-cols-4">
+                <Card><p className="text-xs text-zinc-500">Ventas del último mes</p><p className="mt-2 font-mono text-xl font-bold text-emerald-600">{formatCurrency(Number(comparativaActual?.ventas || 0), comparativaMoneda)}</p></Card>
+                <Card><p className="text-xs text-zinc-500">Compras del último mes</p><p className="mt-2 font-mono text-xl font-bold text-red-600">{formatCurrency(Number(comparativaActual?.compras || 0), comparativaMoneda)}</p></Card>
+                <Card><p className="text-xs text-zinc-500">Venta PR del último mes</p><p className="mt-2 font-mono text-xl font-bold">{formatCurrency(Number(comparativaActual?.venta_pr || 0), comparativaMoneda)}</p></Card>
+                <Card><p className="text-xs text-zinc-500">Margen PR del último mes</p><p className={`mt-2 font-mono text-xl font-bold ${margenPRActual >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(margenPRActual, comparativaMoneda)}</p></Card>
+              </div>
+
+              <div className="grid gap-6 lg:grid-cols-2">
+                <Card>
+                  <CardHeader><CardTitle>Compras totales vs ventas totales</CardTitle></CardHeader>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={comparativaVisible}>
+                        <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
+                        <YAxis tickFormatter={(value) => `${(Number(value) / 1000000).toFixed(1)}M`} tick={{ fontSize: 11 }} />
+                        <Tooltip formatter={(value) => formatCurrency(Number(value), comparativaMoneda)} />
+                        <Legend />
+                        <Bar dataKey="ventas" name="Ventas" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="compras" name="Compras" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Card>
+                <Card>
+                  <CardHeader><CardTitle>Costo de lo vendido vs venta (PR)</CardTitle></CardHeader>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={comparativaVisible}>
+                        <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
+                        <YAxis tickFormatter={(value) => `${(Number(value) / 1000000).toFixed(1)}M`} tick={{ fontSize: 11 }} />
+                        <Tooltip formatter={(value) => formatCurrency(Number(value), comparativaMoneda)} />
+                        <Legend />
+                        <Bar dataKey="venta_pr" name="Venta PR" fill="#f97316" radius={[4, 4, 0, 0]} />
+                        <Bar dataKey="costo_pr" name="Costo PR" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Card>
+              </div>
+
+              <Card className="overflow-hidden p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead><tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800"><th className="px-4 py-3 text-left">Mes</th><th className="px-4 py-3 text-right">Ventas</th><th className="px-4 py-3 text-right">Compras</th><th className="px-4 py-3 text-right">Venta PR</th><th className="px-4 py-3 text-right">Costo PR</th><th className="px-4 py-3 text-right">Margen PR</th></tr></thead>
+                    <tbody>{comparativaVisible.map((row) => { const margen = row.venta_pr - row.costo_pr; return <tr key={`${row.periodo}-${row.moneda}`} className="border-b border-zinc-100 dark:border-zinc-800"><td className="px-4 py-3 font-medium">{row.mes}</td><td className="px-4 py-3 text-right font-mono text-emerald-600">{formatCurrency(row.ventas, row.moneda)}</td><td className="px-4 py-3 text-right font-mono text-red-600">{formatCurrency(row.compras, row.moneda)}</td><td className="px-4 py-3 text-right font-mono">{formatCurrency(row.venta_pr, row.moneda)}</td><td className="px-4 py-3 text-right font-mono">{formatCurrency(row.costo_pr, row.moneda)}</td><td className={`px-4 py-3 text-right font-mono font-semibold ${margen >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(margen, row.moneda)}</td></tr>; })}</tbody>
+                  </table>
+                </div>
+              </Card>
+            </>
+          )}
+        </div>
       )}
 
       {/* Tab: Ranking por Articulo */}

@@ -404,6 +404,7 @@ export interface Proveedor {
   clasificacionTags: string[];
   marcas: string;
   clasificacionNota: string;
+  esTransportista?: boolean;
   activo: boolean;
   createdAt: string;
   updatedAt: string;

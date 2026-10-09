@@ -26,6 +26,7 @@ import { createPortal } from "react-dom";
 import { useUser } from "@/lib/auth-context";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { attachPurchaseOrderInvoices } from "@/lib/purchase-order-invoice-links";
+import { isOwnStockPurchaseOrder, purchaseOrderProviderLabel } from "@/lib/own-stock-purchase-orders";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" | "outline" | "purple" }> = {
   borrador: { label: "Borrador", variant: "outline" },
@@ -506,7 +507,7 @@ export default function OrdenesCompraPage() {
       const updated = ordenes.find(o => o.id === detailOC.id);
       if (updated) setDetailOC(updated);
     }
-  }, [ordenes]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ordenes]);
 
   // ── Fetch profiles for operator dropdown ──────────────────────────
   useEffect(() => {
@@ -1188,6 +1189,7 @@ export default function OrdenesCompraPage() {
 
   const buildOCSummaryText = (oc: OCRow) => {
     const prov = oc.proveedores;
+    const proveedorLabel = purchaseOrderProviderLabel(oc);
     const estadoLabel = (statusConfig[oc.estado] || { label: oc.estado }).label;
     const mon = oc.moneda as "ARS" | "USD";
     const lines = [
@@ -1198,7 +1200,7 @@ export default function OrdenesCompraPage() {
       `Estado: ${estadoLabel}`,
       `Moneda: ${oc.moneda}`,
       "",
-      `*Proveedor:* ${prov?.razon_social || "\u2014"}`,
+      `*Proveedor:* ${proveedorLabel}`,
       prov?.cuit ? `CUIT: ${prov.cuit}` : null,
       prov?.email ? `Email: ${prov.email}` : null,
       prov?.telefono ? `Tel: ${prov.telefono}` : null,
@@ -1222,6 +1224,7 @@ export default function OrdenesCompraPage() {
     if (!detailOC || !sociedadActiva) return;
     const oc = detailOC;
     const prov = oc.proveedores;
+    const proveedorLabel = purchaseOrderProviderLabel(oc);
     const estadoLabel = (statusConfig[oc.estado] || { label: oc.estado }).label;
     const mon = oc.moneda as "ARS" | "USD";
     const soc = getSociedadPDF(sociedadActiva);
@@ -1239,7 +1242,7 @@ export default function OrdenesCompraPage() {
       observaciones: oc.observaciones,
       presupuesto_origen: oc.presupuesto_origen ? { numero: (oc.presupuesto_origen as { numero: string }).numero } : null,
       proveedor: prov ? {
-        razon_social: prov.razon_social,
+        razon_social: proveedorLabel,
         cuit: prov.cuit,
         condicion_iva: prov.condicion_iva,
         direccion: prov.direccion,
@@ -1248,7 +1251,7 @@ export default function OrdenesCompraPage() {
         email: prov.email,
         telefono: prov.telefono,
         forma_pago: prov.forma_pago,
-      } : null,
+      } : { razon_social: proveedorLabel },
       items: detailItems.map(it => ({
         codigo: it.codigo,
         descripcion: it.descripcion,
@@ -1384,7 +1387,7 @@ export default function OrdenesCompraPage() {
         : null,
       `Moneda: ${oc.moneda}`,
       "",
-      `*Proveedor:* ${oc.proveedores?.razon_social || "\u2014"}`,
+      `*Proveedor:* ${purchaseOrderProviderLabel(oc)}`,
       "",
       "*Items:*",
       itemLines || "(sin items)",
@@ -1625,7 +1628,7 @@ export default function OrdenesCompraPage() {
       // que quedaba invisible cuando el item original del PR ya estaba asignado.
       let ocQuery = (supabase as any)
         .from("ordenes_compra")
-        .select("id, numero, moneda, presupuesto_origen_id, orden_compra_items(id, codigo, descripcion, cantidad, precio_unitario, unidad, proveedor_id)")
+        .select("id, numero, moneda, observaciones, presupuesto_origen_id, orden_compra_items(id, codigo, descripcion, cantidad, precio_unitario, unidad, proveedor_id)")
         .is("proveedor_id", null)
         .neq("estado", "cancelada")
         .order("created_at", { ascending: false });
@@ -1633,7 +1636,7 @@ export default function OrdenesCompraPage() {
       const { data: ocsSinProveedor, error: ocError } = await ocQuery;
       if (ocError) throw ocError;
 
-      const itemsDeOC: ItemSinProveedor[] = (ocsSinProveedor || []).flatMap((oc: any) =>
+      const itemsDeOC: ItemSinProveedor[] = (ocsSinProveedor || []).filter((oc: any) => !isOwnStockPurchaseOrder(oc)).flatMap((oc: any) =>
         (oc.orden_compra_items || [])
           .filter((item: any) => !item.proveedor_id)
           .map((item: any) => ({
@@ -1941,6 +1944,7 @@ export default function OrdenesCompraPage() {
       const needle = search.trim().toLocaleLowerCase("es");
       const searchable = [
         oc.numero,
+        purchaseOrderProviderLabel(oc),
         oc.proveedores?.razon_social,
         oc.proveedores?.cuit,
         oc.proveedores?.email,
@@ -2160,10 +2164,10 @@ export default function OrdenesCompraPage() {
                 key: "proveedores",
                 label: "Proveedor",
                 sortable: true,
-                sortValue: (row) => row.proveedores?.razon_social || "",
+                sortValue: (row) => purchaseOrderProviderLabel(row),
                 render: (row) => (
                   <div>
-                    <span className={`font-medium ${!row.proveedores?.razon_social ? "text-amber-500 italic" : ""}`}>{row.proveedores?.razon_social || "Sin proveedor"}</span>
+                    <span className={`font-medium ${!row.proveedores?.razon_social && !isOwnStockPurchaseOrder(row) ? "text-amber-500 italic" : isOwnStockPurchaseOrder(row) ? "text-blue-600 dark:text-blue-400" : ""}`}>{purchaseOrderProviderLabel(row)}</span>
                     {row.proveedores?.email && (
                       <a href={`mailto:${row.proveedores.email}`} className="text-xs text-zinc-400 hover:text-orange-500 truncate max-w-[200px] block" onClick={(e) => e.stopPropagation()}>{row.proveedores.email}</a>
                     )}
@@ -2894,7 +2898,7 @@ export default function OrdenesCompraPage() {
                         onClick={async () => {
                           const oc = detailOC;
                           const template = await loadEmailTemplate("orden_compra", sociedadActiva?.id || "");
-                          const vars = { numero: oc.numero, sociedad: sociedadActiva?.razonSocial || "Lazzari", total: formatCurrency(oc.total, oc.moneda as "ARS" | "USD"), fecha: formatDate(oc.fecha), proveedor: oc.proveedores?.razon_social || "" };
+                          const vars = { numero: oc.numero, sociedad: sociedadActiva?.razonSocial || "Lazzari", total: formatCurrency(oc.total, oc.moneda as "ARS" | "USD"), fecha: formatDate(oc.fecha), proveedor: purchaseOrderProviderLabel(oc) };
                           setEmailModal({ open: true, id: oc.id, to: oc.proveedores?.email || "", subject: applyTemplateVars(template.asunto, vars), body: applyTemplateVars(template.cuerpo, vars), filename: `${oc.numero}.pdf` });
                         }}
                         className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Enviar por email">
@@ -3045,6 +3049,14 @@ export default function OrdenesCompraPage() {
                           <span>Pago: {detailOC.proveedores.forma_pago}</span>
                         </div>
                       )}
+                    </div>
+                  </div>
+                ) : isOwnStockPurchaseOrder(detailOC) ? (
+                  <div className="flex items-center gap-3 rounded-lg bg-blue-50 px-3 py-3 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
+                    <Package className="h-5 w-5" />
+                    <div>
+                      <p className="font-semibold">Stock propio</p>
+                      <p className="text-xs opacity-80">OC normal para recepción de mercadería propia; no requiere proveedor externo.</p>
                     </div>
                   </div>
                 ) : (
@@ -3324,7 +3336,7 @@ export default function OrdenesCompraPage() {
                           <th className="px-3 py-2 text-right">Cant.</th>
                           <th className="px-3 py-2 text-right">P. Unit.</th>
                           <th className="px-3 py-2 text-right">Subtotal</th>
-                          {!detailOC.proveedores && <th className="px-3 py-2">Proveedor</th>}
+                          {!detailOC.proveedores && !isOwnStockPurchaseOrder(detailOC) && <th className="px-3 py-2">Proveedor</th>}
                           <th className="px-3 py-2 text-center">Recibido</th>
                           {editMode && <th className="px-3 py-2 w-8"></th>}
                         </tr>
@@ -3373,7 +3385,7 @@ export default function OrdenesCompraPage() {
                                   ? formatCurrency(Number(item.cantidad) * Number(item.precio_unitario), detailOC.moneda as "ARS" | "USD")
                                   : formatCurrency(Number(item.subtotal), detailOC.moneda as "ARS" | "USD")}
                               </td>
-                              {!detailOC.proveedores && (
+                              {!detailOC.proveedores && !isOwnStockPurchaseOrder(detailOC) && (
                                 <td className="px-3 py-2">
                                   {canManageCompras ? <ProveedorPicker value={item.proveedor_id || ""} options={proveedores} onChange={(proveedorId) => handleItemProveedorChange(item.id, proveedorId)} compact /> : (
                                     <span className="text-xs text-zinc-500">
@@ -3574,6 +3586,7 @@ export default function OrdenesCompraPage() {
           if (!detailOC || !sociedadActiva) throw new Error("No se encontró la OC");
           const oc = detailOC;
           const prov = oc.proveedores;
+          const proveedorLabel = purchaseOrderProviderLabel(oc);
           const estadoLabel = (statusConfig[oc.estado] || { label: oc.estado }).label;
           const mon = oc.moneda as "ARS" | "USD";
           const soc = getSociedadPDF(sociedadActiva);
@@ -3590,7 +3603,7 @@ export default function OrdenesCompraPage() {
             observaciones: oc.observaciones,
             presupuesto_origen: oc.presupuesto_origen ? { numero: (oc.presupuesto_origen as { numero: string }).numero } : null,
             proveedor: prov ? {
-              razon_social: prov.razon_social,
+              razon_social: proveedorLabel,
               cuit: prov.cuit,
               condicion_iva: prov.condicion_iva,
               direccion: prov.direccion,
@@ -3599,7 +3612,7 @@ export default function OrdenesCompraPage() {
               email: prov.email,
               telefono: prov.telefono,
               forma_pago: prov.forma_pago,
-            } : null,
+            } : { razon_social: proveedorLabel },
             items: detailItems.map(it => ({
               codigo: it.codigo,
               descripcion: it.descripcion,

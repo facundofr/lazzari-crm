@@ -5,8 +5,9 @@ const compile=name=>ts.transpileModule(fs.readFileSync(path.join(__dirname,'../s
 const utils={formatCurrency:n=>Number(n).toLocaleString('es-AR',{minimumFractionDigits:2}),formatDate:d=>d};
 const ctx={exports:{},Buffer,btoa:s=>Buffer.from(s,'binary').toString('base64'),require:name=>name==='@/lib/utils'?utils:{readFceMetadata:()=>null}};
 vm.runInNewContext(compile('pdf-templates.ts'),ctx);
-const society=ctx.exports.getSociedadPDF({id:'eee2a3c8-fe6c-494d-bd2f-7a5d8067d021'});
+const society=ctx.exports.getSociedadPDF({id:'eee2a3c8-fe6c-494d-bd2f-7a5d8067d021',nombre:'Lazzari',razonSocial:'Lazzari Soluciones Industriales',cuit:'20379309128',condicionIva:'Responsable Inscripto',colorPrimario:'#FF4500'});
 const template=ctx.exports.generateFacturaPDF({tipo:'FA',punto_venta:15,numero:1,fecha:'2026-09-12',moneda:'ARS',subtotal:100,iva:21,total:121,cae:null,cliente:{razon_social:'CLIENTE DE PRUEBA',cuit:'20111111112'},items:[{descripcion:'Producto de prueba',cantidad:1,precio_unitario:100,iva_porcentaje:21,subtotal:100}]},{cuitNumero:20379309128},society);
+const receiptTemplate=ctx.exports.generateReciboPDF({numero:'f6c4d205-82db-40b2-8b16-77f96637d8ea',fecha:'2026-10-01',cliente:'CLIENTE DE PRUEBA S.A.',descripcion:'Cobro de factura FA 0015-00000039',medio:'Transferencia',monto:1620686.46,moneda:'ARS',conciliado:true},society);
 (async()=>{
  const browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true});
  try {
@@ -23,7 +24,7 @@ const template=ctx.exports.generateFacturaPDF({tipo:'FA',punto_venta:15,numero:1
     const output={};new Function('exports','require',pdfCode)(output,name=>name==='html2pdf.js'?{default:window.html2pdf}:name==='@/lib/pdf-style-scope'?scopeModule.exports:name==='@/lib/fce-invoice'?{readFceMetadata:()=>null}:utils);
     window.renderPdf=output.htmlToPdfBase64;
   },{scopeCode:compile('pdf-style-scope.ts'),pdfCode:compile('pdf-templates.ts')});
-  const result=await page.evaluate(async html=>{
+  const result=await page.evaluate(async ({html,receiptHtml})=>{
     const metrics=()=>['body','#host-modal','#host-modal h2','#host-modal table','#host-modal td','#host-modal input','#host-modal button'].map(selector=>{
       const el=document.querySelector(selector),s=getComputedStyle(el),r=el.getBoundingClientRect();
       return {selector,rect:[r.x,r.y,r.width,r.height],font:s.fontSize,fontFamily:s.fontFamily,padding:s.padding,margin:s.margin,overflow:s.overflow,boxSizing:s.boxSizing,border:s.borderWidth};
@@ -59,14 +60,16 @@ const template=ctx.exports.generateFacturaPDF({tipo:'FA',punto_venta:15,numero:1
       }
     });observer.observe(document.body,{childList:true,subtree:true});
     let pdfs;
-    try { pdfs=await Promise.all([window.renderPdf(html),window.renderPdf(html)]); }
+    try { pdfs=await Promise.all([window.renderPdf(html),window.renderPdf(receiptHtml)]); }
     finally {clearInterval(timer);observer.disconnect();HTMLCanvasElement.prototype.toDataURL=originalDataUrl;}
-    return {before,after:metrics(),differences,frames,scopeValues,cloneValue,printRemoved,cloneChecks,paintedCanvases,pdfs:pdfs.map(base64=>({bytes:atob(base64).length,header:atob(base64).slice(0,5)})),remainingRoots:document.querySelectorAll('[data-pdf-render]').length};
-  },template);
+    return {before,after:metrics(),differences,frames,scopeValues,cloneValue,printRemoved,cloneChecks,paintedCanvases,pdfs:pdfs.map(base64=>({bytes:atob(base64).length,header:atob(base64).slice(0,5)})),receiptBase64:pdfs[1],remainingRoots:document.querySelectorAll('[data-pdf-render]').length};
+  },{html:template,receiptHtml:receiptTemplate});
   assert.deepEqual(result.after,result.before,'Host changed after render');assert.equal(result.differences.length,0,'Host shifted during render');
   assert.ok(result.frames>0);assert.deepEqual(result.scopeValues,['9px','8px','13px','12px']);assert.equal(result.cloneValue,'8px');assert.equal(result.printRemoved,true);assert.ok(result.cloneChecks>=2);assert.equal(result.remainingRoots,0);
   for(const pdf of result.pdfs){assert.equal(pdf.header,'%PDF-');assert.ok(pdf.bytes>10000,'PDF suspiciously empty');}
   assert.ok(result.paintedCanvases>=2,'PDF raster must contain non-white painted content');
-  console.log(JSON.stringify({ok:true,...result,before:undefined,after:undefined,differences:undefined}));
+  const qaDir=path.join(__dirname,'../tmp/pdfs');fs.mkdirSync(qaDir,{recursive:true});
+  fs.writeFileSync(path.join(qaDir,'recibo-cliente-qa.pdf'),Buffer.from(result.receiptBase64,'base64'));
+  console.log(JSON.stringify({ok:true,...result,before:undefined,after:undefined,differences:undefined,receiptBase64:undefined}));
  } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

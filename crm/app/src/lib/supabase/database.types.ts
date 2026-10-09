@@ -1551,6 +1551,7 @@ export type Database = {
           dias_cuenta_corriente: number
           direccion: string | null
           email: string | null
+          es_transportista: boolean
           forma_pago: string | null
           id: string
           limite_credito: number
@@ -1579,6 +1580,7 @@ export type Database = {
           dias_cuenta_corriente?: number
           direccion?: string | null
           email?: string | null
+          es_transportista?: boolean
           forma_pago?: string | null
           id?: string
           limite_credito?: number
@@ -1607,6 +1609,7 @@ export type Database = {
           dias_cuenta_corriente?: number
           direccion?: string | null
           email?: string | null
+          es_transportista?: boolean
           forma_pago?: string | null
           id?: string
           limite_credito?: number

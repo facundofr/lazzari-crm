@@ -14,7 +14,13 @@ const js = ts.transpileModule(fs.readFileSync(helperPath, "utf8"), {
 }).outputText;
 const helperModule = { exports: {} };
 new Function("exports", "require", "module", js)(helperModule.exports, require, helperModule);
-const { groupOwnStockItemsByCurrency, calculateOwnStockPurchaseOrder } = helperModule.exports;
+const { groupOwnStockItemsByCurrency, calculateOwnStockPurchaseOrder, isOwnStockPurchaseOrder, purchaseOrderProviderLabel } = helperModule.exports;
+
+const ownStockOrder = { proveedor_id: null, observaciones: "Stock propio — OC interna generada desde PR-2026-1000", proveedores: null };
+assert.equal(isOwnStockPurchaseOrder(ownStockOrder), true);
+assert.equal(purchaseOrderProviderLabel(ownStockOrder), "Stock propio");
+assert.equal(purchaseOrderProviderLabel({ ...ownStockOrder, proveedor_id: "p1", proveedores: { razon_social: "Proveedor real" } }), "Proveedor real");
+assert.equal(purchaseOrderProviderLabel({ proveedor_id: null, observaciones: "Pendiente", proveedores: null }), "Sin proveedor");
 
 const invoiceLinksPath = path.join(appRoot, "src/lib/purchase-order-invoice-links.ts");
 const invoiceLinksJs = ts.transpileModule(fs.readFileSync(invoiceLinksPath, "utf8"), {
@@ -68,9 +74,12 @@ assert.equal(linkedKnown.orders[0].facturas_vinculadas.length, 1);
 const budgetPage = fs.readFileSync(path.join(appRoot, "src/app/(crm)/presupuestos/page.tsx"), "utf8");
 assert.match(budgetPage, /groupOwnStockItemsByCurrency\(stockItems\)/, "el stock propio debe generar grupos separados por moneda");
 assert.match(budgetPage, /if \(totals\.subtotal <= 0\)/, "un grupo de stock propio con costo total cero no debe crear una OC");
-assert.match(budgetPage, /moneda,\s*estado: "enviada",[\s\S]{0,240}?observaciones: `Stock propio — OC interna generada/, "la OC interna debe quedar enviada y claramente identificada");
+assert.match(budgetPage, /moneda,\s*estado: "enviada",[\s\S]{0,240}?observaciones: `Stock propio — OC generada/, "la OC de stock propio debe quedar enviada y claramente identificada");
 assert.match(budgetPage, /Stock propio — genera OC interna/, "el selector debe explicar que stock propio genera una OC interna");
 assert.doesNotMatch(budgetPage, /Stock propio \(sin OC\)|stock propio — sin OC generada/, "la interfaz no debe contradecir la creación de la OC interna");
+assert.match(ocPage, /purchaseOrderProviderLabel\(row\)/, "la tabla debe mostrar Stock propio como proveedor virtual");
+assert.match(ocPage, /filter\(\(oc: any\) => !isOwnStockPurchaseOrder\(oc\)\)/, "las OC de stock propio no deben aparecer como pendientes sin proveedor");
+assert.match(ocPage, /OC normal para recepción de mercadería propia/, "el detalle debe explicar que es una OC normal sin proveedor externo");
 assert.match(budgetPage, /stockItemsWithOC \+= currencyItems\.length/, "el mensaje final debe contar solo items cuya OC se creó");
 assert.match(budgetPage, /normalizePurchaseCurrency\(it\.costo_moneda\) === normalizePurchaseCurrency\(oc\.moneda\)/, "la sincronización debe limitar cada OC interna a su moneda");
 assert.match(budgetPage, /Generación parcial:/, "un resultado incompleto no puede anunciar éxito total");

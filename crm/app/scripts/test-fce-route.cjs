@@ -1,7 +1,7 @@
 // Execute the actual route with in-memory dependencies. NEVER contacts ARCA/DB.
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript'),assert=require('node:assert/strict');
 const society='eee2a3c8-fe6c-494d-bd2f-7a5d8067d021';
-let allowed=true,obligado=true,wsCalls=0,emissions=[],origin='FCEA',saved=[],timeout=false,failTable=null,preflight=false;
+let allowed=true,obligado=true,wsCalls=0,emissions=[],origin='FCEA',fceState='PendienteRecepcion',saved=[],timeout=false,failTable=null,preflight=false;
 const attempts=new Map();
 const client={id:'client',sociedad_id:society,cuit:'30641405554',condicion_iva:'RI',razon_social:'Test'};
 const db={auth:{getUser:async()=>({data:{user:{id:'user',email:'augusto@lazzari.com.ar'}}})},from(table){let cols='',inserted=null,filters={};const q={
@@ -30,7 +30,7 @@ const context={exports:{},console:{error(){}},Buffer,URL,Date:FixedDate,Intl,pro
  if(name==='@ramiidv/arca-facturacion')return {Arca:class{async getAuth(){wsCalls++;return {Token:'test',Sign:'test',Cuit:20379309128};}}};
  if(name==='@/lib/arca-wsfe-node')return {crearFacturaWsfeNode:async a=>{if(preflight)throw Object.assign(new Error('invalid fiscal date'),{wsfeNotSubmitted:true});emissions.push(a);if(timeout)throw new Error('timeout');return {FeDetResp:{FECAEDetResponse:{Resultado:'A',CAE:'12345678901234',CAEFchVto:'20260922',CbteDesde:1}}};}};
  if(name==='@/lib/fiscal-emission-guard'){const m={exports:{},require};vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/lib/fiscal-emission-guard.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,m);return m.exports;}
- if(name==='@/lib/arca-wsfecred-node')return {consultarObligacionFce:async()=>({obligado,montoDesde:obligado?5549862:null})};
+ if(name==='@/lib/arca-wsfecred-node')return {consultarObligacionFce:async()=>({obligado,montoDesde:obligado?5549862:null}),consultarComprobanteFce:async()=>({estado:fceState,fechaHora:'2026-09-12T10:00:00-03:00',historial:[]})};
  if(name==='@/lib/invoice-exchange-rate')return {getInvoiceExchangeRate:async()=>({valor_venta:1500,fecha:'2026-09-11'})};
  if(name==='@/lib/invoice-rate-permission')return {canOverrideInvoiceRate:()=>true};
  if(name==='@/lib/fce-invoice')return helper.exports;
@@ -49,6 +49,9 @@ const cbu='0720000'+digit('0720000',[7,1,3,9,7,1,3])+'2000000123456'+digit('2000
  r=await post({tipo:'FCEA'});assert.equal(r.status,503);assert.equal(emissions.length,0);
  r=await post({tipo:'FCEA',fce_cbu:cbu,fce_transmision:'SCA',fecha_vencimiento:'2026-10-12'});assert.equal(r.status,200,JSON.stringify(r));assert.equal(emissions.length,1);assert.equal(emissions[0].cbteTipo,201);assert.equal(emissions[0].invoice.FchVtoPago,'20261012');assert.ok(saved.find(x=>x.table==='facturas').v.nota_interna.includes('[ARCA_FCE_V1]'));
  emissions=[];r=await post({tipo:'NCA',factura_origen_id:'original'});assert.equal(r.status,409);assert.equal(emissions.length,0);
+ attempts.clear();emissions=[];r=await post({tipo:'NCEA',factura_origen_id:'original',items:[{descripcion:'Ajuste FCE',cantidad:1,precio_unitario:100,iva_porcentaje:21}]},'44444444-4444-4444-8444-444444444444');assert.equal(r.status,200,JSON.stringify(r));assert.equal(emissions.length,1);assert.equal(emissions[0].cbteTipo,203);assert.deepEqual(JSON.parse(JSON.stringify(emissions[0].invoice.CbtesAsoc)),[{Tipo:201,PtoVta:15,Nro:1,Cuit:20379309128,CbteFch:'20260912'}]);assert.equal(saved.filter(x=>x.table==='facturas').at(-1).v.factura_origen_id,'original');
+ attempts.clear();emissions=[];fceState='Aceptado';r=await post({tipo:'NCEA',factura_origen_id:'original',items:[{descripcion:'Ajuste FCE',cantidad:1,precio_unitario:100,iva_porcentaje:21}]},'55555555-5555-4555-8555-555555555555');assert.equal(r.status,409);assert.equal(r.data.fce_estado,'Aceptado');assert.equal(emissions.length,0);fceState='PendienteRecepcion';
+ origin='FA';r=await post({tipo:'NCEA',factura_origen_id:'original',items:[{descripcion:'Ajuste FCE',cantidad:1,precio_unitario:100,iva_porcentaje:21}]},'66666666-6666-4666-8666-666666666666');assert.equal(r.status,400);assert.equal(emissions.length,0);origin='FCEA';
  r=await post({items:[{descripcion:'bad',cantidad:Infinity,precio_unitario:1}]});assert.equal(r.status,400);assert.equal(emissions.length,0);
  r=await get();assert.equal(r.status,200);assert.equal(r.data.obligado,true);
  allowed=false;const before=wsCalls;r=await post({});assert.equal(r.status,403);r=await get();assert.equal(r.status,403);assert.equal(wsCalls,before);assert.equal(emissions.length,0);

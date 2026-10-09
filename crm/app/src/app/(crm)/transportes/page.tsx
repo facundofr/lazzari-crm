@@ -9,10 +9,10 @@ import { supabase } from "@/lib/supabase/client";
 import {
   Truck, Plus, Minus, X, Loader2, CheckCircle2, Building2,
   MapPin, FileText, Phone, Mail, User, Pencil,
-  ToggleLeft, ToggleRight, Package,
+  Package,
   ChevronRight, Calendar, DollarSign, Hash, Upload, Receipt,
 } from "lucide-react";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@/lib/auth-context";
 import { formatDate, formatCurrency, todayAR } from "@/lib/utils";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
@@ -22,6 +22,7 @@ import { useToast } from "@/components/ui/toast";
 
 interface TransportistaRow {
   id: string;
+  proveedor_id: string | null;
   nombre: string;
   razon_social: string | null;
   cuit: string | null;
@@ -115,8 +116,6 @@ export default function TransportesPage() {
   const [transportistas, setTransportistas] = useState<TransportistaRow[]>([]);
   const [loadingTransportistas, setLoadingTransportistas] = useState(false);
   const [selectedTransportista, setSelectedTransportista] = useState<TransportistaRow | null>(null);
-  const [showNuevoTransportista, setShowNuevoTransportista] = useState(false);
-  const [editingTransportista, setEditingTransportista] = useState(false);
 
   // ─── Options for selects ───
   const [clientes, setClientes] = useState<ClienteOption[]>([]);
@@ -129,14 +128,22 @@ export default function TransportesPage() {
   const [facturaViajeIds, setFacturaViajeIds] = useState<string[]>([]);
   const [facturaSaving, setFacturaSaving] = useState(false);
   const [facturaFile, setFacturaFile] = useState<File | null>(null);
+  const [facturaEsInterna, setFacturaEsInterna] = useState(false);
+  const [facturaParsed, setFacturaParsed] = useState(false);
+  const [facturaParseError, setFacturaParseError] = useState("");
   const [facturaForm, setFacturaForm] = useState({
     proveedor_id: "",
+    tipo_comprobante: "FC A",
     numero_factura: "",
     fecha: todayAR(),
+    fecha_vencimiento: "",
+    cae: "",
     total: "",
     iva_porcentaje: "21",
+    percepciones: "",
     moneda: "ARS",
     detalle: "",
+    notas: "",
   });
 
   // ─── Internos month filter ───
@@ -147,9 +154,10 @@ export default function TransportesPage() {
 
   // ─── AI parse factura ───
   const [facturaParsing, setFacturaParsing] = useState(false);
-  const facturaParseRef = useRef<HTMLInputElement>(null);
-
   async function handleParseFactura(file: File) {
+    setFacturaFile(file);
+    setFacturaParsed(false);
+    setFacturaParseError("");
     setFacturaParsing(true);
     try {
       const formData = new FormData();
@@ -158,19 +166,46 @@ export default function TransportesPage() {
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "Error al leer factura");
       const d = json.data;
+      const rawTipo = String(d.tipo_comprobante || "").toUpperCase().trim();
+      let tipoComprobante = facturaForm.tipo_comprobante;
+      if (/NOTA\s*DE\s*PEDIDO|PRESUPUESTO|COTIZACI[OÓ]N|PROFORMA/.test(rawTipo)) tipoComprobante = "Otro";
+      else if (/^NC/.test(rawTipo) || /NOTA\s+DE\s+CR[EÉ]DITO/.test(rawTipo)) {
+        tipoComprobante = /\bB\b/.test(rawTipo) ? "NC B" : "NC A";
+      } else if (/^ND/.test(rawTipo) || /NOTA\s+DE\s+D[EÉ]BITO/.test(rawTipo)) {
+        tipoComprobante = /\bB\b/.test(rawTipo) ? "ND B" : "ND A";
+      }
+      else if (rawTipo.includes("RECIBO")) tipoComprobante = "Recibo";
+      else if (/\bC\b/.test(rawTipo)) tipoComprobante = "FC C";
+      else if (/\bB\b/.test(rawTipo)) tipoComprobante = "FC B";
+      else if (/\bA\b/.test(rawTipo)) tipoComprobante = "FC A";
+
+      const parsedCuit = String(d.proveedor?.cuit || "").replace(/\D/g, "");
+      const parsedName = String(d.proveedor?.razon_social || "").trim().toLowerCase();
+      const parsedProvider = proveedores.find((provider) => (
+        (parsedCuit && String(provider.cuit || "").replace(/\D/g, "") === parsedCuit)
+        || (parsedName && provider.razon_social.trim().toLowerCase() === parsedName)
+      ));
       setFacturaForm((f) => ({
         ...f,
+        proveedor_id: parsedProvider?.id || f.proveedor_id,
+        tipo_comprobante: tipoComprobante,
         numero_factura: d.numero_factura || f.numero_factura,
         fecha: d.fecha || f.fecha,
+        fecha_vencimiento: d.fecha_vencimiento || "",
+        cae: d.cae || "",
         total: d.total ? String(d.total) : f.total,
         iva_porcentaje: d.iva_porcentaje != null ? String(d.iva_porcentaje) : f.iva_porcentaje,
-        moneda: d.moneda === "USD" ? "USD" : f.moneda,
+        percepciones: d.percepciones != null ? String(Number(d.percepciones) || 0) : "",
+        moneda: d.moneda === "USD" ? "USD" : d.moneda === "ARS" ? "ARS" : f.moneda,
+        notas: d.notas || "",
       }));
-      // Also set the file as attachment
-      setFacturaFile(file);
-      toast.success("Datos extraídos de la factura");
+      if (parsedProvider) setFacturaProvSearch(parsedProvider.razon_social);
+      setFacturaParsed(true);
+      toast.success("Factura adjuntada y leída. Revisá los datos antes de enviarla.");
     } catch (e: any) {
-      toast.error(e.message || "No se pudo leer la factura");
+      const message = e.message || "No se pudo leer la factura";
+      setFacturaParseError(message);
+      toast.error(`${message}. El archivo quedó adjunto para que completes los datos manualmente.`);
     } finally {
       setFacturaParsing(false);
     }
@@ -191,20 +226,6 @@ export default function TransportesPage() {
     bultos: "",
     descripcion_carga: "",
     notas: "",
-  });
-
-  // ─── Nuevo transportista form ───
-  const [formTransportista, setFormTransportista] = useState({
-    nombre: "",
-    razon_social: "",
-    cuit: "",
-    telefono: "",
-    email: "",
-    direccion: "",
-    localidad: "",
-    provincia: "",
-    contacto_principal: "",
-    observaciones: "",
   });
 
   // Search states for viaje cliente & factura proveedor
@@ -461,104 +482,6 @@ export default function TransportesPage() {
     setShowNuevoViaje(true);
   };
 
-  // ── Transportista CRUD ──────────────────────────────────────────────
-
-  const resetFormTransportista = () => {
-    setFormTransportista({
-      nombre: "", razon_social: "", cuit: "", telefono: "",
-      email: "", direccion: "", localidad: "", provincia: "",
-      contacto_principal: "", observaciones: "",
-    });
-  };
-
-  const handleSaveTransportista = async () => {
-    if (!formTransportista.nombre.trim()) { toast.error("Nombre es obligatorio"); return; }
-    setSaving(true);
-    try {
-      const payload: any = {
-        nombre: formTransportista.nombre.trim(),
-        razon_social: formTransportista.razon_social.trim() || null,
-        cuit: formTransportista.cuit.trim() || null,
-        telefono: formTransportista.telefono.trim() || null,
-        email: formTransportista.email.trim() || null,
-        direccion: formTransportista.direccion.trim() || null,
-        localidad: formTransportista.localidad.trim() || null,
-        provincia: formTransportista.provincia.trim() || null,
-        contacto_principal: formTransportista.contacto_principal.trim() || null,
-        observaciones: formTransportista.observaciones.trim() || null,
-      };
-
-      if (editingTransportista && selectedTransportista) {
-        const { error } = await (supabase as any)
-          .from("transportistas")
-          .update(payload)
-          .eq("id", selectedTransportista.id);
-        if (error) throw error;
-        toast.success("Transportista actualizado");
-      } else {
-        payload.sociedad_id = socId;
-        payload.created_by = profile?.id || null;
-        const { error } = await (supabase as any)
-          .from("transportistas")
-          .insert(payload);
-        if (error) throw error;
-        toast.success("Transportista creado");
-      }
-      setShowNuevoTransportista(false);
-      setEditingTransportista(false);
-      resetFormTransportista();
-      fetchTransportistas();
-    } catch (e: any) {
-      toast.error(`Error: ${e.message}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleToggleTransportista = async (t: TransportistaRow) => {
-    try {
-      const { error } = await (supabase as any)
-        .from("transportistas")
-        .update({ activo: !t.activo })
-        .eq("id", t.id);
-      if (error) throw error;
-      toast.success(`${t.nombre} ${!t.activo ? "activado" : "desactivado"}`);
-      fetchTransportistas();
-    } catch (e: any) {
-      toast.error(`Error: ${e.message}`);
-    }
-  };
-
-  const handleDeleteTransportista = async (id: string) => {
-    if (!confirm("¿Eliminar este transportista?")) return;
-    try {
-      const { error } = await (supabase as any).from("transportistas").delete().eq("id", id);
-      if (error) throw error;
-      toast.success("Transportista eliminado");
-      setSelectedTransportista(null);
-      fetchTransportistas();
-    } catch (e: any) {
-      toast.error(`Error: ${e.message}`);
-    }
-  };
-
-  const startEditTransportista = (t: TransportistaRow) => {
-    setFormTransportista({
-      nombre: t.nombre,
-      razon_social: t.razon_social || "",
-      cuit: t.cuit || "",
-      telefono: t.telefono || "",
-      email: t.email || "",
-      direccion: t.direccion || "",
-      localidad: t.localidad || "",
-      provincia: t.provincia || "",
-      contacto_principal: t.contacto_principal || "",
-      observaciones: t.observaciones || "",
-    });
-    setEditingTransportista(true);
-    setShowNuevoTransportista(true);
-  };
-
   // ── Helpers ─────────────────────────────────────────────────────────
 
   const getClienteName = (clienteId: string | null) => {
@@ -573,10 +496,31 @@ export default function TransportesPage() {
     return r?.numero || null;
   };
 
+  const getViajesExternosPendientesDelMes = (viaje: ViajeRow) => {
+    const transportistaKey = viaje.transportista_id || viaje.transportista.trim().toLowerCase();
+    const mes = viaje.fecha.slice(0, 7);
+    return viajes.filter((row) =>
+      row.tipo === "externo"
+      && !row.factura_compra_id
+      && row.fecha.startsWith(mes)
+      && row.moneda === viaje.moneda
+      && (row.transportista_id || row.transportista.trim().toLowerCase()) === transportistaKey
+    );
+  };
+
   const openFacturaParaPagos = (rows: ViajeRow[]) => {
     if (rows.length === 0) return;
     if (rows.some((row) => row.factura_compra_id)) {
       toast.error("Este viaje ya tiene una factura enviada a pagos");
+      return;
+    }
+    const firstTransportista = rows[0].transportista_id || rows[0].transportista.trim().toLowerCase();
+    if (rows.some((row) => (row.transportista_id || row.transportista.trim().toLowerCase()) !== firstTransportista)) {
+      toast.error("Solo podés agrupar viajes del mismo transportista");
+      return;
+    }
+    if (rows.some((row) => row.moneda !== rows[0].moneda)) {
+      toast.error("Los viajes agrupados deben tener la misma moneda");
       return;
     }
 
@@ -586,23 +530,32 @@ export default function TransportesPage() {
       : null;
     const normalizedName = (first.transportista || "").trim().toLowerCase();
     const proveedorSugerido = proveedores.find((proveedor) =>
-      (transportista?.cuit && proveedor.cuit?.replace(/\D/g, "") === transportista.cuit.replace(/\D/g, ""))
+      proveedor.id === transportista?.proveedor_id
+      || (transportista?.cuit && proveedor.cuit?.replace(/\D/g, "") === transportista.cuit.replace(/\D/g, ""))
       || proveedor.razon_social.trim().toLowerCase() === normalizedName
     );
     const total = rows.reduce((sum, row) => sum + Number(row.costo || 0), 0);
 
     setFacturaViajeIds(rows.map((row) => row.id));
     setFacturaFile(null);
+    setFacturaEsInterna(false);
+    setFacturaParsed(false);
+    setFacturaParseError("");
     setFacturaForm({
       proveedor_id: proveedorSugerido?.id || "",
+      tipo_comprobante: "FC A",
       numero_factura: "",
       fecha: todayAR(),
+      fecha_vencimiento: "",
+      cae: "",
       total: total > 0 ? String(total) : "",
       iva_porcentaje: "21",
+      percepciones: "",
       moneda: first.moneda || "ARS",
       detalle: rows.length > 1
-        ? `${rows.length} viajes internos del ${formatDate(first.fecha)} — ${first.transportista}`
+        ? `${rows.length} viajes ${first.tipo === "interno" ? "internos" : "externos"} de ${first.fecha.slice(0, 7)} — ${first.transportista}`
         : `Viaje del ${formatDate(first.fecha)} — ${first.transportista}`,
+      notas: "",
     });
     setFacturaProvSearch(proveedorSugerido?.razon_social || "");
     setFacturaProvDropdown(false);
@@ -612,38 +565,47 @@ export default function TransportesPage() {
   const handleEnviarFacturaAPagos = async () => {
     const total = Number(facturaForm.total);
     const ivaPorcentaje = Number(facturaForm.iva_porcentaje);
+    const percepciones = Number(facturaForm.percepciones || 0);
     if (!facturaForm.proveedor_id) { toast.error("Seleccioná el proveedor que va a cobrar"); return; }
-    if (!facturaForm.numero_factura.trim()) { toast.error("Ingresá el número de factura"); return; }
-    if (!facturaFile) { toast.error("Adjuntá la factura en PDF o imagen"); return; }
+    if (!facturaEsInterna && !facturaForm.numero_factura.trim()) { toast.error("Ingresá el número de factura"); return; }
+    if (!facturaEsInterna && !facturaFile) { toast.error("Adjuntá la factura en PDF o imagen"); return; }
     if (!total || total <= 0) { toast.error("Ingresá el total de la factura"); return; }
+    if (!facturaEsInterna && (percepciones < 0 || percepciones > total)) { toast.error("Revisá el importe de percepciones"); return; }
     if (facturaViajeIds.length === 0 || !socId) return;
 
-    const subtotal = ivaPorcentaje > 0 ? total / (1 + ivaPorcentaje / 100) : total;
-    const iva = total - subtotal;
+    const numeroComprobante = facturaEsInterna ? `MAN-TR-${Date.now()}` : facturaForm.numero_factura.trim();
+    const porcentajeAplicado = facturaEsInterna ? 0 : ivaPorcentaje;
+    const percepcionesAplicadas = facturaEsInterna ? 0 : percepciones;
+    const totalAntesPercepciones = total - percepcionesAplicadas;
+    const subtotal = porcentajeAplicado > 0 ? totalAntesPercepciones / (1 + porcentajeAplicado / 100) : totalAntesPercepciones;
+    const iva = totalAntesPercepciones - subtotal;
     let createdFacturaId = "";
     let uploadedPath = "";
     setFacturaSaving(true);
     try {
       // Check FC duplicada
       const { data: existing } = await (supabase as any).from("facturas_compra")
-        .select("id").eq("numero_factura", facturaForm.numero_factura.trim()).eq("proveedor_id", facturaForm.proveedor_id).eq("sociedad_id", socId).limit(1);
+        .select("id").eq("numero_factura", numeroComprobante).eq("proveedor_id", facturaForm.proveedor_id).eq("sociedad_id", socId).limit(1);
       if (existing?.length) { toast.error("Ya existe una factura con ese número para este proveedor"); setFacturaSaving(false); return; }
       const { data: factura, error: facturaError } = await (supabase as any)
         .from("facturas_compra")
         .insert({
-          numero_factura: facturaForm.numero_factura.trim(),
+          numero_factura: numeroComprobante,
+          tipo_comprobante: facturaEsInterna ? "FC Manual" : facturaForm.tipo_comprobante,
           proveedor_id: facturaForm.proveedor_id,
           fecha: facturaForm.fecha,
+          fecha_vencimiento: facturaEsInterna ? null : facturaForm.fecha_vencimiento || null,
           subtotal: Math.round(subtotal * 100) / 100,
-          iva_porcentaje: ivaPorcentaje,
+          iva_porcentaje: porcentajeAplicado,
           iva: Math.round(iva * 100) / 100,
-          percepciones: 0,
+          percepciones: Math.round(percepcionesAplicadas * 100) / 100,
           total: Math.round(total * 100) / 100,
           moneda: facturaForm.moneda,
-          notas: `Factura de transporte — ${facturaForm.detalle}`,
+          notas: ["Factura de transporte", facturaEsInterna ? "Comprobante manual sin factura fiscal" : "", facturaForm.detalle, facturaForm.notas.trim()].filter(Boolean).join(" — "),
+          cae: facturaEsInterna ? null : facturaForm.cae.trim() || null,
           estado: "pendiente",
           solo_iva: false,
-          tipo: "transporte",
+          tipo: "mercaderia",
           sociedad_id: socId,
           created_by: profile?.id || null,
         })
@@ -652,34 +614,38 @@ export default function TransportesPage() {
       if (facturaError || !factura?.id) throw facturaError || new Error("No se pudo crear la factura");
       createdFacturaId = factura.id;
 
-      const extension = facturaFile.name.split(".").pop() || "pdf";
-      uploadedPath = `${socId}/${createdFacturaId}/factura-transporte.${extension}`;
-      const { error: uploadError } = await supabase.storage
-        .from("facturas-compra")
-        .upload(uploadedPath, facturaFile, { upsert: true });
-      if (uploadError) throw uploadError;
+      if (!facturaEsInterna && facturaFile) {
+        const extension = facturaFile.name.split(".").pop() || "pdf";
+        uploadedPath = `${socId}/${createdFacturaId}/factura-transporte.${extension}`;
+        const { error: uploadError } = await supabase.storage
+          .from("facturas-compra")
+          .upload(uploadedPath, facturaFile, { upsert: true });
+        if (uploadError) throw uploadError;
 
-      const { data: urlData } = supabase.storage.from("facturas-compra").getPublicUrl(uploadedPath);
-      const { error: archivoError } = await (supabase as any)
-        .from("facturas_compra")
-        .update({ archivo_url: urlData.publicUrl, archivo_nombre: facturaFile.name })
-        .eq("id", createdFacturaId);
-      if (archivoError) throw archivoError;
+        const { data: urlData } = supabase.storage.from("facturas-compra").getPublicUrl(uploadedPath);
+        const { error: archivoError } = await (supabase as any)
+          .from("facturas_compra")
+          .update({ archivo_url: urlData.publicUrl, archivo_nombre: facturaFile.name })
+          .eq("id", createdFacturaId)
+          .eq("sociedad_id", socId);
+        if (archivoError) throw archivoError;
+      }
 
       const { error: linkError } = await (supabase as any)
         .from("transportes")
         .update({ factura_compra_id: createdFacturaId })
-        .in("id", facturaViajeIds);
+        .in("id", facturaViajeIds)
+        .eq("sociedad_id", socId);
       if (linkError) throw linkError;
 
-      toast.success("Factura enviada a Finanzas y pendiente de pago");
+      toast.success(facturaEsInterna ? "Factura manual enviada a Finanzas y pendiente de pago" : "Factura enviada a Finanzas y pendiente de pago");
       setShowFacturaViaje(false);
       setFacturaViajeIds([]);
       setFacturaFile(null);
       await fetchViajes();
     } catch (e: any) {
       if (createdFacturaId) {
-        await (supabase as any).from("facturas_compra").delete().eq("id", createdFacturaId);
+        await (supabase as any).from("facturas_compra").delete().eq("id", createdFacturaId).eq("sociedad_id", socId);
       }
       if (uploadedPath) {
         await supabase.storage.from("facturas-compra").remove([uploadedPath]);
@@ -799,7 +765,7 @@ export default function TransportesPage() {
         action={
           activeTab === "viajes"
             ? { label: "Nuevo viaje", onClick: () => { resetFormViaje(); setEditingViaje(false); setShowNuevoViaje(true); } }
-            : { label: "Nuevo transportista", onClick: () => { resetFormTransportista(); setEditingTransportista(false); setShowNuevoTransportista(true); } }
+            : { label: "Nuevo transportista", onClick: () => { window.location.href = "/proveedores?crear=&tipo=transportista"; } }
         }
       />
 
@@ -1207,11 +1173,13 @@ export default function TransportesPage() {
                             onClick={() => openFacturaParaPagos(
                               selectedViaje.tipo === "interno"
                                 ? [selectedViaje, ...getParadasInternas(selectedViaje)].filter((row) => !row.factura_compra_id)
-                                : [selectedViaje]
+                                : getViajesExternosPendientesDelMes(selectedViaje)
                             )}
                             className="flex items-center gap-1.5 rounded-lg bg-orange-50 px-3 py-2 text-sm font-medium text-orange-700 hover:bg-orange-100 dark:bg-orange-950/30 dark:text-orange-400"
                           >
-                            <Receipt size={14} /> Enviar factura a pagos
+                            <Receipt size={14} /> {selectedViaje.tipo === "externo" && getViajesExternosPendientesDelMes(selectedViaje).length > 1
+                              ? `Enviar ${getViajesExternosPendientesDelMes(selectedViaje).length} viajes del mes a pagos`
+                              : "Enviar factura a pagos"}
                           </button>
                           {selectedViaje.tipo === "interno" && (
                             <button
@@ -1252,7 +1220,7 @@ export default function TransportesPage() {
                   <EmptyState
                     icon={Building2}
                     title="Sin transportistas"
-                    description="Agregá transportistas para asignarlos a viajes externos"
+                    description="Marcá un proveedor como transportista para que aparezca automáticamente acá"
                   />
                 ) : (
                   <DataTable
@@ -1296,26 +1264,13 @@ export default function TransportesPage() {
                       </div>
                     )}
 
-                    {/* Actions */}
+                    {/* La ficha maestra se administra desde Proveedores. */}
                     <div className="flex gap-2 pt-3 border-t border-zinc-100 dark:border-zinc-700">
                       <button
-                        onClick={() => startEditTransportista(selectedTransportista)}
+                        onClick={() => { window.location.href = "/proveedores"; }}
                         className="flex items-center gap-1.5 rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
                       >
-                        <Pencil size={14} /> Editar
-                      </button>
-                      <button
-                        onClick={() => handleToggleTransportista(selectedTransportista)}
-                        className="flex items-center gap-1.5 rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
-                      >
-                        {selectedTransportista.activo ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
-                        {selectedTransportista.activo ? "Desactivar" : "Activar"}
-                      </button>
-                      <button
-                        onClick={() => handleDeleteTransportista(selectedTransportista.id)}
-                        className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 ml-auto"
-                      >
-                        <X size={14} /> Eliminar
+                        <Building2 size={14} /> Abrir ficha en Proveedores
                       </button>
                     </div>
                   </div>
@@ -1611,6 +1566,20 @@ export default function TransportesPage() {
               </div>
 
               <div>
+                <label className={labelClass}>Respaldo del pago</label>
+                <div className="grid grid-cols-2 gap-2 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800">
+                  <button type="button" onClick={() => setFacturaEsInterna(false)}
+                    className={`rounded-md px-3 py-2 text-xs font-medium ${!facturaEsInterna ? "bg-white text-zinc-900 shadow dark:bg-zinc-700 dark:text-white" : "text-zinc-500"}`}>
+                    Con factura del transportista
+                  </button>
+                  <button type="button" onClick={() => { setFacturaEsInterna(true); setFacturaFile(null); setFacturaParsed(false); setFacturaParseError(""); }}
+                    className={`rounded-md px-3 py-2 text-xs font-medium ${facturaEsInterna ? "bg-white text-zinc-900 shadow dark:bg-zinc-700 dark:text-white" : "text-zinc-500"}`}>
+                    Factura manual · sin comprobante
+                  </button>
+                </div>
+              </div>
+
+              <div>
                 <label className={labelClass}>Proveedor que va a cobrar *</label>
                 <div className="relative">
                   <input
@@ -1644,15 +1613,37 @@ export default function TransportesPage() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className={labelClass}>Número de factura *</label>
-                  <input
-                    value={facturaForm.numero_factura}
-                    onChange={(e) => setFacturaForm((form) => ({ ...form, numero_factura: e.target.value }))}
-                    placeholder="Ej: 0001-00001234"
-                    className={inputClass}
-                  />
-                </div>
+                {!facturaEsInterna && (
+                  <>
+                    <div>
+                      <label className={labelClass}>Tipo de comprobante *</label>
+                      <select
+                        value={facturaForm.tipo_comprobante}
+                        onChange={(e) => setFacturaForm((form) => ({ ...form, tipo_comprobante: e.target.value }))}
+                        className={inputClass}
+                      >
+                        <option value="FC A">FC A</option>
+                        <option value="FC B">FC B</option>
+                        <option value="FC C">FC C</option>
+                        <option value="ND A">ND A</option>
+                        <option value="ND B">ND B</option>
+                        <option value="NC A">NC A</option>
+                        <option value="NC B">NC B</option>
+                        <option value="Recibo">Recibo</option>
+                        <option value="Otro">Otro</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClass}>Número de factura *</label>
+                      <input
+                        value={facturaForm.numero_factura}
+                        onChange={(e) => setFacturaForm((form) => ({ ...form, numero_factura: e.target.value }))}
+                        placeholder="Ej: 0001-00001234"
+                        className={inputClass}
+                      />
+                    </div>
+                  </>
+                )}
                 <div>
                   <label className={labelClass}>Fecha *</label>
                   <input
@@ -1662,6 +1653,18 @@ export default function TransportesPage() {
                     className={inputClass}
                   />
                 </div>
+                {!facturaEsInterna && (
+                  <>
+                    <div>
+                      <label className={labelClass}>Vencimiento</label>
+                      <input type="date" value={facturaForm.fecha_vencimiento} onChange={(e) => setFacturaForm((form) => ({ ...form, fecha_vencimiento: e.target.value }))} className={inputClass} />
+                    </div>
+                    <div>
+                      <label className={labelClass}>CAE</label>
+                      <input value={facturaForm.cae} onChange={(e) => setFacturaForm((form) => ({ ...form, cae: e.target.value }))} className={inputClass} />
+                    </div>
+                  </>
+                )}
                 <div>
                   <label className={labelClass}>Total de la factura *</label>
                   <input
@@ -1685,7 +1688,7 @@ export default function TransportesPage() {
                     <option value="USD">USD</option>
                   </select>
                 </div>
-                <div className="col-span-2">
+                {!facturaEsInterna && <div className="col-span-2">
                   <label className={labelClass}>IVA incluido en el total</label>
                   <select
                     value={facturaForm.iva_porcentaje}
@@ -1697,46 +1700,82 @@ export default function TransportesPage() {
                     <option value="21">21%</option>
                     <option value="27">27%</option>
                   </select>
+                </div>}
+                {!facturaEsInterna && <div>
+                  <label className={labelClass}>Percepciones</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={facturaForm.percepciones}
+                    onChange={(e) => setFacturaForm((form) => ({ ...form, percepciones: e.target.value }))}
+                    placeholder="0,00"
+                    className={inputClass}
+                  />
+                </div>}
+                <div>
+                  <label className={labelClass}>Observaciones</label>
+                  <input
+                    value={facturaForm.notas}
+                    onChange={(e) => setFacturaForm((form) => ({ ...form, notas: e.target.value }))}
+                    placeholder="Opcional"
+                    className={inputClass}
+                  />
                 </div>
               </div>
 
-              {Number(facturaForm.total) > 0 && (
+              {!facturaEsInterna && Number(facturaForm.total) > 0 && (
                 <div className="rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
                   Neto estimado: <span className="font-mono font-semibold">{formatCurrency(
-                    Number(facturaForm.total) / (1 + Number(facturaForm.iva_porcentaje) / 100),
+                    (Number(facturaForm.total) - Number(facturaForm.percepciones || 0)) / (1 + Number(facturaForm.iva_porcentaje) / 100),
                     facturaForm.moneda as "ARS" | "USD"
                   )}</span>
                   <span className="mx-2 text-zinc-300">|</span>
                   IVA: <span className="font-mono font-semibold">{formatCurrency(
-                    Number(facturaForm.total) - (Number(facturaForm.total) / (1 + Number(facturaForm.iva_porcentaje) / 100)),
+                    (Number(facturaForm.total) - Number(facturaForm.percepciones || 0))
+                      - ((Number(facturaForm.total) - Number(facturaForm.percepciones || 0)) / (1 + Number(facturaForm.iva_porcentaje) / 100)),
                     facturaForm.moneda as "ARS" | "USD"
                   )}</span>
+                  {Number(facturaForm.percepciones || 0) > 0 && (
+                    <><span className="mx-2 text-zinc-300">|</span>Percepciones: <span className="font-mono font-semibold">{formatCurrency(Number(facturaForm.percepciones), facturaForm.moneda as "ARS" | "USD")}</span></>
+                  )}
                 </div>
               )}
 
-              <div>
-                <label className={labelClass}>Factura adjunta *</label>
-                <div className="flex gap-2">
-                  <label className="flex-1 flex cursor-pointer items-center gap-3 rounded-lg border border-dashed border-zinc-300 px-3 py-3 text-sm text-zinc-600 hover:border-orange-400 hover:bg-orange-50/50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-orange-950/20">
+              {!facturaEsInterna ? <div>
+                <label className={labelClass}>Adjuntar y leer factura *</label>
+                <div>
+                  <label className={`flex items-center gap-3 rounded-lg border border-dashed px-3 py-3 text-sm transition-colors ${facturaParsing ? "cursor-wait border-orange-300 bg-orange-50 text-orange-700 dark:border-orange-800 dark:bg-orange-950/20" : "cursor-pointer border-zinc-300 text-zinc-600 hover:border-orange-400 hover:bg-orange-50/50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-orange-950/20"}`}>
                     <Upload size={18} className="text-orange-500" />
-                    <span className="min-w-0 flex-1 truncate">{facturaFile?.name || "Seleccionar PDF o imagen"}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{facturaFile?.name || "Seleccionar PDF o imagen"}</span>
+                      <span className="block text-xs text-zinc-400">{facturaParsing ? "Leyendo datos con IA..." : facturaFile ? "Elegí otro archivo para reemplazarlo y volver a leer" : "Al adjuntarla se completa el formulario automáticamente"}</span>
+                    </span>
+                    {facturaParsing && <Loader2 size={16} className="animate-spin" />}
                     <input
                       type="file"
                       accept=".pdf,image/png,image/jpeg,image/webp"
                       className="hidden"
-                      onChange={(e) => setFacturaFile(e.target.files?.[0] || null)}
+                      disabled={facturaParsing}
+                      onChange={(e) => { const file = e.target.files?.[0]; if (file) handleParseFactura(file); e.target.value = ""; }}
                     />
                   </label>
-                  <input ref={facturaParseRef} type="file" accept=".pdf,image/png,image/jpeg,image/webp" className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleParseFactura(f); e.target.value = ""; }} />
-                  <button type="button" onClick={() => facturaParseRef.current?.click()} disabled={facturaParsing}
-                    className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                    title="Leer datos automáticamente de la factura">
-                    {facturaParsing ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
-                    Leer
-                  </button>
+                  {facturaParsed && (
+                    <div className="mt-2 flex items-center gap-2 rounded-lg bg-green-50 px-3 py-2 text-xs text-green-700 dark:bg-green-950/30 dark:text-green-300">
+                      <CheckCircle2 size={14} /> Factura leída. Revisá y corregí cualquier dato antes de enviarla.
+                    </div>
+                  )}
+                  {facturaParseError && (
+                    <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">
+                      No se pudo leer automáticamente: {facturaParseError}. El archivo quedó adjunto y podés completar el formulario manualmente.
+                    </div>
+                  )}
                 </div>
-              </div>
+              </div> : (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">
+                  El sistema generará una factura manual interna, sin PDF, número fiscal, IVA ni CAE, y la enviará a Finanzas para crear la orden de pago. No reemplaza una factura fiscal.
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 border-t border-zinc-200 p-4 dark:border-zinc-700">
@@ -1760,135 +1799,6 @@ export default function TransportesPage() {
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          MODAL: NUEVO/EDITAR TRANSPORTISTA
-         ══════════════════════════════════════════════════════════════════ */}
-      {showNuevoTransportista && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl dark:bg-zinc-900 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between border-b border-zinc-200 p-4 dark:border-zinc-700">
-              <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">
-                {editingTransportista ? "Editar transportista" : "Nuevo transportista"}
-              </h2>
-              <button onClick={() => { setShowNuevoTransportista(false); setEditingTransportista(false); resetFormTransportista(); }} className="text-zinc-400 hover:text-zinc-600">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="p-4 space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="col-span-2">
-                  <label className={labelClass}>Nombre *</label>
-                  <input
-                    type="text"
-                    value={formTransportista.nombre}
-                    onChange={(e) => setFormTransportista((f) => ({ ...f, nombre: e.target.value }))}
-                    className={inputClass}
-                    placeholder="Nombre del transportista"
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Razón social</label>
-                  <input
-                    type="text"
-                    value={formTransportista.razon_social}
-                    onChange={(e) => setFormTransportista((f) => ({ ...f, razon_social: e.target.value }))}
-                    className={inputClass}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>CUIT</label>
-                  <input
-                    type="text"
-                    value={formTransportista.cuit}
-                    onChange={(e) => setFormTransportista((f) => ({ ...f, cuit: e.target.value }))}
-                    className={inputClass}
-                    placeholder="XX-XXXXXXXX-X"
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Teléfono</label>
-                  <input
-                    type="text"
-                    value={formTransportista.telefono}
-                    onChange={(e) => setFormTransportista((f) => ({ ...f, telefono: e.target.value }))}
-                    className={inputClass}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Email</label>
-                  <input
-                    type="email"
-                    value={formTransportista.email}
-                    onChange={(e) => setFormTransportista((f) => ({ ...f, email: e.target.value }))}
-                    className={inputClass}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Contacto principal</label>
-                  <input
-                    type="text"
-                    value={formTransportista.contacto_principal}
-                    onChange={(e) => setFormTransportista((f) => ({ ...f, contacto_principal: e.target.value }))}
-                    className={inputClass}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Dirección</label>
-                  <input
-                    type="text"
-                    value={formTransportista.direccion}
-                    onChange={(e) => setFormTransportista((f) => ({ ...f, direccion: e.target.value }))}
-                    className={inputClass}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Localidad</label>
-                  <input
-                    type="text"
-                    value={formTransportista.localidad}
-                    onChange={(e) => setFormTransportista((f) => ({ ...f, localidad: e.target.value }))}
-                    className={inputClass}
-                  />
-                </div>
-                <div>
-                  <label className={labelClass}>Provincia</label>
-                  <input
-                    type="text"
-                    value={formTransportista.provincia}
-                    onChange={(e) => setFormTransportista((f) => ({ ...f, provincia: e.target.value }))}
-                    className={inputClass}
-                  />
-                </div>
-                <div className="col-span-2">
-                  <label className={labelClass}>Observaciones</label>
-                  <textarea
-                    value={formTransportista.observaciones}
-                    onChange={(e) => setFormTransportista((f) => ({ ...f, observaciones: e.target.value }))}
-                    rows={2}
-                    className={inputClass}
-                  />
-                </div>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-zinc-200 p-4 dark:border-zinc-700">
-              <button
-                onClick={() => { setShowNuevoTransportista(false); setEditingTransportista(false); resetFormTransportista(); }}
-                className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleSaveTransportista}
-                disabled={saving}
-                className="flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
-              >
-                {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-                {editingTransportista ? "Guardar cambios" : "Crear transportista"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

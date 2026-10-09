@@ -26,8 +26,10 @@ assert.equal(transferencia.fecha, '2026-09-12'); assert.equal(transferencia.fech
 for (const tipo of ['retencion_ganancias', 'retencion_iibb', 'otro', null]) assert.throws(() => payment({ tipo, moneda: 'ARS', monto: 100, fecha: '2026-09-11' }));
 for (const overrides of [{ moneda: null }, { monto: -1 }, { fecha: '2026-02-31' }, { fecha: null }]) assert.throws(() => payment({ tipo: 'transferencia', moneda: 'ARS', monto: 100, fecha: '2026-09-11', ...overrides }));
 assert.throws(() => payment({ tipo: 'transferencia', moneda: 'ARS', monto: 100, fecha_emision: '2026-02-31', fecha_cobro: '2026-09-11' }));
-assert.deepEqual(allocate([{ monto: 400, moneda: 'ARS' }], [{ id: 'fc1', moneda: 'ARS', saldo_pendiente: 1000, selected: true }]), { invoiceId: 'fc1', amount: 400 });
-assert.deepEqual(allocate([{ monto: 1200, moneda: 'ARS' }], [{ id: 'fc1', moneda: 'ARS', saldo_pendiente: 1000, selected: true }]), { invoiceId: 'fc1', amount: 1000 });
+assert.equal(allocate([{ monto: 400, moneda: 'ARS' }], [{ id: 'fc1', moneda: 'ARS', saldo_pendiente: 1000, selected: true }]), null);
+assert.equal(allocate([{ monto: 900, moneda: 'ARS' }], [{ id: 'fc1', moneda: 'ARS', saldo_pendiente: 1000, selected: true }]), null);
+assert.deepEqual(allocate([{ monto: 400, moneda: 'ARS' }], [{ id: 'fc1', moneda: 'ARS', saldo_pendiente: 1000, selected: false }]), { invoiceId: 'fc1', amount: 400 });
+assert.deepEqual(allocate([{ monto: 1200, moneda: 'ARS' }], [{ id: 'fc1', moneda: 'ARS', saldo_pendiente: 1000, selected: false }]), { invoiceId: 'fc1', amount: 1000 });
 assert.equal(allocate([{ monto: 400, moneda: 'ARS' }], [{ id: 'fc1', moneda: 'ARS', saldo_pendiente: 1000, selected: false }, { id: 'fc2', moneda: 'ARS', saldo_pendiente: 800, selected: false }]), null);
 assert.equal(allocate([{ monto: 400, moneda: 'ARS' }, { monto: 100, moneda: 'USD' }], [{ id: 'fc1', moneda: 'ARS', saldo_pendiente: 1000, selected: true }]), null);
 console.log('OK: números AR/internacionales, ambigüedad, IVA cero, cantidades, medios de pago, moneda y vencimiento; sin red ni escrituras.');

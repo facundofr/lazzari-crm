@@ -19,6 +19,7 @@ Te voy a pasar un PDF o imagen de una factura de compra o nota de pedido de prov
   "moneda": "ARS" o "USD",
   "items": [
     {
+      "codigo": "código, SKU o referencia impresa del artículo, o null si no aparece",
       "descripcion": "descripción del producto/servicio",
       "cantidad": 1,
       "precio_unitario": 123.45,
@@ -44,11 +45,13 @@ Reglas:
 - NUNCA usar como proveedor estos nombres (son nuestros, somos el comprador): "Lazzari", "Augusto Lazzari", "Lazzari Soluciones", "Grupo LA", "LAZZARI". Si el nombre en el encabezado contiene alguno de estos, está MAL — buscá el verdadero emisor en otra parte del documento.
 - Si el CUIT del emisor contiene 20379309128 o 30719396042, estás leyendo el comprador, NO el emisor. Buscá el otro CUIT.
 - Extraé todos los items/líneas de la factura.
+- Extraé en "codigo" el código principal del producto exactamente como aparece impreso. Si no aparece, usá null.
+- CRÍTICO — VARIANTES: no descartes columnas de color, talle, medida, presentación ni referencias secundarias. Incorporalas al final de "descripcion" para que cada variante sea inequívoca. Ejemplo: un renglón con código 222020, referencia 0340, descripción PANTALON OMBU CARGO, color NEGRO y talle 40 debe quedar con codigo "222020" y descripcion "PANTALON OMBU CARGO - NEGRO - REF 0340 - TALLE 40". Si la referencia ya codifica color/talle pero el talle no puede separarse con certeza, conservá igualmente la referencia completa en la descripción.
 - El precio_unitario debe ser el importe UNITARIO IMPRESO en el renglón (no inventes un precio de lista). Si el renglón muestra un descuento separado, extraé el precio impreso antes del descuento y el porcentaje; si no muestra descuento, dejá descuento_porcentaje en 0.
 - Si el documento aplica un único descuento general, devolvelo en descuento_general_porcentaje y repetilo en cada item que no tenga un descuento propio.
 - Si el descuento aparece como importe y no como porcentaje, calculá el porcentaje equivalente.
 - El subtotal debe ser el neto luego de aplicar descuentos y antes del IVA.
-- Leé la tabla completa, incluyendo todas las páginas. No resumas varios renglones en uno: cada artículo/código distinto es un item separado. Prestá especial atención a tablas con muchas columnas o formatos densos — leé cada celda individualmente, no saltes columnas.
+- Leé la tabla completa, incluyendo todas las páginas. No resumas varios renglones en uno: cada artículo, código o variante/talle distinto es un item separado. Prestá especial atención a tablas con muchas columnas o formatos densos — leé cada celda individualmente, no saltes columnas.
 - Si la tabla tiene columnas como Código, Descripción, Cantidad, Precio, Bonificación, Subtotal — asegurate de mapear cada columna correctamente. No confundas la columna de bonificación con el precio ni el subtotal de línea con el precio unitario.
 - Verificá aritméticamente cantidad × precio unitario × (1 - descuento/100), subtotal, IVA, percepciones y total contra los totales impresos. Conservá los importes impresos como subtotal/iva/total y corregí únicamente un item evidentemente mal leído.
 - Si la lectura de un artículo te da un subtotal de línea que no cuadra con los totales del documento, releé ese renglón con más cuidado.

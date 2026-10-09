@@ -1,0 +1,64 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+
+const file = fs.readFileSync(new URL("../src/app/(crm)/transportes/page.tsx", import.meta.url), "utf8");
+const providers = fs.readFileSync(new URL("../src/app/(crm)/proveedores/page.tsx", import.meta.url), "utf8");
+const duplicateGuard = fs.readFileSync(new URL("../supabase/migrations/20261007113000_bloquear_facturas_compra_duplicadas.sql", import.meta.url), "utf8");
+const providerCarrierMigration = fs.readFileSync(new URL("../supabase/migrations/20261007124500_transportistas_como_proveedores.sql", import.meta.url), "utf8");
+
+assert.match(file, /Adjuntar y leer factura \*/);
+assert.match(file, /Al adjuntarla se completa el formulario automáticamente/);
+assert.doesNotMatch(file, /facturaParseRef/);
+
+const parseStart = file.indexOf("async function handleParseFactura(file: File)");
+const fileAttach = file.indexOf("setFacturaFile(file);", parseStart);
+const parseRequest = file.indexOf('fetch("\/api\/parse-factura-compra"', parseStart);
+assert.ok(parseStart >= 0 && fileAttach > parseStart && parseRequest > fileAttach, "El archivo debe quedar adjunto antes de intentar leerlo");
+assert.match(file, /setFacturaParseError\(message\)/);
+assert.match(file, /El archivo quedó adjunto y podés completar el formulario manualmente/);
+
+assert.match(file, /tipo_comprobante: facturaEsInterna \? "FC Manual" : facturaForm\.tipo_comprobante/);
+assert.match(file, /fecha_vencimiento: facturaEsInterna \? null : facturaForm\.fecha_vencimiento \|\| null/);
+assert.match(file, /cae: facturaEsInterna \? null : facturaForm\.cae\.trim\(\) \|\| null/);
+assert.match(file, /percepciones: Math\.round\(percepcionesAplicadas \* 100\) \/ 100/);
+assert.match(file, /facturaForm\.notas\.trim\(\)/);
+assert.match(file, /\["Factura de transporte", facturaEsInterna \? "Comprobante manual sin factura fiscal"/);
+assert.match(file, /tipo: "mercaderia"/);
+assert.match(file, /totalAntesPercepciones = total - percepcionesAplicadas/);
+assert.match(file, /<option value="FC A">FC A<\/option>/);
+assert.match(file, /<option value="FC B">FC B<\/option>/);
+assert.match(file, /<option value="FC C">FC C<\/option>/);
+assert.match(file, /<option value="ND A">ND A<\/option>/);
+assert.match(file, /<option value="ND B">ND B<\/option>/);
+assert.match(file, /<option value="NC A">NC A<\/option>/);
+assert.match(file, /<option value="NC B">NC B<\/option>/);
+assert.match(file, /tipoComprobante = \/\\bB\\b\/.test\(rawTipo\) \? "NC B" : "NC A"/);
+assert.match(file, /tipoComprobante = \/\\bB\\b\/.test\(rawTipo\) \? "ND B" : "ND A"/);
+assert.match(file, /Factura manual · sin comprobante/);
+assert.match(file, /tipo_comprobante: facturaEsInterna \? "FC Manual"/);
+assert.match(file, /MAN-TR-/);
+assert.doesNotMatch(file, /<option value="FC Manual">/);
+assert.match(file, /if \(!facturaEsInterna && facturaFile\)/);
+assert.match(file, /\.update\(\{ archivo_url: urlData\.publicUrl, archivo_nombre: facturaFile\.name \}\)[\s\S]*?\.eq\("sociedad_id", socId\)/);
+assert.match(file, /\.update\(\{ factura_compra_id: createdFacturaId \}\)[\s\S]*?\.eq\("sociedad_id", socId\)/);
+assert.match(file, /getViajesExternosPendientesDelMes/);
+assert.match(file, /Solo podés agrupar viajes del mismo transportista/);
+assert.match(file, /proveedor\.id === transportista\?\.proveedor_id/);
+assert.match(file, /Nuevo transportista.*\/proveedores\?crear=&tipo=transportista/);
+assert.doesNotMatch(file, /\.from\("transportistas"\)\s*\.insert/);
+assert.doesNotMatch(file, /MODAL: NUEVO\/EDITAR TRANSPORTISTA/);
+assert.match(providers, /esTransportista: \(row\.es_transportista as boolean\) \?\? false/);
+assert.match(providers, /Es transportista/);
+assert.match(providers, /Aparecerá automáticamente en el catálogo de Transportes/);
+assert.match(providers, /params\.get\("tipo"\) === "transportista"/);
+assert.match(providerCarrierMigration, /add column if not exists es_transportista boolean not null default false/);
+assert.match(providerCarrierMigration, /add column if not exists proveedor_id uuid references public\.proveedores/);
+assert.match(providerCarrierMigration, /sincronizar_proveedor_transportista/);
+assert.match(providerCarrierMigration, /on conflict \(proveedor_id\)/);
+assert.match(duplicateGuard, /pg_advisory_xact_lock/);
+assert.match(duplicateGuard, /before insert or update of orden_pago_id, factura_compra_id/);
+assert.match(duplicateGuard, /mismo registro exacto dos veces/);
+assert.match(duplicateGuard, /enlace\.factura_compra_id = new\.factura_compra_id/);
+assert.doesNotMatch(duplicateGuard, /otra\.numero_factura/);
+
+console.log("Transportes: adjunto único, lectura automática, datos fiscales y vínculos exactos protegidos.");

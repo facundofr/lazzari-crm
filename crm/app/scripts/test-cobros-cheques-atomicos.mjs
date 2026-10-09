@@ -33,7 +33,15 @@ assert.match(massiveHandler, /cheque_numero:/);
 assert.match(massiveHandler, /cheque_fecha_pago:/);
 assert.doesNotMatch(massiveHandler, /from\("echeqs"\)/);
 assert.doesNotMatch(massiveHandler, /p_created_by/);
-assert.match(massive, /\{ value: "echeq", label: "E-Cheq" \}/);
+assert.match(massive, /\{ value: "echeq", label: "Cheque \/ E-Cheq" \}/);
+assert.doesNotMatch(massive, /\{ value: "cheque_recibido", label: "Cheque" \}/);
+assert.match(massive, /tipo === "cheque" \|\| tipo === "echeq"[\s\S]{0,80}\? "echeq"/);
+assert.match(massive, /checked=\{medio\.tipo === "cheque_recibido"\}/);
+assert.match(massive, /e\.target\.checked \? "cheque_recibido" : "echeq"/);
+assert.match(simple, /if \(t === "cheque" \|\| t === "echeq"\) return "echeq"/);
+assert.doesNotMatch(simple, /<option value="cheque_recibido">Cheque<\/option>/);
+assert.match(simple, /<option value="echeq">Cheque \/ E-Cheq<\/option>/);
+assert.match(simple, /checked=\{linea\.tipo === "cheque_recibido"\}/);
 
 assert.match(sql, /begin;[\s\S]*commit;/);
 assert.match(sql, /unique \(sociedad_id, request_key\)/);

@@ -39,11 +39,14 @@ assert.match(finanzas, /dias_cuenta_corriente/, "la OP debe consultar los días 
 assert.match(finanzas, /seleccioná una factura para calcular la fecha sugerida/, "la UI debe explicar cuándo puede calcular la sugerencia");
 
 const proveedores = read("src/app/(crm)/proveedores/page.tsx");
-const migration = read("supabase/migrations/20260925160000_proveedores_cuit_titular_cuenta.sql");
-assert.match(migration, /ADD COLUMN IF NOT EXISTS cuit_titular_cuenta text/, "la migración debe crear un campo separado");
-assert.match(migration, /no reemplaza el CUIT fiscal/, "la migración debe documentar la separación respecto del CUIT fiscal");
-assert.match(proveedores, /cuitTitularCuenta: \(row\.cuit_titular_cuenta as string\)/, "el mapper debe leer el CUIT/CUIL bancario");
-assert.match(proveedores, /value=\{form\.cuit_titular_cuenta\}/, "el formulario debe permitir editar el CUIT/CUIL bancario");
-assert.match(proveedores, /selectedProv\.cuitTitularCuenta \|\| "—"/, "el detalle debe visualizar el CUIT/CUIL bancario");
+const cargarFactura = read("src/components/cargar-factura-oc.tsx");
+assert.match(proveedores, /cuit_titular_cuenta: form\.cuit\.trim\(\)/, "guardar proveedor debe copiar automáticamente su CUIT fiscal al campo bancario histórico");
+assert.doesNotMatch(proveedores, /value=\{form\.cuit_titular_cuenta\}/, "el formulario no debe pedir un segundo CUIT");
+assert.match(proveedores, /CUIT para pagos y eCheq/, "el formulario debe explicar qué CUIT se utiliza");
+assert.match(proveedores, /selectedProv\.cuit \|\| "—"/, "el detalle debe mostrar el CUIT fiscal del proveedor");
+assert.match(cargarFactura, /cuit_titular_cuenta: nuevoProveedor\.cuit\.trim\(\)/, "crear proveedor desde Compras debe copiar el mismo CUIT");
+assert.match(finanzas, /beneficiario_cuit: proveedorCuitPago \|\| null/, "cada medio de pago debe persistir el CUIT del proveedor como beneficiario");
+assert.match(finanzas, /CUIT del proveedor \(cheque \/ eCheq\)/, "la OP debe mostrar el CUIT fiscal que se usará");
+assert.match(finanzas, /proveedorCuitPago\.length !== 11/, "cheques y eCheq deben bloquear un CUIT fiscal inválido");
 
-console.log("OK: CUIT/CUIL bancario separado y condición de pago informativa en OP.");
+console.log("OK: pagos y eCheq usan siempre el CUIT fiscal del proveedor; no existe un segundo CUIT editable.");

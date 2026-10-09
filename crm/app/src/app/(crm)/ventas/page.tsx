@@ -418,6 +418,7 @@ export default function VentasPage() {
         fecha: factura.fecha,
         fecha_vencimiento: factura.fecha_vencimiento,
         nota_interna: factura.nota_interna,
+        observaciones: factura.observaciones,
         condicion_venta: factura.condicion_venta,
         moneda: factura.moneda || "ARS",
         tipo_cambio: factura.tipo_cambio,
@@ -1649,7 +1650,7 @@ export default function VentasPage() {
                     }}
                     className="w-full max-w-xs rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
                   />
-                  {!emitManual && <div className="mt-1 text-xs text-zinc-500">{fiscalDates.error ? <><span className="text-red-600">{fiscalDates.error}</span> <button type="button" onClick={fiscalDates.retry} className="underline">Reintentar</button></> : !fiscalDates.ready ? "Consultando fechas habilitadas en ARCA…" : <>Primera fecha habilitada: {formatDate(fiscalMinDate)}. {emitFecha < fiscalMinDate && <span className="text-red-600">Cambiá la fecha seleccionada.</span>}</>}</div>}
+                  {!emitManual && <div className="mt-1 text-xs text-zinc-500">{fiscalDates.error ? <><span className="text-red-600">{fiscalDates.error}</span> <button type="button" onClick={fiscalDates.retry} className="underline">Reintentar</button></> : !fiscalDates.ready ? "Consultando fechas habilitadas en ARCA…" : <>{fiscalDates.warning ? <span className="text-amber-600 dark:text-amber-400">{fiscalDates.warning} </span> : <>Primera fecha habilitada: {formatDate(fiscalMinDate)}. </>}{emitFecha < fiscalMinDate && <span className="text-red-600">Cambiá la fecha seleccionada.</span>}</>}</div>}
                 </div>
 
                 {/* Info adicional del PR */}

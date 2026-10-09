@@ -560,10 +560,6 @@ export async function POST(req: NextRequest) {
         }
       } catch(error) {return NextResponse.json({error:`${error instanceof Error ? error.message : "Error de validación FCE"}. No se emitió.`},{status:503});}
     }
-    // A FCE adjustment cannot use the ordinary cancellation path without checking
-    // acceptance and its special annulment flag. Fail closed until that workflow is verified.
-    if (["NCEA","NCEB"].includes(tipo)) return NextResponse.json({error:"Las notas de FCE requieren verificar su estado en Registro FCE antes de ajustar o anular. Realizá esta operación en ARCA; el CRM no emitió ninguna nota."},{status:409});
-
     const ivaArray = Object.entries(ivaGroups).map(([id, vals]) => ({
       Id: Number(id),
       BaseImp: Math.round(vals.baseImp * 100) / 100,
@@ -586,7 +582,36 @@ export async function POST(req: NextRequest) {
         .eq("moneda", isUSD ? "USD" : "ARS")
         .single();
       if (origenError || !origen) return NextResponse.json({ error: "La factura origen no pertenece al mismo cliente, sociedad y moneda" }, { status: 400 });
-      if (["FCEA","FCEB","NCEA","NCEB"].includes(origen.tipo)) return NextResponse.json({error:"Una FCE no puede ajustarse con una nota común. Requiere el circuito de notas FCE y verificar su estado en ARCA. No se emitió."},{status:409});
+      const isFceNote = tipo === "NCEA" || tipo === "NCEB";
+      const expectedFceOrigin = tipo === "NCEA" ? "FCEA" : tipo === "NCEB" ? "FCEB" : null;
+      const isFceOrigin = origen.tipo === "FCEA" || origen.tipo === "FCEB";
+      if (isFceNote && origen.tipo !== expectedFceOrigin) {
+        return NextResponse.json({error:`La ${tipo} debe asociarse a su ${expectedFceOrigin}. Revisá la factura origen; no se emitió ninguna nota.`},{status:400});
+      }
+      if (!isFceNote && isFceOrigin) {
+        return NextResponse.json({error:"Una FCE debe ajustarse con su nota MiPyME correspondiente (código ARCA 203 para A o 208 para B). No se emitió ninguna nota."},{status:409});
+      }
+      if (isFceNote) {
+        try {
+          const status = await consultarComprobanteFce({
+            auth: await arca.getAuth("wsfecred"),
+            production: process.env.ARCA_PRODUCTION !== "false",
+            cbteTipo: CBTE_TIPO_MAP[origen.tipo],
+            ptoVta: Number(origen.punto_venta),
+            numero: Number(origen.numero),
+          });
+          if (!["PendienteRecepcion", "Recepcionado"].includes(status.estado)) {
+            return NextResponse.json({
+              error: `La FCE figura ${status.estado} en el Registro FCE. La nota MiPyME común solo puede ajustar el importe antes de su aceptación o rechazo; no se emitió ninguna nota.`,
+              fce_estado: status.estado,
+            }, {status:409});
+          }
+        } catch (error) {
+          return NextResponse.json({
+            error: `No se pudo verificar el estado de la FCE en ARCA: ${error instanceof Error ? error.message : "sin respuesta"}. No se emitió ninguna nota.`,
+          }, {status:503});
+        }
+      }
       if (origen) {
         const origenTipo = CBTE_TIPO_MAP[origen.tipo];
         if (origenTipo) {
@@ -706,6 +731,7 @@ export async function POST(req: NextRequest) {
         cotizacion_modalidad: isUSD ? (automaticInvoiceRate ? inheritedRateModality : (cotizacion_modalidad === "billetes" ? "billetes" : "divisas")) : null,
         estado: "emitida",
         sociedad_id: arcaConfig.id,
+        factura_origen_id: factura_origen_id || null,
         oc_cliente: oc_cliente || null,
         oc_cliente_fecha: oc_cliente_fecha || null,
         solicitado_por: solicitado_por || null,
@@ -814,19 +840,48 @@ export async function GET(req: NextRequest) {
   }
   if (action === "date-limits") {
     const sociedadId = req.nextUrl.searchParams.get("sociedad_id") || "";
-    try { await authorizeFacturaRequest(req, sociedadId); }
+    let supabase: any;
+    try { supabase = await authorizeFacturaRequest(req, sociedadId); }
     catch { return NextResponse.json({error:"No tenés acceso a esta sociedad o sesión válida."},{status:403}); }
+    const config = getArcaConfigBySociedad(sociedadId);
+    const ptoVta = Number(req.nextUrl.searchParams.get("punto_venta"));
+    const tipo = req.nextUrl.searchParams.get("tipo") || "";
+    const cbteTipo = CBTE_TIPO_MAP[tipo];
+    if (!config.ptoVtaPermitidos.includes(ptoVta) || !cbteTipo) return NextResponse.json({error:"Punto de venta o tipo de comprobante inválido."},{status:400});
     try {
-      const config = getArcaConfigBySociedad(sociedadId);
-      const ptoVta = Number(req.nextUrl.searchParams.get("punto_venta"));
-      const cbteTipo = CBTE_TIPO_MAP[req.nextUrl.searchParams.get("tipo") || ""];
-      if (!config.ptoVtaPermitidos.includes(ptoVta) || !cbteTipo) return NextResponse.json({error:"Punto de venta o tipo de comprobante inválido."},{status:400});
       await loadArca();
       const arca = getArcaInstance(config);
       const last = await consultarLimiteFechaPv({auth:await arca.getAuth("wsfe"),production:process.env.ARCA_PRODUCTION !== "false",ptoVta,cbteTipo});
       const minDate = `${last.minDate.slice(0,4)}-${last.minDate.slice(4,6)}-${last.minDate.slice(6,8)}`;
-      return NextResponse.json({minDate,lastNumber:last.lastNumber,punto_venta:ptoVta,tipo:req.nextUrl.searchParams.get("tipo"),sociedad_id:sociedadId},{headers:{"Cache-Control":"no-store"}});
-    } catch (error) { return NextResponse.json({error:error instanceof Error ? error.message : "No se pudo consultar la fecha autorizada en ARCA."},{status:503}); }
+      return NextResponse.json({minDate,lastNumber:last.lastNumber,punto_venta:ptoVta,tipo,sociedad_id:sociedadId,verified:true,warning:""},{headers:{"Cache-Control":"no-store"}});
+    } catch (error) {
+      // La consulta preventiva puede fallar por cortes transitorios de ARCA. No
+      // bloqueamos la carga: usamos el piso local y la emision vuelve a validar
+      // contra ARCA antes de solicitar el CAE (crearFacturaWsfeNode).
+      const today = new Intl.DateTimeFormat("sv-SE", {timeZone:"America/Argentina/Buenos_Aires"}).format(new Date());
+      const floor = new Date(`${today}T12:00:00Z`);
+      floor.setUTCDate(floor.getUTCDate() - 5);
+      let minDate = floor.toISOString().slice(0,10);
+      const {data:ultima} = await supabase.from("facturas")
+        .select("fecha")
+        .eq("sociedad_id", sociedadId)
+        .eq("punto_venta", ptoVta)
+        .in("tipo", Object.keys(CBTE_TIPO_MAP))
+        .order("fecha", {ascending:false})
+        .limit(1)
+        .maybeSingle();
+      if (ultima?.fecha && ultima.fecha > minDate) minDate = ultima.fecha;
+      console.warn("ARCA date-limits no disponible; se usa respaldo local:", error instanceof Error ? error.message : error);
+      return NextResponse.json({
+        minDate,
+        lastNumber:null,
+        punto_venta:ptoVta,
+        tipo,
+        sociedad_id:sociedadId,
+        verified:false,
+        warning:"ARCA no respondió a la consulta previa. Podés elegir la fecha; se validará nuevamente al emitir.",
+      },{headers:{"Cache-Control":"no-store"}});
+    }
   }
 
   if (action === "status") {

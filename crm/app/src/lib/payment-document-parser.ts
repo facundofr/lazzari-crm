@@ -1,13 +1,29 @@
 import { parseInvoiceNumber } from "./invoice-number-parser";
 
-export function paymentDocumentFields(data: Record<string, unknown>) {
+export function paymentDocumentFields(
+  data: Record<string, unknown>,
+  options: { context?: "default" | "orden_pago_proveedor" } = {},
+) {
   const allowed = ["transferencia", "deposito", "cheque", "echeq", "efectivo", "tarjeta"] as const;
-  const tipo = data.tipo;
-  if (typeof tipo !== "string" || !allowed.includes(tipo as typeof allowed[number])) {
-    throw new Error(typeof tipo === "string" && tipo.startsWith("retencion_")
+  const rawTipo = data.tipo;
+  if (typeof rawTipo !== "string" || !allowed.includes(rawTipo as typeof allowed[number])) {
+    throw new Error(typeof rawTipo === "string" && rawTipo.startsWith("retencion_")
       ? "El archivo contiene una retención, no una transferencia. Revisala en la sección de retenciones; no se agregó como medio de pago."
       : "No se pudo identificar el medio de pago. Completalo manualmente; no se agregó una transferencia por defecto.");
   }
+  const chequeHint = [data.tipo_cheque, data.cheque_id_digital, data.concepto, data.notas]
+    .filter(Boolean)
+    .join(" ")
+    .toLocaleLowerCase();
+  const tipo = rawTipo === "cheque" && (Boolean(data.cheque_id_digital)
+    || /(?:e[ -]?cheq|cheque (?:electr[oó]nico|digital))/.test(chequeHint))
+    ? "echeq"
+    : rawTipo;
+  const direccion = data.direccion === "emitido" || data.direccion === "recibido"
+    ? data.direccion
+    : options.context === "orden_pago_proveedor" && (tipo === "cheque" || tipo === "echeq")
+      ? "emitido"
+      : null;
   if (data.moneda !== "ARS" && data.moneda !== "USD") throw new Error("No se pudo identificar la moneda del comprobante. Revisala manualmente.");
   const monto = parseInvoiceNumber(data.monto, "importe del comprobante");
   if (monto <= 0) throw new Error("El importe del comprobante debe ser mayor que cero.");
@@ -32,6 +48,7 @@ export function paymentDocumentFields(data: Record<string, unknown>) {
     fecha_cobro: fechaCobro || fecha,
     banco: typeof data.banco === "string" ? data.banco : "",
     numero_cheque: typeof data.cheque_numero === "string" ? data.cheque_numero : "",
+    direccion,
   };
 }
 
@@ -43,12 +60,11 @@ export function parsedPaymentForSingleInvoice(
   const currencies = new Set(payments.map((payment) => payment.moneda));
   if (currencies.size !== 1) return null;
   const moneda = payments[0].moneda;
-  const selected = invoices.filter((invoice) => invoice.selected && invoice.moneda === moneda);
-  const candidates = selected.length === 1
-    ? selected
-    : selected.length === 0
-      ? invoices.filter((invoice) => invoice.moneda === moneda && invoice.saldo_pendiente > 0)
-      : [];
+  // Un comprobante informa el dinero efectivamente transferido. Si hay una
+  // factura ya seleccionada, ese importe puede ser el neto luego de retenciones
+  // y nunca debe reemplazar el bruto "A pagar" elegido por el operador.
+  if (invoices.some((invoice) => invoice.selected)) return null;
+  const candidates = invoices.filter((invoice) => invoice.moneda === moneda && invoice.saldo_pendiente > 0);
   if (candidates.length !== 1) return null;
   const total = Math.round(payments.reduce((sum, payment) => sum + Number(payment.monto || 0), 0) * 100) / 100;
   if (!Number.isFinite(total) || total <= 0) return null;

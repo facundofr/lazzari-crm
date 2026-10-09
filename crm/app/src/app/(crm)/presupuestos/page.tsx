@@ -490,7 +490,11 @@ export default function PresupuestosPage() {
 
   const [cotizFecha, setCotizFecha] = useState("");
 
-  async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas", fecha?: string) {
+  async function fetchCotizBna(
+    modalidad: "divisas" | "billetes" = "divisas",
+    fecha?: string,
+    options: { preserveItemPrices?: boolean } = {},
+  ) {
     setCotizBnaLoading(true);
     try {
       const params = new URLSearchParams({ modalidad, force: "1" });
@@ -501,7 +505,11 @@ export default function PresupuestosPage() {
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
         if (modalidad === "divisas") {
           setNewPR((p) => {
-            const items = p.items.map(it => {
+            // Un precio de venta ya confirmado es el dato contractual del PR.
+            // Al abrir un PR existente sólo necesitamos cargar la cotización para
+            // futuras ediciones de costo; no debemos reconstruir silenciosamente
+            // el precio desde un markup redondeado.
+            const items = options.preserveItemPrices ? p.items : p.items.map(it => {
               const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, data.valor_venta);
               return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
             });
@@ -509,7 +517,7 @@ export default function PresupuestosPage() {
           });
         } else {
           setNewPR((p) => {
-            const items = p.items.map(it => {
+            const items = options.preserveItemPrices ? p.items : p.items.map(it => {
               const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, data.valor_venta, p.tipo_cambio_divisas);
               return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
             });
@@ -1031,7 +1039,6 @@ export default function PresupuestosPage() {
   // Auto-load BNA rate when PR form opens (for USD cost conversion)
   useEffect(() => {
     if (showNewPR && !cotizBna) fetchCotizBna("divisas");
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showNewPR]);
 
   useEffect(() => {
@@ -1198,8 +1205,7 @@ export default function PresupuestosPage() {
         };
       });
 
-      const buildItemRows = (prId: string) => itemsWithTotals.map((it) => ({
-        presupuesto_id: prId,
+      const buildItemRows = () => itemsWithTotals.map((it) => ({
         codigo: it.codigo ?? "",
         descripcion: it.descripcion,
         categoria: it.categoria ?? null,
@@ -1244,21 +1250,13 @@ export default function PresupuestosPage() {
           updatePayload.estado = "pendiente";
           updatePayload.enviado_at = new Date().toISOString();
         }
-        let prUpdate = supabase
-          .from("presupuestos")
-          .update(updatePayload as any)
-          .eq("id", editingPRId);
-        if (sociedadActiva?.id) prUpdate = prUpdate.eq("sociedad_id" as any, sociedadActiva.id);
-        const { error } = await prUpdate;
+        const { error } = await (supabase as any).rpc("actualizar_presupuesto_atomico", {
+          p_presupuesto_id: editingPRId,
+          p_sociedad_id: sociedadActiva?.id,
+          p_update: updatePayload,
+          p_items: buildItemRows(),
+        });
         if (error) throw new Error(error.message);
-
-        // Replace items: delete old, insert new
-        const { error: delItemsErr } = await supabase.from("presupuesto_items").delete().eq("presupuesto_id", editingPRId);
-        if (delItemsErr) throw new Error("Error al actualizar items: " + delItemsErr.message);
-        if (itemsWithTotals.length > 0) {
-          const { error: itemsError } = await supabase.from("presupuesto_items").insert(buildItemRows(editingPRId) as any);
-          if (itemsError) throw new Error("Error al guardar items: " + itemsError.message);
-        }
 
         // Sync existing OCs with updated PR items (resets estado to pendiente)
         const ocsSynced = await syncOCsFromPR(editingPRId, newPR.modalidad_emision === "manual");
@@ -1273,9 +1271,7 @@ export default function PresupuestosPage() {
         // ── CREATE new PR ──
         const today = todayAR();
 
-        const { data: newRow, error } = await supabase
-          .from("presupuestos")
-          .insert({
+        const presupuestoPayload = {
             cliente_id: newPR.cliente_id,
             vendedor_id: newPR.vendedor_id || null,
             sucursal_id: newPR.sucursal_id || null,
@@ -1298,37 +1294,47 @@ export default function PresupuestosPage() {
             notas_internas: newPR.notas_internas,
             tipo_comprobante: newPR.tipo_comprobante || null,
             modalidad_emision: newPR.modalidad_emision,
-          } as any)
-          .select()
-          .single();
+          };
+
+        const { data: newRowId, error } = await (supabase as any).rpc("crear_presupuesto_atomico", {
+          p_sociedad_id: sociedadActiva?.id,
+          p_presupuesto: presupuestoPayload,
+          p_items: buildItemRows(),
+        });
 
         if (error) throw new Error(error.message);
-
-        if (newRow && itemsWithTotals.length > 0) {
-          const { error: itemsError } = await supabase.from("presupuesto_items").insert(buildItemRows(newRow.id) as any);
-          if (itemsError) throw new Error("Error al guardar items: " + itemsError.message);
-        }
+        if (!newRowId) throw new Error("Supabase no devolvio el presupuesto creado");
 
         setShowNewPR(false);
         setEsSolicitud(false);
         setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
 
         // Fetch the newly created PR with full joins before refreshing the list
-        const { data: fullRow } = await (supabase as any)
+        const { data: fullRow, error: reloadError } = await (supabase as any)
           .from("presupuestos")
           .select(`*, listo_para_facturar, clientes(razon_social, cuit, email, telefono, direccion, localidad, provincia, condicion_iva, limite_credito, saldo_cuenta_corriente), created_by_profile:created_by(full_name), vendedor_profile:vendedor_id(full_name, avatar_url), sucursal:sucursal_id(nombre, direccion, localidad, provincia), contacto:contacto_id(nombre, email), presupuesto_items(*)`)
-          .eq("id", newRow.id)
+          .eq("id", newRowId)
           .single();
-        const createdPR = fullRow ? mapToPresupuesto(fullRow as any) : mapToPresupuesto(newRow as any);
-
-        // Solo mostrar popup post-creacion para presupuestos, no para solicitudes
-        if (!esSolicitud) {
-          setPostCreatePR(createdPR);
+        if (fullRow) {
+          const createdPR = mapToPresupuesto(fullRow as any);
+          // Solo mostrar popup post-creacion para presupuestos, no para solicitudes
+          if (!esSolicitud) {
+            setPostCreatePR(createdPR);
+          } else {
+            toast.success(`Solicitud ${createdPR.numero} creada`);
+          }
         } else {
-          toast.success(`Solicitud ${createdPR.numero} creada`);
+          // La escritura atómica ya terminó. Una falla de recarga no debe informar
+          // que la creación falló ni inducir al usuario a duplicar el presupuesto.
+          console.error("El presupuesto fue creado pero no se pudo recargar:", reloadError);
+          toast.success(esSolicitud ? "Solicitud creada correctamente" : "Presupuesto creado correctamente");
         }
 
-        await fetchPresupuestos();
+        try {
+          await fetchPresupuestos();
+        } catch (refreshError) {
+          console.error("El presupuesto fue creado pero falló la actualización del listado:", refreshError);
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : JSON.stringify(err);
@@ -1627,7 +1633,7 @@ export default function PresupuestosPage() {
               moneda,
               estado: "enviada",
               ...totals,
-              observaciones: `Stock propio — OC interna generada desde ${prNumero}`,
+              observaciones: `Stock propio — OC generada desde ${prNumero}`,
               created_by: prCreatedBy ?? profile?.id ?? (await supabase.auth.getUser()).data.user?.id ?? null,
             } as any)
             .select()
@@ -1996,8 +2002,12 @@ export default function PresupuestosPage() {
       setSelected(null);
       setPanelFullscreen(false);
       setShowNewPR(true);
-      // Load BNA rate for USD cost conversion (even on ARS PRs)
-      if (!Number(fullPR.tipo_cambio_divisas)) fetchCotizBna("divisas");
+      // Sólo hace falta cotización si hay costos en USD. Al cargarla para editar,
+      // conservar siempre el precio de venta exacto que ya fue aceptado.
+      const needsDivisasRate = items.some((item) => item.costo_moneda === "USD" || item.costo_moneda === "USD Divisa");
+      if (needsDivisasRate && !Number(fullPR.tipo_cambio_divisas)) {
+        fetchCotizBna("divisas", undefined, { preserveItemPrices: true });
+      }
     } catch (err) {
       console.error("Error loading PR for edit:", err);
       toast.error("Error al cargar presupuesto para editar");
@@ -3054,7 +3064,11 @@ export default function PresupuestosPage() {
                         if (oc && oc.trim()) {
                           let ocClienteUpdate = supabase.from("presupuestos").update({ oc_cliente: oc.trim() } as any).eq("id", selected.id);
                           if (sociedadActiva?.id) ocClienteUpdate = ocClienteUpdate.eq("sociedad_id" as any, sociedadActiva.id);
-                          await ocClienteUpdate;
+                          const { data: updated, error } = await ocClienteUpdate.select("oc_cliente").maybeSingle();
+                          if (error || !updated) {
+                            toast.error(`No se pudo guardar la OC${error?.message ? `: ${error.message}` : ". Verificá tus permisos y la sociedad activa."}`);
+                            return;
+                          }
                           setSelected({ ...selected, ocCliente: oc.trim() } as any);
                           await fetchPresupuestos();
                           toast.success("OC del cliente guardada");
@@ -3072,8 +3086,8 @@ export default function PresupuestosPage() {
                         const value = e.target.value || null;
                         let updateQuery = supabase.from("presupuestos").update({ oc_cliente_fecha: value } as any).eq("id", selected.id);
                         if (sociedadActiva?.id) updateQuery = updateQuery.eq("sociedad_id" as any, sociedadActiva.id);
-                        const update = await updateQuery;
-                        if (update.error) { toast.error("No se pudo guardar la fecha de la OC"); return; }
+                        const { data: updated, error } = await updateQuery.select("oc_cliente_fecha").maybeSingle();
+                        if (error || !updated) { toast.error(`No se pudo guardar la fecha de la OC${error?.message ? `: ${error.message}` : ". Verificá tus permisos y la sociedad activa."}`); return; }
                         setSelected({ ...selected, ocClienteFecha: value } as any);
                       }}
                       className="mt-0.5 rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
@@ -3163,7 +3177,13 @@ export default function PresupuestosPage() {
                         const { data: urlData } = supabase.storage.from("presupuestos").getPublicUrl(path);
                         let attachFile = supabase.from("presupuestos").update({ archivo_url: urlData.publicUrl, archivo_nombre: file.name } as any).eq("id", selected.id);
                         if (sociedadActiva?.id) attachFile = attachFile.eq("sociedad_id" as any, sociedadActiva.id);
-                        await attachFile;
+                        const { data: updated, error: attachError } = await attachFile.select("archivo_url").maybeSingle();
+                        if (attachError || !updated) {
+                          await supabase.storage.from("presupuestos").remove([path]);
+                          toast.error(`El archivo se subió pero no se pudo vincular al PR${attachError?.message ? `: ${attachError.message}` : ". Verificá tus permisos y la sociedad activa."}`);
+                          e.target.value = "";
+                          return;
+                        }
                         setSelected({ ...selected, archivoUrl: urlData.publicUrl, archivoNombre: file.name } as any);
                         await fetchPresupuestos();
                         toast.success("Archivo adjuntado");
@@ -3735,14 +3755,14 @@ export default function PresupuestosPage() {
             </div>
           )}
           <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
-            <table className="w-full text-sm">
+            <table className="min-w-[1240px] w-full table-fixed text-sm">
               <thead>
                 <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
                   <th className="w-7"></th>
-                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-20">Codigo</th>
-                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500">Descripcion</th>
-                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-36">Proveedor</th>
-                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-16">Cant.</th>
+                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-32">Codigo</th>
+                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-[280px]">Descripcion</th>
+                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500 w-44">Proveedor</th>
+                  <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">Cant.</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-36">P. Costo</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-20">Markup%</th>
                   <th className="px-2 py-2 text-right text-xs font-semibold text-zinc-500 w-24">P. Venta</th>
@@ -3789,7 +3809,7 @@ export default function PresupuestosPage() {
                         <div className="flex items-center gap-1">
                           <input value={item.codigo} onChange={(e) => updateNewPRItem(idx, "codigo", e.target.value)}
                             placeholder="Codigo"
-                            className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                            className="w-full rounded border border-zinc-200 px-2 py-1 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                           <button type="button" onClick={() => openProductSearch(idx)} title="Buscar producto"
                             className="shrink-0 rounded border border-zinc-200 p-1 text-zinc-400 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-300 dark:border-zinc-700 dark:hover:bg-orange-950/30 dark:hover:text-orange-400 transition-colors">
                             <Search className="h-3.5 w-3.5" />
@@ -3810,7 +3830,7 @@ export default function PresupuestosPage() {
                             }
                           }}
                           placeholder="Descripcion del item..."
-                          className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                          className="w-full rounded border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                       </td>
                       <td className="px-2 py-1.5">
                         <ProveedorItemPicker

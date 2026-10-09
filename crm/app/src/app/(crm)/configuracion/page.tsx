@@ -10,6 +10,7 @@ import type { User, Role } from "@/lib/types";
 import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2, Mail, Save, RotateCcw, Percent, Plus, Trash2, X, ShieldCheck } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { normalizeEmail } from "@/lib/email";
 import { useUser } from "@/lib/auth-context";
 
 type ComisionTipo = "porcentaje_venta" | "porcentaje_margen" | "monto_fijo";
@@ -95,11 +96,15 @@ const roleBadgeVariant: Record<Role, "success" | "warning" | "danger" | "info" |
 
 export default function ConfiguracionPage() {
   const { sociedadActiva, profile } = useUser();
+  const canManageUsers = profile?.role === "super_admin" || profile?.role === "admin";
   const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas" | "comisiones" | "retenciones">("usuarios");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dbUsers, setDbUsers] = useState<User[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
+  const [editingNameUserId, setEditingNameUserId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
 
   // Email templates state
   const [templates, setTemplates] = useState<Record<TemplateTipo, EmailTemplate>>({ ...DEFAULT_TEMPLATES });
@@ -162,6 +167,7 @@ export default function ConfiguracionPage() {
         const { data: profiles } = await supabase
           .from("profiles")
           .select("id, full_name, email, role, active, created_at")
+          .eq("active", true)
           .order("created_at", { ascending: false });
         if (profiles) {
           setDbUsers(profiles.map((p: any) => ({
@@ -189,7 +195,8 @@ export default function ConfiguracionPage() {
   }, []);
 
   async function handleInviteUser() {
-    if (!inviteForm.email.trim()) return;
+    const normalizedEmail = normalizeEmail(inviteForm.email);
+    if (!normalizedEmail) return;
     if (!inviteForm.nombre.trim()) return;
     setInviteSaving(true);
     try {
@@ -197,7 +204,7 @@ export default function ConfiguracionPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: inviteForm.email.trim(),
+          email: normalizedEmail,
           nombre: inviteForm.nombre.trim(),
           role: inviteForm.role,
           sociedad_ids: inviteSociedadIds,
@@ -212,6 +219,7 @@ export default function ConfiguracionPage() {
       const { data: profiles } = await supabase
         .from("profiles")
         .select("id, full_name, email, role, active, created_at")
+        .eq("active", true)
         .order("created_at", { ascending: false });
       if (profiles) {
         setDbUsers(profiles.map((p: any) => ({
@@ -220,11 +228,43 @@ export default function ConfiguracionPage() {
           createdAt: p.created_at ? new Date(p.created_at).toLocaleDateString("es-AR") : "—",
         })));
       }
-      alert("Usuario invitado correctamente. Recibirá un email para acceder.");
+      alert(json.invite_sent
+        ? (json.recovered ? "Acceso recuperado e invitación reenviada correctamente." : "Usuario invitado correctamente. Recibirá un email para definir su contraseña.")
+        : (json.warning || "El acceso quedó creado, pero no se pudo enviar la invitación."));
     } catch (e: any) {
       alert(e.message || "Error al invitar usuario");
     } finally {
       setInviteSaving(false);
+    }
+  }
+
+  async function updateSystemUser(id: string, changes: { full_name?: string; role?: Role }) {
+    const response = await fetch("/api/users", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, ...changes }),
+    });
+    const json = await response.json();
+    if (!response.ok) throw new Error(json.error || "No se pudo actualizar el usuario");
+  }
+
+  async function deleteSystemUser(row: User) {
+    if (!confirm(`¿Eliminar el acceso de ${row.name}? La trazabilidad de sus operaciones se conservará.`)) return;
+    setDeletingUserId(row.id);
+    try {
+      const response = await fetch("/api/users", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: row.id }),
+      });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error || "No se pudo eliminar el usuario");
+      setDbUsers((current) => current.filter((user) => user.id !== row.id));
+      alert(json.mode === "disabled" ? "Acceso eliminado. Se conservó el usuario inactivo por su historial contable." : "Usuario eliminado.");
+    } catch (deleteError) {
+      alert(deleteError instanceof Error ? deleteError.message : "No se pudo eliminar el usuario");
+    } finally {
+      setDeletingUserId(null);
     }
   }
 
@@ -621,7 +661,7 @@ export default function ConfiguracionPage() {
                 <h3 className="font-semibold text-zinc-900 dark:text-white">Usuarios del sistema</h3>
                 <p className="text-sm text-zinc-500">{dbUsers.length} usuarios registrados</p>
               </div>
-              {profile?.role === "super_admin" || profile?.role === "admin" ? (
+              {canManageUsers ? (
                 <button onClick={() => setShowInviteModal(true)} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
                   <Plus className="h-4 w-4" /> Invitar usuario
                 </button>
@@ -636,13 +676,29 @@ export default function ConfiguracionPage() {
                 columns={[
                   {
                     key: "name", label: "Usuario", sortable: true,
-                    render: (row) => (
+                    render: (row) => editingNameUserId === row.id && canManageUsers && (row.role !== "super_admin" || profile?.role === "super_admin") ? (
+                      <div className="flex min-w-[250px] items-center gap-2">
+                        <input autoFocus value={editingName} onChange={(event) => setEditingName(event.target.value)} className="min-w-0 flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm dark:border-zinc-600 dark:bg-zinc-800" />
+                        <button onClick={async () => {
+                          try {
+                            await updateSystemUser(row.id, { full_name: editingName });
+                            setDbUsers((current) => current.map((user) => user.id === row.id ? { ...user, name: editingName.trim() } : user));
+                            setEditingNameUserId(null);
+                          } catch (updateError) { alert(updateError instanceof Error ? updateError.message : "No se pudo cambiar el nombre"); }
+                        }} className="rounded bg-orange-500 px-2 py-1.5 text-xs font-semibold text-white">Guardar</button>
+                        <button onClick={() => setEditingNameUserId(null)} className="text-xs text-zinc-500">Cancelar</button>
+                      </div>
+                    ) : (
                       <div className="flex items-center gap-3">
                         <div className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-200 text-xs font-bold text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
                           {row.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
                         </div>
                         <div>
-                          <p className="font-medium text-zinc-900 dark:text-white">{row.name}</p>
+                          {canManageUsers && (row.role !== "super_admin" || profile?.role === "super_admin") ? (
+                            <button onClick={() => { setEditingNameUserId(row.id); setEditingName(row.name); }} className="font-medium text-zinc-900 hover:text-orange-600 dark:text-white dark:hover:text-orange-400" title="Editar nombre">{row.name} <span className="text-xs text-zinc-400">✎</span></button>
+                          ) : (
+                            <span className="font-medium text-zinc-900 dark:text-white">{row.name}</span>
+                          )}
                           <p className="text-xs text-zinc-400">{row.email}</p>
                         </div>
                       </div>
@@ -650,18 +706,17 @@ export default function ConfiguracionPage() {
                   },
                   {
                     key: "role", label: "Rol", sortable: true,
-                    render: (row) => changingRoleUserId === row.id ? (
+                    render: (row) => changingRoleUserId === row.id && canManageUsers && (row.role !== "super_admin" || profile?.role === "super_admin") ? (
                       <select
                         defaultValue={row.role}
                         autoFocus
                         onBlur={() => setChangingRoleUserId(null)}
                         onChange={async (e) => {
                           const newRole = e.target.value as Role;
-                          const { error } = await supabase.from("profiles").update({ role: newRole } as any).eq("id", row.id);
-                          if (error) { alert("Error al cambiar rol: " + error.message); }
-                          else {
+                          try {
+                            await updateSystemUser(row.id, { role: newRole });
                             setDbUsers(prev => prev.map(u => u.id === row.id ? { ...u, role: newRole } : u));
-                          }
+                          } catch (updateError) { alert(updateError instanceof Error ? updateError.message : "Error al cambiar rol"); }
                           setChangingRoleUserId(null);
                         }}
                         className="rounded-md border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-2 py-1 text-xs"
@@ -669,16 +724,27 @@ export default function ConfiguracionPage() {
                         {(Object.entries(ROLE_LABELS) as [Role, string][]).map(([r, l]) => <option key={r} value={r}>{l}</option>)}
                       </select>
                     ) : (
-                      <button onClick={() => setChangingRoleUserId(row.id)} className="flex items-center gap-1.5 group" title="Click para cambiar rol">
-                        <Badge variant={roleBadgeVariant[row.role]}>{ROLE_LABELS[row.role]}</Badge>
-                        <span className="text-xs text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity">✎</span>
-                      </button>
+                      canManageUsers && (row.role !== "super_admin" || profile?.role === "super_admin") ? (
+                        <button onClick={() => setChangingRoleUserId(row.id)} className="flex items-center gap-1.5 group" title="Click para cambiar rol">
+                          <Badge variant={roleBadgeVariant[row.role]}>{ROLE_LABELS[row.role]}</Badge>
+                          <span className="text-xs text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity">✎</span>
+                        </button>
+                      ) : <Badge variant={roleBadgeVariant[row.role]}>{ROLE_LABELS[row.role]}</Badge>
                     ),
                   },
                   { key: "active", label: "Estado", sortable: true, render: (row) => <Badge variant={row.active ? "success" : "outline"}>{row.active ? "Activo" : "Inactivo"}</Badge> },
                   { key: "createdAt", label: "Registrado", sortable: true, render: (row) => <span className="text-zinc-400 text-xs">{row.createdAt}</span> },
+                  {
+                    key: "actions", label: "", sortable: false,
+                    render: (row) => canManageUsers && row.id !== profile?.id && (row.role !== "super_admin" || profile?.role === "super_admin") ? (
+                      <button onClick={() => void deleteSystemUser(row)} disabled={deletingUserId === row.id} className="rounded-md p-2 text-zinc-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50 dark:hover:bg-red-950/30" title="Eliminar acceso">
+                        {deletingUserId === row.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                      </button>
+                    ) : null,
+                  },
                 ]}
                 data={dbUsers}
+                loading={usersLoading}
               />
             </Card>
           </div>
@@ -1305,7 +1371,7 @@ export default function ConfiguracionPage() {
       </div>
 
       {/* ── Modal: Invitar usuario ── */}
-      {showInviteModal && (
+      {showInviteModal && canManageUsers && (
         <>
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setShowInviteModal(false)} />
           <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
@@ -1323,6 +1389,7 @@ export default function ConfiguracionPage() {
               <div>
                 <label className="text-xs font-medium text-zinc-500">Email *</label>
                 <input type="email" value={inviteForm.email} onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
+                  onBlur={() => setInviteForm((current) => ({ ...current, email: normalizeEmail(current.email) }))}
                   placeholder="usuario@empresa.com"
                   className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
               </div>

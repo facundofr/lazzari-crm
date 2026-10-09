@@ -57,6 +57,7 @@ interface FacturaRow {
   oc_cliente_fecha?: string | null;
   condicion_venta?: string | null;
   fecha_vencimiento?: string | null;
+  observaciones?: string | null;
   nota_interna?: string | null;
   factura_origen_id?: string | null;
   total_acreditado?: number | null;
@@ -272,8 +273,6 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     if (emitManual || (canOverrideRate && rateOverride)) { setCotizBnaLoading(false); return; }
     void fetchCotizBna("divisas", previousBusinessDay(emitData.fecha));
     return () => { cotizRequest.current += 1; };
-    // La edición manual de tipo_cambio no dispara otra consulta.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [emitOpen, emitData.moneda, emitData.fecha, emitManual, canOverrideRate, rateOverride]);
 
   function calcFechaVencFC(condVenta: string, fechaBase: string): string {
@@ -320,6 +319,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [ncItems, setNcItems] = useState<NcItem[]>([]);
   const [ncManual, setNcManual] = useState(false);
   const [ncNumero, setNcNumero] = useState("");
+  const [ncFecha, setNcFecha] = useState(todayAR());
   const [ncSaving, setNcSaving] = useState(false);
   const [ncError, setNcError] = useState("");
   const [ncStep, setNcStep] = useState<"form" | "saving" | "success" | "error">("form");
@@ -328,6 +328,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [detailSolicitante, setDetailSolicitante] = useState<string | null>(null);
 
   const isFacturaANc = ncFactura?.tipo === "FA" || ncFactura?.tipo === "FCEA";
+  const ncEsFce = ncFactura?.tipo === "FCEA" || ncFactura?.tipo === "FCEB";
+  const ncTipo = ncFactura?.tipo === "FCEA" ? "NCEA" : ncFactura?.tipo === "FCEB" ? "NCEB" : ncFactura?.tipo === "FA" ? "NCA" : "NCB";
+  const ncFiscalDates = useFiscalDateLimits(ncOpen && !ncManual && Boolean(ncFactura), sociedadActiva?.id, emisorData.ptoVta, ncTipo);
+  const ncFiscalMinDate = ncFiscalDates.minDate && ncFiscalDates.minDate > dateWindowMin ? ncFiscalDates.minDate : dateWindowMin;
+  const ncDateBlocked = !ncFecha || ncFecha < (ncManual ? dateWindowMin : ncFiscalMinDate) || ncFecha > todayAR()
+    || (!ncManual && !ncFiscalDates.ready);
 
   const ncTotals = ncItems.reduce((acc, it) => {
     if (isFacturaANc) {
@@ -358,8 +364,11 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         ? items.map(it => ({ descripcion: it.descripcion, cantidad: Number(it.cantidad), precio_unitario: Number(it.precio_unitario), iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21 }))
         : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }]
     );
-    setNcManual(arcaStatus !== null && arcaStatus.certOk === false);
+    // Una FCE solo puede ajustarse con su nota electrónica MiPyME autorizada
+    // (203 para A / 208 para B). Nunca debe degradarse a una NC manual o común.
+    setNcManual((factura.tipo !== "FCEA" && factura.tipo !== "FCEB") && arcaStatus !== null && arcaStatus.certOk === false);
     setNcNumero("");
+    setNcFecha(todayAR());
     setNcError("");
     setNcStep("form");
     setNcResult("");
@@ -368,14 +377,19 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   async function handleCreateNC() {
     if (!ncFactura) return;
+    if (ncEsFce && ncManual) {
+      setNcError(`La ${ncFactura.tipo} requiere ${ncTipo === "NCEA" ? "Nota de Crédito Electrónica MiPyME A (código ARCA 203)" : "Nota de Crédito Electrónica MiPyME B (código ARCA 208)"}. No puede registrarse manualmente.`); return;
+    }
     if (ncItems.some(it => !it.descripcion || it.precio_unitario <= 0)) {
       setNcError("Completa todos los items con descripción y precio"); return;
     }
     if (ncManual && (!ncNumero || Number(ncNumero) <= 0)) {
       setNcError("Ingresá el número de comprobante"); return;
     }
+    if (ncDateBlocked) {
+      setNcError(ncFiscalDates.error || `Elegí una fecha válida entre ${formatDate(ncManual ? dateWindowMin : ncFiscalMinDate)} y ${formatDate(todayAR())}`); return;
+    }
 
-    const ncTipo = ncFactura.tipo === "FCEA" ? "NCEA" : ncFactura.tipo === "FCEB" ? "NCEB" : ncFactura.tipo === "FA" ? "NCA" : "NCB";
     setNcSaving(true);
     setNcStep("saving");
     setNcError("");
@@ -399,6 +413,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             items: ncItems,
             sociedad_id: sociedadActiva?.id,
             factura_origen_id: ncFactura.id,
+            fecha: ncFecha,
           }),
         });
         const data = await res.json();
@@ -425,7 +440,6 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         setNcResult(data.factura.comprobante + (data.factura.cae ? ` — CAE: ${data.factura.cae}` : ""));
       } else {
         // Manual sin ARCA
-        const today = todayAR();
         const { data: newNc, error: ncErr } = await (supabase as any)
           .from("facturas")
           .insert({
@@ -433,7 +447,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             punto_venta: emisorData.ptoVta,
             numero: Number(ncNumero),
             cliente_id: ncFactura.cliente_id,
-            fecha: today,
+            fecha: ncFecha,
             cae: null,
             cae_vencimiento: null,
             subtotal: ncTotals.neto,
@@ -1039,8 +1053,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       // Map API tipo → CobroLinea tipo
       function mapTipo(t: string): CobroLinea["tipo"] {
         if (t === "deposito") return "efectivo";
-        if (t === "cheque") return "cheque_recibido";
-        if (t === "echeq") return "echeq";
+        // En cobros, todo cheque detectado se presume E-Cheq. El usuario debe
+        // marcarlo expresamente como físico antes de confirmar.
+        if (t === "cheque" || t === "echeq") return "echeq";
         if (t === "retencion_iibb" || t === "retencion_ganancias" || t === "retencion_iva") return t;
         if (t === "efectivo") return "efectivo";
         return "transferencia";
@@ -1446,6 +1461,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       fecha: f.fecha,
       fecha_vencimiento: f.fecha_vencimiento,
       nota_interna: f.nota_interna,
+      observaciones: f.observaciones,
       condicion_venta: f.condicion_venta,
       moneda: f.moneda as "ARS" | "USD",
       tipo_cambio: f.tipo_cambio,
@@ -2112,7 +2128,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                     <input type="date" value={emitData.fecha} min={emitManual ? minFecha : fiscalMinDate} max={todayAR()} disabled={!emitManual && !fiscalDates.ready}
                       onChange={(e) => setEmitData((p) => ({ ...p, fecha: e.target.value, fecha_vencimiento: calcFechaVencFC(p.condicion_venta, e.target.value) }))}
                       className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
-                    {!emitManual && <div className="mt-1 text-xs text-zinc-500">{fiscalDates.error ? <><span className="text-red-600">{fiscalDates.error}</span> <button type="button" onClick={fiscalDates.retry} className="underline">Reintentar</button></> : !fiscalDates.ready ? "Consultando fechas habilitadas en ARCA…" : <>Primera fecha habilitada: {formatDate(fiscalMinDate)}. {emitData.fecha < fiscalMinDate && <span className="text-red-600">Cambiá la fecha seleccionada.</span>}</>}</div>}
+                    {!emitManual && <div className="mt-1 text-xs text-zinc-500">{fiscalDates.error ? <><span className="text-red-600">{fiscalDates.error}</span> <button type="button" onClick={fiscalDates.retry} className="underline">Reintentar</button></> : !fiscalDates.ready ? "Consultando fechas habilitadas en ARCA…" : <>{fiscalDates.warning ? <span className="text-amber-600 dark:text-amber-400">{fiscalDates.warning} </span> : <>Primera fecha habilitada: {formatDate(fiscalMinDate)}. </>}{emitData.fecha < fiscalMinDate && <span className="text-red-600">Cambiá la fecha seleccionada.</span>}</>}</div>}
                   </div>
                   <div className="col-span-3">
                     <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Condición de venta</label>
@@ -2628,13 +2644,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                     {cobroLineas.map((linea, idx) => (
                       <div key={idx} className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 space-y-2">
                         <div className="flex items-center gap-2">
-                          <select value={linea.tipo} onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, tipo: e.target.value as any } : l))}
+                          <select value={linea.tipo === "cheque_recibido" ? "echeq" : linea.tipo} onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, tipo: e.target.value as any } : l))}
                             className="flex-1 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-sm dark:text-white">
                             <option value="transferencia">Transferencia</option>
                             <option value="efectivo">Efectivo</option>
                             <option value="tarjeta">Tarjeta</option>
-                            <option value="cheque_recibido">Cheque</option>
-                            <option value="echeq">Echeq</option>
+                            <option value="echeq">Cheque / E-Cheq</option>
                             <option value="retencion_iibb">Ret. IIBB</option>
                             <option value="retencion_ganancias">Ret. Ganancias</option>
                             <option value="retencion_iva">Ret. IVA</option>
@@ -2694,6 +2709,15 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                                   className="w-full rounded border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2 py-1 text-xs font-mono dark:text-white" />
                               </div>
                             )}
+                            <label className="flex items-center gap-2 self-end rounded border border-zinc-200 px-2 py-1 text-xs text-zinc-700 dark:border-zinc-700 dark:text-zinc-200">
+                              <input
+                                type="checkbox"
+                                checked={linea.tipo === "cheque_recibido"}
+                                onChange={(e) => setCobroLineas(prev => prev.map((l, i) => i === idx ? { ...l, tipo: e.target.checked ? "cheque_recibido" : "echeq" } : l))}
+                                className="h-4 w-4 rounded border-zinc-300 text-orange-600 focus:ring-orange-500"
+                              />
+                              Cheque físico
+                            </label>
                           </div>
                         )}
                       </div>
@@ -2909,6 +2933,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                   )}
                 </div>
 
+                {ncEsFce && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300">
+                    Se emitirá una {ncTipo === "NCEA" ? "Nota de Crédito Electrónica MiPyME A — código ARCA 203" : "Nota de Crédito Electrónica MiPyME B — código ARCA 208"}, vinculada a la FCE original. El modo manual está deshabilitado para evitar un comprobante fiscal incorrecto.
+                  </div>
+                )}
+
                 {/* Toggle ARCA / Manual */}
                 <div className="space-y-1.5">
                   <div className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
@@ -2921,15 +2951,38 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                     </button>
                     <button
                       onClick={() => setNcManual(true)}
-                      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${ncManual ? "bg-zinc-700 text-white dark:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
+                      disabled={ncEsFce}
+                      className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${ncManual ? "bg-zinc-700 text-white dark:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
                     >
                       <FileCheck className="h-3.5 w-3.5" /> Manual (sin CAE)
                     </button>
                   </div>
                   {arcaStatus !== null && arcaStatus.certOk === false && (
                     <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                      <AlertTriangle className="h-3 w-3" /> ARCA no configurado — solo modo manual disponible.
+                      <AlertTriangle className="h-3 w-3" /> {ncEsFce
+                        ? "ARCA no está configurado. Una nota MiPyME no puede emitirse manualmente."
+                        : "ARCA no configurado — solo modo manual disponible."}
                     </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha de emisión *</label>
+                  <input
+                    type="date"
+                    value={ncFecha}
+                    min={ncManual ? dateWindowMin : ncFiscalMinDate}
+                    max={todayAR()}
+                    disabled={!ncManual && !ncFiscalDates.ready}
+                    onChange={(e) => setNcFecha(e.target.value)}
+                    className="w-full max-w-xs rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  />
+                  {!ncManual && (
+                    <div className="mt-1 text-xs text-zinc-500">
+                      {ncFiscalDates.error ? <><span className="text-red-600">{ncFiscalDates.error}</span> <button type="button" onClick={ncFiscalDates.retry} className="underline">Reintentar</button></>
+                        : !ncFiscalDates.ready ? "Consultando fechas habilitadas en ARCA…"
+                        : <>{ncFiscalDates.warning ? <span className="text-amber-600 dark:text-amber-400">{ncFiscalDates.warning} </span> : <>Primera fecha habilitada: {formatDate(ncFiscalMinDate)}. </>}{ncFecha < ncFiscalMinDate && <span className="text-red-600">Cambiá la fecha seleccionada.</span>}</>}
+                    </div>
                   )}
                 </div>
 

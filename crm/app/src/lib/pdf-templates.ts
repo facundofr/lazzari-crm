@@ -142,6 +142,16 @@ function baseStyles(color: string) {
     .center { text-align: center; }
     .bold { font-weight: 700; }
 
+    /* Presupuestos: mantener identificadores y números completos en una línea. */
+    .pr-items { table-layout: fixed; }
+    .pr-items th, .pr-items td { padding-left: 6px; padding-right: 6px; }
+    .pr-items thead th { padding-top: 6px; padding-bottom: 6px; }
+    .pr-items tbody td { padding-top: 5px; padding-bottom: 5px; }
+    .pr-items .pr-nowrap { white-space: nowrap; word-break: normal; overflow-wrap: normal; }
+    .pr-items .pr-code { font-size: 10.5px; font-weight: 700; }
+    .pr-document .footer { margin-top: 12px; padding-top: 5px; }
+    .pr-document .footer-legal { margin-top: 4px; }
+
     /* Totals */
     .totals-wrap { display: flex; justify-content: flex-end; margin-top: 14px; }
     .totals-box { width: 260px; }
@@ -323,75 +333,43 @@ export function generatePresupuestoPDF(
     0
   );
 
-  const itemRows = pr.items.map((it, i) => {
-    const ivaPct = Number(it.ivaPorcentaje ?? 21);
-    const precioUnitarioCliente = isB
-      ? Number(it.precioVenta) * (1 + ivaPct / 100)
-      : Number(it.precioVenta);
-    const totalCliente = isB
-      ? (Number(it.total) || Number(it.cantidad) * precioUnitarioCliente)
-      : Number(it.cantidad) * Number(it.precioVenta);
-    return `
-    <tr>
-      <td class="center">${i + 1}</td>
-      <td class="mono">${it.codigo || ""}</td>
-      <td>${it.descripcion}</td>
-      <td class="right">${it.cantidad}</td>
-      <td class="center">${it.unidad || "u"}</td>
-      <td class="right mono">${formatCurrency(precioUnitarioCliente, mon)}</td>
-      <td class="right mono bold">${formatCurrency(totalCliente, mon)}</td>
-    </tr>`;
-  }).join("");
+  type PaginatedItem = { item: PRItem; originalIndex: number };
+  const pages: PaginatedItem[][] = [];
+  let currentPage: PaginatedItem[] = [];
+  let usedRows = 0;
+  const pageCapacity = 12;
+  pr.items.forEach((item, originalIndex) => {
+    const visualRows = Math.max(1, Math.min(3, Math.ceil(String(item.descripcion || "").length / 68)));
+    if (currentPage.length > 0 && usedRows + visualRows > pageCapacity) {
+      pages.push(currentPage);
+      currentPage = [];
+      usedRows = 0;
+    }
+    currentPage.push({ item, originalIndex });
+    usedRows += visualRows;
+  });
+  if (currentPage.length > 0 || pages.length === 0) pages.push(currentPage);
 
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${pr.numero} - ${soc.razonSocial}</title>
-<style>${baseStyles(c)}</style></head><body>
-<div class="page">
-${documentHeader(soc, {
-  title: "Presupuesto",
-  number: pr.numero,
-  date: formatDate(pr.fecha),
-  secondary: pr.vencimiento ? `Vence ${formatDate(pr.vencimiento)}` : "",
-  badge: pr.estadoLabel,
-  marker: `PR ${pr.tipoComprobante || "X"}`,
-  centerMarker: true,
-  legalLegend: true,
-  contactEmail: soc.commercialEmail,
-})}
-
+  const clientStrip = `
 <table class="compact-strip">
   <tr>
     <td style="width:64%">
       <div class="compact-title">Cliente</div>
-      <div class="compact-primary">${pr.clienteNombre}</div>
-      ${(pr.clienteCuit || pr.clienteCondicionIva) ? `<div class="compact-line">${pr.clienteCuit ? `<span class="compact-label">CUIT</span>${pr.clienteCuit}` : ""}${pr.clienteCuit && pr.clienteCondicionIva ? ` &nbsp;|&nbsp; ` : ""}${pr.clienteCondicionIva ? `<span class="compact-label">IVA</span>${pr.clienteCondicionIva}` : ""}</div>` : ""}
-      ${pr.sucursalNombre ? `<div class="compact-line"><span class="compact-label">Sucursal</span>${pr.sucursalNombre}${pr.sucursalDireccion ? ` &mdash; ${pr.sucursalDireccion}` : ""}</div>` : ""}
+      <div class="compact-primary">${textoSeguro(pr.clienteNombre)}</div>
+      ${(pr.clienteCuit || pr.clienteCondicionIva) ? `<div class="compact-line">${pr.clienteCuit ? `<span class="compact-label">CUIT</span>${textoSeguro(pr.clienteCuit)}` : ""}${pr.clienteCuit && pr.clienteCondicionIva ? ` &nbsp;|&nbsp; ` : ""}${pr.clienteCondicionIva ? `<span class="compact-label">IVA</span>${textoSeguro(pr.clienteCondicionIva)}` : ""}</div>` : ""}
+      ${pr.sucursalNombre ? `<div class="compact-line"><span class="compact-label">Sucursal</span>${textoSeguro(pr.sucursalNombre)}${pr.sucursalDireccion ? ` &mdash; ${textoSeguro(pr.sucursalDireccion)}` : ""}</div>` : ""}
     </td>
     <td style="width:36%">
       <div class="compact-title">Datos comerciales</div>
-      ${pr.vendedorNombre ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Vendedor</span><span>${pr.vendedorNombre}</span></div>` : ""}
-      ${pr.condicionPago ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Pago</span><span>${pr.condicionPago}</span></div>` : ""}
+      ${pr.vendedorNombre ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Vendedor</span><span>${textoSeguro(pr.vendedorNombre)}</span></div>` : ""}
+      ${pr.condicionPago ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Pago</span><span>${textoSeguro(pr.condicionPago)}</span></div>` : ""}
       <div class="compact-line compact-line-aligned"><span class="compact-label">Moneda</span><span>${mon === "USD" ? `USD ${pr.cotizacionModalidad === "billetes" ? "billete" : "divisa"}` : "ARS - Pesos argentinos"}</span></div>
       ${mon === "USD" && pr.tipoCambio ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Tipo de cambio</span><span>$ ${Number(pr.tipoCambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
     </td>
   </tr>
-</table>
+</table>`;
 
-<div class="items-title">Detalle de productos / servicios</div>
-<table>
-  <thead><tr>
-    <th class="center" style="width:30px">#</th>
-    <th style="width:72px">Código</th>
-    <th>Descripción</th>
-    <th class="right" style="width:45px">Cant.</th>
-    <th class="center" style="width:40px">Unid.</th>
-    <th class="right" style="width:110px">${isB ? "P. Unit. final" : "P. Unitario"}</th>
-    <th class="right" style="width:115px">${isB ? "Total final" : isManual ? "Total" : "Subtotal"}</th>
-  </tr></thead>
-  <tbody>${itemRows}</tbody>
-</table>
-
-<table style="width:100%;margin-top:14px;border-collapse:collapse">
+  const totals = `<table style="width:100%;margin-top:14px;border-collapse:collapse">
   <tr><td></td><td style="width:260px">
     ${isManual ? `
       <table style="width:100%;border-collapse:collapse">
@@ -411,14 +389,74 @@ ${documentHeader(soc, {
         <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
       </table>`}
   </td></tr>
+</table>`;
+
+  const pageHtml = pages.map((pageItems, pageIndex) => {
+    const itemRows = pageItems.map(({ item: it, originalIndex }) => {
+      const ivaPct = Number(it.ivaPorcentaje ?? 21);
+      const precioUnitarioCliente = isB ? Number(it.precioVenta) * (1 + ivaPct / 100) : Number(it.precioVenta);
+      const totalCliente = isB ? (Number(it.total) || Number(it.cantidad) * precioUnitarioCliente) : Number(it.cantidad) * Number(it.precioVenta);
+      return `<tr>
+        <td class="center pr-nowrap">${originalIndex + 1}</td>
+        <td class="mono pr-code pr-nowrap">${textoSeguro(it.codigo)}</td>
+        <td>${textoSeguro(it.descripcion)}</td>
+        <td class="right pr-nowrap">${it.cantidad}</td>
+        <td class="center pr-nowrap">${it.unidad || "u"}</td>
+        <td class="right mono pr-nowrap">${formatCurrency(precioUnitarioCliente, mon)}</td>
+        <td class="right mono bold pr-nowrap">${formatCurrency(totalCliente, mon)}</td>
+      </tr>`;
+    }).join("");
+    const isLastPage = pageIndex === pages.length - 1;
+    const pageNumber = pageIndex + 1;
+    const firstItemNumber = pageItems.length ? pageItems[0].originalIndex + 1 : 0;
+    const lastItemNumber = pageItems.length ? pageItems[pageItems.length - 1].originalIndex + 1 : 0;
+    const dueDate = pr.vencimiento ? `Vence ${formatDate(pr.vencimiento)}` : "";
+    return `<div class="page pr-document pr-page${isLastPage ? " pr-page-last" : ""}">
+${documentHeader(soc, {
+  title: pageIndex === 0 ? "Presupuesto" : "Presupuesto · Continuación",
+  number: pr.numero,
+  date: formatDate(pr.fecha),
+  secondary: [dueDate, `Página ${pageNumber} de ${pages.length}`].filter(Boolean).join(" · "),
+  badge: pr.estadoLabel,
+  marker: `PR ${pr.tipoComprobante || "X"}`,
+  centerMarker: true,
+  legalLegend: true,
+  contactEmail: soc.commercialEmail,
+})}
+${clientStrip}
+${pageIndex > 0 ? `<div class="pr-continuation-label">Continuación del detalle · ítems ${firstItemNumber} a ${lastItemNumber}</div>` : ""}
+<div class="items-title">Detalle de productos / servicios</div>
+<table class="pr-items">
+  <thead><tr>
+    <th class="center pr-nowrap" style="width:34px">#</th>
+    <th class="pr-nowrap" style="width:96px">Código</th>
+    <th>Descripción</th>
+    <th class="right pr-nowrap" style="width:62px">Cant.</th>
+    <th class="center pr-nowrap" style="width:42px">Unid.</th>
+    <th class="right pr-nowrap" style="width:104px">${isB ? "P. Unit. final" : "P. Unitario"}</th>
+    <th class="right pr-nowrap" style="width:112px">${isB ? "Total final" : isManual ? "Total" : "Subtotal"}</th>
+  </tr></thead>
+  <tbody>${itemRows}</tbody>
 </table>
+${isLastPage ? totals : `<div class="pr-continues">Continúa en la página ${pageNumber + 1} de ${pages.length} →</div>`}
+${isLastPage && pr.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${textoSeguro(pr.observaciones).replace(/\n/g, "<br/>")}</div></div>` : ""}
+<div class="pr-page-footer">
+${documentFooter(soc, `${pr.numero} · Página ${pageNumber} de ${pages.length}`)}
+<div class="footer-legal">${isLastPage ? "Este presupuesto tiene validez hasta la fecha de vencimiento indicada. Los precios pueden estar sujetos a modificaciones." : `Documento continúa en la página ${pageNumber + 1} de ${pages.length}.`}</div>
+</div>
+</div>`;
+  }).join("");
 
-${pr.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${pr.observaciones}</div></div>` : ""}
-
-${documentFooter(soc, pr.numero)}
-<div class="footer-legal">Este presupuesto tiene validez hasta la fecha de vencimiento indicada. Los precios pueden estar sujetos a modificaciones.</div>
-
-</div></body></html>`;
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${pr.numero} - ${soc.razonSocial}</title>
+<style>${baseStyles(c)}
+  .pr-page { min-height:265mm; display:flex; flex-direction:column; }
+  .pr-page + .pr-page { page-break-before:always; }
+  .pr-page-footer { margin-top:auto; }
+  .pr-continuation-label { margin:-4px 0 8px; padding:5px 8px; border-left:3px solid ${c}; background:#fafafa; color:#555; font-size:8px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; }
+  .pr-continues { margin-top:12px; padding:7px 10px; border:1px solid ${c}; color:${c}; text-align:right; font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.7px; }
+  @media print { .pr-page { min-height:265mm; } .pr-page:not(:last-child) { page-break-after:always; } }
+</style></head><body>${pageHtml}</body></html>`;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -434,6 +472,7 @@ interface FacturaItemPDF {
 
 interface FacturaData {
   nota_interna?: string | null;
+  observaciones?: string | null;
   tipo: string;
   punto_venta: number;
   numero: number;
@@ -594,6 +633,8 @@ ${documentHeader(soc, {
   </tr></thead>
   <tbody>${itemRows}</tbody>
 </table>
+
+${f.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${String(f.observaciones).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] || char).replace(/\n/g, "<br/>")}</div></div>` : ""}
 
 <table style="width:100%;margin-top:14px;border-collapse:collapse">
   <tr><td></td><td style="width:260px">
@@ -1003,6 +1044,7 @@ interface OPFacturaVinculada {
   numero: string;
   fecha: string;
   monto: number;
+  detalle?: string;
 }
 
 interface OPData {
@@ -1086,6 +1128,71 @@ function fechaDD(f: string): string {
   } catch { return f; }
 }
 
+export interface ReciboData {
+  numero: string;
+  fecha: string;
+  cliente: string;
+  descripcion: string;
+  medio: string;
+  monto: number;
+  moneda: "ARS" | "USD";
+  conciliado: boolean;
+}
+
+function textoSeguro(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+export function generateReciboPDF(recibo: ReciboData, soc: SociedadPDF): string {
+  const referencia = recibo.numero.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8).toUpperCase() || "CLIENTE";
+  const numero = `REC-${recibo.fecha.replace(/\D/g, "")}-${referencia}`;
+  const monedaLabel = recibo.moneda === "USD" ? "Dólares estadounidenses" : "Pesos argentinos";
+  const estado = recibo.conciliado ? "Conciliado" : "Pendiente de conciliación";
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Recibo ${numero} - ${textoSeguro(soc.razonSocial)}</title>
+<style>${baseStyles(soc.colorPrimario)}</style></head><body>
+<div class="page">
+${documentHeader(soc, {
+  title: "Recibo de cobro",
+  number: numero,
+  date: formatDate(recibo.fecha),
+  badge: estado,
+  legalLegend: true,
+  fiscalDetails: true,
+})}
+<table class="compact-strip">
+  <tr>
+    <td style="width:64%">
+      <div class="compact-title">Recibimos de</div>
+      <div class="compact-primary">${textoSeguro(recibo.cliente)}</div>
+      <div class="compact-line"><span class="compact-label">Concepto</span>${textoSeguro(recibo.descripcion)}</div>
+    </td>
+    <td style="width:36%">
+      <div class="compact-title">Datos del cobro</div>
+      <div class="compact-line"><span class="compact-label">Medio</span>${textoSeguro(recibo.medio)}</div>
+      <div class="compact-line"><span class="compact-label">Moneda</span>${monedaLabel}</div>
+    </td>
+  </tr>
+</table>
+<div class="items-title">Importe recibido</div>
+<table style="table-layout:fixed">
+  <thead><tr><th>Descripción</th><th class="center" style="width:76px">Moneda</th><th class="right" style="width:160px">Importe</th></tr></thead>
+  <tbody><tr><td>${textoSeguro(recibo.descripcion)}</td><td class="center" style="white-space:nowrap;word-break:normal;overflow-wrap:normal">${recibo.moneda}</td><td class="right mono bold" style="white-space:nowrap;word-break:normal;overflow-wrap:normal">${formatCurrency(recibo.monto, recibo.moneda)}</td></tr></tbody>
+</table>
+<div class="obs-block">
+  <div class="obs-title">Importe en letras</div>
+  <div class="obs-text">${montoEnLetras(recibo.monto, recibo.moneda)}</div>
+</div>
+<table style="width:100%;margin-top:60px;border-collapse:collapse"><tr><td style="width:180px;border-top:1px solid #333;text-align:center;padding-top:6px;font-size:10px;color:#666">Firma y aclaración</td><td></td></tr></table>
+${documentFooter(soc, `Recibo ${numero}`)}
+</div></body></html>`;
+}
+
 export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
   const c = soc.colorPrimario;
   const mon = op.moneda;
@@ -1116,7 +1223,7 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
   const fcsHtml = op.facturas_vinculadas.length > 0
     ? `<table>
         <thead><tr><th class="center">Fecha</th><th>Comprobante</th><th class="right">Monto abonado</th></tr></thead>
-        <tbody>${op.facturas_vinculadas.map(fc => `<tr><td class="center">${fechaDD(fc.fecha)}</td><td>${fc.numero}</td><td class="right mono">${formatCurrency(fc.monto, mon)}</td></tr>`).join("")}</tbody>
+        <tbody>${op.facturas_vinculadas.map(fc => `<tr><td class="center">${fechaDD(fc.fecha)}</td><td>${textoSeguro(fc.numero)}${fc.detalle ? `<div style="font-size:9px;color:#666;margin-top:2px">${textoSeguro(fc.detalle)}</div>` : ""}</td><td class="right mono">${formatCurrency(fc.monto, mon)}</td></tr>`).join("")}</tbody>
       </table>`
     : `<p style="color:#444;font-size:11px;margin-top:6px">Sin documentos vinculados</p>`;
 
