@@ -449,6 +449,7 @@ interface FacturaData {
   cae?: string | null;
   cae_vencimiento?: string | null;
   oc_cliente?: string | null;
+  observaciones?: string | null;
   cliente: {
     razon_social?: string;
     cuit?: string;
@@ -601,6 +602,8 @@ ${documentHeader(soc, {
     ${totalsHtml}
   </td></tr>
 </table>
+
+${f.observaciones ? `<div class="obs-block"><div class="obs-title">Comprobante asociado / observaciones</div><div class="obs-text">${f.observaciones.replace(/[&<>"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[char] || char))}</div></div>` : ""}
 
 ${fce ? `<div class="footer-legal"><strong>Son: ${importeEnLetras(Number(f.total),f.moneda)}.</strong><br/>${fce.remitos?.length ? `Remitos asociados: ${fce.remitos.map(n=>String(n).replace(/[&<>"']/g, "")).join(", ")}.<br/>` : ""}Esta Factura de Crédito Electrónica MiPyME se considerará aceptada si, al vencimiento del plazo de ${fce.plazoAceptacion || 21} días corridos desde su recepción en el domicilio fiscal electrónico del comprador o locatario, no se hubiera registrado su rechazo total o aceptación. Si al vencimiento no se hubiera registrado su cancelación, constituirá título ejecutivo en los términos del artículo 523 del Código Procesal Civil y Comercial de la Nación y concordantes. La aceptación expresa o tácita implica plena conformidad para transferir la información del documento desde el Registro de Facturas de Crédito Electrónicas MiPyMEs a terceros si el vendedor opta por su cesión, transmisión o negociación.</div>` : ""}
 ${f.cae ? `
