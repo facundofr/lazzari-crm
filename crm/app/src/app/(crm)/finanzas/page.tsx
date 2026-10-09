@@ -712,6 +712,9 @@ export default function FinanzasPage() {
   // FC pendientes del proveedor para vincular a la OP
   interface OpFCPendiente { id: string; numero: string; tipo_comprobante: string; fecha: string; total: number; subtotal: number; iva: number; percepciones: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number }
   const [opFCPendientes, setOpFCPendientes] = useState<OpFCPendiente[]>([]);
+  // Notas de crédito del proveedor con crédito disponible (se usan en la OP restando del pago)
+  interface OpNCDisponible { id: string; numero: string; tipo_comprobante: string; fecha: string; total: number; subtotal: number; disponible: number; moneda: string; selected: boolean; monto_a_aplicar: number }
+  const [opNCDisponibles, setOpNCDisponibles] = useState<OpNCDisponible[]>([]);
   const [opMedios, setOpMedios] = useState<OpMedioPago[]>([makeOpMedio()]);
   const [opMonthlyBase, setOpMonthlyBase] = useState(0); // Acumulado mensual de bases sin IVA (de OPs previas)
   const [opDatosError, setOpDatosError] = useState("");
@@ -1826,6 +1829,25 @@ export default function FinanzasPage() {
           return { id: fc.id, numero: fc.numero_factura || "S/N", tipo_comprobante: fc.tipo_comprobante || "FC", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: esDirecta, monto_a_pagar: esDirecta ? saldo : 0 };
         }).filter((fc: any) => fc.saldo_pendiente > 0));
 
+        // NC del proveedor con crédito disponible (total − aplicaciones vigentes)
+        try {
+          let qNC = (supabase as any).from("facturas_compra").select("id, numero_factura, tipo_comprobante, fecha, subtotal, total, moneda")
+            .eq("proveedor_id", opForm.proveedor_id).neq("estado", "anulada").ilike("tipo_comprobante", "NC%");
+          if (sociedadActiva?.id) qNC = qNC.eq("sociedad_id", sociedadActiva.id);
+          const { data: ncData } = await qNC;
+          const ncIds = (ncData || []).map((n: any) => n.id);
+          const aplicadoPorNC: Record<string, number> = {};
+          if (ncIds.length) {
+            const { data: ncMovs } = await (supabase as any).from("movimientos").select("nota_credito_compra_id, monto, anulado").in("nota_credito_compra_id", ncIds);
+            (ncMovs || []).forEach((m: any) => { if (!m.anulado) aplicadoPorNC[m.nota_credito_compra_id] = (aplicadoPorNC[m.nota_credito_compra_id] || 0) + Number(m.monto || 0); });
+          }
+          if (!cancelled) setOpNCDisponibles((ncData || []).map((n: any) => ({
+            id: n.id, numero: n.numero_factura || "S/N", tipo_comprobante: n.tipo_comprobante || "NC", fecha: n.fecha,
+            total: Number(n.total || 0), subtotal: Number(n.subtotal || 0), moneda: n.moneda || "ARS",
+            disponible: roundPaymentMoney(Math.max(0, Number(n.total || 0) - (aplicadoPorNC[n.id] || 0))), selected: false, monto_a_aplicar: 0,
+          })).filter((n: OpNCDisponible) => n.disponible > 0.005));
+        } catch { if (!cancelled) setOpNCDisponibles([]); }
+
         // Acumulado mensual de PAGOS (OPs) a este proveedor — Art. 26 RG 830
         // Se acumulan las bases sin IVA de OPs previas + retenciones ya practicadas
         // El acumulado de RG 830 corresponde al mes de la fecha de la OP.
@@ -1867,7 +1889,27 @@ export default function FinanzasPage() {
 
   // 2. Base sin IVA de esta OP (Art. 23 RG 830: IVA se excluye de la base de retención)
   const opMontoBrutoFC = sumPaymentMoney(opFCPendientes.filter(f => f.selected).map(f => f.monto_a_pagar));
-  const opMontoBruto = roundPaymentMoney(opForm.usar_monto_manual && opForm.monto_manual > 0 ? opForm.monto_manual : opMontoBrutoFC);
+  // NC aplicadas en esta OP (no en monto manual ni en pago parcial directo). Nunca más que las facturas elegidas.
+  const opNCUsables = opForm.usar_monto_manual || pagoParcialDirecto ? [] : opNCDisponibles.filter(n => n.selected && n.moneda === opForm.moneda && n.monto_a_aplicar > 0);
+  const opNCAplicado = Math.min(opMontoBrutoFC, sumPaymentMoney(opNCUsables.map(n => n.monto_a_aplicar)));
+  // Reparto de las NC entre las facturas elegidas, en orden: [{nc_id, factura_compra_id, monto}]
+  const opNCAsignaciones = (() => {
+    const out: { nc_id: string; factura_compra_id: string; monto: number }[] = [];
+    const restoFC = opFCPendientes.filter(f => f.selected).map(f => ({ id: f.id, resto: roundPaymentMoney(f.monto_a_pagar) }));
+    let tope = opNCAplicado;
+    for (const nc of opNCUsables) {
+      let restoNC = Math.min(roundPaymentMoney(nc.monto_a_aplicar), tope);
+      for (const fc of restoFC) {
+        if (restoNC <= 0.004) break;
+        const usar = roundPaymentMoney(Math.min(restoNC, fc.resto));
+        if (usar <= 0.004) continue;
+        out.push({ nc_id: nc.id, factura_compra_id: fc.id, monto: usar });
+        fc.resto = roundPaymentMoney(fc.resto - usar); restoNC = roundPaymentMoney(restoNC - usar); tope = roundPaymentMoney(tope - usar);
+      }
+    }
+    return out;
+  })();
+  const opMontoBruto = roundPaymentMoney(opForm.usar_monto_manual && opForm.monto_manual > 0 ? opForm.monto_manual : opMontoBrutoFC - opNCAplicado);
   const opProveedor = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
   const opDiasPactados = Math.max(0, Number(opProveedor?.dias_cuenta_corriente) || 0);
   const opFechaPactada = calcularFechaPactada(opFCPendientes.filter(f => f.selected).map(f => f.fecha), opDiasPactados);
@@ -1879,12 +1921,22 @@ export default function FinanzasPage() {
       const ivaPct = opForm.iva_manual_pct ?? 21;
       return roundPaymentMoney(opForm.monto_manual / (1 + ivaPct / 100));
     }
-    return roundPaymentMoney(opFCPendientes.filter(f => f.selected).reduce((s, f) => {
+    // RG 830: base = neto gravado de lo que se cancela (sin IVA y sin percepciones) − neto de las NC aplicadas.
+    // Si el comprobante no discrimina IVA (FC/NC C), subtotal = total y se toma el total.
+    // Monotributista / exento o comprobante C: no hay IVA que descontar, la base es el total.
+    const sinIVA = (tipo: string) => /\bC\b|\sC$/i.test(String(tipo || "")) || /monotrib|exento/i.test(String(opProvCondicion || ""));
+    const baseFC = opFCPendientes.filter(f => f.selected).reduce((s, f) => {
       if (f.total <= 0) return s;
-      // Proporción sin IVA: (subtotal + percepciones) / total × monto_a_pagar
-      const ratioSinIVA = (f.subtotal + f.percepciones) / f.total;
-      return s + roundPaymentMoney(f.monto_a_pagar * ratioSinIVA);
-    }, 0));
+      const ratioNeto = sinIVA(f.tipo_comprobante) ? 1 : f.subtotal > 0 ? Math.min(1, f.subtotal / f.total) : 1;
+      return s + roundPaymentMoney(f.monto_a_pagar * ratioNeto);
+    }, 0);
+    const baseNC = opNCAsignaciones.reduce((s, a) => {
+      const nc = opNCDisponibles.find(n => n.id === a.nc_id);
+      if (!nc || nc.total <= 0) return s;
+      const ratioNeto = sinIVA(nc.tipo_comprobante) ? 1 : nc.subtotal > 0 ? Math.min(1, nc.subtotal / nc.total) : 1;
+      return s + roundPaymentMoney(a.monto * ratioNeto);
+    }, 0);
+    return roundPaymentMoney(Math.max(0, baseFC - baseNC));
   })();
 
   // 3. Auto-calcular retención ganancias según RG 830
@@ -2139,6 +2191,24 @@ export default function FinanzasPage() {
       setOpError("Revisá el importe a pagar de cada factura: debe ser positivo y no superar su saldo."); return;
     }
     if (selectedFCs.length === 0 && !opForm.usar_monto_manual) { setOpError("Selecciona al menos una factura o ingresa un monto manual"); return; }
+    if (opNCAsignaciones.length > 0 && opMontoBruto <= 0.005) {
+      // Las NC cubren todo lo elegido: se aplican sin pago en dinero (no se genera OP).
+      if (!confirm(`Las notas de crédito cubren el total elegido (${formatCurrency(opNCAplicado, opForm.moneda)}). Se aplican a las facturas sin generar pago. ¿Continuar?`)) return;
+      setOpSaving(true); setOpError("");
+      try {
+        if (!opRequestKeyRef.current) opRequestKeyRef.current = crypto.randomUUID();
+        const { error } = await (supabase as any).rpc("registrar_pago_proveedor_con_nc", {
+          p_sociedad_id: sociedadActiva.id, p_request_key: opRequestKeyRef.current, p_modo: "op", p_proveedor_id: opForm.proveedor_id,
+          p_fecha: opForm.fecha, p_moneda: opForm.moneda, p_facturas: [], p_medios: [], p_monto_bruto: 0, p_base_retencion: 0,
+          p_retencion_pct: 0, p_retencion_monto: 0, p_notas: opForm.notas || "", p_sobre_verde: false, p_notas_credito: opNCAsignaciones,
+        });
+        if (error) throw new Error(error.message);
+        setOpModalOpen(false); opRequestKeyRef.current = ""; await fetchData();
+        alert("Notas de crédito aplicadas a las facturas.");
+      } catch (e: any) { setOpError(e?.message || "No se pudieron aplicar las notas de crédito"); }
+      finally { setOpSaving(false); }
+      return;
+    }
     if (opMontoBruto <= 0) { setOpError("El monto a pagar debe ser mayor a 0"); return; }
     // Partial payments are selected per invoice BEFORE calculating retention.
     // Never prorate the final retention: monthly thresholds are not linear.
@@ -2186,8 +2256,14 @@ export default function FinanzasPage() {
         beneficiario_cuit: proveedorCuitPago || null,
         beneficiario_nombre: proveedorPago?.razon_social || null,
       }));
-      const facturasPayload = selectedFCs.map(fc => ({ id: fc.id, monto: roundPaymentMoney(fc.monto_a_pagar) }));
-      const { data: opData, error } = await (supabase as any).rpc("registrar_pago_proveedor_seguro", {
+      // Con NC: cada factura se paga en dinero solo por lo que no cubre la NC.
+      const facturasPayload = selectedFCs.map(fc => ({
+        id: fc.id,
+        monto: roundPaymentMoney(fc.monto_a_pagar - opNCAsignaciones.filter(a => a.factura_compra_id === fc.id).reduce((s, a) => s + a.monto, 0)),
+      })).filter(f => f.monto > 0.004);
+      const conNC = opNCAsignaciones.length > 0;
+      const { data: opData, error } = await (supabase as any).rpc(conNC ? "registrar_pago_proveedor_con_nc" : "registrar_pago_proveedor_seguro", {
+        ...(conNC ? { p_notas_credito: opNCAsignaciones } : {}),
         p_sociedad_id: sociedadActiva.id,
         p_request_key: opRequestKeyRef.current,
         p_modo: "op",
@@ -5818,7 +5894,14 @@ export default function FinanzasPage() {
                     <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
                       <table className="w-full text-sm">
                         <thead><tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
-                          <th className="w-8 p-2"></th>
+                          <th className="w-8 p-2 text-center">
+                            {!pagoParcialDirecto && (
+                              <input type="checkbox" title="Seleccionar todas"
+                                checked={opFCPendientes.length > 0 && opFCPendientes.every(f => f.selected)}
+                                onChange={(e) => { const todas = e.target.checked; setOpFCPendientes(prev => prev.map(f => ({ ...f, selected: todas, monto_a_pagar: todas ? f.saldo_pendiente : 0 }))); }}
+                                className="rounded border-zinc-300 text-orange-500 focus:ring-orange-500" />
+                            )}
+                          </th>
                           <th className="text-left p-2">N° Factura</th>
                           <th className="text-left p-2">Fecha</th>
                           <th className="text-right p-2">Total</th>
@@ -5856,10 +5939,44 @@ export default function FinanzasPage() {
                       </table>
                     </div>
                   )}
-                  {opMontoBruto > 0 && (
-                    <div className="flex justify-between items-center mt-2 text-sm">
-                      <span className="text-zinc-500">{opFCPendientes.filter(f => f.selected).length} documento(s) seleccionado(s)</span>
-                      <span className="font-mono font-bold text-orange-600">{formatCurrency(opMontoBruto, opForm.moneda)}</span>
+                  {!opForm.usar_monto_manual && !pagoParcialDirecto && opNCDisponibles.some(n => n.moneda === opForm.moneda) && (
+                    <div className="mt-3 border border-emerald-200 dark:border-emerald-800 rounded-lg overflow-hidden">
+                      <div className="bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300">Notas de crédito disponibles del proveedor (restan del pago)</div>
+                      <table className="w-full text-sm">
+                        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                          {opNCDisponibles.filter(n => n.moneda === opForm.moneda).map(nc => (
+                            <tr key={nc.id} className={nc.selected ? "bg-emerald-50/60 dark:bg-emerald-900/10" : ""}>
+                              <td className="p-2 w-8 text-center">
+                                <input type="checkbox" checked={nc.selected}
+                                  onChange={() => setOpNCDisponibles(prev => prev.map(n => n.id === nc.id ? { ...n, selected: !n.selected, monto_a_aplicar: !n.selected ? n.disponible : 0 } : n))}
+                                  className="rounded border-zinc-300 text-emerald-600 focus:ring-emerald-500" />
+                              </td>
+                              <td className="p-2 font-mono text-xs dark:text-white">{nc.tipo_comprobante} {nc.numero}</td>
+                              <td className="p-2 text-xs text-zinc-500">{formatDate(nc.fecha)}</td>
+                              <td className="p-2 text-right font-mono text-xs text-zinc-500">disp. {formatCurrency(nc.disponible, nc.moneda as "ARS"|"USD")}</td>
+                              <td className="p-2 text-right">
+                                {nc.selected ? (
+                                  <input type="number" value={nc.monto_a_aplicar || ""}
+                                    onChange={(e) => { const val = Math.max(0, Math.min(Number(e.target.value), nc.disponible)); setOpNCDisponibles(prev => prev.map(n => n.id === nc.id ? { ...n, monto_a_aplicar: val } : n)); }}
+                                    className="w-28 text-right rounded border border-emerald-200 px-2 py-1 text-xs font-mono text-emerald-700 dark:border-emerald-800 dark:bg-zinc-800" />
+                                ) : <span className="text-xs text-zinc-300">—</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {(opMontoBruto > 0 || opNCAplicado > 0) && (
+                    <div className="mt-2 space-y-0.5 text-sm">
+                      {opNCAplicado > 0 && <>
+                        <div className="flex justify-between text-zinc-500"><span>Facturas</span><span className="font-mono">{formatCurrency(opMontoBrutoFC, opForm.moneda)}</span></div>
+                        <div className="flex justify-between text-emerald-700 dark:text-emerald-400"><span>− Notas de crédito</span><span className="font-mono">−{formatCurrency(opNCAplicado, opForm.moneda)}</span></div>
+                      </>}
+                      <div className="flex justify-between items-center">
+                        <span className="text-zinc-500">{opFCPendientes.filter(f => f.selected).length} documento(s) seleccionado(s){opNCAplicado > 0 ? " · a pagar en dinero" : ""}</span>
+                        <span className="font-mono font-bold text-orange-600">{formatCurrency(opMontoBruto, opForm.moneda)}</span>
+                      </div>
                     </div>
                   )}
                 </div>

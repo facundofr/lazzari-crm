@@ -527,6 +527,12 @@ export default function CargarFacturaOC({
       }
 
       const d = json.data;
+      // Si la IA no reconoció la NC/ND pero el archivo se llama "N_C A-…" / "NC B …" / "N_D A…", se usa el nombre.
+      const nombre = f.name.toUpperCase();
+      const porNombre = nombre.match(/^N[\s_\-/.]?([CD])[\s_\-]+([ABC])\b/);
+      if (porNombre && !/CR[EÉ]DITO|D[EÉ]BITO|^N[CD]/i.test(String(d?.tipo_comprobante || ""))) {
+        d.tipo_comprobante = `${porNombre[1] === "C" ? "NOTA DE CREDITO" : "NOTA DE DEBITO"} ${porNombre[2]}`;
+      }
 
       await applyImportedData(d);
       setParsed(true);
@@ -545,12 +551,19 @@ export default function CargarFacturaOC({
       // Auto-fill form
       if (isNotaPedido) {
         setTipoComprobante("FC Manual");
+      } else if (d.tipo_comprobante && /CR[EÉ]DITO|^N\.?\s?\/?\s?C\b|^NC/.test(rawTipo)) {
+        // Nota de crédito: "NOTA DE CREDITO A", "NC A", "N/C B", "NOTA DE CRÉDITO ELECTRÓNICA MIPYME (FCE) A"…
+        const letra = /\bB\b|\sB$/.test(rawTipo) ? "B" : /\bC\b|\sC$/.test(rawTipo) ? "C" : "A";
+        setTipoComprobante(/FCE|MIPYME/.test(rawTipo) && letra !== "C" ? `NC FCE ${letra}` : `NC ${letra}`);
+      } else if (d.tipo_comprobante && /D[EÉ]BITO|^N\.?\s?\/?\s?D\b|^ND/.test(rawTipo)) {
+        const letra = /\bB\b|\sB$/.test(rawTipo) ? "B" : /\bC\b|\sC$/.test(rawTipo) ? "C" : "A";
+        setTipoComprobante(`ND ${letra}`);
       } else if (d.tipo_comprobante) {
         const tc = rawTipo;
         if (tc === "A" || tc === "FACTURA A") setTipoComprobante("FC A");
         else if (tc === "B" || tc === "FACTURA B") setTipoComprobante("FC B");
         else if (tc === "C" || tc === "FACTURA C") setTipoComprobante("FC C");
-        else if (["FC A", "FC B", "FC C", "FC Manual", "ND A", "ND B", "NC A", "NC B", "Recibo"].includes(d.tipo_comprobante)) setTipoComprobante(d.tipo_comprobante);
+        else if (["FC A", "FC B", "FC C", "FC Manual", "ND A", "ND B", "ND C", "NC A", "NC B", "NC C", "NC FCE A", "NC FCE B", "Recibo"].includes(d.tipo_comprobante)) setTipoComprobante(d.tipo_comprobante);
       }
       if (d.numero_factura) setNumeroFactura(d.numero_factura);
       if (d.fecha) setFecha(d.fecha);
@@ -661,10 +674,12 @@ export default function CargarFacturaOC({
     if (!proveedorId) { setError("Seleccioná un proveedor"); return; }
     if (!numeroFactura.trim()) { setError("Ingresá el número de factura"); return; }
     if (subtotal <= 0) { setError("El subtotal debe ser mayor a 0"); return; }
-    if (!isCreditNote && tipoFC === "mercaderia" && selectedOCIds.size === 0 && ocsFiltered.length > 0) { setError("Seleccioná al menos una orden de compra"); return; }
-    if (isCreditNote && !facturaOrigenId) { setError("Seleccioná la factura origen de la nota de crédito"); return; }
-    if (isCreditNote && (!Number.isFinite(creditoAplicado) || creditoAplicado <= 0 || !selectedCreditOrigin || creditoAplicado > selectedCreditOrigin.saldo_acreditable + 0.005 || creditoAplicado > total + 0.005)) {
-      setError("El monto aplicado debe ser positivo y no superar el total de la nota ni el saldo acreditable de la factura origen"); return;
+    // La OC es opcional: si no se eligió ninguna, se avisa pero se puede guardar igual.
+    if (!isCreditNote && tipoFC === "mercaderia" && selectedOCIds.size === 0 && ocsFiltered.length > 0
+      && !window.confirm("No elegiste ninguna orden de compra. ¿Guardar la factura igual, sin OC?")) return;
+    // La NC puede quedar sin factura: el total queda como crédito disponible para usar en una Orden de Pago.
+    if (isCreditNote && facturaOrigenId && (!Number.isFinite(creditoAplicado) || creditoAplicado < 0 || !selectedCreditOrigin || creditoAplicado > selectedCreditOrigin.saldo_acreditable + 0.005 || creditoAplicado > total + 0.005)) {
+      setError("El monto aplicado no puede superar el total de la nota ni el saldo de la factura elegida"); return;
     }
     const isMercaderia = tipoFC === "mercaderia";
 
@@ -795,20 +810,19 @@ export default function CargarFacturaOC({
       if (isCreditNote) {
         if (!creditRequestKeyRef.current) creditRequestKeyRef.current = crypto.randomUUID();
         const { data: creditResult, error: creditError } = await (supabase as any).rpc(
-          "registrar_nota_credito_compra",
+          "registrar_nota_credito_compra_v2",
           {
             p_sociedad_id: sociedadId,
             p_request_key: creditRequestKeyRef.current,
-            p_factura_origen_id: facturaOrigenId,
-            p_credito_aplicado: roundMoney(creditoAplicado),
             p_factura: insertData,
             p_items: invoiceItems,
+            p_aplicaciones: facturaOrigenId && creditoAplicado > 0
+              ? [{ factura_compra_id: facturaOrigenId, monto: roundMoney(creditoAplicado) }]
+              : [],
           }
         );
-        if (creditError) throw new Error(`No se pudo aplicar la nota de crédito: ${creditError.message}`);
-        if (!creditResult?.factura_compra_id || creditResult?.factura_origen_id !== facturaOrigenId) {
-          throw new Error("La base no confirmó la relación con la factura origen. No se guardó nada.");
-        }
+        if (creditError) throw new Error(`No se pudo registrar la nota de crédito: ${creditError.message}`);
+        if (!creditResult?.factura_compra_id) throw new Error("La base no confirmó la nota de crédito. No se guardó nada.");
         fcData = { id: creditResult.factura_compra_id };
       } else if (generateExtrasOC && reconciliation?.extras.length) {
         // La factura, sus renglones, los vínculos y la OC de extras forman una
@@ -969,7 +983,7 @@ export default function CargarFacturaOC({
         }
       }
 
-      alert(isCreditNote ? "Nota de crédito registrada y aplicada a la factura origen" : pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");
+      alert(isCreditNote ? (facturaOrigenId ? "Nota de crédito registrada y aplicada a la factura elegida" : "Nota de crédito registrada: queda como crédito disponible del proveedor") : pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");
       onSuccess();
     } catch (err: any) {
       setError(savedFacturaId ? `La factura ${numeroFactura} quedó registrada, pero falta completar una operación: ${err.message || "Error"}. Abrila desde Facturas de compra para revisarla; no vuelvas a cargarla.` : err.message || "Error al guardar");
@@ -1123,8 +1137,12 @@ export default function CargarFacturaOC({
                   <option value="FC Manual">FC Manual</option>
                   <option value="ND A">ND A</option>
                   <option value="ND B">ND B</option>
+                  <option value="ND C">ND C</option>
                   <option value="NC A">NC A</option>
                   <option value="NC B">NC B</option>
+                  <option value="NC C">NC C</option>
+                  <option value="NC FCE A">NC FCE A (MiPyME)</option>
+                  <option value="NC FCE B">NC FCE B (MiPyME)</option>
                   <option value="Recibo">Recibo</option>
                   <option value="Otro">Otro</option>
                 </select>
@@ -1211,7 +1229,7 @@ export default function CargarFacturaOC({
               <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50/70 p-4 dark:border-blue-900 dark:bg-blue-950/20">
                 <div className="mb-3">
                   <p className="text-sm font-semibold text-blue-900 dark:text-blue-200">Aplicación de la nota de crédito</p>
-                  <p className="text-xs text-blue-700 dark:text-blue-300">Elegí la factura original. Solo se muestran comprobantes del mismo proveedor, sociedad y moneda con saldo pendiente.</p>
+                  <p className="text-xs text-blue-700 dark:text-blue-300">Podés aplicarla a una factura con saldo, o dejarla sin factura: el total (o lo que no apliques) queda como <b>crédito disponible</b> del proveedor y lo usás al hacer la Orden de Pago.</p>
                 </div>
                 {creditOriginsError && <p className="mb-3 text-xs text-red-600">{creditOriginsError}</p>}
                 <div className="grid gap-3 md:grid-cols-2">
@@ -1228,7 +1246,7 @@ export default function CargarFacturaOC({
                       }}
                       className="w-full rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm dark:border-blue-800 dark:bg-zinc-900"
                     >
-                      <option value="">{creditOriginsLoading ? "Cargando facturas..." : "Seleccionar factura"}</option>
+                      <option value="">{creditOriginsLoading ? "Cargando facturas..." : "Sin factura — queda como crédito disponible"}</option>
                       {creditOrigins.map((invoice) => (
                         <option key={invoice.id} value={invoice.id}>
                           {invoice.tipo_comprobante} {invoice.numero_factura} · saldo {formatCurrency(invoice.saldo_acreditable, invoice.moneda)}
@@ -1251,7 +1269,8 @@ export default function CargarFacturaOC({
                       className="w-full rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-mono dark:border-blue-800 dark:bg-zinc-900"
                     />
                     {selectedCreditOrigin && (
-                      <p className="mt-1 text-xs text-zinc-500">Máximo aplicable: {formatCurrency(Math.min(total, selectedCreditOrigin.saldo_acreditable), moneda)}</p>
+                      <p className="mt-1 text-xs text-zinc-500">Máximo aplicable: {formatCurrency(Math.min(total, selectedCreditOrigin.saldo_acreditable), moneda)}
+                        {total - creditoAplicado > 0.005 ? ` · Quedan ${formatCurrency(total - creditoAplicado, moneda)} como crédito disponible` : ""}</p>
                     )}
                   </div>
                 </div>
