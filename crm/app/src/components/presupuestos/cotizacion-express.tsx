@@ -315,7 +315,7 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
                     <label className="text-[11px] text-zinc-500">{titulo}</label>
                     {prefs[k].length > 0 && <label className="flex items-center gap-1 text-[11px] text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={prefs[kSolo]} onChange={e => setPrefs(p => ({ ...p, [kSolo]: e.target.checked }))} /> {txtSolo}</label>}
                   </div>
-                  <Autocompletar
+                  <Autocompletar mostrarSinEscribir
                     opciones={opciones.filter(o => !prefs[k].includes(o)).map(o => ({ valor: o, texto: o }))}
                     placeholder={`Escribí para buscar ${titulo.toLowerCase()}…`}
                     onElegir={v => setPrefs(p => ({ ...p, [k]: p[k].includes(v) ? p[k] : [...p[k], v] }))}
@@ -364,7 +364,7 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
                       {l.nota && <p className="mt-0.5 text-[10px] text-amber-700 dark:text-amber-400">{l.nota}</p>}
                       {c && <div className={`mt-1 flex items-center gap-1 text-[10px] ${proveedorId(c.proveedor) ? "text-zinc-500" : "text-red-600"}`}>
                         <span className="whitespace-nowrap">{proveedorId(c.proveedor) ? `“${c.proveedor}” de la lista =` : `⚠ “${c.proveedor}” no está vinculado →`}</span>
-                        <Autocompletar chico
+                        <Autocompletar chico mostrarSinEscribir
                           opciones={[...(provIds.length ? provIds : (proveedoresCRM || []))].sort((a, b) => a.razon_social.localeCompare(b.razon_social, "es")).map(p => ({ valor: p.id, texto: p.razon_social }))}
                           placeholder={proveedorId(c.proveedor) ? ((provIds.length ? provIds : (proveedoresCRM || [])).find(p => p.id === proveedorId(c.proveedor))?.razon_social || "Cambiar…") : "Escribí el proveedor del CRM…"}
                           onElegir={v => vincular(c.proveedor, v)}

@@ -31,7 +31,7 @@ interface Props {
   proveedorInicial?: string;
 }
 
-interface Proveedor { id: string; razon_social: string; nombre_fantasia?: string | null; talles_especiales?: string[] | null; tolerancia_precio_pct?: number | null }
+interface Proveedor { id: string; razon_social: string; cuit?: string | null; nombre_fantasia?: string | null; talles_especiales?: string[] | null; tolerancia_precio_pct?: number | null }
 interface OcAbierta { id: string; numero: string; fecha: string; total: number; moneda: string; saldo_cerrado: boolean }
 type Confianza = "alta" | "media" | "baja" | "ninguna" | "manual" | "guardado";
 interface Renglon {
@@ -89,9 +89,9 @@ export default function LimpiezaOC({ sociedadId, onClose, proveedorInicial }: Pr
   useEffect(() => {
     if (!sociedadId) return;
     (async () => {
-      let { data: provs, error: e } = await db.from("proveedores").select("id, razon_social, nombre_fantasia, talles_especiales, tolerancia_precio_pct")
+      let { data: provs, error: e } = await db.from("proveedores").select("id, razon_social, cuit, nombre_fantasia, talles_especiales, tolerancia_precio_pct")
         .eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social");
-      if (e) ({ data: provs } = await db.from("proveedores").select("id, razon_social").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"));
+      if (e) ({ data: provs } = await db.from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"));
       setProveedores(provs || []);
       const { data: abiertas } = await db.from("ordenes_compra").select("id, proveedor_id, saldo_cerrado")
         .eq("sociedad_id", sociedadId).neq("estado", "cancelada");
@@ -322,7 +322,7 @@ export default function LimpiezaOC({ sociedadId, onClose, proveedorInicial }: Pr
   });
 
   const opcionesProv = proveedores
-    .map(p => ({ valor: p.id, texto: `${p.razon_social}${pendientesPorProv[p.id] ? ` · ${pendientesPorProv[p.id]} renglones sin ordenar` : ""}` }))
+    .map(p => ({ valor: p.id, texto: `${p.razon_social}${pendientesPorProv[p.id] ? ` · ${pendientesPorProv[p.id]} renglones sin ordenar` : ""}`, detalle: p.cuit || undefined }))
     .sort((a, b) => (pendientesPorProv[b.valor] || 0) - (pendientesPorProv[a.valor] || 0));
 
   if (typeof document === "undefined") return null;
@@ -340,7 +340,7 @@ export default function LimpiezaOC({ sociedadId, onClose, proveedorInicial }: Pr
         <div className="space-y-3 border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
           <div className="flex flex-wrap items-center gap-3">
             <div className="w-96 max-w-full">
-              <Autocompletar opciones={opcionesProv} placeholder={proveedor ? proveedor.razon_social : "Escribí el proveedor…"} onElegir={setProveedorId}
+              <Autocompletar mostrarSinEscribir opciones={opcionesProv} placeholder={proveedor ? proveedor.razon_social : "Escribí el proveedor…"} onElegir={setProveedorId}
                 className={`w-full ${proveedor ? "border-orange-300 placeholder:text-zinc-800 dark:placeholder:text-zinc-200" : "border-zinc-300"} dark:border-zinc-700`} />
             </div>
             {proveedor && <>

@@ -14,6 +14,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X, Loader2, Sparkles, Check, AlertTriangle, Upload, Trash2, RotateCcw, Pencil, Maximize2, Minimize2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { aprenderNombreFantasiaDeFactura } from "@/lib/nombre-fantasia";
+import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { parseDecimalInput } from "@/lib/decimal-input";
 import {
@@ -64,6 +66,9 @@ interface FacturaCarga {
   total: number;
   items: ItemFactura[];
   cuit: string;
+  /** Emisor leído por la IA (para aprender el nombre de fantasía del proveedor). */
+  razonSocialLeida?: string;
+  nombreFantasiaLeido?: string;
 }
 
 interface OcLinea extends OcLineInput { moneda: string; ocEstado: string; descripcionOc?: string }
@@ -101,6 +106,8 @@ function facturaDesdeDatos(file: File, d: any): FacturaCarga {
     percepciones: Number(d.percepciones) || 0,
     total: Number(d.total) || 0,
     cuit: String(d.proveedor?.cuit || "").replace(/\D/g, ""),
+    razonSocialLeida: String(d.proveedor?.razon_social || "").trim(),
+    nombreFantasiaLeido: String(d.proveedor?.nombre_fantasia || "").trim(),
     items: (Array.isArray(d.items) ? d.items : []).map((it: any) => ({
       codigo: String(it.codigo || ""),
       descripcion: String(it.descripcion || ""),
@@ -114,6 +121,7 @@ function facturaDesdeDatos(file: File, d: any): FacturaCarga {
 }
 
 export default function ConciliacionCompras({ sociedadId, profileId, onClose, onSuccess, inicial }: Props) {
+  const { toast } = useToast();
   const [fullscreen, setFullscreen] = useState(true);
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
   const [proveedorId, setProveedorId] = useState("");
@@ -461,6 +469,10 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           }
         }
       }
+      // Nombre de fantasía leído en la factura: si el proveedor no tiene, se guarda; si tiene otro, solo se avisa.
+      const cuitProv = (proveedores.find(p => p.id === proveedorId)?.cuit || "").replace(/\D/g, "");
+      const leida = cuitProv ? facturas.find(f => f.nombreFantasiaLeido && (f.cuit || "").replace(/\D/g, "") === cuitProv) : undefined;
+      if (leida) await aprenderNombreFantasiaDeFactura(db, { proveedorId, sociedadId, deFactura: leida.nombreFantasiaLeido, razonSocialFactura: leida.razonSocialLeida, cuitFactura: leida.cuit }, toast);
       alert(borrador
         ? `Conciliación parcial guardada (${guardadas.join(", ")}). No se envía a pagos; la podés retomar desde «Conciliar facturas».`
         : `Listo: ${guardadas.join(", ")} conciliada(s) y enviada(s) a aprobación.`

@@ -16,7 +16,7 @@ import {
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
   PackageCheck, MessageSquare, Edit3, Plus, Minus,
   Maximize2, Upload, Trash2, RefreshCw,
-  Search, CreditCard, Lock, Sparkles,
+  Search, CreditCard, Sparkles,
 } from "lucide-react";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import ConciliacionCompras from "@/components/conciliacion-compras";
@@ -116,8 +116,8 @@ type FiltroOC = "todas" | "por_recibir" | "por_facturar" | "por_pagar" | "comple
 
 const ocPagadaConTarjeta = (oc: OCRow) => oc.estado_pago === "pagada" && oc.medio_pago === "tarjeta";
 
-// Una factura que ya fue aprobada por Finanzas no permite modificar la OC
-// vinculada: conserva la trazabilidad entre el comprobante aprobado y el costo.
+// OC con factura cargada (o sin poder verificarlo): se puede editar igual,
+// pero se avisa que la factura y los pagos no cambian.
 const ocTieneFacturaAprobada = (oc: OCRow) =>
   oc.facturas_vinculadas_estado === "desconocido" || (oc.facturas_vinculadas || []).some((factura) => ["pendiente", "recibida", "pagada"].includes(factura.estado));
 
@@ -962,13 +962,11 @@ export default function OrdenesCompraPage() {
 
   const startEditMode = () => {
     if (!detailOC) return;
+    // Nunca se bloquea: si tiene factura (o no se pudo verificar), se avisa y se deja editar.
     if (detailOC.facturas_vinculadas_estado === "desconocido") {
-      alert("No se puede editar esta OC hasta verificar sus facturas vinculadas. Reintentá cargar la lista.");
-      return;
-    }
-    if (ocTieneFacturaAprobada(detailOC)) {
-      alert("Esta OC no se puede editar porque tiene una factura aprobada por Finanzas. Anulá la factura o corregila desde Finanzas antes de modificarla.");
-      return;
+      if (!confirm("No se pudo verificar si esta OC tiene facturas vinculadas.\n\n¿Querés editarla igual?")) return;
+    } else if (ocTieneFacturaAprobada(detailOC)) {
+      if (!confirm("Ojo: esta OC ya tiene una factura de compra cargada.\nLos cambios en la OC no modifican la factura ni los pagos: si hace falta, corregilos aparte en Finanzas.\n\n¿Querés editarla igual?")) return;
     }
     setEditItems(detailItems.map((it) => ({ ...it })));
     setEditOC({
@@ -984,9 +982,12 @@ export default function OrdenesCompraPage() {
 
   const handleSaveEdit = async () => {
     if (!detailOC) return;
-    if (detailOC.facturas_vinculadas_estado === "desconocido") { alert("No se puede guardar: no se pudo verificar el vínculo de facturas. Reintentá cargar la lista."); return; }
     if (!sociedadActiva?.id) { alert("Seleccioná una sociedad antes de guardar la OC"); return; }
     if (detailOC.sociedad_id && detailOC.sociedad_id !== sociedadActiva.id) { alert("La OC no pertenece a la sociedad activa"); return; }
+    // Aviso (nunca bloqueo): cambiar el proveedor de una OC que ya tiene factura de otro proveedor.
+    if (ocTieneFacturaAprobada(detailOC) && editOC.proveedor_id !== (detailOC.proveedor_id || "")) {
+      if (!confirm("Ojo: cambiás el proveedor de una OC que ya tiene factura de otro proveedor. ¿Seguro?")) return;
+    }
     setSavingEdit(true);
     try {
       const compraSinIva = ocCompraSinIva(detailOC);
@@ -994,7 +995,8 @@ export default function OrdenesCompraPage() {
       const editIds = new Set(editItems.map(it => it.id));
       const deletedItems = detailItems.filter(it => !editIds.has(it.id));
       for (const del of deletedItems) {
-        await supabase.from("orden_compra_items").delete().eq("id", del.id);
+        const { error: delErr } = await supabase.from("orden_compra_items").delete().eq("id", del.id);
+        if (delErr) throw new Error(`Error al borrar el renglón ${del.codigo || del.descripcion || ""}: ${delErr.message}`);
       }
 
       // 2. Insert new items (id starts with "new_")
@@ -2969,17 +2971,18 @@ export default function OrdenesCompraPage() {
                     </>
                   ) : (
                     <>
-                      {canManageCompras && !ocTieneFacturaAprobada(detailOC) && (
+                      {canManageCompras && (ocTieneFacturaAprobada(detailOC) ? (
+                        <button onClick={startEditMode}
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-400 dark:hover:bg-amber-900/20 transition-colors"
+                          title={detailOC.facturas_vinculadas_estado === "desconocido" ? "No se pudieron verificar las facturas vinculadas: se puede editar igual" : "Tiene factura cargada: se puede editar igual, pero la factura y los pagos no cambian"}>
+                          <AlertTriangle className="h-3.5 w-3.5" /> Editar
+                        </button>
+                      ) : (
                         <button onClick={startEditMode}
                           className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-orange-500 text-white hover:bg-orange-600 transition-colors" title="Editar OC">
                           <Edit3 className="h-3.5 w-3.5" /> Editar
                         </button>
-                      )}
-                      {canManageCompras && ocTieneFacturaAprobada(detailOC) && (
-                        <span className="flex items-center gap-1 rounded-lg border border-amber-200 px-2 py-1 text-[11px] text-amber-600 dark:border-amber-900/50 dark:text-amber-400" title={detailOC.facturas_vinculadas_estado === "desconocido" ? "No se pudieron verificar los vínculos de facturas" : "La edición está bloqueada por una factura aprobada por Finanzas"}>
-                          <Lock className="h-3 w-3" /> {detailOC.facturas_vinculadas_estado === "desconocido" ? "Vínculo sin verificar" : "Edición bloqueada"}
-                        </span>
-                      )}
+                      ))}
                       <button onClick={handleCopySummary} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Copiar resumen">
                         {copiedSummary ? <Check className="h-4 w-4 text-emerald-500" /> : <ClipboardCopy className="h-4 w-4" />}
                       </button>
@@ -3353,7 +3356,7 @@ export default function OrdenesCompraPage() {
                     }
                   </h3>
                   {detailOC.facturas_vinculadas_estado === "desconocido" && (
-                    <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">No se pudo verificar si esta OC tiene otras facturas asociadas. La edición y eliminación quedan bloqueadas hasta volver a cargar.</p>
+                    <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">No se pudo verificar si esta OC tiene otras facturas asociadas. Podés editarla igual; para eliminarla, volvé a cargar la lista.</p>
                   )}
                   {(detailOC.facturas_vinculadas || []).length > 0 ? (
                     <div className="space-y-2">

@@ -23,6 +23,9 @@ import {
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useUser } from "@/lib/auth-context";
 import { Ficha360 } from "@/components/clientes/ficha-360";
+import { AvisoDuplicadosCliente, SemaforoBCRAPrevio, type ClienteParecido } from "@/components/clientes/avisos-alta-cliente";
+import { LeerDocumentoImpositivo } from "@/components/leer-documento-impositivo";
+import { TIPO_DOCUMENTO_LABEL, type DatosImpositivos } from "@/lib/documento-impositivo";
 
 const condicionLabels: Record<string, string> = {
   RI: "Resp. Inscripto",
@@ -246,7 +249,7 @@ interface TimelineEvent {
 }
 
 export default function ClientesPage() {
-  const { sociedadActiva } = useUser();
+  const { sociedadActiva, sociedades, profile } = useUser();
   const [view, setView] = useState<"table" | "cards">("table");
   const [search, setSearch] = useState("");
   const [clientes, setClientes] = useState<ClienteExt[]>([]);
@@ -306,6 +309,7 @@ export default function ClientesPage() {
   const [showContactoModalForm, setShowContactoModalForm] = useState(false);
   const [removedContactoIds, setRemovedContactoIds] = useState<string[]>([]);
   const [contactosModalLoading, setContactosModalLoading] = useState(false);
+  const [emailCobranzas, setEmailCobranzas] = useState("");
 
   // Sucursales CRUD desde panel de detalle
   type SucursalDetailForm = { nombre: string; direccion: string; localidad: string; provincia: string; cp: string; telefono: string; email: string; transportista_id: string; principal: boolean };
@@ -986,9 +990,17 @@ export default function ClientesPage() {
   // Modal handlers
   function openCreate() {
     setEditingId(null);
-    setForm(emptyForm);
+    // Vendedor asignado: por defecto el usuario que da el alta (editable).
+    const yo = profile?.id && vendedores.some((v) => v.id === profile.id) ? profile.id : null;
+    setForm({ ...emptyForm, assigned_to: yo });
     setFormError("");
+    setFormFieldErrors({});
     setCuitLookupMsg(null);
+    setFormContactos([]);
+    setRemovedContactoIds([]);
+    setShowContactoModalForm(false);
+    setNewContactoModal({ nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", sucursal_id: "", principal: false, notas: "" });
+    setEmailCobranzas("");
     setFormSucursales([]);
     setNewSucursal({ nombre: "", direccion: "", localidad: "", provincia: "", cp: "", telefono: "", email: "" });
     setShowSucursalForm(false);
@@ -1026,7 +1038,9 @@ export default function ClientesPage() {
       email_comprobante: (c as any).emailComprobante || "",
     });
     setFormError("");
+    setFormFieldErrors({});
     setCuitLookupMsg(null);
+    setEmailCobranzas("");
     setRemovedSucursalIds([]);
     setRemovedContactoIds([]);
     setFormContactos([]);
@@ -1083,6 +1097,64 @@ export default function ClientesPage() {
     setModalOpen(true);
   }
 
+  // Email de cobranzas: no hay columna propia, se guarda como contacto con cargo "Cobranzas".
+  function agregarContactoCobranzas() {
+    const email = emailCobranzas.trim();
+    if (!email) {
+      toast.info("Escribí el email de cobranzas y apretá el botón");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) toast.warning("El email de cobranzas no parece válido: revisalo");
+    if (formContactos.some((ct) => (ct.email || "").toLowerCase() === email.toLowerCase())) {
+      toast.info("Ese email ya está en los contactos");
+      return;
+    }
+    setFormContactos((prev) => [...prev, { ...emptyContactoModal, nombre: "Cobranzas", cargo: "Cobranzas", email, isNew: true }]);
+    setEmailCobranzas("");
+  }
+
+  // Lector IA de papeles impositivos (constancia ARCA, exención, exclusión): el usuario ya confirmó la vista previa.
+  function aplicarDocumentoImpositivo(d: DatosImpositivos) {
+    const sinTildes = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+    let provincia: string | null = null;
+    if (d.provincia) {
+      const p = sinTildes(d.provincia);
+      provincia = /autonoma|capital federal|^caba$/.test(p) ? "CABA" : provincias.find((x) => sinTildes(x) === p) || null;
+    }
+    const cambios: string[] = [];
+    const next = { ...form };
+    if (d.cuit && !form.cuit.trim()) { next.cuit = d.cuit; cambios.push("CUIT"); }
+    if (d.razon_social && !form.razon_social.trim()) { next.razon_social = d.razon_social; cambios.push("razón social"); }
+    if (d.direccion && !form.direccion.trim()) { next.direccion = d.direccion; cambios.push("dirección"); }
+    if (d.localidad && !form.localidad.trim()) { next.localidad = d.localidad; cambios.push("localidad"); }
+    if (provincia && !form.provincia.trim()) { next.provincia = provincia; cambios.push("provincia"); }
+    if (d.condicion_iva && d.condicion_iva in condicionLabels) {
+      if (d.condicion_iva !== form.condicion_iva) cambios.push(`condición IVA → ${condicionLabels[d.condicion_iva]}`);
+      next.condicion_iva = d.condicion_iva;
+    }
+    if (d.resumen) {
+      const linea = `Doc. impositivo: ${d.resumen}`;
+      if (!form.notas.includes(linea)) { next.notas = form.notas.trim() ? `${form.notas.trim()}\n${linea}` : linea; cambios.push("notas"); }
+    }
+    setForm(next);
+    if (cambios.includes("CUIT")) setFormFieldErrors((p) => ({ ...p, cuit: "" }));
+    if (cambios.includes("razón social")) setFormFieldErrors((p) => ({ ...p, razon_social: "" }));
+    toast.info(`${TIPO_DOCUMENTO_LABEL[d.tipo_documento] || "Documento"}: ${cambios.length ? `se cargó ${cambios.join(", ")}` : "no había datos nuevos para cargar"}`);
+  }
+
+  // Aviso de duplicado → abrir el cliente existente (solo si es de la sociedad activa).
+  function abrirClienteParecido(p: ClienteParecido) {
+    const c = clientes.find((x) => x.id === p.id);
+    if (c && p.sociedad_id === sociedadActiva?.id) {
+      setModalOpen(false);
+      setSelectedCliente(c);
+      setDetailTab("datos");
+      return;
+    }
+    const soc = sociedades.find((s) => s.id === p.sociedad_id)?.nombre || "otra sociedad";
+    toast.info(`${p.razon_social} está en ${soc}: cambiá de sociedad para abrirlo`);
+  }
+
   async function handleSave() {
     // Validación por campo
     const fieldErrs: Record<string, string> = {};
@@ -1114,6 +1186,16 @@ export default function ClientesPage() {
       setFormError("Seleccioná una sociedad antes de guardar el cliente");
       toast.error("No hay una sociedad activa");
       return;
+    }
+    // Si escribió el email de cobranzas pero no apretó "+ Contacto de cobranzas", se agrega igual como contacto.
+    let contactosAGuardar = formContactos;
+    const emailCobr = emailCobranzas.trim();
+    if (emailCobr) {
+      if (!contactosAGuardar.some((ct) => (ct.email || "").trim().toLowerCase() === emailCobr.toLowerCase())) {
+        contactosAGuardar = [...contactosAGuardar, { ...emptyContactoModal, nombre: "Cobranzas", cargo: "Cobranzas", email: emailCobr, isNew: true }];
+        setFormContactos(contactosAGuardar);
+      }
+      setEmailCobranzas("");
     }
     setSaving(true);
     setFormError("");
@@ -1173,7 +1255,7 @@ export default function ClientesPage() {
         for (const id of removedContactoIds) {
           await (supabase as any).from("contactos").delete().eq("id", id).eq("entity_type", "cliente").eq("entity_id", editingId);
         }
-        const newContsEdit = formContactos.filter((ct) => ct.isNew);
+        const newContsEdit = contactosAGuardar.filter((ct) => ct.isNew);
         for (const ct of newContsEdit) {
           await (supabase as any).from("contactos").insert({
             entity_type: "cliente", entity_id: editingId,
@@ -1183,7 +1265,7 @@ export default function ClientesPage() {
             principal: ct.principal, notas: ct.notas || null,
           });
         }
-        const existingContsEdit = formContactos.filter((ct) => ct.id && !ct.isNew);
+        const existingContsEdit = contactosAGuardar.filter((ct) => ct.id && !ct.isNew);
         for (const ct of existingContsEdit) {
           await (supabase as any).from("contactos").update({
             nombre: ct.nombre, cargo: ct.cargo || null,
@@ -1227,7 +1309,7 @@ export default function ClientesPage() {
           });
         }
         // Save new contacts for new client
-        const newConts = formContactos.filter((ct) => ct.isNew);
+        const newConts = contactosAGuardar.filter((ct) => ct.isNew);
         for (const ct of newConts) {
           await (supabase as any).from("contactos").insert({
             entity_type: "cliente", entity_id: newClientId,
@@ -2483,8 +2565,8 @@ export default function ClientesPage() {
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title={editingId ? "Editar cliente" : "Nuevo cliente"}
-        description={editingId ? "Modifica los datos del cliente" : "Completa los datos para crear un nuevo cliente"}
-        size="lg"
+        description={editingId ? "Modificá los datos del cliente" : "Empezá por el CUIT: se completan razón social, condición IVA y domicilio desde ARCA"}
+        size="xl"
         footer={
           <>
             <button
@@ -2510,20 +2592,14 @@ export default function ClientesPage() {
           </div>
         )}
 
-        <div className="space-y-5">
-          {/* Section: Identificacion */}
+        <div className="divide-y divide-zinc-100 dark:divide-zinc-800 [&>*]:py-5 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
+          {/* Section: Datos fiscales */}
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Identificacion</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2" id="field-razon_social">
-                <Input
-                  label="Razon social *"
-                  value={form.razon_social}
-                  onChange={(e) => { setForm({ ...form, razon_social: e.target.value }); setFormFieldErrors((p) => ({ ...p, razon_social: "" })); }}
-                  placeholder="Nombre o razon social"
-                  error={formFieldErrors.razon_social}
-                />
-              </div>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Datos fiscales</p>
+              <LeerDocumentoImpositivo compacto cuitEsperado={form.cuit} onDatos={aplicarDocumentoImpositivo} />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div id="field-cuit">
                 <div className="flex items-end gap-2">
                   <div className="flex-1">
@@ -2533,6 +2609,7 @@ export default function ClientesPage() {
                       onChange={(e) => { setForm({ ...form, cuit: e.target.value }); setCuitLookupMsg(null); setFormFieldErrors((p) => ({ ...p, cuit: "" })); }}
                       placeholder="DNI o CUIT"
                       error={formFieldErrors.cuit}
+                      autoFocus={!editingId}
                       onBlur={() => {
                         const clean = form.cuit.replace(/\D/g, "");
                         if ([7, 8, 11].includes(clean.length)) handleCuitLookup();
@@ -2544,14 +2621,14 @@ export default function ClientesPage() {
                     onClick={handleCuitLookup}
                     disabled={cuitLookupLoading}
                     className="mb-[1px] flex items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 transition-colors"
-                    title="Consultar AFIP"
+                    title="Consultar ARCA"
                   >
                     {cuitLookupLoading ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <Search className="h-4 w-4" />
                     )}
-                    AFIP
+                    ARCA
                   </button>
                 </div>
                 {cuitLookupMsg && (
@@ -2561,6 +2638,12 @@ export default function ClientesPage() {
                 )}
               </div>
               <Select
+                label="Condición IVA"
+                value={form.condicion_iva}
+                onChange={(e) => setForm({ ...form, condicion_iva: e.target.value })}
+                options={Object.entries(condicionLabels).map(([k, v]) => ({ value: k, label: v }))}
+              />
+              <Select
                 label="Tipo"
                 value={form.type}
                 onChange={(e) => setForm({ ...form, type: e.target.value })}
@@ -2569,12 +2652,121 @@ export default function ClientesPage() {
                   { value: "persona", label: "Persona" },
                 ]}
               />
-              <Select
-                label="Condicion IVA"
-                value={form.condicion_iva}
-                onChange={(e) => setForm({ ...form, condicion_iva: e.target.value })}
-                options={Object.entries(condicionLabels).map(([k, v]) => ({ value: k, label: v }))}
+              <div className="sm:col-span-2 lg:col-span-3" id="field-razon_social">
+                <Input
+                  label="Razón social *"
+                  value={form.razon_social}
+                  onChange={(e) => { setForm({ ...form, razon_social: e.target.value }); setFormFieldErrors((p) => ({ ...p, razon_social: "" })); }}
+                  placeholder="Nombre o razón social"
+                  error={formFieldErrors.razon_social}
+                />
+              </div>
+              {(form.cuit.replace(/\D/g, "").length === 11 || form.razon_social.trim().length >= 4) && (
+                <div className="sm:col-span-2 lg:col-span-3 space-y-2">
+                  <SemaforoBCRAPrevio cuit={form.cuit} />
+                  <AvisoDuplicadosCliente
+                    cuit={form.cuit}
+                    razonSocial={form.razon_social}
+                    excluirId={editingId}
+                    sociedades={sociedades}
+                    onAbrir={abrirClienteParecido}
+                  />
+                </div>
+              )}
+              <div className="sm:col-span-2">
+                <Input
+                  label="Dirección"
+                  value={form.direccion}
+                  onChange={(e) => setForm({ ...form, direccion: e.target.value })}
+                  placeholder="Calle y número"
+                />
+              </div>
+              <Input
+                label="Localidad"
+                value={form.localidad}
+                onChange={(e) => setForm({ ...form, localidad: e.target.value })}
               />
+              <Select
+                label="Provincia"
+                value={form.provincia}
+                onChange={(e) => setForm({ ...form, provincia: e.target.value })}
+                options={provincias.map((p) => ({ value: p, label: p }))}
+                placeholder="Seleccionar..."
+              />
+              <Input
+                label="Código postal"
+                value={form.cp}
+                onChange={(e) => setForm({ ...form, cp: e.target.value })}
+              />
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Flete / Transporte</label>
+                <select
+                  value={(form as any).flete || ""}
+                  onChange={(e) => setForm({ ...form, flete: e.target.value } as any)}
+                  className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                >
+                  <option value="">Sin transporte definido</option>
+                  {transportistas.map((t) => <option key={t.id} value={t.nombre}>{t.nombre}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Section: Contacto y facturación */}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Contacto y facturación</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <Input
+                label="Email de facturación"
+                type="email"
+                value={form.email_facturacion}
+                onChange={(e) => setForm({ ...form, email_facturacion: e.target.value })}
+                placeholder="Adonde van las facturas"
+                hint="Si queda vacío se usa el email principal"
+              />
+              <div id="field-email">
+                <Input
+                  label="Email principal"
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => { setForm({ ...form, email: e.target.value }); setFormFieldErrors((p) => ({ ...p, email: "" })); }}
+                  error={formFieldErrors.email}
+                />
+              </div>
+              <Input
+                label="Teléfono / WhatsApp"
+                type="tel"
+                value={form.telefono}
+                onChange={(e) => setForm({ ...form, telefono: e.target.value })}
+                placeholder="Ej: +54 9 11 1234-5678"
+              />
+              <div className="sm:col-span-2 lg:col-span-3 space-y-1.5">
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Email de cobranzas</label>
+                <div className="flex gap-2">
+                  <input
+                    type="email"
+                    value={emailCobranzas}
+                    onChange={(e) => setEmailCobranzas(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarContactoCobranzas(); } }}
+                    placeholder="cobranzas@cliente.com"
+                    className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-orange-400 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={agregarContactoCobranzas}
+                    className="flex shrink-0 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 transition-colors"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Contacto de cobranzas
+                  </button>
+                </div>
+                {formContactos.some((ct) => (ct.cargo || "").toLowerCase() === "cobranzas") ? (
+                  <p className="text-xs text-zinc-500">
+                    Cobranzas: {formContactos.filter((ct) => (ct.cargo || "").toLowerCase() === "cobranzas").map((ct) => ct.email || ct.nombre).join(", ")} · se guarda en Contactos comerciales
+                  </p>
+                ) : (
+                  <p className="text-xs text-zinc-500">Se guarda como contacto con cargo &quot;Cobranzas&quot;.</p>
+                )}
+              </div>
             </div>
           </div>
 
@@ -2744,80 +2936,10 @@ export default function ClientesPage() {
             )}
           </div>
 
-          {/* Section: Contacto */}
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Email y comunicacion</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div id="field-email">
-                <Input
-                  label="Email"
-                  type="email"
-                  value={form.email}
-                  onChange={(e) => { setForm({ ...form, email: e.target.value }); setFormFieldErrors((p) => ({ ...p, email: "" })); }}
-                  error={formFieldErrors.email}
-                />
-              </div>
-              <Input
-                label="WhatsApp"
-                type="tel"
-                value={form.telefono}
-                onChange={(e) => setForm({ ...form, telefono: e.target.value })}
-                placeholder="Ej: +54 9 11 1234-5678"
-              />
-              <Input
-                label="Email facturacion"
-                type="email"
-                value={form.email_facturacion}
-                onChange={(e) => setForm({ ...form, email_facturacion: e.target.value })}
-                placeholder="Dejar vacio para usar el email principal"
-              />
-            </div>
-          </div>
-
-          {/* Section: Ubicacion */}
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Ubicacion</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input
-                label="Direccion"
-                value={form.direccion}
-                onChange={(e) => setForm({ ...form, direccion: e.target.value })}
-              />
-              <Input
-                label="Localidad"
-                value={form.localidad}
-                onChange={(e) => setForm({ ...form, localidad: e.target.value })}
-              />
-              <Select
-                label="Provincia"
-                value={form.provincia}
-                onChange={(e) => setForm({ ...form, provincia: e.target.value })}
-                options={provincias.map((p) => ({ value: p, label: p }))}
-                placeholder="Seleccionar..."
-              />
-              <Input
-                label="Codigo Postal"
-                value={form.cp}
-                onChange={(e) => setForm({ ...form, cp: e.target.value })}
-              />
-              <div className="sm:col-span-2 space-y-1.5">
-                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Flete / Transporte</label>
-                <select
-                  value={(form as any).flete || ""}
-                  onChange={(e) => setForm({ ...form, flete: e.target.value } as any)}
-                  className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                >
-                  <option value="">Sin transporte definido</option>
-                  {transportistas.map((t) => <option key={t.id} value={t.nombre}>{t.nombre}</option>)}
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Section: Datos para pagos */}
+          {/* Section: Cobranza y pagos */}
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Datos para pagos</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <Input
                 label="Alias / CBU"
                 value={form.alias_cbu}
@@ -2842,20 +2964,33 @@ export default function ClientesPage() {
                 onChange={(e) => setForm({ ...form, fecha_pago: e.target.value })}
                 placeholder="Ej: 10 de cada mes, último viernes"
               />
-              <Input
-                label="Email para comprobante"
-                type="email"
-                value={form.email_comprobante}
-                onChange={(e) => setForm({ ...form, email_comprobante: e.target.value })}
-                placeholder="Email donde enviar comprobantes de pago"
-              />
+              <div className="sm:col-span-2 lg:col-span-3">
+                <Input
+                  label="Email para comprobantes de pago"
+                  type="email"
+                  value={form.email_comprobante}
+                  onChange={(e) => setForm({ ...form, email_comprobante: e.target.value })}
+                  placeholder="Email donde enviar comprobantes de pago"
+                />
+              </div>
             </div>
           </div>
 
           {/* Section: Comercial */}
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Datos comerciales</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Comercial</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Vendedor asignado</label>
+                <select
+                  value={form.assigned_to || ""}
+                  onChange={(e) => setForm({ ...form, assigned_to: e.target.value || null })}
+                  className="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"
+                >
+                  <option value="">Sin asignar</option>
+                  {vendedores.map((v) => <option key={v.id} value={v.id}>{v.full_name}</option>)}
+                </select>
+              </div>
               <Select
                 label="Lista de precios"
                 value={form.lista_precio}
@@ -2888,7 +3023,7 @@ export default function ClientesPage() {
               />
               <datalist id="tiempos-pago"><option value="0" /><option value="15" /><option value="30" /><option value="45" /><option value="60" /></datalist>
               <Input
-                label="Limite de credito"
+                label="Límite de crédito"
                 type="number"
                 value={String(form.limite_credito)}
                 onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })}
@@ -2900,8 +3035,8 @@ export default function ClientesPage() {
                 onChange={(e) => setForm({ ...form, markup_predeterminado: e.target.value ? Number(e.target.value) : null })}
                 placeholder="Ej: 30"
               />
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Moneda y tipo de dólar predeterminado</label>
+              <div className="sm:col-span-2 lg:col-span-3 space-y-1.5">
+                <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">Moneda y tipo de dólar predeterminado</label>
                 <div className="flex gap-2">
                   {["ARS", "USD", "USD Divisa"].map(m => (
                     <button key={m} type="button" onClick={() => setForm({ ...form, moneda_predeterminada: m })}
@@ -2912,27 +3047,18 @@ export default function ClientesPage() {
                 </div>
                 <p className="text-[11px] text-zinc-500">Los presupuestos de este cliente toman este tipo de dólar automáticamente y avisan si se cotiza con otro.</p>
               </div>
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-zinc-700 dark:text-zinc-300">Vendedor asignado</label>
-                <select
-                  value={form.assigned_to || ""}
-                  onChange={(e) => setForm({ ...form, assigned_to: e.target.value || null })}
-                  className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                >
-                  <option value="">Sin asignar</option>
-                  {vendedores.map((v) => <option key={v.id} value={v.id}>{v.full_name}</option>)}
-                </select>
-              </div>
             </div>
           </div>
 
           {/* Notas */}
-          <Textarea
-            label="Notas"
-            value={form.notas}
-            onChange={(e) => setForm({ ...form, notas: e.target.value })}
-            rows={3}
-          />
+          <div>
+            <Textarea
+              label="Notas"
+              value={form.notas}
+              onChange={(e) => setForm({ ...form, notas: e.target.value })}
+              rows={3}
+            />
+          </div>
         </div>
       </Modal>
     </>

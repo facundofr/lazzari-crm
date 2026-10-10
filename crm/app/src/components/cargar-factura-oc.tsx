@@ -6,6 +6,8 @@ import { formatCurrency, todayAR } from "@/lib/utils";
 import { reconcilePurchaseLines, inspectPurchaseLineMatch, purchaseLineKey, canonicalPurchaseInvoiceNumber, assertCompleteInvoiceOrderSelection, canMarkPurchaseOrdersPaid, markupForFixedSalePrice, type PurchaseLine } from "@/lib/purchase-invoice-reconciliation";
 import { supabase } from "@/lib/supabase/client";
 import { parseVariant, tallesCompatibles } from "@/lib/purchase-matching";
+import { aprenderNombreFantasiaDeFactura } from "@/lib/nombre-fantasia";
+import { useToast } from "@/components/ui/toast";
 
 // ── Types ────────────────────────────────────────────────
 export interface OCParaVincular {
@@ -105,6 +107,7 @@ const itemNeto = (item: FCItem) => (
 export default function CargarFacturaOC({
   sociedadId, profileId, ordenes, preselectedOCId, initialImport, showTipoToggle, onClose, onSuccess,
 }: Props) {
+  const { toast } = useToast();
   const initialOC = preselectedOCId ? ordenes.find((oc) => oc.id === preselectedOCId) : undefined;
   // ── Form state ──
   const [proveedorId, setProveedorId] = useState(initialOC?.proveedor_id || "");
@@ -1116,6 +1119,16 @@ export default function CargarFacturaOC({
             .filter(Boolean);
           if (eqs.length) await (supabase as any).rpc("aprender_equivalencias", { p_sociedad_id: sociedadId, p_proveedor_id: proveedorId, p_equivalencias: eqs });
         } catch { /* aprender es opcional: nunca frena la carga */ }
+      }
+
+      // Nombre de fantasía leído en la factura: si el proveedor no tiene, se guarda; si tiene otro, solo se avisa.
+      const emisorLeido = proveedorFacturaRef.current;
+      if (proveedorId && emisorLeido?.nombre_fantasia) {
+        const cuitLeido = emisorLeido.cuit.replace(/\D/g, "");
+        const cuitElegido = (proveedores.find((p) => p.id === proveedorId)?.cuit || "").replace(/\D/g, "");
+        if (cuitLeido && cuitElegido && cuitLeido === cuitElegido) {
+          await aprenderNombreFantasiaDeFactura(supabase, { proveedorId, sociedadId, deFactura: emisorLeido.nombre_fantasia, razonSocialFactura: emisorLeido.razon_social, cuitFactura: cuitLeido }, toast);
+        }
       }
 
       alert(isCreditNote ? (facturaOrigenId ? "Nota de crédito registrada y aplicada a la factura elegida" : "Nota de crédito registrada: queda como crédito disponible del proveedor") : pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");

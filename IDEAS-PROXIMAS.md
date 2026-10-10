@@ -112,6 +112,140 @@ Orden sugerido:
 - ¿Quién recibe las solicitudes de clientes nuevos?
 - ¿Tope de consultas por día?
 
+## 6. Reportes y Dashboard de cero
+
+**Idea de Augusto**
+- Reportes y Dashboard están como los dejó Manu; Augusto nunca los configuró. Hay que rehacerlos de cero según sus necesidades.
+- Lo que hay hoy (por ejemplo, la comisión fija de 3 % de venta + 10 % de margen en Reportes) **no es una regla del negocio**: no se toma como referencia.
+
+**Preguntas abiertas**
+- ¿Qué números quiere ver apenas entra al sistema (Dashboard)?
+- ¿Qué reportes usa de verdad hoy, aunque sea en Excel?
+- ¿El Dashboard cambia según quién entra (Augusto, vendedor, administración)?
+
+## 7. Torneo de vendedores (en desarrollo, se va completando)
+
+**Idea de Augusto**
+- Una competencia interna divertida y productiva entre todos los vendedores, con puntajes según lo que van logrando.
+- Se arranca parcial y se suman reglas a medida que aparecen ideas.
+- **Objetivo número uno: que vendan el máximo posible todos los meses y que nadie "se guarde" ventas para el mes siguiente** ("ya llegué al objetivo, me guardo este presupuesto"). Toda regla nueva se revisa contra esto.
+
+**Decisiones de Augusto**
+- Todos ven la tabla de todos.
+- Temporada **trimestral** con un premio grande para el campeón, y **premios chicos mensuales**.
+- Tiene que haber **premios lindos y copados**, para que sea divertido y se esmeren de verdad. Se definen después.
+- El juego **solo suma**: perder un presupuesto no resta.
+- Rachas: sí, pero cuidando el margen.
+- Quedan afuera, por ahora: muestra convertida en venta y venta con personalización (la personalización no le interesa hoy; se charla más adelante).
+- Juegan Seba, Jero y **Augusto**. Más adelante se suma **Mariana** (administrativa), con puntos por lo administrativo. Mientras ella no está, Augusto la reemplaza.
+- **Lo primordial: pasarla bien, ganar plata y hacer el trabajo más llevadero.** El torneo es más para el chiste y el buen ambiente que para la competencia.
+- La tabla tiene que ser **divertida, tipo dibujito**, y **verse todo el tiempo**: un mini podio fijo en el CRM que se abre a la tabla completa.
+- Ideas de puntos para Mariana (a definir con ella): facturas de compra cargadas al día, cobranzas registradas, conciliación bancaria al día, cheques cargados, legajos de clientes completos.
+
+**Reglas propuestas (borrador)**
+- Ideas de Augusto:
+  - Cliente nuevo: primera factura cobrada.
+  - Ganancia en pesos (no %): puntos por la ganancia vendida.
+  - Velocidad de cierre: presupuesto ganado en pocos días. Solo suma si el margen supera el mínimo, para no premiar regalar precio.
+- Sugeridas:
+  - Rachas: semanas seguidas con al menos una venta con margen mínimo y ganancia mínima.
+  - Reactivar un cliente dormido (lo detecta Oportunidades).
+  - Venta complementaria a un cliente actual (por ejemplo, le compraba calzado y ahora también guantes).
+  - Respuesta rápida: presupuesto enviado en menos de 24 h desde la solicitud.
+  - Seguimiento: presupuesto con respuesta antes de que venza.
+- Medallas o logros únicos: primera venta del mes, venta récord, "rescatista" (3 clientes dormidos reactivados).
+
+**Contra "guardarse ventas" (propuesta)**
+- Sin objetivo ni tope mensual: no hay un número a partir del cual "ya está". Cada venta suma siempre.
+- Puntos que crecen dentro del mes: los primeros pesos de ganancia del mes valen x1, pasado un tramo x1,5, después x2. Guardar una venta para el mes siguiente hace perder puntos, porque el mes nuevo arranca de nuevo en x1.
+- Récord personal: bonus si supera su mejor mes.
+- La venta cuenta en el mes en que se factura. Los puntos quedan "en espera" hasta que se cobra, pero se acreditan en el mes de la factura, no en el del cobro.
+- Velocidad: el reloj corre desde que el presupuesto se envía. Un presupuesto que se cajonea pierde los puntos de velocidad.
+- Aviso a Augusto (nunca bloqueo): presupuestos aprobados o en negociación en los últimos días del mes que se facturan recién en los primeros días del mes siguiente.
+
+**Formato propuesto**
+- Tabla de posiciones del mes y de la temporada (trimestre).
+- Cada punto se puede abrir para ver de qué venta salió, así nadie discute.
+- Las reglas y los puntos se editan en Configuración, sin programar.
+- Depende de la "base común" (venta cobrada y ganancia real por factura), la misma que necesitan Comisiones y el margen de José.
+
+**Preguntas abiertas**
+- ¿José juega?
+- ¿Qué premios? (mensuales chicos y trimestral grande)
+- ¿Los tramos de ganancia del mes, con qué montos?
+
+---
+
+## 8. "Para revisar": acciones graves con motivo y OK de Augusto
+
+**Idea de Augusto**
+- Las acciones graves no se bloquean: se piden con un **motivo obligatorio** y caen en un sector **"Para revisar"**.
+- Augusto entra, ve qué pasó y por qué, y aprueba o rechaza sin tener que preguntarle a nadie.
+- Ejemplo: eliminar una OC que ya tiene factura, o corregirla porque se equivocaron de número de OC.
+
+**Propuesta**
+- Menú "Para revisar" con contador, más aviso en la campanita.
+- Cada pedido muestra: quién, cuándo, qué acción, sobre qué (con link), el motivo y cómo estaba antes.
+- Aprobar o rechazar, con comentario opcional. Queda todo en un historial.
+- Acción útil para el caso del número de OC equivocado: **"Mover factura a otra OC"**, en vez de borrar y volver a cargar.
+
+**Decisiones de Augusto**
+- **Se hace al toque.** Lo borrado va a la Papelera, y cualquiera que borró algo por error lo puede restablecer. Si Augusto rechaza, se deshace.
+- Cuando lo hace Augusto: va directo, pide el motivo igual (queda registrado) y no pasa por revisión.
+- Acciones graves:
+  - eliminar una OC con factura;
+  - mover una factura a otra OC;
+  - eliminar un cliente o proveedor con movimientos;
+  - vender por debajo del margen mínimo.
+
+---
+
+## 9. Listas de costos y de venta centralizadas en el CRM (a futuro)
+
+**Idea de Augusto**
+- Hoy las listas se arman en el chat de listas y viven en el Drive. No todos tienen acceso, y en algún momento eso se va a trabar.
+- Que todo esté en el CRM:
+  - cargar las listas de los proveedores;
+  - autorizar a otra persona para que lo haga;
+  - desde ahí generar la lista de venta del CRM y la de la web (www.lazzari.com.ar).
+- Que todo use **una sola lista**.
+- Al actualizar: un resumen ("se actualizaron N artículos") y el historial de los artículos que aumentaron.
+- Vencimiento de listas: el CRM recuerda y avisa para pedirle la lista nueva al proveedor o renovar la fecha.
+- Hoy los chicos usan además la app **"COSTOS LAZZARI"**, con todos los productos y fotos. Desde ahí se filtra qué se muestra en la web. Centralizar todo lo posible.
+- **Mientras no se construya, sigue valiendo la regla 7 de CLAUDE.md** (las listas se actualizan solo en el chat de listas).
+
+**Propuesta (por etapas, sin cortar nada de lo que funciona)**
+1. Traer al CRM los productos de COSTOS LAZZARI, con fotos, marca, rubro y la marca "se muestra en la web".
+2. Que la web lea los precios directo del CRM: solo precio de venta y artículos visibles, nunca costos ni proveedores. Ya no hace falta subir el index.html a Netlify en cada actualización.
+3. Carga de listas en el CRM, con IA:
+   - se sube el Excel, PDF o foto del proveedor;
+   - la IA reconoce las columnas y se acuerda del formato de cada proveedor;
+   - muestra un resumen (nuevos, aumentos, bajas y cambios raros, por ejemplo +40 % o un código cambiado);
+   - se aprueba y se aplica.
+   - Lo puede hacer quien tenga el permiso "Listas".
+4. Precio de venta con reglas, no a mano:
+   - margen por proveedor, rubro o marca, con excepción por artículo;
+   - redondeo;
+   - dólar BNA para las listas en USD.
+   - De ahí salen el precio del CRM y el de la web.
+5. Vencimiento:
+   - fecha de vigencia por lista y aviso unos días antes;
+   - botón "Pedir lista" que arma el email o WhatsApp al proveedor;
+   - "Renovar fecha" en un clic si mantiene precios.
+6. Resumen de cada actualización:
+   - artículos actualizados, aumento promedio y los que más subieron;
+   - historial por artículo;
+   - aviso a los vendedores;
+   - presupuestos abiertos afectados.
+7. El chat de listas y el Drive quedan de respaldo y se retiran cuando todo ande bien.
+- Toda la empresa usa la misma lista: Cotización express, presupuestos, la app de José (idea 4) y el asistente de la web (idea 5).
+
+**Preguntas abiertas**
+- Link y tipo de app de COSTOS LAZZARI (¿AppSheet, Glide, otra?). ¿Dónde están las fotos?
+- ¿A quién se autoriza a cargar listas? ¿Lo que carga otro necesita el OK de Augusto (idea 8) o se aplica directo?
+- ¿Cómo se define hoy el margen en el chat de listas? ¿Por proveedor, por rubro o por artículo?
+- Web: ¿precios con o sin IVA? (también está abierta en la idea 5)
+
 ---
 
 ## Otros pendientes ya conocidos

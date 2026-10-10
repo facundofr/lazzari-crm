@@ -4,17 +4,23 @@ import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
-import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
+import { traerTodo } from "@/lib/paginar";
+import {
+  calcularSaldosProveedores, ultimaCompraPorProveedor, linkWhatsApp, textoLocalidad,
+  type FacturaCompraSaldo, type MovimientoPagoFC, type MovimientoNC, type OrdenCompraFecha, type SaldoProveedor,
+} from "@/lib/saldo-proveedores";
+import { LeerDocumentoImpositivo } from "@/components/leer-documento-impositivo";
+import type { DatosImpositivos } from "@/lib/documento-impositivo";
 import { mockProveedores, mockListasPrecios } from "@/lib/mock-data";
 import { supabase } from "@/lib/supabase/client";
 import type { Proveedor, ListaPrecios, ListaPreciosItem, ListaPreciosRegla } from "@/lib/types";
 import { calculateNetPrice } from "@/lib/price-list-rules";
 import {
-  Search, Filter, Download, MapPin, Phone, Mail, ListOrdered, Upload,
-  AlertTriangle, ChevronDown, ChevronRight, Loader2, X, Pencil, Tag,
-  Sparkles, FileUp, Check, Trash2, Eye,
-  Maximize2, Minimize2, Power,
+  Search, Download, ListOrdered,
+  AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Loader2, X, Pencil, Tag,
+  Sparkles, FileUp, Check, Trash2,
+  Maximize2, Minimize2, Power, Copy, MessageCircle, Plus,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Modal } from "@/components/ui/modal";
@@ -156,6 +162,45 @@ const CONCEPTOS_RG830: Record<string, string> = {
   seguros: "Seguros",
 };
 
+// Estilos comunes del alta/edición: mismo alto y mismo espacio en todos los campos
+const INPUT_CLS = "mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800";
+const LABEL_CLS = "text-xs font-medium text-zinc-500";
+
+function SeccionModal({ titulo, extra, children }: { titulo: string; extra?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section>
+      <div className="mb-3 flex items-center justify-between gap-3 border-b border-zinc-100 pb-1.5 dark:border-zinc-800">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{titulo}</h3>
+        {extra}
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{children}</div>
+    </section>
+  );
+}
+
+function BotonCopiar({ valor, onCopiado }: { valor: string; onCopiado?: () => void }) {
+  return (
+    <button type="button" title="Copiar" aria-label={`Copiar ${valor}`}
+      onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(valor).then(() => onCopiado?.(), () => {}); }}
+      className="rounded p-0.5 text-zinc-300 hover:text-zinc-600 focus:text-zinc-600 dark:text-zinc-600 dark:hover:text-zinc-300">
+      <Copy className="h-3 w-3" />
+    </button>
+  );
+}
+
+function normalizarProvincia(p: string): string {
+  const base = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  const b = base(p);
+  if (/ciudad autonoma|capital federal|^caba$/.test(b)) return "CABA";
+  return PROVINCIAS_ARGENTINA.find((x) => base(x) === b) || p;
+}
+
+const CONDICION_IVA_LABEL: Record<string, string> = { RI: "Responsable Inscripto", Monotributo: "Monotributo", Exento: "Exento", CF: "Consumidor Final" };
+
+type FiltroRapido = "todos" | "deuda" | "transportes" | "talleres" | "inactivos";
+type ContactoExtra = { tipo: "email" | "telefono"; etiqueta: string; valor: string };
+type ContactoExistente = { id: string; nombre: string; cargo: string; email: string; telefono: string; whatsapp: string };
+
 const emptyForm = {
   razon_social: "",
   nombre_fantasia: "",
@@ -188,9 +233,8 @@ const emptyForm = {
   exclusion_retencion_desde: null as string | null,
   exclusion_retencion_hasta: null as string | null,
   exclusion_retencion_cert: null as string | null,
-  // Compras: talles que factura como "talle especial" (separados por coma) y tolerancia de precio (%)
-  talles_especiales: "",
-  tolerancia_precio_pct: 1,
+  // Talles especiales y tolerancia de precio NO van acá: se editan en Compras → Limpieza de OC
+  // (reglas del proveedor). Así el alta/edición nunca pisa esos valores.
   // Personalización (bordados / estampados)
   es_personalizador: false,
   tipo_personalizacion: "" as "" | "bordado" | "estampado" | "ambos",
@@ -216,14 +260,13 @@ export default function ProveedoresPage() {
   const canDeleteProveedores = role === "super_admin" || role === "admin";
   const [tab, setTab] = useState<"proveedores" | "listas">("proveedores");
   const [search, setSearch] = useState("");
-  const [filterValues, setFilterValues] = useState<FilterValues>({
-    rubro: "",
-    provincia: "",
-    saldo: {},
-    formaPago: "",
-    estadoProveedor: "activo",
-  });
-  const [view, setView] = useState<"table" | "cards">("table");
+  const [filtroRapido, setFiltroRapido] = useState<FiltroRapido>("todos");
+  const [orden, setOrden] = useState<{ col: "proveedor" | "saldo" | "ultima"; dir: "asc" | "desc" }>({ col: "proveedor", dir: "asc" });
+  // Saldo a pagar y última compra: se calculan de facturas de compra, pagos y OC (igual que la CC de Finanzas)
+  const [saldos, setSaldos] = useState<Record<string, SaldoProveedor>>({});
+  const [ultimaCompra, setUltimaCompra] = useState<Record<string, string>>({});
+  const [saldosCargando, setSaldosCargando] = useState(false);
+  const [saldosError, setSaldosError] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [filterLista, setFilterLista] = useState<string>("todas");
   const [ruleListId, setRuleListId] = useState<string | null>(null);
@@ -241,6 +284,13 @@ export default function ProveedoresPage() {
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [contactosExtra, setContactosExtra] = useState<ContactoExtra[]>([]);
+  const [contactosExistentes, setContactosExistentes] = useState<ContactoExistente[]>([]);
+  // Si al abrir el proveedor era transporte Y taller a la vez, se ofrece "Los dos" para no perder ninguna marca.
+  const [ambosTiposAlCargar, setAmbosTiposAlCargar] = useState(false);
+  // editingId actual, para descartar respuestas de contactos que llegan tarde (si se abrió otro proveedor).
+  const editingIdRef = useRef<string | null>(null);
+  editingIdRef.current = editingId;
 
   // Auto-open create modal from ?crear= query param
   useEffect(() => {
@@ -248,6 +298,7 @@ export default function ProveedoresPage() {
     const crearNombre = params.get("crear");
     if (params.has("crear")) {
       setEditingId(null);
+      setAmbosTiposAlCargar(false);
       setForm({ ...emptyForm, razon_social: crearNombre || "", es_transportista: params.get("tipo") === "transportista" });
       setFormError("");
       setModalOpen(true);
@@ -384,6 +435,50 @@ export default function ProveedoresPage() {
     }
     fetchContactos();
   }, [selectedProv?.id]);
+
+  // Saldo a pagar por proveedor + fecha de última compra (consultas en bloque, de a 1000 filas)
+  useEffect(() => {
+    const sociedadId = sociedadActiva?.id;
+    if (!sociedadId) { setSaldos({}); setUltimaCompra({}); return; }
+    let cancelado = false;
+    setSaldosCargando(true);
+    setSaldosError("");
+    (async () => {
+      try {
+        const db = supabase as any;
+        const [facturas, pagos, ordenes] = await Promise.all([
+          traerTodo<FacturaCompraSaldo>(() => db.from("facturas_compra")
+            .select("id, proveedor_id, total, total_acreditado, moneda, estado, tipo_comprobante, fecha, op_facturas_compra(monto, ordenes_pago(estado))")
+            .eq("sociedad_id", sociedadId).order("id")),
+          traerTodo<MovimientoPagoFC>(() => db.from("movimientos")
+            .select("id, factura_compra_id, monto, retencion_ganancias_monto, anulado, nota_credito_compra_id")
+            .eq("sociedad_id", sociedadId).eq("tipo", "pago").not("factura_compra_id", "is", null).order("id")),
+          traerTodo<OrdenCompraFecha>(() => db.from("ordenes_compra")
+            .select("id, proveedor_id, fecha, estado")
+            .eq("sociedad_id", sociedadId).order("id")),
+        ]);
+        // Crédito ya aplicado de cada NC (igual que Finanzas: por id de NC)
+        const ncIds = facturas
+          .filter((f) => f.estado !== "anulada" && String(f.tipo_comprobante || "").toUpperCase().startsWith("NC"))
+          .map((f) => f.id);
+        const movNC: MovimientoNC[] = [];
+        for (let i = 0; i < ncIds.length; i += 200) {
+          const tramo = ncIds.slice(i, i + 200);
+          movNC.push(...await traerTodo<MovimientoNC>(() => db.from("movimientos")
+            .select("id, nota_credito_compra_id, monto, anulado").in("nota_credito_compra_id", tramo).order("id")));
+        }
+        if (cancelado) return;
+        setSaldos(calcularSaldosProveedores(facturas, pagos, movNC));
+        setUltimaCompra(ultimaCompraPorProveedor(facturas, ordenes));
+      } catch (err) {
+        console.error("Error calculando saldos de proveedores:", err);
+        if (!cancelado) setSaldosError("No se pudieron calcular los saldos a pagar. Mirá la cuenta corriente en Finanzas.");
+      } finally {
+        if (!cancelado) setSaldosCargando(false);
+      }
+    })();
+    return () => { cancelado = true; };
+  }, [sociedadActiva?.id]);
 
   function startProveedorContacto(contacto?: any) {
     setProveedorContactoForm(contacto ? { id: contacto.id, nombre: contacto.nombre ?? "", cargo: contacto.cargo ?? "", email: contacto.email ?? "", telefono: contacto.telefono ?? "", whatsapp: contacto.whatsapp ?? "", principal: !!contacto.principal, notas: contacto.notas ?? "" } : emptyProveedorContacto);
@@ -550,93 +645,44 @@ export default function ProveedoresPage() {
     }
   }
 
-  // Build filter configs dynamically from current data
-  const filterConfigs: FilterConfig[] = [
-    {
-      key: "rubro",
-      label: "Rubro",
-      type: "select",
-      options: Array.from(new Set(proveedores.map((p) => p.rubro).filter(Boolean)))
-        .sort()
-        .map((r) => ({ value: r, label: r })),
-    },
-    {
-      key: "provincia",
-      label: "Provincia",
-      type: "select",
-      options: Array.from(new Set(proveedores.map((p) => p.provincia).filter(Boolean)))
-        .sort()
-        .map((p) => ({ value: p, label: p })),
-    },
-    {
-      key: "saldo",
-      label: "Saldo CC",
-      type: "number-range",
-    },
-    {
-      key: "condicionIva",
-      label: "Condición IVA",
-      type: "select",
-      options: [
-        { value: "RI", label: "Resp. Inscripto" },
-        { value: "Monotributo", label: "Monotributo" },
-        { value: "Exento", label: "Exento" },
-      ],
-    },
-    {
-      key: "formaPago",
-      label: "Forma de pago",
-      type: "select",
-      options: [
-        { value: "Contado", label: "Contado" },
-        { value: "Cuenta corriente", label: "Cuenta corriente" },
-        { value: "Cheque", label: "Cheque" },
-        { value: "Transferencia", label: "Transferencia" },
-        { value: "Tarjeta", label: "Tarjeta" },
-      ],
-    },
-    {
-      key: "estadoProveedor",
-      label: "Estado",
-      type: "select",
-      options: [
-        { value: "activo", label: "Activos" },
-        { value: "inactivo", label: "Inactivos" },
-      ],
-    },
-    {
-      key: "tipoProveedor",
-      label: "Tipo",
-      type: "select",
-      options: [
-        { value: "transportista", label: "Transportistas" },
-        { value: "general", label: "Otros proveedores" },
-      ],
-    },
-  ];
-
-  const filteredProveedores = proveedores.filter((p) => {
-    // Text search
-    if (search) {
-      const q = search.toLowerCase();
-      if (!p.razonSocial.toLowerCase().includes(q) && !String((p as any).nombreFantasia || "").toLowerCase().includes(q) && !p.cuit.includes(search) && !p.rubro.toLowerCase().includes(q)) return false;
-    }
-    // Smart filters
-    if (filterValues.rubro && (filterValues.rubro as string) !== "" && p.rubro !== filterValues.rubro) return false;
-    if (filterValues.provincia && (filterValues.provincia as string) !== "" && p.provincia !== filterValues.provincia) return false;
-    if (filterValues.condicionIva && (filterValues.condicionIva as string) !== "" && p.condicionIva !== filterValues.condicionIva) return false;
-    if (filterValues.formaPago && (filterValues.formaPago as string) !== "" && p.formaPago !== filterValues.formaPago) return false;
-    if (filterValues.estadoProveedor === "activo" && !p.activo) return false;
-    if (filterValues.estadoProveedor === "inactivo" && p.activo) return false;
-    if (filterValues.tipoProveedor === "transportista" && !p.esTransportista) return false;
-    if (filterValues.tipoProveedor === "general" && p.esTransportista) return false;
-    const saldoRange = filterValues.saldo as { min?: number; max?: number } | undefined;
-    if (saldoRange) {
-      if (saldoRange.min !== undefined && p.saldoCuentaCorriente < saldoRange.min) return false;
-      if (saldoRange.max !== undefined && p.saldoCuentaCorriente > saldoRange.max) return false;
-    }
+  const saldoDe = (id: string): SaldoProveedor => saldos[id] || { ARS: 0, USD: 0 };
+  const tieneDeuda = (id: string) => saldoDe(id).ARS > 0.005 || saldoDe(id).USD > 0.005;
+  const pasaFiltroRapido = (p: Proveedor, f: FiltroRapido) => {
+    if (f === "inactivos") return !p.activo;
+    if (!p.activo) return false;
+    if (f === "deuda") return tieneDeuda(p.id);
+    if (f === "transportes") return Boolean(p.esTransportista);
+    if (f === "talleres") return Boolean((p as any).esPersonalizador);
     return true;
-  });
+  };
+  const coincideBusqueda = (p: Proveedor) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase().trim();
+    const qDigitos = q.replace(/\D/g, "");
+    const textos = [p.razonSocial, (p as any).nombreFantasia, p.rubro, p.localidad, p.provincia, p.email];
+    if (textos.some((t) => String(t || "").toLowerCase().includes(q))) return true;
+    return qDigitos.length >= 3 && String(p.cuit || "").replace(/\D/g, "").includes(qDigitos);
+  };
+  const proveedoresBuscados = proveedores.filter(coincideBusqueda);
+  const filteredProveedores = proveedoresBuscados
+    .filter((p) => pasaFiltroRapido(p, filtroRapido))
+    .sort((a, b) => {
+      const signo = orden.dir === "asc" ? 1 : -1;
+      if (orden.col === "saldo") return signo * (saldoDe(a.id).ARS - saldoDe(b.id).ARS || saldoDe(a.id).USD - saldoDe(b.id).USD);
+      if (orden.col === "ultima") return signo * String(ultimaCompra[a.id] || "").localeCompare(String(ultimaCompra[b.id] || ""));
+      return signo * a.razonSocial.localeCompare(b.razonSocial, "es");
+    });
+  const FILTROS_RAPIDOS: { id: FiltroRapido; label: string }[] = [
+    { id: "todos", label: "Todos" },
+    { id: "deuda", label: "Con deuda" },
+    { id: "transportes", label: "Transportes" },
+    { id: "talleres", label: "Talleres" },
+    { id: "inactivos", label: "Inactivos" },
+  ];
+  const totalVisible = filteredProveedores.reduce((acc, p) => ({ ARS: acc.ARS + saldoDe(p.id).ARS, USD: acc.USD + saldoDe(p.id).USD }), { ARS: 0, USD: 0 });
+  function cambiarOrden(col: "proveedor" | "saldo" | "ultima") {
+    setOrden((prev) => prev.col === col ? { col, dir: prev.dir === "asc" ? "desc" : "asc" } : { col, dir: col === "proveedor" ? "asc" : "desc" });
+  }
 
   const filteredListas = listas.filter((lp) => {
     if (filterLista !== "todas" && lp.estado !== filterLista) return false;
@@ -644,20 +690,57 @@ export default function ProveedoresPage() {
     return true;
   });
 
-  const totalDeuda = proveedores.reduce((a, p) => a + p.saldoCuentaCorriente, 0);
-  const totalCredito = proveedores.reduce((a, p) => a + p.limiteCredito, 0);
-  const listasVigentes = listas.filter((l) => l.estado === "vigente").length;
   const listasVencidas = listas.filter((l) => l.estado === "vencida").length;
 
   function openCreate() {
     setEditingId(null);
+    setAmbosTiposAlCargar(false);
     setForm(emptyForm);
     setFormError("");
+    setContactosExtra([]);
+    setContactosExistentes([]);
     setModalOpen(true);
+  }
+
+  async function cargarContactosExistentes(proveedorId: string) {
+    const { data, error } = await (supabase as any).from("contactos").select("id, nombre, cargo, email, telefono, whatsapp")
+      .eq("entity_type", "proveedor").eq("entity_id", proveedorId).order("principal", { ascending: false });
+    if (editingIdRef.current !== proveedorId) return; // se abrió otro proveedor mientras tanto
+    if (error) { console.error("Error cargando contactos:", error); return; }
+    setContactosExistentes((data || []).map((c: Record<string, unknown>) => ({
+      id: c.id as string, nombre: String(c.nombre ?? ""), cargo: String(c.cargo ?? ""),
+      email: String(c.email ?? ""), telefono: String(c.telefono ?? ""), whatsapp: String(c.whatsapp ?? ""),
+    })));
+  }
+
+  // Datos leídos con IA de un papel impositivo: completa lo vacío y pisa condición IVA / exclusión
+  function aplicarDocumentoImpositivo(d: DatosImpositivos) {
+    const next = { ...form };
+    const cambios: string[] = [];
+    const vacio = (v: unknown) => !String(v ?? "").trim();
+    if (d.cuit && vacio(next.cuit)) { next.cuit = d.cuit; cambios.push("CUIT"); }
+    if (d.razon_social && vacio(next.razon_social)) { next.razon_social = d.razon_social; cambios.push("razón social"); }
+    if (d.condicion_iva && d.condicion_iva !== next.condicion_iva) {
+      next.condicion_iva = d.condicion_iva;
+      cambios.push(`condición IVA: ${CONDICION_IVA_LABEL[d.condicion_iva] || d.condicion_iva}`);
+    }
+    if (d.direccion && vacio(next.direccion)) { next.direccion = d.direccion; cambios.push("dirección"); }
+    if (d.localidad && vacio(next.localidad)) { next.localidad = d.localidad; cambios.push("localidad"); }
+    if (d.provincia && vacio(next.provincia)) { next.provincia = normalizarProvincia(d.provincia); cambios.push("provincia"); }
+    if (d.tipo_documento === "exclusion_ganancias") {
+      next.exclusion_retencion = true;
+      if (d.exclusion_desde) next.exclusion_retencion_desde = d.exclusion_desde;
+      if (d.exclusion_hasta) next.exclusion_retencion_hasta = d.exclusion_hasta;
+      if (d.numero_certificado) next.exclusion_retencion_cert = d.numero_certificado;
+      cambios.push(`exclusión de retención de Ganancias${d.exclusion_hasta ? ` hasta ${formatDate(d.exclusion_hasta)}` : ""}`);
+    }
+    setForm(next);
+    toast.info(cambios.length ? `Del documento se cargó: ${cambios.join(", ")}. Revisalo y guardá.` : "El documento no trajo datos nuevos para este proveedor.");
   }
 
   function openEdit(p: Proveedor) {
     setEditingId(p.id);
+    setAmbosTiposAlCargar(Boolean(p.esTransportista) && Boolean((p as any).esPersonalizador));
     setForm({
       razon_social: p.razonSocial, nombre_fantasia: (p as any).nombreFantasia ?? "", cuit: p.cuit, condicion_iva: p.condicionIva,
       email: p.email, telefono: p.telefono, direccion: p.direccion,
@@ -675,13 +758,14 @@ export default function ProveedoresPage() {
       exclusion_retencion_desde: (p as any).exclusionRetencionDesde ?? null,
       exclusion_retencion_hasta: (p as any).exclusionRetencionHasta ?? null,
       exclusion_retencion_cert: (p as any).exclusionRetencionCert ?? null,
-      talles_especiales: ((p as any).tallesEspeciales ?? []).join(", "),
-      tolerancia_precio_pct: (p as any).toleranciaPrecioPct ?? 1,
       es_personalizador: Boolean((p as any).esPersonalizador),
       tipo_personalizacion: (p as any).tipoPersonalizacion ?? "",
     });
     setFormError("");
+    setContactosExtra([]);
+    setContactosExistentes([]);
     setModalOpen(true);
+    cargarContactosExistentes(p.id);
   }
 
   async function handleSave() {
@@ -706,24 +790,46 @@ export default function ProveedoresPage() {
       ...form,
       condicion_iva: condicionIva,
       cuit_titular_cuenta: form.cuit.trim(),
-      talles_especiales: [...new Set(String(form.talles_especiales || "").split(/[,;\s]+/).map((t) => t.trim().toUpperCase()).filter(Boolean))],
-      tolerancia_precio_pct: Math.max(0, Math.min(50, Number(form.tolerancia_precio_pct) || 0)),
       tipo_personalizacion: form.es_personalizador ? (form.tipo_personalizacion || "ambos") : null,
     };
     setSaving(true);
     setFormError("");
     try {
+      let proveedorId = editingId;
       if (editingId) {
+        // talles_especiales y tolerancia_precio_pct no viajan: se conservan tal cual están
         let updateQuery = supabase.from("proveedores").update(proveedorPayload as any).eq("id", editingId);
         updateQuery = updateQuery.eq("sociedad_id" as any, sociedadId);
         const { error } = await updateQuery;
         if (error) throw error;
       } else {
-        const insertData = { ...proveedorPayload } as any;
+        const insertData = { ...proveedorPayload, talles_especiales: [], tolerancia_precio_pct: 1 } as any;
         insertData.sociedad_id = sociedadId;
-        const { error } = await supabase.from("proveedores").insert(insertData);
+        const { data: creado, error } = await supabase.from("proveedores").insert(insertData).select("id").single();
         if (error) throw error;
+        proveedorId = (creado as { id: string } | null)?.id ?? null;
       }
+      // Emails y celulares adicionales → tabla contactos
+      const extras = contactosExtra.filter((c) => c.valor.trim());
+      if (extras.length > 0 && proveedorId) {
+        const { error: contactosError } = await (supabase as any).from("contactos").insert(extras.map((c) => ({
+          entity_type: "proveedor",
+          entity_id: proveedorId,
+          nombre: c.etiqueta.trim() || (c.tipo === "email" ? "Email adicional" : "Celular adicional"),
+          email: c.tipo === "email" ? c.valor.trim() : null,
+          telefono: c.tipo === "telefono" ? c.valor.trim() : null,
+          principal: false,
+        })));
+        if (contactosError) {
+          // El proveedor ya quedó guardado: seguimos en modo edición para no duplicarlo al reintentar
+          setEditingId(proveedorId);
+          setFormError(`El proveedor se guardó, pero no se pudieron guardar los contactos adicionales: ${contactosError.message}`);
+          toast.error("No se pudieron guardar los contactos adicionales");
+          await fetchData();
+          return;
+        }
+      }
+      setContactosExtra([]);
       setModalOpen(false);
       setSelectedProv(null);
       await fetchData();
@@ -932,9 +1038,10 @@ export default function ProveedoresPage() {
   }
 
   function exportCSV() {
-    const headers = ["Razon Social", "CUIT", "Rubro", "Email", "Telefono", "Localidad", "Provincia", "Forma Pago", "Saldo CC", "Limite Credito"];
+    const headers = ["Razon Social", "Nombre de fantasia", "CUIT", "Email", "Celular", "Localidad", "Provincia", "Saldo a pagar ARS", "Saldo a pagar USD", "Ultima compra"];
     const rows = filteredProveedores.map((p) => [
-      p.razonSocial, p.cuit, p.rubro, p.email, p.telefono, p.localidad, p.provincia, p.formaPago, p.saldoCuentaCorriente, p.limiteCredito,
+      p.razonSocial, (p as any).nombreFantasia, p.cuit, p.email, p.telefono, p.localidad, p.provincia,
+      saldoDe(p.id).ARS.toFixed(2), saldoDe(p.id).USD.toFixed(2), ultimaCompra[p.id] || "",
     ]);
     const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -965,25 +1072,6 @@ export default function ProveedoresPage() {
         action={{ label: tab === "proveedores" ? "Nuevo proveedor" : "Cargar lista con IA", onClick: tab === "proveedores" ? openCreate : openAiUpload }}
       />
       <div className="p-4 sm:p-8 space-y-6">
-        {/* Stats */}
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
-          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Proveedores</p><p className="mt-1 text-2xl font-bold">{proveedores.length}</p>
-          </div>
-          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Deuda CC</p><p className="mt-1 text-2xl font-bold">{formatCurrency(totalDeuda, "ARS")}</p>
-          </div>
-          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Credito total</p><p className="mt-1 text-2xl font-bold">{formatCurrency(totalCredito, "ARS")}</p>
-          </div>
-          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Listas vigentes</p><p className="mt-1 text-2xl font-bold text-emerald-600">{listasVigentes}</p>
-          </div>
-          <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Listas vencidas</p><p className="mt-1 text-2xl font-bold text-red-600">{listasVencidas}</p>
-          </div>
-        </div>
-
         {/* Tabs */}
         <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-fit">
           {(["proveedores", "listas"] as const).map((t) => (
@@ -997,102 +1085,137 @@ export default function ProveedoresPage() {
         {/* -- TAB: Proveedores -- */}
         {tab === "proveedores" && (
           <>
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="relative flex-1 max-w-md">
+            {/* Búsqueda, filtros rápidos y exportar en una sola línea */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[220px] flex-1 max-w-md">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
-                <input type="text" placeholder="Buscar por razon social, CUIT o rubro..." value={search} onChange={(e) => setSearch(e.target.value)}
-                  className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900" />
+                <input type="text" placeholder="Buscar por nombre, fantasía, CUIT o localidad..." value={search} onChange={(e) => setSearch(e.target.value)}
+                  className="h-9 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900" />
               </div>
-              <button onClick={exportCSV} className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"><Download className="h-4 w-4" /> Exportar</button>
-              <div className="flex rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                <button onClick={() => setView("table")} className={`px-3 py-2 text-xs font-medium ${view === "table" ? "bg-zinc-100 text-zinc-800 dark:bg-zinc-700 dark:text-white" : "bg-white text-zinc-400 dark:bg-zinc-900"}`}>Tabla</button>
-                <button onClick={() => setView("cards")} className={`px-3 py-2 text-xs font-medium ${view === "cards" ? "bg-zinc-100 text-zinc-800 dark:bg-zinc-700 dark:text-white" : "bg-white text-zinc-400 dark:bg-zinc-900"}`}>Tarjetas</button>
-              </div>
-            </div>
-
-            <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
-
-            {view === "table" ? (
-              <Card className="p-0 overflow-hidden">
-                <DataTable<Proveedor>
-                  columns={[
-                    { key: "razonSocial", label: "Proveedor", sortable: true, render: (row) => (
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600 font-bold text-xs">{row.razonSocial.split(" ").map(w => w[0]).join("").slice(0, 2)}</div>
-                        <div>
-                          <div className="flex items-center gap-2"><p className="font-medium text-zinc-900 dark:text-white">{row.razonSocial}</p>{row.esTransportista && <Badge variant="orange">Transportista</Badge>}{!row.activo && <Badge variant="outline">Inactivo</Badge>}</div>
-                          <p className="text-xs text-zinc-400">{(row as any).nombreFantasia ? <span className="font-medium text-zinc-600 dark:text-zinc-300">{(row as any).nombreFantasia} · </span> : null}{row.cuit}</p>
-                        </div>
-                      </div>
-                    )},
-                    { key: "rubro", label: "Rubro", sortable: true, render: (row) => <Badge variant="info">{row.rubro}</Badge> },
-                    { key: "clasificacionTags" as keyof Proveedor, label: "Clasificacion", sortable: false, render: (row) => (
-                      <div className="flex flex-wrap gap-1">
-                        {row.clasificacionTags?.map((t) => <ClasificacionTag key={t} tag={t} />)}
-                        {row.marcas && <span className="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium bg-violet-50 text-violet-700 ring-1 ring-violet-200 dark:bg-violet-950 dark:text-violet-400">{row.marcas}</span>}
-                      </div>
-                    )},
-                    { key: "localidad", label: "Ubicacion", sortable: true, render: (row) => <span className="text-zinc-500">{row.localidad}, {row.provincia}</span> },
-                    { key: "formaPago", label: "Forma pago", sortable: true, render: (row) => <Badge variant="outline">{row.formaPago}</Badge> },
-                    { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right text-red-600">{formatCurrency(row.saldoCuentaCorriente, "ARS")}</span> },
-                    { key: "limiteCredito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limiteCredito, "ARS")}</span> },
-                    { key: "actions", label: "", sortable: false, render: (row) => (
-                      <div className="flex justify-end gap-1">
-                        {canManageProveedores && <button onClick={(e) => { e.stopPropagation(); handleToggleProveedorActivo(row); }} disabled={mutatingProveedorId === row.id} className={`rounded p-1.5 hover:bg-zinc-100 disabled:opacity-50 ${row.activo ? "text-zinc-400 hover:text-amber-600" : "text-emerald-600 hover:text-emerald-700"}`} title={row.activo ? "Desactivar" : "Reactivar"}>
-                          <Power className="h-3.5 w-3.5" />
-                        </button>}
-                        {canManageProveedores && <button onClick={(e) => { e.stopPropagation(); openEdit(row); }} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600" title="Editar">
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>}
-                        {canDeleteProveedores && <button onClick={(e) => { e.stopPropagation(); handleDeleteProveedor(row); }} disabled={mutatingProveedorId === row.id} className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50" title="Eliminar">
-                          {mutatingProveedorId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                        </button>}
-                      </div>
-                    )},
-                  ]}
-                  data={filteredProveedores}
-                  onRowClick={(row) => setSelectedProv(row)}
-                />
-              </Card>
-            ) : (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {filteredProveedores.map((prov) => {
-                  const provListas = listas.filter((l) => l.proveedorId === prov.id);
+              <div className="flex flex-wrap gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800" role="group" aria-label="Filtros rápidos">
+                {FILTROS_RAPIDOS.map((f) => {
+                  const cantidad = proveedoresBuscados.filter((p) => pasaFiltroRapido(p, f.id)).length;
+                  const activo = filtroRapido === f.id;
                   return (
-                    <Card key={prov.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => setSelectedProv(prov)}>
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-blue-600 font-bold text-sm">{prov.razonSocial.split(" ").map(w => w[0]).join("").slice(0, 2)}</div>
-                          <div><p className="font-semibold text-zinc-900 dark:text-white">{prov.razonSocial}</p><p className="text-xs text-zinc-400">{prov.cuit}</p></div>
-                        </div>
-                        <div className="flex flex-col items-end gap-1">
-                          {prov.esTransportista && <Badge variant="orange">Transportista</Badge>}
-                          {!prov.activo && <Badge variant="outline">Inactivo</Badge>}
-                          <Badge variant="info">{prov.rubro.split(" ")[0]}</Badge>
-                        </div>
-                      </div>
-                      <div className="mt-4 space-y-2 text-sm text-zinc-500">
-                        <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5" /> {prov.localidad}, {prov.provincia}</div>
-                        <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5" /> {prov.telefono || "—"}</div>
-                        <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5" /> {prov.email ? <a href={`mailto:${prov.email}`} className="hover:text-orange-500">{prov.email}</a> : "—"}</div>
-                        <div className="flex items-center gap-2"><ListOrdered className="h-3.5 w-3.5" /> {provListas.length} lista(s) — {provListas.filter(l => l.estado === "vigente").length} vigente(s)</div>
-                      </div>
-                      {(prov.clasificacionTags?.length > 0 || prov.marcas) && (
-                        <div className="mt-3 flex flex-wrap gap-1">
-                          {prov.clasificacionTags?.map((t) => <ClasificacionTag key={t} tag={t} />)}
-                          {prov.marcas && <span className="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium bg-violet-50 text-violet-700 ring-1 ring-violet-200 dark:bg-violet-950 dark:text-violet-400">{prov.marcas}</span>}
-                        </div>
-                      )}
-                      <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4 dark:border-zinc-800">
-                        <div><p className="text-xs text-zinc-400">Saldo CC</p><p className="font-mono font-semibold text-red-600">{formatCurrency(prov.saldoCuentaCorriente, "ARS")}</p></div>
-                        <a href={`/finanzas?tab=cc_proveedores&proveedor=${prov.id}`} className="text-xs text-orange-500 hover:text-orange-600 font-medium">Ver CC →</a>
-                        <div className="text-right"><p className="text-xs text-zinc-400">Forma pago</p><Badge variant="outline">{prov.formaPago}</Badge></div>
-                      </div>
-                    </Card>
+                    <button key={f.id} type="button" aria-pressed={activo} onClick={() => setFiltroRapido(f.id)}
+                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${activo ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}>
+                      {f.label} <span className="text-zinc-400">{cantidad}</span>
+                    </button>
                   );
                 })}
               </div>
-            )}
+              <button onClick={exportCSV} className="ml-auto flex h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"><Download className="h-4 w-4" /> Exportar</button>
+            </div>
+            {saldosError && <p className="text-xs text-amber-600">{saldosError}</p>}
+
+            <Card className="p-0 overflow-hidden">
+              <div className="max-h-[calc(100vh-14rem)] overflow-auto">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 z-10 bg-zinc-50 dark:bg-zinc-900">
+                    <tr className="border-b border-zinc-200 text-left text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">
+                      {([
+                        { col: "proveedor", label: "Proveedor", cls: "" },
+                        { col: null, label: "Contacto", cls: "" },
+                        { col: null, label: "Localidad", cls: "" },
+                        { col: "saldo", label: "Saldo a pagar", cls: "text-right" },
+                        { col: "ultima", label: "Última compra", cls: "" },
+                      ] as const).map((h) => (
+                        <th key={h.label} className={`whitespace-nowrap px-3 py-2 ${h.cls}`} aria-sort={h.col && orden.col === h.col ? (orden.dir === "asc" ? "ascending" : "descending") : undefined}>
+                          {h.col ? (
+                            <button type="button" onClick={() => cambiarOrden(h.col!)} className="inline-flex items-center gap-0.5 uppercase hover:text-zinc-800 dark:hover:text-zinc-200">
+                              {h.label}
+                              {orden.col === h.col && (orden.dir === "asc" ? <ChevronUp className="h-3 w-3 text-orange-500" /> : <ChevronDown className="h-3 w-3 text-orange-500" />)}
+                            </button>
+                          ) : h.label}
+                        </th>
+                      ))}
+                      <th className="px-3 py-2"><span className="sr-only">Acciones</span></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                    {filteredProveedores.length === 0 && (
+                      <tr><td colSpan={6} className="px-3 py-12 text-center text-sm text-zinc-400">No hay proveedores para mostrar</td></tr>
+                    )}
+                    {filteredProveedores.map((row) => {
+                      const fantasia = String((row as any).nombreFantasia || "").trim();
+                      const esTaller = Boolean((row as any).esPersonalizador);
+                      const wa = linkWhatsApp(row.telefono);
+                      const loc = textoLocalidad(row.localidad, row.provincia);
+                      const saldo = saldoDe(row.id);
+                      const ultima = ultimaCompra[row.id];
+                      return (
+                        <tr key={row.id} onClick={() => setSelectedProv(row)} className="group cursor-pointer transition-colors hover:bg-orange-50/50 dark:hover:bg-orange-950/20">
+                          <td className="px-3 py-1.5 align-top">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-medium text-zinc-900 dark:text-white">{row.razonSocial}</span>
+                              {row.esTransportista && <Badge variant="orange">Transporte</Badge>}
+                              {esTaller && <Badge variant="purple">Taller</Badge>}
+                              {!row.activo && <Badge variant="outline">Inactivo</Badge>}
+                            </div>
+                            <div className="text-xs text-zinc-400">{fantasia && <span className="text-zinc-500 dark:text-zinc-400">{fantasia} · </span>}{row.cuit || "Sin CUIT"}</div>
+                          </td>
+                          <td className="px-3 py-1.5 align-top text-xs text-zinc-600 dark:text-zinc-300">
+                            {row.email && (
+                              <div className="flex items-center gap-1">
+                                <a href={`mailto:${row.email}`} onClick={(e) => e.stopPropagation()} className="max-w-[220px] truncate hover:text-orange-600">{row.email}</a>
+                                <BotonCopiar valor={row.email} onCopiado={() => toast.success("Email copiado")} />
+                              </div>
+                            )}
+                            {row.telefono && (
+                              <div className="flex items-center gap-1">
+                                <span className="text-zinc-400">Cel.</span><span>{row.telefono}</span>
+                                <BotonCopiar valor={row.telefono} onCopiado={() => toast.success("Celular copiado")} />
+                                {wa && <a href={wa} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} title="Abrir WhatsApp" aria-label="Abrir WhatsApp" className="rounded p-0.5 text-emerald-600 hover:text-emerald-700"><MessageCircle className="h-3.5 w-3.5" /></a>}
+                              </div>
+                            )}
+                            {!row.email && !row.telefono && <span className="text-zinc-300">—</span>}
+                          </td>
+                          <td className="px-3 py-1.5 align-top text-xs text-zinc-500">{loc || <span className="text-zinc-300">—</span>}</td>
+                          <td className="px-3 py-1.5 align-top text-right font-mono whitespace-nowrap">
+                            {saldosCargando ? <span className="text-zinc-300">…</span> : (
+                              <>
+                                {saldo.ARS > 0.005 ? <span className="block text-red-600">{formatCurrency(saldo.ARS, "ARS")}</span>
+                                  : saldo.ARS < -0.005 ? <span className="block text-emerald-600" title="Saldo a favor (notas de crédito sin usar)">{formatCurrency(saldo.ARS, "ARS")}</span>
+                                  : saldo.USD === 0 ? <span className="text-zinc-300">—</span> : null}
+                                {Math.abs(saldo.USD) > 0.005 && <span className={`block text-xs ${saldo.USD > 0 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(saldo.USD, "USD")}</span>}
+                              </>
+                            )}
+                          </td>
+                          <td className="px-3 py-1.5 align-top whitespace-nowrap text-xs text-zinc-500">{ultima ? formatDate(ultima) : <span className="text-zinc-300">—</span>}</td>
+                          <td className="px-3 py-1.5 align-top">
+                            <div className="flex justify-end gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+                              {canManageProveedores && <button onClick={(e) => { e.stopPropagation(); handleToggleProveedorActivo(row); }} disabled={mutatingProveedorId === row.id} className={`rounded p-1 hover:bg-zinc-100 disabled:opacity-50 dark:hover:bg-zinc-800 ${row.activo ? "text-zinc-400 hover:text-amber-600" : "text-emerald-600 hover:text-emerald-700"}`} title={row.activo ? "Desactivar" : "Reactivar"} aria-label={row.activo ? "Desactivar" : "Reactivar"}>
+                                <Power className="h-3.5 w-3.5" />
+                              </button>}
+                              {canManageProveedores && <button onClick={(e) => { e.stopPropagation(); openEdit(row); }} className="rounded p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Editar" aria-label="Editar">
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>}
+                              {canDeleteProveedores && <button onClick={(e) => { e.stopPropagation(); handleDeleteProveedor(row); }} disabled={mutatingProveedorId === row.id} className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50" title="Eliminar" aria-label="Eliminar">
+                                {mutatingProveedorId === row.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                              </button>}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot className="sticky bottom-0 bg-zinc-50 dark:bg-zinc-900">
+                    <tr className="border-t border-zinc-200 dark:border-zinc-700">
+                      <td colSpan={3} className="px-3 py-2 text-xs text-zinc-500">{filteredProveedores.length} proveedor{filteredProveedores.length === 1 ? "" : "es"}</td>
+                      <td className="px-3 py-2 text-right font-mono text-sm font-semibold whitespace-nowrap">
+                        {saldosCargando ? <span className="text-zinc-300">…</span> : (
+                          <>
+                            <span className={`block ${totalVisible.ARS > 0.005 ? "text-red-600" : "text-zinc-500"}`}>{formatCurrency(totalVisible.ARS, "ARS")}</span>
+                            {Math.abs(totalVisible.USD) > 0.005 && <span className="block text-xs text-red-600">{formatCurrency(totalVisible.USD, "USD")}</span>}
+                          </>
+                        )}
+                      </td>
+                      <td colSpan={2} />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </Card>
           </>
         )}
 
@@ -1241,8 +1364,8 @@ export default function ProveedoresPage() {
                 <div><p className="text-xs text-zinc-500">Rubro</p><p className="text-sm font-medium">{selectedProv.rubro || "—"}</p></div>
                 <div><p className="text-xs text-zinc-500">Condicion IVA</p><p className="text-sm font-medium">{selectedProv.condicionIva}</p></div>
                 <div><p className="text-xs text-zinc-500">Email</p><p className="text-sm font-medium">{selectedProv.email ? <a href={`mailto:${selectedProv.email}`} className="hover:text-orange-500">{selectedProv.email}</a> : "—"}</p></div>
-                <div><p className="text-xs text-zinc-500">Telefono</p><p className="text-sm font-medium">{selectedProv.telefono ? <a href={`tel:${selectedProv.telefono}`} className="hover:text-orange-500">{selectedProv.telefono}</a> : "—"}</p></div>
-                <div className="col-span-2"><p className="text-xs text-zinc-500">Direccion</p><p className="text-sm font-medium">{selectedProv.direccion || "—"}, {selectedProv.localidad}, {selectedProv.provincia}</p></div>
+                <div><p className="text-xs text-zinc-500">Celular</p><p className="text-sm font-medium">{selectedProv.telefono ? <a href={`tel:${selectedProv.telefono}`} className="hover:text-orange-500">{selectedProv.telefono}</a> : "—"}</p></div>
+                <div className="col-span-2"><p className="text-xs text-zinc-500">Dirección</p><p className="text-sm font-medium">{[String(selectedProv.direccion || "").trim(), textoLocalidad(selectedProv.localidad, selectedProv.provincia)].filter(Boolean).join(", ") || "—"}</p></div>
               </div>
               <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                 <h3 className="text-sm font-semibold mb-3">Comercial</h3>
@@ -1250,7 +1373,7 @@ export default function ProveedoresPage() {
                   <div><p className="text-xs text-zinc-500">Forma de pago</p><p className="text-sm font-medium">{selectedProv.formaPago}</p></div>
                   <div><p className="text-xs text-zinc-500">Dias CC</p><p className="text-sm font-medium">{selectedProv.diasCuentaCorriente}</p></div>
                   <div><p className="text-xs text-zinc-500">Limite credito</p><p className="text-sm font-medium">{formatCurrency(selectedProv.limiteCredito, "ARS")}</p></div>
-                  <div><p className="text-xs text-zinc-500">Saldo CC</p><p className="text-sm font-medium text-red-600">{formatCurrency(selectedProv.saldoCuentaCorriente, "ARS")}</p></div>
+                  <div><p className="text-xs text-zinc-500">Saldo a pagar</p><p className={`text-sm font-medium ${saldoDe(selectedProv.id).ARS > 0.005 ? "text-red-600" : "text-zinc-500"}`}>{formatCurrency(saldoDe(selectedProv.id).ARS, "ARS")}{Math.abs(saldoDe(selectedProv.id).USD) > 0.005 && <span className="block text-xs">{formatCurrency(saldoDe(selectedProv.id).USD, "USD")}</span>}</p><a href={`/finanzas?tab=cc_proveedores&proveedor=${selectedProv.id}`} className="text-xs font-medium text-orange-500 hover:text-orange-600">Ver cuenta corriente →</a></div>
                   {((selectedProv as any).conceptoRetencionGanancias || (selectedProv as any).alicuotaGanancias != null) && (
                     <>
                       <div><p className="text-xs text-zinc-500">Ret. Ganancias</p><p className="text-sm font-medium">{CONCEPTOS_RG830[(selectedProv as any).conceptoRetencionGanancias] || "—"}</p></div>
@@ -1325,187 +1448,236 @@ export default function ProveedoresPage() {
       {modalOpen && (
         <>
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => { setModalOpen(false); setModalFullscreen(false); }} />
-          <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl transition-all dark:bg-zinc-900 ${modalFullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[90vh] w-full max-w-2xl"}`}>
-            <div className="flex items-center justify-between mb-6">
+          <div className={`fixed z-50 flex flex-col overflow-hidden rounded-2xl bg-white shadow-2xl transition-all dark:bg-zinc-900 ${modalFullscreen ? "inset-2" : "inset-4 m-auto h-fit max-h-[92vh] w-full max-w-4xl"}`}>
+            <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-3 dark:border-zinc-700">
               <h2 className="text-lg font-bold">{editingId ? "Editar proveedor" : "Nuevo proveedor"}</h2>
               <div className="flex items-center gap-1">
                 <button onClick={() => setModalFullscreen((value) => !value)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={modalFullscreen ? "Reducir" : "Pantalla completa"}>{modalFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
-                <button onClick={() => { setModalOpen(false); setModalFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100"><X className="h-4 w-4" /></button>
+                <button onClick={() => { setModalOpen(false); setModalFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100" title="Cerrar"><X className="h-4 w-4" /></button>
               </div>
             </div>
-            {formError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700">{formError}</div>}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="col-span-2">
-                <label className="text-xs font-medium text-zinc-500">Razon social *</label>
-                <input value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
-              </div>
-              <div className="col-span-2">
-                <label className="text-xs font-medium text-zinc-500">Nombre de fantasía / comercial</label>
-                <input value={form.nombre_fantasia || ""} onChange={(e) => setForm({ ...form, nombre_fantasia: e.target.value })} placeholder="Ej.: Conoflex (como figura en la lista de costos)" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
-                <p className="mt-1 text-[11px] text-zinc-400">La razón social la completa ARCA con el CUIT. El nombre comercial no figura en ARCA: cargalo acá una vez y la lista de costos reconoce al proveedor sola.</p>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">CUIT *</label>
-                <div className="mt-1 flex gap-1">
-                  <input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} onBlur={() => { if (form.cuit.replace(/\D/g, "").length === 11 && !form.razon_social) handleCuitLookup(); }} className="flex-1 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" placeholder="XX-XXXXXXXX-X" />
-                  <button type="button" onClick={handleCuitLookup} disabled={cuitLoading} className="rounded-lg bg-blue-500 px-3 py-2 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50 transition-colors whitespace-nowrap" title="Buscar en AFIP">
-                    {cuitLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-              <div><label className="text-xs font-medium text-zinc-500">Condición IVA</label>
-                <select value={form.condicion_iva} onChange={(e) => setForm({ ...form, condicion_iva: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
-                  <option value="RI">Responsable Inscripto</option>
-                  <option value="Monotributo">Monotributo</option>
-                  <option value="Exento">Exento</option>
-                  <option value="CF">Consumidor Final</option>
-                </select>
-              </div>
-              <div><label className="text-xs font-medium text-zinc-500">Rubro</label><input value={form.rubro} onChange={(e) => setForm({ ...form, rubro: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div className="flex items-center rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-700">
-                <button type="button" onClick={() => setForm({ ...form, es_transportista: !form.es_transportista })}
-                  className={`relative mr-3 inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${form.es_transportista ? "bg-orange-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
-                  <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${form.es_transportista ? "translate-x-4.5" : "translate-x-0.5"}`} />
-                </button>
+            <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
+              {formError && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{formError}</div>}
+
+              {/* Datos fiscales */}
+              <SeccionModal titulo="Datos fiscales" extra={<LeerDocumentoImpositivo compacto cuitEsperado={form.cuit} onDatos={aplicarDocumentoImpositivo} />}>
                 <div>
-                  <p className="text-xs font-medium text-zinc-700 dark:text-zinc-200">Es transportista</p>
-                  <p className="text-[10px] text-zinc-400">Aparecerá automáticamente en el catálogo de Transportes.</p>
+                  <label className={LABEL_CLS}>CUIT *</label>
+                  <div className="mt-1 flex gap-1">
+                    <input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} onBlur={() => { if (form.cuit.replace(/\D/g, "").length === 11 && !form.razon_social) handleCuitLookup(); }} className="h-9 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" placeholder="XX-XXXXXXXX-X" />
+                    <button type="button" onClick={handleCuitLookup} disabled={cuitLoading} className="h-9 rounded-lg bg-blue-500 px-3 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50 whitespace-nowrap" title="Buscar en ARCA" aria-label="Buscar en ARCA">
+                      {cuitLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-3 rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-700">
-                <button type="button" onClick={() => setForm({ ...form, es_personalizador: !form.es_personalizador })}
-                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${form.es_personalizador ? "bg-orange-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
-                  <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${form.es_personalizador ? "translate-x-4.5" : "translate-x-0.5"}`} />
-                </button>
-                <div className="flex-1">
-                  <p className="text-xs font-medium text-zinc-700 dark:text-zinc-200">Taller de personalización</p>
-                  <p className="text-[10px] text-zinc-400">Bordador / estampador: aparece en Personalización.</p>
+                <div className="lg:col-span-2">
+                  <label className={LABEL_CLS}>Razón social *</label>
+                  <input value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value })} className={INPUT_CLS} />
                 </div>
-                {form.es_personalizador && (
-                  <select value={form.tipo_personalizacion || "ambos"} onChange={(e) => setForm({ ...form, tipo_personalizacion: e.target.value as typeof form.tipo_personalizacion })}
-                    className="rounded-lg border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800">
-                    <option value="bordado">Bordador</option>
-                    <option value="estampado">Estampador</option>
-                    <option value="ambos">Ambos</option>
+                <div className="sm:col-span-2 lg:col-span-3">
+                  <label className={LABEL_CLS}>Nombre de fantasía</label>
+                  <input value={form.nombre_fantasia || ""} onChange={(e) => setForm({ ...form, nombre_fantasia: e.target.value })} placeholder="Ej.: Conoflex" className={INPUT_CLS} />
+                  <p className="mt-1 text-[11px] text-zinc-400">Es el nombre con el que figura en las listas de costos. Si no lo sabés, dejalo vacío: el sistema lo aprende de la primera factura.</p>
+                </div>
+                <div><label className={LABEL_CLS}>Condición IVA</label>
+                  <select value={form.condicion_iva} onChange={(e) => setForm({ ...form, condicion_iva: e.target.value })} className={INPUT_CLS}>
+                    <option value="RI">Responsable Inscripto</option>
+                    <option value="Monotributo">Monotributo</option>
+                    <option value="Exento">Exento</option>
+                    <option value="CF">Consumidor Final</option>
                   </select>
-                )}
-              </div>
-              <div><label className="text-xs font-medium text-zinc-500">Talles especiales <span className="font-normal text-zinc-400">(los que factura como “talle especial”)</span></label><input value={form.talles_especiales} onChange={(e) => setForm({ ...form, talles_especiales: e.target.value })} placeholder="ej: 3XL, 4XL, 5XL, 52, 54" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div><label className="text-xs font-medium text-zinc-500">Tolerancia de precio en facturas (%)</label><input type="number" min={0} max={50} step="0.5" value={form.tolerancia_precio_pct} onChange={(e) => setForm({ ...form, tolerancia_precio_pct: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div><label className="text-xs font-medium text-zinc-500">Email</label><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div><label className="text-xs font-medium text-zinc-500">Telefono</label><input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div><label className="text-xs font-medium text-zinc-500">Direccion</label><input value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div><label className="text-xs font-medium text-zinc-500">Localidad</label><input value={form.localidad} onChange={(e) => setForm({ ...form, localidad: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div><label className="text-xs font-medium text-zinc-500">Provincia</label>
-                <select value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
-                  <option value="">Seleccionar...</option>
-                  {PROVINCIAS_ARGENTINA.map((provincia) => <option key={provincia} value={provincia}>{provincia}</option>)}
-                </select>
-              </div>
-              <div><label className="text-xs font-medium text-zinc-500">Forma de pago</label>
-                <select value={form.forma_pago} onChange={(e) => setForm({ ...form, forma_pago: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
-                  <option value="Transferencia">Transferencia</option><option value="Tarjeta">Tarjeta</option><option value="Cheque">Cheque</option><option value="Echeq">Echeq</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option>
-                </select>
-              </div>
-              <div><label className="text-xs font-medium text-zinc-500">Tiempo de pago (días)</label><input type="number" list="tiempos-pago-proveedor" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /><datalist id="tiempos-pago-proveedor"><option value="0" /><option value="15" /><option value="30" /><option value="45" /><option value="60" /></datalist></div>
-              <div><label className="text-xs font-medium text-zinc-500">Limite credito</label><input type="number" value={form.limite_credito} onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div className="col-span-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                <h3 className="text-sm font-semibold">Datos bancarios <span className="font-normal text-zinc-400">(opcionales)</span></h3>
-              </div>
-              <div><label className="text-xs font-medium text-zinc-500">Banco</label><select value={(form as any).banco} onChange={(e) => setForm({ ...form, banco: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"><option value="">Seleccionar...</option>{["Banco Nación","Banco Provincia","Banco Ciudad","Banco Galicia","Banco Santander","Banco BBVA","Banco Macro","Banco HSBC","Banco ICBC","Banco Patagonia","Banco Credicoop","Banco Comafi","Banco Itaú","Banco Supervielle","Banco Columbia","Brubank","Mercado Pago","Ualá","Naranja X","Otro"].map(b => <option key={b} value={b}>{b}</option>)}</select></div>
-              <div><label className="text-xs font-medium text-zinc-500">CBU / CVU</label><input value={form.cbu} onChange={(e) => setForm({ ...form, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div><label className="text-xs font-medium text-zinc-500">Alias</label><input value={form.alias_bancario} onChange={(e) => setForm({ ...form, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div><label className="text-xs font-medium text-zinc-500">Titular</label><input value={(form as any).titular_cuenta} onChange={(e) => setForm({ ...form, titular_cuenta: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div>
-                <label className="text-xs font-medium text-zinc-500">CUIT para pagos y eCheq</label>
-                <div className="mt-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-800">
-                  <p className="text-sm font-mono font-medium">{form.cuit || "Completá el CUIT del proveedor"}</p>
-                  <p className="mt-0.5 text-[10px] text-zinc-400">Se usa automáticamente el CUIT fiscal del proveedor.</p>
                 </div>
-              </div>
-              <div><label className="text-xs font-medium text-zinc-500">Tipo de cuenta</label><select value={(form as any).tipo_cuenta} onChange={(e) => setForm({ ...form, tipo_cuenta: e.target.value } as any)} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800"><option value="">Seleccionar...</option><option value="CC">Cuenta corriente (CC)</option><option value="CA">Caja de ahorro (CA)</option><option value="CVU">CVU</option></select></div>
-              <div><label className="text-xs font-medium text-zinc-500">N° de cuenta</label><input value={form.numero_cuenta} onChange={(e) => setForm({ ...form, numero_cuenta: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              <div className="col-span-2"><label className="text-xs font-medium text-zinc-500">Notas</label><textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={3} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-              {/* Retención Ganancias RG 830 */}
-              <div className="col-span-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                <h3 className="text-sm font-semibold mb-3 flex items-center gap-2">Retención Ganancias (RG 830)</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-xs font-medium text-zinc-500">Concepto de retención</label>
-                    <select value={form.concepto_retencion_ganancias} onChange={(e) => {
-                      const concepto = e.target.value;
-                      const alicuotas: Record<string, number> = { compraventa_bienes: 2, servicios: 2, honorarios: 2, alquileres_inmuebles: 6, alquileres_muebles: 2, intereses_financieros: 3, intereses_otros: 6, transporte: 0.25, fletes: 0.25, comisiones: 2, publicidad: 2, seguros: 2 };
-                      setForm({ ...form, concepto_retencion_ganancias: concepto, alicuota_ganancias: concepto ? (alicuotas[concepto] ?? 2) : null });
-                    }} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800">
-                      <option value="">Sin definir (usa tasa global)</option>
-                      {Object.entries(CONCEPTOS_RG830).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                <div><label className={LABEL_CLS}>Rubro</label><input value={form.rubro} onChange={(e) => setForm({ ...form, rubro: e.target.value })} className={INPUT_CLS} /></div>
+                <div><label className={LABEL_CLS}>Dirección</label><input value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} className={INPUT_CLS} /></div>
+                <div><label className={LABEL_CLS}>Localidad</label><input value={form.localidad} onChange={(e) => setForm({ ...form, localidad: e.target.value })} className={INPUT_CLS} /></div>
+                <div><label className={LABEL_CLS}>Provincia</label>
+                  <select value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })} className={INPUT_CLS}>
+                    <option value="">Seleccionar...</option>
+                    {form.provincia && !PROVINCIAS_ARGENTINA.includes(form.provincia) && <option value={form.provincia}>{form.provincia}</option>}
+                    {PROVINCIAS_ARGENTINA.map((provincia) => <option key={provincia} value={provincia}>{provincia}</option>)}
+                  </select>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 sm:col-span-2 lg:col-span-3">
+                  <span className={LABEL_CLS}>¿Es transporte o taller?</span>
+                  <div role="radiogroup" aria-label="Tipo de proveedor" className="inline-flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
+                    {([
+                      { id: "no", label: "No" },
+                      { id: "transporte", label: "Transporte" },
+                      { id: "taller", label: "Taller" },
+                      ...(ambosTiposAlCargar ? [{ id: "ambos", label: "Los dos" }] : []),
+                    ] as Array<{ id: "no" | "transporte" | "taller" | "ambos"; label: string }>).map((op) => {
+                      const actual = form.es_personalizador && form.es_transportista && ambosTiposAlCargar ? "ambos" : form.es_personalizador ? "taller" : form.es_transportista ? "transporte" : "no";
+                      const elegido = actual === op.id;
+                      return (
+                        <button key={op.id} type="button" role="radio" aria-checked={elegido}
+                          onClick={() => setForm({
+                            ...form,
+                            es_transportista: op.id === "transporte" || op.id === "ambos",
+                            es_personalizador: op.id === "taller" || op.id === "ambos",
+                            tipo_personalizacion: op.id === "taller" || op.id === "ambos" ? (form.tipo_personalizacion || "ambos") : form.tipo_personalizacion,
+                          })}
+                          className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${elegido ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}>
+                          {op.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {form.es_personalizador && (
+                    <select value={form.tipo_personalizacion || "ambos"} onChange={(e) => setForm({ ...form, tipo_personalizacion: e.target.value as typeof form.tipo_personalizacion })}
+                      aria-label="Tipo de taller" className="h-8 rounded-lg border border-zinc-200 bg-white px-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+                      <option value="bordado">Bordador</option>
+                      <option value="estampado">Estampador</option>
+                      <option value="ambos">Ambos</option>
                     </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-medium text-zinc-500">Alícuota inscripto (%)</label>
-                    <input type="number" step="0.25" value={form.alicuota_ganancias ?? ""} onChange={(e) => setForm({ ...form, alicuota_ganancias: e.target.value ? Number(e.target.value) : null })}
-                      placeholder="Ej: 2" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
-                    <p className="text-[10px] text-zinc-400 mt-0.5">Se auto-completa al consultar CUIT en ARCA</p>
-                  </div>
+                  )}
+                  <span className="text-[11px] text-zinc-400">
+                    {form.es_personalizador && form.es_transportista ? "Aparece en Personalización y en el catálogo de Transportes." : form.es_personalizador ? "Aparece en Personalización." : form.es_transportista ? "Aparece en el catálogo de Transportes." : ""}
+                  </span>
                 </div>
-              </div>
-              {/* Exclusión de retención */}
-              <div className="col-span-2 flex items-start gap-4 mt-2">
-                <div className="flex items-center gap-2 pt-1">
-                  <button type="button" onClick={() => setForm({ ...form, exclusion_retencion: !form.exclusion_retencion })}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full ${form.exclusion_retencion ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
+              </SeccionModal>
+
+              {/* Contacto */}
+              <SeccionModal titulo="Contacto">
+                <div>
+                  <label className={LABEL_CLS}>Email de facturación</label>
+                  <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={INPUT_CLS} />
+                  <button type="button" onClick={() => setContactosExtra((prev) => [...prev, { tipo: "email", etiqueta: "", valor: "" }])} className="mt-1 inline-flex items-center gap-0.5 text-xs font-medium text-orange-600 hover:text-orange-700"><Plus className="h-3 w-3" /> email</button>
+                </div>
+                <div>
+                  <label className={LABEL_CLS}>Celular</label>
+                  <input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} placeholder="Ej.: 11 5555-1234" className={INPUT_CLS} />
+                  <button type="button" onClick={() => setContactosExtra((prev) => [...prev, { tipo: "telefono", etiqueta: "", valor: "" }])} className="mt-1 inline-flex items-center gap-0.5 text-xs font-medium text-orange-600 hover:text-orange-700"><Plus className="h-3 w-3" /> celular</button>
+                </div>
+                {contactosExtra.length > 0 && (
+                  <div className="space-y-2 sm:col-span-2 lg:col-span-3">
+                    {contactosExtra.map((c, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <input value={c.etiqueta} onChange={(e) => setContactosExtra((prev) => prev.map((x, j) => j === i ? { ...x, etiqueta: e.target.value } : x))}
+                          placeholder={c.tipo === "email" ? "Etiqueta (ej. Ventas)" : "Etiqueta (ej. Depósito)"} aria-label="Etiqueta"
+                          className="h-9 w-44 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+                        <input type={c.tipo === "email" ? "email" : "text"} value={c.valor} onChange={(e) => setContactosExtra((prev) => prev.map((x, j) => j === i ? { ...x, valor: e.target.value } : x))}
+                          placeholder={c.tipo === "email" ? "otro@proveedor.com" : "Celular"} aria-label={c.tipo === "email" ? "Email adicional" : "Celular adicional"}
+                          className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+                        <button type="button" onClick={() => setContactosExtra((prev) => prev.filter((_, j) => j !== i))} className="rounded p-1.5 text-zinc-400 hover:text-red-500" title="Quitar" aria-label="Quitar"><X className="h-3.5 w-3.5" /></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {contactosExistentes.length > 0 && (
+                  <div className="sm:col-span-2 lg:col-span-3">
+                    <p className="mb-1 text-[11px] text-zinc-400">Contactos ya cargados (se editan o borran desde la ficha del proveedor):</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {contactosExistentes.map((c) => (
+                        <span key={c.id} className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                          <span className="font-medium">{c.nombre}</span>
+                          {[c.cargo, c.email, c.whatsapp || c.telefono].filter(Boolean).join(" · ")}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </SeccionModal>
+
+              {/* Pago */}
+              <SeccionModal titulo="Pago">
+                <div><label className={LABEL_CLS}>Forma de pago</label>
+                  <select value={form.forma_pago} onChange={(e) => setForm({ ...form, forma_pago: e.target.value })} className={INPUT_CLS}>
+                    <option value="Transferencia">Transferencia</option><option value="Tarjeta">Tarjeta</option><option value="Cheque">Cheque</option><option value="Echeq">Echeq</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option>
+                  </select>
+                </div>
+                <div><label className={LABEL_CLS}>Tiempo de pago (días)</label><input type="number" list="tiempos-pago-proveedor" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className={INPUT_CLS} /><datalist id="tiempos-pago-proveedor"><option value="0" /><option value="15" /><option value="30" /><option value="45" /><option value="60" /></datalist></div>
+                <div><label className={LABEL_CLS}>Límite de crédito</label><input type="number" value={form.limite_credito} onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })} className={INPUT_CLS} /></div>
+              </SeccionModal>
+
+              {/* Datos bancarios */}
+              <SeccionModal titulo="Datos bancarios" extra={<span className="text-[11px] text-zinc-400">Opcionales</span>}>
+                <div><label className={LABEL_CLS}>Banco</label><select value={(form as any).banco} onChange={(e) => setForm({ ...form, banco: e.target.value } as any)} className={INPUT_CLS}><option value="">Seleccionar...</option>{["Banco Nación","Banco Provincia","Banco Ciudad","Banco Galicia","Banco Santander","Banco BBVA","Banco Macro","Banco HSBC","Banco ICBC","Banco Patagonia","Banco Credicoop","Banco Comafi","Banco Itaú","Banco Supervielle","Banco Columbia","Brubank","Mercado Pago","Ualá","Naranja X","Otro"].map(b => <option key={b} value={b}>{b}</option>)}</select></div>
+                <div><label className={LABEL_CLS}>CBU / CVU</label><input value={form.cbu} onChange={(e) => setForm({ ...form, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className={`${INPUT_CLS} font-mono`} /></div>
+                <div><label className={LABEL_CLS}>Alias</label><input value={form.alias_bancario} onChange={(e) => setForm({ ...form, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className={INPUT_CLS} /></div>
+                <div><label className={LABEL_CLS}>Titular</label><input value={(form as any).titular_cuenta} onChange={(e) => setForm({ ...form, titular_cuenta: e.target.value } as any)} className={INPUT_CLS} /></div>
+                <div><label className={LABEL_CLS}>Tipo de cuenta</label><select value={(form as any).tipo_cuenta} onChange={(e) => setForm({ ...form, tipo_cuenta: e.target.value } as any)} className={INPUT_CLS}><option value="">Seleccionar...</option><option value="CC">Cuenta corriente (CC)</option><option value="CA">Caja de ahorro (CA)</option><option value="CVU">CVU</option></select></div>
+                <div><label className={LABEL_CLS}>N° de cuenta</label><input value={form.numero_cuenta} onChange={(e) => setForm({ ...form, numero_cuenta: e.target.value })} className={INPUT_CLS} /></div>
+                <div className="sm:col-span-2 lg:col-span-3">
+                  <p className="text-[11px] text-zinc-400">CUIT para pagos y eCheq: <span className="font-mono font-medium text-zinc-600 dark:text-zinc-300">{form.cuit || "completá el CUIT del proveedor"}</span> (se usa siempre el CUIT fiscal del proveedor).</p>
+                </div>
+              </SeccionModal>
+
+              {/* Retención de Ganancias RG 830 */}
+              <SeccionModal titulo="Retención de Ganancias (RG 830)">
+                <div>
+                  <label className={LABEL_CLS}>Concepto de retención</label>
+                  <select value={form.concepto_retencion_ganancias} onChange={(e) => {
+                    const concepto = e.target.value;
+                    const alicuotas: Record<string, number> = { compraventa_bienes: 2, servicios: 2, honorarios: 2, alquileres_inmuebles: 6, alquileres_muebles: 2, intereses_financieros: 3, intereses_otros: 6, transporte: 0.25, fletes: 0.25, comisiones: 2, publicidad: 2, seguros: 2 };
+                    setForm({ ...form, concepto_retencion_ganancias: concepto, alicuota_ganancias: concepto ? (alicuotas[concepto] ?? 2) : null });
+                  }} className={INPUT_CLS}>
+                    <option value="">Sin definir (usa tasa global)</option>
+                    {Object.entries(CONCEPTOS_RG830).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className={LABEL_CLS}>Alícuota inscripto (%)</label>
+                  <input type="number" step="0.25" value={form.alicuota_ganancias ?? ""} onChange={(e) => setForm({ ...form, alicuota_ganancias: e.target.value ? Number(e.target.value) : null })}
+                    placeholder="Ej: 2" className={INPUT_CLS} />
+                  <p className="mt-0.5 text-[10px] text-zinc-400">Se autocompleta al consultar el CUIT en ARCA</p>
+                </div>
+                <div className="flex items-center gap-2 pt-5">
+                  <button type="button" role="switch" aria-checked={form.exclusion_retencion} aria-label="Excluido de retención" onClick={() => setForm({ ...form, exclusion_retencion: !form.exclusion_retencion })}
+                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full ${form.exclusion_retencion ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
                     <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${form.exclusion_retencion ? "translate-x-4.5" : "translate-x-0.5"}`} />
                   </button>
                   <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Excluido de retención</span>
                 </div>
                 {form.exclusion_retencion && (
-                  <div className="flex-1 grid grid-cols-3 gap-2">
+                  <>
                     <div>
-                      <label className="text-[10px] font-medium text-zinc-500">Desde</label>
-                      <input type="date" value={form.exclusion_retencion_desde || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_desde: e.target.value || null })}
-                        className="mt-0.5 w-full rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      <label className={LABEL_CLS}>Exclusión desde</label>
+                      <input type="date" value={form.exclusion_retencion_desde || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_desde: e.target.value || null })} className={INPUT_CLS} />
                     </div>
                     <div>
-                      <label className="text-[10px] font-medium text-zinc-500">Hasta</label>
-                      <input type="date" value={form.exclusion_retencion_hasta || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_hasta: e.target.value || null })}
-                        className="mt-0.5 w-full rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      <label className={LABEL_CLS}>Exclusión hasta</label>
+                      <input type="date" value={form.exclusion_retencion_hasta || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_hasta: e.target.value || null })} className={INPUT_CLS} />
                     </div>
                     <div>
-                      <label className="text-[10px] font-medium text-zinc-500">Nro. certificado</label>
-                      <input value={form.exclusion_retencion_cert || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_cert: e.target.value || null })}
-                        placeholder="Nro. cert." className="mt-0.5 w-full rounded border border-zinc-200 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                      <label className={LABEL_CLS}>N° de certificado</label>
+                      <input value={form.exclusion_retencion_cert || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_cert: e.target.value || null })} placeholder="N° cert." className={INPUT_CLS} />
                     </div>
-                  </div>
+                  </>
                 )}
-              </div>
-              {/* Clasificacion */}
-              <div className="col-span-2 border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                <h3 className="text-sm font-semibold mb-3 flex items-center gap-2"><Tag className="h-4 w-4" /> Clasificacion del proveedor</h3>
-                <div className="flex flex-wrap gap-2">
-                  {CLASIFICACION_TAGS.map((tag) => {
-                    const selected = form.clasificacion_tags.includes(tag);
-                    const color = selected ? TAG_COLORS[tag] : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500";
-                    return (
-                      <button key={tag} type="button" onClick={() => {
-                        setForm({ ...form, clasificacion_tags: selected ? form.clasificacion_tags.filter((t) => t !== tag) : [...form.clasificacion_tags, tag] });
-                      }} className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-medium transition-all cursor-pointer border ${selected ? "border-transparent ring-1" : "border-zinc-200 dark:border-zinc-700"} ${color}`}>
-                        {tag}
-                      </button>
-                    );
-                  })}
+              </SeccionModal>
+
+              {/* Notas y clasificación */}
+              <SeccionModal titulo="Notas y clasificación">
+                <div className="sm:col-span-2 lg:col-span-3"><label className={LABEL_CLS}>Notas</label><textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+                <div className="sm:col-span-2 lg:col-span-3">
+                  <label className={`${LABEL_CLS} flex items-center gap-1`}><Tag className="h-3.5 w-3.5" /> Clasificación del proveedor</label>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    {CLASIFICACION_TAGS.map((tag) => {
+                      const selected = form.clasificacion_tags.includes(tag);
+                      const color = selected ? TAG_COLORS[tag] : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500";
+                      return (
+                        <button key={tag} type="button" aria-pressed={selected} onClick={() => {
+                          setForm({ ...form, clasificacion_tags: selected ? form.clasificacion_tags.filter((t) => t !== tag) : [...form.clasificacion_tags, tag] });
+                        }} className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-medium transition-all cursor-pointer border ${selected ? "border-transparent ring-1" : "border-zinc-200 dark:border-zinc-700"} ${color}`}>
+                          {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-              <div className="col-span-2">
-                <label className="text-xs font-medium text-zinc-500">Marcas <span className="text-zinc-400 font-normal">(separadas por coma)</span></label>
-                <input value={form.marcas} onChange={(e) => setForm({ ...form, marcas: e.target.value })} placeholder="Ej: Spirax Sarco, Valvitalia, FMC" className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
-              </div>
-              <div className="col-span-2">
-                <label className="text-xs font-medium text-zinc-500">Comentario de clasificacion</label>
-                <textarea value={form.clasificacion_nota} onChange={(e) => setForm({ ...form, clasificacion_nota: e.target.value })} rows={2} placeholder="Notas sobre precio, entrega, calidad..." className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
-              </div>
+                <div className="sm:col-span-2 lg:col-span-3">
+                  <label className={LABEL_CLS}>Marcas <span className="font-normal text-zinc-400">(separadas por coma)</span></label>
+                  <input value={form.marcas} onChange={(e) => setForm({ ...form, marcas: e.target.value })} placeholder="Ej: 3M, Funcional, Pampero" className={INPUT_CLS} />
+                </div>
+                <div className="sm:col-span-2 lg:col-span-3">
+                  <label className={LABEL_CLS}>Comentario de clasificación</label>
+                  <textarea value={form.clasificacion_nota} onChange={(e) => setForm({ ...form, clasificacion_nota: e.target.value })} rows={2} placeholder="Notas sobre precio, entrega, calidad..." className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+                </div>
+              </SeccionModal>
+              <p className="text-[11px] text-zinc-400">Los talles especiales y la tolerancia de precio de este proveedor se editan en Compras → Limpieza de OC (reglas del proveedor).</p>
             </div>
-            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200">
-              <button onClick={() => setModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50">Cancelar</button>
+            <div className="flex justify-end gap-3 border-t border-zinc-200 bg-white px-6 py-3 dark:border-zinc-700 dark:bg-zinc-900">
+              <button onClick={() => { setModalOpen(false); setModalFullscreen(false); }} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
               <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />}
                 {editingId ? "Guardar" : "Crear"}

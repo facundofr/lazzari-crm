@@ -95,7 +95,7 @@ export default function MuestrasPage() {
   const [envios, setEnvios] = useState<Envio[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [productos, setProductos] = useState<Map<string, { descripcion: string; codigo: string; talle: string | null; color: string | null }>>(new Map());
-  const [clientes, setClientes] = useState<Array<{ id: string; razon_social: string }>>([]);
+  const [clientes, setClientes] = useState<Array<{ id: string; razon_social: string; cuit?: string | null }>>([]);
   const [sucursales, setSucursales] = useState<Array<{ id: string; cliente_id: string; nombre: string }>>([]);
   const [filtro, setFiltro] = useState<"abiertos" | "viejos" | EstadoEnvio | "todos">("abiertos");
   const [search, setSearch] = useState("");
@@ -112,7 +112,7 @@ export default function MuestrasPage() {
     try {
       const [envRes, cliRes, sucRes, prodRes] = await Promise.all([
         db.from("muestra_envios").select("*, created_by_profile:created_by(full_name)").eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).order("created_at", { ascending: false }),
-        db.from("clientes").select("id, razon_social").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
+        db.from("clientes").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
         db.from("cliente_sucursales").select("id, cliente_id, nombre").eq("activo", true).order("principal", { ascending: false }),
         db.from("muestra_productos").select("id, codigo, descripcion, talle, color").eq("sociedad_id", sociedadId),
       ]);
@@ -397,7 +397,7 @@ export default function MuestrasPage() {
               <div className="grid gap-3 md:grid-cols-4">
                 <div className="md:col-span-2">
                   <label className="text-xs text-zinc-500">Cliente {form.cliente_id && <b className="text-zinc-800 dark:text-zinc-100">· {clienteMap.get(form.cliente_id)}</b>}</label>
-                  <Autocompletar opciones={clientes.map(c => ({ valor: c.id, texto: c.razon_social }))} placeholder={form.cliente_id ? "Cambiar cliente…" : "Escribí el cliente…"}
+                  <Autocompletar opciones={clientes.map(c => ({ valor: c.id, texto: c.razon_social, detalle: c.cuit || undefined }))} placeholder={form.cliente_id ? "Cambiar cliente…" : "Escribí el cliente…"}
                     onElegir={v => setForm(f => ({ ...f, cliente_id: v, sucursal_id: "" }))} className={inputClass} />
                 </div>
                 <div>

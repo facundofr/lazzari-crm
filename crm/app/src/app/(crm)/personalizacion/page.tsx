@@ -35,7 +35,7 @@ const TECNICAS = ["Bordado", "Estampa", "DTF", "Vinilo", "Sublimado", "Otro"];
 const UBICACIONES = ["Pecho izquierdo", "Pecho derecho", "Espalda", "Espalda alta", "Manga izquierda", "Manga derecha", "Gorra frente", "Bolsillo", "Pierna"];
 
 interface Taller { id: string; razon_social: string; cuit: string | null; tipo_personalizacion: string | null; telefono?: string | null }
-interface Cliente { id: string; razon_social: string }
+interface Cliente { id: string; razon_social: string; cuit?: string | null }
 interface Precio { id: string; proveedor_id: string; tecnica: string; detalle: string; precio: number; moneda: string; activo: boolean }
 interface Logo { id: string; cliente_id: string; nombre: string; tecnica: string | null; ubicacion: string | null; proveedor_id: string | null; ultimo_costo: number | null; archivo_url: string | null; archivo_nombre: string | null; activo: boolean }
 interface Item {
@@ -87,7 +87,7 @@ export default function PersonalizacionPage() {
     try {
       const [provRes, cliRes, precRes, logoRes, trabRes, liqRes] = await Promise.all([
         db.from("proveedores").select("id, razon_social, cuit, telefono, es_personalizador, tipo_personalizacion").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
-        db.from("clientes").select("id, razon_social").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
+        db.from("clientes").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).eq("activo", true).order("razon_social"),
         db.from("personalizacion_precios").select("*").eq("sociedad_id", sociedadId).order("tecnica"),
         db.from("personalizacion_logos").select("*").eq("sociedad_id", sociedadId).eq("activo", true).order("nombre"),
         db.from("personalizacion_trabajos").select("*, personalizacion_items(*)").eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).order("created_at", { ascending: false }).limit(500),
@@ -370,7 +370,7 @@ function TrabajoModal({ sociedadId, trabajo, talleres, clientes, precios, logos,
             </div>
             <div>
               <label className="text-xs text-zinc-500">Cliente</label>
-              <Autocompletar opciones={clientes.map(c => ({ valor: c.id, texto: c.razon_social }))} placeholder={clientes.find(c => c.id === t.cliente_id)?.razon_social || "Escribí el cliente…"}
+              <Autocompletar opciones={clientes.map(c => ({ valor: c.id, texto: c.razon_social, detalle: c.cuit || undefined }))} placeholder={clientes.find(c => c.id === t.cliente_id)?.razon_social || "Escribí el cliente…"}
                 onElegir={v => set({ cliente_id: v, presupuesto_id: null })} className={`${inp} ${t.cliente_id ? "placeholder:text-zinc-800 dark:placeholder:text-zinc-200" : ""}`} />
             </div>
             <div>
@@ -511,7 +511,7 @@ function TalleresTab({ sociedadId, talleres, todos, precios, trabajos, onNuevo, 
         </div>
         <div className="mt-3 border-t border-zinc-100 pt-3 dark:border-zinc-800">
           <label className="text-[11px] text-zinc-500">¿Ya está cargado como proveedor? Marcalo como taller:</label>
-          <Autocompletar chico opciones={todos.filter(p => !talleres.some(t => t.id === p.id)).map(p => ({ valor: p.id, texto: p.razon_social }))} placeholder="Escribí el proveedor…" onElegir={marcarExistente} className="mt-1 w-full border-zinc-200 dark:border-zinc-700" />
+          <Autocompletar chico opciones={todos.filter(p => !talleres.some(t => t.id === p.id)).map(p => ({ valor: p.id, texto: p.razon_social, detalle: p.cuit || undefined }))} placeholder="Escribí el proveedor…" onElegir={marcarExistente} className="mt-1 w-full border-zinc-200 dark:border-zinc-700" />
         </div>
       </div>
 
@@ -632,7 +632,7 @@ function LogosTab({ sociedadId, clientes, talleres, logos, onCambio, toast }: { 
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="w-80"><Autocompletar opciones={clientes.map(c => ({ valor: c.id, texto: `${c.razon_social}${conLogos.includes(c.id) ? " · tiene logos" : ""}` }))} placeholder={clientes.find(c => c.id === clienteId)?.razon_social || "Escribí el cliente…"} onElegir={setClienteId} className={`${inp} ${clienteId ? "placeholder:text-zinc-800 dark:placeholder:text-zinc-200" : ""}`} /></div>
+        <div className="w-80"><Autocompletar opciones={clientes.map(c => ({ valor: c.id, texto: `${c.razon_social}${conLogos.includes(c.id) ? " · tiene logos" : ""}`, detalle: c.cuit || undefined }))} placeholder={clientes.find(c => c.id === clienteId)?.razon_social || "Escribí el cliente…"} onElegir={setClienteId} className={`${inp} ${clienteId ? "placeholder:text-zinc-800 dark:placeholder:text-zinc-200" : ""}`} /></div>
         <span className="text-xs text-zinc-500">Cada logo guarda técnica, ubicación, taller y último costo: al cargar un trabajo se completa solo.</span>
       </div>
       {clienteId && (

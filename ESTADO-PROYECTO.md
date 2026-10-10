@@ -1,8 +1,90 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 09/10/2026 · Versión publicada: **V1.1.410** (migración 20261010100000 corrida en Supabase)
+Actualizado: 09/10/2026 · Versión publicada: **V1.1.411** (en curso: V1.1.412)
 
-## 1. Última tanda publicada (V1.1.410)
+## 0. Arreglo urgente V1.1.411 (publicado, solo código, sin migración)
+
+- **Oportunidades:** el vendedor del cliente se lee de `clientes.assigned_to`. Antes leía `vendedor_id`, que no existe, y la pantalla no cargaba.
+- **Avisos (toast):** el objeto `toast` ahora es estable (`useMemo`). Antes, si una carga fallaba, el aviso se repetía sin parar en Oportunidades, Muestras, Personalización y Papelera.
+- **Ficha 360 → Cobros:** ahora muestra todos los medios de cobro (transferencia, efectivo, cheque, retenciones, etc.). Antes buscaba solo el tipo "cobro" y faltaban la mayoría.
+- **Cron BCRA:** trae clientes e informes de a páginas, así no quedan clientes sin revisar si hay más de 1000.
+- Revisado: las columnas que usan las pantallas nuevas existen en la base. Se verificó solo leyendo.
+
+## 0.b En curso: V1.1.412 (sin publicar, sin migración)
+
+**Programado (falta publicar):**
+- **Compras → OC:**
+  - Se sacó el candado "Edición bloqueada".
+  - Si la OC tiene factura, el botón Editar sale en amarillo, avisa y deja editar.
+- **Proveedores → lista:**
+  - Sin la fila de tarjetas de arriba.
+  - Buscador, pestañas rápidas (Todos / Con deuda / Transportes / Talleres / Inactivos) y Exportar en una línea.
+  - Columnas: Proveedor (con nombre de fantasía, CUIT y chip Transporte/Taller), Contacto (copiar y WhatsApp), Localidad, Saldo a pagar con total abajo, y Última compra.
+  - Filas finas y botones al pasar el mouse.
+  - **Saldo arreglado:** antes leía `proveedores.saldo_cuenta_corriente`, que nadie actualizaba (de ahí los -$66 M). Ahora se calcula igual que la cuenta corriente de Finanzas (`lib/saldo-proveedores.ts`).
+- **Proveedores → alta:**
+  - Secciones, CUIT primero y botones fijos abajo.
+  - "¿Es transporte o taller?" con una sola opción.
+  - Email de facturación + celular, con "+ email" y "+ celular" (se guardan en `contactos`).
+  - Talles especiales y tolerancia se editan en Compras → Limpieza de OC.
+  - IA de papeles impositivos.
+- **Clientes → alta:**
+  - Secciones y CUIT primero.
+  - Email de cobranzas.
+  - Aviso de duplicados en las dos sociedades.
+  - Semáforo BCRA en vivo sin guardar (`/api/bcra/preview`).
+  - Vendedor = el que lo crea.
+  - IA de papeles impositivos.
+- **Buscador (Autocompletar):**
+  - Muestra resultados recién con 2 letras, como máximo 8, con el CUIT al lado.
+  - Ojo: en Limpieza de OC ya no aparecen arriba los proveedores con pendientes al hacer clic.
+- **Nombre de fantasía:**
+  - Al guardar una factura de un proveedor existente, si no tenía nombre de fantasía, lo guarda solo.
+  - Si tenía otro distinto, avisa y no lo pisa (`lib/nombre-fantasia.ts`).
+
+**Pendiente, próximas tandas:**
+1. Alta de cliente: cargar sucursales en el mismo alta (hoy solo al editar); se guardan junto con el cliente.
+2. "Para revisar" (idea 8): necesita mandar OC, clientes y proveedores a la Papelera, así que lleva migración.
+3. Lista de costos dentro de Proveedores y listas centralizadas (idea 9).
+4. Comisiones (idea 1) y Torneo (idea 7): faltan respuestas de Augusto.
+
+## 0. Arreglo urgente V1.1.411 (publicado, solo código, sin migración)
+
+- **Oportunidades:** el vendedor del cliente se lee de `clientes.assigned_to`. Antes leía `vendedor_id`, que no existe, y la pantalla no cargaba.
+- **Avisos (toast):** el objeto `toast` ahora es estable (`useMemo`). Antes, si una carga fallaba, el aviso se repetía sin parar en Oportunidades, Muestras, Personalización y Papelera.
+- **Ficha 360 → Cobros:** ahora muestra todos los medios de cobro (transferencia, efectivo, cheque, retenciones, etc.). Antes buscaba solo el tipo "cobro" y faltaban la mayoría.
+- **Cron BCRA:** trae clientes e informes de a páginas, así no quedan clientes sin revisar si hay más de 1000.
+- Revisado: las columnas que usan las pantallas nuevas existen en la base. Se verificó solo leyendo.
+
+## 0.b En curso: V1.1.412 (sin publicar)
+
+**Ya aplicado:**
+- **Compras → OC:** se sacó el candado "Edición bloqueada". Si la OC tiene factura, el botón Editar sale en amarillo y avisa que la factura y los pagos no cambian, pero deja editar.
+
+**Correcciones anotadas, sin aplicar (Augusto avisa cuándo):**
+1. Buscador desplegable (`components/ui/autocompletar.tsx`, ej. Personalización → Logos por cliente): no le gusta que se abra la lista entera. Falta que elija el estilo nuevo.
+2. Eliminar una OC con facturas vinculadas: hoy no se puede. Va al circuito "Para revisar" (idea 8 de IDEAS-PROXIMAS.md). Caso típico: se equivocaron de número de OC y la quieren corregir.
+3. Proveedores → Nuevo proveedor: por defecto es de mercadería (no se marca nada). Solo si es transporte o taller se marca, y **una sola opción** (no las dos).
+4. Rediseño de las ventanas de alta de **proveedor y cliente** (mismo criterio en las dos):
+   - CUIT primero, con ARCA autocompletando.
+   - Secciones con título y botones Guardar/Cancelar fijos abajo.
+   - Espacios parejos, 3 columnas en pantallas anchas y tildes corregidas.
+   - Proveedor:
+     - Sacar "Talles especiales" del alta. Se sigue usando en Compras: definir dónde se edita.
+     - Pedir **email de facturación** y **celular**, con "+ email" y "+ celular" para agregar más (no necesariamente de facturación).
+     - Dejar retención de Ganancias y exclusión.
+     - **IA que lee archivos impositivos del proveedor** (constancia de inscripción, certificado de exención de IVA o de retención) y completa los datos.
+   - **Nombre de fantasía:** es importante, porque las listas de proveedores usan ese nombre.
+     - CUIT, razón social y nombre de fantasía tienen que quedar siempre relacionados.
+     - Si no se carga, no pasa nada: al cargar una factura de ese proveedor, la IA lo detecta y lo guarda sola (hoy solo lo hace al dar de alta un proveedor nuevo).
+     - Augusto va a contar después otro tema que depende de esto.
+   - Probablemente requiere migración aditiva para los emails y celulares extra del proveedor (los clientes ya usan la tabla `contactos`).
+5. **Proveedores → lista:**
+   - Sacar la fila de tarjetas de arriba (Proveedores / Deuda CC / Crédito total / Listas vigentes / Listas vencidas).
+   - Rediseño estético y funcional propuesto, pendiente de OK.
+   - Revisar el posible error: la tarjeta "Deuda CC" dice -$66 millones, pero todos los saldos de la tabla dan $0,00.
+
+## 1. Tanda anterior publicada (V1.1.410)
 
 Todo está en `C:\Users\lazza\lazzari\crm\app`: los tipos chequeados sin errores y el orden de hooks verificado.
 
