@@ -1,12 +1,12 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 09/10/2026 · Versión en la compu: **V1.1.410** (todavía **sin publicar**)
+Actualizado: 09/10/2026 · Versión publicada: **V1.1.410** (migración 20261010100000 corrida en Supabase)
 
-## 1. Listo en la compu, falta publicar (tanda grande)
+## 1. Última tanda publicada (V1.1.410)
 
 Todo está en `C:\Users\lazza\lazzari\crm\app`: los tipos chequeados sin errores y el orden de hooks verificado.
 
-**Antes de publicar hay que correr en Supabase:**
+**Migración (ya corrida):**
 `crm/app/supabase/migrations/20261010100000_compras_pagos_personalizacion_muestras_bcra.sql`
 - La vuelta atrás está en `crm/app/supabase/rollback/` con el mismo nombre.
 - Se probó en una base de prueba: aplica bien, se puede volver a correr sin romper nada y la vuelta atrás funciona.
@@ -26,6 +26,8 @@ Todo está en `C:\Users\lazza\lazzari\crm\app`: los tipos chequeados sin errores
 Para que el BCRA se actualice solo, en Vercel tienen que existir `SUPABASE_SERVICE_ROLE_KEY` y `CRON_SECRET`. Son solo nombres: **no mandes los valores a nadie**. Si no están, el botón "Actualizar ahora" y "Actualizar pendientes" funcionan igual.
 
 ## 2. Pendiente (próximas tandas)
+
+El detalle de cada idea (comisiones, margen de José, ordenar pantallas, app de José, IA en la web) y sus preguntas abiertas está en **`IDEAS-PROXIMAS.md`**.
 
 - **Archivo para BBVA Net Cash**: falta que Augusto pase el formato (layout) del banco. El botón ya está en el Plan de pagos, desactivado.
 - **Cheques**: importar al CRM (Finanzas → cheques) los del "Flujo de Fondos" desde el 01/01/2026.
