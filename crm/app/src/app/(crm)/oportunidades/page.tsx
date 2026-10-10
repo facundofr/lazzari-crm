@@ -72,7 +72,8 @@ export default function OportunidadesPage() {
     try {
       const desde = new Date(Date.now() - 3 * 366 * 86400_000).toISOString().slice(0, 10);
       const [cli, prs, items, facts, vend] = await Promise.all([
-        traerTodo<Cliente>(() => db.from("clientes").select("id, razon_social, cuit, vendedor_id").eq("sociedad_id", sociedadId).eq("activo", true).order("id")),
+        traerTodo<Omit<Cliente, "vendedor_id"> & { assigned_to: string | null }>(() => db.from("clientes").select("id, razon_social, cuit, assigned_to").eq("sociedad_id", sociedadId).eq("activo", true).order("id"))
+          .then(rows => rows.map(({ assigned_to, ...c }) => ({ ...c, vendedor_id: assigned_to }) as Cliente)),
         traerTodo<PRHist>(() => db.from("presupuestos").select("id, cliente_id, numero, fecha, estado, total, moneda, motivo_rechazo").eq("sociedad_id", sociedadId).gte("fecha", desde).order("id")),
         traerTodo<ItemHist & { id: string }>(() => db.from("presupuesto_items").select("id, presupuesto_id, codigo, descripcion, cantidad, precio_venta, presupuestos!inner(sociedad_id, fecha)")
           .eq("presupuestos.sociedad_id", sociedadId).gte("presupuestos.fecha", desde).order("id")),

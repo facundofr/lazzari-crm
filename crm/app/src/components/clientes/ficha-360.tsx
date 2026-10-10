@@ -55,6 +55,9 @@ function textoMonedas(t: { ARS: number; USD: number }) {
   return partes.join(" · ");
 }
 
+// Los cobros se guardan con el medio de pago como tipo (ver facturacion-content.tsx), no solo "cobro".
+const TIPOS_COBRO = ["cobro", "transferencia", "efectivo", "tarjeta", "cheque_recibido", "echeq", "retencion_iibb", "retencion_ganancias", "retencion_iva"];
+
 export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefined; cliente: { id: string; razon_social: string; cuit?: string | null } }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -77,7 +80,7 @@ export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefin
         const [prRes, fRes, cRes, mRes] = await Promise.all([
           db.from("presupuestos").select("id, cliente_id, numero, fecha, estado, total, moneda, motivo_rechazo").eq("cliente_id", cliente.id).eq("sociedad_id", sociedadId).order("fecha", { ascending: false }),
           db.from("facturas").select("id, tipo, punto_venta, numero, fecha, total, moneda, estado").eq("cliente_id", cliente.id).eq("sociedad_id", sociedadId).order("fecha", { ascending: false }),
-          db.from("movimientos").select("id, fecha, monto, moneda, descripcion, anulado").eq("cliente_id", cliente.id).eq("tipo", "cobro").eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).limit(300),
+          db.from("movimientos").select("id, fecha, monto, moneda, descripcion, anulado").eq("cliente_id", cliente.id).in("tipo", TIPOS_COBRO).eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).limit(300),
           db.from("muestra_envios").select("id, numero, fecha, estado").eq("cliente_id", cliente.id).eq("sociedad_id", sociedadId).neq("estado", "devuelto").neq("estado", "cerrado"),
         ]);
         if (prRes.error) throw prRes.error;

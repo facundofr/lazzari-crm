@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { cuitLimpio, mesActual } from "@/lib/bcra";
 import { actualizarInformeCliente } from "@/lib/bcra-server";
+import { traerTodo } from "@/lib/paginar";
 
 /**
  * GET /api/cron/bcra — corre todos los días a la mañana.
@@ -26,9 +27,14 @@ export async function GET(req: NextRequest) {
   const inicio = Date.now();
   const mes = mesActual();
 
-  const { data: clientes, error } = await db.from("clientes").select("id, cuit, razon_social, sociedad_id").eq("activo", true);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  const { data: hechos } = await db.from("cliente_bcra_informes").select("cliente_id, semaforo").eq("mes", mes);
+  // Más de 1000 filas: se trae todo de a páginas para no dejar clientes sin revisar.
+  let clientes: any[], hechos: any[];
+  try {
+    clientes = await traerTodo(() => db.from("clientes").select("id, cuit, razon_social, sociedad_id").eq("activo", true).order("id"));
+    hechos = await traerTodo(() => db.from("cliente_bcra_informes").select("cliente_id, semaforo").eq("mes", mes).order("cliente_id"));
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
+  }
   const listos = new Set((hechos || []).filter((h: any) => h.semaforo !== "gris").map((h: any) => h.cliente_id));
 
   const pendientes = (clientes || [])
