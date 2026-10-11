@@ -2631,7 +2631,7 @@ export default function FinanzasPage() {
       const { error } = await gmDelete;
       if (error) throw error;
       await fetchData();
-    } catch (err) { alert("Error eliminando gasto: " + (err instanceof Error ? err.message : String(err))); }
+    } catch (err) { alert("Error eliminando gasto: " + (err instanceof Error ? err.message : (err as any)?.message || String(err))); }
   }
 
   // ── Facturas compra handlers ──

@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 11/10/2026 · Versión publicada: **V1.1.413**
+Actualizado: 11/10/2026 · Versión publicada: **V1.1.413** · En curso, sin publicar: **V1.1.414**
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -48,6 +48,11 @@ ventas, precio de factura, reportes y NC: todos OK.
   - **Arreglo 11/10/2026:** la regla `tiene_contraparte` de `movimientos` (creada a mano en la base, no estaba en el repo) pedía cliente o proveedor,
     y rechazaba el pago de los gastos sin proveedor. Migración `20261011130000_movimientos_contraparte_gasto.sql` (con vuelta atrás):
     también acepta `gasto_manual_id`. No necesita cambio de código ni publicar.
+  - **Arreglo 2 (11/10/2026):** otra regla hecha a mano, `monto_positivo` (monto > 0), hacía fallar **todas** las anulaciones
+    (cobros, OP, NC de compra, pagos de gastos), porque anular deja el monto en 0. Migración `20261011140000_movimientos_anulados_reglas.sql`
+    (con vuelta atrás): un movimiento anulado puede quedar en 0 y sin contraparte. Las 3 reglas CHECK de `movimientos` hoy son:
+    `monto_positivo`, `tiene_contraparte` y `movimientos_ajuste_sentido_check`.
+  - **V1.1.414 (sin publicar):** el error al borrar un gasto muestra el texto real (antes "[object Object]").
   - No se probó en local: las funciones nuevas no existen en la base hasta correr la migración, y probar anulaciones implica guardar.
 
 El `git stash` "correcciones financieras a medias" es una copia **vieja** de este trabajo. No usarlo.
