@@ -1,7 +1,7 @@
 # CLAUDE.md — CRM Lazzari
 
 Guía para Claude Code en este repositorio. Leela entera antes de tocar nada.
-El estado actual del proyecto (qué está hecho, qué falta publicar y qué está pendiente) está en `ESTADO-PROYECTO.md`.
+El estado actual del proyecto (qué está hecho, qué falta publicar y qué está pendiente) está en `docs/ESTADO.md`.
 
 ## El negocio
 
@@ -152,4 +152,25 @@ Buckets: `certificados`, `comprobantes`, `facturas-compra`, `presupuestos`.
 - Toda lógica de cálculo (plata, retenciones, matching, oportunidades) va en `src/lib` como funciones puras, con una prueba rápida.
 - Antes de dar algo por terminado: correr `npx tsc --noEmit` y `node scripts/check-hooks.mjs`, y probar en local **sin guardar** contra la base real.
 - Proponé mejoras continuas: velocidad, que se vean todos los números, menos clics. Siempre como sugerencia y explicando el beneficio en una línea.
-- Al terminar una tanda, actualizá `ESTADO-PROYECTO.md`.
+- Al terminar una tanda, actualizá `docs/ESTADO.md`.
+
+## Forma de trabajo para ahorrar uso
+- Leer solo los archivos necesarios para cada tarea.
+- Antes de cambios grandes, proponer un plan y esperar mi OK.
+- Correr solo los tests relacionados con lo que cambiaste.
+- No crear ramas ni PRs ni cambiar de rama sin que yo lo pida.
+- Al terminar cada tarea, anotar en docs/ESTADO.md qué se hizo.
+
+## Avisos de /clear y /compact
+Augusto no sabe cuándo usar estos comandos. Vos decidís y le avisás.
+- Cuando termines una tarea y ya esté anotada en docs/ESTADO.md,
+  escribí al final de tu respuesta, en un bloque de código,
+  exactamente lo que tiene que hacer. Por ejemplo:
+    👉 Paso 1: escribí esto y apretá Enter:
+    /clear
+    👉 Paso 2: después pegá esto:
+    Lee docs/ESTADO.md. Tarea: [la próxima tarea pendiente, ya escrita por vos]
+- Si una tarea se está haciendo muy larga y conviene resumir, escribí:
+    👉 Escribí esto, apretá Enter y después seguí normal:
+    /compact
+- Si no hace falta ninguno de los dos, no digas nada.
