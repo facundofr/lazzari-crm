@@ -10,7 +10,7 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import {
   calcularSaldosCuentas, sugerenciasCuentas, TIPO_CUENTA_LABEL,
-  type CuentaFinanciera, type MovimientoCuenta, type ChequeCuenta, type TipoCuenta,
+  type CuentaFinanciera, type MovimientoCuenta, type ChequeCuenta, type TipoCuenta, type PaseCuenta,
 } from "@/lib/saldo-cuentas";
 import { clasificarMovimiento } from "@/lib/tipos-movimiento";
 import { AlertTriangle, Banknote, CreditCard, Landmark, Lightbulb, Loader2, PiggyBank, Plus, Pencil, Receipt, Send, Wallet, X } from "lucide-react";
@@ -78,6 +78,7 @@ export default function CuentasFinancieras({ onIrACheques }: { onIrACheques?: ()
   const [cuentas, setCuentas] = useState<CuentaRow[]>([]);
   const [movimientos, setMovimientos] = useState<MovimientoRow[]>([]);
   const [cheques, setCheques] = useState<ChequeCuenta[]>([]);
+  const [pases, setPases] = useState<PaseCuenta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [faltaMigracion, setFaltaMigracion] = useState(false);
@@ -108,9 +109,21 @@ export default function CuentasFinancieras({ onIrACheques }: { onIrACheques?: ()
           .select("id, direccion, estado, monto, moneda, fecha_pago")
           .eq("sociedad_id", sociedadId).in("estado", ["en_cartera", "depositado", "pendiente", "entregado"]).order("id")),
       ]);
+      // Pases del extracto (FCI, entre cuentas, efectivo). Si falta la migración de la etapa 2, sigue sin pases.
+      let pasesLeidos: PaseCuenta[] = [];
+      if (lista.length) {
+        try {
+          const lineas = await traerTodo<{ contra_cuenta_id: string; fecha: string; monto: number; tipo: string }>(() => db.from("extracto_movimientos")
+            .select("id, contra_cuenta_id, fecha, monto, tipo")
+            .in("cuenta_id", lista.map((c) => c.id)).in("clasificacion", ["fci", "entre_cuentas"])
+            .not("contra_cuenta_id", "is", null).gt("fecha", corte).order("id"));
+          pasesLeidos = lineas.map((l) => ({ cuenta_id: l.contra_cuenta_id, fecha: l.fecha, importe: l.tipo === "credito" ? -Number(l.monto) : Number(l.monto) }));
+        } catch { pasesLeidos = []; }
+      }
       setCuentas(lista);
       setMovimientos(movs);
       setCheques(chs);
+      setPases(pasesLeidos);
     } catch (e: any) {
       setError(e?.message || "No se pudieron leer las cuentas.");
     } finally {
@@ -120,7 +133,7 @@ export default function CuentasFinancieras({ onIrACheques }: { onIrACheques?: ()
 
   useEffect(() => { void cargar(); }, [cargar]);
 
-  const resultado = useMemo(() => calcularSaldosCuentas(cuentas, movimientos, cheques, hoy), [cuentas, movimientos, cheques, hoy]);
+  const resultado = useMemo(() => calcularSaldosCuentas(cuentas, movimientos, cheques, hoy, pases), [cuentas, movimientos, cheques, hoy, pases]);
   const sugerencias = useMemo(() => sugerenciasCuentas(cuentas, resultado), [cuentas, resultado]);
   const activas = cuentas.filter((c) => c.activa);
   const inactivas = cuentas.filter((c) => !c.activa);
@@ -309,6 +322,15 @@ export default function CuentasFinancieras({ onIrACheques }: { onIrACheques?: ()
                   <p className="text-sm text-zinc-500">Va por resumen mensual. Falta cargar el primer resumen.</p>
                 ) : (
                   <p className={`text-2xl font-bold ${s.saldo < 0 ? "text-red-600" : "text-zinc-900 dark:text-white"}`}>{formatCurrency(s.saldo, c.moneda)}</p>
+                )}
+                {s.segunBanco && (
+                  <p className="text-xs text-emerald-700 dark:text-emerald-400">
+                    Según el banco al {formatDate(s.segunBanco)}: {formatCurrency(Number(c.saldo_banco || 0), c.moneda)}
+                    {s.cantidadMovimientos > 0 ? ` + ${s.cantidadMovimientos} mov. del CRM posteriores` : ""}
+                  </p>
+                )}
+                {!s.segunBanco && Boolean(s.pases) && (
+                  <p className="text-xs text-zinc-500">Incluye {formatCurrency(s.pases || 0, c.moneda)} de pases del extracto (FCI / efectivo)</p>
                 )}
                 {c.tipo === "cuenta_corriente" && Number(c.acuerdo || 0) > 0 && s.disponibleConAcuerdo !== null && (
                   <p className={`text-xs ${pasadoDeAcuerdo ? "font-semibold text-red-600" : "text-zinc-500"}`}>

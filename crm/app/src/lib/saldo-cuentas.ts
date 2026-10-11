@@ -1,5 +1,7 @@
 // Saldos de las cuentas de Finanzas (bancos, FCI, efectivo, tarjetas y cheques).
 // - Banco / FCI / efectivo: saldo al corte + ingresos − egresos con fecha posterior al corte.
+// - Con extracto importado: el saldo es el del banco (saldo_banco) + lo del CRM posterior al extracto.
+// - Pases del extracto (FCI, entre cuentas, efectivo): suman o restan en la otra cuenta.
 // - Cheques en cartera y emitidos a pagar: se calculan con la lista de cheques (no usan saldo al corte).
 // - Tarjetas: van por resumen mensual (etapa 3); por ahora no suman.
 import { clasificarMovimiento, type MovimientoClasificable } from "./tipos-movimiento";
@@ -26,6 +28,18 @@ export interface CuentaFinanciera {
   saldo_inicial: number | string | null;
   acuerdo?: number | string | null;
   activa?: boolean | null;
+  /** Último saldo del extracto importado y su fecha (etapa 2). */
+  saldo_banco?: number | string | null;
+  saldo_banco_fecha?: string | null;
+}
+
+/** Línea del extracto que es un pase hacia otra cuenta (FCI, entre cuentas, efectivo). */
+export interface PaseCuenta {
+  /** La otra cuenta (contra_cuenta_id de la línea). */
+  cuenta_id: string;
+  fecha: string;
+  /** Visto desde la otra cuenta: + entra, − sale (es el importe de la línea con el signo cambiado). */
+  importe: number;
 }
 
 export interface MovimientoCuenta extends MovimientoClasificable {
@@ -54,6 +68,10 @@ export interface SaldoCuenta {
   cantidadMovimientos: number;
   /** Cuentas corrientes: saldo + acuerdo. */
   disponibleConAcuerdo: number | null;
+  /** El saldo sale del extracto del banco (al cierre de esta fecha). */
+  segunBanco?: string | null;
+  /** Pases del extracto que movieron esta cuenta (FCI, efectivo…). */
+  pases?: number;
   /** Solo cuentas de cheques. */
   cantidadCheques?: number;
   vencimientos?: VencimientosCheques;
@@ -133,21 +151,29 @@ export function calcularSaldosCuentas(
   movimientos: MovimientoCuenta[],
   cheques: ChequeCuenta[],
   hoy: string,
+  pases: PaseCuenta[] = [],
 ): ResultadoCuentas {
   const activas = cuentas.filter((c) => c.activa !== false);
   const porId = new Map(activas.map((c) => [c.id, c]));
   const porCuenta: Record<string, SaldoCuenta> = {};
   for (const c of activas) {
-    const faltaSaldoInicial = usaMovimientos(c.tipo) && (c.saldo_inicial === null || c.saldo_inicial === undefined || c.saldo_inicial === "");
+    const conBanco = usaMovimientos(c.tipo) && Boolean(c.saldo_banco_fecha) && c.saldo_banco !== null && c.saldo_banco !== undefined && c.saldo_banco !== "";
+    const faltaSaldoInicial = !conBanco && usaMovimientos(c.tipo) && (c.saldo_inicial === null || c.saldo_inicial === undefined || c.saldo_inicial === "");
     porCuenta[c.id] = {
-      saldo: usaMovimientos(c.tipo) ? n(c.saldo_inicial) : 0,
+      saldo: conBanco ? n(c.saldo_banco) : usaMovimientos(c.tipo) ? n(c.saldo_inicial) : 0,
       faltaSaldoInicial,
       ingresos: 0,
       egresos: 0,
       cantidadMovimientos: 0,
       disponibleConAcuerdo: null,
+      segunBanco: conBanco ? String(c.saldo_banco_fecha).slice(0, 10) : null,
     };
   }
+  /** Desde qué fecha (exclusive) suman los movimientos: el extracto si hay, si no el corte. */
+  const desdeDe = (c: CuentaFinanciera) => {
+    const b = porCuenta[c.id]?.segunBanco;
+    return b && b > c.fecha_corte ? b : c.fecha_corte;
+  };
 
   const corteGeneral = activas.map((c) => c.fecha_corte).sort()[0] || "2026-08-31";
   const sinCuenta: Record<"ARS" | "USD", SinCuenta> = { ARS: { cantidad: 0, ingresos: 0, egresos: 0 }, USD: { cantidad: 0, ingresos: 0, egresos: 0 } };
@@ -165,10 +191,19 @@ export function calcularSaldosCuentas(
       if (clase === "ingreso") s.ingresos += monto; else s.egresos += monto;
       continue;
     }
-    if (!usaMovimientos(cuenta.tipo) || fecha <= cuenta.fecha_corte) continue;
+    if (!usaMovimientos(cuenta.tipo) || fecha <= desdeDe(cuenta)) continue;
     const s = porCuenta[cuenta.id];
     s.cantidadMovimientos += 1;
     if (clase === "ingreso") { s.ingresos += monto; s.saldo += monto; } else { s.egresos += monto; s.saldo -= monto; }
+  }
+
+  for (const p of pases) {
+    const cuenta = porId.get(p.cuenta_id);
+    if (!cuenta || !usaMovimientos(cuenta.tipo) || String(p.fecha).slice(0, 10) <= desdeDe(cuenta)) continue;
+    const s = porCuenta[cuenta.id];
+    const importe = n(p.importe);
+    s.saldo += importe;
+    s.pases = r2((s.pases || 0) + importe);
   }
 
   const recibidosCartera = cheques.filter((c) => c.direccion === "recibido" && c.estado === "en_cartera");

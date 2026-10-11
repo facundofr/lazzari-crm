@@ -28,6 +28,8 @@ import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factur
 import CargaMasivaFacturasCompra from "@/components/carga-masiva-facturas-compra";
 import PlanPagos from "@/components/plan-pagos";
 import CuentasFinancieras from "@/components/cuentas-financieras";
+import ExtractoBbva from "@/components/extracto-bbva";
+import ChequesTercero from "@/components/cheques-tercero";
 import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/payment-document-parser";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
@@ -50,7 +52,7 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   retencion_suss: { label: "Ret. SUSS", variant: "warning", icon: Wallet },
 };
 
-type FinanzasTab = "cuentas" | "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones";
+type FinanzasTab = "cuentas" | "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cheques_tercero" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones";
 
 // ── Echeq types ──
 interface EcheqRow {
@@ -3685,6 +3687,7 @@ export default function FinanzasPage() {
     { id: "ordenes_pago", label: "Órdenes de pago" },
     { id: "gastos_manuales", label: "Gastos" },
     { id: "echeqs", label: "Cheques" },
+    { id: "cheques_tercero", label: "Cheques Martín F." },
     { id: "cc_clientes", label: "CC Clientes" },
     { id: "cc_proveedores", label: "CC Prov." },
     { id: "extractos", label: "Extractos" },
@@ -3994,6 +3997,7 @@ export default function FinanzasPage() {
 
         {/* ── Cuentas ── */}
         {tab === "cuentas" && <CuentasFinancieras onIrACheques={() => setTab("echeqs")} />}
+        {tab === "cheques_tercero" && <ChequesTercero />}
 
         {/* ── Movimientos ── */}
         {tab === "movimientos" && (
@@ -5347,6 +5351,7 @@ export default function FinanzasPage() {
         {/* ── Extractos bancarios ── */}
         {tab === "extractos" && (
           <>
+            <ExtractoBbva onIrACheques={() => setTab("echeqs")} />
             <div className="rounded-xl border-2 border-dashed border-zinc-300 bg-white p-6 text-center dark:border-zinc-600 dark:bg-zinc-900">
               <Upload className="mx-auto h-8 w-8 text-zinc-300" />
               <p className="mt-2 font-medium text-zinc-700 dark:text-zinc-300">Arrastra un extracto o hace click para subir</p>

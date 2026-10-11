@@ -99,4 +99,32 @@ assert.equal(s1[0].monto, 1075636.31);
 // Sin saldo al corte cargado: no sugiere.
 assert.deepEqual(sug([{ ...base[0], saldo_inicial: null }, base[2]]), []);
 
+// Etapa 2: con extracto, el saldo es el del banco + lo del CRM posterior al extracto.
+{
+  const cs = [
+    { id: "cc", nombre: "CC", tipo: "cuenta_corriente", moneda: "ARS", fecha_corte: "2026-08-31", saldo_inicial: 10829781.65, saldo_banco: -1575636.31, saldo_banco_fecha: "2026-10-09" },
+    { id: "fci", nombre: "FCI", tipo: "fci", moneda: "ARS", fecha_corte: "2026-08-31", saldo_inicial: 1000 },
+    { id: "ef", nombre: "Efectivo", tipo: "efectivo", moneda: "ARS", fecha_corte: "2026-08-31", saldo_inicial: null, saldo_banco: null },
+  ];
+  const movs = [
+    { cuenta_id: "cc", tipo: "pago", proveedor_id: "p", monto: 500, fecha: "2026-10-05" }, // ya está en el extracto
+    { cuenta_id: "cc", tipo: "cobro", cliente_id: "c", monto: 2000, fecha: "2026-10-10" }, // posterior al extracto
+  ];
+  const pases = [
+    { cuenta_id: "fci", fecha: "2026-09-10", importe: 300 },   // suscripción al FCI (sale de la CC)
+    { cuenta_id: "fci", fecha: "2026-10-01", importe: -100 },  // rescate
+    { cuenta_id: "fci", fecha: "2026-08-20", importe: 999 },   // antes del corte: no cuenta
+    { cuenta_id: "ef", fecha: "2026-09-25", importe: 6200000 }, // extracción de efectivo
+  ];
+  const r = calcularSaldosCuentas(cs, movs, [], "2026-10-11", pases);
+  assert.equal(r.porCuenta.cc.saldo, -1575636.31 + 2000);
+  assert.equal(r.porCuenta.cc.segunBanco, "2026-10-09");
+  assert.equal(r.porCuenta.cc.cantidadMovimientos, 1);
+  assert.equal(r.porCuenta.fci.saldo, 1200);
+  assert.equal(r.porCuenta.fci.pases, 200);
+  assert.equal(r.porCuenta.fci.segunBanco, null);
+  assert.equal(r.porCuenta.ef.saldo, 6200000);
+  assert.equal(r.porCuenta.ef.faltaSaldoInicial, true);
+}
+
 console.log("saldo-cuentas OK");

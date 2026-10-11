@@ -10,6 +10,8 @@ import { createClient } from "@supabase/supabase-js";
  *   - 5 dias sin respuesta: alerta de atencion
  *   - 7 dias sin respuesta: alerta urgente
  *   - Al superar fecha de vencimiento: marca estado = "vencido" + alerta "vencimiento_pr"
+ * Además (Finanzas): avisa 3 días antes del débito de cada cheque propio que cubre un tercero
+ * (echeqs.cubre_tercero, ej. Martín Fernández), para avisarle a tiempo.
  *
  * Protegido por CRON_SECRET en produccion.
  */
@@ -34,6 +36,46 @@ const SEGUIMIENTO_DIAS = [
   { dias: 7, tag: "seguimiento_7d", title: "Seguimiento urgente PR", urgencia: "urgente" },
 ] as const;
 
+/** Avisos de cheques que cubre un tercero: uno por cheque, cuando faltan 3 días o menos. Nunca rompe el cron. */
+async function avisarChequesTercero(supabase: ReturnType<typeof getSupabase>, today: string): Promise<{ creadas: number; error?: string }> {
+  try {
+    const hasta = new Date(`${today}T12:00:00Z`);
+    hasta.setUTCDate(hasta.getUTCDate() + 3);
+    const { data: cheques, error } = await (supabase as any)
+      .from("echeqs")
+      .select("id, numero, monto, fecha_pago, cubre_tercero, sociedad_id")
+      .not("cubre_tercero", "is", null)
+      .in("estado", ["pendiente", "entregado"])
+      .gte("fecha_pago", today)
+      .lte("fecha_pago", hasta.toISOString().slice(0, 10));
+    if (error) return { creadas: 0, error: error.message };
+    if (!cheques?.length) return { creadas: 0 };
+    const { data: existentes } = await (supabase as any)
+      .from("alertas").select("entity_id").eq("entity_type", "echeq_tercero").in("entity_id", cheques.map((c: any) => c.id));
+    const ya = new Set((existentes ?? []).map((a: any) => a.entity_id));
+    const filas = cheques.filter((c: any) => !ya.has(c.id)).map((c: any) => {
+      const [y, m, d] = String(c.fecha_pago).slice(0, 10).split("-");
+      const monto = Number(c.monto || 0).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return {
+        tipo: "seguimiento",
+        title: `Avisale a ${c.cubre_tercero}: cheque ${c.numero}`,
+        description: `El ${d}/${m}/${y} se debita el cheque ${c.numero} por $${monto}, que cubre ${c.cubre_tercero}.`,
+        entity_id: c.id,
+        entity_type: "echeq_tercero",
+        module: "finanzas",
+        user_id: null,
+        sociedad_id: c.sociedad_id,
+        read: false,
+      };
+    });
+    if (!filas.length) return { creadas: 0 };
+    const { error: insError } = await (supabase as any).from("alertas").insert(filas);
+    return insError ? { creadas: 0, error: insError.message } : { creadas: filas.length };
+  } catch (err: any) {
+    return { creadas: 0, error: err?.message || String(err) };
+  }
+}
+
 export async function GET(req: NextRequest) {
   // Verificar CRON_SECRET en produccion
   const cronSecret = process.env.CRON_SECRET;
@@ -52,8 +94,13 @@ export async function GET(req: NextRequest) {
     presupuestos_revisados: 0,
     alertas_seguimiento_creadas: 0,
     presupuestos_vencidos: 0,
+    alertas_cheques_tercero: 0,
     errores: [] as string[],
   };
+
+  const chequesTercero = await avisarChequesTercero(supabase, today);
+  stats.alertas_cheques_tercero = chequesTercero.creadas;
+  if (chequesTercero.error) stats.errores.push(`Cheques de terceros: ${chequesTercero.error}`);
 
   try {
     // 1) Buscar PRs con estado pendiente, aprobado, solicitud o postergado

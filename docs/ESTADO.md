@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 11/10/2026 · Versión publicada: **V1.1.415** (11/10/2026)
+Actualizado: 11/10/2026 · Versión publicada: **V1.1.416** (11/10/2026)
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -94,6 +94,30 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   en la CC principal también cubre los cheques propios a debitar en 7 días; si el FCI no alcanza, dice cuánto falta (`sugerenciasCuentas`).
   Es real recién con el extracto del día (etapa 2). Ideas siguientes: avisarlo en la campana; sugerir suscribir al FCI el sobrante.
 
+## 3c. Publicado el 11/10/2026 (V1.1.416), migración 20261011180000 ya corrida — Cuentas y extractos, etapa 2
+
+- **Migración ya corrida (11/10/2026):** `20261011180000_extractos_bbva.sql` (+ vuelta atrás en `rollback/`). Aditiva:
+  columnas en `extracto_movimientos` (cuenta, saldo, clave sin duplicar, clasificación, cheque, cuenta contraria, nota),
+  `saldo_banco`/`saldo_banco_fecha` en `cuentas_financieras`, tabla `extracto_reglas` ("Recordar"), `cubre_tercero`/`cubierto_at` en `echeqs`,
+  y las funciones `importar_extracto_bbva`, `aplicar_cruces_extracto` (también deshace) y `completar_cheques_emitidos`.
+  Sin la migración, Extractos y "Cheques Martín F." muestran "Falta correr la migración" (no rompe nada).
+- **Finanzas > Extractos** (`components/extracto-bbva.tsx`, lógica en `lib/extracto-bbva.ts`, prueba `scripts/test-extracto-bbva.mjs`):
+  subir el .xls del BBVA tal cual (cuenta por número del encabezado, solo desde el corte, no duplica, avisa saltos de saldo, resumen antes de guardar);
+  cruce automático (cheques propios por número, cheque acreditado por importe, devueltos, impuestos/comisiones/SIRCREB, FCI, entre cuentas,
+  efectivo, tarjetas, cobros y pagos por importe + fecha + CUIT); "Para revisar" con botones, candidatos y "Recordar"; cobros/pagos "a cargar"
+  que se cruzan solos cuando se cargan; totales mensuales de gastos e impuestos del banco (1a); deshacer por línea.
+  "Completar cheques emitidos": sube la planilla o los eCheq, agrega solo los que faltan (pagos desde 01/08 o sin pagar), completa números de
+  cheques "CHQ-…", marca Martín, y pasa a debitados los que el banco pagó antes del corte y el CRM tenía "a pagar".
+  Simulado con los Excel reales: de 522 líneas de la CC desde 01/09, 391 se clasifican solas sin mirar el CRM (161 cheques, impuestos, FCI…).
+- **Cuentas:** con extracto, el saldo es el del banco + lo del CRM posterior ("Según el banco al…"); los pases a FCI/efectivo mueven esas cuentas.
+  `lib/saldo-cuentas.ts` (prueba ampliada).
+- **Finanzas > Cheques Martín F.** (`components/cheques-tercero.tsx`): pendientes, próximo débito, aviso (≤3 días), "Ya cubrió", copiar mensaje,
+  agregar/sacar por N°. La campana avisa 3 días antes (cron diario `presupuestos-vencimiento`, módulo finanzas).
+- **Pasos de Augusto después de publicar:** 1) Extractos → "Completar cheques emitidos" con `Cheques_Lazzari.xlsx` + los 3 eCheqs emitidos.
+  2) Subir los Excel "(3)" (CC) y "(2)" (CA) del 11/10 → Guardar. 3) "Aplicar cruces". 4) Revisar el resto
+  (Alesso: depósito 06/10 y transferencia 01/10 de $1.000.000 → Personal, nota "Juan Pablo Alesso").
+- Chequeos: tipos 0 errores, hooks OK, tests extracto-bbva, saldo-cuentas y cheques-filtro OK. No probado en pantalla (necesita la migración).
+
 ## 4. Pendiente (próximas tandas)
 
 0. **PRÓXIMO: análisis a fondo de Finanzas** (lo más importante del CRM, pedido por Augusto 11/10/2026):
@@ -146,6 +170,16 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         El 09/10 la CC pagó Visa $4.694.598,40 y Master $3.201.710,17 + $4.709.743,56 (los U$S). El 25/09 hubo extracción de efectivo de $6.200.000 de la CA
         que no está en la planilla de caja (preguntar en la etapa 2).
      2) Importar extracto BBVA y cruce automático; lo que no cruza se pregunta (cobro, pago, gasto bancario, impuesto, transferencia a FCI, cheque acreditado, personal).
+        **Plan etapa 2 con OK de Augusto (11/10/2026):** subir el .xls del BBVA tal cual (cuenta por encabezado, desde 01/09, sin duplicar, control de saldos);
+        cruce automático (PAGO CHEQUE por número, DEPOSITO CHEQUE = cobro acreditado, DEVUELTO avisa, cobros/pagos por importe y fecha, FCI/entre cuentas/tarjetas = pases);
+        "Para revisar" con botones y "Recordar"; saldo real en Cuentas. **1a:** gastos e impuestos del banco quedan clasificados en el extracto
+        con totales por mes (SIRCREB aparte), sin crear movimientos. **2:** la primera subida cruza todo desde 01/09 y asigna cuenta a lo viejo.
+        Antes de programar: Augusto exporta los eCheqs de todas las categorías (para cruzar los 154 PAGO CHEQUE). Excel CC = Descargas "(3)", CA = "(2)" del 11/10.
+        **Datos para la etapa 2 (11/10/2026):** eCheqs exportados en Descargas (11-10-2026-eCheqs-*.xls; el banco corta en 100 filas) + planilla "Cheques_Lazzari.xlsx"
+        (hoja Emitidos: 1.710 cheques desde 2022 con fecha de débito). Con eso cruzan 156 de 161 PAGO CHEQUE desde 01/09; faltan 5 de chequera física (00496361/63/64/65/66) → cruzar por importe con pagos.
+        Depósito 06/10 $1.000.000 = cheque 14588139 de Alesso (efectivo prestado a un amigo): pase personal, su salida es la Transferencia inmediata del 01/10 de $1.000.000.
+        **Martín Fernández:** cheques que emite Lazzari pero cubre él (hoja "Martín Fernández", 15; 6 pendientes por $15.515.936, próximo 22/10).
+        Cuentan en el comprometido, pero con lista aparte con fechas para avisarle.
         Cheque acreditado en el extracto = cobro acreditado (idea de Augusto).
      3) Tarjetas Visa y Master: resumen, consumos a proveedor/gasto/"personal", pago del resumen desde la cuenta.
         **Mercado Libre (aclarado por Augusto):** todo lo de ML se paga con la Visa. Las OC se cargan con proveedor "Mercado Libre";
