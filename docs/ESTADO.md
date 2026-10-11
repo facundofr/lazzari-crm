@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 11/10/2026 · Versión publicada: **V1.1.412** · En curso, sin publicar: **V1.1.413**
+Actualizado: 11/10/2026 · Versión publicada: **V1.1.413**
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -18,7 +18,7 @@ Versiones anteriores de este archivo: historial de git (`ESTADO-PROYECTO.md`).
 - **V1.1.412:** OC sin candado (avisa en amarillo), lista de proveedores nueva con saldo real (`lib/saldo-proveedores.ts`),
   altas de proveedor y cliente rediseñadas con IA de papeles impositivos, buscador nuevo (2 letras, máx. 8) y nombre de fantasía automático.
 
-## 2. Hecho, falta publicar (V1.1.413)
+## 2. Publicado el 11/10/2026 (V1.1.413), con las 3 migraciones ya corridas
 
 Guardado en el commit `04c8b7f` (11/10/2026). Chequeo de tipos: 0 errores. Orden de hooks: OK. Tests de saldos, tipos de movimiento,
 ventas, precio de factura, reportes y NC: todos OK.
@@ -29,7 +29,7 @@ ventas, precio de factura, reportes y NC: todos OK.
   - Ya en el código: A1 (Factura B con IVA, `lib/precio-factura.ts`), A6 (rechazar cheque), A8 (NC manual de venta en un paso),
     A9a (SICORE pide rol y sociedad), B1, B3, B4, B5, B6, B7, B8, B9, B12, C4, D2, D3.
   - En las migraciones: A2, A4, A7, A9b, B9, B10, C1, C2, C3, D3.
-- **3 migraciones nuevas, NO corridas todavía** (cada una con su vuelta atrás en `crm/app/supabase/rollback/`):
+- **3 migraciones nuevas, YA corridas el 11/10/2026** (cada una con su vuelta atrás en `crm/app/supabase/rollback/`):
   1. `20261011100000_finanzas_correcciones.sql`
   2. `20261011110000_ventas_correcciones.sql`
   3. `20261011120000_compras_correcciones.sql`
