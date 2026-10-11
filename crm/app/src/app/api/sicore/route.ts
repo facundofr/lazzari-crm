@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { createSupabaseServer } from "@/lib/supabase/server";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -68,6 +69,29 @@ export async function GET(req: NextRequest) {
   }
   if (desde > hasta) {
     return NextResponse.json({ error: "La fecha desde no puede ser posterior a la fecha hasta" }, { status: 400 });
+  }
+
+  // Seguridad (A9a): este archivo trae CUIT y retenciones, y la consulta usa la
+  // clave de servicio. Antes de leer nada se verifica la sesión del usuario, su
+  // rol y que pertenezca a la sociedad pedida (mismo criterio que /api/facturacion
+  // y las funciones seguras de la base).
+  const bearer = req.headers.get("authorization");
+  const authSupabase = bearer
+    ? createClient(supabaseUrl, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, { global: { headers: { Authorization: bearer } } })
+    : await createSupabaseServer();
+  const { data: { user }, error: authError } = await authSupabase.auth.getUser();
+  if (authError || !user) {
+    return NextResponse.json({ error: "Sesión no válida. Volvé a ingresar al CRM." }, { status: 401 });
+  }
+  const { data: perfil, error: perfilError } = await (authSupabase as any)
+    .from("profiles").select("role").eq("id", user.id).maybeSingle();
+  if (perfilError || !perfil || !["super_admin", "admin", "administrativo"].includes(String(perfil.role))) {
+    return NextResponse.json({ error: "No tenés permiso para descargar el archivo SICORE." }, { status: 403 });
+  }
+  const { data: membresia, error: membresiaError } = await (authSupabase as any)
+    .from("user_sociedades").select("sociedad_id").eq("user_id", user.id).eq("sociedad_id", sociedadId).maybeSingle();
+  if (membresiaError || !membresia) {
+    return NextResponse.json({ error: "No tenés acceso a la sociedad seleccionada." }, { status: 403 });
   }
 
   const supabase = createClient(supabaseUrl, supabaseKey);

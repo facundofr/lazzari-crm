@@ -26,6 +26,8 @@ import { Ficha360 } from "@/components/clientes/ficha-360";
 import { AvisoDuplicadosCliente, SemaforoBCRAPrevio, type ClienteParecido } from "@/components/clientes/avisos-alta-cliente";
 import { LeerDocumentoImpositivo } from "@/components/leer-documento-impositivo";
 import { TIPO_DOCUMENTO_LABEL, type DatosImpositivos } from "@/lib/documento-impositivo";
+import { traerTodo } from "@/lib/paginar";
+import { traerSaldosClientes, saldoClienteEn, type SaldoCliente } from "@/lib/saldo-clientes";
 
 const condicionLabels: Record<string, string> = {
   RI: "Resp. Inscripto",
@@ -145,7 +147,8 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string; monedaPrede
   };
 }
 
-type ClienteExt = Client & { vendedorNombre: string; monedaPredeterminada: string };
+// saldoUSD: saldo real de cuenta corriente en dólares (saldoCuentaCorriente queda en pesos).
+type ClienteExt = Client & { vendedorNombre: string; monedaPredeterminada: string; saldoUSD?: number };
 
 interface ConsumoCategory {
   categoria: string;
@@ -250,7 +253,8 @@ interface TimelineEvent {
 
 export default function ClientesPage() {
   const { sociedadActiva, sociedades, profile } = useUser();
-  const [view, setView] = useState<"table" | "cards">("table");
+  // Saldo real de cuenta corriente (B3): si no se pudo calcular, se avisa en pantalla.
+  const [saldosError, setSaldosError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [clientes, setClientes] = useState<ClienteExt[]>([]);
   const [loading, setLoading] = useState(true);
@@ -912,21 +916,35 @@ export default function ClientesPage() {
   const fetchClientes = useCallback(async () => {
     try {
       // contactos is polymorphic (no FK to clientes), so we fetch it separately
-      let query = supabase
-        .from("clientes")
-        .select(`*, assigned_profile:assigned_to(full_name), cliente_sucursales(*)`);
-
-      if (sociedadActiva?.id) {
-        query = query.eq("sociedad_id" as any, sociedadActiva.id);
-      }
-
-      const { data, error } = await query.order("razon_social");
+      // Todos los clientes (Supabase corta en 1000 filas) y, en paralelo, su saldo real
+      // de cuenta corriente: facturas − NC − cobros (con retenciones), ARS y USD aparte.
+      // La columna clientes.saldo_cuenta_corriente no la actualiza nadie (B3).
+      const armarQuery = () => {
+        let query = supabase
+          .from("clientes")
+          .select(`*, assigned_profile:assigned_to(full_name), cliente_sucursales(*)`);
+        if (sociedadActiva?.id) {
+          query = query.eq("sociedad_id" as any, sociedadActiva.id);
+        }
+        return query.order("razon_social").order("id");
+      };
+      const [res, saldos] = await Promise.all([
+        traerTodo<Record<string, unknown>>(armarQuery).then((data) => ({ data, error: null as unknown })).catch((e: unknown) => ({ data: null, error: e })),
+        sociedadActiva?.id
+          ? traerSaldosClientes(supabase, sociedadActiva.id, traerTodo).catch((e: unknown) => { console.error("Error calculando saldos de clientes:", e); return null; })
+          : Promise.resolve(null as Record<string, SaldoCliente> | null),
+      ]);
+      const { data, error } = res;
+      setSaldosError(saldos ? null : "No se pudo calcular el saldo de cuenta corriente: se muestra en 0. Recargá la página para reintentar.");
 
       if (error) {
         console.error("Error fetching clientes:", error);
         setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—", monedaPredeterminada: "ARS" })));
       } else if (data) {
-        setClientes(data.map((row) => mapRow({ ...row, contactos: [] } as unknown as ClienteRow)));
+        setClientes(data.map((row) => {
+          const c = mapRow({ ...row, contactos: [] } as unknown as ClienteRow);
+          return { ...c, saldoCuentaCorriente: saldoClienteEn(saldos, c.id, "ARS"), saldoUSD: saldoClienteEn(saldos, c.id, "USD") };
+        }));
       } else {
         setClientes(mockClients.map((c) => ({ ...c, vendedorNombre: "—", monedaPredeterminada: "ARS" })));
       }
@@ -1234,12 +1252,17 @@ export default function ClientesPage() {
         }
         // Insert new sucursales
         const newSucs = formSucursales.filter((s) => s.isNew);
+        const sucIdMapEdit = new Map<string, string>();
         for (const s of newSucs) {
-          const { error: sucErr } = await (supabase as any)
+          const { data: sucInsEdit, error: sucErr } = await (supabase as any)
             .from("cliente_sucursales")
-            .insert({ cliente_id: editingId, nombre: s.nombre, direccion: s.direccion || null, localidad: s.localidad || null, provincia: s.provincia || null, cp: s.cp || null, telefono: s.telefono || null, email: s.email || null, activo: true });
+            .insert({ cliente_id: editingId, nombre: s.nombre, direccion: s.direccion || null, localidad: s.localidad || null, provincia: s.provincia || null, cp: s.cp || null, telefono: s.telefono || null, email: s.email || null, activo: true })
+            .select("id").single();
           if (sucErr) throw sucErr;
+          if (sucInsEdit?.id) sucIdMapEdit.set(s.id, sucInsEdit.id as string);
         }
+        // Contactos que apuntan a una sucursal recién agregada (id temporal "new-...") pasan al id real
+        const mapSucIdEdit = (id: string) => (id && sucIdMapEdit.has(id) ? sucIdMapEdit.get(id)! : id && id.startsWith("new-") ? "" : id);
         // Update existing sucursales (non-new)
         const existingSucs = formSucursales.filter((s) => !s.isNew);
         for (const s of existingSucs) {
@@ -1261,7 +1284,7 @@ export default function ClientesPage() {
             entity_type: "cliente", entity_id: editingId,
             nombre: ct.nombre, cargo: ct.cargo || null,
             email: ct.email || null, telefono: ct.telefono || null,
-            whatsapp: ct.whatsapp || null, sucursal_id: ct.sucursal_id || null,
+            whatsapp: ct.whatsapp || null, sucursal_id: mapSucIdEdit(ct.sucursal_id) || null,
             principal: ct.principal, notas: ct.notas || null,
           });
         }
@@ -1270,7 +1293,7 @@ export default function ClientesPage() {
           await (supabase as any).from("contactos").update({
             nombre: ct.nombre, cargo: ct.cargo || null,
             email: ct.email || null, telefono: ct.telefono || null,
-            whatsapp: ct.whatsapp || null, sucursal_id: ct.sucursal_id || null,
+            whatsapp: ct.whatsapp || null, sucursal_id: mapSucIdEdit(ct.sucursal_id) || null,
             principal: ct.principal, notas: ct.notas || null,
           }).eq("id", ct.id!).eq("entity_type", "cliente").eq("entity_id", editingId);
         }
@@ -1300,13 +1323,32 @@ export default function ClientesPage() {
             activo: true,
           });
         }
-        // Insertar sucursales agregadas manualmente
+        // Insertar sucursales agregadas manualmente (ids temporales "new-..." -> id real)
+        const sucIdMap = new Map<string, string>();
+        let sucFallo: string | null = null;
         for (const s of formSucursales.filter((s) => s.isNew)) {
-          await (supabase as any).from("cliente_sucursales").insert({
+          const { data: sucIns, error: sucErr } = await (supabase as any).from("cliente_sucursales").insert({
             cliente_id: newClientId, nombre: s.nombre, direccion: s.direccion || null,
             localidad: s.localidad || null, provincia: s.provincia || null, cp: s.cp || null,
             telefono: s.telefono || null, email: s.email || null, activo: true,
-          });
+          }).select("id").single();
+          if (sucErr || !sucIns?.id) {
+            sucFallo = `No se pudo guardar la sucursal "${s.nombre}": ${sucErr?.message || "error desconocido"}`;
+            break;
+          }
+          sucIdMap.set(s.id, sucIns.id as string);
+        }
+        // Si el contacto apunta a una sucursal temporal que no se guardó (se quitó o falló), queda sin sucursal.
+        const mapSucId = (id: string) => (id && sucIdMap.has(id) ? sucIdMap.get(id)! : id && id.startsWith("new-") && !sucFallo ? "" : id);
+        if (sucFallo) {
+          // El cliente ya quedó guardado: pasamos el modal a modo edición para reintentar sin duplicarlo.
+          setEditingId(newClientId);
+          setFormSucursales((prev) => prev.map((s) => (sucIdMap.has(s.id) ? { ...s, id: sucIdMap.get(s.id)!, isNew: false } : s)));
+          setFormContactos(contactosAGuardar.map((ct) => ({ ...ct, sucursal_id: mapSucId(ct.sucursal_id) })));
+          setFormError(`El cliente se creó, pero falló una sucursal. ${sucFallo}. Revisá y apretá Guardar de nuevo.`);
+          toast.error(sucFallo);
+          await fetchClientes();
+          return;
         }
         // Save new contacts for new client
         const newConts = contactosAGuardar.filter((ct) => ct.isNew);
@@ -1315,7 +1357,7 @@ export default function ClientesPage() {
             entity_type: "cliente", entity_id: newClientId,
             nombre: ct.nombre, cargo: ct.cargo || null,
             email: ct.email || null, telefono: ct.telefono || null,
-            whatsapp: ct.whatsapp || null, sucursal_id: ct.sucursal_id || null,
+            whatsapp: ct.whatsapp || null, sucursal_id: mapSucId(ct.sucursal_id) || null,
             principal: ct.principal, notas: ct.notas || null,
           });
         }
@@ -1656,8 +1698,8 @@ export default function ClientesPage() {
         action={{ label: "Nuevo cliente", onClick: openCreate }}
       />
       <div className="p-4 sm:p-8 space-y-6">
-        {/* Filters bar */}
-        <div className="flex flex-wrap items-center gap-3">
+        {/* Búsqueda, filtros y exportar en una sola línea (el panel de filtros abre abajo, a todo el ancho) */}
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px] max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
@@ -1665,19 +1707,15 @@ export default function ClientesPage() {
               placeholder="Buscar por razon social, CUIT o email..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+              className="h-9 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             />
           </div>
-          <button onClick={exportCSV} className="flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800">
+          <SmartFilters className="contents [&>button]:mb-0 [&>div]:order-last [&>div]:basis-full" filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
+          <button onClick={exportCSV} className="ml-auto flex h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800">
             <Download className="h-4 w-4" /> Exportar
           </button>
-          <div className="flex rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-            <button onClick={() => setView("table")} className={`px-3 py-2 text-xs font-medium ${view === "table" ? "bg-zinc-100 text-zinc-800 dark:bg-zinc-700 dark:text-white" : "bg-white text-zinc-400 dark:bg-zinc-900"}`}>Tabla</button>
-            <button onClick={() => setView("cards")} className={`px-3 py-2 text-xs font-medium ${view === "cards" ? "bg-zinc-100 text-zinc-800 dark:bg-zinc-700 dark:text-white" : "bg-white text-zinc-400 dark:bg-zinc-900"}`}>Tarjetas</button>
-          </div>
         </div>
-
-        <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
+        {saldosError && <p className="text-xs text-amber-600">{saldosError}</p>}
 
         {/* Quick stats */}
         <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-4">
@@ -1688,6 +1726,9 @@ export default function ClientesPage() {
           <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Saldo total CC</p>
             <p className="mt-1 text-xl sm:text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.saldoCuentaCorriente, 0), "ARS")}</p>
+            {clientes.some((c) => (c.saldoUSD || 0) !== 0) && (
+              <p className="text-xs font-semibold text-zinc-500">+ {formatCurrency(clientes.reduce((a, c) => a + (c.saldoUSD || 0), 0), "USD")}</p>
+            )}
           </div>
           <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
             <p className="text-xs text-zinc-500">Credito otorgado</p>
@@ -1699,8 +1740,7 @@ export default function ClientesPage() {
           </div>
         </div>
 
-        {view === "table" ? (
-          <Card className="p-0 overflow-hidden">
+        <Card className="p-0 overflow-hidden">
             <DataTable<ClienteExt>
               columns={[
                 {
@@ -1739,7 +1779,12 @@ export default function ClientesPage() {
                     </div>
                   ) : <span className="text-zinc-300 dark:text-zinc-600">—</span>;
                 }},
-                { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => <span className="font-mono text-xs block text-right">{formatCurrency(row.saldoCuentaCorriente, "ARS")}</span> },
+                { key: "saldoCuentaCorriente", label: "Saldo CC", className: "text-right", sortable: true, render: (row) => (
+                  <span className="font-mono text-xs block text-right">
+                    <span className={row.saldoCuentaCorriente < 0 ? "text-emerald-600" : ""} title={row.saldoCuentaCorriente < 0 ? "Saldo a favor del cliente" : undefined}>{formatCurrency(row.saldoCuentaCorriente, "ARS")}</span>
+                    {(row.saldoUSD || 0) !== 0 && <span className={`block ${(row.saldoUSD || 0) < 0 ? "text-emerald-600" : "text-zinc-500"}`}>{formatCurrency(row.saldoUSD || 0, "USD")}</span>}
+                  </span>
+                ) },
                 { key: "activo", label: "Estado", sortable: true, render: (row) => <Badge variant={row.activo ? "success" : "danger"}>{row.activo ? "Activo" : "Inactivo"}</Badge> },
                 {
                   key: "actions", label: "", sortable: false,
@@ -1759,44 +1804,6 @@ export default function ClientesPage() {
               onRowClick={(row) => { setSelectedCliente(row); setDetailTab("datos"); }}
             />
           </Card>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((client) => (
-              <Card key={client.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => { setSelectedCliente(client); setDetailTab("datos"); }}>
-                <div className="flex items-start justify-between gap-2 overflow-hidden">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-sm dark:bg-orange-900/30 dark:text-orange-400">
-                      {getInitials(client.razonSocial)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-semibold text-zinc-900 dark:text-white truncate">{client.razonSocial}</p>
-                      <p className="text-xs text-zinc-400">{client.cuit ? (client.cuit.replace(/\D/g, "").length <= 8 ? `DNI ${client.cuit}` : client.cuit) : "Sin CUIT/DNI"}</p>
-                    </div>
-                  </div>
-                  <Badge variant={client.activo ? "success" : "danger"}>
-                    {client.activo ? "Activo" : "Inactivo"}
-                  </Badge>
-                </div>
-                <div className="mt-4 space-y-2 text-sm text-zinc-500">
-                  <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{client.localidad}, {client.provincia}</span></div>
-                  <div className="flex items-center gap-2"><Phone className="h-3.5 w-3.5 shrink-0" /> {client.telefono ? <a href={`tel:${client.telefono}`} className="hover:text-orange-500">{client.telefono}</a> : "—"}</div>
-                  <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5 shrink-0" /> {client.email ? <a href={`mailto:${client.email}`} className="hover:text-orange-500 truncate">{client.email}</a> : <span className="truncate">—</span>}</div>
-                </div>
-                <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-4 dark:border-zinc-800">
-                  <div>
-                    <p className="text-xs text-zinc-400">Saldo CC</p>
-                    <p className="font-mono font-semibold">{formatCurrency(client.saldoCuentaCorriente)}</p>
-                  </div>
-                  <a href={`/finanzas?tab=cc_clientes&cliente=${client.id}`} className="text-xs text-orange-500 hover:text-orange-600 font-medium">Ver CC →</a>
-                  <div className="text-right">
-                    <p className="text-xs text-zinc-400">Lista</p>
-                    <Badge variant="info">{client.listaPrecio || "—"}</Badge>
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* ===================== DETAIL SIDE PANEL ===================== */}
@@ -1953,7 +1960,7 @@ export default function ClientesPage() {
                       <InfoField label="Forma de pago" value={selectedCliente.formaPago || "—"} />
                       <InfoField label="Dias CC" value={String(selectedCliente.diasCuentaCorriente)} />
                       <InfoField label="Limite credito" value={formatCurrency(selectedCliente.limiteCredito, "ARS")} />
-                      <InfoField label="Saldo CC" value={formatCurrency(selectedCliente.saldoCuentaCorriente, "ARS")} highlight />
+                      <InfoField label="Saldo CC" value={formatCurrency(selectedCliente.saldoCuentaCorriente, "ARS") + ((selectedCliente as ClienteExt).saldoUSD ? ` · ${formatCurrency((selectedCliente as ClienteExt).saldoUSD || 0, "USD")}` : "")} highlight />
                       {selectedCliente.limiteCredito > 0 && selectedCliente.saldoCuentaCorriente >= selectedCliente.limiteCredito && (
                         <div className="col-span-2 sm:col-span-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
                           Aviso de límite de crédito: el saldo alcanzó o superó el límite configurado.
@@ -2388,7 +2395,7 @@ export default function ClientesPage() {
 
               {/* ---- TAB: HISTORIAL (Ficha completa) ---- */}
               {detailTab === "historial" && (
-                <Ficha360 sociedadId={sociedadActiva?.id} cliente={{ id: selectedCliente.id, razon_social: selectedCliente.razonSocial, cuit: selectedCliente.cuit }} />
+                <Ficha360 sociedadId={sociedadActiva?.id} cliente={{ id: selectedCliente.id, razon_social: selectedCliente.razonSocial, cuit: selectedCliente.cuit, limite_credito: selectedCliente.limiteCredito }} />
               )}
 
               {detailTab === "actividad" && (
@@ -2770,8 +2777,8 @@ export default function ClientesPage() {
             </div>
           </div>
 
-          {/* Section: Sucursales (edit mode only) */}
-          {editingId && (
+          {/* Section: Sucursales (alta y edición; en el alta quedan en memoria hasta guardar) */}
+          {(
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Sucursales</p>
               {sucursalesLoading ? (

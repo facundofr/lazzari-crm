@@ -14,6 +14,8 @@ import {
   ESTADOS_GANADOS, ESTADOS_PERDIDOS, TIPO_LABEL, calcularOportunidades, claveArticulo,
   type FacturaHist, type ItemHist, type PRHist, type TipoOportunidad,
 } from "@/lib/oportunidades";
+import { totalVentasNeto } from "@/lib/ventas-documentos";
+import { calcularSaldosClientes, superaLimiteCredito, type SaldoCliente, type MovimientoCC, type AplicacionCC } from "@/lib/saldo-clientes";
 import { ChevronDown, ChevronRight, Lightbulb, Loader2, Search } from "lucide-react";
 
 const db = supabase as any;
@@ -22,7 +24,7 @@ const mon = (m: string | null | undefined): Moneda => (m === "USD" ? "USD" : "AR
 const DIA = 86400_000;
 const diasDesde = (f: string) => Math.floor((Date.now() - new Date(`${f.slice(0, 10)}T12:00:00`).getTime()) / DIA);
 
-interface Factura { id: string; tipo: string; punto_venta: number | string; numero: number | string; fecha: string; total: number; moneda: string; estado: string }
+interface Factura { id: string; tipo: string; punto_venta: number | string; numero: number | string; fecha: string; total: number; moneda: string; estado: string; factura_origen_id?: string | null; total_acreditado?: number | null; saldo_a_favor_cliente?: number | null; cliente_id?: string }
 interface Cobro { id: string; fecha: string; monto: number; moneda: string; descripcion: string | null }
 interface MuestraAbierta { numero: string; fecha: string; pendientes: number }
 
@@ -58,7 +60,7 @@ function textoMonedas(t: { ARS: number; USD: number }) {
 // Los cobros se guardan con el medio de pago como tipo (ver facturacion-content.tsx), no solo "cobro".
 const TIPOS_COBRO = ["cobro", "transferencia", "efectivo", "tarjeta", "cheque_recibido", "echeq", "retencion_iibb", "retencion_ganancias", "retencion_iva"];
 
-export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefined; cliente: { id: string; razon_social: string; cuit?: string | null } }) {
+export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefined; cliente: { id: string; razon_social: string; cuit?: string | null; limite_credito?: number | null } }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [vista, setVista] = useState<Vista>("resumen");
@@ -67,6 +69,7 @@ export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefin
   const [facturas, setFacturas] = useState<Factura[]>([]);
   const [cobros, setCobros] = useState<Cobro[]>([]);
   const [muestras, setMuestras] = useState<MuestraAbierta[]>([]);
+  const [saldoCC, setSaldoCC] = useState<SaldoCliente | null>(null);
   const [abierto, setAbierto] = useState<string | null>(null);
   const [filtroPr, setFiltroPr] = useState<"todos" | "ganados" | "perdidos" | "abiertos">("todos");
   const [buscar, setBuscar] = useState("");
@@ -77,9 +80,18 @@ export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefin
       if (!sociedadId) return;
       setLoading(true); setError(null);
       try {
+        const camposFactura = "id, cliente_id, tipo, punto_venta, numero, fecha, total, moneda, estado, factura_origen_id, total_acreditado";
+        const armarFacturas = (campos: string) => () => db.from("facturas").select(campos).eq("cliente_id", cliente.id).eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).order("id");
+        const traerFacturas = async () => {
+          try { return { data: await traerTodo(armarFacturas(`${camposFactura}, saldo_a_favor_cliente`)), error: null }; }
+          catch {
+            try { return { data: await traerTodo(armarFacturas(camposFactura)), error: null }; }
+            catch (e) { return { data: null, error: e }; }
+          }
+        };
         const [prRes, fRes, cRes, mRes] = await Promise.all([
           db.from("presupuestos").select("id, cliente_id, numero, fecha, estado, total, moneda, motivo_rechazo").eq("cliente_id", cliente.id).eq("sociedad_id", sociedadId).order("fecha", { ascending: false }),
-          db.from("facturas").select("id, tipo, punto_venta, numero, fecha, total, moneda, estado").eq("cliente_id", cliente.id).eq("sociedad_id", sociedadId).order("fecha", { ascending: false }),
+          traerFacturas(),
           db.from("movimientos").select("id, fecha, monto, moneda, descripcion, anulado").eq("cliente_id", cliente.id).in("tipo", TIPOS_COBRO).eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).limit(300),
           db.from("muestra_envios").select("id, numero, fecha, estado").eq("cliente_id", cliente.id).eq("sociedad_id", sociedadId).neq("estado", "devuelto").neq("estado", "cerrado"),
         ]);
@@ -101,9 +113,31 @@ export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefin
             pendientes: (mi || []).filter((x: any) => x.envio_id === m.id).reduce((s: number, x: any) => s + Math.max(0, x.cantidad - (x.cantidad_devuelta || 0) - (x.cantidad_vendida || 0) - (x.cantidad_baja || 0)), 0),
           })).filter((m: MuestraAbierta) => m.pendientes > 0);
         }
+        // Saldo de cuenta corriente real (B3): facturas − NC − cobros (incluye retenciones), ARS y USD aparte.
+        let saldo: SaldoCliente | null = null;
+        if (!fRes.error) {
+          const facturasCli = (fRes.data || []) as Factura[];
+          const idsF = facturasCli.filter(f => f.estado !== "anulada").map(f => f.id);
+          const movs: MovimientoCC[] = [];
+          const apls: AplicacionCC[] = [];
+          try {
+            for (let i = 0; i < idsF.length; i += 150) {
+              const lote = idsF.slice(i, i + 150);
+              const [mv, ap] = await Promise.all([
+                traerTodo<MovimientoCC>(() => db.from("movimientos").select("id, factura_id, monto, moneda, anulado").in("factura_id", lote).eq("sociedad_id", sociedadId).order("id")),
+                traerTodo<AplicacionCC>(() => db.from("cobro_aplicaciones").select("movimiento_id, factura_id, monto, movimientos!inner(anulado, sociedad_id)").in("factura_id", lote).eq("movimientos.sociedad_id", sociedadId).order("movimiento_id").order("factura_id")),
+              ]);
+              movs.push(...mv); apls.push(...ap);
+            }
+            saldo = calcularSaldosClientes(facturasCli.map(f => ({ ...f, cliente_id: cliente.id })), movs, apls)[cliente.id]
+              || { ARS: { deuda: 0, aFavor: 0, saldo: 0 }, USD: { deuda: 0, aFavor: 0, saldo: 0 } };
+          } catch { saldo = null; }
+        }
         if (cancel) return;
+        setSaldoCC(saldo);
         setPrs(lista);
         setItems(its);
+        if (fRes.error) throw fRes.error;
         setFacturas((fRes.data || []).map((f: any) => ({ ...f, total: Number(f.total) || 0, moneda: mon(f.moneda) })));
         setCobros((cRes.data || []).filter((c: any) => !c.anulado).map((c: any) => ({ ...c, monto: Number(c.monto) || 0, moneda: mon(c.moneda) })));
         setMuestras(abiertas);
@@ -135,8 +169,10 @@ export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefin
     const montoDec = porMoneda([...ganados, ...perdidos].map(p => ({ monto: p.total, moneda: p.moneda })));
     const hace12 = new Date(Date.now() - 365 * DIA).toISOString().slice(0, 10);
     const esNC = (t: string) => /^NC/i.test(String(t));
-    const fact12 = facturasValidas.filter(f => String(f.fecha).slice(0, 10) >= hace12);
-    const signo = (f: Factura) => (esNC(f.tipo) ? -1 : 1);
+    // B7: la NC de una factura anulada no se resta otra vez (la factura ya quedó afuera).
+    const estadoPorId = new Map(facturas.map(f => [f.id, f.estado] as [string, string]));
+    const fact12Todas = facturas.filter(f => String(f.fecha).slice(0, 10) >= hace12);
+    const facturadoEn = (m: Moneda) => totalVentasNeto(fact12Todas.filter(f => mon(f.moneda) === m), id => estadoPorId.get(id));
     const fechasCompra = [...new Set([...ganados.map(p => p.fecha), ...facturasValidas.filter(f => !esNC(f.tipo)).map(f => String(f.fecha).slice(0, 10))])].sort();
     const frecuencia = fechasCompra.length >= 2
       ? Math.round((new Date(fechasCompra[fechasCompra.length - 1]).getTime() - new Date(fechasCompra[0]).getTime()) / DIA / (fechasCompra.length - 1)) : null;
@@ -150,11 +186,11 @@ export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefin
       ticket: ganados.length ? { ARS: montoGan.ARS / Math.max(1, ganados.filter(p => p.moneda === "ARS").length), USD: montoGan.USD / Math.max(1, ganados.filter(p => p.moneda === "USD").length) } : null,
       ultimaCompra: fechasCompra[fechasCompra.length - 1] || null,
       frecuencia,
-      facturado12: porMoneda(fact12.map(f => ({ monto: f.total * signo(f), moneda: f.moneda }))),
+      facturado12: { ARS: facturadoEn("ARS"), USD: facturadoEn("USD") },
       cobrado12: porMoneda(cobros.filter(c => String(c.fecha).slice(0, 10) >= hace12)),
       abiertos: prs.filter(p => !ESTADOS_GANADOS.includes(p.estado) && !ESTADOS_PERDIDOS.includes(p.estado)).length,
     };
-  }, [prs, facturasValidas, cobros]);
+  }, [prs, facturas, facturasValidas, cobros]);
 
   // ── Artículos ──
   const articulos = useMemo(() => {
@@ -216,7 +252,17 @@ export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefin
             <Kpi label="Frecuencia de compra" valor={kpi.frecuencia != null ? `cada ~${kpi.frecuencia} días` : "—"} />
             <Kpi label="Facturado últimos 12 meses" valor={textoMonedas(kpi.facturado12)} sub="neto de notas de crédito" />
             <Kpi label="Cobrado últimos 12 meses" valor={textoMonedas(kpi.cobrado12)} />
+            <Kpi
+              label="Saldo cuenta corriente"
+              valor={saldoCC ? textoMonedas({ ARS: saldoCC.ARS.saldo, USD: saldoCC.USD.saldo }) : "—"}
+              sub={saldoCC ? (saldoCC.ARS.aFavor || saldoCC.USD.aFavor ? `incluye saldo a favor ${textoMonedas({ ARS: saldoCC.ARS.aFavor, USD: saldoCC.USD.aFavor })}` : "facturas − NC − cobros") : "no se pudo calcular"}
+            />
           </div>
+          {superaLimiteCredito(cliente.limite_credito, saldoCC) && (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300">
+              Aviso: el saldo en pesos alcanzó o superó el límite de crédito ({formatCurrency(Number(cliente.limite_credito) || 0, "ARS")}). Es solo un aviso, no frena nada.
+            </p>
+          )}
 
           <BCRACard sociedadId={sociedadId} clienteId={cliente.id} cuit={cliente.cuit} />
 

@@ -3,12 +3,16 @@
 import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
+import { mockPresupuestos, mockUsers } from "@/lib/mock-data";
+import { traerTodo } from "@/lib/paginar";
 import {
-  dashboardKPIs, presupuestosPorEstado, topClientes, mockPresupuestos, mockUsers,
-} from "@/lib/mock-data";
+  equivalenteARS, filtrarParaGestion, firmarFilaLibro, incluirEnLibroIVACompras, incluirEnLibroIVAVentas,
+  inicioDeMesHace, montoFirmado, normalizarMoneda, periodoDeFecha, signoComprobante, sumarMeses,
+  totalesLibroIVA, totalesMensuales, type Moneda, type TotalesLibro, type TotalesLibroIVA,
+} from "@/lib/reportes-comprobantes";
 import { TrendingUp, Users, FileText, Download, DollarSign, XCircle, Loader2, Percent, Package, BookOpen } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
@@ -68,6 +72,7 @@ interface ArticuloRanking {
 }
 
 // ── Libro IVA types ──────────────────────────────────────────────
+// Importes con signo: las NC van en negativo (ver lib/reportes-comprobantes.ts).
 interface LibroIVAVentaRow {
   fecha: string;
   tipo: string;
@@ -78,11 +83,15 @@ interface LibroIVAVentaRow {
   neto_gravado: number;
   iva: number;
   total: number;
-  moneda: string;
+  moneda: Moneda;
+  tipo_cambio: number | null;
+  anulada: boolean;
+  signo: 1 | -1;
 }
 
 interface LibroIVACompraRow {
   fecha: string;
+  tipo: string;
   numero_factura: string;
   cuit: string;
   razon_social: string;
@@ -90,7 +99,16 @@ interface LibroIVACompraRow {
   iva: number;
   percepciones: number;
   total: number;
-  moneda: string;
+  moneda: Moneda;
+  signo: 1 | -1;
+}
+
+interface ClienteRanking {
+  nombre: string;
+  ARS: number;
+  USD: number;
+  /** ARS + USD pasado a pesos con la cotización de cada factura. Sirve para ordenar. */
+  equivalente: number;
 }
 
 interface ComparativaMensualRow {
@@ -104,6 +122,63 @@ interface ComparativaMensualRow {
 }
 
 const COLORS = ["#f97316", "#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#eab308"];
+
+/** Ids de comprobantes anulados (de cualquier fecha), para no restar dos veces una NC cuya factura ya se excluye. */
+async function idsAnulados(tabla: "facturas" | "facturas_compra", sociedadId?: string): Promise<string[]> {
+  const rows = await traerTodo<{ id: string }>(() => {
+    let q = (supabase as any).from(tabla).select("id").eq("estado", "anulada").order("id", { ascending: true });
+    if (sociedadId) q = q.eq("sociedad_id", sociedadId);
+    return q;
+  });
+  return rows.map((r) => r.id);
+}
+
+function etiquetaMes(periodo: string, conAnio = false): string {
+  const [y, m] = periodo.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("es-AR", conAnio ? { month: "short", year: "2-digit" } : { month: "short" });
+}
+
+function TotalesLibroIVACard({ totales, conPercepciones }: { totales: TotalesLibroIVA; conPercepciones: boolean }) {
+  const filas: { titulo: string; t: TotalesLibro; moneda: Moneda }[] = [{ titulo: "En pesos", t: totales.ARS, moneda: "ARS" }];
+  if (totales.USD.cantidad > 0) filas.push({ titulo: "En dólares", t: totales.USD, moneda: "USD" });
+  if (totales.USDenARS.cantidad > 0) filas.push({ titulo: "Dólares pasados a pesos (referencia)", t: totales.USDenARS, moneda: "ARS" });
+  return (
+    <Card>
+      <CardHeader><CardTitle>Totales del mes por moneda</CardTitle></CardHeader>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-zinc-200 dark:border-zinc-700 text-xs uppercase text-zinc-500">
+              <th className="px-3 py-2 text-left">Moneda</th>
+              <th className="px-3 py-2 text-right">Comprobantes</th>
+              <th className="px-3 py-2 text-right">Neto gravado</th>
+              <th className="px-3 py-2 text-right">IVA</th>
+              {conPercepciones && <th className="px-3 py-2 text-right">Percepciones</th>}
+              <th className="px-3 py-2 text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((f) => (
+              <tr key={f.titulo} className="border-b border-zinc-100 dark:border-zinc-800">
+                <td className="px-3 py-2 font-medium">{f.titulo}</td>
+                <td className="px-3 py-2 text-right">{f.t.cantidad}</td>
+                <td className="px-3 py-2 text-right font-mono">{formatCurrency(f.t.neto_gravado, f.moneda)}</td>
+                <td className="px-3 py-2 text-right font-mono font-semibold text-blue-600">{formatCurrency(f.t.iva, f.moneda)}</td>
+                {conPercepciones && <td className="px-3 py-2 text-right font-mono text-violet-600">{formatCurrency(f.t.percepciones, f.moneda)}</td>}
+                <td className="px-3 py-2 text-right font-mono font-semibold">{formatCurrency(f.t.total, f.moneda)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-3 text-xs text-zinc-500">
+        Las notas de crédito restan. Los pesos y los dólares no se suman entre sí.
+        {totales.USDenARS.cantidad > 0 && " La fila de referencia pasa a pesos los comprobantes en dólares con la cotización guardada en cada uno."}
+        {totales.usdSinCotizacion > 0 && ` ${totales.usdSinCotizacion} comprobante(s) en dólares no tienen cotización guardada y no se pasan a pesos.`}
+      </p>
+    </Card>
+  );
+}
 
 function costoEnMonedaPresupuesto(costo: number, costoMoneda: string, prMoneda: string, tipoCambio: number, tipoCambioDivisas: number): number {
   const costoEsUsd = costoMoneda === "USD" || costoMoneda === "USD Divisa";
@@ -120,9 +195,10 @@ export default function ReportesPage() {
   const [monedaReporte, setMonedaReporte] = useState<"original" | "ARS" | "USD">("original");
   const [tipoCambioReporte, setTipoCambioReporte] = useState<number>(1200);
   const [loading, setLoading] = useState(true);
-  const [ventasMensuales, setVentasMensuales] = useState<{ mes: string; total: number }[]>([]);
+  const [ventasMensuales, setVentasMensuales] = useState<{ periodo: string; mes: string; ARS: number; USD: number }[]>([]);
   const [prEstadoData, setPrEstadoData] = useState<{ name: string; value: number }[]>([]);
-  const [topClientesData, setTopClientesData] = useState<{ nombre: string; facturado: number }[]>([]);
+  const [topClientesData, setTopClientesData] = useState<ClienteRanking[]>([]);
+  const [resumen12m, setResumen12m] = useState({ equivalente: 0, facturas: 0 });
   const [rechazados, setRechazados] = useState<{ id: string; numero: string; motivoRechazo: string | null; clienteNombre: string; fecha: string; total: number }[]>([]);
   const [comisionesData, setComisionesData] = useState<VendedorComision[]>([]);
   const [comisionesLoading, setComisionesLoading] = useState(true);
@@ -151,48 +227,64 @@ export default function ReportesPage() {
   useEffect(() => {
     async function fetchData() {
       try {
-        // Ventas por mes from facturas
-        let facturasQuery = supabase
-          .from("facturas")
-          .select("fecha, total, estado")
-          .neq("estado", "anulada");
-        if (sociedadActiva?.id) facturasQuery = facturasQuery.eq("sociedad_id" as any, sociedadActiva.id);
-        const { data: facturas } = await facturasQuery;
+        const hoy = todayAR();
+        const mesHoy = periodoDeFecha(hoy);
+        const desde12 = inicioDeMesHace(hoy, 11);
+        const sid = sociedadActiva?.id;
 
-        if (facturas && facturas.length > 0) {
-          const byMonth: Record<string, number> = {};
-          facturas.forEach((f) => {
-            const d = new Date(f.fecha);
-            const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-            byMonth[key] = (byMonth[key] || 0) + Number(f.total);
-          });
-          const sorted = Object.entries(byMonth)
-            .sort(([a], [b]) => a.localeCompare(b))
-            .slice(-6)
-            .map(([key, total]) => {
-              const [y, m] = key.split("-");
-              const label = new Date(Number(y), Number(m) - 1).toLocaleString("es-AR", { month: "short" });
-              return { mes: label, total };
-            });
-          setVentasMensuales(sorted);
-        } else {
-          setVentasMensuales([]);
+        // Facturas de los últimos 12 meses, todas las páginas (Supabase corta en 1000 filas)
+        const [facturas, anuladas] = await Promise.all([
+          traerTodo<any>(() => {
+            let q = (supabase as any).from("facturas")
+              .select("id, fecha, tipo, total, moneda, tipo_cambio, estado, factura_origen_id, cliente_id, clientes(razon_social)")
+              .gte("fecha", desde12)
+              .neq("estado", "anulada")
+              .order("fecha", { ascending: true })
+              .order("id", { ascending: true });
+            if (sid) q = q.eq("sociedad_id", sid);
+            return q;
+          }),
+          idsAnulados("facturas", sid),
+        ]);
+        const vigentes = filtrarParaGestion(facturas, anuladas);
+
+        // Ventas por mes: mes tomado del texto de la fecha, NC en negativo, ARS y USD por separado
+        const porMes = totalesMensuales(vigentes);
+        setVentasMensuales(Array.from({ length: 6 }, (_, i) => {
+          const periodo = sumarMeses(mesHoy, i - 5);
+          return { periodo, mes: etiquetaMes(periodo), ARS: porMes[periodo]?.ARS || 0, USD: porMes[periodo]?.USD || 0 };
+        }));
+
+        // Ranking de clientes (12 meses)
+        const byCli = new Map<string, ClienteRanking>();
+        let equivalenteTotal = 0;
+        let cantFacturas = 0;
+        for (const f of vigentes) {
+          const key = f.cliente_id || f.clientes?.razon_social || "?";
+          const cur = byCli.get(key) || { nombre: f.clientes?.razon_social ?? "Desconocido", ARS: 0, USD: 0, equivalente: 0 };
+          const monto = montoFirmado(f);
+          const eq = equivalenteARS(monto, f.moneda, f.tipo_cambio) ?? 0;
+          cur[normalizarMoneda(f.moneda)] += monto;
+          cur.equivalente += eq;
+          equivalenteTotal += eq;
+          if (signoComprobante(f.tipo) > 0) cantFacturas += 1;
+          byCli.set(key, cur);
         }
+        setTopClientesData([...byCli.values()].sort((a, b) => b.equivalente - a.equivalente).slice(0, 10));
+        setResumen12m({ equivalente: equivalenteTotal, facturas: cantFacturas });
 
-        // PR por estado
-        let prsQuery = supabase
-          .from("presupuestos")
-          .select("estado, total");
-        if (sociedadActiva?.id) prsQuery = prsQuery.eq("sociedad_id" as any, sociedadActiva.id);
-        const { data: prs } = await prsQuery;
-
-        if (prs && prs.length > 0) {
-          const byEstado: Record<string, number> = {};
-          prs.forEach((p) => { byEstado[p.estado] = (byEstado[p.estado] || 0) + 1; });
-          setPrEstadoData(Object.entries(byEstado).map(([name, value]) => ({ name, value })));
-        } else {
-          setPrEstadoData(presupuestosPorEstado.map((p) => ({ name: p.estado, value: p.cantidad })));
-        }
+        // PR por estado (12 meses)
+        const prs = await traerTodo<{ estado: string }>(() => {
+          let q = (supabase as any).from("presupuestos")
+            .select("id, estado")
+            .gte("fecha", desde12)
+            .order("id", { ascending: true });
+          if (sid) q = q.eq("sociedad_id", sid);
+          return q;
+        });
+        const byEstado: Record<string, number> = {};
+        prs.forEach((p) => { byEstado[p.estado] = (byEstado[p.estado] || 0) + 1; });
+        setPrEstadoData(Object.entries(byEstado).map(([name, value]) => ({ name, value })));
 
         // Rechazados
         let rechQuery = supabase
@@ -201,7 +293,7 @@ export default function ReportesPage() {
           .eq("estado", "rechazado")
           .order("fecha", { ascending: false })
           .limit(20);
-        if (sociedadActiva?.id) rechQuery = rechQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        if (sid) rechQuery = rechQuery.eq("sociedad_id" as any, sid);
         const { data: rechData } = await rechQuery;
         if (rechData) {
           setRechazados(rechData.map((r: any) => ({
@@ -209,64 +301,54 @@ export default function ReportesPage() {
             fecha: r.fecha, total: Number(r.total),
           })));
         }
-
-        // Top clientes
-        let topCliQuery = supabase
-          .from("facturas")
-          .select("clientes(razon_social), total")
-          .neq("estado", "anulada");
-        if (sociedadActiva?.id) topCliQuery = topCliQuery.eq("sociedad_id" as any, sociedadActiva.id);
-        const { data: topCli } = await topCliQuery;
-
-        if (topCli && topCli.length > 0) {
-          const byCli: Record<string, number> = {};
-          topCli.forEach((f: Record<string, unknown>) => {
-            const cli = f.clientes as { razon_social: string } | null;
-            const name = cli?.razon_social ?? "Desconocido";
-            byCli[name] = (byCli[name] || 0) + Number(f.total);
-          });
-          const sorted = Object.entries(byCli)
-            .sort(([, a], [, b]) => b - a)
-            .slice(0, 5)
-            .map(([nombre, facturado]) => ({ nombre, facturado }));
-          setTopClientesData(sorted);
-        } else {
-          setTopClientesData(topClientes);
-        }
-      } catch {
+      } catch (error) {
+        console.error("Error cargando reportes:", error);
         setVentasMensuales([]);
         setPrEstadoData([]);
         setTopClientesData([]);
+        setResumen12m({ equivalente: 0, facturas: 0 });
       } finally {
         setLoading(false);
       }
     }
     fetchData();
-  }, [sociedadActiva]);
+  }, [sociedadActiva?.id]);
 
   // ── Compras vs ventas y costo vs venta de PR ──────────────────
   useEffect(() => {
     async function fetchComparativa() {
       setComparativaLoading(true);
       try {
-        let ventasQuery = (supabase as any).from("facturas")
-          .select("fecha, tipo, total, moneda, estado")
-          .neq("estado", "anulada");
-        let comprasQuery = (supabase as any).from("facturas_compra")
-          .select("fecha, tipo_comprobante, total, moneda, estado")
-          .neq("estado", "anulada");
-        let prsQuery = (supabase as any).from("presupuestos")
-          .select("fecha, subtotal, moneda, estado, tipo_cambio, tipo_cambio_divisas, presupuesto_items(cantidad, precio_costo, costo_moneda)")
-          .in("estado", ["aprobado", "facturado"]);
-        if (sociedadActiva?.id) {
-          ventasQuery = ventasQuery.eq("sociedad_id", sociedadActiva.id);
-          comprasQuery = comprasQuery.eq("sociedad_id", sociedadActiva.id);
-          prsQuery = prsQuery.eq("sociedad_id", sociedadActiva.id);
-        }
-        const [ventasResult, comprasResult, prsResult] = await Promise.all([ventasQuery, comprasQuery, prsQuery]);
-        if (ventasResult.error) throw ventasResult.error;
-        if (comprasResult.error) throw comprasResult.error;
-        if (prsResult.error) throw prsResult.error;
+        const sid = sociedadActiva?.id;
+        const desde24 = inicioDeMesHace(todayAR(), 23);
+        const conSociedad = (q: any) => (sid ? q.eq("sociedad_id", sid) : q);
+        const [ventasData, comprasData, prsData, ventasAnuladas, comprasAnuladas] = await Promise.all([
+          traerTodo<any>(() => conSociedad((supabase as any).from("facturas")
+            .select("id, fecha, tipo, total, moneda, estado, factura_origen_id")
+            .gte("fecha", desde24)
+            .neq("estado", "anulada")
+            .order("fecha", { ascending: true })
+            .order("id", { ascending: true }))),
+          traerTodo<any>(() => conSociedad((supabase as any).from("facturas_compra")
+            .select("id, fecha, tipo_comprobante, total, moneda, estado, factura_origen_id")
+            .gte("fecha", desde24)
+            .neq("estado", "anulada")
+            .order("fecha", { ascending: true })
+            .order("id", { ascending: true }))),
+          traerTodo<any>(() => conSociedad((supabase as any).from("presupuestos")
+            .select("id, fecha, subtotal, moneda, estado, tipo_cambio, tipo_cambio_divisas, presupuesto_items(cantidad, precio_costo, costo_moneda)")
+            .gte("fecha", desde24)
+            .in("estado", ["aprobado", "facturado"])
+            .order("fecha", { ascending: true })
+            .order("id", { ascending: true }))),
+          idsAnulados("facturas", sid),
+          idsAnulados("facturas_compra", sid),
+        ]);
+        const ventasVigentes = filtrarParaGestion(ventasData, ventasAnuladas);
+        const comprasVigentes = filtrarParaGestion(
+          comprasData.map((f: any) => ({ ...f, tipo: f.tipo_comprobante })),
+          comprasAnuladas,
+        );
 
         const byMonth = new Map<string, ComparativaMensualRow>();
         const ensure = (periodo: string, monedaRaw: string) => {
@@ -276,7 +358,7 @@ export default function ReportesPage() {
             const [year, month] = periodo.split("-");
             byMonth.set(key, {
               periodo,
-              mes: new Date(Number(year), Number(month) - 1).toLocaleDateString("es-AR", { month: "short", year: "2-digit" }),
+              mes: etiquetaMes(`${year}-${month}`, true),
               moneda,
               ventas: 0,
               compras: 0,
@@ -287,18 +369,20 @@ export default function ReportesPage() {
           return byMonth.get(key)!;
         };
 
-        (ventasResult.data || []).forEach((factura: any) => {
-          const row = ensure(String(factura.fecha || "").slice(0, 7), factura.moneda);
-          const signo = String(factura.tipo || "").toUpperCase().startsWith("NC") ? -1 : 1;
-          row.ventas += signo * Number(factura.total || 0);
+        ventasVigentes.forEach((factura: any) => {
+          const periodo = periodoDeFecha(factura.fecha);
+          if (!periodo) return;
+          ensure(periodo, normalizarMoneda(factura.moneda)).ventas += montoFirmado(factura);
         });
-        (comprasResult.data || []).forEach((factura: any) => {
-          const row = ensure(String(factura.fecha || "").slice(0, 7), factura.moneda);
-          const signo = String(factura.tipo_comprobante || "").toUpperCase().startsWith("NC") ? -1 : 1;
-          row.compras += signo * Number(factura.total || 0);
+        comprasVigentes.forEach((factura: any) => {
+          const periodo = periodoDeFecha(factura.fecha);
+          if (!periodo) return;
+          ensure(periodo, normalizarMoneda(factura.moneda)).compras += montoFirmado(factura);
         });
-        (prsResult.data || []).forEach((pr: any) => {
-          const row = ensure(String(pr.fecha || "").slice(0, 7), pr.moneda);
+        prsData.forEach((pr: any) => {
+          const periodo = periodoDeFecha(pr.fecha);
+          if (!periodo) return;
+          const row = ensure(periodo, normalizarMoneda(pr.moneda));
           row.venta_pr += Number(pr.subtotal || 0);
           row.costo_pr += (pr.presupuesto_items || []).reduce((sum: number, item: any) => {
             const costoUnitario = costoEnMonedaPresupuesto(
@@ -328,14 +412,17 @@ export default function ReportesPage() {
     async function fetchComisiones() {
       try {
         // Try fetching approved presupuestos with their items and vendedor profiles
-        let comPrsQuery = supabase
-          .from("presupuestos")
-          .select("id, subtotal, created_by, presupuesto_items(cantidad, precio_costo)")
-          .eq("estado", "aprobado");
-        if (sociedadActiva?.id) comPrsQuery = comPrsQuery.eq("sociedad_id" as any, sociedadActiva.id);
-        const { data: prs, error } = await comPrsQuery;
+        const prs = await traerTodo<{ id: string; subtotal: number; created_by: string | null; presupuesto_items: { cantidad: number; precio_costo: number }[] | null }>(() => {
+          let q = (supabase as any)
+            .from("presupuestos")
+            .select("id, subtotal, created_by, presupuesto_items(cantidad, precio_costo)")
+            .eq("estado", "aprobado")
+            .order("id", { ascending: true });
+          if (sociedadActiva?.id) q = q.eq("sociedad_id", sociedadActiva.id);
+          return q;
+        });
 
-        if (error || !prs || prs.length === 0) {
+        if (prs.length === 0) {
           setComisionesData([]);
           return;
         }
@@ -362,7 +449,7 @@ export default function ReportesPage() {
           if (!byVendedor[vid]) byVendedor[vid] = { ventaNeta: 0, costoTotal: 0, count: 0 };
           byVendedor[vid].ventaNeta += Number(pr.subtotal) || 0;
           byVendedor[vid].count += 1;
-          const items = (pr as Record<string, unknown>).presupuesto_items as { cantidad: number; precio_costo: number }[] | null;
+          const items = pr.presupuesto_items;
           if (items) {
             byVendedor[vid].costoTotal += items.reduce((s, it) => s + ((it.cantidad || 0) * (Number(it.precio_costo) || 0)), 0);
           }
@@ -393,53 +480,68 @@ export default function ReportesPage() {
       }
     }
     fetchComisiones();
-  }, [sociedadActiva]);
+  }, [sociedadActiva?.id]);
 
   // ── Fetch ranking por articulo ──────────────────────────────────
   useEffect(() => {
     async function fetchArticulos() {
       setArticulosLoading(true);
       try {
+        const articulosDesde = inicioDeMesHace(todayAR(), 11);
         const byDesc: Record<string, { cantidad: number; monto: number; docs: Set<string> }> = {};
 
         if (articulosFuente === "facturas" || articulosFuente === "ambos") {
-          // Get factura_items joined with facturas to filter by sociedad and exclude anuladas
-          let facItemsQuery = supabase
-            .from("factura_items")
-            .select("descripcion, cantidad, subtotal, factura_id, facturas!inner(estado, sociedad_id)");
-          if (sociedadActiva?.id) facItemsQuery = facItemsQuery.eq("facturas.sociedad_id" as any, sociedadActiva.id);
-          facItemsQuery = facItemsQuery.neq("facturas.estado" as any, "anulada");
-          const { data: facItems } = await facItemsQuery;
-
-          if (facItems) {
-            facItems.forEach((item: Record<string, unknown>) => {
-              const desc = ((item.descripcion as string) || "Sin descripcion").trim();
-              if (!byDesc[desc]) byDesc[desc] = { cantidad: 0, monto: 0, docs: new Set() };
-              byDesc[desc].cantidad += Number(item.cantidad) || 0;
-              byDesc[desc].monto += Number(item.subtotal) || 0;
-              byDesc[desc].docs.add(`F-${item.factura_id}`);
-            });
-          }
+          // Renglones de facturas de los últimos 12 meses (sin anuladas; las NC restan; USD pasado a $ con la cotización de la factura)
+          const [facItems, anuladas] = await Promise.all([
+            traerTodo<any>(() => {
+              let q = (supabase as any)
+                .from("factura_items")
+                .select("id, descripcion, cantidad, subtotal, factura_id, facturas!inner(id, estado, sociedad_id, fecha, tipo, moneda, tipo_cambio, factura_origen_id)")
+                .gte("facturas.fecha", articulosDesde)
+                .neq("facturas.estado", "anulada")
+                .order("id", { ascending: true });
+              if (sociedadActiva?.id) q = q.eq("facturas.sociedad_id", sociedadActiva.id);
+              return q;
+            }),
+            idsAnulados("facturas", sociedadActiva?.id),
+          ]);
+          const facturasValidas = new Set(
+            filtrarParaGestion(facItems.map((it: any) => it.facturas).filter(Boolean), anuladas).map((f: any) => f.id),
+          );
+          facItems.forEach((item: any) => {
+            const fac = item.facturas;
+            if (!fac || !facturasValidas.has(fac.id)) return;
+            const signo = signoComprobante(fac.tipo);
+            const desc = ((item.descripcion as string) || "Sin descripcion").trim();
+            if (!byDesc[desc]) byDesc[desc] = { cantidad: 0, monto: 0, docs: new Set() };
+            const subtotal = signo * (Number(item.subtotal) || 0);
+            byDesc[desc].cantidad += signo * (Number(item.cantidad) || 0);
+            byDesc[desc].monto += equivalenteARS(subtotal, fac.moneda, fac.tipo_cambio) ?? subtotal;
+            byDesc[desc].docs.add(`F-${item.factura_id}`);
+          });
         }
 
         if (articulosFuente === "presupuestos" || articulosFuente === "ambos") {
           // Get presupuesto_items joined with presupuestos (only aprobados)
-          let prItemsQuery = supabase
-            .from("presupuesto_items")
-            .select("descripcion, cantidad, subtotal, presupuesto_id, presupuestos!inner(estado, sociedad_id)")
-            .eq("presupuestos.estado" as any, "aprobado");
-          if (sociedadActiva?.id) prItemsQuery = prItemsQuery.eq("presupuestos.sociedad_id" as any, sociedadActiva.id);
-          const { data: prItems } = await prItemsQuery;
-
-          if (prItems) {
-            prItems.forEach((item: Record<string, unknown>) => {
-              const desc = ((item.descripcion as string) || "Sin descripcion").trim();
-              if (!byDesc[desc]) byDesc[desc] = { cantidad: 0, monto: 0, docs: new Set() };
-              byDesc[desc].cantidad += Number(item.cantidad) || 0;
-              byDesc[desc].monto += Number(item.subtotal) || 0;
-              byDesc[desc].docs.add(`P-${item.presupuesto_id}`);
-            });
-          }
+          const prItems = await traerTodo<any>(() => {
+            let q = (supabase as any)
+              .from("presupuesto_items")
+              .select("id, descripcion, cantidad, subtotal, presupuesto_id, presupuestos!inner(estado, sociedad_id, fecha, moneda, tipo_cambio)")
+              .eq("presupuestos.estado", "aprobado")
+              .gte("presupuestos.fecha", articulosDesde)
+              .order("id", { ascending: true });
+            if (sociedadActiva?.id) q = q.eq("presupuestos.sociedad_id", sociedadActiva.id);
+            return q;
+          });
+          prItems.forEach((item: any) => {
+            const pr = item.presupuestos;
+            const desc = ((item.descripcion as string) || "Sin descripcion").trim();
+            if (!byDesc[desc]) byDesc[desc] = { cantidad: 0, monto: 0, docs: new Set() };
+            const subtotal = Number(item.subtotal) || 0;
+            byDesc[desc].cantidad += Number(item.cantidad) || 0;
+            byDesc[desc].monto += equivalenteARS(subtotal, pr?.moneda, pr?.tipo_cambio) ?? subtotal;
+            byDesc[desc].docs.add(`P-${item.presupuesto_id}`);
+          });
         }
 
         const result: ArticuloRanking[] = Object.entries(byDesc).map(([descripcion, data]) => ({
@@ -457,7 +559,7 @@ export default function ReportesPage() {
       }
     }
     fetchArticulos();
-  }, [sociedadActiva, articulosFuente]);
+  }, [sociedadActiva?.id, articulosFuente]);
 
   // ── Libro IVA fetch ──
   useEffect(() => {
@@ -471,59 +573,62 @@ export default function ReportesPage() {
         const hastaMonth = month === 12 ? 1 : month + 1;
         const hasta = `${hastaYear}-${String(hastaMonth).padStart(2, "0")}-01`;
 
-        // Libro IVA Ventas
-        let qVentas = supabase
-          .from("facturas")
-          .select("fecha, tipo, punto_venta, numero, subtotal, iva, total, moneda, clientes(razon_social, cuit)")
-          .gte("fecha", desde)
-          .lt("fecha", hasta)
-          .neq("estado", "anulada")
-          .order("fecha", { ascending: true });
-        if (sociedadActiva?.id) qVentas = qVentas.eq("sociedad_id" as any, sociedadActiva.id);
-        const { data: ventas } = await qVentas;
+        const sid = sociedadActiva?.id;
+        const [ventas, compras] = await Promise.all([
+          // Ventas: todo lo que tiene CAE entra (una factura anulada por NC sigue en el libro y la NC la compensa)
+          traerTodo<any>(() => {
+            let q = (supabase as any)
+              .from("facturas")
+              .select("id, fecha, tipo, punto_venta, numero, subtotal, iva, total, moneda, tipo_cambio, estado, cae, clientes(razon_social, cuit)")
+              .gte("fecha", desde)
+              .lt("fecha", hasta)
+              .order("fecha", { ascending: true })
+              .order("id", { ascending: true });
+            if (sid) q = q.eq("sociedad_id", sid);
+            return q;
+          }),
+          // Compras: las anuladas son registros dados de baja, no entran
+          traerTodo<any>(() => {
+            let q = (supabase as any)
+              .from("facturas_compra")
+              .select("id, fecha, tipo_comprobante, numero_factura, subtotal, iva, percepciones, total, moneda, estado, proveedores:proveedor_id(razon_social, cuit)")
+              .gte("fecha", desde)
+              .lt("fecha", hasta)
+              .neq("estado", "anulada")
+              .order("fecha", { ascending: true })
+              .order("id", { ascending: true });
+            if (sid) q = q.eq("sociedad_id", sid);
+            return q;
+          }),
+        ]);
 
-        if (ventas) {
-          setLibroIVAVentas(ventas.map((f: any) => ({
-            fecha: f.fecha,
-            tipo: f.tipo,
-            punto_venta: f.punto_venta,
-            numero: f.numero,
-            cuit: f.clientes?.cuit || "",
-            razon_social: f.clientes?.razon_social || "",
-            neto_gravado: Number(f.subtotal),
-            iva: Number(f.iva),
-            total: Number(f.total),
-            moneda: f.moneda || "ARS",
-          })));
-        } else {
-          setLibroIVAVentas([]);
-        }
+        setLibroIVAVentas(ventas.filter(incluirEnLibroIVAVentas).map((f: any) => firmarFilaLibro({
+          fecha: f.fecha,
+          tipo: f.tipo,
+          punto_venta: f.punto_venta,
+          numero: f.numero,
+          cuit: f.clientes?.cuit || "",
+          razon_social: f.clientes?.razon_social || "",
+          neto_gravado: Number(f.subtotal),
+          iva: Number(f.iva),
+          total: Number(f.total),
+          moneda: normalizarMoneda(f.moneda),
+          tipo_cambio: Number(f.tipo_cambio) > 0 ? Number(f.tipo_cambio) : null,
+          anulada: f.estado === "anulada",
+        })));
 
-        // Libro IVA Compras
-        let qCompras = (supabase as any)
-          .from("facturas_compra")
-          .select("fecha, numero_factura, subtotal, iva, percepciones, total, moneda, proveedores:proveedor_id(razon_social, cuit)")
-          .gte("fecha", desde)
-          .lt("fecha", hasta)
-          .order("fecha", { ascending: true });
-        if (sociedadActiva?.id) qCompras = qCompras.eq("sociedad_id", sociedadActiva.id);
-        const { data: compras } = await qCompras;
-
-        if (compras) {
-          setLibroIVACompras(compras.map((f: any) => ({
-            fecha: f.fecha,
-            numero_factura: f.numero_factura || "",
-            cuit: f.proveedores?.cuit || "",
-            razon_social: f.proveedores?.razon_social || "",
-            neto_gravado: Number(f.subtotal),
-            iva: Number(f.iva),
-            percepciones: Number(f.percepciones || 0),
-            total: Number(f.total),
-            moneda: f.moneda || "ARS",
-          })));
-        } else {
-          setLibroIVACompras([]);
-        }
+        setLibroIVACompras(compras.filter(incluirEnLibroIVACompras).map((f: any) => firmarFilaLibro({
+          fecha: f.fecha,
+          tipo: f.tipo_comprobante || "",
+          numero_factura: f.numero_factura || "",
+          cuit: f.proveedores?.cuit || "",
+          razon_social: f.proveedores?.razon_social || "",
+          neto_gravado: Number(f.subtotal),
+          iva: Number(f.iva),
+          percepciones: Number(f.percepciones || 0),
+          total: Number(f.total),
+          moneda: normalizarMoneda(f.moneda),
+        })));
       } catch (err) {
         console.error("Error fetching Libro IVA:", err);
         setLibroIVAVentas([]);
@@ -533,7 +638,10 @@ export default function ReportesPage() {
       }
     }
     fetchLibroIVA();
-  }, [activeTab, libroIVAMes, sociedadActiva]);
+  }, [activeTab, libroIVAMes, sociedadActiva?.id]);
+
+  const totalesIVAVentas = useMemo(() => totalesLibroIVA(libroIVAVentas), [libroIVAVentas]);
+  const totalesIVACompras = useMemo(() => totalesLibroIVA(libroIVACompras), [libroIVACompras]);
 
   const articulosSorted = useMemo(() => {
     const sorted = [...articulosData];
@@ -558,9 +666,10 @@ export default function ReportesPage() {
   const totalPR = prEstadoData.reduce((sum, e) => sum + e.value, 0);
   const aprobadosPR = prEstadoData.find((e) => e.name === "aprobado")?.value ?? 0;
   const tasaConversion = totalPR > 0 ? Math.round((aprobadosPR / totalPR) * 100) : 0;
-  const facturadoMes = ventasMensuales.length > 0 ? ventasMensuales[ventasMensuales.length - 1].total : 0;
-  const facturadoMesAnterior = ventasMensuales.length > 1 ? ventasMensuales[ventasMensuales.length - 2].total : 0;
-  const ticketPromedio = totalPR > 0 ? topClientesData.reduce((a, c) => a + c.facturado, 0) / totalPR : 0;
+  const mesFacturado = ventasMensuales[ventasMensuales.length - 1] ?? { ARS: 0, USD: 0 };
+  const mesFacturadoAnterior = ventasMensuales[ventasMensuales.length - 2] ?? { ARS: 0, USD: 0 };
+  // Ticket promedio por factura de los últimos 12 meses, en pesos (USD a la cotización de cada factura)
+  const ticketPromedio = resumen12m.facturas > 0 ? resumen12m.equivalente / resumen12m.facturas : 0;
 
   const downloadCSV = useCallback((filename: string, headers: string[], rows: string[][]) => {
     const csv = [headers.join(","), ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(","))].join("\n");
@@ -576,12 +685,13 @@ export default function ReportesPage() {
   const exportMetricas = useCallback(() => {
     const rows = [
       ["Tasa de conversion", `${tasaConversion}%`],
-      ["Ticket promedio", String(ticketPromedio)],
-      ["Presupuestos emitidos", String(totalPR)],
-      ["Facturado", String(facturadoMes)],
+      ["Ticket promedio por factura 12 meses (ARS)", String(Math.round(ticketPromedio))],
+      ["Presupuestos 12 meses", String(totalPR)],
+      ["Facturado del mes ARS", String(mesFacturado.ARS)],
+      ["Facturado del mes USD", String(mesFacturado.USD)],
     ];
     downloadCSV(`metricas_${mesActual.replace(/ /g, "_")}`, ["Metrica", "Valor"], rows);
-  }, [downloadCSV, mesActual, ticketPromedio, totalPR, tasaConversion, facturadoMes]);
+  }, [downloadCSV, mesActual, ticketPromedio, totalPR, tasaConversion, mesFacturado.ARS, mesFacturado.USD]);
 
   const exportComisiones = useCallback(() => {
     const headers = ["Vendedor", "PR Aprobados", "Venta neta", "Costo", "Margen", "Com. venta", "Com. margen", "Total comision"];
@@ -647,6 +757,18 @@ export default function ReportesPage() {
       return monto;
     },
     [monedaReporte, tipoCambioReporte]
+  );
+
+  /** Muestra pesos y dólares por separado ("original") o todo convertido a la moneda elegida. */
+  const fmtDual = useCallback(
+    (ars: number, usd: number): string => {
+      if (monedaReporte === "original") {
+        if (usd && ars) return `${formatCurrency(ars)} + ${formatCurrency(usd, "USD")}`;
+        return usd ? formatCurrency(usd, "USD") : formatCurrency(ars);
+      }
+      return formatCurrency(convertMonto(ars, "ARS") + convertMonto(usd, "USD"), monedaReporte);
+    },
+    [convertMonto, monedaReporte]
   );
 
   /** Format currency with conversion applied. monedaOriginal defaults to ARS. */
@@ -751,7 +873,7 @@ export default function ReportesPage() {
       </div>
 
       {/* Currency selector */}
-      {activeTab !== "compras_ventas" && (
+      {activeTab !== "compras_ventas" && activeTab !== "libro_iva" && (
       <div className="px-8 pt-4 flex flex-wrap items-center gap-3">
         <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Moneda:</span>
         <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-600 overflow-hidden">
@@ -799,15 +921,28 @@ export default function ReportesPage() {
           <Card>
             <CardHeader>
               <CardTitle>Facturacion mensual</CardTitle>
+              <span className="text-xs text-zinc-400">Últimos 6 meses · neto de NC{monedaReporte === "original" ? " · pesos y dólares por separado" : ""}</span>
             </CardHeader>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={ventasMensuales.map((d) => ({ ...d, total: convertMonto(d.total, "ARS") }))}>
-                  <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
-                  <YAxis tickFormatter={(v) => `${(v / 1000000).toFixed(1)}M`} tick={{ fontSize: 12 }} />
-                  <Tooltip formatter={(v) => fc(Number(v))} />
-                  <Bar dataKey="total" fill="#f97316" radius={[4, 4, 0, 0]} />
-                </BarChart>
+                {monedaReporte === "original" ? (
+                  <BarChart data={ventasMensuales}>
+                    <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
+                    <YAxis yAxisId="ars" tickFormatter={(v) => `${(v / 1000000).toFixed(1)}M`} tick={{ fontSize: 12 }} />
+                    <YAxis yAxisId="usd" orientation="right" tickFormatter={(v) => `US$${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 12 }} />
+                    <Tooltip formatter={(v, name) => formatCurrency(Number(v), name === "USD" ? "USD" : "ARS")} />
+                    <Legend />
+                    <Bar yAxisId="ars" dataKey="ARS" name="ARS" fill="#f97316" radius={[4, 4, 0, 0]} />
+                    <Bar yAxisId="usd" dataKey="USD" name="USD" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                ) : (
+                  <BarChart data={ventasMensuales.map((d) => ({ mes: d.mes, total: convertMonto(d.ARS, "ARS") + convertMonto(d.USD, "USD") }))}>
+                    <XAxis dataKey="mes" tick={{ fontSize: 12 }} />
+                    <YAxis tickFormatter={(v) => `${(v / 1000000).toFixed(1)}M`} tick={{ fontSize: 12 }} />
+                    <Tooltip formatter={(v) => formatCurrency(Number(v), monedaReporte === "USD" ? "USD" : "ARS")} />
+                    <Bar dataKey="total" fill="#f97316" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                )}
               </ResponsiveContainer>
             </div>
           </Card>
@@ -816,6 +951,7 @@ export default function ReportesPage() {
           <Card>
             <CardHeader>
               <CardTitle>Presupuestos por estado</CardTitle>
+              <span className="text-xs text-zinc-400">Últimos 12 meses</span>
             </CardHeader>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
@@ -844,10 +980,10 @@ export default function ReportesPage() {
             </CardHeader>
             <div className="space-y-4">
               {[
-                { label: "Tasa de conversion", value: `${tasaConversion}%`, prev: "—", up: tasaConversion > 0 },
-                { label: "Ticket promedio", value: fc(ticketPromedio), prev: "—", up: false },
-                { label: "Presupuestos emitidos", value: String(totalPR), prev: "—", up: false },
-                { label: "Facturado", value: fc(facturadoMes), prev: fc(facturadoMesAnterior), up: facturadoMes > facturadoMesAnterior },
+                { label: "Tasa de conversion (PR 12 meses)", value: `${tasaConversion}%`, prev: "—", up: tasaConversion > 0 },
+                { label: "Ticket promedio por factura (12 meses)", value: fc(ticketPromedio), prev: "—", up: false },
+                { label: "Presupuestos (12 meses)", value: String(totalPR), prev: "—", up: false },
+                { label: "Facturado del mes (neto de NC)", value: fmtDual(mesFacturado.ARS, mesFacturado.USD), prev: fmtDual(mesFacturadoAnterior.ARS, mesFacturadoAnterior.USD), up: mesFacturado.ARS > mesFacturadoAnterior.ARS },
               ].map((m) => (
                 <div key={m.label} className="flex items-center justify-between py-2 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
                   <span className="text-sm text-zinc-600 dark:text-zinc-400">{m.label}</span>
@@ -900,6 +1036,7 @@ export default function ReportesPage() {
         <Card>
           <CardHeader>
             <CardTitle>Ranking de clientes por facturacion</CardTitle>
+            <span className="text-xs text-zinc-400">Últimos 12 meses · neto de NC · % sobre el total en pesos (USD a la cotización de cada factura)</span>
           </CardHeader>
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -914,18 +1051,18 @@ export default function ReportesPage() {
               </thead>
               <tbody>
                 {topClientesData.map((c, i) => {
-                  const totalFact = topClientesData.reduce((a, x) => a + x.facturado, 0);
-                  const pct = totalFact > 0 ? ((c.facturado / totalFact) * 100).toFixed(1) : "0";
-                  const maxFact = topClientesData[0]?.facturado || 1;
+                  const totalFact = resumen12m.equivalente;
+                  const pct = totalFact > 0 ? ((c.equivalente / totalFact) * 100).toFixed(1) : "0";
+                  const maxFact = topClientesData[0]?.equivalente || 1;
                   return (
                     <tr key={c.nombre} className="border-b border-zinc-100 dark:border-zinc-800">
                       <td className="px-4 py-3 text-sm font-bold text-zinc-400">{i + 1}</td>
                       <td className="px-4 py-3 text-sm font-medium text-zinc-800 dark:text-zinc-200">{c.nombre}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right">{fc(c.facturado)}</td>
+                      <td className="px-4 py-3 text-sm font-mono text-right">{fmtDual(c.ARS, c.USD)}</td>
                       <td className="px-4 py-3 text-sm text-right text-zinc-500">{pct}%</td>
                       <td className="px-4 py-3 w-40">
                         <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800">
-                          <div className="h-2 rounded-full bg-orange-500" style={{ width: `${(c.facturado / maxFact) * 100}%` }} />
+                          <div className="h-2 rounded-full bg-orange-500" style={{ width: `${Math.max(0, (c.equivalente / maxFact) * 100)}%` }} />
                         </div>
                       </td>
                     </tr>
@@ -1142,7 +1279,10 @@ export default function ReportesPage() {
             {/* Full table */}
             <Card>
               <CardHeader>
-                <CardTitle>Ranking completo de articulos</CardTitle>
+                <div>
+                  <CardTitle>Ranking completo de articulos</CardTitle>
+                  <p className="text-xs text-zinc-400">Últimos 12 meses · las NC restan · montos en $ (USD a la cotización de cada comprobante)</p>
+                </div>
                 <button onClick={exportArticulos} className="flex items-center gap-1.5 text-xs font-medium text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
                   <Download className="h-3.5 w-3.5" /> Exportar
                 </button>
@@ -1410,11 +1550,11 @@ export default function ReportesPage() {
             onClick={() => {
               const isVentas = libroIVASubtab === "ventas";
               const headers = isVentas
-                ? ["Fecha", "Tipo", "PV", "Numero", "CUIT", "Razon Social", "Neto Gravado", "IVA", "Total", "Moneda"]
-                : ["Fecha", "N Factura", "CUIT", "Razon Social", "Neto Gravado", "IVA", "Percepciones", "Total", "Moneda"];
+                ? ["Fecha", "Tipo", "PV", "Numero", "CUIT", "Razon Social", "Neto Gravado", "IVA", "Total", "Moneda", "Tipo de cambio", "Estado"]
+                : ["Fecha", "Tipo", "N Factura", "CUIT", "Razon Social", "Neto Gravado", "IVA", "Percepciones", "Total", "Moneda"];
               const rows = isVentas
-                ? libroIVAVentas.map((r) => [r.fecha, r.tipo, String(r.punto_venta), String(r.numero), r.cuit, r.razon_social, r.neto_gravado.toFixed(2), r.iva.toFixed(2), r.total.toFixed(2), r.moneda])
-                : libroIVACompras.map((r) => [r.fecha, r.numero_factura, r.cuit, r.razon_social, r.neto_gravado.toFixed(2), r.iva.toFixed(2), r.percepciones.toFixed(2), r.total.toFixed(2), r.moneda]);
+                ? libroIVAVentas.map((r) => [r.fecha, r.tipo, String(r.punto_venta), String(r.numero), r.cuit, r.razon_social, r.neto_gravado.toFixed(2), r.iva.toFixed(2), r.total.toFixed(2), r.moneda, r.tipo_cambio ? String(r.tipo_cambio) : "", r.anulada ? "Anulada por NC" : ""])
+                : libroIVACompras.map((r) => [r.fecha, r.tipo, r.numero_factura, r.cuit, r.razon_social, r.neto_gravado.toFixed(2), r.iva.toFixed(2), r.percepciones.toFixed(2), r.total.toFixed(2), r.moneda]);
               downloadCSV(`libro_iva_${libroIVASubtab}_${libroIVAMes}`, headers, rows);
             }}
             className="flex items-center gap-1.5 text-sm font-medium text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
@@ -1429,21 +1569,7 @@ export default function ReportesPage() {
           </div>
         ) : libroIVASubtab === "ventas" ? (
           <>
-            {/* Totals */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <Card>
-                <h3 className="text-sm text-zinc-500">Neto gravado</h3>
-                <p className="mt-1 text-lg font-bold font-mono text-zinc-900 dark:text-white">{fc(libroIVAVentas.reduce((s, r) => s + r.neto_gravado, 0))}</p>
-              </Card>
-              <Card>
-                <h3 className="text-sm text-zinc-500">IVA débito fiscal</h3>
-                <p className="mt-1 text-lg font-bold font-mono text-blue-600">{fc(libroIVAVentas.reduce((s, r) => s + r.iva, 0))}</p>
-              </Card>
-              <Card>
-                <h3 className="text-sm text-zinc-500">Total facturado</h3>
-                <p className="mt-1 text-lg font-bold font-mono text-orange-600">{fc(libroIVAVentas.reduce((s, r) => s + r.total, 0))}</p>
-              </Card>
-            </div>
+            <TotalesLibroIVACard totales={totalesIVAVentas} conPercepciones={false} />
 
             {libroIVAVentas.length === 0 ? (
               <Card><p className="text-center text-sm text-zinc-400 py-8">No hay facturas de venta en el período seleccionado</p></Card>
@@ -1467,23 +1593,25 @@ export default function ReportesPage() {
                       {libroIVAVentas.map((r, i) => (
                         <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
                           <td className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400">{new Date(r.fecha + "T00:00:00").toLocaleDateString("es-AR")}</td>
-                          <td className="px-3 py-2"><Badge variant="outline">{r.tipo}</Badge></td>
+                          <td className="px-3 py-2"><Badge variant={r.signo < 0 ? "danger" : "outline"}>{r.tipo}</Badge>{r.anulada && <span className="ml-1 text-[10px] text-zinc-400">anulada por NC</span>}</td>
                           <td className="px-3 py-2 text-sm font-mono">{String(r.punto_venta).padStart(5, "0")}-{String(r.numero).padStart(8, "0")}</td>
                           <td className="px-3 py-2 text-sm font-mono text-zinc-500">{r.cuit}</td>
                           <td className="px-3 py-2 text-sm text-zinc-700 dark:text-zinc-300 max-w-[200px] truncate">{r.razon_social}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right">{fc(r.neto_gravado)}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right text-blue-600">{fc(r.iva)}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right font-semibold">{fc(r.total)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right">{formatCurrency(r.neto_gravado, r.moneda)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right text-blue-600">{formatCurrency(r.iva, r.moneda)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right font-semibold">{formatCurrency(r.total, r.moneda)}</td>
                         </tr>
                       ))}
                     </tbody>
                     <tfoot>
-                      <tr className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50">
-                        <td colSpan={5} className="px-3 py-2.5 text-sm font-bold">Totales ({libroIVAVentas.length} comprobantes)</td>
-                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold">{fc(libroIVAVentas.reduce((s, r) => s + r.neto_gravado, 0))}</td>
-                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-blue-600">{fc(libroIVAVentas.reduce((s, r) => s + r.iva, 0))}</td>
-                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-orange-600">{fc(libroIVAVentas.reduce((s, r) => s + r.total, 0))}</td>
-                      </tr>
+                      {(["ARS", "USD"] as const).filter((m) => m === "ARS" || totalesIVAVentas.USD.cantidad > 0).map((m) => (
+                        <tr key={m} className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50">
+                          <td colSpan={5} className="px-3 py-2.5 text-sm font-bold">Totales {m} ({totalesIVAVentas[m].cantidad} comprobantes)</td>
+                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold">{formatCurrency(totalesIVAVentas[m].neto_gravado, m)}</td>
+                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-blue-600">{formatCurrency(totalesIVAVentas[m].iva, m)}</td>
+                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-orange-600">{formatCurrency(totalesIVAVentas[m].total, m)}</td>
+                        </tr>
+                      ))}
                     </tfoot>
                   </table>
                 </div>
@@ -1492,25 +1620,7 @@ export default function ReportesPage() {
           </>
         ) : (
           <>
-            {/* Compras totals */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-4">
-              <Card>
-                <h3 className="text-sm text-zinc-500">Neto gravado</h3>
-                <p className="mt-1 text-lg font-bold font-mono text-zinc-900 dark:text-white">{fc(libroIVACompras.reduce((s, r) => s + r.neto_gravado, 0))}</p>
-              </Card>
-              <Card>
-                <h3 className="text-sm text-zinc-500">IVA crédito fiscal</h3>
-                <p className="mt-1 text-lg font-bold font-mono text-emerald-600">{fc(libroIVACompras.reduce((s, r) => s + r.iva, 0))}</p>
-              </Card>
-              <Card>
-                <h3 className="text-sm text-zinc-500">Percepciones</h3>
-                <p className="mt-1 text-lg font-bold font-mono text-violet-600">{fc(libroIVACompras.reduce((s, r) => s + r.percepciones, 0))}</p>
-              </Card>
-              <Card>
-                <h3 className="text-sm text-zinc-500">Total</h3>
-                <p className="mt-1 text-lg font-bold font-mono text-orange-600">{fc(libroIVACompras.reduce((s, r) => s + r.total, 0))}</p>
-              </Card>
-            </div>
+            <TotalesLibroIVACard totales={totalesIVACompras} conPercepciones />
 
             {libroIVACompras.length === 0 ? (
               <Card><p className="text-center text-sm text-zinc-400 py-8">No hay facturas de compra en el período seleccionado</p></Card>
@@ -1521,6 +1631,7 @@ export default function ReportesPage() {
                     <thead>
                       <tr className="border-b border-zinc-200 dark:border-zinc-700">
                         <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Fecha</th>
+                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Tipo</th>
                         <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">N° Factura</th>
                         <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">CUIT</th>
                         <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón Social</th>
@@ -1534,24 +1645,27 @@ export default function ReportesPage() {
                       {libroIVACompras.map((r, i) => (
                         <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
                           <td className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400">{new Date(r.fecha + "T00:00:00").toLocaleDateString("es-AR")}</td>
+                          <td className="px-3 py-2"><Badge variant={r.signo < 0 ? "danger" : "outline"}>{r.tipo || "—"}</Badge></td>
                           <td className="px-3 py-2 text-sm font-mono">{r.numero_factura}</td>
                           <td className="px-3 py-2 text-sm font-mono text-zinc-500">{r.cuit}</td>
                           <td className="px-3 py-2 text-sm text-zinc-700 dark:text-zinc-300 max-w-[200px] truncate">{r.razon_social}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right">{fc(r.neto_gravado)}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right text-emerald-600">{fc(r.iva)}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right text-violet-600">{fc(r.percepciones)}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right font-semibold">{fc(r.total)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right">{formatCurrency(r.neto_gravado, r.moneda)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right text-emerald-600">{formatCurrency(r.iva, r.moneda)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right text-violet-600">{formatCurrency(r.percepciones, r.moneda)}</td>
+                          <td className="px-3 py-2 text-sm font-mono text-right font-semibold">{formatCurrency(r.total, r.moneda)}</td>
                         </tr>
                       ))}
                     </tbody>
                     <tfoot>
-                      <tr className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50">
-                        <td colSpan={4} className="px-3 py-2.5 text-sm font-bold">Totales ({libroIVACompras.length} comprobantes)</td>
-                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold">{fc(libroIVACompras.reduce((s, r) => s + r.neto_gravado, 0))}</td>
-                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-emerald-600">{fc(libroIVACompras.reduce((s, r) => s + r.iva, 0))}</td>
-                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-violet-600">{fc(libroIVACompras.reduce((s, r) => s + r.percepciones, 0))}</td>
-                        <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-orange-600">{fc(libroIVACompras.reduce((s, r) => s + r.total, 0))}</td>
-                      </tr>
+                      {(["ARS", "USD"] as const).filter((m) => m === "ARS" || totalesIVACompras.USD.cantidad > 0).map((m) => (
+                        <tr key={m} className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50">
+                          <td colSpan={5} className="px-3 py-2.5 text-sm font-bold">Totales {m} ({totalesIVACompras[m].cantidad} comprobantes)</td>
+                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold">{formatCurrency(totalesIVACompras[m].neto_gravado, m)}</td>
+                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-emerald-600">{formatCurrency(totalesIVACompras[m].iva, m)}</td>
+                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-violet-600">{formatCurrency(totalesIVACompras[m].percepciones, m)}</td>
+                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-orange-600">{formatCurrency(totalesIVACompras[m].total, m)}</td>
+                        </tr>
+                      ))}
                     </tfoot>
                   </table>
                 </div>

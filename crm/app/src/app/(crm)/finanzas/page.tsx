@@ -9,7 +9,10 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { formatCurrency, formatDate, formatDateTime, todayAR } from "@/lib/utils";
 import { canMatchBankMovement } from "@/lib/extracto-match";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
-import { mockMovimientos, mockClients, mockProveedores, mockExtractos, mockLineasCredito, mockGastosFijos, mockObjetivos } from "@/lib/mock-data";
+import { traerTodo } from "@/lib/paginar";
+import { clasificarMovimiento, esCobroDeCliente, sentidoAjuste, resumirCaja, TIPOS_RETENCION } from "@/lib/tipos-movimiento";
+import { calcularSaldosProveedores, traerCreditosProveedores, pagosSobreFacturasAnuladas, type CreditoProveedor } from "@/lib/saldo-proveedores";
+import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta } from "@/lib/saldo-clientes";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
 import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles, Mail, MailCheck, Send } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
@@ -383,6 +386,10 @@ interface MovimientoRow {
   retencion_ganancias_pct?: number;
   retencion_ganancias_monto?: number;
   nota_credito_compra_id?: string | null;
+  ajuste_sentido?: string | null;
+  gasto_manual_id?: string | null;
+  conciliado_por?: string | null;
+  conciliado_at?: string | null;
   clientes?: { razon_social: string } | null;
   proveedores?: { razon_social: string; cuit?: string | null } | null;
 }
@@ -569,6 +576,11 @@ export default function FinanzasPage() {
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
   const [loading, setLoading] = useState(true);
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
+  // B8: si una consulta falla se avisa (nunca se muestran datos inventados).
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // B5: créditos a favor con proveedores (anticipos, saldos a favor, ajustes, pagos sobre FC anuladas).
+  const [creditosProv, setCreditosProv] = useState<CreditoProveedor[]>([]);
+  const puedeAdministrar = profile?.role === "super_admin" || profile?.role === "admin";
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
@@ -606,7 +618,7 @@ export default function FinanzasPage() {
     }
   }
 
-  // Data state — initialised with mock data as fallback
+  // Data state (empieza vacío; nunca datos de ejemplo)
   const [movimientos, setMovimientos] = useState<MovimientoRow[]>([]);
   const [recibosClientes, setRecibosClientes] = useState<ReciboClienteRow[]>([]);
   const [reciboSearch, setReciboSearch] = useState("");
@@ -970,12 +982,16 @@ export default function FinanzasPage() {
         setLoadingTimedOut(true);
         return;
       }
+      const sociedadId = sociedadActiva.id;
+      const db = supabase as any;
+      const errores: string[] = [];
       try {
-        let qMov = supabase
-          .from("movimientos")
+        // B4: Supabase corta en 1000 filas; los movimientos se traen paginados (orden estable).
+        const qMov = traerTodo<MovimientoRow>(() => db.from("movimientos")
           .select(`*, clientes(razon_social), proveedores(razon_social,cuit)`)
-          .order("fecha", { ascending: false });
-        if (sociedadActiva?.id) qMov = qMov.eq("sociedad_id" as any, sociedadActiva.id);
+          .eq("sociedad_id", sociedadId)
+          .order("fecha", { ascending: false }).order("id", { ascending: false }))
+          .then((data) => ({ data, error: null as unknown }), (error: unknown) => ({ data: null as MovimientoRow[] | null, error }));
 
         // Las cuentas corrientes se arman desde comprobantes y pagos reales más
         // abajo. No dependemos de vistas materializadas que pueden quedar viejas.
@@ -1006,27 +1022,9 @@ export default function FinanzasPage() {
         // datos principales y dejamos que el resto termine en segundo plano.
         setLoading(false);
 
-        // Use Supabase data if available, otherwise fall back to mock data mapped to snake_case
-        if (movRes.data) {
-          setMovimientos(movRes.data as MovimientoRow[]);
-        } else if (movRes.error) {
-          setMovimientos(
-            mockMovimientos.map((m) => ({
-              id: m.id,
-              tipo: m.tipo,
-              cliente_id: m.clienteId,
-              proveedor_id: m.proveedorId,
-              descripcion: m.descripcion,
-              monto: m.monto,
-              fecha: m.fecha,
-              factura_id: m.facturaId,
-              conciliado: m.conciliado,
-              created_at: m.createdAt,
-              clientes: null,
-              proveedores: null,
-            }))
-          );
-        }
+        // B8: nunca datos de ejemplo. Si algo falla, la lista queda vacía y se avisa arriba.
+        if (movRes.error) { console.error("Error cargando movimientos:", movRes.error); errores.push("movimientos"); }
+        setMovimientos(movRes.data ? (movRes.data as MovimientoRow[]) : []);
 
         if (ccCliRes.data) {
           setCcClientes(ccCliRes.data.map((r: any) => ({
@@ -1041,17 +1039,9 @@ export default function FinanzasPage() {
             saldo_usd: 0,
           })));
         } else if (ccCliRes.error) {
-          setCcClientes(
-            mockClients.map((c) => ({
-              id: c.id,
-              razon_social: c.razonSocial,
-              cuit: c.cuit,
-              dias_cuenta_corriente: c.diasCuentaCorriente,
-              forma_pago: c.formaPago,
-              limite_credito: c.limiteCredito,
-              saldo_cuenta_corriente: c.saldoCuentaCorriente,
-            }))
-          );
+          console.error("Error cargando clientes:", ccCliRes.error);
+          errores.push("cuentas corrientes de clientes");
+          setCcClientes([]);
         }
 
         if (ccProvRes.data) {
@@ -1068,70 +1058,25 @@ export default function FinanzasPage() {
             saldo_usd: 0,
           })));
         } else if (ccProvRes.error) {
-          setCcProveedores(
-            mockProveedores.map((p) => ({
-              id: p.id,
-              razon_social: p.razonSocial,
-              cuit: p.cuit,
-              rubro: p.rubro,
-              dias_cuenta_corriente: p.diasCuentaCorriente,
-              forma_pago: p.formaPago,
-              limite_credito: p.limiteCredito,
-              saldo_cuenta_corriente: p.saldoCuentaCorriente,
-            }))
-          );
+          console.error("Error cargando proveedores:", ccProvRes.error);
+          errores.push("cuentas corrientes de proveedores");
+          setCcProveedores([]);
         }
 
         if (extRes.data) {
           setExtractos(extRes.data as ExtractoRow[]);
         } else if (extRes.error) {
-          setExtractos(
-            mockExtractos.map((e) => ({
-              id: e.id,
-              banco: e.banco,
-              cuenta: e.cuenta,
-              periodo: e.periodo,
-              total_creditos: e.totalCreditos,
-              total_debitos: e.totalDebitos,
-              estado: e.estado,
-              created_at: e.fechaUpload,
-              extracto_movimientos: e.movimientos.map((em) => ({
-                id: em.id,
-                fecha: em.fecha,
-                descripcion: em.descripcion,
-                referencia: em.referencia,
-                monto: em.monto,
-                tipo: em.tipo,
-                estado: em.estado,
-                match_cliente_id: em.matchClienteId,
-                match_proveedor_id: em.matchProveedorId,
-                match_factura_id: em.matchFacturaId,
-              })),
-            }))
-          );
+          console.error("Error cargando extractos:", extRes.error);
+          errores.push("extractos bancarios");
+          setExtractos([]);
         }
 
         if (lcRes.data) {
           setLineasCredito(lcRes.data as LineaCreditoRow[]);
         } else if (lcRes.error) {
-          setLineasCredito(
-            mockLineasCredito.map((lc) => ({
-              id: lc.id,
-              entidad: lc.entidad,
-              tipo: lc.tipo,
-              proveedor_id: lc.proveedorId,
-              monto_total: lc.montoTotal,
-              monto_utilizado: lc.montoUtilizado,
-              monto_disponible: lc.montoDisponible,
-              moneda: lc.moneda,
-              tasa: lc.tasa,
-              vencimiento: lc.vencimiento,
-              estado: lc.estado,
-              notas: lc.notas,
-              created_at: lc.createdAt,
-              proveedores: null,
-            }))
-          );
+          console.error("Error cargando líneas de crédito:", lcRes.error);
+          errores.push("líneas de crédito");
+          setLineasCredito([]);
         }
 
         if (gfRes.data) {
@@ -1158,10 +1103,10 @@ export default function FinanzasPage() {
 
         // Recibos: todo cobro persistido a un cliente queda consultable como
         // recibo. Se usa movimientos (la fuente contable) y no estado del modal.
+        // B1: la regla de "qué es un cobro" es una sola (lib/tipos-movimiento).
         const movimientosReales = ((movRes.data || []) as MovimientoRow[]).filter((mov) => !mov.anulado);
-        const tiposCobro = new Set(["cobro", "cheque_recibido", "transferencia", "efectivo", "deposito"]);
         setRecibosClientes(movimientosReales
-          .filter((mov) => Boolean(mov.cliente_id) && tiposCobro.has(mov.tipo))
+          .filter((mov) => esCobroDeCliente(mov))
           .map((mov) => ({
             id: mov.id,
             fecha: mov.fecha,
@@ -1174,49 +1119,32 @@ export default function FinanzasPage() {
             conciliado: Boolean(mov.conciliado),
           })));
 
-        // Saldos de venta autoritativos para vencimientos y CC clientes.
-        // Las notas de crédito se aplican vía total_acreditado y no se vuelven a
-        // sumar como una deuda independiente.
+        // Saldos de venta autoritativos para vencimientos y CC clientes (misma regla que
+        // lib/saldo-clientes). Las NC se aplican vía total_acreditado; lo que no pudieron
+        // aplicar queda como saldo a favor del cliente (B6).
         try {
           if (movRes.error) throw movRes.error;
-          let qFacturasVenta = (supabase as any).from("facturas")
-            .select("id, cliente_id, tipo, punto_venta, numero, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado")
-            .neq("estado", "anulada");
-          if (sociedadActiva?.id) qFacturasVenta = qFacturasVenta.eq("sociedad_id", sociedadActiva.id);
-          const { data: facturasVenta, error: facturasVentaError } = await qFacturasVenta;
-          if (facturasVentaError) throw facturasVentaError;
-          const facturasPositivas = (facturasVenta || []).filter((factura: any) => !String(factura.tipo || "").toUpperCase().startsWith("NC"));
-          const facturaIds = facturasPositivas.map((factura: any) => factura.id);
-          const cobradoPorFactura: Record<string, number> = {};
-          const movimientosAplicados = new Set<string>();
-          if (facturaIds.length > 0) {
-            let qAplicaciones = (supabase as any).from("cobro_aplicaciones")
-              .select("movimiento_id, factura_id, monto, movimientos!inner(anulado, sociedad_id)")
-              .in("factura_id", facturaIds);
-            if (sociedadActiva?.id) qAplicaciones = qAplicaciones.eq("movimientos.sociedad_id", sociedadActiva.id);
-            const { data: aplicaciones, error: aplicacionesError } = await qAplicaciones;
-            if (aplicacionesError) throw aplicacionesError;
-            (aplicaciones || []).forEach((aplicacion: any) => {
-              const movimiento = Array.isArray(aplicacion.movimientos) ? aplicacion.movimientos[0] : aplicacion.movimientos;
-              if (movimiento && !movimiento.anulado) {
-                if (aplicacion.movimiento_id) movimientosAplicados.add(aplicacion.movimiento_id);
-                cobradoPorFactura[aplicacion.factura_id] = (cobradoPorFactura[aplicacion.factura_id] || 0) + Number(aplicacion.monto || 0);
-              }
-            });
-          }
-          // Los cobros consolidados ya fueron contabilizados por sus aplicaciones.
-          // Solo sumamos aquí los movimientos directos para no descontarlos dos veces.
-          movimientosReales.forEach((mov) => {
-            if (mov.factura_id && !movimientosAplicados.has(mov.id)) {
-              cobradoPorFactura[mov.factura_id] = (cobradoPorFactura[mov.factura_id] || 0) + Number(mov.monto || 0);
-            }
-          });
+          const camposVenta = "id, cliente_id, tipo, punto_venta, numero, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado";
+          const armarFacturasVenta = (campos: string) => () => db.from("facturas").select(campos)
+            .eq("sociedad_id", sociedadId).neq("estado", "anulada")
+            .order("fecha", { ascending: false }).order("id", { ascending: false });
+          let facturasVenta: any[];
+          try { facturasVenta = await traerTodo<any>(armarFacturasVenta(`${camposVenta}, saldo_a_favor_cliente, factura_origen_id`)); }
+          catch { facturasVenta = await traerTodo<any>(armarFacturasVenta(camposVenta)); }
+          const facturasPositivas = facturasVenta.filter((factura: any) => !String(factura.tipo || "").toUpperCase().startsWith("NC"));
+          // Todas las aplicaciones de la sociedad (paginadas): evita listas .in() enormes.
+          const aplicaciones = await traerTodo<any>(() => db.from("cobro_aplicaciones")
+            .select("movimiento_id, factura_id, monto, movimientos!inner(anulado, sociedad_id)")
+            .eq("movimientos.sociedad_id", sociedadId)
+            .order("movimiento_id").order("factura_id"));
+          const movsParaSaldo = ((movRes.data || []) as MovimientoRow[]).map((m) => ({ id: m.id, factura_id: m.factura_id ?? null, monto: m.monto, moneda: m.moneda ?? null, anulado: m.anulado ?? false }));
+          const cobrado = cobradoPorFactura(facturasPositivas, movsParaSaldo, aplicaciones);
           const nombreClientePorId = new Map<string, string>(
             (ccCliRes.data || []).map((cliente: any) => [cliente.id, cliente.razon_social || "Cliente sin nombre"])
           );
           const deudas: VencimientoDeudaRow[] = facturasPositivas.map((factura: any): VencimientoDeudaRow => {
             const total = Number(factura.total || 0);
-            const saldo = Math.max(0, total - Number(factura.total_acreditado || 0) - Number(cobradoPorFactura[factura.id] || 0));
+            const saldo = saldoFacturaVenta(factura, cobrado[factura.id] || 0);
             return {
               id: `venta-${factura.id}`,
               operacion: "venta",
@@ -1232,19 +1160,26 @@ export default function FinanzasPage() {
             };
           }).filter((deuda: VencimientoDeudaRow) => deuda.saldo > 0.01);
           setDeudasVenta(deudas);
-          const saldoPorCliente = deudas.reduce((acc: Record<string, { ARS: number; USD: number }>, deuda: VencimientoDeudaRow) => {
-            acc[deuda.entidad_id] ||= { ARS: 0, USD: 0 };
-            acc[deuda.entidad_id][deuda.moneda] += deuda.saldo;
-            return acc;
-          }, {});
-          setCcClientes((prev) => prev.map((cliente) => ({
-            ...cliente,
-            saldo_cuenta_corriente: saldoPorCliente[cliente.id]?.ARS || 0,
-            saldo_ars: saldoPorCliente[cliente.id]?.ARS || 0,
-            saldo_usd: saldoPorCliente[cliente.id]?.USD || 0,
-          })));
+          const saldosCli = calcularSaldosClientes(facturasVenta, movsParaSaldo, aplicaciones);
+          // Ajustes manuales de CC del cliente (sin factura): crédito = a favor del cliente, débito = cargo.
+          const ajustesCli: Record<string, { ARS: number; USD: number }> = {};
+          movimientosReales.forEach((mov) => {
+            if (!mov.cliente_id || mov.factura_id) return;
+            const sentido = sentidoAjuste(mov);
+            if (!sentido) return;
+            const mon = mov.moneda === "USD" ? "USD" : "ARS";
+            ajustesCli[mov.cliente_id] ||= { ARS: 0, USD: 0 };
+            ajustesCli[mov.cliente_id][mon] += sentido === "credito" ? -Number(mov.monto || 0) : Number(mov.monto || 0);
+          });
+          setCcClientes((prev) => prev.map((cliente) => {
+            // Positivo = nos debe; negativo = saldo a favor del cliente (ya no se recorta a cero).
+            const ars = Math.round(((saldosCli[cliente.id]?.ARS.saldo || 0) + (ajustesCli[cliente.id]?.ARS || 0)) * 100) / 100;
+            const usd = Math.round(((saldosCli[cliente.id]?.USD.saldo || 0) + (ajustesCli[cliente.id]?.USD || 0)) * 100) / 100;
+            return { ...cliente, saldo_cuenta_corriente: ars, saldo_ars: ars, saldo_usd: usd };
+          }));
         } catch (error) {
           console.error("Error calculando vencimientos y CC de clientes:", error);
+          errores.push("saldos de clientes y vencimientos");
           setDeudasVenta([]);
         }
 
@@ -1347,20 +1282,13 @@ export default function FinanzasPage() {
 
         // Fetch facturas de compra
         try {
-          let qFc = (supabase as any).from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero), op_facturas_compra(orden_pago_id, monto, ordenes_pago(id, numero, estado, fecha, sobre_verde, email_enviado_at)), factura_compra_ocs(orden_compra_id, ordenes_compra(numero))").order("fecha", { ascending: false });
-          if (sociedadActiva?.id) qFc = qFc.eq("sociedad_id", sociedadActiva.id);
-          const { data: fcData, error: fcDataError } = await qFc;
-          if (fcDataError) throw fcDataError;
+          // B4: paginado (Supabase corta en 1000 filas) y sin listas .in() gigantes.
+          const fcData = await traerTodo<any>(() => db.from("facturas_compra").select("*, proveedores(razon_social), ordenes_compra(numero), op_facturas_compra(orden_pago_id, monto, ordenes_pago(id, numero, estado, fecha, sobre_verde, email_enviado_at)), factura_compra_ocs(orden_compra_id, ordenes_compra(numero))")
+            .eq("sociedad_id", sociedadId).order("fecha", { ascending: false }).order("id", { ascending: false }));
           if (fcData) {
-            const fcIds = fcData.map((r: any) => r.id);
-            let directPayments: any[] = [];
-            if (fcIds.length > 0) {
-              let qDirect = (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado, nota_credito_compra_id").in("factura_compra_id", fcIds).eq("tipo", "pago");
-              if (sociedadActiva?.id) qDirect = qDirect.eq("sociedad_id", sociedadActiva.id);
-              const { data, error: directPaymentsError } = await qDirect;
-              if (directPaymentsError) throw directPaymentsError;
-              directPayments = data || [];
-            }
+            const directPayments: any[] = await traerTodo<any>(() => db.from("movimientos")
+              .select("id, factura_compra_id, monto, retencion_ganancias_monto, anulado, nota_credito_compra_id")
+              .eq("sociedad_id", sociedadId).eq("tipo", "pago").not("factura_compra_id", "is", null).order("id"));
             const directByFC = directPayments.reduce((acc: Record<string, number>, p: any) => {
               if (!p.anulado && !p.nota_credito_compra_id) acc[p.factura_compra_id] = (acc[p.factura_compra_id] || 0) + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0);
               return acc;
@@ -1372,10 +1300,11 @@ export default function FinanzasPage() {
             // Crédito disponible de cada NC (total − aplicaciones vigentes): resta del saldo del proveedor.
             const ncIdsCC = fcData.filter((r: any) => String(r.tipo_comprobante || "").toUpperCase().startsWith("NC") && r.estado !== "anulada").map((r: any) => r.id);
             const aplicadoPorNC: Record<string, number> = {};
-            if (ncIdsCC.length > 0) {
-              const { data: ncMovs } = await (supabase as any).from("movimientos").select("nota_credito_compra_id, monto, anulado").in("nota_credito_compra_id", ncIdsCC);
-              (ncMovs || []).forEach((m: any) => { if (!m.anulado) aplicadoPorNC[m.nota_credito_compra_id] = (aplicadoPorNC[m.nota_credito_compra_id] || 0) + Number(m.monto || 0); });
-            }
+            const ncMovs: any[] = ncIdsCC.length > 0
+              ? await traerTodo<any>(() => db.from("movimientos").select("id, nota_credito_compra_id, monto, anulado")
+                .eq("sociedad_id", sociedadId).not("nota_credito_compra_id", "is", null).order("id"))
+              : [];
+            ncMovs.forEach((m: any) => { if (!m.anulado) aplicadoPorNC[m.nota_credito_compra_id] = (aplicadoPorNC[m.nota_credito_compra_id] || 0) + Number(m.monto || 0); });
             const facturasCompraMapeadas: FacturaCompraRow[] = fcData.map((r: any) => ({
               id: r.id, numero_factura: r.numero_factura,
               proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? "—",
@@ -1420,21 +1349,18 @@ export default function FinanzasPage() {
                 .reduce((sum: number, link: any) => sum + Number(link.monto || 0), 0),
             }));
             setFacturasCompra(facturasCompraMapeadas);
-            const saldosProveedor = facturasCompraMapeadas
-              .filter((factura) => factura.estado !== "anulada" && !String(factura.tipo_comprobante || "").toUpperCase().startsWith("NC"))
-              .reduce((acc: Record<string, { ARS: number; USD: number }>, factura) => {
-                const saldo = saldoPendienteFacturaCompra(factura);
-                acc[factura.proveedor_id] ||= { ARS: 0, USD: 0 };
-                acc[factura.proveedor_id][factura.moneda] += saldo;
-                return acc;
-              }, {});
-            for (const nc of facturasCompraMapeadas) {
-              if (nc.estado === "anulada" || !String(nc.tipo_comprobante || "").toUpperCase().startsWith("NC")) continue;
-              const disponible = Math.max(0, Number(nc.total || 0) - (aplicadoPorNC[nc.id] || 0));
-              if (disponible <= 0.005) continue;
-              saldosProveedor[nc.proveedor_id] ||= { ARS: 0, USD: 0 };
-              saldosProveedor[nc.proveedor_id][nc.moneda] -= disponible;
-            }
+            // B5: misma cuenta que lib/saldo-proveedores (Proveedores): facturas − pagos − NC,
+            // y además restan los anticipos / pagos a cuenta, los saldos a favor de OP, los ajustes
+            // manuales y lo pagado sobre facturas anuladas. Negativo = saldo a favor nuestro.
+            let creditos: CreditoProveedor[] = [];
+            try { creditos = await traerCreditosProveedores(db, sociedadId, traerTodo, sentidoAjuste); }
+            catch (errCred) { console.error("Error cargando créditos de proveedores:", errCred); errores.push("anticipos y saldos a favor de proveedores"); }
+            const saldosProveedor = calcularSaldosProveedores(fcData, directPayments, ncMovs, creditos);
+            const ncDisponibles: CreditoProveedor[] = facturasCompraMapeadas
+              .filter((nc) => nc.estado !== "anulada" && String(nc.tipo_comprobante || "").toUpperCase().startsWith("NC"))
+              .map((nc) => ({ proveedor_id: nc.proveedor_id, moneda: nc.moneda, monto: Math.max(0, Number(nc.total || 0) - (aplicadoPorNC[nc.id] || 0)), detalle: `${nc.tipo_comprobante || "NC"} ${nc.numero_factura || ""} · crédito disponible`, fecha: nc.fecha }))
+              .filter((c) => Number(c.monto) > 0.005);
+            setCreditosProv([...ncDisponibles, ...pagosSobreFacturasAnuladas(fcData, directPayments), ...creditos]);
             setCcProveedores((prev) => prev.map((proveedor) => ({
               ...proveedor,
               saldo_cuenta_corriente: saldosProveedor[proveedor.id]?.ARS || 0,
@@ -1446,7 +1372,9 @@ export default function FinanzasPage() {
           }
         } catch (error) {
           console.error("Error cargando facturas de compra y sus pagos:", error);
+          errores.push("facturas de compra y saldos de proveedores");
           setFacturasCompra([]);
+          setCreditosProv([]);
         }
 
         // Fetch ordenes de compra for optional linking
@@ -1459,11 +1387,11 @@ export default function FinanzasPage() {
 
         // Fetch echeqs
         try {
-          let qEcheq = (supabase as any).from("echeqs").select("*").order("fecha_pago", { ascending: true });
-          if (sociedadActiva?.id) qEcheq = qEcheq.eq("sociedad_id", sociedadActiva.id);
-          const { data: echeqData } = await qEcheq;
-          if (echeqData) setEcheqs(echeqData.map((e: any) => ({ ...e, tipo_cheque: e.tipo_cheque || "echeq" })) as EcheqRow[]);
-        } catch { /* table may not exist yet */ }
+          // B4: paginado (con los 695 cheques importados se pasa de 1000 filas).
+          const echeqData = await traerTodo<any>(() => db.from("echeqs").select("*").eq("sociedad_id", sociedadId)
+            .order("fecha_pago", { ascending: true }).order("id", { ascending: true }));
+          setEcheqs(echeqData.map((e: any) => ({ ...e, tipo_cheque: e.tipo_cheque || "echeq" })) as EcheqRow[]);
+        } catch (errEcheq) { console.error("Error cargando cheques:", errEcheq); errores.push("cheques"); }
 
         // Fetch balance projection
         try {
@@ -1479,21 +1407,13 @@ export default function FinanzasPage() {
           if (cliData) setClientesOptions(cliData as ClienteOption[]);
         } catch { /* ignore */ }
 
+        setLoadError(errores.length > 0
+          ? `No se pudieron cargar: ${errores.join(", ")}. Los números de esta pantalla pueden estar incompletos.`
+          : null);
       } catch (err) {
         console.error("Error fetching finanzas data:", err);
-        // On error, mock data fallback is already set above (or stays empty).
-        // Re-map mock data so the page still works.
-        setMovimientos(
-          mockMovimientos.map((m) => ({
-            id: m.id, tipo: m.tipo, cliente_id: m.clienteId, proveedor_id: m.proveedorId,
-            descripcion: m.descripcion, monto: m.monto, fecha: m.fecha, factura_id: m.facturaId,
-            conciliado: m.conciliado, created_at: m.createdAt, clientes: null, proveedores: null,
-          }))
-        );
-        setCcClientes(mockClients.map((c) => ({ id: c.id, razon_social: c.razonSocial, cuit: c.cuit, dias_cuenta_corriente: c.diasCuentaCorriente, forma_pago: c.formaPago, limite_credito: c.limiteCredito, saldo_cuenta_corriente: c.saldoCuentaCorriente })));
-        setCcProveedores(mockProveedores.map((p) => ({ id: p.id, razon_social: p.razonSocial, cuit: p.cuit, rubro: p.rubro, dias_cuenta_corriente: p.diasCuentaCorriente, forma_pago: p.formaPago, limite_credito: p.limiteCredito, saldo_cuenta_corriente: p.saldoCuentaCorriente })));
-        setExtractos(mockExtractos.map((e) => ({ id: e.id, banco: e.banco, cuenta: e.cuenta, periodo: e.periodo, total_creditos: e.totalCreditos, total_debitos: e.totalDebitos, estado: e.estado, created_at: e.fechaUpload, extracto_movimientos: e.movimientos.map((em) => ({ id: em.id, fecha: em.fecha, descripcion: em.descripcion, referencia: em.referencia, monto: em.monto, tipo: em.tipo, estado: em.estado, match_cliente_id: em.matchClienteId, match_proveedor_id: em.matchProveedorId, match_factura_id: em.matchFacturaId })) })));
-        setLineasCredito(mockLineasCredito.map((lc) => ({ id: lc.id, entidad: lc.entidad, tipo: lc.tipo, proveedor_id: lc.proveedorId, monto_total: lc.montoTotal, monto_utilizado: lc.montoUtilizado, monto_disponible: lc.montoDisponible, moneda: lc.moneda, tasa: lc.tasa, vencimiento: lc.vencimiento, estado: lc.estado, notas: lc.notas, created_at: lc.createdAt, proveedores: null })));
+        // B8: sin datos de ejemplo. Se avisa y se puede reintentar.
+        setLoadError(`No se pudieron cargar los datos de Finanzas (${err instanceof Error ? err.message : (err as any)?.message || String(err)}). Los números de esta pantalla pueden estar incompletos.`);
       } finally {
         setLoading(false);
       }
@@ -1594,16 +1514,35 @@ export default function FinanzasPage() {
     setEditingSaldo(null);
   }
 
-  async function handleConciliar(id: string) {
-    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
+  async function handleConciliar(id: string): Promise<boolean> {
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return false; }
     try {
+      // D3: conciliado_por / conciliado_at los completa la base (trigger) con el usuario y la hora.
       let q = supabase.from("movimientos").update({ conciliado: true }).eq("id", id);
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       const { error } = await q;
       if (error) throw error;
-      setMovimientos(prev => prev.map(m => m.id === id ? { ...m, conciliado: true } : m));
+      const ahora = new Date().toISOString();
+      setMovimientos(prev => prev.map(m => m.id === id ? { ...m, conciliado: true, conciliado_at: m.conciliado_at || ahora } : m));
+      return true;
     } catch (err) {
-      alert("Error conciliando: " + (err instanceof Error ? err.message : String(err)));
+      alert("Error conciliando: " + (err instanceof Error ? err.message : (err as any)?.message || String(err)));
+      return false;
+    }
+  }
+
+  // D3: quién y cuándo concilió lo guarda la base (trigger); acá se puede deshacer.
+  async function handleDesconciliar(id: string) {
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
+    if (!confirm("¿Desconciliar este movimiento? Vuelve a quedar pendiente y, si estaba asociado a una línea del extracto, esa línea también vuelve a pendiente.")) return;
+    try {
+      const { error } = await (supabase as any).rpc("desconciliar_movimiento", { p_movimiento_id: id });
+      if (error) throw error;
+      setMovimientos(prev => prev.map(m => m.id === id ? { ...m, conciliado: false } : m));
+      setSelectedMov(prev => prev && prev.id === id ? { ...prev, conciliado: false } : prev);
+      await fetchData();
+    } catch (err) {
+      alert("Error al desconciliar: " + (err instanceof Error ? err.message : (err as any)?.message || String(err)));
     }
   }
 
@@ -1704,18 +1643,28 @@ export default function FinanzasPage() {
     }
   }
 
+  /** Muestra los avisos que devuelven las funciones de la base (nunca frenan: solo informan). */
+  function avisosDeRpc(data: any, titulo: string) {
+    const avisos: string[] = Array.isArray(data?.avisos) ? data.avisos.filter(Boolean).map(String) : [];
+    const chequesAnulados = Number(data?.cheques_anulados || 0);
+    if (chequesAnulados > 0) avisos.unshift(chequesAnulados === 1 ? "Se anuló el cheque que había generado este cobro." : `Se anularon ${chequesAnulados} cheques que había generado este cobro.`);
+    if (avisos.length > 0) alert(`${titulo}\n\n• ${avisos.join("\n• ")}`);
+  }
+
   async function handleDeleteMov(id: string) {
     const mov = movimientos.find(m => m.id === id);
     if (mov?.liquidacion_fx_id) { alert("Este movimiento pertenece a una liquidación FX. Anulá la liquidación completa desde el botón Anular."); return; }
     if (mov?.factura_compra_id) { alert("Este movimiento pertenece a un pago parcial de proveedor. Hasta contar con anulación transaccional, no se puede eliminar una línea individual."); return; }
-    if (!confirm("¿Seguro que queres eliminar este movimiento?")) return;
+    if (!puedeAdministrar) { alert("Solo un administrador puede borrar un movimiento. Usá «Anular»: conserva el registro y recalcula la factura."); return; }
+    if (!confirm("¿Borrar este movimiento? No queda registro. Si es para corregir, conviene «Anular» (conserva el historial). Si el cobro generó un cheque que sigue en cartera, se anula.")) return;
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     try {
-      const { error } = await (supabase as any).rpc("gestionar_cobro", {
+      const { data, error } = await (supabase as any).rpc("gestionar_cobro", {
         p_movimiento_id: id,
         p_accion: "eliminar",
       });
       if (error) throw error;
+      avisosDeRpc(data, "Movimiento borrado.");
       if (selectedMov?.id === id) setSelectedMov(null);
       await fetchData();
     } catch (err) {
@@ -1757,13 +1706,14 @@ export default function FinanzasPage() {
       } catch (err) { alert("Error al anular liquidación FX: " + (err instanceof Error ? err.message : String(err))); }
       return;
     }
-    if (!confirm("¿Anular este cobro? Se conservará el registro, se revertirá el importe y se recalculará la factura.")) return;
+    if (!confirm("¿Anular este movimiento? Se conservará el registro, se revertirá el importe y se recalculará la factura. Si generó un cheque que sigue en cartera, el cheque también se anula.")) return;
     try {
-      const { error } = await (supabase as any).rpc("gestionar_cobro", {
+      const { data, error } = await (supabase as any).rpc("gestionar_cobro", {
         p_movimiento_id: id,
         p_accion: "anular",
       });
       if (error) throw error;
+      avisosDeRpc(data, "Movimiento anulado.");
       setSelectedMov(null);
       await fetchData();
     } catch (err) {
@@ -3237,43 +3187,17 @@ export default function FinanzasPage() {
   async function fetchCCDetailProveedor(prov: CCRow) {
     setCcDetailProveedor(prov); setCcDetailProvLoading(true); setCcDetailFCProv([]); setCcDetailMovProv([]);
     try {
-      let qFC = (supabase as any).from("facturas_compra").select("id, numero_factura, fecha, fecha_vencimiento, total, estado, moneda").eq("proveedor_id", prov.id).in("estado", ["pendiente", "pagada", "recibida"]).not("tipo_comprobante", "ilike", "NC%").order("fecha", { ascending: false });
-      if (sociedadActiva?.id) qFC = qFC.eq("sociedad_id", sociedadActiva.id);
-      const { data: fcData } = await qFC;
-      // Calculate paid per FC from op_facturas_compra (only non-anulada OPs)
-      let pagadoMap: Record<string, number> = {};
-      if (fcData && fcData.length > 0) {
-        const fcIds = fcData.map((f: any) => f.id);
-        const { data: opLinks } = await (supabase as any).from("op_facturas_compra").select("factura_compra_id, monto, orden_pago_id").in("factura_compra_id", fcIds);
-        if (opLinks && opLinks.length > 0) {
-          const opIds = [...new Set((opLinks as any[]).map((l: any) => l.orden_pago_id))];
-          const { data: opsActivas } = await (supabase as any).from("ordenes_pago").select("id").in("id", opIds).neq("estado", "anulada");
-          const activasSet = new Set((opsActivas || []).map((o: any) => o.id));
-          (opLinks as any[]).forEach((l: any) => { if (activasSet.has(l.orden_pago_id)) pagadoMap[l.factura_compra_id] = (pagadoMap[l.factura_compra_id] || 0) + Number(l.monto); });
-        }
-        // Also include direct payments (pagos parciales) from movimientos
-        let qDirectPay = (supabase as any).from("movimientos").select("factura_compra_id, monto, retencion_ganancias_monto, anulado").in("factura_compra_id", fcIds).eq("tipo", "pago");
-        if (sociedadActiva?.id) qDirectPay = qDirectPay.eq("sociedad_id", sociedadActiva.id);
-        const { data: directPayments } = await qDirectPay;
-        if (directPayments) (directPayments as any[]).filter((p: any) => !p.anulado).forEach((p: any) => { pagadoMap[p.factura_compra_id] = (pagadoMap[p.factura_compra_id] || 0) + Number(p.monto || 0) + Number(p.retencion_ganancias_monto || 0); });
-      }
-      // NC con crédito disponible: se muestran como renglón negativo (a nuestro favor)
-      let ncRows: any[] = [];
-      try {
-        let qNC = (supabase as any).from("facturas_compra").select("id, numero_factura, tipo_comprobante, fecha, total, moneda").eq("proveedor_id", prov.id).neq("estado", "anulada").ilike("tipo_comprobante", "NC%");
-        if (sociedadActiva?.id) qNC = qNC.eq("sociedad_id", sociedadActiva.id);
-        const { data: ncData } = await qNC;
-        const ids = (ncData || []).map((n: any) => n.id);
-        const aplicado: Record<string, number> = {};
-        if (ids.length) {
-          const { data: ncMovs } = await (supabase as any).from("movimientos").select("nota_credito_compra_id, monto, anulado").in("nota_credito_compra_id", ids);
-          (ncMovs || []).forEach((m: any) => { if (!m.anulado) aplicado[m.nota_credito_compra_id] = (aplicado[m.nota_credito_compra_id] || 0) + Number(m.monto || 0); });
-        }
-        ncRows = (ncData || []).map((n: any) => ({ n, disp: Math.max(0, Number(n.total || 0) - (aplicado[n.id] || 0)) }))
-          .filter((x: any) => x.disp > 0.005)
-          .map(({ n, disp }: any) => ({ id: n.id, numero_factura: `${n.tipo_comprobante || "NC"} ${n.numero_factura || ""} · crédito disponible`, fecha: n.fecha, fecha_vencimiento: null, total: -disp, pagado: 0, estado: "recibida", moneda: n.moneda ?? "ARS" }));
-      } catch { ncRows = []; }
-      if (fcData) setCcDetailFCProv([...ncRows, ...fcData.map((f: any) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento, total: Number(f.total), pagado: pagadoMap[f.id] || 0, estado: f.estado, moneda: f.moneda ?? "ARS" }))]);
+      // B12: el detalle usa exactamente los mismos datos y la misma cuenta que el resumen
+      // (todas las facturas no anuladas: por aprobar, en conciliación, pendientes, recibidas y pagadas).
+      const fcRows: CCFCRow[] = facturasCompra
+        .filter((f) => f.proveedor_id === prov.id && f.estado !== "anulada" && !String(f.tipo_comprobante || "").toUpperCase().startsWith("NC"))
+        .map((f) => ({ id: f.id, numero_factura: f.numero_factura ?? "", fecha: f.fecha, fecha_vencimiento: f.fecha_vencimiento ?? null, total: Number(f.total || 0), pagado: Math.round((Number(f.total || 0) - saldoPendienteFacturaCompra(f)) * 100) / 100, estado: f.estado, moneda: f.moneda ?? "ARS" }));
+      // NC con crédito disponible, anticipos / pagos a cuenta, saldos a favor de OP, ajustes manuales
+      // y pagos sobre facturas anuladas: renglones negativos (a nuestro favor) o positivos (cargo).
+      const creditoRows: CCFCRow[] = creditosProv
+        .filter((c) => c.proveedor_id === prov.id && Math.abs(Number(c.monto || 0)) > 0.005)
+        .map((c, i) => ({ id: `credito-${i}`, numero_factura: c.detalle || "Crédito a favor", fecha: c.fecha || todayAR(), fecha_vencimiento: null, total: -Number(c.monto || 0), pagado: 0, estado: Number(c.monto || 0) > 0 ? "a_favor" : "cargo", moneda: c.moneda === "USD" ? "USD" : "ARS" }));
+      setCcDetailFCProv([...creditoRows, ...fcRows]);
       let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, factura_compra_id, retencion_ganancias_monto, conciliado, anulado, monto_original, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("proveedor_id" as any, prov.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData } = await qM;
@@ -3334,12 +3258,17 @@ export default function FinanzasPage() {
     setManualMovSaving(true); setManualMovError("");
     try {
       const userId = (await supabase.auth.getUser()).data.user?.id || null;
-      const movData: Record<string, unknown> = { tipo: manualMovForm.tipo_mov === "credito" ? "cobro" : "pago", descripcion: `[Ajuste manual] ${manualMovForm.descripcion}`, monto: manualMovForm.monto, moneda: manualMovForm.moneda, fecha: manualMovForm.fecha, conciliado: false };
+      if (!puedeAdministrar) { setManualMovError("Solo un administrador puede cargar ajustes manuales de cuenta corriente."); return; }
+      // B9: el ajuste es tipo "ajuste" (no es plata: no entra a la caja) y guarda su sentido.
+      const movData: Record<string, unknown> = { tipo: "ajuste", ajuste_sentido: manualMovForm.tipo_mov, descripcion: `[Ajuste manual] ${manualMovForm.descripcion}`, monto: manualMovForm.monto, moneda: manualMovForm.moneda, fecha: manualMovForm.fecha, conciliado: false };
       if (manualMovTarget === "cliente") (movData as any).cliente_id = manualMovTargetId; else (movData as any).proveedor_id = manualMovTargetId;
       (movData as any).sociedad_id = sociedadActiva.id;
       if (userId) (movData as any).created_by = userId;
       const { error } = await supabase.from("movimientos").insert(movData as any);
-      if (error) throw error;
+      if (error) {
+        if (String(error.message || "").includes("ajuste_sentido")) throw new Error("Falta correr en Supabase la migración 20261011100000_finanzas_correcciones.sql para guardar ajustes.");
+        throw error;
+      }
       setManualMovOpen(false); await fetchData();
       if (manualMovTarget === "cliente" && ccDetailCliente) await fetchCCDetailCliente(ccDetailCliente);
       if (manualMovTarget === "proveedor" && ccDetailProveedor) await fetchCCDetailProveedor(ccDetailProveedor);
@@ -3499,6 +3428,24 @@ export default function FinanzasPage() {
     const echeq = echeqOverride || selectedEcheq;
     if (!echeq) return;
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
+    // A6: un cheque recibido rechazado anula el cobro que generó y la deuda del cliente vuelve a aparecer.
+    if (action === "rechazar" && ((echeq as any).direccion || "recibido") === "recibido") {
+      if (!confirm(`¿Rechazar el cheque ${echeq.numero || ""}? Se anula el cobro que generó (queda el registro), la factura vuelve a quedar pendiente y se deja un aviso.`)) return;
+      const motivo = window.prompt("Motivo del rechazo (por ejemplo: sin fondos, firma no válida):", "Sin fondos");
+      if (motivo === null) return;
+      setEcheqActionSaving(true);
+      try {
+        const { data, error } = await (supabase as any).rpc("rechazar_cheque_recibido", { p_cheque_id: echeq.id, p_motivo: motivo });
+        if (error) throw error;
+        const avisos: string[] = Array.isArray(data?.avisos) ? data.avisos.map(String) : [];
+        if (data?.cobro_anulado) avisos.unshift("Se anuló el cobro del cheque y la factura volvió a quedar pendiente.");
+        if (avisos.length > 0) alert(`Cheque rechazado.${String.fromCharCode(10, 10)}• ${avisos.join(`${String.fromCharCode(10)}• `)}`);
+        setSelectedEcheq(null); setEcheqActionModal(null);
+        await fetchData();
+      } catch (err) { alert("Error al rechazar el cheque: " + (err instanceof Error ? err.message : (err as any)?.message || String(err))); }
+      finally { setEcheqActionSaving(false); }
+      return;
+    }
     setEcheqActionSaving(true);
     try {
       const updates: Record<string, unknown> = {};
@@ -3540,12 +3487,15 @@ export default function FinanzasPage() {
   const movimientosMes = movimientos.filter((m) => m.fecha?.startsWith(currentMonth) && !m.anulado && !m.nota_credito_compra_id);
   const movimientosMesARS = movimientosMes.filter((m) => !m.moneda || m.moneda === "ARS");
   const movimientosMesUSD = movimientosMes.filter((m) => m.moneda === "USD");
-  const tiposIngreso = ["cobro", "cheque_recibido", "deposito"];
-  const tiposEgreso = ["pago", "cheque_emitido", "retencion_ganancias", "retencion_iva", "retencion_iibb", "retencion_suss"];
-  const totalCobrosARS = movimientosMesARS.filter((m) => tiposIngreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const totalPagosARS = movimientosMesARS.filter((m) => tiposEgreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const totalCobrosUSD = movimientosMesUSD.filter((m) => tiposIngreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
-  const totalPagosUSD = movimientosMesUSD.filter((m) => tiposEgreso.includes(m.tipo)).reduce((a, m) => a + m.monto, 0);
+  // B1/B9: una sola regla de "qué es plata" (lib/tipos-movimiento). Los cobros por transferencia,
+  // efectivo o tarjeta son ingreso; las retenciones que nos hacen los clientes son crédito fiscal
+  // (se muestran aparte, no son egreso) y los ajustes manuales de CC no tocan la caja.
+  const cajaMesARS = resumirCaja(movimientosMesARS);
+  const cajaMesUSD = resumirCaja(movimientosMesUSD);
+  const totalCobrosARS = cajaMesARS.ingresos;
+  const totalPagosARS = cajaMesARS.egresos;
+  const totalCobrosUSD = cajaMesUSD.ingresos;
+  const totalPagosUSD = cajaMesUSD.egresos;
   const tarjetasOPMes = ordenesPago
     .filter((op) => op.estado !== "anulada" && op.fecha?.startsWith(currentMonth))
     .flatMap((op) => op.medios_pago || [])
@@ -3558,7 +3508,7 @@ export default function FinanzasPage() {
   const saldoInicialUSD = saldosCaja.find(s => s.moneda === "USD")?.monto ?? 0;
   const saldoFinalARS = saldoInicialARS + totalCobrosARS - totalPagosARS;
   const saldoFinalUSD = saldoInicialUSD + totalCobrosUSD - totalPagosUSD;
-  const hasUSD = totalCobrosUSD > 0 || totalPagosUSD > 0 || saldoInicialUSD !== 0;
+  const hasUSD = totalCobrosUSD > 0 || totalPagosUSD > 0 || cajaMesUSD.retencionesSufridas > 0 || saldoInicialUSD !== 0;
 
   // ── Apply SmartFilters to movimientos ──
   const filteredMovimientos = movimientos.filter((m) => {
@@ -3570,12 +3520,13 @@ export default function FinanzasPage() {
     // Tipo filter (with group support)
     const tipoFilter = movFilterValues.tipo as string;
     if (tipoFilter) {
+      const clase = clasificarMovimiento({ ...m, anulado: false });
       if (tipoFilter === "_cobros") {
-        if (!["cobro", "cheque_recibido", "transferencia", "efectivo", "deposito"].includes(m.tipo)) return false;
+        if (clase !== "ingreso") return false;
       } else if (tipoFilter === "_pagos") {
-        if (!["pago", "cheque_emitido"].includes(m.tipo)) return false;
+        if (clase !== "egreso" || (TIPOS_RETENCION as readonly string[]).includes(m.tipo)) return false;
       } else if (tipoFilter === "_retenciones") {
-        if (!["retencion_iva", "retencion_ganancias", "retencion_iibb", "retencion_suss"].includes(m.tipo)) return false;
+        if (!(TIPOS_RETENCION as readonly string[]).includes(m.tipo)) return false;
       } else if (m.tipo !== tipoFilter) return false;
     }
 
@@ -3715,6 +3666,26 @@ export default function FinanzasPage() {
     return list.sort((a, b) => a.fecha.localeCompare(b.fecha));
   }, [retencionesTablaAll, retFilterDesde, retFilterHasta]);
 
+  // D2: Finanzas es solo para administración (super_admin, admin, administrativo).
+  if (profile?.role === "vendedor" || profile?.role === "viewer") {
+    return (
+      <>
+        <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" />
+        <div className="p-8">
+          <Card className="p-6">
+            <div className="flex items-center gap-3 text-zinc-700 dark:text-zinc-300">
+              <ShieldCheck className="h-6 w-6 text-orange-500" />
+              <div>
+                <p className="font-semibold">No tenés acceso a Finanzas</p>
+                <p className="text-sm text-zinc-500">Si lo necesitás, pedile a un administrador que te cambie el rol.</p>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </>
+    );
+  }
+
   if (loading) {
     return (
       <>
@@ -3734,11 +3705,19 @@ export default function FinanzasPage() {
     </div>
   ) : null;
 
+  const errorCargaAviso = loadError ? (
+    <div className="mx-6 mt-4 flex items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+      <span className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 shrink-0" />{loadError}</span>
+      <button type="button" onClick={() => fetchData()} className="rounded-md border border-amber-300 px-3 py-1.5 text-xs font-medium hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900/40">Reintentar</button>
+    </div>
+  ) : null;
+
   return (
     <>
       <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setEditingMovId(null); setMovForm(emptyMovForm); setMovClienteSearch(""); setMovProvSearch(""); setFormError(""); setModalOpen(true); } }} />
       <div className="p-4 sm:p-8 space-y-6">
         {cargaLentaAviso}
+        {errorCargaAviso}
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -3820,6 +3799,13 @@ export default function FinanzasPage() {
                   <td className="py-2 px-3 text-right font-mono text-red-600">-{formatCurrency(totalPagosARS)}</td>
                   {hasUSD && <td className="py-2 px-3 text-right font-mono text-red-600">-{formatCurrency(totalPagosUSD, "USD")}</td>}
                 </tr>
+                {(cajaMesARS.retencionesSufridas > 0 || cajaMesUSD.retencionesSufridas > 0) && (
+                  <tr className="border-b border-zinc-100 dark:border-zinc-800">
+                    <td className="py-2 px-3 text-zinc-500" title="Retenciones que nos hicieron los clientes al pagar: no es plata que sale, es crédito fiscal. No suma ni resta al saldo de caja.">Retenciones sufridas (crédito fiscal, no suma a la caja)</td>
+                    <td className="py-2 px-3 text-right font-mono text-zinc-500">{formatCurrency(cajaMesARS.retencionesSufridas)}</td>
+                    {hasUSD && <td className="py-2 px-3 text-right font-mono text-zinc-500">{formatCurrency(cajaMesUSD.retencionesSufridas, "USD")}</td>}
+                  </tr>
+                )}
                 <tr className="border-t-2 border-zinc-300 dark:border-zinc-600">
                   <td className="py-2 px-3 font-semibold text-zinc-800 dark:text-zinc-200">Saldo actual</td>
                   <td className={`py-2 px-3 text-right font-mono font-bold text-base ${saldoFinalARS >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(saldoFinalARS)}</td>
@@ -3959,8 +3945,10 @@ export default function FinanzasPage() {
                 }},
                 { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
                 { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => {
-                  const isIngreso = ["cobro", "cheque_recibido", "transferencia", "efectivo", "deposito", "retencion_iva", "retencion_ganancias", "retencion_iibb", "retencion_suss"].includes(row.tipo) && !!row.cliente_id;
-                  const isEgreso = ["pago", "cheque_emitido"].includes(row.tipo) || (!!row.proveedor_id && !row.cliente_id);
+                  // Misma regla que la caja (los anulados se colorean como eran, tachados).
+                  const clase = clasificarMovimiento({ ...row, anulado: false });
+                  const isIngreso = clase === "ingreso" || clase === "retencion_sufrida";
+                  const isEgreso = clase === "egreso";
                   const visibleAmount = row.anulado ? Number(row.monto_original || 0) : row.monto;
                   return <span className={`font-mono font-semibold block text-right ${row.anulado ? "text-zinc-400 line-through" : isIngreso ? "text-emerald-600" : isEgreso ? "text-red-600" : "text-zinc-700 dark:text-zinc-300"}`}>{isIngreso ? "+" : isEgreso ? "-" : ""}{formatCurrency(visibleAmount, row.moneda as "ARS" | "USD")}</span>;
                 }},
@@ -3970,6 +3958,11 @@ export default function FinanzasPage() {
                     {!row.anulado && !row.conciliado && (
                       <button onClick={() => handleConciliar(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-green-100 hover:text-green-600" title="Conciliar">
                         <CheckCircle2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                    {!row.anulado && row.conciliado && (
+                      <button onClick={() => handleDesconciliar(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-amber-100 hover:text-amber-600" title="Desconciliar">
+                        <X className="h-3.5 w-3.5" />
                       </button>
                     )}
                     {!row.anulado && !row.factura_compra_id && (
@@ -3982,8 +3975,8 @@ export default function FinanzasPage() {
                         </button>
                       </>
                     )}
-                    {!row.factura_compra_id && (
-                      <button onClick={() => handleDeleteMov(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar">
+                    {puedeAdministrar && !row.factura_compra_id && (
+                      <button onClick={() => handleDeleteMov(row.id)} className="rounded p-1.5 text-zinc-400 hover:bg-red-100 hover:text-red-500" title="Eliminar (solo administradores; conviene Anular)">
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     )}
@@ -4114,6 +4107,9 @@ export default function FinanzasPage() {
                     <Badge variant={selectedMov.anulado ? "danger" : selectedMov.conciliado ? "success" : "warning"}>
                       {selectedMov.anulado ? "Anulado" : selectedMov.conciliado ? "Conciliado" : "Pendiente"}
                     </Badge>
+                    {!selectedMov.anulado && selectedMov.conciliado && selectedMov.conciliado_at && (
+                      <p className="mt-1 text-xs text-zinc-400">el {formatDateTime(selectedMov.conciliado_at)}</p>
+                    )}
                   </div>
                   <div>
                     <p className="text-xs text-zinc-400 uppercase">Entidad</p>
@@ -4180,9 +4176,15 @@ export default function FinanzasPage() {
                 {/* Actions */}
                 <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
                   {!selectedMov.anulado && !selectedMov.conciliado && (
-                    <button onClick={async () => { await handleConciliar(selectedMov.id); setSelectedMov({ ...selectedMov, conciliado: true }); }}
+                    <button onClick={async () => { if (await handleConciliar(selectedMov.id)) setSelectedMov({ ...selectedMov, conciliado: true }); }}
                       className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
                       <CheckCircle2 className="h-4 w-4" /> Conciliar
+                    </button>
+                  )}
+                  {!selectedMov.anulado && selectedMov.conciliado && (
+                    <button onClick={() => handleDesconciliar(selectedMov.id)}
+                      className="flex items-center gap-1.5 rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20">
+                      <X className="h-4 w-4" /> Desconciliar
                     </button>
                   )}
                   {!selectedMov.anulado && (
@@ -4199,8 +4201,8 @@ export default function FinanzasPage() {
                       </button>}
                     </>
                   )}
-                  {!selectedMov.liquidacion_fx_id && !selectedMov.factura_compra_id && (
-                    <button onClick={() => handleDeleteMov(selectedMov.id)}
+                  {puedeAdministrar && !selectedMov.liquidacion_fx_id && !selectedMov.factura_compra_id && (
+                    <button onClick={() => handleDeleteMov(selectedMov.id)} title="Borra el registro (solo administradores). Para corregir conviene Anular."
                       className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
                       <Trash2 className="h-4 w-4" /> Eliminar
                     </button>
@@ -4682,8 +4684,11 @@ export default function FinanzasPage() {
                       { key: "forma_pago", label: "Forma de pago", render: (row) => <Badge variant="outline">{row.forma_pago || "—"}</Badge> },
                       { key: "limite_credito", label: "Limite", className: "text-right", sortable: true, render: (row) => <span className="font-mono block text-right">{formatCurrency(row.limite_credito)}</span> },
                       { key: "saldo_cuenta_corriente", label: "Nos debe", className: "text-right", sortable: true, render: (row) => {
-                        const pct = row.limite_credito ? (row.saldo_cuenta_corriente / row.limite_credito) * 100 : 0;
-                        return (<div className="text-right"><span className={`font-mono font-semibold ${pct > 80 ? "text-red-600" : ""}`}>{formatCurrency(Number(row.saldo_ars || 0))}</span>{Number(row.saldo_usd || 0) > 0 && <p className="font-mono text-xs text-zinc-500">{formatCurrency(Number(row.saldo_usd), "USD")}</p>}{row.limite_credito > 0 && row.saldo_cuenta_corriente > row.limite_credito && <p className="mt-1 text-xs text-red-600 dark:text-red-400">Límite de crédito excedido</p>}<div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.max(0, Math.min(pct, 100))}%` }} /></div></div>);
+                        const pct = row.limite_credito ? (Math.max(0, row.saldo_cuenta_corriente) / row.limite_credito) * 100 : 0;
+                        // B6: saldo negativo = el cliente tiene saldo a favor (se muestra en verde, no se recorta a cero).
+                        const aFavorARS = Number(row.saldo_ars || 0) < -0.005;
+                        const aFavorUSD = Number(row.saldo_usd || 0) < -0.005;
+                        return (<div className="text-right"><span className={`font-mono font-semibold ${aFavorARS ? "text-emerald-600" : pct > 80 ? "text-red-600" : ""}`}>{aFavorARS ? `Saldo a favor ${formatCurrency(Math.abs(Number(row.saldo_ars || 0)))}` : formatCurrency(Number(row.saldo_ars || 0))}</span>{Math.abs(Number(row.saldo_usd || 0)) > 0.005 && <p className={`font-mono text-xs ${aFavorUSD ? "text-emerald-600" : "text-zinc-500"}`}>{aFavorUSD ? `Saldo a favor ${formatCurrency(Math.abs(Number(row.saldo_usd)), "USD")}` : formatCurrency(Number(row.saldo_usd), "USD")}</p>}{row.limite_credito > 0 && row.saldo_cuenta_corriente > row.limite_credito && <p className="mt-1 text-xs text-red-600 dark:text-red-400">Límite de crédito excedido</p>}<div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.max(0, Math.min(pct, 100))}%` }} /></div></div>);
                       }},
                       { key: "cuit" as any, label: "Le debemos", className: "text-right", sortable: false, render: (row) => {
                         const saldoProv = row.cuit ? cuitToSaldoProveedor[row.cuit] : undefined;
@@ -4711,18 +4716,23 @@ export default function FinanzasPage() {
                   </button>
                   <h2 className="text-lg font-semibold">{ccDetailCliente.razon_social}</h2>
                   {ccDetailCliente.cuit && <span className="font-mono text-xs text-zinc-500">CUIT: {ccDetailCliente.cuit}</span>}
-                  <div className="ml-auto text-right font-mono font-bold text-red-600">
-                    <p>Deuda ARS: {formatCurrency(Number(ccDetailCliente.saldo_ars || 0))}</p>
-                    {Number(ccDetailCliente.saldo_usd || 0) > 0 && <p className="text-sm">Deuda USD: {formatCurrency(Number(ccDetailCliente.saldo_usd), "USD")}</p>}
+                  <div className="ml-auto text-right font-mono font-bold">
+                    {Number(ccDetailCliente.saldo_ars || 0) < -0.005
+                      ? <p className="text-emerald-600">Saldo a favor ARS: {formatCurrency(Math.abs(Number(ccDetailCliente.saldo_ars || 0)))}</p>
+                      : <p className="text-red-600">Deuda ARS: {formatCurrency(Number(ccDetailCliente.saldo_ars || 0))}</p>}
+                    {Number(ccDetailCliente.saldo_usd || 0) > 0.005 && <p className="text-sm text-red-600">Deuda USD: {formatCurrency(Number(ccDetailCliente.saldo_usd), "USD")}</p>}
+                    {Number(ccDetailCliente.saldo_usd || 0) < -0.005 && <p className="text-sm text-emerald-600">Saldo a favor USD: {formatCurrency(Math.abs(Number(ccDetailCliente.saldo_usd)), "USD")}</p>}
                   </div>
                 </div>
                 <div className="flex gap-2 mb-4">
                   <button onClick={openCobroMultiple} className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700">
                     <DollarSign className="h-4 w-4" /> Realizar cobro
                   </button>
-                  <button onClick={() => openManualMovForCliente(ccDetailCliente)} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800">
-                    <Plus className="h-4 w-4" /> Movimiento manual
-                  </button>
+                  {puedeAdministrar && (
+                    <button onClick={() => openManualMovForCliente(ccDetailCliente)} title="Ajuste de cuenta corriente: mueve el saldo del cliente, no la caja" className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                      <Plus className="h-4 w-4" /> Ajuste manual
+                    </button>
+                  )}
                   <button onClick={exportCCCliente} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800">
                     <Download className="h-4 w-4" /> Exportar CSV
                   </button>
@@ -4803,7 +4813,7 @@ export default function FinanzasPage() {
                     { key: "saldo_cuenta_corriente", label: "Le debemos", className: "text-right", sortable: true, render: (row) => {
                       const saldoAFavor = row.saldo_cuenta_corriente < -0.005;
                       const pct = row.limite_credito ? (Math.max(0, row.saldo_cuenta_corriente) / row.limite_credito) * 100 : 0;
-                      return (<div className="text-right"><span className={`font-mono font-semibold ${saldoAFavor ? "text-emerald-600" : "text-red-600"}`}>{saldoAFavor ? `A favor ${formatCurrency(Math.abs(Number(row.saldo_ars || 0)))}` : formatCurrency(Number(row.saldo_ars || 0))}</span>{Number(row.saldo_usd || 0) > 0 && <p className="font-mono text-xs text-zinc-500">{formatCurrency(Number(row.saldo_usd), "USD")}</p>}<div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
+                      return (<div className="text-right"><span className={`font-mono font-semibold ${saldoAFavor ? "text-emerald-600" : "text-red-600"}`}>{saldoAFavor ? `A favor ${formatCurrency(Math.abs(Number(row.saldo_ars || 0)))}` : formatCurrency(Number(row.saldo_ars || 0))}</span>{Math.abs(Number(row.saldo_usd || 0)) > 0.005 && <p className={`font-mono text-xs ${Number(row.saldo_usd) < 0 ? "text-emerald-600" : "text-zinc-500"}`}>{Number(row.saldo_usd) < 0 ? `A favor ${formatCurrency(Math.abs(Number(row.saldo_usd)), "USD")}` : formatCurrency(Number(row.saldo_usd), "USD")}</p>}<div className="mt-1 h-1.5 w-20 ml-auto rounded-full bg-zinc-100 dark:bg-zinc-700"><div className={`h-1.5 rounded-full ${pct > 80 ? "bg-red-500" : pct > 50 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div></div>);
                     }},
                     { key: "cuit" as any, label: "Nos debe", className: "text-right", sortable: false, render: (row) => {
                       const saldoCli = row.cuit ? cuitToSaldoCliente[row.cuit] : undefined;
@@ -4828,14 +4838,15 @@ export default function FinanzasPage() {
                 {ccDetailProveedor.cuit && <span className="font-mono text-xs text-zinc-500">CUIT: {ccDetailProveedor.cuit}</span>}
                 <div className={`ml-auto text-right font-mono font-bold ${ccDetailProveedor.saldo_cuenta_corriente < -0.005 ? "text-emerald-600" : "text-red-600"}`}>
                   <p>{ccDetailProveedor.saldo_cuenta_corriente < -0.005 ? "Saldo a favor ARS: " : "Deuda ARS: "}{formatCurrency(Math.abs(Number(ccDetailProveedor.saldo_ars || 0)))}</p>
-                  {Number(ccDetailProveedor.saldo_usd || 0) > 0 && <p className="text-sm">Deuda USD: {formatCurrency(Number(ccDetailProveedor.saldo_usd), "USD")}</p>}
+                  {Number(ccDetailProveedor.saldo_usd || 0) > 0.005 && <p className="text-sm text-red-600">Deuda USD: {formatCurrency(Number(ccDetailProveedor.saldo_usd), "USD")}</p>}
+                  {Number(ccDetailProveedor.saldo_usd || 0) < -0.005 && <p className="text-sm text-emerald-600">Saldo a favor USD: {formatCurrency(Math.abs(Number(ccDetailProveedor.saldo_usd)), "USD")}</p>}
                 </div>
               </div>
               <div className="flex gap-2 mb-4">
                 <button onClick={() => { openOPModal(ccDetailProveedor.id); setCcDetailProveedor(null); setTab("ordenes_pago"); }} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">
                   <DollarSign className="h-4 w-4" /> Crear OP
                 </button>
-                <button onClick={() => openManualMovForProveedor(ccDetailProveedor)} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"><Plus className="h-4 w-4" /> Movimiento manual</button>
+                {puedeAdministrar && <button onClick={() => openManualMovForProveedor(ccDetailProveedor)} title="Ajuste de cuenta corriente: mueve el saldo del proveedor, no la caja" className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"><Plus className="h-4 w-4" /> Ajuste manual</button>}
                 <button onClick={exportCCProveedor} className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"><Download className="h-4 w-4" /> Exportar CSV</button>
               </div>
               {ccDetailProvLoading ? (
@@ -4850,8 +4861,8 @@ export default function FinanzasPage() {
                       { key: "numero_factura", label: "N. Factura", sortable: true, render: (row) => <span className="font-mono text-xs">{row.numero_factura}</span> },
                       { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.total, row.moneda as "ARS" | "USD")}</span> },
                       { key: "pagado" as any, label: "Pagado", className: "text-right", render: (row) => <span className="font-mono block text-right text-emerald-600">{row.pagado > 0 ? formatCurrency(row.pagado, row.moneda as "ARS" | "USD") : "—"}</span> },
-                      { key: "id" as any, label: "Saldo", className: "text-right", render: (row) => { const saldo = Math.max(0, row.total - row.pagado); return <span className={`font-mono font-semibold block text-right ${saldo > 0.01 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(saldo, row.moneda as "ARS" | "USD")}</span>; }},
-                      { key: "estado", label: "Estado", render: (row) => { const cfg: Record<string, { label: string; variant: "success" | "warning" | "danger" | "outline" }> = { pagada: { label: "Pagada", variant: "success" }, pendiente: { label: "Pendiente", variant: "danger" }, recibida: { label: "Recibida", variant: "warning" } }; const c = cfg[row.estado] || { label: row.estado, variant: "outline" as const }; return <Badge variant={c.variant}>{c.label}</Badge>; }},
+                      { key: "id" as any, label: "Saldo", className: "text-right", render: (row) => { const saldo = row.estado === "a_favor" || row.estado === "cargo" ? row.total : Math.max(0, row.total - row.pagado); return <span className={`font-mono font-semibold block text-right ${saldo > 0.01 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(saldo, row.moneda as "ARS" | "USD")}</span>; }},
+                      { key: "estado", label: "Estado", render: (row) => { const cfg: Record<string, { label: string; variant: "success" | "warning" | "danger" | "outline" }> = { pagada: { label: "Pagada", variant: "success" }, pendiente: { label: "Pendiente", variant: "danger" }, recibida: { label: "Recibida", variant: "warning" }, pendiente_aprobacion: { label: "Por aprobar", variant: "warning" }, en_conciliacion: { label: "En conciliación", variant: "warning" }, a_favor: { label: "A favor", variant: "success" }, cargo: { label: "Cargo", variant: "outline" } }; const c = cfg[row.estado] || { label: row.estado, variant: "outline" as const }; return <Badge variant={c.variant}>{c.label}</Badge>; }},
                     ]}
                     data={ccDetailFCProv}
                     emptyMessage="Sin facturas de compra"
@@ -7236,10 +7247,11 @@ export default function FinanzasPage() {
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setManualMovOpen(false)} />
           <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-full max-w-md rounded-xl bg-white p-6 shadow-xl dark:bg-zinc-900">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">Movimiento manual</h2>
+              <h2 className="text-lg font-semibold">Ajuste manual de cuenta corriente</h2>
               <button onClick={() => setManualMovOpen(false)} className="text-zinc-400 hover:text-zinc-600"><X className="h-5 w-5" /></button>
             </div>
             <p className="text-sm text-zinc-500 mb-4">{manualMovTarget === "cliente" ? "Cliente" : "Proveedor"}: <span className="font-medium text-zinc-800 dark:text-zinc-200">{manualMovTargetName}</span></p>
+            <p className="mb-4 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-500 dark:bg-zinc-800/60">Corrige el saldo de la cuenta corriente. No es plata: no suma ni resta en la caja.</p>
             {manualMovError && <p className="mb-3 text-sm text-red-500">{manualMovError}</p>}
             <div className="space-y-3">
               <div>

@@ -4,6 +4,7 @@ import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate, getInitials, todayAR } from "@/lib/utils";
+import { precioUnitarioParaFactura } from "@/lib/precio-factura";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
@@ -556,14 +557,8 @@ export default function VentasPage() {
         descripcion: it.descripcion,
         cantidad: it.cantidad,
         // Un PR manual ya guarda el precio final; no se le vuelve a sumar IVA al facturarlo.
-        // Los PR A/B electrónicos guardan precio neto y mantienen la lógica habitual.
-        precio_unitario: isFacturaA(defaultTipo)
-          ? sourceIsManual
-            ? roundMoney(precioNeto / (1 + ivaPorcentaje / 100))
-            : roundMoney(precioNeto)
-          : sourceIsManual
-            ? roundMoney(precioNeto)
-            : roundMoney(precioNeto * (1 + ivaPorcentaje / 100)),
+        // Los PR A/B electrónicos guardan precio neto. Regla única en lib/precio-factura.
+        precio_unitario: precioUnitarioParaFactura({ tipo: defaultTipo, sourceIsManual, precioNeto, ivaPorcentaje }),
         iva_porcentaje: ivaPorcentaje,
       };
     });

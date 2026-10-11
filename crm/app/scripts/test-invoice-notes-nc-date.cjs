@@ -11,7 +11,7 @@ assert.match(facturacion, /const \[ncFecha, setNcFecha\] = useState\(todayAR\(\)
 assert.match(facturacion, /useFiscalDateLimits\(ncOpen && !ncManual && Boolean\(ncFactura\)/);
 assert.match(facturacion, /value=\{ncFecha\}/);
 assert.match(facturacion, /factura_origen_id: ncFactura\.id,\s*nota_credito_modo: ncMode,\s*fecha: ncFecha/);
-assert.match(facturacion, /fecha: ncFecha,\s*cae: null/);
+assert.match(facturacion, /p_fecha: ncFecha,/); // NC manual: RPC atómica crear_nota_credito_manual_venta
 
 assert.match(pdf, /observaciones\?: string \| null/);
 assert.match(pdf, /f\.observaciones \? `<div class="obs-block">/);

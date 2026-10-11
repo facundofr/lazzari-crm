@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 09/10/2026 · Versión publicada: **V1.1.411** (en curso: V1.1.412)
+Actualizado: 09/10/2026 · Versión publicada: **V1.1.412** (en curso: V1.1.413)
 
 ## 0. Arreglo urgente V1.1.411 (publicado, solo código, sin migración)
 
@@ -10,7 +10,22 @@ Actualizado: 09/10/2026 · Versión publicada: **V1.1.411** (en curso: V1.1.412)
 - **Cron BCRA:** trae clientes e informes de a páginas, así no quedan clientes sin revisar si hay más de 1000.
 - Revisado: las columnas que usan las pantallas nuevas existen en la base. Se verificó solo leyendo.
 
-## 0.b En curso: V1.1.412 (sin publicar, sin migración)
+## 0.c V1.1.413 (sin migración)
+
+- **Alta de cliente:** las sucursales se cargan en el mismo alta y se guardan junto con el cliente.
+- **Reportes y Dashboard:**
+  - El libro IVA resta las NC, excluye las compras anuladas y separa ARS de USD.
+  - Los meses salen sin el corrimiento por zona horaria.
+  - No hay listados cortados en 1000 filas.
+  - Se sacaron los datos de ejemplo.
+  - Lógica en `lib/reportes-comprobantes.ts`.
+- **Diagnóstico financiero** completo en `DIAGNOSTICO-FINANCIERO.md`; propuestas de Reportes y Dashboard en `PROPUESTA-REPORTES-DASHBOARD.md`.
+- **Correcciones financieras A MEDIAS** (Finanzas, Ventas, Compras: 3 migraciones y varios archivos):
+  - Se cortaron por el límite de uso.
+  - Están guardadas en `git stash` ("correcciones financieras a medias"). **No están publicadas.**
+  - Para retomarlas: `git stash list` / `git stash apply`. Revisar todo antes de usar; hay un test roto (`scripts/test-saldo-factura-compra.ts`).
+
+## 0.b V1.1.412 (publicada)
 
 **Programado (falta publicar):**
 - **Compras → OC:**
@@ -43,6 +58,12 @@ Actualizado: 09/10/2026 · Versión publicada: **V1.1.411** (en curso: V1.1.412)
   - Si tenía otro distinto, avisa y no lo pisa (`lib/nombre-fantasia.ts`).
 
 **Pendiente, próximas tandas:**
+0. **Cheque vs echeq:**
+   - Hoy hay 3 criterios distintos: en Facturación "echeq" se guarda como cheque_recibido con una tilde; en Finanzas se usa tipo_cheque físico/echeq; la IA de cobros decide sola.
+   - Unificar en "Cheque" con variante Físico / Electrónico, visible y editable en todas las pantallas.
+   - Reglas claras para la IA (ID digital o la palabra ECHEQ = electrónico; si no se puede saber, "a confirmar" en amarillo).
+   - Falta que Augusto diga dónde se confunde y pase un ejemplo.
+0.b **Retenciones (A5 del diagnóstico):** comparar contra el archivo de Netegia que va a pasar Augusto, después de los arreglos financieros.
 1. Alta de cliente: cargar sucursales en el mismo alta (hoy solo al editar); se guardan junto con el cliente.
 2. "Para revisar" (idea 8): necesita mandar OC, clientes y proveedores a la Papelera, así que lleva migración.
 3. Lista de costos dentro de Proveedores y listas centralizadas (idea 9).

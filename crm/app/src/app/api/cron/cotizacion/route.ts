@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSupabaseServer } from "@/lib/supabase/server";
+import { createClient } from "@supabase/supabase-js";
+import { parseBnaHistorical, BNA_VERIFIED_SOURCE } from "@/lib/bna-historical";
 
 /**
  * GET /api/cron/cotizacion
- * Cron diario (18:00 ART / 21:00 UTC) — guarda cotización BNA divisas + billetes del día.
- * Fuente: BNA Cotizador AJAX (principal) → DolarAPI (fallback).
- * Protegido por CRON_SECRET en producción.
+ * Cron (lun a vie 18:00 ART / 21:00 UTC) — guarda la cotización BNA divisas + billetes.
+ * - Exige CRON_SECRET (sin la clave configurada o con otra clave responde 401).
+ * - Escribe con la clave de servicio (el cron no tiene sesión de usuario), como el cron del BCRA.
+ * - Lo leído del BNA se graba con la fuente verificada (BNA_VERIFIED_SOURCE), la misma que
+ *   /api/cotizacion-bna acepta como cache confiable, y con la fecha real que publicó el BNA.
+ * - Nunca pisa una cotización cargada a mano (es_manual = true).
+ * - DolarAPI no distingue divisas de billetes: solo se usa de respaldo para billetes del día
+ *   y nunca pisa un valor verificado del BNA.
+ * - Si falla una escritura responde 500, para que se vea en los logs de Vercel.
  */
-
-const parse = (s: string) => {
-  if (s.includes(",")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
-  return parseFloat(s);
-};
 
 const toddmmyyyy = (isoDate: string) => {
   const [y, m, d] = isoDate.split("-");
@@ -21,7 +23,7 @@ const toddmmyyyy = (isoDate: string) => {
 async function scrapeBna(
   modalidad: "divisas" | "billetes",
   fechaIso: string
-): Promise<{ compra: number; venta: number } | null> {
+): Promise<{ compra: number; venta: number; fecha: string } | null> {
   const idMoneda = modalidad === "billetes" ? "22" : "55";
   const fechaDdMm = toddmmyyyy(fechaIso);
   try {
@@ -36,15 +38,8 @@ async function scrapeBna(
       next: { revalidate: 0 },
     });
     if (!res.ok) return null;
-    const html = await res.text();
-    const rowMatch = html.match(
-      /Dolar\s+U\.S\.A<\/td>\s*<td[^>]*>([\d.,]+)<\/td>\s*<td[^>]*>([\d.,]+)<\/td>/i
-    );
-    if (!rowMatch) return null;
-    const compra = parse(rowMatch[1]);
-    const venta = parse(rowMatch[2]);
-    if (isNaN(compra) || isNaN(venta) || compra <= 0 || venta <= 0) return null;
-    return { compra, venta };
+    // Mismo parser que /api/cotizacion-bna: toma la fila con la fecha real publicada (<= hoy).
+    return parseBnaHistorical(await res.text(), fechaIso);
   } catch {
     return null;
   }
@@ -67,52 +62,76 @@ async function fetchDolarApi(): Promise<{ compra: number; venta: number } | null
   }
 }
 
+type Resultado = { tipo: string; ok: boolean; fecha?: string; fuente?: string; omitida?: string; error?: string };
+
 export async function GET(req: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const authHeader = req.headers.get("authorization");
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+  if (!cronSecret || req.headers.get("authorization") !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    return NextResponse.json({ error: "Falta SUPABASE_SERVICE_ROLE_KEY" }, { status: 500 });
+  }
+  const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY) as any;
 
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Buenos_Aires" });
-  const results: { tipo: string; ok: boolean; fuente?: string; error?: string }[] = [];
-  const supabase = await createSupabaseServer();
+  const results: Resultado[] = [];
+  let erroresEscritura = 0;
 
   for (const modalidad of ["divisas", "billetes"] as const) {
     const tipoDb = modalidad === "billetes" ? "oficial_billetes" : "oficial_divisas";
 
-    // BNA primero (distingue divisas/billetes)
-    let scraped = await scrapeBna(modalidad, today);
-    let fuente = "BNA_cron";
-
-    // Fallback: DolarAPI (no distingue pero mejor que nada)
-    if (!scraped) {
-      scraped = await fetchDolarApi();
-      fuente = "dolarapi_cron";
+    let fila: { fecha: string; compra: number; venta: number; fuente: string; verificada: boolean } | null = null;
+    const bna = await scrapeBna(modalidad, today);
+    if (bna) {
+      fila = { fecha: bna.fecha, compra: bna.compra, venta: bna.venta, fuente: BNA_VERIFIED_SOURCE, verificada: true };
+    } else if (modalidad === "billetes") {
+      const api = await fetchDolarApi();
+      if (api) fila = { fecha: today, compra: api.compra, venta: api.venta, fuente: "dolarapi_cron", verificada: false };
     }
-
-    if (!scraped) {
-      results.push({ tipo: tipoDb, ok: false, error: "Sin datos" });
+    if (!fila) {
+      results.push({ tipo: tipoDb, ok: false, error: "Sin datos del BNA" });
       continue;
     }
 
-    const { error } = await (supabase as any)
+    const { data: existente, error: errorLectura } = await db
+      .from("cotizaciones_dolar")
+      .select("es_manual, fuente")
+      .eq("fecha", fila.fecha)
+      .eq("tipo", tipoDb)
+      .limit(1)
+      .maybeSingle();
+    if (errorLectura) {
+      erroresEscritura++;
+      results.push({ tipo: tipoDb, ok: false, fecha: fila.fecha, error: errorLectura.message });
+      continue;
+    }
+    if (existente?.es_manual) {
+      results.push({ tipo: tipoDb, ok: true, fecha: fila.fecha, omitida: "cargada a mano: no se pisa" });
+      continue;
+    }
+    if (!fila.verificada && existente?.fuente === BNA_VERIFIED_SOURCE) {
+      results.push({ tipo: tipoDb, ok: true, fecha: fila.fecha, omitida: "ya está la del BNA" });
+      continue;
+    }
+
+    const { error } = await db
       .from("cotizaciones_dolar")
       .upsert(
         {
-          fecha: today,
+          fecha: fila.fecha,
           tipo: tipoDb,
-          valor_compra: scraped.compra,
-          valor_venta: scraped.venta,
-          fuente,
+          valor_compra: fila.compra,
+          valor_venta: fila.venta,
+          fuente: fila.fuente,
           es_manual: false,
         },
         { onConflict: "fecha,tipo" }
       );
-    results.push({ tipo: tipoDb, ok: !error, fuente, error: error?.message });
+    if (error) erroresEscritura++;
+    results.push({ tipo: tipoDb, ok: !error, fecha: fila.fecha, fuente: fila.fuente, error: error?.message });
   }
 
-  return NextResponse.json({ fecha: today, results });
+  const status = erroresEscritura > 0 ? 500 : results.some(r => r.ok) ? 200 : 502;
+  return NextResponse.json({ fecha: today, results }, { status });
 }

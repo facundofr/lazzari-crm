@@ -25,11 +25,15 @@ import {
   mockAlerts,
   ventasPorMes as mockVentasPorMes,
   presupuestosPorEstado as mockPresupuestosPorEstado,
-  topClientes as mockTopClientes,
   mockGastosFijos,
   mockObjetivos,
 } from "@/lib/mock-data";
 import { supabase } from "@/lib/supabase/client";
+import { traerTodo } from "@/lib/paginar";
+import {
+  equivalenteARS, filtrarParaGestion, inicioDeMesHace, montoFirmado, normalizarMoneda,
+  periodoDeFecha, sumarMeses, totalesMensuales,
+} from "@/lib/reportes-comprobantes";
 import type { Presupuesto, ActivityLog, Alert, GastoFijo, Objetivo } from "@/lib/types";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info" }> = {
@@ -69,6 +73,13 @@ const estadoLabelMap: Record<string, string> = {
 
 const DASHBOARD_ALERT_LIMIT = 5;
 
+interface ClienteTop { nombre: string; ARS: number; USD: number; equivalente: number }
+
+/** Envuelve traerTodo con la forma { data, error } de Supabase, para usarlo dentro del Promise.all. */
+function comoResultado<T>(p: Promise<T[]>): Promise<{ data: T[] | null; error: unknown }> {
+  return p.then((data) => ({ data, error: null }), (error) => ({ data: null, error }));
+}
+
 function calcChange(current: number, previous: number): number | undefined {
   if (!previous || previous === 0) return undefined;
   return Math.round(((current - previous) / previous) * 100);
@@ -91,7 +102,7 @@ export default function DashboardPage() {
   const [presupuestos, setPresupuestos] = useState<typeof mockPresupuestos>([]);
   const [alerts, setAlerts] = useState<typeof mockAlerts>([]);
   const [showAllAlerts, setShowAllAlerts] = useState(false);
-  const [topClientes, setTopClientes] = useState<typeof mockTopClientes>([]);
+  const [topClientes, setTopClientes] = useState<ClienteTop[]>([]);
   const [activity, setActivity] = useState<typeof mockActivity>([]);
   const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>([]);
   const [objetivos, setObjetivos] = useState<Objetivo[]>([]);
@@ -113,34 +124,46 @@ export default function DashboardPage() {
       setObjetivos([]);
       setFacturadoMonedas({ ARS: 0, USD: 0, anteriorARS: 0 });
       try {
-        // Build queries with optional sociedad filter
-        let qPresupuestosEstado = supabase.from("presupuestos").select("estado").neq("eliminado" as any, true);
+        const sid = sociedadActiva!.id;
+        const desde12 = inicioDeMesHace(todayAR(), 11);
+        // Todas las páginas (Supabase corta en 1000 filas)
+        const qPresupuestosEstado = comoResultado(traerTodo<{ estado: string }>(() => (supabase as any)
+          .from("presupuestos")
+          .select("id, estado")
+          .neq("eliminado", true)
+          .eq("sociedad_id", sid)
+          .order("id", { ascending: true })));
+        // Facturas de los últimos 12 meses (gráfico mensual, facturado del mes y top clientes)
+        const qFacturas = comoResultado(traerTodo<any>(() => (supabase as any)
+          .from("facturas")
+          .select("id, fecha, total, moneda, tipo, tipo_cambio, estado, factura_origen_id, cliente_id, clientes(razon_social)")
+          .gte("fecha", desde12)
+          .neq("estado", "anulada")
+          .eq("sociedad_id", sid)
+          .order("fecha", { ascending: true })
+          .order("id", { ascending: true })));
+        // Ids de facturas anuladas: una NC cuya factura ya está anulada no se resta otra vez
+        const qAnuladas = comoResultado(traerTodo<{ id: string }>(() => (supabase as any)
+          .from("facturas")
+          .select("id")
+          .eq("estado", "anulada")
+          .eq("sociedad_id", sid)
+          .order("id", { ascending: true })));
         let qPresupuestosRecent = supabase
           .from("presupuestos")
           .select("id, numero, cliente_id, total, estado, fecha, clientes(razon_social)")
           .neq("eliminado" as any, true)
           .order("created_at", { ascending: false })
           .limit(5);
-        let qTopClientes = supabase
-          .from("facturas")
-          .select("cliente_id, clientes(razon_social), total")
-          .neq("estado", "anulada");
-        let qFacturasMensuales = (supabase as any)
-          .from("facturas")
-          .select("fecha, total, moneda, tipo")
-          .neq("estado", "anulada");
 
-        qPresupuestosEstado = qPresupuestosEstado.eq("sociedad_id" as any, sociedadActiva!.id);
-        qPresupuestosRecent = qPresupuestosRecent.eq("sociedad_id" as any, sociedadActiva!.id);
-        qTopClientes = qTopClientes.eq("sociedad_id" as any, sociedadActiva!.id);
-        qFacturasMensuales = qFacturasMensuales.eq("sociedad_id" as any, sociedadActiva!.id);
+        qPresupuestosRecent = qPresupuestosRecent.eq("sociedad_id" as any, sid);
 
         const [
           kpiResult,
           presupuestosEstadoResult,
           presupuestosRecentResult,
           alertasResult,
-          topClientesResult,
+          anuladasResult,
           activityResult,
           facturasResult,
           gastosFijosResult,
@@ -158,7 +181,7 @@ export default function DashboardPage() {
               .eq("sociedad_id", sociedadActiva!.id);
             return qAlertas;
           })(),
-          qTopClientes,
+          qAnuladas,
           (() => {
             let qActivity = (supabase as any)
               .from("activity_log")
@@ -168,8 +191,8 @@ export default function DashboardPage() {
               .eq("sociedad_id", sociedadActiva!.id);
             return qActivity;
           })(),
-          // Facturación mensual
-          qFacturasMensuales,
+          // Facturación (12 meses)
+          qFacturas,
           // Gastos fijos
           (() => {
             let qGastos = (supabase as any)
@@ -224,43 +247,37 @@ export default function DashboardPage() {
           setPresupuestosPorEstado(mapped);
         }
 
-        // --- Facturacion mensual ---
-        if (!facturasResult.error && facturasResult.data?.length) {
+        // --- Facturacion mensual y top clientes ---
+        // Mes tomado del texto de la fecha (sin corrimiento de zona horaria), NC en negativo, monedas separadas.
+        if (!facturasResult.error && !anuladasResult.error) {
+          const vigentes = filtrarParaGestion(facturasResult.data ?? [], (anuladasResult.data ?? []).map((r) => r.id));
           const monthNames = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-          const byMonth: Record<string, number> = {};
-          const ncTipos = new Set(["NCA", "NCB", "NCEA", "NCEB"]);
-          const signedTotal = (f: { total: number; tipo?: string | null }) => Number(f.total || 0) * (ncTipos.has(String(f.tipo || "").toUpperCase()) ? -1 : 1);
-          facturasResult.data.forEach((f: { fecha: string; total: number; moneda?: string | null; tipo?: string | null }) => {
-            const key = String(f.fecha || "").slice(0, 7);
-            if (!key || (f.moneda || "ARS") !== "ARS") return;
-            byMonth[key] = (byMonth[key] || 0) + signedTotal(f);
-          });
-          const sorted = Object.entries(byMonth)
-            .sort(([a], [b]) => a.localeCompare(b))
-            .slice(-6)
-            .map(([key, monto]) => ({
-              mes: monthNames[parseInt(key.split("-")[1]) - 1],
-              monto,
-            }));
-          setVentasPorMes(sorted);
-
-          const currentMonth = todayAR().slice(0, 7);
-          const [year, month] = currentMonth.split("-").map(Number);
-          const previousMonth = new Date(year, month - 2, 1).toISOString().slice(0, 7);
-          const totals = facturasResult.data.reduce((acc: { ARS: number; USD: number; anteriorARS: number }, f: { fecha: string; total: number; moneda?: string | null; tipo?: string | null }) => {
-            const key = String(f.fecha || "").slice(0, 7);
-            const currency = (f.moneda || "ARS") === "USD" ? "USD" : "ARS";
-            const amount = signedTotal(f);
-            if (key === currentMonth) acc[currency] += amount;
-            if (key === previousMonth && currency === "ARS") acc.anteriorARS += amount;
-            return acc;
-          }, { ARS: 0, USD: 0, anteriorARS: 0 });
+          const porMes = totalesMensuales(vigentes);
+          const currentMonth = periodoDeFecha(todayAR());
+          const previousMonth = sumarMeses(currentMonth, -1);
+          setVentasPorMes(Array.from({ length: 6 }, (_, i) => {
+            const key = sumarMeses(currentMonth, i - 5);
+            return { mes: monthNames[parseInt(key.split("-")[1]) - 1], monto: porMes[key]?.ARS || 0 };
+          }));
+          const totals = {
+            ARS: porMes[currentMonth]?.ARS || 0,
+            USD: porMes[currentMonth]?.USD || 0,
+            anteriorARS: porMes[previousMonth]?.ARS || 0,
+          };
           setFacturadoMonedas(totals);
           setKpi((current) => ({ ...current, facturadoMes: totals.ARS }));
-        } else if (!facturasResult.error) {
-          setVentasPorMes([]);
-          setFacturadoMonedas({ ARS: 0, USD: 0, anteriorARS: 0 });
-          setKpi((current) => ({ ...current, facturadoMes: 0 }));
+
+          const porCliente: Record<string, ClienteTop> = {};
+          vigentes.forEach((f: any) => {
+            const id = f.cliente_id || "?";
+            if (!porCliente[id]) porCliente[id] = { nombre: f.clientes?.razon_social || "N/A", ARS: 0, USD: 0, equivalente: 0 };
+            const monto = montoFirmado(f);
+            porCliente[id][normalizarMoneda(f.moneda)] += monto;
+            porCliente[id].equivalente += equivalenteARS(monto, f.moneda, f.tipo_cambio) ?? 0;
+          });
+          setTopClientes(Object.values(porCliente).sort((a, b) => b.equivalente - a.equivalente).slice(0, 5));
+        } else {
+          console.error("Error cargando facturas del dashboard:", facturasResult.error || anuladasResult.error);
         }
 
         // --- Ultimos presupuestos ---
@@ -277,17 +294,6 @@ export default function DashboardPage() {
             id: a.id, type: a.tipo, title: a.title, description: a.description,
             entityId: a.entity_id, module: a.module, read: a.read, createdAt: a.created_at,
           })));
-        }
-
-        // --- Top clientes ---
-        if (!topClientesResult.error) {
-          const totals: Record<string, { nombre: string; facturado: number }> = {};
-          (topClientesResult.data ?? []).forEach((f: any) => {
-            const id = f.cliente_id;
-            if (!totals[id]) totals[id] = { nombre: f.clientes?.razon_social || "N/A", facturado: 0 };
-            totals[id].facturado += Number(f.total);
-          });
-          setTopClientes(Object.values(totals).sort((a, b) => b.facturado - a.facturado).slice(0, 5));
         }
 
         // --- Actividad reciente ---
@@ -325,7 +331,7 @@ export default function DashboardPage() {
       }
     }
     fetchAll();
-  }, [sociedadActiva]);
+  }, [sociedadActiva?.id]);
 
   if (loading) {
     return (
@@ -680,19 +686,22 @@ export default function DashboardPage() {
           {/* Top clientes */}
           <Card>
             <CardHeader>
-              <CardTitle>Top clientes (facturado acumulado)</CardTitle>
+              <CardTitle>Top clientes</CardTitle>
+              <span className="text-xs text-zinc-400">Últimos 12 meses · neto de NC</span>
             </CardHeader>
             <div className="space-y-3">
               {topClientes.map((c, i) => {
-                const maxFacturado = topClientes[0]?.facturado || 1;
-                const pct = (c.facturado / maxFacturado) * 100;
+                const maxFacturado = topClientes[0]?.equivalente || 1;
+                const pct = Math.max(0, (c.equivalente / maxFacturado) * 100);
                 return (
                   <div key={c.nombre} className="flex items-center gap-3">
                     <span className="w-5 text-right text-xs font-bold text-zinc-400">{i + 1}</span>
                     <div className="flex-1">
                       <div className="flex items-center justify-between">
                         <span className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{c.nombre}</span>
-                        <span className="text-sm font-mono text-zinc-500">{formatCurrency(c.facturado)}</span>
+                        <span className="text-sm font-mono text-zinc-500">
+                          {[c.ARS ? formatCurrency(c.ARS) : "", c.USD ? formatCurrency(c.USD, "USD") : ""].filter(Boolean).join(" + ") || formatCurrency(0)}
+                        </span>
                       </div>
                       <div className="mt-1 h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800">
                         <div className="h-1.5 rounded-full bg-orange-500" style={{ width: `${pct}%` }} />

@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabase/client";
 import { parseVariant, tallesCompatibles } from "@/lib/purchase-matching";
 import { aprenderNombreFantasiaDeFactura } from "@/lib/nombre-fantasia";
 import { useToast } from "@/components/ui/toast";
+import { duplicadosComprobanteCompra } from "@/lib/saldo-factura-compra";
 
 // ── Types ────────────────────────────────────────────────
 export interface OCParaVincular {
@@ -803,21 +804,21 @@ export default function CargarFacturaOC({
     let generateExtrasOC = createExtrasOC;
 
     try {
-      // Evitar duplicar una factura del mismo proveedor y número dentro de la
-      // sociedad antes de insertar y generar saldos/pagos duplicados.
+      // Aviso de duplicado: mismo proveedor, número y TIPO de comprobante (una NC 0001-00000045
+      // no repite a la FC 0001-00000045). Las anuladas no cuentan. Avisa, no traba.
       const normalizedNumero = numeroFactura.trim();
       let duplicateFactura: any[] = [];
       for (let offset = 0; ; offset += 500) {
         const { data: providerFacturas, error: duplicateError } = await (supabase as any)
-          .from("facturas_compra").select("id, numero_factura, estado")
+          .from("facturas_compra").select("id, numero_factura, tipo_comprobante, estado")
           .eq("sociedad_id", sociedadId).eq("proveedor_id", proveedorId)
           .order("id").range(offset, offset + 499);
         if (duplicateError) throw new Error(`No se pudo validar duplicados: ${duplicateError.message}`);
-        duplicateFactura = (providerFacturas || []).filter((invoice: any) => canonicalPurchaseInvoiceNumber(invoice.numero_factura || "") === canonicalPurchaseInvoiceNumber(normalizedNumero));
+        duplicateFactura = duplicadosComprobanteCompra(providerFacturas || [], { numero_factura: normalizedNumero, tipo_comprobante: tipoComprobante }, canonicalPurchaseInvoiceNumber);
         if (duplicateFactura.length || (providerFacturas || []).length < 500) break;
       }
-      if (duplicateFactura?.length) {
-        throw new Error(`La factura ${normalizedNumero} de este proveedor ya está cargada (estado ${duplicateFactura[0].estado || "registrada"}). Revisá antes de continuar.`);
+      if (duplicateFactura.length && !window.confirm(`La ${tipoComprobante} ${normalizedNumero} de este proveedor ya está cargada (estado ${duplicateFactura[0].estado || "registrada"}).\n\n¿Cargarla igual?`)) {
+        return;
       }
 
       let alignmentResult: Awaited<ReturnType<typeof validateOCAlignmentLive>> | null = null;

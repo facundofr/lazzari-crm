@@ -437,7 +437,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           "Conciliada por línea contra OC" + (iaInfo ? ` · ${iaInfo}` : ""),
           extras.length ? `Fuera de OC: ${extras.join("; ")}` : "",
         ].filter(Boolean).join("\n");
-        const { data, error: rpcError } = await db.rpc("guardar_conciliacion_compra", {
+        const guardarFactura = (confirmar: boolean) => db.rpc("guardar_conciliacion_compra", {
           p_sociedad_id: sociedadId,
           p_factura_id: f.dbId,
           p_factura: {
@@ -453,8 +453,18 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           p_borrador: borrador,
           p_aceptar_costos: aceptarCostos,
           p_equivalencias: eqs,
+          p_confirmar: confirmar,
         });
+        let { data, error: rpcError } = await guardarFactura(false);
         if (rpcError) throw new Error(`Factura ${f.numero}: ${rpcError.message}`);
+        // Facturado de más contra la OC: es un aviso, nunca traba. Sin confirmar no se guardó nada.
+        if (data?.requiere_confirmacion) {
+          if (!window.confirm(`Factura ${f.numero}: ${data.aviso || "hay líneas de OC que quedarían facturadas de más."}\n\n¿Guardar igual?`)) {
+            throw new Error(`Factura ${f.numero}: no se guardó (quedaba facturado de más contra la OC). Revisá la asignación.`);
+          }
+          ({ data, error: rpcError } = await guardarFactura(true));
+          if (rpcError) throw new Error(`Factura ${f.numero}: ${rpcError.message}`);
+        }
         const facturaId = data?.factura_compra_id as string;
         guardadas.push(f.numero);
         prActualizados += Number(data?.presupuestos_items_actualizados) || 0;

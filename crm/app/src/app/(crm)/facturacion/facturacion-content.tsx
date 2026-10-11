@@ -21,6 +21,10 @@ import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { buildOrdenPagoPlan, comprobanteKey, type OpParsed } from "@/lib/orden-pago-plan";
 import { creditNoteTotals, creditNoteTypeForInvoice, freeAmountCreditItem, isInvoiceA, type SalesCreditNoteMode } from "@/lib/sales-credit-note";
 import { supabase } from "@/lib/supabase/client";
+import { precioUnitarioParaFactura } from "@/lib/precio-factura";
+import { traerTodo } from "@/lib/paginar";
+import { esNotaCredito, elegirFacturaDeOrdenPago, totalVentasNeto } from "@/lib/ventas-documentos";
+import { traerDatosSaldoClientes, calcularSaldosClientes, cobradoPorFactura as cobradoPorFacturaVenta, saldoClienteEn, type SaldoCliente } from "@/lib/saldo-clientes";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { mockFacturas } from "@/lib/mock-data";
 import {
@@ -165,6 +169,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   }, [sociedadActiva]);
   const [facturas, setFacturas] = useState<FacturaRow[]>([]);
   const [cobradoPorFactura, setCobradoPorFactura] = useState<Record<string,number> | null>(null);
+  // Saldo real por cliente (B3): la columna clientes.saldo_cuenta_corriente no la actualiza nadie.
+  const saldosClientesRef = useRef<Record<string, SaldoCliente> | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailFactura, setDetailFactura] = useState<FacturaRow | null>(null);
   const [fceRegistry, setFceRegistry] = useState<{ key: string; loading?: boolean; error?: string; estado?: string; historial?: { estado: string; fechaHora?: string }[]; checkedAt?: string }>({ key: "" });
@@ -240,6 +246,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     tipo_cambio: number | null; cotizacion_modalidad: "divisas" | "billetes" | null;
     total: number; cliente_id: string; clienteNombre: string; condicion_iva: string | null;
     tipo_comprobante: string | null; items: EmitItem[]; selected: boolean;
+    /** PR manual: guarda precio final (con IVA). PR electrónico: guarda precio neto. */
+    sourceIsManual: boolean;
   };
   type FacturacionMasivaResultado = { id: string; numero: string; ok: boolean; comprobante?: string; error?: string };
   const [fmOpen, setFmOpen] = useState(false);
@@ -365,6 +373,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [ncStep, setNcStep] = useState<"form" | "saving" | "success" | "error">("form");
   const [ncResult, setNcResult] = useState<string>("");
   const [ncSuccessWarning, setNcSuccessWarning] = useState("");
+  const ncRequestKeyRef = useRef("");
   const [detailNCs, setDetailNCs] = useState<FacturaRow[]>([]);
   const [detailSolicitante, setDetailSolicitante] = useState<string | null>(null);
 
@@ -412,6 +421,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     setNcStep("form");
     setNcResult("");
     setNcSuccessWarning("");
+    ncRequestKeyRef.current = crypto.randomUUID();
     setNcOpen(true);
   }
 
@@ -466,60 +476,38 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         setNcResult(data.factura.comprobante + (data.factura.cae ? ` — CAE: ${data.factura.cae}` : ""));
         setNcSuccessWarning(data.warning || "");
       } else {
-        // Manual sin ARCA
-        const { data: newNc, error: ncErr } = await (supabase as any)
-          .from("facturas")
-          .insert({
-            tipo: ncTipo,
-            punto_venta: emisorData.ptoVta,
-            numero: Number(ncNumero),
-            cliente_id: ncFactura.cliente_id,
-            fecha: ncFecha,
-            cae: null,
-            cae_vencimiento: null,
-            subtotal: ncTotals.neto,
-            iva: ncTotals.iva,
-            total: ncTotals.total,
-            moneda: ncFactura.moneda || "ARS",
-            tipo_cambio: ncFactura.tipo_cambio || null,
-            estado: "emitida",
-            sociedad_id: sociedadActiva?.id || null,
-            factura_origen_id: ncFactura.id,
-            observaciones: `Comprobante asociado: ${formatComprobante(ncFactura.tipo, ncFactura.punto_venta, ncFactura.numero)}`,
-            created_by: profile?.id || null,
-          })
-          .select("id")
-          .single();
-
-        if (ncErr) throw new Error(ncErr.message);
-
-        if (newNc) {
-          const itemRows = ncItemsParaEmitir.map((it, idx) => {
-            return { factura_id: newNc.id, descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: it.precio_unitario, iva_porcentaje: isFacturaANc ? it.iva_porcentaje : 21, orden: idx };
-          });
-          const { error: ncItemsErr } = await (supabase as any).from("factura_items").insert(itemRows);
-          if (ncItemsErr) throw new Error("Error al guardar items NC: " + ncItemsErr.message);
+        // Manual sin ARCA: una sola llamada atómica e idempotente (A8).
+        // Si la NC supera el saldo pendiente, la base avisa y se pide confirmación (nunca bloquea).
+        if (!sociedadActiva?.id) throw new Error("No se pudo determinar la sociedad activa");
+        if (!ncRequestKeyRef.current) ncRequestKeyRef.current = crypto.randomUUID();
+        const ncManualParams = {
+          p_request_key: ncRequestKeyRef.current,
+          p_sociedad_id: sociedadActiva.id,
+          p_factura_origen_id: ncFactura.id,
+          p_tipo: ncTipo,
+          p_punto_venta: emisorData.ptoVta,
+          p_numero: Number(ncNumero),
+          p_fecha: ncFecha,
+          p_subtotal: ncTotals.neto,
+          p_iva: ncTotals.iva,
+          p_total: ncTotals.total,
+          p_items: ncItemsParaEmitir.map((it, idx) => ({ descripcion: it.descripcion, cantidad: it.cantidad, precio_unitario: it.precio_unitario, iva_porcentaje: isFacturaANc ? it.iva_porcentaje : 21, orden: idx })),
+          p_modo: ncMode,
+          p_observaciones: `Comprobante asociado: ${formatComprobante(ncFactura.tipo, ncFactura.punto_venta, ncFactura.numero)}`,
+        };
+        let { data: ncRpc, error: ncRpcErr } = await (supabase as any).rpc("crear_nota_credito_manual_venta", { ...ncManualParams, p_confirmar: false });
+        if (ncRpcErr) throw new Error(ncRpcErr.message);
+        if (ncRpc?.requires_confirmation) {
+          const seguir = window.confirm(`${ncRpc.warning || "La NC supera el saldo pendiente de la factura."}\n\n¿Querés registrarla igual?`);
+          if (!seguir) { setNcStep("form"); return; }
+          ({ data: ncRpc, error: ncRpcErr } = await (supabase as any).rpc("crear_nota_credito_manual_venta", { ...ncManualParams, p_confirmar: true }));
+          if (ncRpcErr) throw new Error(ncRpcErr.message);
         }
-
-        const newAcreditadoManual = (Number(ncFactura.total_acreditado) || 0) + ncTotals.total;
-        const ncCobreTotalManual = newAcreditadoManual >= Number(ncFactura.total) - 0.01;
-        let acredQuery = (supabase as any).from("facturas").update({
-          total_acreditado: newAcreditadoManual,
-          ...(ncCobreTotalManual ? { estado: "anulada" } : {}),
-        }).eq("id", ncFactura.id);
-        if (sociedadActiva?.id) acredQuery = acredQuery.eq("sociedad_id", sociedadActiva.id);
-        const { error: acredErr } = await acredQuery;
-        if (acredErr) throw new Error("Error al actualizar total_acreditado: " + acredErr.message);
-
-        // Si la NC cubre el total, permitir re-facturar el PR
-        if (ncCobreTotalManual && ncFactura.presupuesto_id) {
-          let prQuery = supabase.from("presupuestos").update({ estado: "facturar" } as any).eq("id", ncFactura.presupuesto_id);
-          if (sociedadActiva?.id) prQuery = prQuery.eq("sociedad_id" as any, sociedadActiva.id);
-          await prQuery;
-        }
+        if (!ncRpc?.ok) throw new Error("No se pudo registrar la nota de crédito.");
+        ncRequestKeyRef.current = "";
 
         setNcResult(formatComprobante(ncTipo, emisorData.ptoVta, Number(ncNumero)) + " (manual)");
-        setNcSuccessWarning(ncExcedeSaldo ? "La NC supera el saldo pendiente; revisá el saldo a favor del cliente en su cuenta corriente." : "");
+        setNcSuccessWarning(ncRpc?.warning || (ncExcedeSaldo ? "La NC supera el saldo pendiente; revisá el saldo a favor del cliente en su cuenta corriente." : ""));
       }
 
       setNcStep("success");
@@ -579,20 +567,35 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const fetchData = useCallback(async () => {
     setCobradoPorFactura(null);
     try {
-      let query = supabase
-        .from("facturas")
-        .select(`*, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia, dias_cuenta_corriente, limite_credito, saldo_cuenta_corriente), presupuestos:presupuesto_id(numero, cotizacion_modalidad, oc_cliente_fecha)`)
-        .order("created_at", { ascending: false });
+      // B4: Supabase corta en 1000 filas; se traen todas de a páginas con orden estable.
+      const armarQuery = () => {
+        let query = supabase
+          .from("facturas")
+          .select(`*, clientes(razon_social, cuit, condicion_iva, email, email_facturacion, telefono, direccion, localidad, provincia, dias_cuenta_corriente, limite_credito, saldo_cuenta_corriente), presupuestos:presupuesto_id(numero, cotizacion_modalidad, oc_cliente_fecha)`)
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: true });
+        if (sociedadActiva?.id) {
+          query = query.eq("sociedad_id" as any, sociedadActiva.id);
+        }
+        return query;
+      };
 
-      if (sociedadActiva?.id) {
-        query = query.eq("sociedad_id" as any, sociedadActiva.id);
-      }
-
-      const { data, error } = await query;
+      let data: unknown[] | null = null;
+      let error: unknown = null;
+      try { data = await traerTodo(armarQuery); } catch (e) { error = e; }
 
       if (!error && data) {
-        try {setCobradoPorFactura(await fetchCobradoMap((data as unknown as FacturaRow[]).map(f=>({id:f.id,moneda:f.moneda||"ARS"}))))}
-        catch {setCobradoPorFactura(null);}
+        // Cobrado por factura y saldo real de cada cliente (B3), con una sola lectura paginada.
+        let saldosCli: Record<string, SaldoCliente> | null = null;
+        try {
+          if (!sociedadActiva?.id) throw new Error("sin sociedad");
+          const datosSaldo = await traerDatosSaldoClientes(supabase, sociedadActiva.id, traerTodo);
+          setCobradoPorFactura(cobradoPorFacturaVenta(datosSaldo.facturas, datosSaldo.movimientos, datosSaldo.aplicaciones));
+          saldosCli = calcularSaldosClientes(datosSaldo.facturas, datosSaldo.movimientos, datosSaldo.aplicaciones);
+        } catch { setCobradoPorFactura(null); }
+        saldosClientesRef.current = saldosCli;
+        // El aviso de límite usa el saldo real en pesos (si no se pudo calcular, no se muestra).
+        const saldoRealCli = (id: string | null | undefined) => (saldosCli ? saldoClienteEn(saldosCli, id, "ARS") : null);
         const hoy = new Date().toISOString().slice(0, 10);
         setFacturas((data as unknown as FacturaRow[]).map(f => {
           const fv = f.fecha_vencimiento || (f.clientes?.dias_cuenta_corriente && f.fecha
@@ -604,7 +607,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             if (fv && fv < hoy) estado = "vencida";
             else estado = "pendiente";
           }
-          return { ...f, estado, cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null, oc_cliente_fecha: f.oc_cliente_fecha || (f as any).presupuestos?.oc_cliente_fecha || null, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "", _prNumero: (f as any).presupuestos?.numero || "" };
+          return { ...f, clientes: f.clientes ? { ...f.clientes, saldo_cuenta_corriente: saldoRealCli(f.cliente_id) } : f.clientes, estado, cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null, oc_cliente_fecha: f.oc_cliente_fecha || (f as any).presupuestos?.oc_cliente_fecha || null, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "", _prNumero: (f as any).presupuestos?.numero || "" };
         }));
       } else if (error) {
         setFacturas(mockFacturas.map((f) => ({
@@ -704,7 +707,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     // Fetch clientes
     const q = supabase.from("clientes").select("id, razon_social, cuit, condicion_iva, limite_credito, saldo_cuenta_corriente").eq("activo", true).order("razon_social");
     (sociedadActiva?.id ? q.eq("sociedad_id" as any, sociedadActiva.id) : q)
-      .then(({ data }) => { if (data) setClientes(data as ClienteOption[]); });
+      .then(({ data }) => { if (data) setClientes((data as ClienteOption[]).map(c => ({ ...c, saldo_cuenta_corriente: saldosClientesRef.current ? saldoClienteEn(saldosClientesRef.current, c.id, "ARS") : null }))); });
     // Auto-fill next correlative number
     (async () => {
       try {
@@ -742,7 +745,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     try {
       const { data: rows, error } = await (supabase as any)
         .from("presupuestos")
-        .select("id, numero, fecha, moneda, tipo_cambio, tipo_cambio_divisas, cotizacion_modalidad, total, cliente_id, tipo_comprobante, estado, clientes(razon_social, condicion_iva), presupuesto_items(codigo, descripcion, cantidad, precio_venta, iva_porcentaje, orden)")
+        .select("id, numero, fecha, moneda, tipo_cambio, tipo_cambio_divisas, cotizacion_modalidad, total, cliente_id, tipo_comprobante, estado, modalidad_emision, clientes(razon_social, condicion_iva), presupuesto_items(codigo, descripcion, cantidad, precio_venta, iva_porcentaje, total, orden)")
         .eq("sociedad_id", sociedadActiva.id)
         .eq("cliente_id", clienteId)
         .in("estado", ["facturar", "aprobado"])
@@ -773,12 +776,22 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         clienteNombre: r.clientes?.razon_social || "",
         condicion_iva: r.clientes?.condicion_iva || null,
         tipo_comprobante: r.tipo_comprobante || null,
-        items: (r.presupuesto_items || []).sort((a: any, b: any) => Number(a.orden || 0) - Number(b.orden || 0)).map((it: any) => ({
-          descripcion: it.descripcion || it.codigo || "Item",
-          cantidad: Number(it.cantidad || 0),
-          precio_unitario: Number(it.precio_venta || 0),
-          iva_porcentaje: Number(it.iva_porcentaje ?? 21),
-        })),
+        // precio_unitario queda como lo guarda el PR (neto si es electrónico, final si es manual).
+        // Se convierte al emitir, cuando ya se sabe si va FA o FB (ver precioUnitarioParaFactura).
+        items: (r.presupuesto_items || []).sort((a: any, b: any) => Number(a.orden || 0) - Number(b.orden || 0)).map((it: any) => {
+          const iva = Number(it.iva_porcentaje ?? 21);
+          const cantidad = Number(it.cantidad || 0);
+          const precio = it.precio_venta != null
+            ? Number(it.precio_venta || 0)
+            : (it.total ? Number(it.total) / (cantidad || 1) / (1 + iva / 100) : 0);
+          return {
+            descripcion: it.descripcion || it.codigo || "Item",
+            cantidad,
+            precio_unitario: precio,
+            iva_porcentaje: iva,
+          };
+        }),
+        sourceIsManual: r.modalidad_emision === "manual",
         selected: true,
       })) as FacturacionMasivaPR[];
       setFmPRs(disponibles);
@@ -802,6 +815,13 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     for (const pr of seleccionados) {
       const esRI = (pr.condicion_iva || "").toUpperCase() === "RI" || (pr.condicion_iva || "").toUpperCase() === "RESPONSABLE INSCRIPTO";
       const tipo = ["FA", "FB"].includes(pr.tipo_comprobante || "") ? pr.tipo_comprobante! : (esRI ? "FA" : "FB");
+      // A1: la FB se manda con precio final (IVA incluido) y la FA con neto, igual que Ventas.
+      // PENDIENTE DE VERIFICAR EN PRODUCCIÓN con una factura controlada (FB y FA chicas)
+      // antes de volver a usar la facturación masiva: en local no se puede probar ARCA.
+      const itemsFactura: EmitItem[] = pr.items.map(it => ({
+        ...it,
+        precio_unitario: precioUnitarioParaFactura({ tipo, sourceIsManual: pr.sourceIsManual, precioNeto: it.precio_unitario, ivaPorcentaje: it.iva_porcentaje }),
+      }));
       try {
         let automaticRate: number | null = null;
         if (pr.moneda === "USD") {
@@ -817,7 +837,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             tipo, cliente_id: pr.cliente_id, punto_venta: emisorData.ptoVta,
             moneda: pr.moneda, tipo_cambio: automaticRate,
             cotizacion_modalidad: pr.moneda === "USD" ? (pr.cotizacion_modalidad || "divisas") : null,
-            fecha: fmFecha, items: pr.items, presupuesto_id: pr.id, sociedad_id: sociedadActiva.id,
+            fecha: fmFecha, items: itemsFactura, presupuesto_id: pr.id, sociedad_id: sociedadActiva.id,
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -1075,8 +1095,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     if (!sociedadActiva?.id || !clienteId) { alert("No se pudo identificar el cliente o la sociedad."); return; }
     const claves = (parsed.facturas_pagadas || [])
       .filter(f => !String(f.tipo || "").toUpperCase().startsWith("NC"))
-      .map(f => ({ clave: comprobanteKey(f.punto_venta, f.numero, f.comprobante), texto: f.comprobante || `${f.punto_venta}-${f.numero}` }))
-      .filter((c): c is { clave: string; texto: string } => !!c.clave);
+      .map(f => ({ clave: comprobanteKey(f.punto_venta, f.numero, f.comprobante), texto: f.comprobante || `${f.punto_venta}-${f.numero}`, tipo: f.tipo || null, comprobante: f.comprobante || null }))
+      .filter((c): c is { clave: string; texto: string; tipo: string | null; comprobante: string | null } => !!c.clave);
     if (!claves.length) { alert("La IA no encontró el detalle de facturas en la orden de pago."); return; }
     try {
       const numeros = Array.from(new Set(claves.map(c => Number(c.clave.split("-")[1]))));
@@ -1084,13 +1104,14 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         .select("id, numero, tipo, punto_venta, fecha, subtotal, iva, total, total_acreditado, moneda, tipo_cambio, estado, cliente_id, clientes(razon_social)")
         .eq("sociedad_id", sociedadActiva.id).eq("cliente_id", clienteId).in("numero", numeros);
       if (error) throw error;
-      const filas = ((data || []) as any[]).filter(f => f.estado !== "anulada" && claves.some(c => c.clave === `${Number(f.punto_venta)}-${Number(f.numero)}`));
+      // Solo facturas: una NC puede tener el mismo punto de venta y número que la factura.
+      const filas = ((data || []) as any[]).filter(f => f.estado !== "anulada" && !esNotaCredito(f.tipo) && claves.some(c => c.clave === `${Number(f.punto_venta)}-${Number(f.numero)}`));
       const cobrado = await fetchCobradoMap(filas.map(f => ({ id: f.id, moneda: f.moneda || "ARS" })));
       const ars: LiquidacionFactura[] = [];
       const usd: {id:string;numero:string;saldo:number;total:number;subtotal?:number;cotizacion?:number}[] = [];
       const avisos: string[] = [];
       for (const c of claves) {
-        const f = filas.find(x => `${Number(x.punto_venta)}-${Number(x.numero)}` === c.clave);
+        const f = elegirFacturaDeOrdenPago(filas.filter(x => `${Number(x.punto_venta)}-${Number(x.numero)}` === c.clave), c.tipo, c.comprobante);
         if (!f) { avisos.push(`${c.texto}: no está en el sistema para este cliente (o está anulada). Revisala.`); continue; }
         const numero = formatComprobante(f.tipo, f.punto_venta, f.numero);
         const saldo = Math.round((Number(f.total) - Number(f.total_acreditado || 0) - (cobrado[f.id] || 0)) * 100) / 100;
@@ -1221,14 +1242,24 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     const documents=Array.isArray(input)?input:[input];
     if(!documents.length)return {};
     const ids=documents.map(f=>f.id);
-    const [direct,applications]=await Promise.all([
-      (supabase as any).from("movimientos").select("factura_id,monto,moneda,anulado").in("factura_id",ids).eq("sociedad_id",sociedadActiva.id),
-      (supabase as any).from("cobro_aplicaciones").select("factura_id,monto,movimientos!inner(anulado,sociedad_id)").in("factura_id",ids).eq("movimientos.sociedad_id",sociedadActiva.id),
-    ]);
-    if(direct.error||applications.error)throw new Error("No se pudieron verificar los cobros previos; no se habilitó el cobro. Reintentá la consulta.");
+    // B4: de a tandas de ids (URL corta) y paginado (más de 1000 cobros).
+    const sociedadId=sociedadActiva.id;
+    const direct={data:[] as any[]}, applications={data:[] as any[]};
+    try{
+      for(let i=0;i<ids.length;i+=150){
+        const lote=ids.slice(i,i+150);
+        const [d,a]=await Promise.all([
+          traerTodo(()=>(supabase as any).from("movimientos").select("id,factura_id,monto,moneda,anulado").in("factura_id",lote).eq("sociedad_id",sociedadId).order("id")),
+          traerTodo(()=>(supabase as any).from("cobro_aplicaciones").select("movimiento_id,factura_id,monto,movimientos!inner(anulado,sociedad_id)").in("factura_id",lote).eq("movimientos.sociedad_id",sociedadId).order("movimiento_id").order("factura_id")),
+        ]);
+        direct.data.push(...d); applications.data.push(...a);
+      }
+    }catch{throw new Error("No se pudieron verificar los cobros previos; no se habilitó el cobro. Reintentá la consulta.");}
     const totals:Record<string,number>={};
+    // Un cobro con aplicaciones ya se cuenta por ellas: no se suma también como directo (igual que Finanzas y lib/saldo-clientes).
+    const movimientosAplicados=new Set<string>((applications.data||[]).map((a:any)=>a.movimiento_id).filter(Boolean));
     for(const m of direct.data||[]){
-      if(m.anulado)continue;
+      if(m.anulado||movimientosAplicados.has(m.id))continue;
       const doc=documents.find(f=>f.id===m.factura_id);
       if(!doc || (m.moneda||"ARS")!==doc.moneda)throw new Error("Hay un cobro previo en otra moneda sin aplicación conciliada. Revisalo antes de continuar.");
       if(!Number.isFinite(Number(m.monto)))throw new Error("Un cobro previo tiene un importe inválido.");
@@ -1611,7 +1642,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear && f.estado !== "anulada";
   });
   const ncTipos = ["NCA", "NCB", "NCEA", "NCEB"];
-  const facturadoMesMoneda = (moneda:string)=>facturasEsteMes.filter(f=>f.moneda===moneda).reduce((a, f) => a + (ncTipos.includes(f.tipo) ? -Number(f.total) : Number(f.total)), 0);
+  // B7: una NC cuya factura quedó anulada no se resta otra vez (la factura ya no suma).
+  const estadoFacturaPorId = new Map(facturas.map(f => [f.id, f.estado] as [string, string]));
+  const facturadoMesMoneda = (moneda:string)=>totalVentasNeto(facturasEsteMes.filter(f=>f.moneda===moneda), id => estadoFacturaPorId.get(id));
   const saldoFactura = (f:FacturaRow)=>["pagada","anulada"].includes(f.estado)?0:Math.max(0,Number(f.total)-Number(f.total_acreditado||0)-(cobradoPorFactura?.[f.id]||0));
   const pendientesMoneda = (moneda:string)=>facturas.filter(f => f.moneda===moneda && ["pendiente", "parcial", "vencida"].includes(f.estado) && !ncTipos.includes(f.tipo)).reduce((a, f) => a + saldoFactura(f), 0);
   const facturasVencidas = facturas.filter(f => f.estado === "vencida").length;

@@ -192,6 +192,7 @@ Orden sugerido:
 **Decisiones de Augusto**
 - **Se hace al toque.** Lo borrado va a la Papelera, y cualquiera que borró algo por error lo puede restablecer. Si Augusto rechaza, se deshace.
 - Cuando lo hace Augusto: va directo, pide el motivo igual (queda registrado) y no pasa por revisión.
+- Avisa al que se equivocó y a Augusto (y a Mariana cuando vuelva).
 - Acciones graves:
   - eliminar una OC con factura;
   - mover una factura a otra OC;
@@ -239,6 +240,20 @@ Orden sugerido:
    - presupuestos abiertos afectados.
 7. El chat de listas y el Drive quedan de respaldo y se retiran cuando todo ande bien.
 - Toda la empresa usa la misma lista: Cotización express, presupuestos, la app de José (idea 4) y el asistente de la web (idea 5).
+
+**Respuestas de Augusto (10/10/2026)**
+- Las listas las pueden cargar **todos**, siempre que quede un **historial de carga**: quién, cuándo, qué cambió.
+- Los márgenes para el precio sugerido de venta hoy se manejan **por marca/rubro**.
+- En la web los precios **no incluyen IVA**.
+- La fuente de las reglas es `G:\Unidades compartidas\02 - LAZZARI\CRM - COSTO VENTA\Base_de_Costos_Lazzari_Oct2026.xlsx` (no modificarlo):
+  - **Hoja "Reglas":**
+    - tabla 1: por proveedor, moneda, vigencia, Desc. 1/2, opcional, otro, cómo se calcula el COSTO, condiciones;
+    - tabla 2: criterio general;
+    - tabla 3: cómo leer las hojas;
+    - tabla 4: márgenes por rubro/marca (General 40 %, 3M 35 %, Aire Libre 38 %, Funcional/Voran 30 %, etc.) y el redondeo: pesos hacia arriba a $100 ($10 si es menos de $1.000), dólares al centavo.
+  - **"Observaciones":** compara proveedores para el mismo producto (ARS, y 3M Segufer vs Segutécnica).
+  - **Hojas por proveedor:** columnas de opcionales (Antic., Contado, Al día, Por cantidad, 12+, +10M, Excep.), Control "Verificar", Estado "PEDIR ACTUALIZACIÓN" (Prisina).
+  - Regla clave: **los opcionales y los descuentos por volumen NO entran en el COSTO**; son margen extra de cada operación.
 
 **Preguntas abiertas**
 - Link y tipo de app de COSTOS LAZZARI (¿AppSheet, Glide, otra?). ¿Dónde están las fotos?
