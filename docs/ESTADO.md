@@ -35,20 +35,23 @@ ventas, precio de factura, reportes y NC: todos OK.
   3. `20261011120000_compras_correcciones.sql`
   Se corren en ese orden en el SQL Editor de Supabase **antes** de publicar el código.
 
-## 3. A medias: "Finish Finanzas fixes"
+- **"Finish Finanzas fixes" terminado** (11/10/2026, en `finanzas/page.tsx`, también dentro de V1.1.413):
+  - **A3:** anular una NC de compra usa `anular_nota_credito_compra_v2`.
+  - **A7:** anular una factura de compra usa `anular_factura_compra()` (pide motivo opcional y muestra los avisos de pagos).
+    "Eliminar" factura: si tiene pagos o NC aplicadas, recomienda anular; si Augusto insiste, elimina igual (avisa, no frena).
+  - **B10:** el alta de gasto manual guarda `gasto_manual_id` en su pago; editar el gasto actualiza el pago (vía `gestionar_cobro`);
+    eliminar el gasto anula su pago (queda el registro).
+  - ⚠️ Necesita la migración `20261011100000_finanzas_correcciones.sql` corrida **antes** de publicar (si no, anular facturas y crear gastos dan error).
+  - Chequeos: tipos 0 errores, hooks OK, tests de saldos, pago directo, anulación OP y edición FC OK.
+    Fallan 6 tests de texto viejos (`financial-ledger-ui`, `op-echeqs`, `op-money-rounding`, `op-validation`,
+    `pr-pagination-and-op-duplicates`, `purchase-credit-note`): **ya fallaban antes** de este cambio; quedan para revisar.
+  - No se probó en local: las funciones nuevas no existen en la base hasta correr la migración, y probar anulaciones implica guardar.
 
-Se cortó por el límite de uso. Lo que falta conectar en `crm/app/src/app/(crm)/finanzas/page.tsx`:
-
-- **A3:** `handleAnularFC` sigue llamando a `anular_nota_credito_compra` (la vieja). Tiene que usar la v2.
-- **A7:** `handleAnularFC` anula la factura de compra con un `update` directo. La migración ya trae `anular_factura_compra()`
-  (anula sin borrar, avisa si tenía pagos y libera la OC), pero la pantalla todavía no la usa. Revisar también "Eliminar" factura de compra.
-- **B10:** la columna `movimientos.gasto_manual_id` está en la migración; confirmar que el alta y la edición de gastos manuales la completen.
-- Después: correr `npx tsc --noEmit`, `node scripts/check-hooks.mjs` y los tests de saldos, y probar en local **sin guardar**.
-
-El `git stash` "correcciones financieras a medias" es una copia **vieja** de este mismo trabajo (ya está todo en el commit). No usarlo.
+El `git stash` "correcciones financieras a medias" es una copia **vieja** de este trabajo. No usarlo.
 
 ## 4. Pendiente (próximas tandas)
 
+0. **Tests viejos que fallan** (ver punto 2): actualizarlos a cómo quedó el código.
 1. **A5 Retención RG 830:** mínimo y escala por concepto (bienes, servicios, honorarios), unificar 224.000 vs 400.000 y no "congelar" en el Plan de pagos. Comparar con el archivo de Netegia que va a pasar Augusto y confirmar montos con el contador.
 2. **Diagnóstico sin tocar:** D1 (cron cotización BNA, revisar lo que quedó), D4 (saldo inicial de caja automático), D5 (cuentas bancarias), D6 (errores sin revisar en Plan de pagos y Finanzas), sección E.
 3. **Cheque vs echeq:** unificar en "Cheque" Físico / Electrónico en todas las pantallas y reglas claras para la IA. Falta un ejemplo de Augusto.

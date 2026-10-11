@@ -20,6 +20,7 @@ Toda consulta que lee o escribe datos filtra por `sociedad_id` (`sociedadActiva`
 
 - **Augusto** (dueño) maneja el sistema. **No es programador.** Manu, el desarrollador anterior, ya no trabaja en el proyecto.
 - Hablale en **español rioplatense**, corto y claro. Cuando tenga que hacer algo, dale **pasos literales, uno por uno** (qué abrir, qué pegar, qué apretar).
+- Guialo siempre vos, **de a un paso por vez**. Si algo es riesgoso, avisale con ⚠️, explicale el riesgo en palabras simples, dale tu recomendación y **esperá su OK**.
 - Trabaja en **Windows**. Repositorio: `C:\Users\lazza\lazzari`, app en `crm\app`. En PowerShell se usa `npx.cmd` y `vercel.cmd`.
 - Los cambios van **directo a producción**, en **tandas**. **No le pases los comandos para publicar hasta que él lo pida**: se acumulan los cambios y él carga todo junto.
 - Cuando algo haya que hacerlo en otro chat, **pasale directamente el prompt** listo para pegar.

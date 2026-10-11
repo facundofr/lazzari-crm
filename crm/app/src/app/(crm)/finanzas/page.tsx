@@ -2553,11 +2553,32 @@ export default function FinanzasPage() {
         if (sociedadActiva?.id) gmUpdate = gmUpdate.eq("sociedad_id", sociedadActiva.id);
         const { error } = await gmUpdate;
         if (error) throw error;
+
+        // B10: el pago atado al gasto acompaña los cambios (non-fatal — gasto ya guardado)
+        try {
+          const { data: pagosAtados, error: pagosErr } = await (supabase as any).from("movimientos")
+            .select("id").eq("gasto_manual_id", gmEditingId).eq("sociedad_id", sociedadActiva.id).eq("anulado", false);
+          if (pagosErr) throw pagosErr;
+          const provNombre = gmForm.proveedor_id ? proveedoresOptions.find(p => p.id === gmForm.proveedor_id)?.razon_social : null;
+          for (const pago of (pagosAtados || []) as { id: string }[]) {
+            const { error: editErr } = await (supabase as any).rpc("gestionar_cobro", {
+              p_movimiento_id: pago.id,
+              p_accion: "editar",
+              p_descripcion: `Gasto — ${gmForm.categoria} — ${gmForm.descripcion}${provNombre ? ` (${provNombre})` : ""}`,
+              p_monto: gmForm.monto,
+              p_moneda: gmForm.moneda,
+              p_fecha: gmForm.fecha,
+            });
+            if (editErr) throw editErr;
+          }
+        } catch (movErr: any) {
+          alert("Gasto actualizado, pero no se pudo actualizar su pago en Movimientos: " + (movErr?.message || String(movErr)));
+        }
       } else {
         // Insert new gasto
         payload.sociedad_id = sociedadActiva.id;
         if (profile?.id) payload.created_by = profile.id;
-        const { error } = await (supabase as any).from("gastos_manuales").insert(payload);
+        const { data: gmNuevo, error } = await (supabase as any).from("gastos_manuales").insert(payload).select("id").single();
         if (error) throw error;
 
         // Also create a movimiento for new gastos (non-fatal — gasto already saved)
@@ -2570,6 +2591,7 @@ export default function FinanzasPage() {
             moneda: gmForm.moneda,
             fecha: gmForm.fecha,
             conciliado: false,
+            gasto_manual_id: gmNuevo?.id ?? null,
           };
           if (gmForm.proveedor_id) (movData as any).proveedor_id = gmForm.proveedor_id;
           if (sociedadActiva?.id) (movData as any).sociedad_id = sociedadActiva.id;
@@ -2593,8 +2615,17 @@ export default function FinanzasPage() {
   }
 
   async function handleDeleteGM(id: string) {
-    if (!confirm("¿Seguro que queres eliminar este gasto?")) return;
+    if (!confirm("¿Seguro que querés eliminar este gasto? Si tiene su pago en Movimientos, el pago se anula (queda el registro).")) return;
     try {
+      // B10: anular el pago atado antes de borrar el gasto, así la caja no resta un gasto que ya no existe
+      if (sociedadActiva?.id) {
+        const { data: pagosAtados } = await (supabase as any).from("movimientos")
+          .select("id").eq("gasto_manual_id", id).eq("sociedad_id", sociedadActiva.id).eq("anulado", false);
+        for (const pago of (pagosAtados || []) as { id: string }[]) {
+          const { error: anularErr } = await (supabase as any).rpc("gestionar_cobro", { p_movimiento_id: pago.id, p_accion: "anular" });
+          if (anularErr) alert("No se pudo anular el pago del gasto en Movimientos: " + anularErr.message + "\nEl gasto se elimina igual; revisá el pago a mano.");
+        }
+      }
       let gmDelete = (supabase as any).from("gastos_manuales").delete().eq("id", id);
       if (sociedadActiva?.id) gmDelete = gmDelete.eq("sociedad_id", sociedadActiva.id);
       const { error } = await gmDelete;
@@ -2816,8 +2847,17 @@ export default function FinanzasPage() {
   }
 
   async function handleDeleteFC(id: string) {
-    if (!confirm("¿Seguro que querés eliminar esta factura de compra?")) return;
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
+    // Eliminar borra sin dejar registro: si tiene pagos o NC aplicadas, se recomienda anular (avisa, no frena).
+    const fc = facturasCompra.find(f => f.id === id);
+    const tieneMovimientos = !!fc && fc.estado !== "anulada" && (Number(fc.pago_op || 0) > 0 || Number(fc.pago_directo || 0) > 0 || Number(fc.total_acreditado || 0) > 0 || !!fc.op_vinculada);
+    if (tieneMovimientos) {
+      if (confirm("Esta factura tiene pagos o notas de crédito aplicadas. Si la eliminás, esos importes quedan sueltos.\n\nRecomendado: ANULARLA (no se pierde nada).\n\n¿Querés anularla en vez de eliminarla?")) {
+        await handleAnularFC(id);
+        return;
+      }
+      if (!confirm("¿Eliminar igual? No queda registro de la factura.")) return;
+    } else if (!confirm("¿Seguro que querés eliminar esta factura de compra? No queda registro. Si es para corregir, conviene «Anular».")) return;
     try {
       let fcDelete = (supabase as any).from("facturas_compra").delete().eq("id", id);
       if (sociedadActiva?.id) fcDelete = fcDelete.eq("sociedad_id", sociedadActiva.id);
@@ -2920,17 +2960,28 @@ export default function FinanzasPage() {
     }
   }
 
-  async function handleAnularFC(id: string) {
-    if (!confirm("¿Seguro que querés anular esta factura?")) return;
-    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
-    try {
+  /** A3 + A7: anula sin borrar. NC → anular_nota_credito_compra_v2 (revierte el crédito); factura → anular_factura_compra (avisa pagos y libera la OC). */
+  async function handleAnularFC(id: string): Promise<boolean> {
+    if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return false; }
     const target = facturasCompra.find((factura) => factura.id === id);
-    const { error } = target?.factura_origen_id
-      ? await (supabase as any).rpc("anular_nota_credito_compra", { p_sociedad_id: sociedadActiva.id, p_nota_credito_id: id })
-      : await (supabase as any).from("facturas_compra").update({ estado: "anulada" }).eq("id", id).eq("sociedad_id", sociedadActiva.id);
+    const esNC = !!target?.factura_origen_id || (target?.tipo_comprobante || "").toUpperCase().startsWith("NC");
+    let motivo = "";
+    if (esNC) {
+      if (!confirm("¿Anular esta nota de crédito? No se borra: queda anulada y se revierte el crédito aplicado en las facturas.")) return false;
+    } else {
+      const respuesta = prompt("¿Anular esta factura? No se borra: queda anulada, se liberan sus líneas de OC y si tenía pagos quedan a favor del proveedor.\n\nMotivo (opcional):", "");
+      if (respuesta === null) return false;
+      motivo = respuesta;
+    }
+    try {
+      const { data, error } = esNC
+        ? await (supabase as any).rpc("anular_nota_credito_compra_v2", { p_sociedad_id: sociedadActiva.id, p_nota_credito_id: id })
+        : await (supabase as any).rpc("anular_factura_compra", { p_factura_id: id, p_motivo: motivo });
       if (error) throw error;
+      avisosDeRpc(data, esNC ? "Nota de crédito anulada." : "Factura anulada.");
       await fetchData();
-    } catch (err) { console.error("Error anulando FC:", err); alert("Error al anular FC: " + (err instanceof Error ? err.message : String(err))); }
+      return true;
+    } catch (err) { console.error("Error anulando FC:", err); alert("Error al anular: " + (err instanceof Error ? err.message : (err as any)?.message || String(err))); return false; }
   }
 
   async function handleRecibirFC(id: string) {
@@ -6681,7 +6732,7 @@ export default function FinanzasPage() {
                   </button>
                 )}
                 {(selectedFC.estado === "pendiente" || selectedFC.estado === "recibida" || selectedFC.estado === "pendiente_aprobacion") && (
-                  <button onClick={() => { handleAnularFC(selectedFC.id); setSelectedFC(null); }}
+                  <button onClick={async () => { if (await handleAnularFC(selectedFC.id)) setSelectedFC(null); }}
                     className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
                     <Ban className="h-4 w-4" /> Anular
                   </button>
