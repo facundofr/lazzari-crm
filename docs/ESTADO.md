@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 11/10/2026 · Versión publicada: **V1.1.413** · En curso, sin publicar: **V1.1.414**
+Actualizado: 11/10/2026 · Versión publicada: **V1.1.414** (11/10/2026)
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -52,12 +52,12 @@ ventas, precio de factura, reportes y NC: todos OK.
     (cobros, OP, NC de compra, pagos de gastos), porque anular deja el monto en 0. Migración `20261011140000_movimientos_anulados_reglas.sql`
     (con vuelta atrás): un movimiento anulado puede quedar en 0 y sin contraparte. Las 3 reglas CHECK de `movimientos` hoy son:
     `monto_positivo`, `tiene_contraparte` y `movimientos_ajuste_sentido_check`.
-  - **V1.1.414 (sin publicar):** el error al borrar un gasto muestra el texto real (antes "[object Object]").
+  - **V1.1.414:** el error al borrar un gasto muestra el texto real (antes "[object Object]").
   - No se probó en local: las funciones nuevas no existen en la base hasta correr la migración, y probar anulaciones implica guardar.
 
 El `git stash` "correcciones financieras a medias" es una copia **vieja** de este trabajo. No usarlo.
 
-## 3. Tanda en curso, sin publicar (V1.1.414) — cobros con cheque (11/10/2026)
+## 3. Publicado el 11/10/2026 (V1.1.414, commit bf8c19d), migración 20261011150000 ya corrida — cobros con cheque
 
 - **Código:** `lib/fecha-cobro.ts` (prueba `scripts/test-fecha-cobro.mjs`): el cobro va con la fecha en que se recibe; con cheque es hoy y
   la fecha del cheque queda en el cheque. Aviso (no bloqueo) si la fecha del cobro es futura. Aplicado en `cobro-masivo-liquidacion.tsx`
