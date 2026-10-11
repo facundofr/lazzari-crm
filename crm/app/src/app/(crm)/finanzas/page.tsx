@@ -11,6 +11,8 @@ import { canMatchBankMovement } from "@/lib/extracto-match";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { traerTodo } from "@/lib/paginar";
 import { clasificarMovimiento, esCobroDeCliente, sentidoAjuste, resumirCaja, TIPOS_RETENCION } from "@/lib/tipos-movimiento";
+import { filtrarCheques, MOTIVOS_RECHAZO_CHEQUE } from "@/lib/cheques-filtro";
+import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { calcularSaldosProveedores, traerCreditosProveedores, pagosSobreFacturasAnuladas, type CreditoProveedor } from "@/lib/saldo-proveedores";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta } from "@/lib/saldo-clientes";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
@@ -25,6 +27,7 @@ import * as XLSX from "xlsx";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import CargaMasivaFacturasCompra from "@/components/carga-masiva-facturas-compra";
 import PlanPagos from "@/components/plan-pagos";
+import CuentasFinancieras from "@/components/cuentas-financieras";
 import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/payment-document-parser";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
@@ -47,7 +50,7 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   retencion_suss: { label: "Ret. SUSS", variant: "warning", icon: Wallet },
 };
 
-type FinanzasTab = "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones";
+type FinanzasTab = "cuentas" | "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones";
 
 // ── Echeq types ──
 interface EcheqRow {
@@ -571,7 +574,7 @@ export default function FinanzasPage() {
       const params = new URLSearchParams(window.location.search);
       if (params.get("factura")) return "facturacion";
     }
-    return "movimientos";
+    return "cuentas";
   });
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
   const [loading, setLoading] = useState(true);
@@ -877,7 +880,7 @@ export default function FinanzasPage() {
   const [clientesOptions, setClientesOptions] = useState<ClienteOption[]>([]);
   const [echeqClienteSearch, setEcheqClienteSearch] = useState("");
   const [selectedEcheq, setSelectedEcheq] = useState<EcheqRow | null>(null);
-  const [echeqActionModal, setEcheqActionModal] = useState<"endosar" | "depositar" | null>(null);
+  const [echeqActionModal, setEcheqActionModal] = useState<"endosar" | "depositar" | "rechazar" | null>(null);
   const [echeqActionSaving, setEcheqActionSaving] = useState(false);
   const [echeqDestinoTipo, setEcheqDestinoTipo] = useState<"proveedor" | "banco">("proveedor");
   const [echeqDestinoId, setEcheqDestinoId] = useState("");
@@ -885,6 +888,12 @@ export default function FinanzasPage() {
   const [echeqProvSearch, setEcheqProvSearch] = useState("");
   const [echeqFilterEstado, setEcheqFilterEstado] = useState("");
   const [echeqFilterDireccion, setEcheqFilterDireccion] = useState<"" | "emitido" | "recibido">("");
+  const [echeqBusqueda, setEcheqBusqueda] = useState("");
+  const [echeqFilterTipo, setEcheqFilterTipo] = useState<"" | "echeq" | "fisico">("");
+  const [echeqFilterDesde, setEcheqFilterDesde] = useState("");
+  const [echeqFilterHasta, setEcheqFilterHasta] = useState("");
+  const [echeqMotivoRechazo, setEcheqMotivoRechazo] = useState<string>(MOTIVOS_RECHAZO_CHEQUE[0]);
+  const [echeqMotivoOtro, setEcheqMotivoOtro] = useState("");
 
   // Sync selectedEcheq after data reload
   useEffect(() => {
@@ -3202,7 +3211,7 @@ export default function FinanzasPage() {
   async function fetchCCDetailCliente(cliente: CCRow) {
     setCcDetailCliente(cliente); setCcDetailLoading(true); setCcDetailFacturas([]); setCcDetailMovimientos([]);
     try {
-      let qF = (supabase as any).from("facturas").select("id, numero, tipo, punto_venta, fecha, fecha_vencimiento, total, total_acreditado, moneda, estado").eq("cliente_id", cliente.id).in("estado", ["emitida", "pagada", "parcial", "vencida"]).order("fecha", { ascending: false });
+      let qF = (supabase as any).from("facturas").select("*").eq("cliente_id", cliente.id).in("estado", ["emitida", "pagada", "parcial", "vencida"]).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qF = qF.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: fData, error: fError } = await qF;
       if (fError) throw fError;
@@ -3227,12 +3236,12 @@ export default function FinanzasPage() {
         });
         if (cobros) (cobros as any[]).filter((m: any) => !m.anulado && !movimientosAplicados.has(m.id)).forEach((m: any) => { cobradoMap[m.factura_id] = (cobradoMap[m.factura_id] || 0) + Number(m.monto); });
       }
-      setCcDetailFacturas(facturasPositivas.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.fecha_vencimiento ?? null, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: f.estado })));
-      let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
+      setCcDetailFacturas(facturasPositivas.map((f: any) => ({ id: f.id, numero: f.numero ?? "", tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, vencimiento: f.fecha_vencimiento ?? null, total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), cobrado: cobradoMap[f.id] || 0, moneda: f.moneda ?? "ARS", estado: estadoVisibleFactura(f, f.fecha_vencimiento, todayAR()) })));
+      let qM = supabase.from("movimientos").select("id, tipo, monto, moneda, descripcion, fecha, factura_id, conciliado, anulado, cliente_id, proveedor_id, clientes(razon_social), proveedores(razon_social)").eq("cliente_id" as any, cliente.id).order("fecha", { ascending: false });
       if (sociedadActiva?.id) qM = qM.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: mData, error: mError } = await qM;
       if (mError) throw mError;
-      if (mData) setCcDetailMovimientos(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, factura_id: m.factura_id ?? null, conciliado: !!m.conciliado, cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
+      if (mData) setCcDetailMovimientos(mData.map((m: any) => ({ id: m.id, tipo: m.tipo, monto: Number(m.monto), moneda: m.moneda ?? "ARS", descripcion: m.descripcion ?? "", fecha: m.fecha, factura_id: m.factura_id ?? null, conciliado: !!m.conciliado, anulado: !!m.anulado, cliente_id: m.cliente_id, proveedor_id: m.proveedor_id, clientes: m.clientes, proveedores: m.proveedores })));
     } catch (err) { console.error("CC detail err:", err); } finally { setCcDetailLoading(false); }
   }
   async function fetchCCDetailProveedor(prov: CCRow) {
@@ -3423,7 +3432,13 @@ export default function FinanzasPage() {
     : proveedoresOptions;
 
   // ── Echeq handlers ──
-  const filteredEcheqs = echeqs.filter(e => (!echeqFilterEstado || e.estado === echeqFilterEstado) && (!echeqFilterDireccion || e.direccion === echeqFilterDireccion));
+  const filteredEcheqs = filtrarCheques(echeqs, {
+    texto: echeqBusqueda, estado: echeqFilterEstado, direccion: echeqFilterDireccion,
+    tipo: echeqFilterTipo, desde: echeqFilterDesde, hasta: echeqFilterHasta,
+  });
+  const echeqFiltrosActivos = Boolean(echeqBusqueda || echeqFilterEstado || echeqFilterDireccion || echeqFilterTipo || echeqFilterDesde || echeqFilterHasta);
+  const filteredEcheqsTotalARS = filteredEcheqs.filter(e => e.moneda !== "USD").reduce((s, e) => s + Number(e.monto || 0), 0);
+  const filteredEcheqsTotalUSD = filteredEcheqs.filter(e => e.moneda === "USD").reduce((s, e) => s + Number(e.monto || 0), 0);
   const echeqsRecibidos = echeqs.filter(e => e.direccion === "recibido" || !e.direccion);
   const echeqsEmitidos = echeqs.filter(e => e.direccion === "emitido");
   const echeqsEnCartera = echeqsRecibidos.filter(e => e.estado === "en_cartera");
@@ -3481,9 +3496,9 @@ export default function FinanzasPage() {
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
     // A6: un cheque recibido rechazado anula el cobro que generó y la deuda del cliente vuelve a aparecer.
     if (action === "rechazar" && ((echeq as any).direccion || "recibido") === "recibido") {
-      if (!confirm(`¿Rechazar el cheque ${echeq.numero || ""}? Se anula el cobro que generó (queda el registro), la factura vuelve a quedar pendiente y se deja un aviso.`)) return;
-      const motivo = window.prompt("Motivo del rechazo (por ejemplo: sin fondos, firma no válida):", "Sin fondos");
-      if (motivo === null) return;
+      // El motivo sale del desplegable del modal de rechazo ("Otro" = texto libre).
+      const motivo = echeqMotivoRechazo === "otro" ? echeqMotivoOtro.trim() : echeqMotivoRechazo;
+      if (!motivo) { alert("Escribí el motivo del rechazo."); return; }
       setEcheqActionSaving(true);
       try {
         const { data, error } = await (supabase as any).rpc("rechazar_cheque_recibido", { p_cheque_id: echeq.id, p_motivo: motivo });
@@ -3661,6 +3676,7 @@ export default function FinanzasPage() {
   }), [recibosClientes, reciboSearch]);
 
   const tabs: { id: FinanzasTab; label: string }[] = [
+    { id: "cuentas", label: "Cuentas" },
     { id: "movimientos", label: "Movimientos" },
     { id: "recibos", label: "Recibos" },
     { id: "vencimientos", label: "Vencimientos" },
@@ -3975,6 +3991,9 @@ export default function FinanzasPage() {
             ))}
           </div>
         </div>
+
+        {/* ── Cuentas ── */}
+        {tab === "cuentas" && <CuentasFinancieras onIrACheques={() => setTab("echeqs")} />}
 
         {/* ── Movimientos ── */}
         {tab === "movimientos" && (
@@ -4811,7 +4830,7 @@ export default function FinanzasPage() {
                           { key: "numero", label: "Comprobante", sortable: true, render: (row) => <span className="font-mono text-xs">{row.tipo}{String(row.punto_venta).padStart(4, "0")}-{String(row.numero).padStart(8, "0")}</span> },
                           { key: "total", label: "Total", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.total, row.moneda as "ARS" | "USD")}</span> },
                           { key: "total_acreditado" as any, label: "Saldo", className: "text-right", render: (row) => { const saldo = Math.max(0, row.total - row.total_acreditado - row.cobrado); return <span className={`font-mono font-semibold block text-right ${saldo > 0.01 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(saldo, row.moneda as "ARS" | "USD")}</span>; }},
-                          { key: "estado", label: "Estado", render: (row) => { const cfg: Record<string, { label: string; variant: "success" | "warning" | "danger" | "outline" }> = { pagada: { label: "Pagada", variant: "success" }, parcial: { label: "Parcial", variant: "warning" }, emitida: { label: "Pendiente", variant: "danger" } }; const c = cfg[row.estado] || { label: row.estado, variant: "outline" as const }; return <Badge variant={c.variant}>{c.label}</Badge>; }},
+                          { key: "estado", label: "Estado", render: (row) => { const cfg: Record<string, { label: string; variant: "success" | "warning" | "danger" | "outline" }> = { pagada: { label: "Pagada", variant: "success" }, parcial: { label: "Parcial", variant: "warning" }, emitida: { label: "Pendiente", variant: "danger" }, pendiente: { label: "Pendiente", variant: "danger" }, vencida: { label: "Vencida", variant: "danger" }, cheque_rechazado: { label: "Cheque rechazado", variant: "danger" } }; const c = cfg[row.estado] || { label: row.estado, variant: "outline" as const }; return <Badge variant={c.variant}>{c.label}</Badge>; }},
                         ]}
                         data={ccDetailFacturas}
                         emptyMessage="Sin facturas registradas"
@@ -4826,7 +4845,7 @@ export default function FinanzasPage() {
                           { key: "tipo", label: "Tipo", render: (row) => { const tc = tipoConfig[row.tipo] || { label: row.tipo, variant: "outline" as const, icon: Wallet }; return <Badge variant={tc.variant}>{tc.label}</Badge>; }},
                           { key: "descripcion", label: "Descripcion", render: (row) => <span className="text-sm text-zinc-600 dark:text-zinc-400 max-w-xs truncate block">{row.descripcion}</span> },
                           { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className={`font-mono font-semibold block text-right text-emerald-600`}>{formatCurrency(row.monto, row.moneda as "ARS" | "USD")}</span> },
-                          { key: "conciliado" as any, label: "Estado", render: (row) => <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Conciliado" : "Pendiente"}</Badge> },
+                          { key: "conciliado" as any, label: "Estado", render: (row) => row.anulado ? <Badge variant="outline">Anulado</Badge> : <Badge variant={row.conciliado ? "success" : "warning"}>{row.conciliado ? "Conciliado" : "Pendiente"}</Badge> },
                         ]}
                         data={ccDetailMovimientos}
                         onRowClick={(row) => openMovDetail(row as any)}
@@ -4957,11 +4976,17 @@ export default function FinanzasPage() {
               <StatCard title="Por vencer (7 días)" value={String(echeqsPorVencer)} icon={Clock} iconColor="text-amber-500" />
               <StatCard title="Endosados / Entregados" value={String(echeqs.filter(e => e.estado === "endosado" || e.estado === "entregado").length)} icon={ArrowUpRight} iconColor="text-purple-500" />
             </div>
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+              <div className="flex flex-1 flex-wrap items-center gap-2">
+                <div className="relative min-w-[220px] flex-1 max-w-sm">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
+                  <input value={echeqBusqueda} onChange={(e) => setEcheqBusqueda(e.target.value)}
+                    placeholder="Buscar: número, cliente, banco o importe"
+                    className="w-full rounded-lg border border-zinc-200 py-2 pl-9 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </div>
                 <select value={echeqFilterDireccion} onChange={(e) => setEcheqFilterDireccion(e.target.value as "" | "emitido" | "recibido")}
                   className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  <option value="">Todos</option>
+                  <option value="">Recibidos y emitidos</option>
                   <option value="recibido">Recibidos</option>
                   <option value="emitido">Emitidos (propios)</option>
                 </select>
@@ -4970,6 +4995,29 @@ export default function FinanzasPage() {
                   <option value="">Todos los estados</option>
                   {Object.entries(echeqEstadoConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                 </select>
+                <select value={echeqFilterTipo} onChange={(e) => setEcheqFilterTipo(e.target.value as "" | "echeq" | "fisico")}
+                  className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="">E-Cheq y físicos</option>
+                  <option value="echeq">E-Cheq</option>
+                  <option value="fisico">Físicos</option>
+                </select>
+                <label className="flex items-center gap-1 text-xs text-zinc-500">Pago desde
+                  <input type="date" value={echeqFilterDesde} onChange={(e) => setEcheqFilterDesde(e.target.value)}
+                    className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </label>
+                <label className="flex items-center gap-1 text-xs text-zinc-500">hasta
+                  <input type="date" value={echeqFilterHasta} onChange={(e) => setEcheqFilterHasta(e.target.value)}
+                    className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                </label>
+                {echeqFiltrosActivos && (
+                  <button onClick={() => { setEcheqBusqueda(""); setEcheqFilterDireccion(""); setEcheqFilterEstado(""); setEcheqFilterTipo(""); setEcheqFilterDesde(""); setEcheqFilterHasta(""); }}
+                    className="rounded-lg px-2 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/30">
+                    Limpiar filtros
+                  </button>
+                )}
+                <span className="w-full text-xs text-zinc-500">
+                  {filteredEcheqs.length} cheque{filteredEcheqs.length === 1 ? "" : "s"} — {formatCurrency(filteredEcheqsTotalARS)}{filteredEcheqsTotalUSD > 0 ? ` + ${formatCurrency(filteredEcheqsTotalUSD, "USD")}` : ""}
+                </span>
               </div>
               <button onClick={() => { setEcheqForm(emptyEcheqForm); setEcheqError(""); setEcheqClienteSearch(""); setEcheqModalOpen(true); }}
                 className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600">
@@ -5060,7 +5108,7 @@ export default function FinanzasPage() {
                             <button onClick={() => handleEcheqAction("cobrar")} className="flex items-center gap-1.5 rounded-lg bg-green-50 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-100 dark:bg-green-950/30 dark:text-green-400">
                               <CheckCircle2 className="h-3.5 w-3.5" /> Cobrado
                             </button>
-                            <button onClick={() => handleEcheqAction("rechazar")} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-400">
+                            <button onClick={() => { setEcheqMotivoRechazo(MOTIVOS_RECHAZO_CHEQUE[0]); setEcheqMotivoOtro(""); setEcheqActionModal("rechazar"); }} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-400">
                               <Ban className="h-3.5 w-3.5" /> Rechazar
                             </button>
                           </div>
@@ -5070,7 +5118,7 @@ export default function FinanzasPage() {
                       {(selectedEcheq.estado === "depositado" || selectedEcheq.estado === "cobrado") && ((selectedEcheq as any).direccion || "recibido") === "recibido" && (
                         <div className="pt-3 border-t border-zinc-100 dark:border-zinc-700">
                           <p className="text-xs font-medium text-zinc-500 mb-2 uppercase">¿Vino rechazado?</p>
-                          <button onClick={() => handleEcheqAction("rechazar")} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-400">
+                          <button onClick={() => { setEcheqMotivoRechazo(MOTIVOS_RECHAZO_CHEQUE[0]); setEcheqMotivoOtro(""); setEcheqActionModal("rechazar"); }} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-400">
                             <Ban className="h-3.5 w-3.5" /> Rechazar
                           </button>
                         </div>
@@ -5236,9 +5284,28 @@ export default function FinanzasPage() {
           <>
             <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setEcheqActionModal(null)} />
             <div className="fixed inset-4 z-50 m-auto h-fit max-h-[70vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
-              <h2 className="text-lg font-bold mb-4 dark:text-white">{echeqActionModal === "endosar" ? "Endosar cheque" : "Depositar cheque"}</h2>
-              <p className="text-sm text-zinc-500 mb-4">Cheque #{selectedEcheq.numero} — {formatCurrency(selectedEcheq.monto, selectedEcheq.moneda)}</p>
+              <h2 className="text-lg font-bold mb-4 dark:text-white">{echeqActionModal === "endosar" ? "Endosar cheque" : echeqActionModal === "rechazar" ? "Rechazar cheque" : "Depositar cheque"}</h2>
+              <p className="text-sm text-zinc-500 mb-4">Cheque #{selectedEcheq.numero} — {formatCurrency(selectedEcheq.monto, selectedEcheq.moneda)}{selectedEcheq.origen_nombre ? ` — ${selectedEcheq.origen_nombre}` : ""}</p>
               <div className="space-y-4">
+                {echeqActionModal === "rechazar" && (
+                  <div className="space-y-3">
+                    <p className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-300">
+                      Se anula el cobro que generó este cheque (queda el registro), la factura vuelve a quedar pendiente y se deja un aviso en Alertas.
+                    </p>
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500">Motivo del rechazo</label>
+                      <select value={echeqMotivoRechazo} onChange={(e) => setEcheqMotivoRechazo(e.target.value)}
+                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                        {MOTIVOS_RECHAZO_CHEQUE.map((m) => <option key={m} value={m}>{m}</option>)}
+                        <option value="otro">Otro…</option>
+                      </select>
+                    </div>
+                    {echeqMotivoRechazo === "otro" && (
+                      <input autoFocus value={echeqMotivoOtro} onChange={(e) => setEcheqMotivoOtro(e.target.value)}
+                        placeholder="Escribí el motivo" className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                    )}
+                  </div>
+                )}
                 {echeqActionModal === "endosar" && (
                   <div>
                     <label className="text-xs font-medium text-zinc-500">Destino</label>
@@ -5268,9 +5335,9 @@ export default function FinanzasPage() {
               </div>
               <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
                 <button onClick={() => setEcheqActionModal(null)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
-                <button onClick={() => handleEcheqAction(echeqActionModal)} disabled={echeqActionSaving}
-                  className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
-                  {echeqActionSaving && <Loader2 className="h-4 w-4 animate-spin" />} {echeqActionModal === "endosar" ? "Endosar" : "Depositar"}
+                <button onClick={() => handleEcheqAction(echeqActionModal)} disabled={echeqActionSaving || (echeqActionModal === "rechazar" && echeqMotivoRechazo === "otro" && !echeqMotivoOtro.trim())}
+                  className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50 ${echeqActionModal === "rechazar" ? "bg-red-600 hover:bg-red-700" : "bg-orange-500 hover:bg-orange-600"}`}>
+                  {echeqActionSaving && <Loader2 className="h-4 w-4 animate-spin" />} {echeqActionModal === "endosar" ? "Endosar" : echeqActionModal === "rechazar" ? "Rechazar cheque" : "Depositar"}
                 </button>
               </div>
             </div>

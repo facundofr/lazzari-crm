@@ -20,6 +20,7 @@ import { useFceCheck, fceTotalArs } from "@/lib/use-fce-check";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { buildOrdenPagoPlan, comprobanteKey, type OpParsed } from "@/lib/orden-pago-plan";
 import { fechaCobroSugerida, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
+import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { creditNoteTotals, creditNoteTypeForInvoice, freeAmountCreditItem, isInvoiceA, type SalesCreditNoteMode } from "@/lib/sales-credit-note";
 import { supabase } from "@/lib/supabase/client";
 import { precioUnitarioParaFactura } from "@/lib/precio-factura";
@@ -43,6 +44,7 @@ const estadoConfig: Record<string, { label: string; variant: "success" | "warnin
   pagada: { label: "Pagada", variant: "success" },
   anulada: { label: "Anulada", variant: "danger" },
   vencida: { label: "Vencida", variant: "warning" },
+  cheque_rechazado: { label: "Cheque rechazado", variant: "danger" },
 };
 
 interface FacturaRow {
@@ -523,9 +525,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
   // Filters — multi-select estado (like presupuestos)
   const ESTADO_GROUPS: Record<string, string[]> = {
-    emitida_all: ["pendiente", "parcial", "pagada", "vencida"],
-    pendiente_all: ["pendiente", "parcial", "vencida"],
+    emitida_all: ["pendiente", "parcial", "pagada", "vencida", "cheque_rechazado"],
+    pendiente_all: ["pendiente", "parcial", "vencida", "cheque_rechazado"],
     vencida: ["vencida"],
+    cheque_rechazado: ["cheque_rechazado"],
     pagada: ["pagada"],
     anulada: ["anulada"],
   };
@@ -602,12 +605,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           const fv = f.fecha_vencimiento || (f.clientes?.dias_cuenta_corriente && f.fecha
             ? new Date(new Date(f.fecha).getTime() + ((f.clientes.dias_cuenta_corriente as number) * 86400000)).toISOString().slice(0, 10)
             : null);
-          // Compute derived estado: emitida + vencida → "vencida", emitida sin vencer → "pendiente"
-          let estado = f.estado;
-          if (estado === "emitida") {
-            if (fv && fv < hoy) estado = "vencida";
-            else estado = "pendiente";
-          }
+          // Estado visible: vencida / pendiente, o "cheque rechazado" si su cheque volvió (lib/estado-factura-venta).
+          const estado = estadoVisibleFactura(f as { estado: string; cheque_rechazado_at?: string | null }, fv, hoy);
           return { ...f, clientes: f.clientes ? { ...f.clientes, saldo_cuenta_corriente: saldoRealCli(f.cliente_id) } : f.clientes, estado, cotizacion_modalidad: f.cotizacion_modalidad || (f as any).presupuestos?.cotizacion_modalidad || null, oc_cliente_fecha: f.oc_cliente_fecha || (f as any).presupuestos?.oc_cliente_fecha || null, _clienteNombre: f.clientes?.razon_social || "", _fechaVencCalc: fv || "", _prNumero: (f as any).presupuestos?.numero || "" };
         }));
       } else if (error) {
@@ -1649,7 +1648,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const estadoFacturaPorId = new Map(facturas.map(f => [f.id, f.estado] as [string, string]));
   const facturadoMesMoneda = (moneda:string)=>totalVentasNeto(facturasEsteMes.filter(f=>f.moneda===moneda), id => estadoFacturaPorId.get(id));
   const saldoFactura = (f:FacturaRow)=>["pagada","anulada"].includes(f.estado)?0:Math.max(0,Number(f.total)-Number(f.total_acreditado||0)-(cobradoPorFactura?.[f.id]||0));
-  const pendientesMoneda = (moneda:string)=>facturas.filter(f => f.moneda===moneda && ["pendiente", "parcial", "vencida"].includes(f.estado) && !ncTipos.includes(f.tipo)).reduce((a, f) => a + saldoFactura(f), 0);
+  const pendientesMoneda = (moneda:string)=>facturas.filter(f => f.moneda===moneda && ["pendiente", "parcial", "vencida", "cheque_rechazado"].includes(f.estado) && !ncTipos.includes(f.tipo)).reduce((a, f) => a + saldoFactura(f), 0);
   const facturasVencidas = facturas.filter(f => f.estado === "vencida").length;
   const caeVigentes = facturas.filter(f => f.cae && f.estado !== "anulada").length;
 
@@ -1772,7 +1771,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         </div>
         {/* Estado multi-select toggles */}
         <div className="flex gap-2 flex-wrap">
-          {([["emitida_all", "Emitida"], ["pendiente_all", "Pendiente"], ["vencida", "Vencida"], ["pagada", "Pagada"], ["anulada", "Anulada"]] as const).map(([key, label]) => {
+          {([["emitida_all", "Emitida"], ["pendiente_all", "Pendiente"], ["vencida", "Vencida"], ["cheque_rechazado", "Cheque rechazado"], ["pagada", "Pagada"], ["anulada", "Anulada"]] as const).map(([key, label]) => {
             const active = !fvIsAll && fvSelectedEstados.has(key);
             return (
               <button key={key} onClick={() => fvToggleEstado(key)}

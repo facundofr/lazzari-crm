@@ -276,6 +276,8 @@ export function Header({ title, subtitle, action }: HeaderProps) {
           const prefs = prefsRes.data as Record<string, boolean>;
           filtered = filtered.filter((alert) => {
             if (alert.module === "calendario") return true;
+            // Avisos de plata (cheque rechazado, etc.): se muestran siempre, sin importar las preferencias.
+            if (alert.module === "finanzas") return true;
             const prefKey = ALERT_TIPO_TO_PREF[alert.tipo];
             // If we have a mapping and the pref is explicitly false, filter it out
             if (prefKey && prefs[prefKey] === false) return false;

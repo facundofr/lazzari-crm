@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 11/10/2026 · Versión publicada: **V1.1.414** (11/10/2026)
+Actualizado: 11/10/2026 · Versión publicada: **V1.1.415** (11/10/2026)
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -72,6 +72,28 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   (NC A 0001-00000025, CAE 86416795481784, $26.954.340,91, anula FA 15-10, 15-19 y 15-30).
 - Chequeos: tipos 0 errores, hooks OK, tests fecha-cobro, cobros/cheques y saldo-clientes OK. No probado en pantalla (necesita sesión).
 
+## 3b. Publicado el 11/10/2026 (V1.1.415), migraciones 20261011160000 y 20261011170000 ya corridas
+
+- Finanzas > Cheques: buscador (número, cliente, banco o importe), filtros por tipo y fecha de pago, "Limpiar filtros",
+  cantidad y total de lo filtrado (`lib/cheques-filtro.ts`, prueba `scripts/test-cheques-filtro.mjs`).
+- Rechazar cheque: modal con desplegable de motivos y "Otro…" para escribirlo (antes era una ventanita de texto).
+- Augusto rechazó los cheques 00000074 y 00000176 de Barraza (11/10/2026).
+- Factura con cheque rechazado se ve como **"Cheque rechazado"** (rojo) mientras siga sin cobrar, en Facturación (con filtro)
+  y en CC Clientes (`lib/estado-factura-venta.ts`, prueba `scripts/test-estado-factura-venta.mjs`). En CC Clientes los cobros anulados dicen "Anulado".
+- **Migración ya corrida (11/10/2026):** `20261011160000_facturas_cheque_rechazado.sql` (columnas `cheque_rechazado_at/_motivo`,
+  marca FA 15-10 y 15-30 de Barraza, y `rechazar_cheque_recibido` las completa). Con vuelta atrás.
+- Campana: las alertas del módulo "finanzas" se muestran siempre (las de Barraza existían, pero Augusto tiene apagado "seguimiento").
+- **Cuentas y extractos, etapa 1 (hecha; migración ya corrida 11/10/2026, 10 cuentas verificadas):** `20261011170000_cuentas_financieras.sql` (+ vuelta atrás):
+  tabla `cuentas_financieras` (solo super_admin/admin/administrativo), `cuenta_id` en movimientos y extractos_bancarios,
+  trigger `lz_cuenta_sugerida_movimiento` (cuenta sugerida según el medio para lo nuevo; si falla, guarda sin cuenta)
+  y carga de las 10 cuentas de Lazzari con saldos al 31/08/2026. Pestaña **"Cuentas"** primera y por defecto en Finanzas
+  (`components/cuentas-financieras.tsx`): totales (disponible, cheques en cartera/depositados, comprometido en emitidos con vencimientos),
+  aviso de movimientos sin cuenta desde el corte, acuerdo de la CC, editar/crear cuentas. Cálculo en `lib/saldo-cuentas.ts`
+  (prueba `scripts/test-saldo-cuentas.mjs`). Sin la migración, la pestaña muestra "Falta correr la migración" (no rompe nada).
+  Recuadro **"Sugerencias"** arriba (pedido de Augusto): CC en negativo → "Rescatá $X del FCI" para dejarla en 0 (redondeo a $1.000);
+  en la CC principal también cubre los cheques propios a debitar en 7 días; si el FCI no alcanza, dice cuánto falta (`sugerenciasCuentas`).
+  Es real recién con el extracto del día (etapa 2). Ideas siguientes: avisarlo en la campana; sugerir suscribir al FCI el sobrante.
+
 ## 4. Pendiente (próximas tandas)
 
 0. **PRÓXIMO: análisis a fondo de Finanzas** (lo más importante del CRM, pedido por Augusto 11/10/2026):
@@ -94,6 +116,43 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
      El 3er eCheq NO se rechaza todavía (decisión de Augusto): se rechaza cuando aparezca en el extracto; su NC se carga recién ahí.
    - **Idea de Augusto (11/10/2026):** Finanzas como centro de todo, enlazado con los extractos que él carga día a día:
      cuentas corrientes, cajas de ahorro, FCI, tarjetas y efectivo. Un cobro con cheque "se cobra" cuando el cheque se acredita.
+   - **Datos de Augusto (11/10/2026):** Lazzari opera con **BBVA** (cuenta + tarjetas BBVA Visa y BBVA Master).
+     La Master hoy la usa también para gastos personales; la idea es que Visa y Master queden solo para trabajo y lo personal vaya a Galicia.
+     Falta cargar: cobros recibidos que no están en el sistema, cheques emitidos viejos (pagos e impagos del sistema viejo), eCheqs recibidos sin actualizar.
+     Respuestas 11/10/2026: fecha de corte = el día en que empezó a usar el sistema (sacarla de la base); solo Lazzari/BBVA en pesos
+     (Grupo LA usa Galicia pero hoy sin acceso; ignorar USD); usan FCI. Después de cargar todo, Augusto reenvía las órdenes de pago de clientes de sus mails.
+   - **Plan "Cuentas y extractos" propuesto (esperando OK):** ya existen `extractos_bancarios`/`extracto_movimientos` y un cruce manual por importe exacto
+     (`lib/extracto-match.ts`), sin tabla de cuentas.
+     1) Cuentas (migración): tabla de cuentas (cuenta corriente, caja de ahorro, FCI, tarjeta, efectivo) con saldo al corte; `cuenta_id` en movimientos y extractos.
+        **OK de Augusto (11/10/2026), con estos ajustes:** pestaña "Cuentas" primera en Finanzas, en archivo propio; `lib/saldo-cuentas.ts` con prueba.
+        Saldo al corte solo para BBVA, FCI y efectivo. Cuentas automáticas: "Cheques en cartera" y "Cheques emitidos a pagar"
+        (eCheq/cheque propio: el pago al proveedor queda hecho, pero la plata sale del BBVA recién cuando se debita; mostrar lo comprometido por semana y mes).
+        Tarjetas Visa/Master: sin saldo al corte, van por resumen mensual, en **ARS y USD** (dos saldos; el USD se paga en pesos o en dólares, se ve en etapa 3).
+        Cuenta sugerida por medio para lo nuevo (trigger, nunca frena); lo viejo queda "sin cuenta" y se asigna en la etapa 2.
+        Paso 1: `supabase/diagnostico/fecha_corte_lazzari.sql` (solo lectura). Resultado: cheques desde 22/08, presupuestos 26/08,
+        OC 01/09, facturas y cobros/pagos cargados desde 02/09 (alguno con fecha 22/08). **Propuesta: corte = cierre del 31/08/2026**
+        (saldo al corte = saldo del extracto al 31/08; entran los movimientos con fecha desde 01/09).
+        **Cuentas reales BBVA (resúmenes al 09/10/2026 en Descargas, 11/10):** CC "EPP LAZZARI" 091-312483/1 (la principal, acuerdo $1.500.000,
+        debita las tarjetas; hoy −$1.575.636,31; FALTA su extracto); CC "INDU LAZZARI" 091-318933/7 ($4.797,36, sin movimientos);
+        CA $ 091-339549/3 (saldo anterior 88.411,83 al ~10/09; falta el saldo al 31/08); CA U$S ignorar;
+        FCI FBA Money Market Pesos (custodia 91-565772/5): 551.950,26 cuotapartes al 31/08 (calculado con el Excel de custodia y cruzado con el resumen) ≈ $97,56 M;
+        Visa Signature ·1582 y Mastercard Black ·4775: resúmenes con cierre 01/10, vto 09/10, en $ y U$S; la deuda al corte sale del "saldo anterior" (cierre 01/09):
+        Visa $9.792.257,37 + U$S 148,82; Master $4.402.026,27 + U$S 4.389,17. Agregar campo "acuerdo" (descubierto) a la cuenta.
+        Sumar también CA U$S 091-314103/6 (U$S 14,62; Augusto la quiere incluida). Efectivo: planilla "Cierre de caja" de Augusto, arranque 08/09 $33.520
+        (usar como saldo al corte). En esa planilla, "Útil – Venta/Ingreso" es un negocio por afuera (ventas tercerizadas por la empresa Útil de Camila y
+        Agustín Musso, el contador, que se queda un %): ignorarlo por ahora, armarlo más adelante si Augusto lo pide.
+        **Saldos al 31/08 calculados de los Excel completos (Descargas, "Detalle_mov_cuenta_11_10_2026 (2)/(3).xls", cadena de saldos verificada):**
+        CC EPP LAZZARI **$10.829.781,65**; CA $ **$300.440,53**. Con esto están todos los datos de la etapa 1.
+        El 09/10 la CC pagó Visa $4.694.598,40 y Master $3.201.710,17 + $4.709.743,56 (los U$S). El 25/09 hubo extracción de efectivo de $6.200.000 de la CA
+        que no está en la planilla de caja (preguntar en la etapa 2).
+     2) Importar extracto BBVA y cruce automático; lo que no cruza se pregunta (cobro, pago, gasto bancario, impuesto, transferencia a FCI, cheque acreditado, personal).
+        Cheque acreditado en el extracto = cobro acreditado (idea de Augusto).
+     3) Tarjetas Visa y Master: resumen, consumos a proveedor/gasto/"personal", pago del resumen desde la cuenta.
+        **Mercado Libre (aclarado por Augusto):** todo lo de ML se paga con la Visa. Las OC se cargan con proveedor "Mercado Libre";
+        a fin de mes se suben todas las facturas de ML, cada una se ata a su OC y pasa al vendedor real (dejando marcado que la compra fue por ML),
+        queda pagada con tarjeta Visa (sin OP) y se cruza con el resumen de la Visa y su pago en el extracto. Ojo con compras en cuotas.
+        Sugerencia: anotar el N° de compra de ML en la OC al comprar (ayuda mucho al cruce).
+     4) Puesta al día: cruce del listado de eCheqs del BBVA (✅ coinciden / ➕ faltan / ✏️ estado distinto) y OP de clientes por mail.
 0b. **Tests viejos que fallan** (ver punto 2): actualizarlos a cómo quedó el código.
 1. **A5 Retención RG 830:** mínimo y escala por concepto (bienes, servicios, honorarios), unificar 224.000 vs 400.000 y no "congelar" en el Plan de pagos. Comparar con el archivo de Netegia que va a pasar Augusto y confirmar montos con el contador.
 2. **Diagnóstico sin tocar:** D1 (cron cotización BNA, revisar lo que quedó), D4 (saldo inicial de caja automático), D5 (cuentas bancarias), D6 (errores sin revisar en Plan de pagos y Finanzas), sección E.
