@@ -6,6 +6,7 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { buildOrdenPagoPlan, type OpParsed } from "@/lib/orden-pago-plan";
+import { fechaMedioCobro, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
 
 // ── Types ────────────────────────────────────────────────
 export interface LiquidacionFactura {
@@ -221,12 +222,13 @@ export default function CobroMasivoLiquidacion({
           _id: uid(),
           tipo: normalizedType,
           monto: toDecimalInput(m.monto),
-          fecha: String(m.fecha || p.fecha_cobro || p.fecha || todayStr()),
+          // El cobro va con la fecha en que se recibe; la del cheque queda en cheque_fecha_pago.
+          fecha: fechaMedioCobro({ tipo, fecha: m.fecha || p.fecha, fecha_cobro: p.fecha_cobro }, todayStr()),
           referencia: String(m.referencia || p.cheque_numero || p.cheque_id_digital || ""),
           observaciones: String(p.notas || p.concepto || ""),
           cheque_banco: String(m.banco || p.banco || ""),
           cheque_numero: String(p.cheque_numero || p.cheque_id_digital || ""),
-          cheque_fecha_pago: String(p.cheque_fecha || p.fecha_cobro || p.fecha || ""),
+          cheque_fecha_pago: String(p.cheque_fecha || m.fecha || p.fecha_cobro || p.fecha || ""),
         };
       });
       setOpConOtras(plan.otras.length && !ordenPagoAvisos ? ordenLeida : null);
@@ -261,6 +263,8 @@ export default function CobroMasivoLiquidacion({
 
     try {
       const fechaPago = medios[0]?.fecha || todayStr();
+      const avisoFecha = avisoFechaCobroFutura(fechaPago, todayStr());
+      if (avisoFecha && !confirm(avisoFecha)) { setSaving(false); return; }
 
       const cotizSuffix = isUSD && cotizNum > 0 ? ` | TC: ${cotizNum.toFixed(2)} (${cotizModalidad})` : "";
 

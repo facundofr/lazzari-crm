@@ -19,6 +19,7 @@ import { beginInvoiceIntent, postInvoiceIntent } from "@/lib/invoice-intent";
 import { useFceCheck, fceTotalArs } from "@/lib/use-fce-check";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { buildOrdenPagoPlan, comprobanteKey, type OpParsed } from "@/lib/orden-pago-plan";
+import { fechaCobroSugerida, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
 import { creditNoteTotals, creditNoteTypeForInvoice, freeAmountCreditItem, isInvoiceA, type SalesCreditNoteMode } from "@/lib/sales-credit-note";
 import { supabase } from "@/lib/supabase/client";
 import { precioUnitarioParaFactura } from "@/lib/precio-factura";
@@ -1202,14 +1203,14 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           descripcion: descParts.join(" — "),
           cheque_numero: p.cheque_numero || "",
           cheque_banco: p.banco || "",
-          cheque_fecha: p.cheque_fecha || "",
+          cheque_fecha: p.cheque_fecha || ((tipo === "cheque_recibido" || tipo === "echeq") ? (p.fecha_cobro || p.fecha || "") : ""),
           cheque_id_digital: p.cheque_id_digital || "",
         };
       });
 
-      // Use fecha from first pago
-      const firstFecha = pagos.find(p => p.fecha)?.fecha;
-      if (firstFecha) setCobroFecha(firstFecha);
+      // El cobro va con la fecha en que se recibe: la de la transferencia, o hoy si se pagó con cheques
+      // (la fecha de pago del cheque queda en el cheque).
+      setCobroFecha(fechaCobroSugerida(pagos, todayAR()));
 
       setCobroLineas(prev => {
         // If only one default line (untouched by user), replace entirely with AI results
@@ -1345,6 +1346,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       alert(`El total de cobros ($${totalLineas.toLocaleString()}) supera el saldo pendiente ($${Math.max(0, saldoComp).toLocaleString()})`);
       return;
     }
+    const avisoFecha = avisoFechaCobroFutura(cobroFecha, todayAR());
+    if (avisoFecha && !confirm(avisoFecha)) return;
     setCobroSaving(true);
     try {
       if (!cobroRequestKeyRef.current) cobroRequestKeyRef.current = crypto.randomUUID();

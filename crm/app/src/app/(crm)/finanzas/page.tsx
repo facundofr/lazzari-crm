@@ -3526,11 +3526,20 @@ export default function FinanzasPage() {
     finally { setEcheqActionSaving(false); }
   }
 
-  async function handleDeleteEcheq(id: string) {
-    if (!confirm("¿Seguro que querés eliminar este cheque?")) return;
+  // Anular en vez de borrar: el cheque queda en el historial. Si vino de un cobro, el cobro sigue vigente:
+  // para que la deuda vuelva hay que rechazar el cheque o anular el cobro.
+  async function handleAnularEcheq(echeq: { id: string; numero?: string | null; observaciones?: string | null }) {
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
-    try { let echeqDelete = (supabase as any).from("echeqs").delete().eq("id", id); if (sociedadActiva?.id) echeqDelete = echeqDelete.eq("sociedad_id", sociedadActiva.id); const { error } = await echeqDelete; if (error) throw error; await fetchData(); }
-    catch (err) { console.error(err); alert("Error al eliminar cheque: " + (err as any)?.message); }
+    if (!confirm(`¿Anular el cheque ${echeq.numero || ""}? Queda en el historial como anulado.${String.fromCharCode(10, 10)}Si vino de un cobro y no lo vas a cobrar, usá "Rechazar": así la factura vuelve a quedar pendiente.`)) return;
+    try {
+      const hoy = todayAR().split("-").reverse().join("/");
+      const { error } = await (supabase as any).from("echeqs")
+        .update({ estado: "anulado", observaciones: [echeq.observaciones, `[Anulado ${hoy}]`].filter(Boolean).join(" | ") })
+        .eq("id", echeq.id).eq("sociedad_id", sociedadActiva.id);
+      if (error) throw error;
+      setSelectedEcheq(null);
+      await fetchData();
+    } catch (err) { alert("Error al anular el cheque: " + ((err as any)?.message || String(err))); }
   }
 
   // ── Derived calculations ──
@@ -5057,11 +5066,22 @@ export default function FinanzasPage() {
                           </div>
                         </div>
                       )}
+                      {/* Un cheque depositado o cobrado también puede volver rechazado: se ve en el extracto. */}
+                      {(selectedEcheq.estado === "depositado" || selectedEcheq.estado === "cobrado") && ((selectedEcheq as any).direccion || "recibido") === "recibido" && (
+                        <div className="pt-3 border-t border-zinc-100 dark:border-zinc-700">
+                          <p className="text-xs font-medium text-zinc-500 mb-2 uppercase">¿Vino rechazado?</p>
+                          <button onClick={() => handleEcheqAction("rechazar")} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-950/30 dark:text-red-400">
+                            <Ban className="h-3.5 w-3.5" /> Rechazar
+                          </button>
+                        </div>
+                      )}
+                      {selectedEcheq.estado !== "anulado" && selectedEcheq.estado !== "rechazado" && (
                       <div className="pt-3 border-t border-zinc-100 dark:border-zinc-700 flex justify-end">
-                        <button onClick={() => handleDeleteEcheq(selectedEcheq.id)} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400">
-                          <Trash2 className="h-3.5 w-3.5" /> Eliminar
+                        <button onClick={() => handleAnularEcheq(selectedEcheq)} className="flex items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400">
+                          <Trash2 className="h-3.5 w-3.5" /> Anular
                         </button>
                       </div>
+                      )}
                     </div>
                   </Card>
                 </div>
