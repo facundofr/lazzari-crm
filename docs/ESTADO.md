@@ -356,6 +356,9 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   - **Datos de proveedores (Excel `Claude outputs/proveedores_datos_faltantes_12_10_2026.xlsx`):** de los 51 con OC, 48 sin vendedor (WhatsApp/mail),
     27 sin mail de administración, 10 sin CBU; Prisina, FADI, Inmuovi y San Martín tienen un mail de ventas en el campo de administración.
     Augusto lo completa y Claude carga los vendedores (mostrar la lista antes de guardar).
+  - **Pendientes de Augusto como checklist en Finanzas > Hoy > Revisar** (migración `20261012210000_pendientes_proveedores_augusto.sql`, corrida, con
+    vuelta atrás; aviso en la campana el 13/10): Excel de vendedores, alta de Eslingar y Mariana SA, Ecoway/Fravida, CUIT de los talleres.
+  - Los vendedores se cargan en Proveedores > ficha > "Contactos comerciales" (ya existía) con **Cargo = Ventas**: de ahí los toma "Enviar OC".
   1) Compras: filtro **"Abiertas"** por defecto (todas menos completas y canceladas; hoy 77 de 125). "Todas" y "Completas" siguen.
   2) Columnas Pago, Pedido y Factura con íconos (✓ verde, ½ azul, ✗ naranja/gris, tarjeta); el texto sale al pasar el mouse.
   3) Recibido (antes "Mercadería") solo con el punto de color (y "3/10" si es parcial); sin mail debajo del proveedor; "Copiar" solo ícono;
