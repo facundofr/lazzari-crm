@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 12/10/2026 · Versión publicada: **V1.1.422** (12/10/2026, commit 680e1f9)
+Actualizado: 12/10/2026 · Versión publicada: **V1.1.423** (12/10/2026, commit 525a675)
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -340,6 +340,22 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   **Tanda V1.1.422 (12/10/2026, OK de Augusto "Va 1 a 4") — PUBLICADA por Claude (commit 680e1f9, Vercel Ready), migración CORRIDA.**
   Probado en producción: "Abiertas 77 / Todas 125 / Completas 47", tarjeta A reclamar, y el cartel de OC-1199 dice
   "Facturado y pagado $2.340.164,27 de $2.412.764,36. Diferencia $72.600,09 (3 %). Faltan facturar 2 unidades".
+  **Tanda V1.1.423 (12/10/2026) — PUBLICADA por Claude (commit 525a675, Vercel Ready) y probada en producción.**
+  - **Migración `20261012200000_proveedores_lista_fantasia.sql` CORRIDA** (+ vuelta atrás): vínculo proveedor ↔ nombre en `catalogo_crm.csv`
+    (`catalogo_proveedores`, las dos sociedades) y nombre de fantasía, confirmados por Augusto: Prisina, TKW, Startex, FADI, Aire Libre (AYRE LIBRE SA),
+    Mediglove, Segutécnica, Segufer, BH Industrial (EUGENIO MASTROIANNI 20-08528051-2; GRUPO MASTROIANNI S.A. es otro CUIT sin movimientos),
+    Iturria (COMERCIALIZADORA ITURRIA MDP), SPI (SPI SHIELD INDUSTRIAL), DPS (INDUSTRIAS DE PASCALE), Conoflex (SERENPLAS SRL).
+    Se sacó "Delta Plus" de ESPACIO MARKETING (era un error: Delta Plus = **ESLINGAR**, no está cargado en el CRM).
+    **Pendientes:** dar de alta Eslingar (Delta Plus) y **MARIANA SA** (Pegaso) y vincularlos; Ecoway (Augusto pasa el nombre); Fravida (sin confirmar).
+  - Ordenar OC abiertas: al abrir muestra botones con los proveedores que tienen lista de costos y renglones sin ordenar (hoy: Prisina 59, Star-Tex 23,
+    TKW 19, De Pascale 9, Ayre Libre 6, Mastroianni 4, Mediglove 3, Segutécnica 2, Serenplas 2; FADI ya ordenado). Se busca también por fantasía.
+  - Compras: el proveedor se ve "RAZÓN SOCIAL · Fantasía" (si es distinta) y se busca por los dos (`lib/proveedor-nombre.ts`, prueba `scripts/test-proveedor-nombre.ts`).
+  - **Enviar OC: solo al contacto de VENTAS** (`contactoVentas` en `lib/oc-envio.ts`, prueba `scripts/test-contacto-ventas.ts`). Nunca usa el mail del
+    proveedor (es el de administración, para facturas; se muestra "Administración: x (no se usa)") ni contactos de Cobros. "Guardar en el proveedor"
+    crea/actualiza el contacto "Ventas". Probado en producción con OC-1224 Prisina: campos vacíos + aviso; cerrado SIN enviar.
+  - **Datos de proveedores (Excel `Claude outputs/proveedores_datos_faltantes_12_10_2026.xlsx`):** de los 51 con OC, 48 sin vendedor (WhatsApp/mail),
+    27 sin mail de administración, 10 sin CBU; Prisina, FADI, Inmuovi y San Martín tienen un mail de ventas en el campo de administración.
+    Augusto lo completa y Claude carga los vendedores (mostrar la lista antes de guardar).
   1) Compras: filtro **"Abiertas"** por defecto (todas menos completas y canceladas; hoy 77 de 125). "Todas" y "Completas" siguen.
   2) Columnas Pago, Pedido y Factura con íconos (✓ verde, ½ azul, ✗ naranja/gris, tarjeta); el texto sale al pasar el mouse.
   3) Recibido (antes "Mercadería") solo con el punto de color (y "3/10" si es parcial); sin mail debajo del proveedor; "Copiar" solo ícono;
