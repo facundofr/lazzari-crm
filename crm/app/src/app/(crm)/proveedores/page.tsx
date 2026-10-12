@@ -1071,7 +1071,7 @@ export default function ProveedoresPage() {
         subtitle={`${proveedores.length} proveedores — ${listas.length} listas de precios`}
         action={{ label: tab === "proveedores" ? "Nuevo proveedor" : "Cargar lista con IA", onClick: tab === "proveedores" ? openCreate : openAiUpload }}
       />
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         {/* Tabs */}
         <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-fit">
           {(["proveedores", "listas"] as const).map((t) => (

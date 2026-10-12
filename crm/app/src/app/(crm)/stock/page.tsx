@@ -462,7 +462,7 @@ export default function StockPage() {
         subtitle="Control de inventario y articulos"
         action={{ label: "Nuevo articulo", onClick: openCreate }}
       />
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard title="Total articulos" value={String(productos.length)} icon={Package} iconColor="text-blue-600" />
           <StatCard title="Valor de stock" value={valorStockLabel} icon={Package} iconColor="text-emerald-600" />

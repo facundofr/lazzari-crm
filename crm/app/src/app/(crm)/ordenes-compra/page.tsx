@@ -2084,7 +2084,7 @@ export default function OrdenesCompraPage() {
         </button>
       </div>}
 
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         {facturaLinksError && (
           <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />

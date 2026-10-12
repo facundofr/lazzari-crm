@@ -12,6 +12,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { normalizeEmail } from "@/lib/email";
 import { useUser } from "@/lib/auth-context";
+import { ArcaStatusCard } from "@/components/arca-status-card";
 
 type ComisionTipo = "porcentaje_venta" | "porcentaje_margen" | "monto_fijo";
 type ComisionAplicaA = "todos" | "vendedor_especifico";
@@ -641,7 +642,7 @@ export default function ConfiguracionPage() {
   return (
     <>
       <Header title="Configuracion" subtitle="Administracion del sistema" />
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         <div className="flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
           {tabs.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
@@ -864,9 +865,10 @@ export default function ConfiguracionPage() {
         )}
 
         {tab === "integraciones" && (
+          <div className="space-y-4">
+          <ArcaStatusCard />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {[
-              { name: "AFIP — Factura electronica", desc: "WSFE para emision de comprobantes y obtencion de CAE", icon: Key, connected: false, note: "Requiere certificado digital" },
               { name: "AFIP — Remitos electronicos", desc: "COT para remitos con codigo de autorizacion", icon: Key, connected: false, note: "Requiere certificado digital" },
               { name: "Banco — Cuenta corriente", desc: "Sincronizacion de movimientos bancarios", icon: Database, connected: false, note: "API bancaria pendiente" },
               { name: "Banco — E-cheques", desc: "Gestion de echeqs emitidos y recibidos", icon: Database, connected: false, note: "API bancaria pendiente" },
@@ -894,6 +896,7 @@ export default function ConfiguracionPage() {
                 </div>
               </Card>
             ))}
+          </div>
           </div>
         )}
 

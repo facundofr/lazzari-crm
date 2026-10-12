@@ -914,7 +914,7 @@ export default function ReportesPage() {
 
       {/* Tab: Analisis comercial */}
       {activeTab === "comercial" && (
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         {/* Charts row */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Ventas mensuales */}
@@ -1077,7 +1077,7 @@ export default function ReportesPage() {
 
       {/* Tab: Compras vs ventas */}
       {activeTab === "compras_ventas" && (
-        <div className="space-y-6 p-4 sm:p-8">
+        <div className="space-y-4 p-3 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Compras, ventas y margen comercial</h2>
@@ -1149,7 +1149,7 @@ export default function ReportesPage() {
 
       {/* Tab: Ranking por Articulo */}
       {activeTab === "articulos" && (
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         {articulosLoading ? (
           <div className="flex items-center justify-center p-16">
             <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
@@ -1358,7 +1358,7 @@ export default function ReportesPage() {
 
       {/* Tab: Comisiones */}
       {activeTab === "comisiones" && (
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         {comisionesLoading ? (
           <div className="flex items-center justify-center p-16">
             <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
@@ -1523,7 +1523,7 @@ export default function ReportesPage() {
 
       {/* Tab: Libro IVA */}
       {activeTab === "libro_iva" && (
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         {/* Controls */}
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-600 overflow-hidden">

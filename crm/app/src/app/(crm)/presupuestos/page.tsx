@@ -2414,7 +2414,7 @@ export default function PresupuestosPage() {
         subtitle={`${presupuestos.length} presupuestos totales`}
         action={{ label: "Nuevo PR", onClick: () => setShowNewPR(true) }}
       />
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         {/* Status multi-select toggles + seguimiento */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex gap-2 flex-wrap flex-1">

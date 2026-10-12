@@ -10,6 +10,8 @@ import { formatCurrency, formatDate, formatDateTime, todayAR } from "@/lib/utils
 import { canMatchBankMovement } from "@/lib/extracto-match";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { traerTodo } from "@/lib/paginar";
+import { Autocompletar } from "@/components/ui/autocompletar";
+import { FINANZAS_GRUPOS, grupoDeTab, operacionVencimientos, pestanaInicial, type FinanzasGrupo, type FinanzasTab } from "@/lib/finanzas-grupos";
 import { clasificarMovimiento, esCobroDeCliente, sentidoAjuste, resumirCaja, TIPOS_RETENCION } from "@/lib/tipos-movimiento";
 import { filtrarCheques, MOTIVOS_RECHAZO_CHEQUE } from "@/lib/cheques-filtro";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
@@ -52,7 +54,15 @@ const tipoConfig: Record<string, { label: string; variant: "success" | "danger" 
   retencion_suss: { label: "Ret. SUSS", variant: "warning", icon: Wallet },
 };
 
-type FinanzasTab = "cuentas" | "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago" | "gastos_manuales" | "echeqs" | "cheques_tercero" | "cc_clientes" | "cc_proveedores" | "extractos" | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones";
+const FINANZAS_ULTIMA_PESTANA = "finanzas.ultimaPestana";
+
+function leerPestanaInicial(): { grupo: FinanzasGrupo; tab: FinanzasTab } {
+  if (typeof window === "undefined") return pestanaInicial({});
+  const params = new URLSearchParams(window.location.search);
+  let guardado: { grupo?: unknown; tab?: unknown } | null = null;
+  try { guardado = JSON.parse(window.localStorage.getItem(FINANZAS_ULTIMA_PESTANA) || "null"); } catch { guardado = null; }
+  return pestanaInicial({ tab: params.get("tab"), factura: params.get("factura"), grupo: params.get("grupo") }, guardado);
+}
 
 // ── Echeq types ──
 interface EcheqRow {
@@ -571,13 +581,10 @@ const emptyMovForm = {
 
 export default function FinanzasPage() {
   const { sociedadActiva, profile } = useUser();
-  const [tab, setTab] = useState<FinanzasTab>(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get("factura")) return "facturacion";
-    }
-    return "cuentas";
-  });
+  // Finanzas en 5 grupos (Hoy / Cobrar / Pagar / Cheques / Deudas); recuerda lo último abierto en esta compu.
+  const [inicioFinanzas] = useState(leerPestanaInicial);
+  const [grupo, setGrupo] = useState<FinanzasGrupo>(inicioFinanzas.grupo);
+  const [tab, setTabActual] = useState<FinanzasTab>(inicioFinanzas.tab);
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
   const [loading, setLoading] = useState(true);
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
@@ -629,7 +636,28 @@ export default function FinanzasPage() {
   const [reciboSearch, setReciboSearch] = useState("");
   const [resumenFinanciero, setResumenFinanciero] = useState<"caja" | "balance" | null>(null);
   const [deudasVenta, setDeudasVenta] = useState<VencimientoDeudaRow[]>([]);
-  const [vencOperacion, setVencOperacion] = useState<"" | "venta" | "compra">("");
+  const [vencOperacion, setVencOperacion] = useState<"" | "venta" | "compra">(() => inicioFinanzas.tab === "vencimientos" ? operacionVencimientos(inicioFinanzas.grupo) : "");
+
+  /** Cambia de pestaña y, si hace falta, de grupo. Vencimientos abre filtrado según el grupo (a cobrar / a pagar). */
+  function setTab(nueva: FinanzasTab, grupoElegido?: FinanzasGrupo) {
+    const nuevoGrupo = grupoElegido ?? grupoDeTab(nueva, grupo);
+    setGrupo(nuevoGrupo);
+    setTabActual(nueva);
+    if (nueva === "vencimientos") setVencOperacion(operacionVencimientos(nuevoGrupo));
+  }
+
+  // Al llegar desde otra pantalla sin recargar (links de Ventas, Proveedores, Facturación), en el primer render
+  // la dirección todavía es la anterior: se vuelve a leer una vez montada la página.
+  useEffect(() => {
+    const inicio = leerPestanaInicial();
+    if (inicio.tab !== tab || inicio.grupo !== grupo) setTab(inicio.tab, inicio.grupo);
+    proveedorDelLink.current = new URLSearchParams(window.location.search).get("proveedor");
+  }, []);
+
+  useEffect(() => {
+    try { window.localStorage.setItem(FINANZAS_ULTIMA_PESTANA, JSON.stringify({ grupo, tab })); } catch { /* sin almacenamiento: no pasa nada */ }
+  }, [grupo, tab]);
+
   const [vencEntidadTipo, setVencEntidadTipo] = useState<"" | "cliente" | "proveedor">("");
   const [vencMoneda, setVencMoneda] = useState<"" | "ARS" | "USD">("");
   const [vencEntidad, setVencEntidad] = useState("");
@@ -922,6 +950,15 @@ export default function FinanzasPage() {
   const [ccDetailFCProv, setCcDetailFCProv] = useState<CCFCRow[]>([]);
   const [ccDetailMovProv, setCcDetailMovProv] = useState<CCMovRow[]>([]);
   const [ccDetailProvLoading, setCcDetailProvLoading] = useState(false);
+  // Link "Ver cuenta corriente" desde Proveedores (?tab=cc_proveedores&proveedor=ID): abre esa CC una sola vez.
+  const proveedorDelLink = useRef<string | null>(null);
+  useEffect(() => {
+    const id = proveedorDelLink.current;
+    if (!id || ccProveedores.length === 0) return;
+    const prov = ccProveedores.find((p) => p.id === id);
+    proveedorDelLink.current = null;
+    if (prov) { setTab("cc_proveedores"); fetchCCDetailProveedor(prov); }
+  }, [ccProveedores]);
 
   // ── Cobro Multiple modal ──
   interface CobroMultiFC { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; subtotal: number; iva: number; total: number; total_acreditado: number; moneda: string; tipo_cambio?: number; saldo: number; selected: boolean }
@@ -3453,9 +3490,6 @@ export default function FinanzasPage() {
   const sevenDays = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
   const echeqsPorVencer = echeqsEnCartera.filter(e => e.fecha_pago >= today && e.fecha_pago <= sevenDays).length;
 
-  const filteredClientesEcheq = echeqClienteSearch.trim()
-    ? clientesOptions.filter((c: ClienteOption) => c.razon_social.toLowerCase().includes(echeqClienteSearch.toLowerCase()))
-    : clientesOptions;
 
   async function handleCreateEcheq() {
     if (!echeqForm.numero.trim()) { setEcheqError("El numero es obligatorio"); return; }
@@ -3677,25 +3711,8 @@ export default function FinanzasPage() {
     return !query || recibo.cliente_nombre.toLocaleLowerCase().includes(query) || recibo.descripcion.toLocaleLowerCase().includes(query);
   }), [recibosClientes, reciboSearch]);
 
-  const tabs: { id: FinanzasTab; label: string }[] = [
-    { id: "cuentas", label: "Cuentas" },
-    { id: "movimientos", label: "Movimientos" },
-    { id: "recibos", label: "Recibos" },
-    { id: "vencimientos", label: "Vencimientos" },
-    { id: "facturacion", label: "Fact. Ventas" },
-    { id: "facturas_compra", label: "Fact. Compra" },
-    { id: "ordenes_pago", label: "Órdenes de pago" },
-    { id: "gastos_manuales", label: "Gastos" },
-    { id: "echeqs", label: "Cheques" },
-    { id: "cheques_tercero", label: "Cheques Martín F." },
-    { id: "cc_clientes", label: "CC Clientes" },
-    { id: "cc_proveedores", label: "CC Prov." },
-    { id: "extractos", label: "Extractos" },
-    { id: "lineas_credito", label: "Crédito" },
-    // { id: "gastos_fijos", label: "G. Fijos" },  // OCULTO: funcionalidad en revisión
-    { id: "objetivos", label: "Objetivos" },
-    { id: "retenciones", label: "Retenciones" },
-  ];
+  const tabsDelGrupo = FINANZAS_GRUPOS.find((g) => g.id === grupo)?.tabs ?? FINANZAS_GRUPOS[0].tabs;
+  const iconoGrupo: Record<FinanzasGrupo, typeof Wallet> = { hoy: CalendarDays, cobrar: ArrowDownLeft, pagar: ArrowUpRight, cheques: Receipt, deudas: Landmark };
 
   // Filtros de retenciones
   const [retFilterDesde, setRetFilterDesde] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; });
@@ -3794,9 +3811,44 @@ export default function FinanzasPage() {
   return (
     <>
       <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setEditingMovId(null); setMovForm(emptyMovForm); setMovClienteSearch(""); setMovProvSearch(""); setFormError(""); setModalOpen(true); } }} />
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         {cargaLentaAviso}
         {errorCargaAviso}
+
+        {/* Grupos: Hoy / Cobrar / Pagar / Cheques / Deudas */}
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+            {FINANZAS_GRUPOS.map((g) => {
+              const Icono = iconoGrupo[g.id];
+              const activo = grupo === g.id;
+              return (
+                <button key={g.id} type="button" onClick={() => { if (!activo) { setTab(g.tabs[0].id, g.id); setCcDetailCliente(null); setCcDetailProveedor(null); fetchData(); } }}
+                  aria-pressed={activo}
+                  className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${activo ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 bg-white hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900"}`}>
+                  <Icono className={`h-5 w-5 shrink-0 ${activo ? "text-orange-600" : "text-zinc-400"}`} />
+                  <span className="min-w-0">
+                    <span className={`block text-sm font-semibold ${activo ? "text-orange-700 dark:text-orange-300" : "text-zinc-800 dark:text-zinc-200"}`}>{g.label}</span>
+                    <span className="hidden truncate text-xs text-zinc-500 lg:block">{g.descripcion}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="w-full overflow-x-auto pb-1">
+            <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-max">
+              {tabsDelGrupo.map((t) => (
+                <button key={t.id} onClick={() => { setTab(t.id, grupo); setCcDetailCliente(null); setCcDetailProveedor(null); fetchData(); }}
+                  className={`rounded-md px-3 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                    tab === t.id ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                  }`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {grupo === "hoy" && (
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -3816,8 +3868,9 @@ export default function FinanzasPage() {
           </button>
           <span className="text-xs text-zinc-400">Abrí sólo el resumen que necesites; el resto del módulo queda visible.</span>
         </div>
+        )}
 
-        {resumenFinanciero === "caja" && (<>
+        {grupo === "hoy" && resumenFinanciero === "caja" && (<>
         {/* ── Resumen de Caja ── */}
         <Card className="p-4">
           <div className="flex items-center justify-between mb-3">
@@ -3925,7 +3978,7 @@ export default function FinanzasPage() {
         </>)}
 
         {/* ── Balance Debe / Haber ── */}
-        {resumenFinanciero === "balance" && balanceData && (
+        {grupo === "hoy" && resumenFinanciero === "balance" && balanceData && (
           <Card className="p-4">
             <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
               <Target className="h-4 w-4 text-orange-500" />
@@ -3980,20 +4033,6 @@ export default function FinanzasPage() {
             </div>
           </Card>
         )}
-
-        {/* Tabs */}
-        <div className="w-full overflow-x-auto pb-1">
-          <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-max">
-            {tabs.map((t) => (
-              <button key={t.id} onClick={() => { setTab(t.id); setCcDetailCliente(null); setCcDetailProveedor(null); fetchData(); }}
-                className={`rounded-md px-3 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
-                  tab === t.id ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-                }`}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-        </div>
 
         {/* ── Cuentas ── */}
         {tab === "cuentas" && <CuentasFinancieras onIrACheques={() => setTab("echeqs")} />}
@@ -5247,18 +5286,15 @@ export default function FinanzasPage() {
                     </div>
                     {echeqForm.origen_tipo === "cliente" ? (
                       <div>
-                        <input
-                          type="text"
-                          value={echeqClienteSearch}
-                          onChange={(e) => setEcheqClienteSearch(e.target.value)}
-                          placeholder="Filtrar clientes..."
-                          className="w-full rounded-t-lg border border-zinc-200 px-3 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                        <Autocompletar
+                          opciones={clientesOptions.map((c: ClienteOption) => ({ valor: c.id, texto: c.razon_social }))}
+                          placeholder={clientesOptions.find((c: ClienteOption) => c.id === echeqForm.origen_id)?.razon_social || "Escribí el cliente…"}
+                          onElegir={(id) => setEcheqForm({ ...echeqForm, origen_id: id })}
+                          className="w-full border-zinc-200 dark:border-zinc-700"
                         />
-                        <select value={echeqForm.origen_id} onChange={(e) => setEcheqForm({ ...echeqForm, origen_id: e.target.value })} size={5}
-                          className="w-full rounded-b-lg border border-t-0 border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                          <option value="">Seleccionar cliente</option>
-                          {filteredClientesEcheq.map((c: ClienteOption) => <option key={c.id} value={c.id}>{c.razon_social}</option>)}
-                        </select>
+                        {echeqForm.origen_id && (
+                          <p className="mt-1 text-xs text-emerald-600">Cliente: {clientesOptions.find((c: ClienteOption) => c.id === echeqForm.origen_id)?.razon_social}</p>
+                        )}
                       </div>
                     ) : (
                       <input value={echeqForm.origen_nombre} onChange={(e) => setEcheqForm({ ...echeqForm, origen_nombre: e.target.value })}
@@ -5692,6 +5728,11 @@ export default function FinanzasPage() {
                   Total mensual: <span className="font-bold font-mono text-zinc-900 dark:text-white">
                     {formatCurrency(gastosFijos.filter((g) => g.activo && g.moneda === "ARS").reduce((s, g) => s + g.monto, 0))}
                   </span>
+                  {gastosFijos.some((g) => g.activo && g.moneda === "USD") && (
+                    <> + <span className="font-bold font-mono text-zinc-900 dark:text-white">
+                      {formatCurrency(gastosFijos.filter((g) => g.activo && g.moneda === "USD").reduce((s, g) => s + g.monto, 0), "USD")}
+                    </span></>
+                  )}
                 </p>
               </div>
               <button onClick={() => openGastoModal()} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">

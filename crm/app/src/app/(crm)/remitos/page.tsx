@@ -1190,7 +1190,7 @@ export default function RemitosPage() {
         subtitle="Remitos de entrega"
         action={{ label: "Nuevo remito", onClick: openCreateModal }}
       />
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         <SmartFilters
           filters={smartFilterConfigs}
           values={smartFilterValues}
@@ -1609,7 +1609,7 @@ export default function RemitosPage() {
                     {detailFacturas.map((f) => (
                       <button
                         key={f.id}
-                        onClick={() => window.open(`/facturacion`, "_self")}
+                        onClick={() => window.open(`/facturacion?factura=${f.id}`, "_self")}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 px-2.5 py-1.5 text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
                         title="Ir a facturacion"
                       >

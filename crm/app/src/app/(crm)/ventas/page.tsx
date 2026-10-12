@@ -882,7 +882,7 @@ export default function VentasPage() {
   return (
     <>
       <Header title="Ventas" subtitle={`${ventas.length} ventas en proceso`} />
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
 
         {/* Tab toggle */}
         <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-fit">

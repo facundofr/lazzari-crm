@@ -7,6 +7,8 @@ import { supabase } from "@/lib/supabase/client";
 import { formatCurrency, todayAR } from "@/lib/utils";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { buildOrdenPagoPlan, type OpParsed } from "@/lib/orden-pago-plan";
+import { diaHabilAnterior } from "@/lib/dias-habiles";
+import { modalidadCobroUsd, compararTcCobro, mensajeActualizacionTc, UMBRAL_TC_COBRO, type ModalidadUsd } from "@/lib/tc-cobro-usd";
 
 export interface FxSettlementDocument { id: string; numero: string; saldo: number; total: number; subtotal?: number; cotizacion?: number }
 interface Props {
@@ -38,18 +40,17 @@ const mediosPorKind = (kind: "cobro" | "pago") => (kind === "cobro" ? [...medios
 const medioLabel: Record<string, string> = { transferencia: "transferencia", efectivo: "efectivo", deposito: "deposito", cheque_recibido: "cheque / eCheq" };
 const retentionTypes = [{ value: "retencion_iva", label: "IVA" }, { value: "retencion_ganancias", label: "Ganancias" }, { value: "retencion_iibb", label: "IIBB" }, { value: "retencion_suss", label: "SUSS" }];
 
-function prevDay(dateStr: string): string {
-  const d = new Date(dateStr + "T12:00:00");
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().split("T")[0];
-}
-
 export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents, onClose, onSuccess, ordenPago, ordenPagoAvisos, onCobrarOrdenCompleta }: Props) {
   const [fecha, setFecha] = useState(todayAR());
-  const [cotizacionFecha, setCotizacionFecha] = useState(prevDay(todayAR()));
+  const [cotizacionFecha, setCotizacionFecha] = useState(diaHabilAnterior(todayAR()));
   const [modalidad, setModalidad] = useState<"divisas" | "billetes" | "manual">("divisas");
   const [cotizacion, setCotizacion] = useState("");
-  const [bnaRef, setBnaRef] = useState<{ label: string; valor: number } | null>(null);
+  const [bnaRef, setBnaRef] = useState<{ label: string; valor: number; fecha: string } | null>(null);
+  // Divisa o billete del cliente: con eso se compara contra el BNA (regla de Augusto, lib/tc-cobro-usd.ts).
+  const [modalidadCliente, setModalidadCliente] = useState<ModalidadUsd | null>(null);
+  const [copiado, setCopiado] = useState(false);
+  // Mientras el usuario no elija otra cotización, se usa la del cliente (TC implícito).
+  const tcElegido = useRef(false);
   const [quoteStamp, setQuoteStamp] = useState("");
   const [allocations, setAllocations] = useState<Record<string, string>>(() => Object.fromEntries(documents.map(d => [d.id, ""])));
   const [medios, setMedios] = useState<Medio[]>([{ tipo: "transferencia", monto: "", fecha: todayAR(), referencia: "" }]);
@@ -134,7 +135,7 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
 
       // Fecha de la operación = fecha del pago (nunca futura).
       const fechaOp = plan.fecha && /^\d{4}-\d{2}-\d{2}$/.test(plan.fecha) && plan.fecha <= todayAR() ? plan.fecha : fecha;
-      setFecha(fechaOp); setCotizacionFecha(prevDay(fechaOp));
+      setFecha(fechaOp); setCotizacionFecha(diaHabilAnterior(fechaOp));
 
       // USD a cancelar y tipo de cambio que usó el cliente.
       if (plan.incluidas.length) {
@@ -205,11 +206,65 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
       const data = await response.json();
       if (!response.ok || !(Number(data.valor_venta) > 0)) throw new Error(data.error || "No se obtuvo una cotización válida.");
       if (data.fecha !== cotizacionFecha) throw new Error(`BNA devolvió ${data.fecha || "otra fecha"}, no ${cotizacionFecha}. No se aplicó: elegí esa fecha explícitamente o usá cotización manual.`);
-      if (id === quoteRequest.current) { setCotizacion(toDecimalInput(Number(data.valor_venta))); setQuoteStamp(stamp); setBnaRef({ label: `BNA ${modalidad} ${cotizacionFecha.split("-").reverse().join("/")}`, valor: Number(data.valor_venta) }); }
+      if (id === quoteRequest.current) { setCotizacion(toDecimalInput(Number(data.valor_venta))); setQuoteStamp(stamp); }
     } catch (e) { if (id === quoteRequest.current) setError(e instanceof Error ? e.message : "No se pudo consultar BNA."); }
     finally { if (id === quoteRequest.current) setLoadingQuote(false); }
   }
   function changeQuote() { quoteRequest.current += 1; setLoadingQuote(false); setQuoteStamp(""); }
+
+  // Divisa o billete: lo de las facturas o, si no dicen, la ficha del cliente.
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      if (kind !== "cobro") { setModalidadCliente("divisas"); return; }
+      const [{ data: fs }, { data: cli }] = await Promise.all([
+        (supabase as any).from("facturas").select("cotizacion_modalidad").in("id", documents.map(d => d.id)),
+        (supabase as any).from("clientes").select("moneda_predeterminada").eq("id", counterpartyId).maybeSingle(),
+      ]);
+      const m = modalidadCobroUsd((fs || []).map((f: { cotizacion_modalidad: string | null }) => f.cotizacion_modalidad), cli?.moneda_predeterminada);
+      if (!vivo) return;
+      setModalidadCliente(m);
+      if (!sentPayload.current && !tcElegido.current) setModalidad(prev => (prev === "manual" ? prev : m));
+    })().catch(() => { if (vivo) setModalidadCliente("divisas"); });
+    return () => { vivo = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, counterpartyId]);
+
+  // BNA de referencia (día hábil anterior al cobro), se trae solo.
+  useEffect(() => {
+    if (!modalidadCliente || !cotizacionFecha) return;
+    let vivo = true;
+    setBnaRef(null);
+    fetch(`/api/cotizacion-bna?modalidad=${modalidadCliente}&fecha=${encodeURIComponent(cotizacionFecha)}`, { cache: "no-store" })
+      .then(r => r.json())
+      .then(data => {
+        if (!vivo || !(Number(data.valor_venta) > 0) || !data.fecha) return;
+        const dias = (Date.parse(cotizacionFecha) - Date.parse(data.fecha)) / 86400000;
+        if (dias < 0 || dias > 7) return;
+        setBnaRef({ label: `BNA ${modalidadCliente === "billetes" ? "billete" : "divisa"} ${String(data.fecha).split("-").reverse().join("/")}`, valor: Number(data.valor_venta), fecha: data.fecha });
+      })
+      .catch(() => {});
+    return () => { vivo = false; };
+  }, [modalidadCliente, cotizacionFecha]);
+
+  // Sin cotización elegida a mano: arranca con el BNA y, apenas hay pesos cargados, se cancela con el TC del cliente.
+  useEffect(() => {
+    if (sentPayload.current || tcElegido.current || modalidad === "manual" || !modalidadCliente || modalidad !== modalidadCliente) return;
+    if (quoteStamp !== `${modalidad}:${cotizacionFecha}` && !loadingQuote) void consultarBna();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalidad, modalidadCliente, cotizacionFecha]);
+  useEffect(() => {
+    if (sentPayload.current || tcElegido.current || impliedRate === null) return;
+    const v = Math.round(impliedRate * 1000000) / 1000000;
+    if (modalidad === "manual" && Math.abs(rate - v) < 0.000001) return;
+    changeQuote(); setModalidad("manual"); setCotizacion(toDecimalInput(v));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [impliedRate]);
+  const comparacion = kind === "cobro" && impliedRate !== null && bnaRef ? compararTcCobro(impliedRate, bnaRef.valor, totalUsd) : null;
+  const mensajeCliente = comparacion?.estado === "abajo" && bnaRef && impliedRate !== null && modalidadCliente
+    ? mensajeActualizacionTc({ facturas: allocatedDocs.map(d => d.numero), tcCliente: impliedRate, tcBna: bnaRef.valor, modalidad: modalidadCliente, fechaBna: bnaRef.fecha, faltante: comparacion.faltante })
+    : "";
+  const pct = (n: number) => `${n > 0 ? "+" : ""}${(n * 100).toLocaleString("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`;
   async function guardar() {
     if (inFlight.current) return;
     if (!sentPayload.current) {
@@ -266,8 +321,8 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
         {opMensaje && <ul className={`mt-2 list-disc space-y-1 pl-5 text-xs ${opMensaje.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"}`}>{opMensaje.lineas.map((l, i) => <li key={i}>{l}</li>)}</ul>}
         {opConOtras && onCobrarOrdenCompleta && <button type="button" className="mt-2 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white" onClick={() => onCobrarOrdenCompleta(opConOtras)}>Cobrar todas las facturas de esta orden de pago</button>}
       </div>
-      <div className="grid gap-3 sm:grid-cols-3"><label className="text-sm">Fecha de la operación<input className={input} type="date" value={fecha} onChange={e => { const v = e.target.value; setFecha(v); setMedios(p => p.map(m => ({ ...m, fecha: v }))); changeQuote(); setCotizacionFecha(prevDay(v)); }} /></label><label className="text-sm">Fecha de cotización<input className={input} type="date" value={cotizacionFecha} onChange={e => { changeQuote(); setCotizacionFecha(e.target.value); }} /></label><label className="text-sm">Cotización ARS por USD<input className={input} type="text" inputMode="decimal" placeholder="Ej: 1.530,50" value={cotizacion} readOnly={modalidad !== "manual"} onChange={e => setCotizacion(e.target.value)} /></label></div>
-      <div className="flex flex-wrap items-center gap-2">{(["divisas", "billetes", "manual"] as const).map(m => <button type="button" key={m} className={`${button} ${modalidad === m ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950" : ""}`} onClick={() => { changeQuote(); setModalidad(m); }}>{m === "divisas" ? "Divisas" : m === "billetes" ? "Billetes" : "Manual"}</button>)}<button type="button" className={button} disabled={modalidad === "manual" || loadingQuote} onClick={consultarBna}>{loadingQuote ? "Consultando…" : "Consultar BNA para esa fecha"}</button>{singleDocumentRate && <button type="button" className={`${button} ${modalidad === "manual" && Math.abs(rate - singleDocumentRate) < 0.000001 ? "border-green-600 text-green-700 dark:text-green-400" : ""}`} onClick={() => applyRate(singleDocumentRate)}>Usar TC de la factura ({formatCurrency(singleDocumentRate, "ARS")})</button>}</div>
+      <div className="grid gap-3 sm:grid-cols-3"><label className="text-sm">Fecha de la operación<input className={input} type="date" value={fecha} onChange={e => { const v = e.target.value; setFecha(v); setMedios(p => p.map(m => ({ ...m, fecha: v }))); changeQuote(); setCotizacionFecha(diaHabilAnterior(v)); }} /></label><label className="text-sm">Fecha de cotización<input className={input} type="date" value={cotizacionFecha} onChange={e => { changeQuote(); setCotizacionFecha(e.target.value); }} /></label><label className="text-sm">Cotización ARS por USD<input className={input} type="text" inputMode="decimal" placeholder="Ej: 1.530,50" value={cotizacion} readOnly={modalidad !== "manual"} onChange={e => { tcElegido.current = true; setCotizacion(e.target.value); }} /></label></div>
+      <div className="flex flex-wrap items-center gap-2">{(["divisas", "billetes", "manual"] as const).map(m => <button type="button" key={m} className={`${button} ${modalidad === m ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950" : ""}`} onClick={() => { tcElegido.current = true; changeQuote(); setModalidad(m); }}>{m === "divisas" ? "Divisas" : m === "billetes" ? "Billetes" : "Manual"}</button>)}<button type="button" className={button} disabled={modalidad === "manual" || loadingQuote} onClick={consultarBna}>{loadingQuote ? "Consultando…" : "Consultar BNA para esa fecha"}</button>{singleDocumentRate && <button type="button" className={`${button} ${modalidad === "manual" && Math.abs(rate - singleDocumentRate) < 0.000001 ? "border-green-600 text-green-700 dark:text-green-400" : ""}`} onClick={() => { tcElegido.current = true; applyRate(singleDocumentRate); }}>Usar TC de la factura ({formatCurrency(singleDocumentRate, "ARS")})</button>}</div>
       <div className="space-y-3"><h3 className="font-medium">USD a cancelar por factura</h3>{documents.map(d => {
         const allocated = parseNum(allocations[d.id] || "0");
         const exceedsBalance = Number.isFinite(allocated) && cents(allocated) > cents(d.saldo);
@@ -281,7 +336,14 @@ export function FxSettlementDialog({ kind, sociedadId, counterpartyId, documents
           <p>TC implícito del pago: <strong>{formatCurrency(impliedRate, "ARS")}</strong> por USD <span className="text-xs text-zinc-500">(depósitos + retenciones ÷ USD a cancelar)</span></p>
           {rateCandidates.map(c => <p key={c.key} className={matchesImplied(c.valor) ? "text-green-700 dark:text-green-400" : ""}>{c.label}: {formatCurrency(c.valor, "ARS")} {matchesImplied(c.valor) ? "✓ coincide: el cliente pagó con este tipo de cambio" : `· diferencia ${formatCurrency((impliedRate - c.valor) * totalUsd, "ARS")}`}</p>)}
           {!rateCandidates.some(c => matchesImplied(c.valor)) && <p className="text-xs text-zinc-500">{rateCandidates.length ? "No coincide con ninguno de los tipos de cambio de referencia." : "Consultá BNA para comparar con la cotización del día."}</p>}
-          {!(modalidad === "manual" && Math.abs(rate - impliedRate) < 0.000001) && <button type="button" className={button} onClick={() => applyRate(impliedRate)}>Usar el TC implícito como cotización</button>}
+          {!(modalidad === "manual" && Math.abs(rate - impliedRate) < 0.000001) && <button type="button" className={button} onClick={() => { tcElegido.current = false; applyRate(impliedRate); }}>Usar el TC implícito como cotización</button>}
+          {comparacion?.estado === "abajo" && bnaRef && <div role="status" className="mt-2 space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+            <p>⚠️ El cliente pagó a <strong>{formatCurrency(impliedRate, "ARS")}</strong> y el {bnaRef.label} era <strong>{formatCurrency(bnaRef.valor, "ARS")}</strong> ({pct(comparacion.diferenciaPct)}, más de {UMBRAL_TC_COBRO * 100} % abajo). Te faltan <strong>{formatCurrency(comparacion.faltante, "ARS")}</strong>: pedile la actualización al cliente.</p>
+            <p className="text-xs">Es solo un aviso: podés confirmar igual.</p>
+            <button type="button" className={`${button} border-amber-400 bg-white dark:bg-zinc-900`} onClick={() => { void navigator.clipboard?.writeText(mensajeCliente).then(() => { setCopiado(true); setTimeout(() => setCopiado(false), 2000); }).catch(() => {}); }}>{copiado ? "Mensaje copiado ✓" : "Copiar mensaje para el cliente"}</button>
+          </div>}
+          {comparacion?.estado === "arriba" && bnaRef && <p className="mt-2 rounded-lg border border-green-300 bg-green-50 p-2 text-green-800 dark:border-green-800 dark:bg-green-950/30 dark:text-green-300">El cliente pagó arriba del {bnaRef.label} ({pct(comparacion.diferenciaPct)}): {formatCurrency(-comparacion.faltante, "ARS")} a favor.</p>}
+          {comparacion?.estado === "en_rango" && bnaRef && <p className="mt-2 text-xs text-zinc-500">Contra el {bnaRef.label}: {pct(comparacion.diferenciaPct)}, dentro del {UMBRAL_TC_COBRO * 100} %.</p>}
         </div>}
       </div>
     </fieldset>

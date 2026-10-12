@@ -9,6 +9,7 @@ import { DataTable } from "@/components/ui/data-table";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, formatDateTime, todayAR } from "@/lib/utils";
 import { generateFacturaPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64, documentFilename } from "@/lib/pdf-templates";
+import { Autocompletar } from "@/components/ui/autocompletar";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { EmailComposeModal, type EmailDocumentType } from "@/components/email-compose-modal";
@@ -32,7 +33,7 @@ import { mockFacturas } from "@/lib/mock-data";
 import {
   Receipt, DollarSign, FileCheck, AlertTriangle, Loader2, XCircle,
   X, Printer, CheckCircle2, Clock, Ban, Copy, Download, Check,
-  ShieldCheck, KeyRound, Server, ClipboardCopy, Plus, Minus, Mail, MailCheck, FileText, Search, Scissors,
+  ShieldCheck, ClipboardCopy, Plus, Minus, Mail, MailCheck, FileText, Search, Scissors,
   Maximize2, Minimize2, Pencil, Trash2, Upload, Sparkles, Eye, CheckCheck, MailX,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
@@ -1341,8 +1342,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     const totalLineas = lineasValidas.reduce((s, l) => s + montoNum(l.monto), 0);
     const saldo = Number(factura.total) - Number(factura.total_acreditado || 0) - cobroPrevios;
     const saldoComp = saldo;
-    if (totalLineas > saldoComp + 0.01) {
-      alert(`El total de cobros ($${totalLineas.toLocaleString()}) supera el saldo pendiente ($${Math.max(0, saldoComp).toLocaleString()})`);
+    // Aviso, nunca bloqueo (regla de Augusto): puede haber un redondeo o un pago de más que se aplica después.
+    if (totalLineas > saldoComp + 0.01 && !confirm(`El total de cobros (${formatCurrency(totalLineas)}) supera el saldo de la factura (${formatCurrency(Math.max(0, saldoComp))}). ¿Guardar igual?`)) {
       return;
     }
     const avisoFecha = avisoFechaCobroFutura(cobroFecha, todayAR());
@@ -1711,7 +1712,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         action={{ label: "Emitir factura", onClick: openEmitModal }}
       />}
       {/* Action buttons */}
-      <div className="px-6 lg:px-8 pt-4 -mb-2 flex justify-end gap-2">
+      <div className={`${embedded ? "" : "px-3 sm:px-5 pt-3"} flex flex-wrap justify-end gap-2`}>
         {embedded && (
           <button onClick={() => openEmitModal()} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
             <Plus className="h-4 w-4" /> Emitir factura
@@ -1730,7 +1731,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           <Download className="h-4 w-4" /> Exportar CSV
         </button>
       </div>
-      <div className="p-6 lg:p-8 space-y-6">
+      <div className={`${embedded ? "pt-3" : "p-3 sm:p-5"} space-y-4`}>
         {/* KPIs */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard title="Facturado este mes" value={`${formatCurrency(facturadoMesMoneda("ARS"),"ARS")} / ${formatCurrency(facturadoMesMoneda("USD"),"USD")}`} icon={DollarSign} iconColor="text-emerald-600" />
@@ -1914,62 +1915,13 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           />
         </Card>
 
-        {/* ARCA Status Card */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5 text-blue-600" />
-              <CardTitle>Conexion ARCA</CardTitle>
-            </div>
-          </CardHeader>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700 space-y-3">
-              <div className="flex items-center gap-2">
-                <div className="rounded-lg bg-blue-50 p-2 dark:bg-blue-950">
-                  <Server className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">WSFE</p>
-                  <p className="text-xs text-zinc-400">Factura electronica</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className={`h-2 w-2 rounded-full ${arcaStatus?.connected ? "bg-emerald-500" : arcaStatus === null ? "bg-zinc-300 dark:bg-zinc-600 animate-pulse" : arcaStatus?.certOk ? "bg-amber-400" : "bg-red-400"}`} />
-                <span className="text-xs text-zinc-500">
-                  {arcaStatus === null ? "Verificando..." : arcaStatus.connected ? `Produccion — PV ${arcaStatus.ptoVta}` : arcaStatus?.certOk ? `Configurado — PV ${arcaStatus.ptoVta}` : "Sin conexion"}
-                </span>
-              </div>
-              {arcaStatus && !arcaStatus.connected && arcaStatus.afipError && (
-                <p className="text-xs text-amber-500 mt-1 leading-tight">AFIP no responde ahora (normal)</p>
-              )}
-              {arcaStatus && !arcaStatus.connected && arcaStatus.error && !arcaStatus.certOk && (
-                <p className="text-xs text-red-500 mt-1 leading-tight">{arcaStatus.error}</p>
-              )}
-            </div>
-            <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700 space-y-3">
-              <div className="flex items-center gap-2">
-                <div className="rounded-lg bg-amber-50 p-2 dark:bg-amber-950">
-                  <KeyRound className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Certificado digital</p>
-                  <p className="text-xs text-zinc-400">Requerido para emitir</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className={`h-2 w-2 rounded-full ${arcaStatus === null ? "bg-zinc-300 dark:bg-zinc-600 animate-pulse" : arcaStatus?.connected || arcaStatus?.certOk ? "bg-emerald-500" : "bg-red-400"}`} />
-                <span className="text-xs text-zinc-500">
-                  {arcaStatus === null ? "Verificando..." : arcaStatus?.connected || arcaStatus?.certOk ? "Certificado configurado" : "Certificado no configurado"}
-                </span>
-              </div>
-            </div>
-            <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
-              <p className="text-xs font-medium text-zinc-500 mb-2">CUIT emisor</p>
-              <p className="text-xl font-bold font-mono dark:text-white">{emisorData.cuit}</p>
-              <p className="text-xs text-zinc-400 mt-1">{emisorData.razonSocial}</p>
-            </div>
+        {/* ARCA: la tarjeta completa está en Configuración > Integraciones. Acá solo se avisa si falta el certificado. */}
+        {arcaStatus?.certOk === false && (
+          <div className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>ARCA: {arcaStatus.error || "certificado no configurado"}. Las facturas se cargan como manuales. Detalle en Configuración &gt; Integraciones.</span>
           </div>
-        </Card>
+        )}
       </div>
 
       {/* ── Facturación masiva sin OC del cliente ───────────────────── */}
@@ -1985,24 +1937,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cliente *</label>
-                  <input
-                    type="text"
-                    value={fmClienteSearch}
-                    onChange={e => setFmClienteSearch(e.target.value)}
-                    placeholder="Filtrar clientes..."
-                    className="w-full rounded-t-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1.5 text-xs dark:text-white"
+                  <Autocompletar
+                    opciones={fmClientes.map(c => ({ valor: c.id, texto: c.razon_social, detalle: c.cuit || undefined }))}
+                    placeholder={fmClientes.find(c => c.id === fmClienteId)?.razon_social || "Escribí el cliente o el CUIT…"}
+                    onElegir={(id) => { setFmClienteId(id); fmSelectCliente(id); }}
+                    className="w-full border-zinc-300 dark:border-zinc-700"
                   />
-                  <select
-                    value={fmClienteId}
-                    onChange={e => { setFmClienteId(e.target.value); fmSelectCliente(e.target.value); }}
-                    size={6}
-                    className="w-full rounded-b-lg border border-t-0 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-1 text-sm dark:text-white"
-                  >
-                    <option value="">Seleccionar cliente</option>
-                    {fmClientes.filter(c => !fmClienteSearch.trim() || c.razon_social.toLowerCase().includes(fmClienteSearch.toLowerCase()) || (c.cuit || "").includes(fmClienteSearch)).map(c => (
-                      <option key={c.id} value={c.id}>{c.razon_social}{c.cuit ? ` — ${c.cuit}` : ""}</option>
-                    ))}
-                  </select>
                 </div>
                 <div><label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha común *</label><input type="date" value={fmFecha} min={minFecha} max={todayAR()} onChange={e => setFmFecha(e.target.value)} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" /></div>
               </div>
@@ -2730,8 +2670,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                     <p className="text-xs text-zinc-400 mt-0.5 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Calculando saldo...</p>
                   ) : (
                     <p className="text-xs font-medium mt-0.5" style={{ color: (saldo - totalLineas) > 0 ? "#f59e0b" : "#10b981" }}>
-                      {cobroPrevios > 0 && `Cobrado: ${formatCurrency(cobroPrevios, f.moneda as "ARS" | "USD")} — `}
-                      Saldo pendiente: {formatCurrency(Math.max(0, saldo - totalLineas), f.moneda as "ARS" | "USD")}
+                      {cobroPrevios > 0 && `Cobrado antes: ${formatCurrency(cobroPrevios, f.moneda as "ARS" | "USD")} — `}
+                      Saldo de la factura: {formatCurrency(Math.max(0, saldo), f.moneda as "ARS" | "USD")} — Queda después de este cobro: {formatCurrency(Math.max(0, saldo - totalLineas), f.moneda as "ARS" | "USD")}
                     </p>
                   )}
                 </div>

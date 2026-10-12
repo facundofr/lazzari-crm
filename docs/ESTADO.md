@@ -117,8 +117,148 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   2) Subir los Excel "(3)" (CC) y "(2)" (CA) del 11/10 → Guardar. 3) "Aplicar cruces". 4) Revisar el resto
   (Alesso: depósito 06/10 y transferencia 01/10 de $1.000.000 → Personal, nota "Juan Pablo Alesso").
 - Chequeos: tipos 0 errores, hooks OK, tests extracto-bbva, saldo-cuentas y cheques-filtro OK. No probado en pantalla (necesita la migración).
+- **Hecho por Augusto (11/10/2026):** "Completar cheques emitidos" → 339 cheques agregados (13 ya estaban; Martín marcado).
+  Extractos guardados: CC 522 líneas y CA 41 (saldos al 09/10: −$1.575.636,31 y $295.614,01). Cruce: 435 automáticos
+  (impuesto 168, cheque propio 161, gasto bancario 59, FCI 15, pago 9, entre cuentas 6, tarjeta 5, cobro 5, intereses 3, devuelto 2, acreditado 2)
+  → **aplicados por Augusto (11/10/2026)**. Quedan **128 para revisar** (los resuelve él de a poco).
+- **Próximo: conciliar cobros con las OP de clientes** (las OP llegan al Gmail **administracion@lazzari.com.ar**; conector de Gmail, solo lectura). 45 entradas al banco desde 01/09 parecen cobros (≈ $242.015.105,87; solo 5 cruzaron):
+  lista en `Claude outputs/entradas_banco_sin_cobro_sept_oct_2026.csv` (cuenta;fecha;concepto;importe; "PAGO A PROVEEDORES OP.n" = OP del cliente vía BBVA).
+  Augusto manda las OP de clientes (facturas + retenciones + neto) → armar por OP: cliente, facturas, retenciones y la línea del banco que le corresponde,
+  para que él cargue el cobro (Facturación) y después "Aplicar cruces" lo enganche solo. No cargar cobros desde el chat.
+  Idea de mejora: en "Para revisar", sugerir facturas abiertas del cliente cuyo saldo (neto de retenciones) coincida con la entrada.
+  **Hecho 11/10/2026 (leyendo el Gmail de administracion@ en el navegador de la app, solo lectura):** tabla en
+  `Claude outputs/cobros_identificados_gmail_sept_oct_2026.csv`: 15 cobros EXACTOS ($186.532.340,43: Corteva Seeds x8, Corteva Agriscience 40,6M,
+  Synthon x2, Limagrain x2, Soychu, Adecco) con facturas y retenciones; 9 PROBABLES ($13,1M: SO Energy/Termocórdoba y Pedro Peregrini, PDF escaneados);
+  03/09 $15.989.281,41 dudoso (¿Corteva Agriscience pago 31/08?, no cierra) y 4 sin aviso ($20M, incluye 29/09 $15.994.806,07).
+  **Segunda búsqueda (por monto, Gmail lee los PDF escaneados):** 27 CONFIRMADOS ($232.993.760,33), incluidos SO Energy/Termocórdoba,
+  Criper SA, Pedro Peregrini y Corteva Agriscience 03/09 y 29/09. Quedan: 15/09 $1.394.525,00 (solo en la doc de IVA de agosto del contador)
+  y 11/09 $1.255.728,47 (sin rastro).
+  **Resueltos con el home banking (11/10/2026):** 15/09 $1.394.525,00 = Logística Casadei SRL (30716804840); 11/09 $1.255.728,47 = Chacraservicios SRL (30708583819).
+  → Los 29 ingresos del CSV tienen cliente.
+  **Cobros aplicados por Claude en el CRM (11/10/2026, con OK de Augusto):** Corteva Seeds FA 16-1 ($294.483,93 + Gan 5.023,18 cert 4824 + IIBB 4.395,28 cert 6005, 07/10);
+  SO Energy FA 15-6 (US$796,24 a TC 1530: $1.184.971,58 + Gan 15.656,33 cert 2590 + IIBB 17.619,29 cert 991, 05/10); Limagrain FA 16-5 (US$301,47 a TC 1520:
+  $448.512,85 + IIBB 6.627,39 RB 25897 + Gan 3.094,16 RG 16589, 07/10; dif. cambio −$3.014,70 informativa). Las 3 quedaron "Pagada".
+  Ya estaban pagadas: Termocórdoba FA 15-2/15-4/15-7, Criper 16-4, Peregrini 15-27, Chacraservicios 16-2 ($568.558,20 del 25/09). Adecco 05/10 = FA 8-667 (sistema anterior).
+  "Aplicar 3 cruces" falló: "Anulá y registrá nuevamente la liquidación" (trigger `proteger_movimiento_fx` solo dejaba cambiar `conciliado`
+  en movimientos de liquidaciones USD; el cruce también pone cuenta_id/conciliado_at/conciliado_por). No se guardó nada (todo o nada).
+  **Arreglo:** migración `20261011190000_fx_conciliar_cuenta.sql` (+ vuelta atrás): permite esos 3 campos. Sin cambios de código ni publicar.
+  **Hecho (11/10/2026):** migración corrida y "Aplicar 3 cruces" aplicado por Augusto.
+  **Error a revisar:** "Registrar cobro" de FA 16-1 mostraba "Saldo pendiente $0,00" estando impaga (la CC sí la debía).
+- **Idea de Augusto (11/10/2026) — tipo de cambio de cobros en USD:** se cancela con el TC que usó el cliente (pesos ÷ USD); se compara con BNA del día anterior al pago
+  (divisa o billete según el cliente, dato en la ficha); si la diferencia supera un % (sugerido 2 %) → aviso "pedir actualización al cliente", nunca frena.
+  Además: que el CRM guarde todos los días hábiles la cotización BNA divisa y billete (ya existe el cron `/api/cron/cotizacion`, revisar D1).
+  Siguiente: Augusto carga esos cobros en Facturación (los que no estén) y aprieta "Aplicar cruces".
 
 ## 4. Pendiente (próximas tandas)
+
+00. **Correcciones de la conciliación BBVA (V1.1.416)** — en código, SIN publicar (V1.1.417, sin migración). Revisión completa 12/10/2026:
+   1. **"Saldo pendiente $0" (HECHO):** no era un error de datos: el cartel mostraba lo que queda DESPUÉS del cobro y el CRM precarga el total.
+      Ahora dice "Saldo de la factura: X — Queda después de este cobro: Y". Además, cobrar de más ya no frena: avisa y pregunta (regla 1).
+   2. **Tipo de cambio en cobros USD + BNA diaria:** HECHO en código (12/10/2026, V1.1.417 sin publicar, sin migración).
+      `lib/tc-cobro-usd.ts` (prueba `scripts/test-tc-cobro-usd.mjs`) + `components/fx-settlement-dialog.tsx`:
+      divisa/billete sale de la factura o de la ficha del cliente ("USD" = billete, "USD Divisa" = divisa); BNA de referencia del **día hábil anterior**
+      (`diaHabilAnterior`, saltea feriados) traído solo; la factura se cancela con el TC del cliente (pesos + retenciones ÷ USD) mientras no elija otro;
+      si el cliente pagó **más de 2 % abajo** del BNA → recuadro amarillo con lo que falta y "Copiar mensaje para el cliente" (nunca frena);
+      si pagó arriba → verde. Probado en local sin guardar (FA 15-52 Soenergy: billete, BNA 09/10 $1.535, −2,9 % aviso / +1,3 % verde).
+      **D1 revisado:** el cron guarda divisa y billete todos los días hábiles. ⚠️ Las filas viejas (fuente `BNA_cron`, hasta 09/10) están corridas un día
+      (guardaban el valor del día anterior con la fecha de hoy). El CRM no las usa (solo confía en `BNA histórico v2` o cargadas a mano) y el cron nuevo ya graba bien.
+      **Corregido con OK de Augusto (12/10/2026):** las 76 filas de días hábiles (19/08 a 09/10) quedaron con el histórico del BNA y fuente `BNA histórico v2`
+      (39 cambiaron de valor, 37 ya coincidían). Las 3 filas de fin de semana (05/09 y 06/09, fuente `BNA`) quedaron igual: el BNA no cotiza esos días y el CRM no las usa.
+      Valores anteriores en `Claude outputs/antes_cotizaciones_dolar_12_10_2026.json`.
+   3. **Cuentas (HECHO en código):**
+      - Efectivo = lo que dice Augusto (las extracciones no suman a la caja; "Según tu caja al ..."). FCI = saldo del banco, sin interés estimado.
+      - `lib/fci-custodia.ts` (+ `scripts/test-fci-custodia.mjs`): lee el Excel de la custodia (BBVA_Comprobante_*.xls) y calcula lo que generó el FCI
+        por mes con valuaciones reales. Sept (27/08→30/09) **$1.646.385,79**; oct (30/09→11/10, con el total del home banking) **$453.278,60**.
+        Falta mostrarlo en el CRM (subir el Excel en la tarjeta del FCI; para guardarlo haría falta una tabla nueva → plan y OK).
+      - Débitos por semana + aviso rojo de rescate 1 día hábil antes (`lib/dias-habiles.ts`, feriados 2026; ⚠️ cargar móviles 2027).
+        Un cheque de sábado/feriado no figura "atrasado" (se debita el hábil siguiente).
+      - **Error arreglado (V1.1.416):** una OP pagada con eCheq restaba su total de la CC el día de la OP (el trigger le pone la CC a todo "pago")
+        y otra vez al debitarse el cheque. Ahora solo resta la parte en transferencias (`montoCuentaDeOp` con `ordenes_pago.medios_pago`).
+        El aviso "sin cuenta" solo cuenta lo que mueve banco o caja (bajó de 78 a 15). Mejora futura: que el trigger use los medios de la OP.
+      - Extracto: los pagos de OP mixtos (cheques + transferencia) cruzan por la parte en transferencia (4 líneas más cruzan solas).
+   4. **Revisión de datos (solo lectura) 12/10:**
+      - Cheques emitidos: los 126 "a pagar" coinciden con el banco (ACTIVO / CUSTODIA / ACTIVO_PENDIENTE) o con la planilla (12 viejos que el listado
+        del banco no trae). Ninguno a cambiar. 90017077 y 90017203 (20/09) siguen activos en el banco.
+      - **Aplicado en la base con OK de Augusto (12/10/2026):** Efectivo $2.561.020 al 09/10 (saldo_banco); FCI $71.480.800,70 al 11/10;
+        cheque 30012626 (Fedea $2.145.833,33) "endosado" a STAR-TEX SA el 15/09 (OP-000011, con observación); cheques 90017359/60/66 a "eCheq";
+        pagos OP-000038 (Inmuovi) y OP-000052 (Da Silva) a la cuenta Visa. Valores anteriores: `Claude outputs/antes_correcciones_finanzas_12_10_2026.json`.
+      - **Explicado por Augusto:** OP-000043 Electronic: pagó $620.329,99 y después le avisaron que están exentos → les transfirió los $5.870,42
+        retenidos el 08/10. OP-000004 Mastroianni: le anularon los eCheqs por las fechas y pagó por transferencia el 02/10 ($325.500,12).
+        **Hecho con OK (12/10/2026):** retención de Electronic anulada (ya no sale en SICORE); pago nuevo de $5.870,42 del 08/10 (CC, factura 0004-00011819,
+        sigue "pagada") conciliado con la línea del banco; línea del 02/10 conciliada con el pago de la OP-000004. Antes: `Claude outputs/antes_electronic_mastroianni_12_10_2026.json`.
+   **SIGUIENTE:** Augusto pidió ideas para Finanzas y para ordenar Ventas (sin tareas repetidas): revisar las pantallas de Ventas/Presupuestos/Oportunidades/Facturación y proponer. Después, Augusto revisa el CSV de líneas pendientes.
+      **Hecho 12/10/2026 (solo ideas, sin código):** propuesta pasada en el chat: Finanzas de 16 pestañas a 5 grupos (Hoy / Cobrar / Pagar / Cheques / Deudas),
+      una sola pantalla por acción (hoy "Emitir factura" está en Ventas y en Facturación; Facturación entera está repetida en Finanzas > Fact. Ventas;
+      "Cobro masivo" en Facturación y Finanzas), botón "Próximo paso" en cada operación, Presupuestos hasta Aprobado y después Ventas,
+      bandeja de pendientes, proyección de caja 30/60/90 días, tarjeta ARCA a Configuración. Esperando OK y respuestas de Augusto.
+      **Etapa A HECHA en código (12/10/2026, OK de Augusto; va en la V1.1.417 sin publicar, sin migración):**
+      - Finanzas en 5 grupos (`lib/finanzas-grupos.ts`, prueba `scripts/test-finanzas-grupos.mjs`): **Hoy** (Cuentas, Movimientos, Extractos, Objetivos
+        + botones Caja/Balance, que ahora solo salen acá) · **Cobrar** (Facturas de venta, CC Clientes, Recibos, Vencimientos) · **Pagar** (Facturas de compra,
+        Órdenes de pago, CC Proveedores, Gastos, **Gastos fijos** —ya no está oculta; total en $ y US$—, Retenciones, Vencimientos) · **Cheques** (Cheques,
+        Cheques Martín F.) · **Deudas** (Créditos). Vencimientos abre filtrado "a cobrar" desde Cobrar y "a pagar" desde Pagar.
+        Recuerda el último grupo/pestaña en la compu (localStorage `finanzas.ultimaPestana`); los links (`?tab=`, `?factura=`) mandan sobre lo guardado.
+      - `/facturacion` ya no es una pantalla aparte: lleva a Finanzas > Cobrar > Facturas de venta (quien no tiene Finanzas, p. ej. "viewer", la sigue viendo ahí).
+        El buscador de arriba y Remitos abren la factura puntual (`?factura=ID`).
+      - Tarjeta ARCA → Configuración > Integraciones (`components/arca-status-card.tsx`, solo consulta el estado). En Facturación queda un aviso amarillo solo si falta el certificado.
+        En local siempre dice "Certificado no configurado" (normal: las variables ARCA están solo en Vercel).
+      - Arreglado: links que llegan a Finanzas sin recargar (Ventas "ver factura", Proveedores "Ver cuenta corriente") abrían Cuentas; ahora abren la pestaña pedida
+        y la CC del proveedor.
+      - Cobro masivo: se deja en los dos lugares (Facturación y CC Clientes) porque los dos guardan con el mismo componente (`CobroMasivoLiquidacion`);
+        solo cambia la ventana para elegir facturas. No es lógica repetida.
+      - Probado en local sin guardar: 5 grupos, Vencimientos, recordar pestaña, `/facturacion`, link de Proveedores, Configuración. tsc 0 errores, check-hooks OK.
+      - Ruido viejo en consola (no es de este cambio): dos columnas con key "cuit" en las tablas de CC Clientes/Proveedores.
+      **Pantallas más compactas (12/10/2026, OK de Augusto; V1.1.417 sin publicar):** Card p-4, StatCard más baja (text-xl), Header más bajo,
+      páginas `p-3 sm:p-5 space-y-4` (12 archivos), Facturación dentro de Finanzas sin doble margen. `DataTable`: filas más finas (py-2) y botones
+      "Filas: 25 · 50 · 100 · Todas" (por defecto 50, se recuerda en la compu con `tabla.filas`; las tablas con `pageSize` fijo —Dashboard, Transportes— no cambian).
+      Listas desplegables de clientes (`select size`) cambiadas por el buscador `Autocompletar`: Registrar cheque (Finanzas) y Facturación masiva sin OC.
+      **Cheques de Del Sol (12/10/2026, pedido de Augusto):**
+      - **Cargado:** eCheq 3644 $11.801.686,09 (pago 30/10) como cheque recibido de DEL SOL en cartera (sin cobro: paga FC-A 0009-405 $7.394.812,15 y
+        0009-406 $4.600.666,31 del sistema anterior, total $11.995.478,46). Diferencia **$193.792,37** = retenciones a confirmar (anotado en el cheque).
+        Recibidos en cartera: 3 — $25.590.065,66.
+      - **Falta (REVISAR el martes 13/10):** eCheq $6.210.728,30 (pago 11/12) contra FA 16-17, 16-18, 16-16, 15-45 y 15-54 (total $6.463.222,05; diferencia
+        **$252.493,75**, ¿retenciones?). No se cargó porque el cobro masivo exige "diferencia $0" (⚠️ va contra la regla 1: debería avisar y dejar seguir).
+        Con los certificados de retención cuadra exacto y se carga normal. Fecha de recepción de ambos: 09/10 a confirmar (Del Sol paga a 45–60 días, los viernes).
+        Recordatorio programado para el martes 13/10 9 h (tarea `recordatorio-retenciones-del-sol`).
+      - Ojo: FA 16-18 ($1.370.733,34, 25/09) tiene el mismo importe que la FC-A 9-399 del sistema anterior (20/08): confirmar que no sea la misma venta facturada dos veces.
+      - **Bichara (HECHO 12/10, decisión de Augusto: sin factura):** cheques físicos recibidos de MARCOS MARTIN BICHARA en cartera: 00406334 $266.000 (pago 20/10,
+        firmante Borgogno Guillermo Dario) y 85983561 $290.000 (pago 23/10, firmante Alvarez Juan Carlos); datos de `ideas/cheques_desde_2026.csv`.
+        Pagan una factura del sistema anterior. Fecha de recepción: REVISAR. Recibidos en cartera: 5 — $26.146.065,66.
+      - **REVISAR (Augusto lo deja para después):** fecha de recepción de todos estos cheques y de los cobros con fecha futura (Barraza $10.110.492,35 y
+        Del Sol $3.677.887,22). Van a la pestaña "Revisar" cuando exista.
+      - **Líneas pendientes del extracto (125):** siguen en Finanzas > Hoy > Extractos (filtro "pendiente") y en el CSV; cuando exista "Revisar", se ven ahí también.
+      - Pendiente de código: que el cobro masivo deje confirmar con diferencia (avisa y pregunta; lo que falta queda como saldo de la última factura).
+        La función de la base `registrar_cobro_masivo` no está en el repo: antes de tocarla, leer su definición en Supabase (`select pg_get_functiondef('public.registrar_cobro_masivo'::regproc)`).
+      **Datos de Augusto para cargar (12/10/2026), faltan detalles:**
+      - **Crédito BNA 1 (lo paga Luis María Lazzari, papá; al día, pagó todas las vencidas):** cuenta BNA CA $ 27003971709297, titular LAZZARI AUGUSTO,
+        CUIT 20-37930912-8, alias lazzariaugusto.bna. 12 cuotas de capital $300.000 ($3.600.000), sistema alemán, débito ~el 10.
+        Cuota total (cuota + cargos): 1) 13/07/26 $432.874,52 · 2) 10/08 $385.261,15 · 3) 10/09 $385.814,80 · 4) 09/10 $382.216,11 ·
+        5) 10/11 $362.008,11 · 6) 10/12 $358.132,60 · 7) 08/01/27 $353.149,80 · 8) 10/02 $341.523,29 · 9) 10/03 $331.004,05 · 10) 08/04 $327.405,36 ·
+        11) 10/05 $315.502,04 · 12) 10/06 $308.581,48. Quedan 5 a 12: $2.697.306,73 (capital $2.400.000).
+      - **Crédito BNA 2 (lo paga Andrés Leguizamo):** ⏰ **Recordarle a Augusto** que pase los detalles.
+      - **Préstamo Cecilia Alvarez (tía), plata de la empresa:** US$ 25.000; US$ 10.000 están en **BAVSA** (ALyC/banco: descuenta cheques y presta;
+        cargarla como cuenta en US$ y $, el $ se actualiza el martes 13/10). Sin fechas de devolución.
+      - **Préstamo José Alvarez (abuelo):** US$ 18.500. US$ 8.500 se los paga Andrés Leguizamo **a Augusto** y Augusto se los da al abuelo
+        (no tiene que ver con el crédito BNA). Sin fechas. Idea: "apartado" mensual sugerido para devolver a Cecilia y José sin afectar el negocio.
+      - **Gastos fijos (Lazzari):** sueldos $1.500.000/mes c/u (Mariana Santinelli, Jerónimo Casadidio, Sebastián Pereyra), se pagan del 1 al 10;
+        alquiler US$ 800/mes del 1 al 15, en dólares (retira efectivo → compra US$ en financiera → inmobiliaria).
+        **TC del alquiler = dólar blue** (no BNA): el CRM pregunta el valor a Augusto (lo carga él), nunca toma el del banco.
+      - **Cómo pagan los terceros:** papá (BNA 1) paga cuando quiere, sin cuenta fija → el cobro lo carga Augusto cuando avisa (la cuota igual figura en la proyección).
+        Andrés todavía no pagó nada de los US$ 8.500 → se carga cuando Augusto avise.
+      - **Estado "Facturar" de Presupuestos (dato de Augusto 12/10):** algunas empresas aprueban pero no se factura hasta que mandan su OC.
+        Propuesta (esperando OK, va en la Etapa D): Presupuestos termina en Aprobado; en Ventas, si falta la OC, la operación queda "Esperando OC del cliente"
+        (aviso a los X días, botón "Cargar OC" con número/fecha/PDF en los campos `oc_cliente`/`oc_cliente_fecha` que ya existen) y al cargarla pasa sola a "Lista para facturar".
+        Marca opcional en la ficha del cliente "Pide OC para facturar". Facturar sin OC se puede igual: avisa y pregunta (regla 1). Reemplaza `listo_para_facturar`.
+      - **Falta de Augusto:** colchón mínimo para el "apartado" (Cecilia/José) y la tabla del crédito BNA 2.
+        **Pendientes de Augusto:** honorarios del contador (monto) y otros gastos fijos que va completando esta semana.
+        La pestaña "G. Fijos" de Finanzas existe pero está oculta ("en revisión"); la tabla `gastos_fijos` ya tiene moneda.
+      - **Regla de Augusto:** todo lo que se compra con tarjeta en Mercado Libre se paga con la Visa (la Visa es la tarjeta sugerida para lo nuevo).
+      - **Faltan en el CRM (los tiene que cargar Augusto con las OP de Del Sol, etc.):** cobro con cheque Del Sol 3414 ($12.532.078,86, depositado 01/10);
+        cheques en mano Del Sol 3644 ($11.801.686,09, 30/10) y 3968 ($6.210.728,30, 11/12); Bichara 00406334 ($266.000) y 85983561 ($290.000);
+        recibidos y endosados: Del Sol 3587 y Punto Espacios 211 (a Bruno Francione, OP-000009), Pachamama 9919 (Prisina), Musso 2105 (BA Valores).
+      - **Dudas para Augusto:** OP-000004 Mastroianni y OP-000043 Electronic están ANULADAS pero su pago sigue activo y la plata salió
+        (02/10 $325.500,12 y $620.329,99); la retención de Electronic ($5.870,42) sigue activa y el 08/10 salió una transferencia por ese importe.
+        OP-000038 y OP-000052 pagadas con tarjeta: ¿cuál? 21 cobros del banco son de facturas del sistema anterior (no están en el CRM): ¿cómo registrarlos?
+      - Las 125 líneas pendientes del extracto, con lo que se sabe de cada una: `Claude outputs/extracto_pendiente_revision_12_10_2026.csv`.
 
 0. **PRÓXIMO: análisis a fondo de Finanzas** (lo más importante del CRM, pedido por Augusto 11/10/2026):
    - Cobros con eCheq guardados con **fecha futura** y ya "Conciliado": DEL SOL CONSTRUCTORA (20/11/2026, cobro $3.677.887,22 + ret. Ganancias $61.813,23)

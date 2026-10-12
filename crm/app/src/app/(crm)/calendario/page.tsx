@@ -533,7 +533,7 @@ export default function CalendarioPage() {
         subtitle="Agenda de eventos y seguimientos"
         action={{ label: "Nuevo evento", onClick: () => openCreateModal() }}
       />
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         {/* ── Stats ───────────────────────────────────────────────── */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <StatCard

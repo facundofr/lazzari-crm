@@ -25,15 +25,33 @@ interface DataTableProps<T> {
 
 type SortDir = "asc" | "desc";
 
+const FILAS_KEY = "tabla.filas";
+const FILAS_OPCIONES = [25, 50, 100, 0];
+const FILAS_DEFAULT = 50;
+
 export function DataTable<T extends { id: string }>({
   columns,
   data,
   onRowClick,
   emptyMessage = "No hay datos para mostrar",
-  pageSize = 10,
+  pageSize: pageSizeFijo,
   loading = false,
 }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | null>(null);
+  // Filas por página que elige cada usuario (se recuerda en la compu). 0 = todas.
+  const [filas, setFilas] = useState<number>(FILAS_DEFAULT);
+  useEffect(() => {
+    try {
+      const crudo = window.localStorage.getItem(FILAS_KEY);
+      const guardado = crudo === null ? NaN : Number(crudo);
+      if (FILAS_OPCIONES.includes(guardado)) setFilas(guardado);
+    } catch { /* sin almacenamiento: queda el valor por defecto */ }
+  }, []);
+  function elegirFilas(n: number) {
+    setFilas(n);
+    setPage(0);
+    try { window.localStorage.setItem(FILAS_KEY, String(n)); } catch { /* no pasa nada */ }
+  }
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [page, setPage] = useState(0);
 
@@ -71,6 +89,7 @@ export function DataTable<T extends { id: string }>({
     });
   }, [data, sortKey, sortDir, columns]);
 
+  const pageSize = pageSizeFijo ?? (filas === 0 ? Math.max(1, sorted.length) : filas);
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const safePage = Math.min(page, totalPages - 1);
   const paged = sorted.slice(safePage * pageSize, (safePage + 1) * pageSize);
@@ -109,7 +128,7 @@ export function DataTable<T extends { id: string }>({
                   key={col.key}
                   onClick={() => handleSort(col)}
                   className={cn(
-                    "px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 whitespace-nowrap",
+                    "px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 whitespace-nowrap",
                     col.sortable !== false && "cursor-pointer select-none hover:text-zinc-700 dark:hover:text-zinc-200",
                     col.className
                   )}
@@ -125,7 +144,7 @@ export function DataTable<T extends { id: string }>({
               Array.from({ length: Math.min(pageSize, 5) }).map((_, i) => (
                 <tr key={`skeleton-${i}`}>
                   {columns.map((col) => (
-                    <td key={col.key} className={cn("px-4 py-3.5", col.className)}>
+                    <td key={col.key} className={cn("px-3 py-2", col.className)}>
                       <div className="h-4 animate-pulse rounded bg-zinc-200 dark:bg-zinc-700" style={{ width: `${60 + Math.random() * 30}%` }} />
                     </td>
                   ))}
@@ -160,7 +179,7 @@ export function DataTable<T extends { id: string }>({
                     <td
                       key={col.key}
                       className={cn(
-                        "px-4 py-3.5 text-sm text-zinc-700 dark:text-zinc-300",
+                        "px-3 py-2 text-sm text-zinc-700 dark:text-zinc-300",
                         col.className
                       )}
                     >
@@ -177,11 +196,28 @@ export function DataTable<T extends { id: string }>({
       </div>
 
       {/* Pagination */}
-      {sorted.length > pageSize && (
-        <div className="flex items-center justify-between border-t border-zinc-200 px-4 py-3 dark:border-zinc-700">
-          <span className="text-xs text-zinc-500">
-            Mostrando {showingFrom}–{showingTo} de {sorted.length}
-          </span>
+      {(pageSizeFijo ? sorted.length > pageSizeFijo : sorted.length > FILAS_OPCIONES[0]) && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 px-3 py-2 dark:border-zinc-700">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs text-zinc-500">
+              Mostrando {showingFrom}–{showingTo} de {sorted.length}
+            </span>
+            {!pageSizeFijo && (
+              <div className="flex items-center gap-1 text-xs text-zinc-500">
+                <span>Filas:</span>
+                {FILAS_OPCIONES.map((n) => (
+                  <button key={n} type="button" onClick={() => elegirFilas(n)}
+                    className={cn(
+                      "rounded-md px-2 py-0.5 font-medium",
+                      filas === n ? "bg-orange-500 text-white" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                    )}>
+                    {n === 0 ? "Todas" : n}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {totalPages > 1 && (
           <div className="flex items-center gap-1">
             <button
               onClick={() => setPage((p) => Math.max(0, p - 1))}
@@ -225,6 +261,7 @@ export function DataTable<T extends { id: string }>({
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
+          )}
         </div>
       )}
     </div>

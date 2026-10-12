@@ -33,6 +33,8 @@ export const SUBTIPO_LABEL: Record<string, string> = {
   mantenimiento: "Mantenimiento de cuenta",
   intereses: "Intereses",
   reintegro: "Reintegros",
+  extraccion_efectivo: "Extracción de efectivo",
+  deposito_efectivo: "Depósito de efectivo",
 };
 
 // ─── Lectura de números y fechas ─────────────────────────────────────────────
@@ -270,6 +272,8 @@ export interface MovCruce extends MovimientoClasificable {
   moneda?: string | null;
   /** CUIT del cliente o proveedor (para las transferencias que lo traen en el concepto). */
   cuit?: string | null;
+  /** Pagos de OP: la parte en transferencias (lo pagado con cheques se cruza por el cheque). */
+  montoCuenta?: number | null;
 }
 
 export interface ChequeCruce {
@@ -358,9 +362,13 @@ function clasificarPorConcepto(l: LineaCruce, ctx: Contexto): Omit<Propuesta, "l
     if (otra) return { ...base, clasificacion: "entre_cuentas", contra_cuenta_id: otra.id, motivo: `Pase con ${otra.nombre}` };
   }
 
-  if (/EXTRACCION DE EFECTIVO|DEPOSITO EFECTIVO/.test(c)) {
-    const ef = activas.find((x) => x.tipo === "efectivo" && x.moneda === "ARS");
-    return { ...base, clasificacion: "entre_cuentas", contra_cuenta_id: ef?.id || null, auto: Boolean(ef), motivo: credito ? "Depósito de efectivo" : "Extracción de efectivo" };
+  // Regla de Augusto: lo que se extrae no se supone en la caja (el efectivo es solo lo que carga él).
+  // La extracción sale del banco sin ir a la cuenta Efectivo; el depósito se pregunta (puede ser un cobro).
+  if (/EXTRACCION DE EFECTIVO/.test(c) && !credito) {
+    return { ...base, clasificacion: "otro", subtipo: "extraccion_efectivo", motivo: "Extracción de efectivo (no suma a la caja)" };
+  }
+  if (/DEPOSITO EFECTIVO/.test(c) && credito) {
+    return { ...base, clasificacion: "otro", subtipo: "deposito_efectivo", auto: false, motivo: "Depósito de efectivo: ¿es un cobro?" };
   }
 
   const tarjeta = c.match(/^CUENTA (VISA|MASTERCARD) NRO\.?\s*(\d+)|^PAGO DE TARJETA (VISA|MASTERCARD)/);
@@ -380,7 +388,9 @@ const cuitEnConcepto = (concepto: string) => (concepto.match(/\b(\d{11})\b/) || 
 
 function esCandidatoCobroPago(l: LineaCruce, m: MovCruce): boolean {
   if (String(m.moneda || "ARS") !== "ARS") return false;
-  if (centavos(Number(m.monto)) !== centavos(Math.abs(l.importe))) return false;
+  const importe = centavos(Math.abs(l.importe));
+  const parteCuenta = m.montoCuenta === null || m.montoCuenta === undefined ? null : centavos(Number(m.montoCuenta));
+  if (centavos(Number(m.monto)) !== importe && parteCuenta !== importe) return false;
   const tipo = String(m.tipo || "");
   if (tipo.startsWith("retencion_") || ["cheque_recibido", "cheque_emitido", "echeq", "efectivo"].includes(tipo)) return false;
   const clase = clasificarMovimiento(m);

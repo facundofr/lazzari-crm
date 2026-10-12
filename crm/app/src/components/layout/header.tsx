@@ -339,7 +339,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   }
 
   return (
-    <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-4 sm:px-8 sm:py-5 dark:border-zinc-800 dark:bg-zinc-950">
+    <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-3 sm:px-5 dark:border-zinc-800 dark:bg-zinc-950">
       <div className="flex items-center gap-3">
         {/* Hamburger menu - mobile only */}
         <button
@@ -513,7 +513,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
                       {searchResults.facturas.map((f) => (
                         <button
                           key={f.id}
-                          onClick={() => navigateTo("/facturacion")}
+                          onClick={() => navigateTo(`/facturacion?factura=${f.id}`)}
                           className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800"
                         >
                           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-green-50 text-green-600 dark:bg-green-950 dark:text-green-400">

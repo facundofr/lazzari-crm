@@ -9,7 +9,7 @@ import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import {
-  calcularSaldosCuentas, sugerenciasCuentas, TIPO_CUENTA_LABEL,
+  calcularSaldosCuentas, sugerenciasCuentas, montoCuentaDeOp, debitosPorSemana, debitosACubrir, diaDeRescate, TIPO_CUENTA_LABEL,
   type CuentaFinanciera, type MovimientoCuenta, type ChequeCuenta, type TipoCuenta, type PaseCuenta,
 } from "@/lib/saldo-cuentas";
 import { clasificarMovimiento } from "@/lib/tipos-movimiento";
@@ -31,6 +31,7 @@ interface CuentaRow extends CuentaFinanciera {
 
 interface MovimientoRow extends MovimientoCuenta {
   id: string;
+  orden_pago_id?: string | null;
 }
 
 const ICONO: Record<TipoCuenta, typeof Wallet> = {
@@ -64,6 +65,10 @@ const formVacio = {
 };
 
 /** "1.234.567,89" o "1234567.89" → número; vacío → null. */
+const DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+/** "2026-10-13" → "mar 13/10". */
+const diaCorto = (f: string) => `${DIAS[new Date(`${f}T12:00:00Z`).getUTCDay()]} ${f.slice(8, 10)}/${f.slice(5, 7)}`;
+
 function leerImporte(v: string): number | null {
   const s = v.trim();
   if (!s) return null;
@@ -103,12 +108,23 @@ export default function CuentasFinancieras({ onIrACheques }: { onIrACheques?: ()
       const corte = lista.map((c) => c.fecha_corte).sort()[0] || "2026-08-31";
       const [movs, chs] = await Promise.all([
         traerTodo<MovimientoRow>(() => db.from("movimientos")
-          .select("id, cuenta_id, fecha, monto, moneda, tipo, cliente_id, proveedor_id, anulado, descripcion, nota_credito_compra_id")
+          .select("id, cuenta_id, fecha, monto, moneda, tipo, cliente_id, proveedor_id, anulado, descripcion, nota_credito_compra_id, orden_pago_id")
           .eq("sociedad_id", sociedadId).gt("fecha", corte).order("fecha", { ascending: false }).order("id")),
         traerTodo<ChequeCuenta>(() => db.from("echeqs")
           .select("id, direccion, estado, monto, moneda, fecha_pago")
           .eq("sociedad_id", sociedadId).in("estado", ["en_cartera", "depositado", "pendiente", "entregado"]).order("id")),
       ]);
+      // Pagos de OP: solo la parte en transferencias sale del banco ese día (lo de cheques sale al debitarse).
+      const idsOp = [...new Set(movs.map((m) => m.orden_pago_id).filter(Boolean) as string[])];
+      const mediosOp = new Map<string, number | null>();
+      for (let i = 0; i < idsOp.length; i += 150) {
+        const { data: ops, error: eOp } = await db.from("ordenes_pago").select("id, medios_pago").eq("sociedad_id", sociedadId).in("id", idsOp.slice(i, i + 150));
+        if (eOp) throw eOp;
+        for (const op of ops || []) mediosOp.set(op.id, montoCuentaDeOp(op.medios_pago));
+      }
+      for (const m of movs) {
+        if (m.orden_pago_id && String(m.tipo) === "pago") m.montoCuenta = mediosOp.get(m.orden_pago_id) ?? null;
+      }
       // Pases del extracto (FCI, entre cuentas, efectivo). Si falta la migración de la etapa 2, sigue sin pases.
       let pasesLeidos: PaseCuenta[] = [];
       if (lista.length) {
@@ -134,7 +150,22 @@ export default function CuentasFinancieras({ onIrACheques }: { onIrACheques?: ()
   useEffect(() => { void cargar(); }, [cargar]);
 
   const resultado = useMemo(() => calcularSaldosCuentas(cuentas, movimientos, cheques, hoy, pases), [cuentas, movimientos, cheques, hoy, pases]);
-  const sugerencias = useMemo(() => sugerenciasCuentas(cuentas, resultado), [cuentas, resultado]);
+  const sugerencias = useMemo(() => sugerenciasCuentas(cuentas, resultado, hoy), [cuentas, resultado, hoy]);
+  const debitosEmitidos = useMemo(() => {
+    const emi = cuentas.find((c) => c.activa && c.tipo === "cheques_emitidos" && c.moneda === "ARS");
+    return (emi && resultado.porCuenta[emi.id]?.debitos) || [];
+  }, [cuentas, resultado]);
+  const semanas = useMemo(() => debitosPorSemana(debitosEmitidos, hoy), [debitosEmitidos, hoy]);
+  /** Próximo rescate después de hoy (para avisar con tiempo). */
+  const proximoRescate = useMemo(() => {
+    const yaCubiertos = new Set(debitosACubrir(debitosEmitidos, hoy));
+    const prox = debitosEmitidos.find((d) => !yaCubiertos.has(d));
+    if (!prox) return null;
+    const rescatarEl = diaDeRescate(prox.fecha);
+    const mismoDia = debitosEmitidos.filter((d) => !d.atrasado && diaDeRescate(d.fecha) === rescatarEl);
+    return { rescatarEl, fechas: mismoDia.map((d) => d.fecha), monto: mismoDia.reduce((a, d) => a + d.monto, 0) };
+  }, [debitosEmitidos, hoy]);
+  const urgentes = sugerencias.filter((sg) => sg.chequesProximos > 0 || sg.saldo < 0);
   const activas = cuentas.filter((c) => c.activa);
   const inactivas = cuentas.filter((c) => !c.activa);
   const nombreCuenta = (id: string | null) => cuentas.find((c) => c.id === id)?.nombre || "";
@@ -239,29 +270,68 @@ export default function CuentasFinancieras({ onIrACheques }: { onIrACheques?: ()
         <Total titulo="Tarjetas" valor="Por resumen" extra="Se cargan con el resumen mensual (próxima etapa)" color="text-zinc-500" />
       </div>
 
-      {/* Sugerencias del día */}
-      <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-3 text-sm dark:border-violet-900 dark:bg-violet-950/30">
-        <p className="mb-1 flex items-center gap-1.5 font-semibold text-violet-800 dark:text-violet-200"><Lightbulb className="h-4 w-4" /> Sugerencias</p>
-        {sugerencias.length === 0 ? (
-          <p className="text-zinc-600 dark:text-zinc-400">Todo en orden: ninguna cuenta corriente en negativo ni cheques propios sin cubrir esta semana.</p>
-        ) : (
+      {/* Rescate del día: aviso fuerte (nunca frena). La plata vive en el FCI y se rescata 1 día hábil antes de cada débito. */}
+      {urgentes.length > 0 && (
+        <div className="rounded-xl border-2 border-red-400 bg-red-50 p-3 text-sm dark:border-red-700 dark:bg-red-950/40">
+          <p className="mb-1 flex items-center gap-1.5 font-bold text-red-700 dark:text-red-300"><AlertTriangle className="h-4 w-4" /> Hoy tenés que cubrir la cuenta</p>
           <ul className="space-y-1.5">
-            {sugerencias.map((sg) => (
-              <li key={sg.cuentaId} className="text-zinc-700 dark:text-zinc-300">
+            {urgentes.map((sg) => (
+              <li key={sg.cuentaId} className="text-zinc-800 dark:text-zinc-200">
                 {sg.tipo === "rescatar_fci" ? (
                   <>👉 <b>Rescatá {formatCurrency(sg.monto)} del {nombreCuenta(sg.desdeId || null)}</b> a <b>{nombreCuenta(sg.cuentaId)}</b></>
                 ) : (
                   <>⚠️ <b>A {nombreCuenta(sg.cuentaId)} le faltan {formatCurrency(sg.monto)}</b>{sg.desdeId ? ` aunque rescates todo el ${nombreCuenta(sg.desdeId)}` : " y no hay FCI para rescatar"}</>
                 )}
-                <span className="text-zinc-500">
+                <span className="text-zinc-600 dark:text-zinc-400">
                   {" — "}saldo {formatCurrency(sg.saldo)}
-                  {sg.chequesProximos > 0 ? `; cheques propios a debitar en 7 días: ${formatCurrency(sg.chequesProximos)}` : ""}
-                  {sg.saldo < 0 ? ". Así queda en 0 y no pagás intereses." : "."}
+                  {sg.chequesProximos > 0 ? `; cheques propios a debitar${sg.debitoHasta ? ` hasta el ${diaCorto(sg.debitoHasta)}` : " (atrasados)"}: ${formatCurrency(sg.chequesProximos)}` : ""}
+                  {sg.saldo < 0 && !sg.chequesProximos ? ". Así queda en 0 y no pagás intereses." : "."}
                 </span>
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      <div className="rounded-xl border border-violet-200 bg-violet-50/60 p-3 text-sm dark:border-violet-900 dark:bg-violet-950/30">
+        <p className="mb-1 flex items-center gap-1.5 font-semibold text-violet-800 dark:text-violet-200"><Lightbulb className="h-4 w-4" /> Cheques propios a debitar por semana</p>
+        {urgentes.length === 0 && (
+          <p className="text-zinc-600 dark:text-zinc-400">Hoy no hace falta rescatar: ninguna cuenta corriente en negativo ni cheques que se debiten el próximo día hábil.</p>
         )}
+        {proximoRescate && (
+          <p className="text-zinc-700 dark:text-zinc-300">
+            Próximo rescate: <b>{diaCorto(proximoRescate.rescatarEl)}</b>, {formatCurrency(proximoRescate.monto)} para los débitos del {proximoRescate.fechas.map(diaCorto).join(", ")}.
+          </p>
+        )}
+        <div className="mt-2 overflow-x-auto">
+          <table className="w-full text-xs">
+            <tbody>
+              {semanas.atrasado > 0 && (
+                <tr className="border-t border-violet-100 dark:border-violet-900">
+                  <td className="py-1 pr-3 text-amber-700 dark:text-amber-400">Fecha pasada, sin debitar</td>
+                  <td className="py-1 pr-3 text-right font-mono text-amber-700 dark:text-amber-400">{formatCurrency(semanas.atrasado)}</td>
+                  <td className="py-1 text-zinc-500">Se pueden presentar hasta 30 días después de su fecha: se cubren hoy. Si ya salieron del banco, se marcan solos al subir el extracto.</td>
+                </tr>
+              )}
+              {semanas.semanas.map((w) => (
+                <tr key={w.desde} className="border-t border-violet-100 align-top dark:border-violet-900">
+                  <td className="whitespace-nowrap py-1 pr-3 text-zinc-600 dark:text-zinc-400">Semana {formatDate(w.desde).slice(0, 5)} – {formatDate(w.hasta).slice(0, 5)}</td>
+                  <td className={`whitespace-nowrap py-1 pr-3 text-right font-mono ${w.monto ? "font-semibold text-zinc-900 dark:text-white" : "text-zinc-400"}`}>{w.monto ? formatCurrency(w.monto) : "—"}</td>
+                  <td className="py-1 text-zinc-500">
+                    {w.dias.map((d) => `${diaCorto(d.fecha)}: ${formatCurrency(d.monto)} (${d.cantidad} ch., rescatar ${diaCorto(d.rescatarEl)})`).join(" · ")}
+                  </td>
+                </tr>
+              ))}
+              {semanas.despues > 0 && (
+                <tr className="border-t border-violet-100 dark:border-violet-900">
+                  <td className="py-1 pr-3 text-zinc-600 dark:text-zinc-400">Más adelante</td>
+                  <td className="py-1 pr-3 text-right font-mono text-zinc-700 dark:text-zinc-300">{formatCurrency(semanas.despues)}</td>
+                  <td />
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
         {sinARS.cantidad > 0 && (
           <p className="mt-1.5 text-xs text-zinc-500">Ojo: hasta que se cargue el extracto del día, el saldo de los bancos es el del sistema y la sugerencia puede no coincidir con el banco.</p>
         )}
@@ -325,12 +395,12 @@ export default function CuentasFinancieras({ onIrACheques }: { onIrACheques?: ()
                 )}
                 {s.segunBanco && (
                   <p className="text-xs text-emerald-700 dark:text-emerald-400">
-                    Según el banco al {formatDate(s.segunBanco)}: {formatCurrency(Number(c.saldo_banco || 0), c.moneda)}
+                    {c.tipo === "efectivo" ? "Según tu caja" : "Según el banco"} al {formatDate(s.segunBanco)}: {formatCurrency(Number(c.saldo_banco || 0), c.moneda)}
                     {s.cantidadMovimientos > 0 ? ` + ${s.cantidadMovimientos} mov. del CRM posteriores` : ""}
                   </p>
                 )}
                 {!s.segunBanco && Boolean(s.pases) && (
-                  <p className="text-xs text-zinc-500">Incluye {formatCurrency(s.pases || 0, c.moneda)} de pases del extracto (FCI / efectivo)</p>
+                  <p className="text-xs text-zinc-500">Incluye {formatCurrency(s.pases || 0, c.moneda)} de {c.tipo === "fci" ? "suscripciones y rescates" : "pases"} del extracto</p>
                 )}
                 {c.tipo === "cuenta_corriente" && Number(c.acuerdo || 0) > 0 && s.disponibleConAcuerdo !== null && (
                   <p className={`text-xs ${pasadoDeAcuerdo ? "font-semibold text-red-600" : "text-zinc-500"}`}>

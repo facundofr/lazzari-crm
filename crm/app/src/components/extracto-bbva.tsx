@@ -15,6 +15,7 @@ import {
   type ExtractoLeido, type ChequeListado, type ClasificacionLinea, type MovCruce, type ChequeCruce, type ReglaCruce, type Propuesta,
   digitosCuenta,
 } from "@/lib/extracto-bbva";
+import { montoCuentaDeOp } from "@/lib/saldo-cuentas";
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, Loader2, RotateCcw, Upload, Wand2 } from "lucide-react";
 
 interface CuentaRow {
@@ -51,6 +52,7 @@ interface LineaRow {
 interface MovRow extends MovCruce {
   descripcion?: string | null;
   conciliado?: boolean | null;
+  orden_pago_id?: string | null;
 }
 
 interface ChequeRow extends ChequeCruce {
@@ -138,7 +140,7 @@ export default function ExtractoBbva({ onIrACheques }: { onIrACheques?: () => vo
           .select("id, extracto_id, cuenta_id, fecha, descripcion, monto, tipo, estado, saldo, clave, clasificacion, subtipo, match_movimiento_id, cheque_id, contra_cuenta_id, nota")
           .in("cuenta_id", ids).order("fecha").order("id")) : Promise.resolve([]),
         traerTodo<MovRow>(() => db.from("movimientos")
-          .select("id, fecha, monto, moneda, tipo, cliente_id, proveedor_id, anulado, descripcion, nota_credito_compra_id, ajuste_sentido, conciliado")
+          .select("id, fecha, monto, moneda, tipo, cliente_id, proveedor_id, anulado, descripcion, nota_credito_compra_id, ajuste_sentido, conciliado, orden_pago_id")
           .eq("sociedad_id", sociedadId).gte("fecha", desdeMovs.toISOString().slice(0, 10)).order("fecha").order("id")),
         traerTodo<ChequeRow>(() => db.from("echeqs")
           .select("id, numero, monto, direccion, estado, fecha_pago, tipo_cheque, origen_nombre, destino_nombre")
@@ -148,11 +150,23 @@ export default function ExtractoBbva({ onIrACheques }: { onIrACheques?: () => vo
         traerTodo<{ id: string; cuit: string | null }>(() => db.from("proveedores").select("id, cuit").order("id")).catch(() => []),
       ]);
       if (rg.error && /extracto_reglas/.test(String(rg.error.message || ""))) { setFaltaMigracion(true); return; }
+      // Pagos de OP mixtos (cheques + transferencia): se cruzan por la parte en transferencias.
+      const idsOp = [...new Set(movs.map((m) => m.orden_pago_id).filter(Boolean) as string[])];
+      const parteCuentaOp = new Map<string, number | null>();
+      for (let i = 0; i < idsOp.length; i += 150) {
+        const { data: ops, error: eOp } = await db.from("ordenes_pago").select("id, medios_pago").eq("sociedad_id", sociedadId).in("id", idsOp.slice(i, i + 150));
+        if (eOp) throw eOp;
+        for (const op of ops || []) parteCuentaOp.set(op.id, montoCuentaDeOp(op.medios_pago));
+      }
       const cuitCli = new Map(cli.map((c) => [c.id, c.cuit]));
       const cuitProv = new Map(prov.map((p) => [p.id, p.cuit]));
       setCuentas(lista);
       setLineas(ls);
-      setMovimientos(movs.map((m) => ({ ...m, cuit: (m.proveedor_id && cuitProv.get(m.proveedor_id)) || (m.cliente_id && cuitCli.get(m.cliente_id)) || null })));
+      setMovimientos(movs.map((m) => ({
+        ...m,
+        cuit: (m.proveedor_id && cuitProv.get(m.proveedor_id)) || (m.cliente_id && cuitCli.get(m.cliente_id)) || null,
+        montoCuenta: m.orden_pago_id && m.tipo === "pago" ? parteCuentaOp.get(m.orden_pago_id) ?? null : null,
+      })));
       setCheques(chs);
       setReglas((rg.data || []) as ReglaCruce[]);
     } catch (e) {
@@ -414,7 +428,7 @@ export default function ExtractoBbva({ onIrACheques }: { onIrACheques?: () => vo
   }
 
   const nombreCuenta = (id: string | null) => (id && cuentaPorId.get(id)?.nombre) || "—";
-  const descMov = (m: MovRow) => `${formatDate(m.fecha)} · ${m.descripcion || m.tipo} · ${formatCurrency(Number(m.monto))}${m.conciliado ? " · (marcado conciliado)" : ""}`;
+  const descMov = (m: MovRow) => `${formatDate(m.fecha)} · ${m.descripcion || m.tipo} · ${formatCurrency(Number(m.monto))}${m.montoCuenta !== null && m.montoCuenta !== undefined && Math.abs(Number(m.montoCuenta) - Number(m.monto)) > 0.005 ? ` (en transferencia: ${formatCurrency(Number(m.montoCuenta))})` : ""}${m.conciliado ? " · (marcado conciliado)" : ""}`;
   const descCheque = (c: ChequeRow) => `N° ${c.numero} · ${c.direccion === "emitido" ? c.destino_nombre || "emitido" : c.origen_nombre || "recibido"} · ${formatCurrency(Number(c.monto))} · paga ${c.fecha_pago ? formatDate(c.fecha_pago) : "—"} · ${c.estado}`;
   const cuentasActivas = cuentas.filter((c) => c.activa);
   const visibles = verTodas ? aRevisar : aRevisar.slice(0, 60);

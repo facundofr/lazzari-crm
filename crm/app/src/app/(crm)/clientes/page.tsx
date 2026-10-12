@@ -1697,7 +1697,7 @@ export default function ClientesPage() {
         subtitle={`${activos} clientes activos`}
         action={{ label: "Nuevo cliente", onClick: openCreate }}
       />
-      <div className="p-4 sm:p-8 space-y-6">
+      <div className="p-3 sm:p-5 space-y-4">
         {/* Búsqueda, filtros y exportar en una sola línea (el panel de filtros abre abajo, a todo el ancho) */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px] max-w-md">

@@ -152,4 +152,21 @@ const tot = totalesBancoPorMes([
 ]);
 assert.deepEqual(tot, { "2026-10": { iva: -5921.82, ley_25413: 1829.52 }, "2026-09": { intereses: 35 } });
 
+// OP mixta (eCheq + transferencia): la línea del banco cruza con la parte en transferencia.
+{
+  const linea = { id: "mob", fecha: "2026-09-18", concepto: "TRANSFERENCIA 30715102001", importe: -527103.55, cuenta_id: "cc" };
+  const mov = { id: "op22", tipo: "pago", proveedor_id: "p", fecha: "2026-09-18", monto: 1581310.65, montoCuenta: 527103.55, cuit: "30-71510200-1" };
+  const [r] = cruzarExtracto([linea], [mov], [], cuentas);
+  assert.equal(r.clasificacion, "pago");
+  assert.equal(r.movimiento_id, "op22");
+  assert.equal(r.auto, true);
+}
+// Extracción de efectivo: sale del banco pero no entra a la caja.
+{
+  const [r] = cruzarExtracto([{ id: "ext", fecha: "2026-09-25", concepto: "Extraccion de Efectivo Nro:00000001", importe: -6200000, cuenta_id: "ca" }], [], [], cuentas);
+  assert.equal(r.clasificacion, "otro");
+  assert.equal(r.subtipo, "extraccion_efectivo");
+  assert.equal(r.contra_cuenta_id ?? null, null);
+}
+
 console.log("extracto-bbva OK");
