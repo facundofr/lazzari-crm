@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, FileUp, Loader2, X, AlertTriangle, UserPlus, PlayCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
-import ConciliacionCompras from "@/components/conciliacion-compras";
+import ConciliacionCompras, { lineasParaCruce } from "@/components/conciliacion-compras";
+import { cargarLineasOc, sugerirEquivalencias, contarSemaforo, type AnalisisIA } from "@/lib/conciliacion-compras-analisis";
+import { matchPurchaseLines, citaOc } from "@/lib/purchase-matching";
 import { formatCurrency } from "@/lib/utils";
 import { canonicalPurchaseInvoiceNumber } from "@/lib/purchase-invoice-reconciliation";
 import { canonicalCondicionIva } from "@/lib/fiscal-condition";
@@ -13,6 +15,8 @@ type Provider = { id: string; razon_social: string; cuit?: string | null };
 type OC = { id: string; numero: string; proveedor_id: string; proveedor_nombre: string; moneda: string };
 type RowState = "pending" | "parsing" | "ready" | "saved" | "error";
 type QueueRow = { id: string; file: File; state: RowState; message?: string; data?: any; provider?: Provider; oc?: OC; duplicada?: boolean };
+/** Resultado del cruce automático de un proveedor (todas sus facturas del lote juntas). */
+type Cruce = { estado: "analizando" | "listo" | "sin_renglones" | "error"; verde?: number; amarillo?: number; rojo?: number; analisis?: AnalisisIA; mensaje?: string };
 type NuevoProv = { rowId: string; cuit: string; razon_social: string; nombre_fantasia: string; condicion_iva: string; direccion: string; localidad: string; provincia: string; rubro: string };
 
 const onlyDigits = (v: unknown) => String(v ?? "").replace(/\D/g, "");
@@ -84,6 +88,8 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
       const provider = findProvider(onlyDigits(data.proveedor?.cuit));
       const duplicada = provider ? await esDuplicada(provider.id, data.numero_factura) : false;
       // Además evitamos subir dos veces el mismo comprobante dentro del lote.
+      // Si ese proveedor ya se había cruzado, se vuelve a cruzar con esta factura incluida.
+      if (provider && cruceRef.current[provider.id]) setCruce(c => { const n = { ...c }; delete n[provider.id]; return n; });
       const repetidaEnLote = rowsRef.current.some(r => r.id !== row.id && r.data && onlyDigits(r.data.proveedor?.cuit) === onlyDigits(data.proveedor?.cuit) && canonicalPurchaseInvoiceNumber(r.data.numero_factura || "") === canonicalPurchaseInvoiceNumber(data.numero_factura));
       setRows(prev => prev.map(r => r.id === row.id ? {
         ...r, state: "ready", data, provider, oc: ocFor(provider, data), duplicada: duplicada || repetidaEnLote,
@@ -105,7 +111,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
 
   // ── Un solo circuito: si el proveedor tiene OC con renglones pendientes, la factura se concilia línea por línea
   //    (junto con las demás del mismo proveedor). Si no (OC viejas sin detalle, NC, gastos), va a la carga simple.
-  const [conciliar, setConciliar] = useState<{ proveedorId: string; rows: QueueRow[] } | null>(null);
+  const [conciliar, setConciliar] = useState<{ proveedorId: string; rows: QueueRow[]; auto?: boolean } | null>(null);
   const renglonesCache = useRef<Record<string, boolean>>({});
   async function proveedorTieneRenglonesOc(provId: string): Promise<boolean> {
     if (provId in renglonesCache.current) return renglonesCache.current[provId];
@@ -140,6 +146,58 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
       setReview({ row, orders: (data || []).map((o: any) => ({ ...o, proveedor_nombre: o.proveedores?.razon_social || "Sin proveedor" })) });
     } catch (e) { alert(e instanceof Error ? e.message : "No se pudieron cargar las OC"); setEnSecuencia(false); }
     finally { setSaving(false); }
+  }
+
+  // ── Cruce automático: cuando terminan de leerse, se cruzan todas las facturas de cada proveedor contra sus OC ──
+  const [cruce, setCruce] = useState<Record<string, Cruce>>({});
+  const cruceRef = useRef<Record<string, Cruce>>({});
+  cruceRef.current = cruce;
+  const cruzandoRef = useRef(false);
+  const filasDe = (provId: string) => rowsRef.current.filter(r => r.state === "ready" && r.provider?.id === provId && !r.duplicada && !esNotaODebito(r));
+
+  async function cruzarProveedor(provId: string) {
+    setCruce(c => ({ ...c, [provId]: { estado: "analizando" } }));
+    try {
+      if (!await proveedorTieneRenglonesOc(provId)) { setCruce(c => ({ ...c, [provId]: { estado: "sin_renglones" } })); return; }
+      const filas = filasDe(provId);
+      const { data: prov } = await (supabase as any).from("proveedores").select("razon_social, talles_especiales, tolerancia_precio_pct").eq("id", provId).single();
+      const facturas = filas.map(r => lineasParaCruce(r.file, r.data || {}));
+      const lineas = facturas.flatMap(f => f.lineas);
+      const { lineas: ocLineas, legacy } = await cargarLineasOc(supabase, sociedadId, provId);
+      const usables = ocLineas.filter(l => !legacy.has(l.ocId));
+      if (!lineas.length || !usables.length) { setCruce(c => ({ ...c, [provId]: { estado: "sin_renglones" } })); return; }
+      const ocPreferidas: Record<string, string[]> = {};
+      for (const f of facturas) {
+        const ids = [...new Set(usables.filter(o => f.ocRefs.some(r => citaOc(r, o.ocNumero))).map(o => o.ocId))];
+        if (ids.length) ocPreferidas[f.facturaRef] = ids;
+      }
+      const opciones = { tallesEspeciales: prov?.talles_especiales || [], toleranciaPct: Number(prov?.tolerancia_precio_pct ?? 0) || 0, ocPreferidas };
+      const analisis = await sugerirEquivalencias(supabase, { sociedadId, proveedorId: provId, proveedorNombre: prov?.razon_social || "", lineasFactura: lineas, ocs: usables, manual: {}, opciones });
+      const r = matchPurchaseLines(lineas, usables, analisis.equivalencias, {}, opciones);
+      const c = contarSemaforo(lineas, r, { manual: {}, confianza: analisis.confianza });
+      setCruce(x => ({ ...x, [provId]: { estado: "listo", verde: c.verde, amarillo: c.amarillo, rojo: c.rojo, analisis } }));
+    } catch (e) {
+      setCruce(x => ({ ...x, [provId]: { estado: "error", mensaje: e instanceof Error ? e.message : "No se pudo cruzar" } }));
+    }
+  }
+
+  // De a un proveedor por vez, y solo cuando no queda nada leyéndose.
+  useEffect(() => {
+    if (cruzandoRef.current || rows.some(r => r.state === "pending" || r.state === "parsing")) return;
+    const prov = rows.find(r => r.state === "ready" && r.provider && !r.duplicada && !esNotaODebito(r) && !cruceRef.current[r.provider.id])?.provider;
+    if (!prov) return;
+    cruzandoRef.current = true;
+    void cruzarProveedor(prov.id).finally(() => { cruzandoRef.current = false; setRows(prev => [...prev]); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
+
+  const provsQueCierran = () => Object.entries(cruceRef.current)
+    .filter(([id, c]) => c.estado === "listo" && !c.amarillo && !c.rojo && filasDe(id).length > 0).map(([id]) => id);
+  function confirmarLasQueCierran(excluir?: string) {
+    const id = provsQueCierran().find(x => x !== excluir);
+    if (!id) { setEnSecuencia(false); return; }
+    setEnSecuencia(true);
+    setConciliar({ proveedorId: id, rows: filasDe(id), auto: true });
   }
 
   function siguienteParaRevisar(excluir?: string) {
@@ -220,7 +278,8 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
   const leyendo = rows.filter(r => r.state === "pending" || r.state === "parsing").length;
 
   if (conciliar) return <ConciliacionCompras sociedadId={sociedadId} profileId={profileId}
-    inicial={{ proveedorId: conciliar.proveedorId, facturas: conciliar.rows.map(r => ({ file: r.file, data: r.data || {} })) }}
+    inicial={{ proveedorId: conciliar.proveedorId, facturas: conciliar.rows.map(r => ({ file: r.file, data: r.data || {} })), analisis: cruce[conciliar.proveedorId]?.analisis }}
+    autoConfirmar={conciliar.auto}
     onClose={() => { setConciliar(null); setEnSecuencia(false); }}
     onSuccess={(guardadas) => {
       const nums = new Set((guardadas || []).map(n => canonicalPurchaseInvoiceNumber(n)));
@@ -228,7 +287,9 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
       setRows(prev => prev.map(r => ids.has(r.id) ? { ...r, state: "saved" } : r));
       delete dupCache.current[conciliar.proveedorId];
       delete renglonesCache.current[conciliar.proveedorId];
+      const eraAuto = conciliar.auto, provHecho = conciliar.proveedorId;
       setConciliar(null);
+      if (eraAuto) { rowsRef.current = rowsRef.current.map(r => ids.has(r.id) ? { ...r, state: "saved" as const } : r); confirmarLasQueCierran(provHecho); return; }
       if (enSecuencia) {
         const next = rowsRef.current.find(r => !ids.has(r.id) && r.state === "ready" && r.provider && !r.duplicada);
         if (next) void openReview(next); else setEnSecuencia(false);
@@ -297,7 +358,15 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
                   {row.state === "error" && <span className="flex items-center gap-1 text-red-600" title={row.message}><AlertTriangle className="h-3 w-3" /> No se pudo leer</span>}
                   {row.state === "ready" && (row.duplicada ? <span className="flex items-center gap-1 text-red-600"><AlertTriangle className="h-3 w-3" /> {row.message}</span>
                     : sinProv ? <span className="flex items-center gap-1 text-amber-600"><AlertTriangle className="h-3 w-3" /> Proveedor no cargado</span>
-                    : <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" /> Lista{row.oc ? ` · ${row.oc.numero}` : ""}</span>)}
+                    : (() => {
+                      const c = row.provider && !esNotaODebito(row) ? cruce[row.provider.id] : undefined;
+                      if (c?.estado === "analizando") return <span className="flex items-center gap-1 text-orange-600"><Loader2 className="h-3 w-3 animate-spin" /> Cruzando con OC</span>;
+                      if (c?.estado === "listo") return (c.amarillo || c.rojo)
+                        ? <span className="flex items-center gap-1 text-amber-600" title="Del proveedor (todas sus facturas del lote)"><AlertTriangle className="h-3 w-3" /> {(c.amarillo || 0) + (c.rojo || 0)} renglón(es) para revisar</span>
+                        : <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" /> Cierra con las OC</span>;
+                      if (c?.estado === "error") return <span className="flex items-center gap-1 text-red-600" title={c.mensaje}><AlertTriangle className="h-3 w-3" /> No se pudo cruzar</span>;
+                      return <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" /> Lista{row.oc ? ` · ${row.oc.numero}` : ""}{c?.estado === "sin_renglones" ? " · carga simple" : ""}</span>;
+                    })())}
                 </td>
                 <td className="px-2 whitespace-nowrap text-right">
                   {sinProv && <button disabled={saving} onClick={() => abrirNuevoProv(row)} className="mr-1 inline-flex items-center gap-1 rounded bg-amber-500 px-2 py-1 text-white"><UserPlus className="h-3 w-3" /> Crear proveedor</button>}
@@ -312,6 +381,20 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
           </tbody>
         </table>
       </div>
+
+      {Object.values(cruce).some(c => c.estado === "listo") && (() => {
+        const cierran = Object.entries(cruce).filter(([id, c]) => c.estado === "listo" && !c.amarillo && !c.rojo && filasDe(id).length > 0);
+        const revisar = Object.entries(cruce).filter(([id, c]) => c.estado === "listo" && ((c.amarillo || 0) + (c.rojo || 0)) > 0 && filasDe(id).length > 0);
+        const nombre = (id: string) => provs.find(p => p.id === id)?.razon_social || "Proveedor";
+        return <div className="mt-3 rounded-lg border border-zinc-200 p-3 text-xs dark:border-zinc-700 dark:text-zinc-200">
+          <p className="mb-1 font-semibold">Cruce automático con las OC</p>
+          {cierran.map(([id]) => <p key={id} className="text-emerald-700 dark:text-emerald-400">✔ {nombre(id)}: {filasDe(id).length} factura(s), cierran todas</p>)}
+          {revisar.map(([id, c]) => <p key={id} className="text-amber-700 dark:text-amber-400">⚠ {nombre(id)}: {filasDe(id).length} factura(s), {(c.amarillo || 0) + (c.rojo || 0)} renglón(es) para revisar{" "}
+            <button disabled={saving} onClick={() => { const r = filasDe(id)[0]; if (r) void openReview(r); }} className="underline">Revisar</button></p>)}
+          {cierran.length > 0 && <button disabled={saving || busy} onClick={() => confirmarLasQueCierran()}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"><CheckCircle2 className="h-4 w-4" /> Confirmar las que cierran ({cierran.reduce((t, [id]) => t + filasDe(id).length, 0)} facturas)</button>}
+        </div>;
+      })()}
 
       {nuevoProv && <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950/30">
         <div className="mb-2 flex items-center justify-between">
@@ -338,7 +421,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
       </div>}
 
       <div className="mt-5 flex items-center justify-between gap-2">
-        <p className="text-[11px] text-zinc-500">Cada factura se abre para que confirmes importes y OC antes de guardarla. Al guardar una, pasa sola a la siguiente.</p>
+        <p className="text-[11px] text-zinc-500">Al terminar de leer, se cruzan solas contra las OC. Las que cierran se confirman con un botón; las demás se abren mostrando solo lo que no cierra.</p>
         <div className="flex gap-2">
           <button disabled={busy} onClick={close} className="rounded-lg border px-4 py-2 text-sm">Cerrar</button>
           <button disabled={saving || listas === 0} onClick={revisarTodas} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><PlayCircle className="h-4 w-4" /> Cargar las {listas} listas</button>

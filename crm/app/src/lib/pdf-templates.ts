@@ -998,6 +998,10 @@ ${documentHeader(soc, {
   </tr>
 </table>
 
+<div style="margin:10px 0 12px;padding:9px 12px;border:2px solid ${c};border-radius:6px;font-size:12px;font-weight:700;color:#111;text-align:center">
+  IMPORTANTE: por favor indicar el N° de orden de compra <span style="color:${c};font-size:13px">${oc.numero}</span> en la factura (y en el remito).
+</div>
+
 <div class="items-title">Detalle de productos / servicios</div>
 <table>
   <thead><tr>

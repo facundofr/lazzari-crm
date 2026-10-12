@@ -23,6 +23,8 @@ import ConciliacionCompras from "@/components/conciliacion-compras";
 import LimpiezaOC from "@/components/limpieza-oc";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
+import EnviarOCProveedor from "@/components/enviar-oc-proveedor";
+import { avisoNumeroOC, cuerpoMailConAviso } from "@/lib/oc-envio";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useUser } from "@/lib/auth-context";
@@ -255,6 +257,7 @@ export default function OrdenesCompraPage() {
   const [limpiezaOpen, setLimpiezaOpen] = useState(false);
 
   // Email modal
+  const [enviarOCId, setEnviarOCId] = useState<string | null>(null);
   const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
 
   // All profiles for operator dropdown
@@ -1373,6 +1376,8 @@ export default function OrdenesCompraPage() {
       `IVA: ${formatCurrency(Number(oc.iva), mon)}`,
       `*Total: ${formatCurrency(Number(oc.total), mon)}*`,
       oc.observaciones ? `\nObs: ${oc.observaciones}` : null,
+      "",
+      `⚠️ *${avisoNumeroOC(oc.numero)}*`,
     ];
     return lines.filter((l) => l !== null).join("\n");
   };
@@ -1551,6 +1556,8 @@ export default function OrdenesCompraPage() {
       "",
       `*Total: ${formatCurrency(Number(oc.total), mon)}*`,
       oc.observaciones ? `\nObs: ${oc.observaciones}` : null,
+      "",
+      `⚠️ *${avisoNumeroOC(oc.numero)}*`,
     ];
     const text = lines.filter((l) => l !== null).join("\n");
     await navigator.clipboard.writeText(text);
@@ -2578,6 +2585,12 @@ export default function OrdenesCompraPage() {
                         <><ClipboardCopy className="h-3 w-3" /> Copiar</>
                       )}
                     </button>
+                    {row.proveedor_id && (
+                      <button onClick={() => setEnviarOCId(row.id)} title="Enviar por WhatsApp o mail"
+                        className="ml-1 inline-flex items-center gap-1 rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-400">
+                        <Send className="h-3 w-3" /> Enviar
+                      </button>
+                    )}
                   </div>
                 ),
               },
@@ -3150,12 +3163,16 @@ export default function OrdenesCompraPage() {
                       <button onClick={handleDownloadPDF} className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Descargar PDF">
                         <Download className="h-4 w-4" />
                       </button>
+                      {detailOC.proveedor_id && <button onClick={() => setEnviarOCId(detailOC.id)}
+                        className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700" title="Enviar la OC al proveedor por WhatsApp o mail">
+                        <Send className="h-3.5 w-3.5" /> Enviar
+                      </button>}
                       {canManageCompras && <button
                         onClick={async () => {
                           const oc = detailOC;
                           const template = await loadEmailTemplate("orden_compra", sociedadActiva?.id || "");
                           const vars = { numero: oc.numero, sociedad: sociedadActiva?.razonSocial || "Lazzari", total: formatCurrency(oc.total, oc.moneda as "ARS" | "USD"), fecha: formatDate(oc.fecha), proveedor: purchaseOrderProviderLabel(oc) };
-                          setEmailModal({ open: true, id: oc.id, to: oc.proveedores?.email || "", subject: applyTemplateVars(template.asunto, vars), body: applyTemplateVars(template.cuerpo, vars), filename: `${oc.numero}.pdf` });
+                          setEmailModal({ open: true, id: oc.id, to: oc.proveedores?.email || "", subject: applyTemplateVars(template.asunto, vars), body: cuerpoMailConAviso(applyTemplateVars(template.cuerpo, vars), oc.numero), filename: `${oc.numero}.pdf` });
                         }}
                         className="rounded p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Enviar por email">
                         <Mail className="h-4 w-4" />
@@ -3918,6 +3935,8 @@ export default function OrdenesCompraPage() {
           onSuccess={() => { setCargarFCOpen(false); setCargarFCPreselectedId(undefined); fetchData(); }}
         />
       )}
+
+      {enviarOCId && <EnviarOCProveedor ocIds={[enviarOCId]} onClose={() => { setEnviarOCId(null); void fetchData(); }} />}
 
       {/* Email compose modal */}
       <EmailComposeModal

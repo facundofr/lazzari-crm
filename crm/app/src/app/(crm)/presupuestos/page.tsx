@@ -28,6 +28,7 @@ import CatalogoPicker from "@/components/presupuestos/catalogo-picker";
 import CotizacionExpress from "@/components/presupuestos/cotizacion-express";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
+import EnviarOCProveedor from "@/components/enviar-oc-proveedor";
 import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalizePurchaseCurrency } from "@/lib/own-stock-purchase-orders";
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
 
@@ -488,6 +489,8 @@ export default function PresupuestosPage() {
 
   // Costos faltantes modal (al aprobar)
   const [costosFaltantesModal, setCostosFaltantesModal] = useState<{ id: string; count: number; motivo?: string } | null>(null);
+  // Al aprobar un PR se propone mandar sus OC a cada proveedor (WhatsApp / mail).
+  const [enviarOCs, setEnviarOCs] = useState<{ ids: string[]; titulo: string } | null>(null);
   // Track PRs aprobados con costos faltantes (set of PR ids)
   const [prsSinCostos, setPrsSinCostos] = useState<Set<string>>(new Set());
 
@@ -1881,6 +1884,15 @@ export default function PresupuestosPage() {
         } catch { /* ignore */ }
 
         await generateOCsFromPresupuesto(id);
+        // Propuesta: enviar ya las OC con proveedor que todavía no se pidieron (sugerencia, se puede cerrar).
+        try {
+          const { data: ocsPR } = await (supabase as any).from("ordenes_compra").select("id, numero")
+            .eq("presupuesto_origen_id", id).not("proveedor_id", "is", null).neq("estado", "cancelada").or("pedido.is.null,pedido.eq.false");
+          if (ocsPR?.length) {
+            const pr = presupuestos.find(p => p.id === id);
+            setEnviarOCs({ ids: ocsPR.map((o: { id: string }) => o.id), titulo: `PR ${pr?.numero || ""} aprobado: ¿enviamos ${ocsPR.length === 1 ? "la OC" : `las ${ocsPR.length} OC`} al proveedor?` });
+          }
+        } catch { /* la propuesta es opcional: nunca frena la aprobación */ }
       }
 
       await fetchPresupuestos();
@@ -4652,6 +4664,7 @@ export default function PresupuestosPage() {
           return htmlToPdfBase64(html);
         }}
       />
+      {enviarOCs && <EnviarOCProveedor ocIds={enviarOCs.ids} titulo={enviarOCs.titulo} onClose={() => setEnviarOCs(null)} />}
     </>
   );
 }

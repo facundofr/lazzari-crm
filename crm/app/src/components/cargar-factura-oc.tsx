@@ -5,7 +5,7 @@ import { X, Loader2, Sparkles, Check, Search, Plus, Trash2, Maximize2, Minimize2
 import { formatCurrency, todayAR } from "@/lib/utils";
 import { reconcilePurchaseLines, inspectPurchaseLineMatch, purchaseLineKey, canonicalPurchaseInvoiceNumber, assertCompleteInvoiceOrderSelection, canMarkPurchaseOrdersPaid, markupForFixedSalePrice, type PurchaseLine } from "@/lib/purchase-invoice-reconciliation";
 import { supabase } from "@/lib/supabase/client";
-import { parseVariant, tallesCompatibles } from "@/lib/purchase-matching";
+import { parseVariant, tallesCompatibles, mismoCodigo, puntajeParecido, PUNTAJE_PARECIDO } from "@/lib/purchase-matching";
 import { aprenderNombreFantasiaDeFactura } from "@/lib/nombre-fantasia";
 import { useToast } from "@/components/ui/toast";
 import { duplicadosComprobanteCompra } from "@/lib/saldo-factura-compra";
@@ -379,7 +379,11 @@ export default function CargarFacturaOC({
   // Para comparar se usa el nombre del proveedor; para guardar, siempre el renglón original.
   const ocItemsComparables = useMemo(() => selectedOCItems.map(comoLoLlamaElProveedor), [selectedOCItems]);
 
-  const itemComparisons = useMemo(() => items.map((item) => {
+  // Mismas reglas que la conciliación por línea (lib/purchase-matching): código tolerante y, si no aparece,
+  // el renglón más parecido por nombre + cantidad + precio (queda en amarillo con el motivo).
+  const itemComparisons = useMemo(() => {
+    const usadosParecido = new Set<string>();
+    return items.map((item) => {
     const manualTarget = manualItemMatches[item.tempId];
     if (manualTarget === "__extra__") return { item, status: "unmatched" as const, matched: null, manual: true, aprendido: false };
     if (manualTarget) {
@@ -389,6 +393,17 @@ export default function CargarFacturaOC({
     const inspection = inspectPurchaseLineMatch(ocItemsComparables, item);
     if (inspection.status === "matched" && inspection.candidates.length === 1) {
       return { item, status: "matched" as const, matched: selectedOCItems.find((candidate) => candidate.id === inspection.candidates[0].id) || null, manual: false, aprendido: false };
+    }
+    // Código parecido: sin ceros adelante, guiones ni el talle pegado ("01234-42" = "1234" talle 42).
+    if (item.codigo && inspection.status === "unmatched") {
+      const vt = parseVariant(item.descripcion).talle;
+      const porCodigo = ocItemsComparables.filter((o) => {
+        const ot = parseVariant(o.descripcion).talle;
+        return mismoCodigo(item.codigo, vt, o.codigo, ot) && !(vt && ot && !tallesCompatibles(vt, ot));
+      });
+      if (porCodigo.length === 1) {
+        return { item, status: "matched" as const, matched: selectedOCItems.find((c) => c.id === porCodigo[0].id) || null, manual: false, aprendido: false };
+      }
     }
     // Equivalencia aprendida de este proveedor (mismo artículo con otro nombre, mismo talle).
     const v = parseVariant(item.descripcion);
@@ -402,8 +417,22 @@ export default function CargarFacturaOC({
         return { item, status: "matched" as const, matched: selectedOCItems.find((c) => c.id === cand[0].id) || null, manual: false, aprendido: true };
       }
     }
+    if (inspection.status === "unmatched") {
+      const factura = { descripcion: item.descripcion, cantidad: Number(item.cantidad) || 0, precio: roundMoney(Number(item.precio_unitario) * (1 - Number(item.descuento_porcentaje || 0) / 100)) };
+      let mejor: { o: OCItemForMatch; puntaje: number; motivos: string[] } | null = null;
+      for (const o of ocItemsComparables) {
+        if (usadosParecido.has(o.id)) continue;
+        const p = puntajeParecido(factura, { descripcion: o.descripcion, precio: Number(o.precio_unitario) || 0 }, Number(o.cantidad) || 0);
+        if (p && p.puntaje >= PUNTAJE_PARECIDO && (!mejor || p.puntaje > mejor.puntaje)) mejor = { o, puntaje: p.puntaje, motivos: p.motivos };
+      }
+      if (mejor) {
+        usadosParecido.add(mejor.o.id);
+        return { item, status: "matched" as const, matched: selectedOCItems.find((c) => c.id === mejor!.o.id) || null, manual: false, aprendido: false, parecido: `Propuesto por parecido: ${mejor.motivos.join(", ")}. Revisalo.` };
+      }
+    }
     return { item, status: inspection.status, matched: null, manual: false, aprendido: false };
-  }), [items, selectedOCItems, ocItemsComparables, manualItemMatches, equivalenciasProv]);
+    });
+  }, [items, selectedOCItems, ocItemsComparables, manualItemMatches, equivalenciasProv]);
 
   // Vínculos efectivos para guardar: los automáticos (incluidos los aprendidos) + los manuales.
   const asignacionesEfectivas = useMemo(() => {
@@ -420,7 +449,7 @@ export default function CargarFacturaOC({
   const [aiMatchMsg, setAiMatchMsg] = useState("");
   const aiRunKey = useRef("");
   async function sugerirConIA() {
-    const pendientes = itemComparisons.filter((c) => c.status !== "matched" && !manualItemMatches[c.item.tempId]);
+    const pendientes = itemComparisons.filter((c) => (c.status !== "matched" || (c as { parecido?: string }).parecido) && !manualItemMatches[c.item.tempId]);
     if (!pendientes.length || !selectedOCItems.length) return;
     setAiMatching(true); setAiMatchMsg("");
     try {
@@ -454,7 +483,7 @@ export default function CargarFacturaOC({
     if (ocItemsLoading || !selectedOCItems.length || aiMatching) return;
     const key = `${selectedOCKey}::${items.map((i) => i.tempId).join(",")}`;
     if (aiRunKey.current === key) return;
-    if (!itemComparisons.some((c) => c.status !== "matched" && !manualItemMatches[c.item.tempId])) return;
+    if (!itemComparisons.some((c) => (c.status !== "matched" || (c as { parecido?: string }).parecido) && !manualItemMatches[c.item.tempId])) return;
     aiRunKey.current = key;
     void sugerirConIA();
   }, [ocItemsLoading, selectedOCItems, selectedOCKey, items]);
@@ -1108,7 +1137,10 @@ export default function CargarFacturaOC({
       // Memoria del proveedor: lo que vinculaste a mano queda aprendido para la próxima factura.
       if (!isCreditNote && proveedorId) {
         try {
-          const eqs = Object.entries(manualItemMatches)
+          const porParecido = itemComparisons
+            .filter((c) => (c as { parecido?: string }).parecido && c.matched && !manualItemMatches[c.item.tempId])
+            .map((c) => [c.item.tempId, c.matched!.id] as [string, string]);
+          const eqs = [...Object.entries(manualItemMatches), ...porParecido]
             .filter(([, target]) => target && target !== "__extra__")
             .map(([tempId, target]) => {
               const it = items.find((i) => i.tempId === tempId);
@@ -1588,7 +1620,8 @@ export default function CargarFacturaOC({
                     {aiMatchMsg && <p className="text-[11px] font-medium text-violet-700 dark:text-violet-300">{aiMatchMsg}</p>}
                     {itemComparisons.map((comparison) => {
                       const assignedId = manualItemMatches[comparison.item.tempId] || "";
-                      const isMatched = comparison.status === "matched";
+                      const parecido = (comparison as { parecido?: string }).parecido;
+                      const isMatched = comparison.status === "matched" && !parecido;
                       const statusText = comparison.manual
                         ? (assignedId === "__extra__" ? "Marcado fuera de OC" : "Asignación manual")
                         : comparison.status === "matched"
@@ -1603,6 +1636,7 @@ export default function CargarFacturaOC({
                             <p className="text-[10px] text-zinc-500">Factura: {comparison.item.cantidad} {comparison.item.unidad || "UN"}</p>
                             <p className={`mt-1 text-[10px] font-semibold ${isMatched ? "text-emerald-600" : "text-amber-700 dark:text-amber-300"}`}>{aiMotivos[comparison.item.tempId] && assignedId && assignedId !== "__extra__" ? "Sugerido por IA" : statusText}</p>
                             {aiMotivos[comparison.item.tempId] && assignedId && assignedId !== "__extra__" && <p className="text-[10px] text-violet-700 dark:text-violet-300">{aiMotivos[comparison.item.tempId]}</p>}
+                            {parecido && !assignedId && <p className="text-[10px] text-amber-700 dark:text-amber-300">{parecido}{comparison.matched ? ` → ${comparison.matched.ocNumero}: ${comparison.matched.descripcion}` : ""}</p>}
                           </div>
                           <select
                             value={assignedId}
@@ -1680,7 +1714,8 @@ export default function CargarFacturaOC({
             <div className="max-h-[72vh] overflow-y-auto p-6">
               {nuevoProveedorError && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400">{nuevoProveedorError}</div>}
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Razón social *</label><input value={nuevoProveedor.razon_social} onChange={e => setNuevoProveedor({ ...nuevoProveedor, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+                <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Razón social *</label><input value={nuevoProveedor.razon_social} onChange={e => setNuevoProveedor({ ...nuevoProveedor, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
+
                 <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Nombre de fantasía <span className="font-normal text-zinc-400">(como figura en la lista de costos, ej. "Segutécnica")</span></label><input value={nuevoProveedor.nombre_fantasia} onChange={e => setNuevoProveedor({ ...nuevoProveedor, nombre_fantasia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
                 <div><label className="text-xs font-medium text-zinc-500">CUIT *</label><div className="mt-1 flex gap-2"><input value={nuevoProveedor.cuit} onChange={e => setNuevoProveedor({ ...nuevoProveedor, cuit: e.target.value })} placeholder="XX-XXXXXXXX-X" className="min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-mono dark:border-zinc-600 dark:bg-zinc-800" /><button type="button" onClick={() => lookupNuevoProveedor()} disabled={cuitLoading} className="inline-flex items-center gap-1 rounded-lg border border-blue-300 px-3 text-xs font-semibold text-blue-600 hover:bg-blue-50 disabled:opacity-50">{cuitLoading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />} AFIP</button></div></div>
                 <div><label className="text-xs font-medium text-zinc-500">Condición IVA</label><select value={nuevoProveedor.condicion_iva} onChange={e => setNuevoProveedor({ ...nuevoProveedor, condicion_iva: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"><option value="RI">Responsable Inscripto</option><option value="Monotributo">Monotributo</option><option value="Exento">Exento</option></select></div>

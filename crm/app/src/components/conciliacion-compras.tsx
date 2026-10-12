@@ -19,9 +19,13 @@ import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { parseDecimalInput } from "@/lib/decimal-input";
 import {
-  matchPurchaseLines, parseVariant,
-  type Equivalencias, type InvoiceLineInput, type OcLineInput, type MatchResult, type Asignacion,
+  matchPurchaseLines, parseVariant, puntajeParecido, citaOc,
+  type Equivalencias, type InvoiceLineInput, type MatchResult, type Asignacion,
 } from "@/lib/purchase-matching";
+import {
+  cargarLineasOc, sugerirEquivalencias, semaforoLinea, contarSemaforo,
+  type OcLinea, type Manual, type Confianza, type AnalisisIA,
+} from "@/lib/conciliacion-compras-analisis";
 
 const db = supabase as any;
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -33,7 +37,9 @@ interface Props {
   /** Recibe los números de las facturas guardadas. */
   onSuccess: (guardadas?: string[]) => void;
   /** Facturas ya leídas (desde la carga masiva): se cargan sin volver a pasar por la IA. */
-  inicial?: { proveedorId?: string; facturas: Array<{ file: File; data: any }> };
+  inicial?: { proveedorId?: string; facturas: Array<{ file: File; data: any }>; analisis?: AnalisisIA };
+  /** Carga masiva: si al abrir todo cierra (sin amarillas ni rojas), confirma sola y pasa a la siguiente. */
+  autoConfirmar?: boolean;
 }
 
 interface Proveedor { id: string; razon_social: string; cuit: string | null; talles_especiales?: string[] | null; tolerancia_precio_pct?: number | null }
@@ -66,14 +72,13 @@ interface FacturaCarga {
   total: number;
   items: ItemFactura[];
   cuit: string;
+  /** Números de OC que la factura cita impresos ("Su OC N° 1199"). */
+  ocRefs?: string[];
   /** Emisor leído por la IA (para aprender el nombre de fantasía del proveedor). */
   razonSocialLeida?: string;
   nombreFantasiaLeido?: string;
 }
 
-interface OcLinea extends OcLineInput { moneda: string; ocEstado: string; descripcionOc?: string }
-type Manual = Record<string, Array<{ ocLineId: string; cantidad: number }> | "__extra__">;
-type Confianza = "alta" | "media" | "baja";
 
 function tipoComprobante(raw: string): string {
   const t = String(raw || "").toUpperCase().trim();
@@ -85,6 +90,16 @@ function tipoComprobante(raw: string): string {
 
 const precioNeto = (it: ItemFactura) => round2(it.precio_unitario * (1 - (it.descuento_porcentaje || 0) / 100));
 const lineKey = (f: FacturaCarga, i: number) => `${f.localId}:${i}`;
+
+/** Líneas de una factura ya leída, como las cruza la conciliación (para el cruce automático de la carga masiva). */
+export function lineasParaCruce(file: File, d: any): { lineas: InvoiceLineInput[]; ocRefs: string[]; facturaRef: string } {
+  const f = facturaDesdeDatos(file, d);
+  const facturaRef = f.numero || f.localId;
+  return {
+    facturaRef, ocRefs: f.ocRefs || [],
+    lineas: f.items.map((it, i) => ({ key: lineKey(f, i), facturaRef, codigo: it.codigo || null, descripcion: it.descripcion, cantidad: it.cantidad, precio: precioNeto(it) })),
+  };
+}
 
 /** Arma una factura de la conciliación con los datos que devolvió /api/parse-factura-compra. */
 function facturaDesdeDatos(file: File, d: any): FacturaCarga {
@@ -106,6 +121,7 @@ function facturaDesdeDatos(file: File, d: any): FacturaCarga {
     percepciones: Number(d.percepciones) || 0,
     total: Number(d.total) || 0,
     cuit: String(d.proveedor?.cuit || "").replace(/\D/g, ""),
+    ocRefs: (Array.isArray(d.referencias_oc) ? d.referencias_oc : []).map((x: unknown) => String(x || "").trim()).filter(Boolean),
     razonSocialLeida: String(d.proveedor?.razon_social || "").trim(),
     nombreFantasiaLeido: String(d.proveedor?.nombre_fantasia || "").trim(),
     items: (Array.isArray(d.items) ? d.items : []).map((it: any) => ({
@@ -120,7 +136,7 @@ function facturaDesdeDatos(file: File, d: any): FacturaCarga {
   };
 }
 
-export default function ConciliacionCompras({ sociedadId, profileId, onClose, onSuccess, inicial }: Props) {
+export default function ConciliacionCompras({ sociedadId, profileId, onClose, onSuccess, inicial, autoConfirmar }: Props) {
   const { toast } = useToast();
   const [fullscreen, setFullscreen] = useState(true);
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
@@ -144,7 +160,14 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
   const [conciliado, setConciliado] = useState(false);
   const [manual, setManual] = useState<Manual>({});
   const [revisadas, setRevisadas] = useState<Set<string>>(new Set());
-  const [soloRevisar, setSoloRevisar] = useState(false);
+  // Arranca mostrando solo lo que no cierra; lo que está bien queda plegado en una línea.
+  const [soloRevisar, setSoloRevisar] = useState(true);
+  // Lo que vino sin OC o de más va a una OC complementaria atada a la factura (se puede destildar).
+  const [crearOcExtra, setCrearOcExtra] = useState(true);
+  // Unidades de más que se aceptan en la misma OC (en vez de mandarlas a la OC complementaria).
+  const [aceptarDeMas, setAceptarDeMas] = useState<Set<string>>(new Set());
+  // Diferencias de precio que se aceptan pero quedan anotadas para reclamar al proveedor.
+  const [reclamar, setReclamar] = useState<Set<string>>(new Set());
   const [editando, setEditando] = useState<string | null>(null);
   const [aceptarCostos, setAceptarCostos] = useState(true);
   const [guardando, setGuardando] = useState(false);
@@ -165,6 +188,16 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
     tallesEspeciales: proveedor?.talles_especiales || [],
     toleranciaPct: Number(proveedor?.tolerancia_precio_pct ?? 0) || 0,
   }), [proveedor?.talles_especiales, proveedor?.tolerancia_precio_pct]);
+  // OC citadas en cada factura (por número): el motor las prefiere al repartir.
+  const opcionesConRefs = useMemo(() => {
+    const ocPreferidas: Record<string, string[]> = {};
+    for (const f of facturas) {
+      if (!f.ocRefs?.length) continue;
+      const ids = [...new Set(ocLineas.filter(o => f.ocRefs!.some(r => citaOc(r, o.ocNumero))).map(o => o.ocId))];
+      if (ids.length) ocPreferidas[f.numero || f.localId] = ids;
+    }
+    return { ...opcionesMatch, ocPreferidas };
+  }, [opcionesMatch, facturas, ocLineas]);
   const proveedoresFiltrados = useMemo(() => {
     const q = busquedaProv.trim().toLowerCase();
     if (!q) return proveedores.slice(0, 30);
@@ -263,44 +296,10 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
     if (!proveedorId || !sociedadId) return { lineas: [], legacy: new Set() };
     setCargandoOcs(true);
     try {
-      const { data: ocs, error: e1 } = await db.from("ordenes_compra")
-        .select("id, numero, fecha, estado, moneda, estado_facturacion, saldo_cerrado")
-        .eq("sociedad_id", sociedadId).eq("proveedor_id", proveedorId)
-        .neq("estado", "cancelada").order("fecha");
-      if (e1) throw e1;
-      // No se filtra por estado_facturacion: una conciliación parcial retomada puede haber completado una OC.
-      // Las OC con el saldo cerrado ya no esperan facturas.
-      const abiertas = (ocs || []).filter((o: any) => !o.saldo_cerrado);
-      const ids = abiertas.map((o: any) => o.id);
-      if (!ids.length) { setOcLineas([]); return { lineas: [], legacy: new Set() }; }
-      const [{ data: lineas, error: e2 }, { data: links }, { data: conAsig }] = await Promise.all([
-        db.from("orden_compra_items_pendientes").select("id, orden_id, codigo, descripcion, cantidad_pendiente, precio_unitario, codigo_proveedor, descripcion_proveedor, talle").in("orden_id", ids),
-        db.from("factura_compra_ocs").select("orden_compra_id").in("orden_compra_id", ids),
-        db.from("factura_compra_asignaciones").select("orden_compra_id").in("orden_compra_id", ids),
-      ]);
-      if (e2) throw e2;
-      // OC vinculadas con el sistema viejo (sin detalle por línea): se consideran ya facturadas.
-      const nuevas = new Set((conAsig || []).map((a: any) => a.orden_compra_id));
-      const legacy = new Set<string>((links || []).map((l: any) => l.orden_compra_id).filter((id: string) => !nuevas.has(id)));
-      setLegacyOcs(legacy);
-      // Si se retoma una conciliación parcial, lo que ella misma asignó vuelve a estar disponible.
-      const propias = new Map<string, number>();
-      for (const arr of Object.values(manual)) if (arr !== "__extra__") for (const a of arr) propias.set(a.ocLineId, (propias.get(a.ocLineId) || 0) + a.cantidad);
-      const byId = new Map(abiertas.map((o: any) => [o.id, o]));
-      const out: OcLinea[] = (lineas || []).map((l: any) => {
-        const o: any = byId.get(l.orden_id);
-        return {
-          id: l.id, ocId: l.orden_id, ocNumero: o?.numero || String(l.orden_id).slice(0, 8), ocFecha: o?.fecha || "",
-          // Si la OC ya se ordenó contra la lista del proveedor, se compara con cómo lo llama el proveedor.
-          codigo: l.codigo_proveedor || l.codigo,
-          descripcion: l.descripcion_proveedor ? `${l.descripcion_proveedor}${l.talle ? ` TALLE ${l.talle}` : ""}` : l.descripcion,
-          descripcionOc: l.descripcion,
-          cantidad: round2(Number(l.cantidad_pendiente) + (propias.get(l.id) || 0)),
-          precio: Number(l.precio_unitario) || 0, moneda: o?.moneda || "ARS", ocEstado: o?.estado || "",
-        };
-      }).filter((l: OcLinea) => l.cantidad > 0);
-      setOcLineas(out);
-      return { lineas: out, legacy };
+      const r = await cargarLineasOc(db, sociedadId, proveedorId, manual);
+      setLegacyOcs(r.legacy);
+      setOcLineas(r.lineas);
+      return r;
     } finally {
       setCargandoOcs(false);
     }
@@ -317,6 +316,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
   }))), [facturas]);
 
   // ── Conciliar con IA ──
+  const analisisPrevio = useRef<AnalisisIA | undefined>(inicial?.analisis);
   async function conciliar() {
     setError(""); setIaInfo(""); setConciliando(true);
     try {
@@ -324,45 +324,13 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
       const usables = ocs.filter(l => incluirLegacy || !legacy.has(l.ocId));
       if (!lineasFactura.length) throw new Error("La factura no tiene líneas");
       if (!usables.length) throw new Error("Este proveedor no tiene OC con artículos pendientes de facturar.");
-      // Equivalencias aprendidas de conciliaciones anteriores
-      const { data: aprendidas } = await db.from("proveedor_equivalencias").select("producto_factura, producto_oc")
-        .eq("sociedad_id", sociedadId).eq("proveedor_id", proveedorId);
-      const eq: Equivalencias = {}; const conf: Record<string, Confianza> = {}; const mot: Record<string, string> = {};
-      const res = await fetch("/api/conciliar-compra", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ proveedor: proveedor?.razon_social || "", factura: lineasFactura, ocs: usables, tallesEspeciales: opcionesMatch.tallesEspeciales }),
+      // Desde la carga masiva el análisis ya viene hecho: no se vuelve a consultar a la IA.
+      const previo = analisisPrevio.current;
+      analisisPrevio.current = undefined;
+      const a = previo || await sugerirEquivalencias(db, {
+        sociedadId, proveedorId, proveedorNombre: proveedor?.razon_social || "", lineasFactura, ocs: usables, manual, opciones: opcionesConRefs,
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "No se pudo conciliar");
-      Object.assign(eq, json.equivalencias || {}); Object.assign(conf, json.confianza || {}); Object.assign(mot, json.motivo || {});
-      for (const a of (aprendidas || []) as Array<{ producto_factura: string; producto_oc: string }>) {
-        eq[a.producto_factura] = [...new Set([...(eq[a.producto_factura] || []), a.producto_oc])];
-        conf[a.producto_factura] = "alta";
-        mot[a.producto_factura] = "Aprendido de conciliaciones anteriores.";
-      }
-      // Segunda pasada: si quedaron líneas sin OC y OC con pendientes, se le pregunta a la IA
-      // solo por lo que sobró (a veces un mismo artículo de la factura va a dos OC con nombres distintos).
-      if (json.ia) {
-        const r1 = matchPurchaseLines(lineasFactura, usables, eq, manual, opcionesMatch);
-        if (r1.sinAsignar.length && r1.pendientesOc.length) {
-          const restoF = r1.sinAsignar.map(x => ({ ...lineasFactura.find(l => l.key === x.invoiceKey)!, cantidad: x.cantidad }));
-          const restoO = r1.pendientesOc.map(p => ({ ...usables.find(o => o.id === p.ocLineId)!, cantidad: p.cantidad }));
-          try {
-            const res2 = await fetch("/api/conciliar-compra", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ proveedor: proveedor?.razon_social || "", factura: restoF, ocs: restoO, tallesEspeciales: opcionesMatch.tallesEspeciales }),
-            });
-            const j2 = await res2.json();
-            if (res2.ok && j2.ia) for (const [prod, os] of Object.entries(j2.equivalencias || {}) as Array<[string, string[]]>) {
-              eq[prod] = [...new Set([...(eq[prod] || []), ...os])];
-              conf[prod] = conf[prod] === "alta" && j2.confianza?.[prod] === "alta" ? "alta" : "media";
-              if (j2.motivo?.[prod]) mot[prod] = [mot[prod], j2.motivo[prod]].filter(Boolean).join(" · ");
-            }
-          } catch { /* si falla, queda lo de la primera pasada */ }
-        }
-      }
-      setEquivalencias(eq); setConfianza(conf); setMotivo(mot);
-      setIaInfo(json.ia ? `Sugerencias de IA${json.modelo ? ` (${json.modelo})` : ""}` : json.aviso || "Sin IA: se usó similitud de nombres.");
+      setEquivalencias(a.equivalencias); setConfianza(a.confianza); setMotivo(a.motivo); setIaInfo(a.iaInfo);
       setConciliado(true);
     } catch (e: any) {
       setError(e?.message || "Error al conciliar");
@@ -371,9 +339,20 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
     }
   }
 
+  // Concilia sola en cuanto hay facturas y proveedor (una vez por combinación; "Volver a conciliar" repite).
+  const autoKey = useRef("");
+  useEffect(() => {
+    if (!proveedor || !facturas.length || conciliado || conciliando || leyendo) return;
+    const key = `${proveedorId}|${facturas.map(f => f.localId).join(",")}`;
+    if (autoKey.current === key) return;
+    autoKey.current = key;
+    void conciliar();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proveedor, proveedorId, facturas, conciliado, conciliando, leyendo]);
+
   const resultado: MatchResult | null = useMemo(
-    () => (conciliado ? matchPurchaseLines(lineasFactura, ocsUsables, equivalencias, manual, opcionesMatch) : null),
-    [conciliado, lineasFactura, ocsUsables, equivalencias, manual, opcionesMatch],
+    () => (conciliado ? matchPurchaseLines(lineasFactura, ocsUsables, equivalencias, manual, opcionesConRefs) : null),
+    [conciliado, lineasFactura, ocsUsables, equivalencias, manual, opcionesConRefs],
   );
 
   const asigPorLinea = useMemo(() => {
@@ -384,44 +363,118 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
   const sinAsignarPorLinea = useMemo(() => new Map((resultado?.sinAsignar || []).map(s => [s.invoiceKey, s])), [resultado]);
   const ocById = useMemo(() => new Map(ocLineas.map(o => [o.id, o])), [ocLineas]);
 
-  function semaforo(l: InvoiceLineInput): "verde" | "amarillo" | "rojo" | "fuera" {
-    if (manual[l.key] === "__extra__") return "fuera";
-    if (sinAsignarPorLinea.has(l.key)) return "rojo";
-    const as = asigPorLinea.get(l.key) || [];
-    const prod = parseVariant(l.descripcion).producto;
-    const dudosa = as.some(a => a.origen === "equivalencia") && confianza[prod] && confianza[prod] !== "alta";
-    if (as.some(a => a.semaforo === "amarillo") || dudosa) return revisadas.has(l.key) ? "verde" : "amarillo";
-    return "verde";
+  function semaforo(l: InvoiceLineInput) {
+    return resultado ? semaforoLinea(l.key, l.descripcion, resultado, { manual, confianza, revisadas }) : "verde";
   }
 
-  const conteo = useMemo(() => {
-    const c = { verde: 0, amarillo: 0, rojo: 0, fuera: 0 };
-    if (resultado) for (const l of lineasFactura) c[semaforo(l)]++;
-    return c;
+  const sugerenciaSinOc = useMemo(() => {
+    const m = new Map<string, { o: OcLinea; libre: number; motivos: string[] }>();
+    if (!resultado) return m;
+    const usado = new Map<string, number>();
+    for (const a of resultado.asignaciones) usado.set(a.ocLineId, (usado.get(a.ocLineId) || 0) + a.cantidad);
+    for (const sa of resultado.sinAsignar) {
+      if (sa.tipo !== "sin_oc" || manual[sa.invoiceKey] === "__extra__") continue;
+      const l = lineasFactura.find(x => x.key === sa.invoiceKey);
+      if (!l) continue;
+      let mejor: { o: OcLinea; libre: number; motivos: string[]; puntaje: number } | null = null;
+      for (const o of ocsUsables) {
+        const libre = round2(o.cantidad - (usado.get(o.id) || 0));
+        const p = puntajeParecido({ ...l, cantidad: sa.cantidad }, o, libre, opcionesMatch);
+        if (p && (!mejor || p.puntaje > mejor.puntaje)) mejor = { o, libre, motivos: p.motivos, puntaje: p.puntaje };
+      }
+      if (mejor) m.set(sa.invoiceKey, mejor);
+    }
+    return m;
+  }, [resultado, lineasFactura, ocsUsables, manual, opcionesMatch]);
+
+  const conteo = useMemo(
+    () => (resultado ? contarSemaforo(lineasFactura, resultado, { manual, confianza, revisadas }) : { verde: 0, amarillo: 0, rojo: 0, fuera: 0 }),
+    [resultado, lineasFactura, revisadas, confianza, manual],
+  );
+
+  // Carga masiva: si todo cierra, se confirma sola (una sola vez).
+  const autoConfirmado = useRef(false);
+  useEffect(() => {
+    if (!autoConfirmar || autoConfirmado.current || !resultado || guardando || conciliando) return;
+    if (!lineasFactura.length || conteo.amarillo > 0 || conteo.rojo > 0) return;
+    autoConfirmado.current = true;
+    void guardar(false, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resultado, lineasFactura, revisadas, confianza, manual]);
+  }, [autoConfirmar, resultado, conteo, guardando, conciliando, lineasFactura]);
 
   const diferenciaTotal = round2((resultado?.asignaciones || []).reduce((s, a) => s + a.diferencia, 0));
   const ocNumero = (id: string) => ocLineas.find(o => o.ocId === id)?.ocNumero || id.slice(0, 8);
 
+  // ── OC complementaria: lo que vino sin OC o de más, atado a la factura ──
+  async function crearOcComplementaria(f: FacturaCarga, sobrantes: Array<{ key: string; it: ItemFactura; cantidad: number }>) {
+    const renglones = sobrantes.map((x, i) => {
+      const precio = precioNeto(x.it);
+      return { key: x.key, precio, item: {
+        codigo: x.it.codigo || "", descripcion: x.it.descripcion, cantidad: x.cantidad, cantidad_recibida: x.cantidad,
+        unidad: x.it.unidad || "UN", precio_unitario: precio, iva_porcentaje: Number(x.it.iva_porcentaje ?? 21), orden: i,
+      } };
+    });
+    const subtotal = round2(renglones.reduce((s, r) => s + r.item.cantidad * r.precio, 0));
+    const iva = round2(renglones.reduce((s, r) => s + r.item.cantidad * r.precio * r.item.iva_porcentaje / 100, 0));
+    const { data: oc, error: e1 } = await db.from("ordenes_compra").insert({
+      proveedor_id: proveedorId, fecha: f.fecha || todayAR(), moneda: f.moneda, estado: "enviada", estado_pago: "pendiente",
+      subtotal, iva, total: round2(subtotal + iva), sociedad_id: sociedadId, presupuesto_origen_id: null,
+      observaciones: `OC complementaria de la FC ${f.numero.trim()}: artículos que vinieron sin OC o de más`, created_by: profileId,
+    }).select("id, numero").single();
+    if (e1 || !oc) throw new Error(`Factura ${f.numero}: no se pudo crear la OC complementaria (${e1?.message || "sin respuesta"})`);
+    const { data: items, error: e2 } = await db.from("orden_compra_items")
+      .insert(renglones.map(r => ({ orden_id: oc.id, ...r.item }))).select("id, orden");
+    if (e2 || !items?.length) {
+      await db.from("ordenes_compra").update({ estado: "cancelada" }).eq("id", oc.id);
+      throw new Error(`Factura ${f.numero}: no se pudieron cargar los artículos de la OC complementaria (${e2?.message || "sin respuesta"})`);
+    }
+    const idPorOrden = new Map((items as Array<{ id: string; orden: number }>).map(x => [Number(x.orden), x.id]));
+    return {
+      oc: { id: oc.id as string, numero: String(oc.numero || "nueva") },
+      asignaciones: renglones
+        .map((r, i) => ({ invoiceKey: r.key, ocLineId: idPorOrden.get(i) || "", cantidad: r.item.cantidad, precioFactura: r.precio, precioOc: r.precio, origen: "oc_complementaria" }))
+        .filter(a => a.ocLineId),
+    };
+  }
+
   // ── Guardar ──
-  async function guardar(borrador: boolean) {
+  async function guardar(borrador: boolean, silencioso = false) {
     if (!resultado || !proveedorId) return;
     setError("");
-    if (!borrador && conteo.rojo > 0) {
-      setError("Hay líneas en rojo (sin OC). Asignalas, marcalas «Fuera de OC» o guardá como conciliación parcial.");
-      return;
-    }
     for (const f of facturas) if (!f.numero.trim()) { setError("Falta el número de una factura."); return; }
+    // Lo que no está en ninguna OC nunca frena: va a la OC complementaria o queda como "Fuera de OC".
+    if (!borrador && conteo.rojo > 0 && !crearOcExtra
+      && !window.confirm(`Hay ${conteo.rojo} línea(s) sin OC. Se guardan como «Fuera de OC» (se pagan con la factura, sin OC). ¿Seguir?`)) return;
     if (!borrador && conteo.amarillo > 0 && !window.confirm(`Hay ${conteo.amarillo} línea(s) en amarillo sin revisar. ¿Confirmar igual?`)) return;
     setGuardando(true);
     const guardadas: string[] = [];
+    const ocsCreadas: string[] = [];
     let prActualizados = 0;
     const sinPr: string[] = [];
     try {
       for (const f of facturas) {
         const keys = new Set(f.items.map((_, i) => lineKey(f, i)));
-        const asign = resultado.asignaciones.filter(a => keys.has(a.invoiceKey));
+        const asign: Array<Pick<Asignacion, "invoiceKey" | "ocLineId" | "cantidad" | "precioFactura" | "precioOc"> & { origen: string }> =
+          resultado.asignaciones.filter(a => keys.has(a.invoiceKey));
+        // Lo que sobró de esta factura: las unidades de más aceptadas van a su misma OC; el resto, a la OC complementaria.
+        const sobrantes: Array<{ key: string; it: ItemFactura; cantidad: number }> = [];
+        if (!borrador) f.items.forEach((it, i) => {
+          const k = lineKey(f, i);
+          const sa = sinAsignarPorLinea.get(k);
+          if (!sa || sa.cantidad <= 0) return;
+          const ocLinea = sa.ocLineId ? ocById.get(sa.ocLineId) : undefined;
+          if (sa.tipo === "de_mas" && aceptarDeMas.has(k) && ocLinea) {
+            asign.push({ invoiceKey: k, ocLineId: ocLinea.id, cantidad: sa.cantidad, precioFactura: precioNeto(it), precioOc: ocLinea.precio, origen: "de_mas" });
+          } else {
+            sobrantes.push({ key: k, it, cantidad: sa.cantidad });
+          }
+        });
+        let ocExtra: { id: string; numero: string } | null = null;
+        if (sobrantes.length && crearOcExtra) {
+          const creada = await crearOcComplementaria(f, sobrantes);
+          ocExtra = creada.oc;
+          asign.push(...creada.asignaciones);
+        }
         const eqMap = new Map<string, { producto_factura: string; producto_oc: string; codigo_proveedor: string | null }>();
         if (!borrador) for (const a of asign) {
           if (a.origen === "codigo") continue;
@@ -432,10 +485,18 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           if (pf && po) eqMap.set(`${pf}|${po}`, { producto_factura: pf, producto_oc: po, codigo_proveedor: l.codigo || null });
         }
         const eqs = [...eqMap.values()];
-        const extras = f.items.map((it, i) => (manual[lineKey(f, i)] === "__extra__" ? it.descripcion : null)).filter(Boolean);
+        const extras = ocExtra ? [] : sobrantes.map(x => `${x.cantidad} × ${x.it.descripcion}`);
+        const aReclamar = f.items.map((it, i) => {
+          const k = lineKey(f, i);
+          if (!reclamar.has(k)) return null;
+          const as = asigPorLinea.get(k) || [];
+          return `${it.descripcion} (factura ${formatCurrency(precioNeto(it), f.moneda)} vs OC ${[...new Set(as.map(a => formatCurrency(a.precioOc, f.moneda)))].join(" / ")})`;
+        }).filter(Boolean);
         const notas = [
           "Conciliada por línea contra OC" + (iaInfo ? ` · ${iaInfo}` : ""),
+          ocExtra ? `OC complementaria ${ocExtra.numero} con lo que vino sin OC o de más` : "",
           extras.length ? `Fuera de OC: ${extras.join("; ")}` : "",
+          aReclamar.length ? `A reclamar al proveedor (precio): ${aReclamar.join("; ")}` : "",
         ].filter(Boolean).join("\n");
         const guardarFactura = (confirmar: boolean) => db.rpc("guardar_conciliacion_compra", {
           p_sociedad_id: sociedadId,
@@ -455,18 +516,27 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
           p_equivalencias: eqs,
           p_confirmar: confirmar,
         });
-        let { data, error: rpcError } = await guardarFactura(false);
-        if (rpcError) throw new Error(`Factura ${f.numero}: ${rpcError.message}`);
-        // Facturado de más contra la OC: es un aviso, nunca traba. Sin confirmar no se guardó nada.
-        if (data?.requiere_confirmacion) {
-          if (!window.confirm(`Factura ${f.numero}: ${data.aviso || "hay líneas de OC que quedarían facturadas de más."}\n\n¿Guardar igual?`)) {
-            throw new Error(`Factura ${f.numero}: no se guardó (quedaba facturado de más contra la OC). Revisá la asignación.`);
-          }
-          ({ data, error: rpcError } = await guardarFactura(true));
+        let data: any;
+        try {
+          let rpcError: any;
+          ({ data, error: rpcError } = await guardarFactura(false));
           if (rpcError) throw new Error(`Factura ${f.numero}: ${rpcError.message}`);
+          // Facturado de más contra la OC: es un aviso, nunca traba. Sin confirmar no se guardó nada.
+          if (data?.requiere_confirmacion) {
+            if (!window.confirm(`Factura ${f.numero}: ${data.aviso || "hay líneas de OC que quedarían facturadas de más."}\n\n¿Guardar igual?`)) {
+              throw new Error(`Factura ${f.numero}: no se guardó (quedaba facturado de más contra la OC). Revisá la asignación.`);
+            }
+            ({ data, error: rpcError } = await guardarFactura(true));
+            if (rpcError) throw new Error(`Factura ${f.numero}: ${rpcError.message}`);
+          }
+        } catch (e) {
+          // La factura no se guardó: la OC complementaria recién creada queda cancelada (no se borra).
+          if (ocExtra) await db.from("ordenes_compra").update({ estado: "cancelada", observaciones: `Cancelada: no se pudo guardar la FC ${f.numero} a la que acompañaba` }).eq("id", ocExtra.id);
+          throw e;
         }
         const facturaId = data?.factura_compra_id as string;
         guardadas.push(f.numero);
+        if (ocExtra) ocsCreadas.push(`${ocExtra.numero} (FC ${f.numero})`);
         prActualizados += Number(data?.presupuestos_items_actualizados) || 0;
         for (const x of (data?.sin_presupuesto || []) as string[]) sinPr.push(x);
         if (f.file && facturaId) {
@@ -483,11 +553,14 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
       const cuitProv = (proveedores.find(p => p.id === proveedorId)?.cuit || "").replace(/\D/g, "");
       const leida = cuitProv ? facturas.find(f => f.nombreFantasiaLeido && (f.cuit || "").replace(/\D/g, "") === cuitProv) : undefined;
       if (leida) await aprenderNombreFantasiaDeFactura(db, { proveedorId, sociedadId, deFactura: leida.nombreFantasiaLeido, razonSocialFactura: leida.razonSocialLeida, cuitFactura: leida.cuit }, toast);
-      alert(borrador
+      const mensaje = (borrador
         ? `Conciliación parcial guardada (${guardadas.join(", ")}). No se envía a pagos; la podés retomar desde «Conciliar facturas».`
         : `Listo: ${guardadas.join(", ")} conciliada(s) y enviada(s) a aprobación.`
+          + (ocsCreadas.length ? `\n\nOC complementaria creada y atada a la factura: ${ocsCreadas.join("; ")}.` : "")
           + (aceptarCostos ? `\n\nCostos actualizados en presupuestos: ${prActualizados} artículo(s) (se mantuvo el precio de venta y se recalculó el margen).` : "")
           + (sinPr.length ? `\n\nNo se encontró en el presupuesto de origen (revisalo a mano): ${sinPr.join("; ")}` : ""));
+      if (silencioso) toast.success(mensaje.split("\n")[0] + (ocsCreadas.length ? ` · OC complementaria ${ocsCreadas.join("; ")}` : ""));
+      else alert(mensaje);
       onSuccess(guardadas);
     } catch (e: any) {
       setError(guardadas.length
@@ -512,7 +585,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
           <div>
             <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2"><Sparkles className="h-5 w-5 text-orange-500" /> Conciliar facturas de compra con OC</h2>
-            <p className="text-sm text-zinc-500">Subí la factura, la IA busca cada artículo en las OC del proveedor y vos revisás lo que quede en amarillo o rojo.</p>
+            <p className="text-sm text-zinc-500">Subí la factura: se busca sola cada artículo en las OC del proveedor (código, nombre, cantidad y precio) y te muestra solo lo que no cierra.</p>
           </div>
           <div className="flex items-center gap-1">
             <button onClick={() => setFullscreen(v => !v)} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800">{fullscreen ? <Minimize2 size={19} /> : <Maximize2 size={19} />}</button>
@@ -616,9 +689,9 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                 <span className="text-xs text-zinc-500">{iaInfo}</span>
                 <span className="flex items-center gap-1 text-sm"><span className="h-3 w-3 rounded-full bg-emerald-500" />{conteo.verde} ok</span>
                 <span className="flex items-center gap-1 text-sm"><span className="h-3 w-3 rounded-full bg-amber-400" />{conteo.amarillo} para revisar</span>
-                <span className="flex items-center gap-1 text-sm"><span className="h-3 w-3 rounded-full bg-red-500" />{conteo.rojo} sin OC</span>
+                <span className="flex items-center gap-1 text-sm"><span className="h-3 w-3 rounded-full bg-red-500" />{conteo.rojo} sin OC{conteo.rojo > 0 && crearOcExtra ? " (van a OC complementaria)" : ""}</span>
                 {conteo.fuera > 0 && <span className="flex items-center gap-1 text-sm"><span className="h-3 w-3 rounded-full bg-zinc-400" />{conteo.fuera} fuera de OC</span>}
-                <label className="ml-auto flex items-center gap-2 text-sm"><input type="checkbox" checked={soloRevisar} onChange={e => setSoloRevisar(e.target.checked)} /> Mostrar solo amarillas y rojas</label>
+                <label className="ml-auto flex items-center gap-2 text-sm"><input type="checkbox" checked={soloRevisar} onChange={e => setSoloRevisar(e.target.checked)} /> Mostrar solo lo que no cierra</label>
                 {conteo.amarillo > 0 && (
                   <button onClick={() => setRevisadas(new Set(lineasFactura.map(l => l.key)))}
                     className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-400 text-emerald-700 text-sm"><Check className="h-4 w-4" /> Aceptar todas las sugerencias</button>
@@ -671,17 +744,62 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                             {as.map(a => (
                               <div key={a.ocLineId}><span className="font-mono text-xs">{a.ocNumero}</span> · {a.cantidad} × {ocById.get(a.ocLineId)?.descripcion || ""}</div>
                             ))}
-                            {sa && <div className="text-red-600">{sa.cantidad} sin asignar: {sa.motivo}</div>}
+                            {sa && sa.tipo === "de_mas" && (
+                              <div className="text-amber-700">
+                                {sa.cantidad} de más (la OC {sa.ocNumero} pedía menos) →{" "}
+                                {aceptarDeMas.has(l.key) ? <>se cargan en la {sa.ocNumero}, que queda facturada de más.{" "}
+                                  <button onClick={() => { setAceptarDeMas(p => { const n = new Set(p); n.delete(l.key); return n; }); setRevisadas(p => new Set(p).add(l.key)); }} className="underline">Mejor a OC aparte</button></>
+                                : <>{crearOcExtra ? "van a la OC complementaria." : "quedan fuera de OC."}{" "}
+                                  <button onClick={() => { setAceptarDeMas(p => new Set(p).add(l.key)); setRevisadas(p => new Set(p).add(l.key)); }} className="underline">Aceptar de más en la {sa.ocNumero}</button></>}
+                              </div>
+                            )}
+                            {sa && sa.tipo === "sin_oc" && manual[l.key] !== "__extra__" && (
+                              <div className="text-red-600">
+                                {sa.cantidad} sin OC{crearOcExtra ? " → van a la OC complementaria" : " → quedan fuera de OC"}.
+                                {sugerenciaSinOc.get(l.key) && (() => {
+                                  const sg = sugerenciaSinOc.get(l.key)!;
+                                  const cant = Math.min(sa.cantidad, sg.libre);
+                                  return (
+                                    <div className="mt-1 text-zinc-700 dark:text-zinc-300">
+                                      ¿Es este? <span className="font-mono text-xs">{sg.o.ocNumero}</span> · {sg.o.descripcion} (libre {sg.libre}, {formatCurrency(sg.o.precio)}) <span className="text-xs text-zinc-500">— {sg.motivos.join(", ")}</span>{" "}
+                                      <button onClick={() => {
+                                        const actual = manual[l.key];
+                                        const previas = Array.isArray(actual) ? actual : (asigPorLinea.get(l.key) || []).map(a => ({ ocLineId: a.ocLineId, cantidad: a.cantidad }));
+                                        setManual(p => ({ ...p, [l.key]: [...previas, { ocLineId: sg.o.id, cantidad: cant }] }));
+                                        setRevisadas(p => new Set(p).add(l.key));
+                                      }} className="text-xs font-semibold text-blue-700 underline">Asignar {cant}</button>
+                                    </div>
+                                  );
+                                })()}
+                              </div>
+                            )}
                           </td>
                           <td className="px-2 py-2 text-right">{as.length ? [...new Set(as.map(a => formatCurrency(a.precioOc)))].join(" / ") : ""}</td>
                           <td className={`px-2 py-2 text-right ${dif > 0 ? "text-red-600" : dif < 0 ? "text-emerald-600" : "text-zinc-400"}`}>{as.length ? formatCurrency(dif) : ""}</td>
                           <td className="px-2 py-2 text-right whitespace-nowrap">
-                            {s === "amarillo" && <button onClick={() => setRevisadas(p => new Set(p).add(l.key))} className="mr-2 text-xs text-emerald-700 underline">OK</button>}
+                            {s === "amarillo" && <button onClick={() => setRevisadas(p => new Set(p).add(l.key))} className="mr-2 text-xs text-emerald-700 underline">{as.some(a => a.origen === "parecido") ? "Es este, OK" : dif !== 0 ? "Aceptar precio" : "OK"}</button>}
+                            {as.length > 0 && dif !== 0 && (s === "amarillo" || reclamar.has(l.key)) && (
+                              <button onClick={() => { setReclamar(p => { const n = new Set(p); if (n.has(l.key)) n.delete(l.key); else n.add(l.key); return n; }); setRevisadas(p => new Set(p).add(l.key)); }}
+                                className={`mr-2 text-xs underline ${reclamar.has(l.key) ? "font-semibold text-red-700" : "text-red-600"}`}>{reclamar.has(l.key) ? "✓ A reclamar" : "A reclamar"}</button>
+                            )}
+                            {s === "rojo" && <button onClick={() => { setManual(p => ({ ...p, [l.key]: "__extra__" })); setRevisadas(p => new Set(p).add(l.key)); }} className="mr-2 text-xs text-zinc-600 underline">Fuera de OC</button>}
                             <button onClick={() => setEditando(editando === l.key ? null : l.key)} className="inline-flex items-center gap-1 text-xs underline"><Pencil className="h-3 w-3" /> Cambiar</button>
                           </td>
                         </tr>
                       );
                     })}
+                    {soloRevisar && conteo.verde + conteo.fuera > 0 && (
+                      <tr>
+                        <td className="px-2 py-2"><span className="mt-1 block h-3 w-3 rounded-full bg-emerald-500" /></td>
+                        <td colSpan={7} className="px-2 py-2 text-emerald-700">
+                          ✔ {conteo.verde + conteo.fuera} renglón(es) cierran solos.{" "}
+                          <button onClick={() => setSoloRevisar(false)} className="underline">Ver todo</button>
+                        </td>
+                      </tr>
+                    )}
+                    {soloRevisar && conteo.amarillo + conteo.rojo === 0 && (
+                      <tr><td colSpan={8} className="px-2 py-3 text-center text-emerald-700 font-semibold">Todo cierra: podés confirmar.</td></tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -707,6 +825,13 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                 </div>
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 text-sm space-y-2">
                   <p className="font-semibold">Diferencia de costo total: <span className={diferenciaTotal > 0 ? "text-red-600" : diferenciaTotal < 0 ? "text-emerald-600" : ""}>{formatCurrency(diferenciaTotal)}</span> <span className="text-xs font-normal text-zinc-500">(sin IVA; positivo = la factura es más cara que la OC)</span></p>
+                  {(resultado.sinAsignar.length > 0) && (
+                    <label className="flex items-start gap-2">
+                      <input type="checkbox" className="mt-1" checked={crearOcExtra} onChange={e => setCrearOcExtra(e.target.checked)} />
+                      <span>Crear una OC complementaria con lo que vino sin OC o de más, atada a la factura
+                        <span className="block text-xs text-zinc-500">{resultado.sinAsignar.filter(x => !aceptarDeMas.has(x.invoiceKey)).reduce((t, x) => t + x.cantidad, 0)} unidad(es). Si la destildás, quedan anotadas como «Fuera de OC».</span></span>
+                    </label>
+                  )}
                   <label className="flex items-start gap-2">
                     <input type="checkbox" className="mt-1" checked={aceptarCostos} onChange={e => setAceptarCostos(e.target.checked)} />
                     <span>Actualizar el costo en las OC y en los presupuestos al precio facturado <span className="block text-xs text-zinc-500">El precio de venta del presupuesto no cambia: se recalcula el margen. Queda anotado en las observaciones de la OC y del presupuesto.</span></span>
@@ -720,7 +845,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                   className="px-4 py-2 rounded-lg border border-amber-400 text-amber-700 dark:text-amber-300 text-sm font-semibold disabled:opacity-40">
                   Guardar como conciliación parcial
                 </button>
-                <button disabled={guardando || conteo.rojo > 0} onClick={() => guardar(false)} title={conteo.rojo > 0 ? "Hay líneas en rojo" : ""}
+                <button disabled={guardando} onClick={() => guardar(false)}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-40">
                   {guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Confirmar y enviar a aprobación
                 </button>
