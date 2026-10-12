@@ -97,7 +97,8 @@ const roleBadgeVariant: Record<Role, "success" | "warning" | "danger" | "info" |
 
 export default function ConfiguracionPage() {
   const { sociedadActiva, profile } = useUser();
-  const canManageUsers = profile?.role === "super_admin" || profile?.role === "admin";
+  // Solo el super_admin (Augusto) invita, cambia roles y da de baja usuarios.
+  const canManageUsers = profile?.role === "super_admin";
   const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas" | "comisiones" | "retenciones">("usuarios");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);

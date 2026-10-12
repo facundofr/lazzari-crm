@@ -18,18 +18,18 @@ function escapeHtml(value: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    // Verify the caller is admin/super_admin
+    // Solo el super_admin (Augusto) invita usuarios
     const supabaseUser = await createSupabaseServer();
     const { data: { user } } = await supabaseUser.auth.getUser();
     if (!user) return Response.json({ error: "No autenticado" }, { status: 401 });
 
     const { data: profile } = await supabaseUser
       .from("profiles")
-      .select("role")
+      .select("role, active")
       .eq("id", user.id)
       .single();
-    if (!profile || !["super_admin", "admin"].includes(profile.role)) {
-      return Response.json({ error: "No tenés permisos para invitar usuarios" }, { status: 403 });
+    if (!profile || profile.active === false || profile.role !== "super_admin") {
+      return Response.json({ error: "Solo el super admin puede invitar usuarios" }, { status: 403 });
     }
 
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

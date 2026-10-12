@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 12/10/2026 · Versión publicada: **V1.1.417** (12/10/2026, commit f5b725c)
+Actualizado: 12/10/2026 · Versión publicada: **V1.1.418** (12/10/2026, commit 6d75961)
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -151,7 +151,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
 
 ## 4. Pendiente (próximas tandas)
 
-**Tanda V1.1.418 (12/10/2026, OK de Augusto) — EN CÓDIGO, SIN PUBLICAR. Plan y estudio: `docs/ESTUDIO-Y-PLAN-12-10-2026.md`.**
+**Tanda V1.1.418 (12/10/2026) — PUBLICADA (commit 6d75961), migraciones 20261012100000 y 20261012110000 ya corridas por Augusto. Plan y estudio: `docs/ESTUDIO-Y-PLAN-12-10-2026.md`.**
 - **Pestaña Revisar** (Finanzas > Hoy): `components/finanzas-revisar.tsx`, lógica `lib/revisar-finanzas.ts` (prueba `scripts/test-revisar-finanzas.mjs`).
   A) lo anotado (tabla nueva `finanzas_revisar`: motivo, nota, "Recordarme el", Resuelto con nota, Posponer, Volver a pendiente; no se borra nada);
   B) lo que encuentra el sistema (movimientos con fecha futura, cheques recibidos en cartera vencidos hace +3 días, líneas del extracto sin cruzar).
@@ -192,7 +192,92 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   estados Aprobado / Rechazado (no "ganado/perdido"); dentro de Rechazado, opción "Postergado". No pide adelantos a clientes.
 - **Margen real por venta (punto 3):** más adelante; revisar los "costos" que Augusto ya puso al armar un PR y ordenarlos.
 - **Prioridad de Augusto (12/10/2026): ARREGLAR LO ROTO primero**, de a un tema por vez y a fondo, empezando por las funciones viejas de Manu.
-  Paso 1: Augusto corre `supabase/diagnostico/todas_las_funciones.sql` (solo lectura, Download CSV) → comparar con el repo y listar lo roto.
+  Paso 1 HECHO: Augusto corrió `supabase/diagnostico/todas_las_funciones.sql`; el resultado está en
+  `C:\Users\lazza\Downloads\Supabase Snippet Untitled query (5).csv` (98 funciones + triggers, una sola fila; leerlo por partes, pesa 270 KB).
+  **PRÓXIMO:** comparar esas funciones con `crm/app/supabase/migrations`, listar las hechas a mano y lo roto (ordenado por gravedad, en palabras simples)
+  y arreglar de a un tema por vez con OK de Augusto. Ya conocidos: `registrar_cobro_masivo` no acepta facturas "vencida"; el pago de más se pierde
+  (no queda a favor); Caja/Balance (`get_balance_projection`) y Dashboard (`get_dashboard_kpis`) calculan distinto que Cuentas; 13 de 59 pruebas fallan.
+  **Paso 2 HECHO (12/10/2026): comparación.** 99 funciones en la base: 63 iguales al repo, 3 con diferencias menores, 36 hechas a mano (no están en el repo).
+  Diferencias: `crear_presupuesto_atomico` en la base graba como operador el `created_by` que manda la pantalla (el repo usa el usuario logueado);
+  `conciliar_extracto_movimiento` y `anular_liquidacion_fx` = solo formato / la base es más estricta (OK).
+  Ojo: `registrar_cobro` y `registrar_cobro_masivo` (de Manu) SIGUEN EN USO: las llaman `registrar_cobro_seguro` / `registrar_cobro_masivo_seguro`.
+  Lista de lo roto entregada a Augusto, por gravedad: 1) `handle_new_user` toma el rol que manda quien se registra (si el registro público
+  de Supabase está abierto, cualquiera entra como super_admin); 2) `registrar_cobro_masivo` reparte proporcional, el pago de más queda dentro de la última
+  factura (no a favor), rechaza "vencida", usa el saldo que manda la pantalla, liga todas las aplicaciones al primer medio, moneda de la última factura;
+  `registrar_cobro` también rechaza "vencida"; 3) trigger `recalcular_oc` pone IVA 21 % fijo a toda la OC en cada cambio de renglón (también al recibir):
+  rompe OC de PR manual (IVA 0) y renglones al 10,5 %; 4) `get_balance_projection` (Finanzas → Balance) no cuenta facturas "parcial"/"vencida",
+  usa el total y no el saldo, ignora el vencimiento real; 5) `get_dashboard_kpis` suma ARS + USD juntos y NC como venta, "pendiente de cobro" solo "emitida";
+  6) funciones con permiso total sin chequear sociedad/rol (`increment_stock`, `change_pr_operator`, `registrar_cobro*` directas, `get_*` con sociedad vacía);
+  7) menores: `auto_estado_oc` revive OC canceladas, alertas sin sociedad (`check_stock_bajo`, `presupuesto_estado_alert`), `generate_document_number`
+  con dos versiones (la de 2 datos es una trampa), `next_cai_number` gasta el número aunque el remito falle, saldos guardados en
+  `clientes/proveedores.saldo_cuenta_corriente` mal calculados (la app no los usa). **Esperando OK de Augusto para arreglar de a uno, empezando por el 1.**
+  **Punto 1 (usuarios) HECHO EN CÓDIGO, SIN PUBLICAR (V1.1.419), con OK de Augusto:** Augusto es el único super_admin y el único que invita/maneja usuarios.
+  Hallazgos: "Allow new users to sign up" estaba PRENDIDO en Supabase (se le pidió apagarlo); la regla `profiles_update_own` dejaba que cualquiera
+  se cambie el rol; los admin podían invitar y cambiar roles. Migración `20261012120000_usuarios_solo_superadmin.sql` (+ rollback): `handle_new_user`
+  siempre "viewer", disparadores que solo dejan al super_admin (o al servidor/SQL Editor) cambiar rol/activo/email y `user_sociedades`.
+  Código: `/api/invite` y `/api/users` solo super_admin; dar de baja ya NO borra el usuario (solo inactivo + bloqueado); Configuración muestra
+  la gestión de usuarios solo al super_admin. Laura: tiene 1 movimiento y 15 actividades → baja sin borrar con
+  `supabase/diagnostico/baja_laura_12_10_2026.sql` (+ vuelta atrás). **12/10/2026: Augusto apagó el registro público, corrió la migración
+  20261012120000 (Success) y la baja de Laura (listo).** José Alvarez es vendedor que NO usa el sistema (solo para asignarle PR y ventas):
+  se propuso bloquearle solo la entrada (sin tocar su ficha); falta OK. Falta que diga qué hacer con Manu.
+  **OK de Augusto a todo (12/10/2026).** Scripts listos para que los corra: `diagnostico/bloquear_entrada_jose_12_10_2026.sql` (solo entrada),
+  `diagnostico/baja_manu_12_10_2026.sql` (baja sin borrar), `diagnostico/laura_pasar_a_mariana_y_borrar_12_10_2026.sql` (su movimiento y
+  actividad pasan a Mariana con marca `pasado_de` y se BORRA el usuario; sin vuelta atrás). Pedido: "nadie que yo no invite entra, ni a mirar":
+  migración `20261012130000_usuarios_nuevos_inactivos.sql` (+ rollback; usuario nuevo nace inactivo, la invitación del CRM lo activa) y
+  middleware: sin ficha o inactivo → afuera. Probado en local: Configuración carga con Augusto.
+  **CORRIDO por Augusto (12/10/2026):** José bloqueado (vendedor, activo, entrada bloqueada hasta 2126), Laura borrada (15 actividades a Mariana),
+  migración 20261012130000 OK. **Manu NO se dio de baja (decisión de Augusto: que pueda entrar por si hace falta);** `baja_manu_12_10_2026.sql` queda sin usar.
+  Roles según Augusto: Jero y Seba vendedores, Mariana administradora (falta confirmar si en la base es "admin" o "administrativo"
+  con `diagnostico/estado_usuarios.sql`), rol de Manu sin confirmar.
+  **PUNTO 1 TERMINADO.** El código (api/invite, api/users, configuración, middleware) sale en la próxima publicación (V1.1.419).
+  **Punto 2 (cobros) HECHO EN CÓDIGO, SIN PUBLICAR (V1.1.419), con OK de Augusto (12/10/2026; pago de más → saldo a favor en la CC del cliente).**
+  Migración `20261012140000_cobros_corregidos.sql` (+ rollback que deja las funciones de Manu textuales): reescribe `registrar_cobro` y
+  `registrar_cobro_masivo` con los mismos parámetros (las `_seguro` y `registrar_cobro_masivo_diferencia_cc` no cambian). Ahora: acepta "vencida";
+  lo cobrado se calcula como `gestionar_cobro` (sin anulados ni dobles) con la ayuda nueva `lz_cobrado_factura`; el masivo calcula el saldo real
+  y reparte de la más vieja a la más nueva, **cada medio y cada retención con sus propias `cobro_aplicaciones`** (antes todo al primer medio:
+  si rebotaba otro cheque la factura seguía pagada); **pago de más = movimiento `ajuste` con `ajuste_sentido='credito'`** atado al cobro por la
+  columna nueva `movimientos.cobro_origen_id`; disparador `lz_anular_a_favor_de_cobro`: si ese cobro se anula o se borra, el saldo a favor se anula solo.
+  No se mezclan ARS y USD (error claro). **USD masivo:** la pantalla ahora manda `tipo_cambio` en medios y retenciones; los movimientos quedan en ARS
+  y lo aplicado en USD (antes grababa los pesos como dólares). Sin TC → error claro. Cobro simple: lo que sobra también queda a favor.
+  Pantalla: textos de "sobran" (masivo, Revisar y cobro simple) dicen que queda a favor. Probado en un Postgres de juguete (PGlite) con datos
+  inventados: 10 casos OK (justo, de menos, de más, cheque rebotado, borrado, vencida, USD, mezcla, diferencia a CC, doble clic, vuelta atrás).
+  tsc 0, check-hooks OK, test-cobro-reparto y test-cobros-cheques-atomicos OK. Finanzas carga en local.
+  **Orden al publicar: primero la migración 20261012140000, después el código** (si no, un cobro masivo en USD daría "falta el tipo de cambio").
+  **Falta que Augusto corra (solo lectura):** `supabase/diagnostico/cobros_revisar_12_10_2026.sql` → lista cobros viejos atados a un solo medio,
+  facturas cobradas de más (sobrante escondido), cobros USD grabados en pesos y cuántas facturas tienen "vencida" en la base. Con eso se decide
+  qué corregir de lo viejo, de a uno y con OK.
+  **Resultado de la revisión (12/10/2026):** 0 cobros USD en pesos, 0 facturas cobradas de más, 0 "vencida" en la base. 2 cobros con las
+  retenciones colgadas del medio: DEL SOL cheque 3881 (30/09, $3.677.887,22 aplicado $3.739.700,45) y TERMO CORDOBA transferencia
+  (05/10, $181.135,41 aplicado $186.340). Script listo, ESPERANDO OK: `diagnostico/corregir_cobros_atados_12_10_2026.sql` (+ `_vuelta_atras`):
+  pasa cada retención a su propia aplicación sin cambiar lo cobrado por factura; se corta sin cambiar nada si no coincide al centavo;
+  respaldo en `lz_respaldo_correcciones`. Probado en PGlite (corrige, 2.ª vez no hace nada, vuelta atrás deja igual).
+  **CORRIDO por Augusto con OK (12/10/2026):** 5 renglones, todos con monto = aplicado (DEL SOL cheque + Ganancias; TERMO transferencia +
+  Ganancias $2.509,59 + IIBB $2.695). **PUNTO 2 TERMINADO.** Falta solo publicar (migración 20261012140000 primero, después el código).
+  **Resumen económico en Finanzas → Hoy → Cuentas (12/10/2026, pedido de Augusto, V1.1.419 sin publicar, sin migración):** se sacaron los botones
+  "Caja" (saldo inicial a mano, repetía las cuentas) y "Balance" (usaba `get_balance_projection`, mal: ya no se llama). En su lugar, arriba de las
+  cuentas: "Resumen: cómo estoy hoy" → Lo que tengo (disponible, cheques en cartera + depositados, a cobrar = CC clientes neto, vendido sin
+  facturar = PR aprobados/facturar sin factura, apagado de entrada) − Lo que debo (cheques emitidos, a pagar = CC proveedores neto, deudas =
+  `lineas_credito.monto_utilizado`) = posición neta, ARS y USD aparte + todo en pesos con BNA divisa. "Elegir qué ver": casillas guardadas en
+  localStorage de la compu. Cálculo puro `lib/resumen-economico.ts` (prueba `scripts/test-resumen-economico.mjs` OK), componente
+  `components/resumen-economico.tsx`, `CuentasFinancieras` acepta `resumen` (reemplaza los 4 recuadros). Probado en local: posición neta
+  $1.416.070,25 + US$ 39.774,43 (todo en pesos $61.753.880,56). Tarjetas de crédito: el sistema todavía no tiene su deuda como número
+  (`deudaTarjetas` siempre 0; solo nota en la cuenta) → sumarla cuando se carguen los resúmenes. Quedan en el código (sin uso) los cálculos viejos de Caja.
+  **PRÓXIMO: punto 3, trigger `recalcular_oc`** (pone IVA 21 % fijo a toda la OC en cada cambio de renglón): proponer plan y esperar OK.
+  Ojo (menor, no se tocó): editar el monto de un medio que dejó saldo a favor (`gestionar_cobro` 'editar') no ajusta ese saldo a favor.
+  Ya estaba bien: las funciones directas ya no se podían llamar desde la app (lo cerró 20260925220000); igual se vuelve a cerrar.
+  Pendiente (punto 6, más adelante): las reglas de lectura de la base dejan leer a cualquier usuario logueado; con el registro cerrado,
+  los bloqueos y el middleware no hay forma de que entre alguien no invitado.
+  Pendiente aparte: `profiles_select_all` deja a cualquier logueado ver la lista de usuarios (menor).
+- **Rescate del FCI (12/10/2026):** Augusto pidió rescatar solo lo inmediato y después aclaró que **el sistema tenía razón**: se mantiene rescatar
+  **un día hábil antes** del débito (con feriado, el 13/10 se rescata el 09/10). No cambiar esta regla.
+- **Control de cheques emitidos (12/10/2026):** los 126 "a pagar" del CRM ($115.297.683,61) cruzados con la lista de eCheqs "Aceptado" del home banking (100 renglones, corta ahí)
+  y los Excel del 11/10: ningún monto distinto, ningún cheque de más en el banco, ninguno "pagado" en el banco que el CRM tenga a pagar. 18 ($20.783.695,95) no estaban en esos
+  archivos, pero 16 se cargaron del propio listado del banco (en "Custodia" o fuera de los 100). Augusto rescató $49.200.000 del FCI a la CC el 12/10 (ref. 50001364014261012)
+  para los débitos del 13/10. **Corregido con OK (SQL corrido por Augusto):** 8 cheques de "Físico" a "eCheq" (90017369/70/71/72/64/73/65 y 90000172), script en
+  `supabase/diagnostico/corregir_tipo_echeqs_12_10_2026.sql`. 90017362 (Sinpostre $270.075,03) y 90017368 (Conte Hnos $34.140,75) también corregidos a eCheq (confirmado por Augusto; script `..._b.sql`, 2 filas OK). Ningún emitido queda mal como Físico.
+  **Control completo con `12-10-2026-eCheqs-emitidos.xls` (400 eCheqs emitidos desde 18/05, todos los estados):** los 126 "a pagar" del CRM coinciden 126/126
+  con los pendientes del banco (99 ACTIVO + 18 CUSTODIA + 9 ACTIVO_PENDIENTE) en número, monto y fecha de pago. Ninguno pagado en el banco que el CRM tenga a pagar,
+  ninguno pendiente en el banco que falte en el CRM. Cheques emitidos: OK.
 - **Arreglado (V1.1.418):** el cobro masivo desde Facturación listaba notas de crédito como si fueran facturas a cobrar (Finanzas ya las filtraba).
 - Chequeos: tsc 0 errores, check-hooks OK, tests revisar-finanzas, cobro-reparto y finanzas-grupos OK. Versión 1.1.418.
 

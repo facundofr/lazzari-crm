@@ -30,10 +30,9 @@ export function repartirCobro(facturas: FacturaReparto[], aplicado: number): { f
 }
 
 /**
- * Facturas para `registrar_cobro_masivo` (función de la base, ver supabase/diagnostico/registrar_cobro_masivo_actual.sql):
- * la base reparte lo cobrado EN PROPORCIÓN al "saldo" que recibe y la última se lleva el resto; el estado (pagada/parcial)
- * lo calcula con sus propios totales. Por eso, si falta plata, se le manda a cada factura lo que le toca como "saldo"
- * y se dejan afuera las que no reciben nada (si no, quedarían "parcial" con $0). Sin faltante, va el saldo real.
+ * Facturas para `registrar_cobro_masivo` (migración 20261012140000): la base calcula sola el saldo real de cada factura
+ * y reparte de la más vieja a la más nueva (lo que sobra queda a favor del cliente). El "saldo" que se manda es informativo.
+ * Si falta plata, se mandan solo las facturas que reciben algo (así la descripción del cobro nombra solo esas).
  */
 export function facturasParaRegistrar(r: { filas: FilaReparto[]; falta: number }): { id: string; numero: string; saldo: number }[] {
   if (r.falta <= 0) return r.filas.map((f) => ({ id: f.id, numero: f.numero, saldo: f.saldo }));
@@ -48,7 +47,7 @@ export function avisoDiferenciaCobro(r: { filas: FilaReparto[]; falta: number; s
     return `Faltan ${formato(r.falta)} para cancelar todas las facturas.\nSe aplica empezando por la más vieja: ${detalle}.\n\n¿Registrar el cobro igual?`;
   }
   if (r.sobra > 0) {
-    return `Sobran ${formato(r.sobra)}: el cliente pagó de más. La base los suma a la última factura (queda pagada) y hoy no se ven como saldo a favor en la cuenta corriente.\n\n¿Registrar el cobro igual?`;
+    return `Sobran ${formato(r.sobra)}: el cliente pagó de más. Las facturas quedan pagadas y los ${formato(r.sobra)} quedan como saldo a favor del cliente en su cuenta corriente.\n\n¿Registrar el cobro igual?`;
   }
   return "";
 }

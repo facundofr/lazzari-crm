@@ -66,13 +66,14 @@ export async function updateSession(request: NextRequest) {
 
   // Una cuenta desactivada conserva su perfil para trazabilidad contable, pero
   // no debe seguir operando con una sesión emitida antes de la baja.
-  if (user) {
+  // Sin ficha = no fue invitado por el super_admin: tampoco entra (ni a mirar).
+  if (user && !isPublicAuthFlow) {
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
       .select("active")
       .eq("id", user.id)
       .maybeSingle();
-    if (!profileError && profile?.active === false) {
+    if (!profileError && (!profile || profile.active === false)) {
       await supabase.auth.signOut();
       if (pathname.startsWith("/api/")) {
         return NextResponse.json({ error: "Usuario inactivo" }, { status: 403 });

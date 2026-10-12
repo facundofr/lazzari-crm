@@ -38,6 +38,8 @@ import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/paym
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
 import { roundPaymentMoney, sumPaymentMoney } from "@/lib/payment-money";
+import ResumenEconomico from "@/components/resumen-economico";
+import { netoCuentaCorriente, sumarPorMoneda } from "@/lib/resumen-economico";
 
 const FacturacionEmbed = lazy(() => import("@/app/(crm)/facturacion/facturacion-content").then(m => ({ default: m.FacturacionContent })));
 
@@ -636,7 +638,6 @@ export default function FinanzasPage() {
   const [movimientos, setMovimientos] = useState<MovimientoRow[]>([]);
   const [recibosClientes, setRecibosClientes] = useState<ReciboClienteRow[]>([]);
   const [reciboSearch, setReciboSearch] = useState("");
-  const [resumenFinanciero, setResumenFinanciero] = useState<"caja" | "balance" | null>(null);
   const [deudasVenta, setDeudasVenta] = useState<VencimientoDeudaRow[]>([]);
   const [vencOperacion, setVencOperacion] = useState<"" | "venta" | "compra">(() => inicioFinanzas.tab === "vencimientos" ? operacionVencimientos(inicioFinanzas.grupo) : "");
 
@@ -937,8 +938,6 @@ export default function FinanzasPage() {
   }, [echeqs, selectedEcheq?.id]);
 
   // Balance projection
-  interface BalanceBand { banda: string; moneda: string; total: number }
-  const [balanceData, setBalanceData] = useState<{ cobrar: BalanceBand[]; pagar: BalanceBand[]; echeqs: BalanceBand[] } | null>(null);
 
   // ── CC Detail (Estado de cuenta) ──
   interface CCFacturaRow { id: string; numero: string; tipo: string; punto_venta: number; fecha: string; vencimiento: string | null; total: number; total_acreditado: number; cobrado: number; moneda: string; estado: string }
@@ -1437,12 +1436,6 @@ export default function FinanzasPage() {
             .order("fecha_pago", { ascending: true }).order("id", { ascending: true }));
           setEcheqs(echeqData.map((e: any) => ({ ...e, tipo_cheque: e.tipo_cheque || "echeq" })) as EcheqRow[]);
         } catch (errEcheq) { console.error("Error cargando cheques:", errEcheq); errores.push("cheques"); }
-
-        // Fetch balance projection
-        try {
-          const { data: balData } = await (supabase as any).rpc("get_balance_projection", sociedadActiva?.id ? { p_sociedad_id: sociedadActiva.id } : {});
-          if (balData) setBalanceData(balData as any);
-        } catch { /* ignore */ }
 
         // Fetch clientes for echeq origin
         try {
@@ -3664,20 +3657,17 @@ export default function FinanzasPage() {
   const totalLineasUSD = lcUSD.reduce((a, lc) => a + lc.monto_total, 0);
   const totalLineas = totalLineasARS + totalLineasUSD;
 
-  // ── Balance projection helpers ──
-  function sumBands(items: { banda: string; moneda: string; total: number }[], moneda: string, bandas: string[]): number {
-    return items.filter(i => i.moneda === moneda && bandas.includes(i.banda)).reduce((s, i) => s + Number(i.total), 0);
-  }
-  const balCobrarARS = balanceData ? sumBands(balanceData.cobrar, "ARS", ["vencido", "7dias", "15dias", "mas15"]) : 0;
-  const balCobrarUSD = balanceData ? sumBands(balanceData.cobrar, "USD", ["vencido", "7dias", "15dias", "mas15"]) : 0;
-  const balPagarARS = balanceData ? sumBands(balanceData.pagar, "ARS", ["vencido", "7dias", "15dias", "mas15"]) : 0;
-  const balPagarUSD = balanceData ? sumBands(balanceData.pagar, "USD", ["vencido", "7dias", "15dias", "mas15"]) : 0;
-  const balCobrar7ARS = balanceData ? sumBands(balanceData.cobrar, "ARS", ["vencido", "7dias"]) : 0;
-  const balCobrar15ARS = balanceData ? sumBands(balanceData.cobrar, "ARS", ["vencido", "7dias", "15dias"]) : 0;
-  const balPagar7ARS = balanceData ? sumBands(balanceData.pagar, "ARS", ["vencido", "7dias"]) : 0;
-  const balPagar15ARS = balanceData ? sumBands(balanceData.pagar, "ARS", ["vencido", "7dias", "15dias"]) : 0;
-  const balVencidoCobrarARS = balanceData ? sumBands(balanceData.cobrar, "ARS", ["vencido"]) : 0;
-  const balVencidoPagarARS = balanceData ? sumBands(balanceData.pagar, "ARS", ["vencido"]) : 0;
+  // Resumen económico (Hoy → Cuentas): mismos saldos que CC Clientes, CC Proveedores y Créditos.
+  const resumenCC = useMemo(() => {
+    const cobrar = netoCuentaCorriente(ccClientes.map((c) => ({ ARS: Number(c.saldo_ars ?? c.saldo_cuenta_corriente ?? 0), USD: Number(c.saldo_usd ?? 0) })));
+    const pagar = netoCuentaCorriente(ccProveedores.map((p) => ({ ARS: Number(p.saldo_ars ?? p.saldo_cuenta_corriente ?? 0), USD: Number(p.saldo_usd ?? 0) })));
+    const deudas = sumarPorMoneda(lineasCredito, (lc) => Number(lc.monto_utilizado || 0), (lc) => lc.moneda);
+    const aFavor = (a: { ARS: number; USD: number }, quien: string) => {
+      const partes = [a.ARS >= 0.01 ? formatCurrency(a.ARS) : "", a.USD >= 0.01 ? formatCurrency(a.USD, "USD") : ""].filter(Boolean);
+      return partes.length ? `Ya restado: ${partes.join(" + ")} a favor ${quien}` : undefined;
+    };
+    return { cobrar, pagar, deudas, notaCobrar: aFavor(cobrar.aFavor, "de clientes"), notaPagar: aFavor(pagar.aFavor, "nuestro") };
+  }, [ccClientes, ccProveedores, lineasCredito]);
 
   const deudasCompra = useMemo<VencimientoDeudaRow[]>(() => facturasCompra
     .filter((factura) => factura.estado !== "anulada" && !String(factura.tipo_comprobante || "").toUpperCase().startsWith("NC"))
@@ -3845,194 +3835,38 @@ export default function FinanzasPage() {
           </div>
         </div>
 
-        {grupo === "hoy" && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setResumenFinanciero((actual) => actual === "caja" ? null : "caja")}
-            aria-expanded={resumenFinanciero === "caja"}
-            className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${resumenFinanciero === "caja" ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300" : "border-zinc-200 bg-white text-zinc-700 hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}
-          >
-            <Landmark className="h-4 w-4" /> Caja
-          </button>
-          <button
-            type="button"
-            onClick={() => setResumenFinanciero((actual) => actual === "balance" ? null : "balance")}
-            aria-expanded={resumenFinanciero === "balance"}
-            className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${resumenFinanciero === "balance" ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300" : "border-zinc-200 bg-white text-zinc-700 hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}
-          >
-            <Target className="h-4 w-4" /> Balance
-          </button>
-          <span className="text-xs text-zinc-400">Abrí sólo el resumen que necesites; el resto del módulo queda visible.</span>
-        </div>
-        )}
-
-        {grupo === "hoy" && resumenFinanciero === "caja" && (<>
-        {/* ── Resumen de Caja ── */}
-        <Card className="p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-2">
-              <Landmark className="h-4 w-4 text-orange-500" />
-              Caja del mes — {new Date().toLocaleDateString("es-AR", { month: "long", year: "numeric", timeZone: "America/Buenos_Aires" })}
-            </h3>
-            <span className="text-xs text-zinc-400">Click en saldo inicial para editar</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-zinc-200 dark:border-zinc-700">
-                  <th className="text-left py-2 px-3 text-xs font-medium text-zinc-500">Concepto</th>
-                  <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500">ARS</th>
-                  {hasUSD && <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500">USD</th>}
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-b border-zinc-100 dark:border-zinc-800">
-                  <td className="py-2 px-3 text-zinc-600 dark:text-zinc-400">Saldo inicial</td>
-                  <td className="py-2 px-3 text-right">
-                    {editingSaldo === "ARS" ? (
-                      <input type="number" autoFocus value={editingSaldoVal} onChange={e => setEditingSaldoVal(e.target.value)}
-                        onBlur={() => handleSaveSaldoCaja("ARS")} onKeyDown={e => e.key === "Enter" && handleSaveSaldoCaja("ARS")}
-                        className="w-32 ml-auto rounded border border-orange-300 bg-orange-50 dark:bg-zinc-800 px-2 py-0.5 text-sm font-mono text-right dark:text-white" />
-                    ) : (
-                      <button onClick={() => { setEditingSaldo("ARS"); setEditingSaldoVal(String(saldoInicialARS)); }}
-                        className="font-mono font-medium text-zinc-700 dark:text-zinc-300 hover:text-orange-600 hover:underline cursor-pointer transition-colors"
-                        title="Editar saldo inicial ARS">
-                        {formatCurrency(saldoInicialARS)}
-                      </button>
-                    )}
-                  </td>
-                  {hasUSD && (
-                    <td className="py-2 px-3 text-right">
-                      {editingSaldo === "USD" ? (
-                        <input type="number" autoFocus value={editingSaldoVal} onChange={e => setEditingSaldoVal(e.target.value)}
-                          onBlur={() => handleSaveSaldoCaja("USD")} onKeyDown={e => e.key === "Enter" && handleSaveSaldoCaja("USD")}
-                          className="w-32 ml-auto rounded border border-orange-300 bg-orange-50 dark:bg-zinc-800 px-2 py-0.5 text-sm font-mono text-right dark:text-white" />
-                      ) : (
-                        <button onClick={() => { setEditingSaldo("USD"); setEditingSaldoVal(String(saldoInicialUSD)); }}
-                          className="font-mono font-medium text-zinc-700 dark:text-zinc-300 hover:text-orange-600 hover:underline cursor-pointer transition-colors"
-                          title="Editar saldo inicial USD">
-                          {formatCurrency(saldoInicialUSD, "USD")}
-                        </button>
-                      )}
-                    </td>
-                  )}
-                </tr>
-                <tr className="border-b border-zinc-100 dark:border-zinc-800">
-                  <td className="py-2 px-3 text-emerald-600 flex items-center gap-1"><ArrowDownLeft className="h-3.5 w-3.5" /> Ingresos</td>
-                  <td className="py-2 px-3 text-right font-mono text-emerald-600">+{formatCurrency(totalCobrosARS)}</td>
-                  {hasUSD && <td className="py-2 px-3 text-right font-mono text-emerald-600">+{formatCurrency(totalCobrosUSD, "USD")}</td>}
-                </tr>
-                <tr className="border-b border-zinc-100 dark:border-zinc-800">
-                  <td className="py-2 px-3 text-red-600 flex items-center gap-1"><ArrowUpRight className="h-3.5 w-3.5" /> Egresos</td>
-                  <td className="py-2 px-3 text-right font-mono text-red-600">-{formatCurrency(totalPagosARS)}</td>
-                  {hasUSD && <td className="py-2 px-3 text-right font-mono text-red-600">-{formatCurrency(totalPagosUSD, "USD")}</td>}
-                </tr>
-                {(cajaMesARS.retencionesSufridas > 0 || cajaMesUSD.retencionesSufridas > 0) && (
-                  <tr className="border-b border-zinc-100 dark:border-zinc-800">
-                    <td className="py-2 px-3 text-zinc-500" title="Retenciones que nos hicieron los clientes al pagar: no es plata que sale, es crédito fiscal. No suma ni resta al saldo de caja.">Retenciones sufridas (crédito fiscal, no suma a la caja)</td>
-                    <td className="py-2 px-3 text-right font-mono text-zinc-500">{formatCurrency(cajaMesARS.retencionesSufridas)}</td>
-                    {hasUSD && <td className="py-2 px-3 text-right font-mono text-zinc-500">{formatCurrency(cajaMesUSD.retencionesSufridas, "USD")}</td>}
-                  </tr>
-                )}
-                <tr className="border-t-2 border-zinc-300 dark:border-zinc-600">
-                  <td className="py-2 px-3 font-semibold text-zinc-800 dark:text-zinc-200">Saldo actual</td>
-                  <td className={`py-2 px-3 text-right font-mono font-bold text-base ${saldoFinalARS >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(saldoFinalARS)}</td>
-                  {hasUSD && <td className={`py-2 px-3 text-right font-mono font-bold text-base ${saldoFinalUSD >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(saldoFinalUSD, "USD")}</td>}
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-              <CreditCard className="h-4 w-4 text-orange-500" />
-              Medios financieros
-            </h3>
-            <span className="text-xs text-zinc-400">Resumen operativo, separado de la caja bancaria</span>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <button type="button" onClick={() => setTab("echeqs")} className="rounded-lg border border-zinc-200 p-3 text-left transition-colors hover:border-orange-300 hover:bg-orange-50/50 dark:border-zinc-700 dark:hover:border-orange-700 dark:hover:bg-orange-950/20">
-              <p className="text-xs font-medium text-zinc-500">Cheques en cartera</p>
-              <p className="mt-1 font-mono text-sm font-semibold text-zinc-900 dark:text-white">{formatCurrency(echeqsMontoCarteraARS)}</p>
-              {echeqsMontoCarteraUSD > 0 && <p className="font-mono text-xs text-zinc-500">{formatCurrency(echeqsMontoCarteraUSD, "USD")}</p>}
-            </button>
-            <button type="button" onClick={() => setTab("echeqs")} className="rounded-lg border border-zinc-200 p-3 text-left transition-colors hover:border-orange-300 hover:bg-orange-50/50 dark:border-zinc-700 dark:hover:border-orange-700 dark:hover:bg-orange-950/20">
-              <p className="text-xs font-medium text-zinc-500">Cheques emitidos pendientes</p>
-              <p className="mt-1 font-mono text-sm font-semibold text-zinc-900 dark:text-white">{formatCurrency(echeqsMontoEmitidosPendARS)}</p>
-              {echeqsMontoEmitidosPendUSD > 0 && <p className="font-mono text-xs text-zinc-500">{formatCurrency(echeqsMontoEmitidosPendUSD, "USD")}</p>}
-            </button>
-            <button type="button" onClick={() => setTab("ordenes_pago")} className="rounded-lg border border-zinc-200 p-3 text-left transition-colors hover:border-orange-300 hover:bg-orange-50/50 dark:border-zinc-700 dark:hover:border-orange-700 dark:hover:bg-orange-950/20">
-              <p className="text-xs font-medium text-zinc-500">Tarjetas en OP del mes</p>
-              <p className="mt-1 font-mono text-sm font-semibold text-zinc-900 dark:text-white">{formatCurrency(tarjetasOPMesARS)}</p>
-              {tarjetasOPMesUSD > 0 && <p className="font-mono text-xs text-zinc-500">{formatCurrency(tarjetasOPMesUSD, "USD")}</p>}
-            </button>
-          </div>
-          <p className="mt-3 text-xs text-zinc-500">Los pagos con tarjeta quedan reflejados en la orden de pago y su movimiento contable; no se suman al saldo de caja.</p>
-        </Card>
-        </>)}
-
-        {/* ── Balance Debe / Haber ── */}
-        {grupo === "hoy" && resumenFinanciero === "balance" && balanceData && (
-          <Card className="p-4">
-            <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3 flex items-center gap-2">
-              <Target className="h-4 w-4 text-orange-500" />
-              Balance — Proyección de cobranzas vs pagos
-            </h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-zinc-200 dark:border-zinc-700">
-                    <th className="text-left py-2 px-3 text-xs font-medium text-zinc-500">Concepto</th>
-                    <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500 text-red-500">Vencido</th>
-                    <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500">Prox. 7 días</th>
-                    <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500">Prox. 15 días</th>
-                    <th className="text-right py-2 px-3 text-xs font-medium text-zinc-500">Total pendiente</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b border-zinc-100 dark:border-zinc-800">
-                    <td className="py-2 px-3 font-medium text-emerald-700 dark:text-emerald-400">A cobrar (facturas emitidas)</td>
-                    <td className="py-2 px-3 text-right font-mono text-red-600">{formatCurrency(balVencidoCobrarARS)}</td>
-                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balCobrar7ARS)}</td>
-                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balCobrar15ARS)}</td>
-                    <td className="py-2 px-3 text-right font-mono font-semibold text-emerald-600">{formatCurrency(balCobrarARS)}</td>
-                  </tr>
-                  <tr className="border-b border-zinc-100 dark:border-zinc-800">
-                    <td className="py-2 px-3 font-medium text-red-700 dark:text-red-400">A pagar (FC pendientes)</td>
-                    <td className="py-2 px-3 text-right font-mono text-red-600">{formatCurrency(balVencidoPagarARS)}</td>
-                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balPagar7ARS)}</td>
-                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balPagar15ARS)}</td>
-                    <td className="py-2 px-3 text-right font-mono font-semibold text-red-600">{formatCurrency(balPagarARS)}</td>
-                  </tr>
-                  <tr className="bg-zinc-50 dark:bg-zinc-800/50 font-semibold">
-                    <td className="py-2 px-3">Balance neto ARS</td>
-                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balVencidoCobrarARS - balVencidoPagarARS)}</td>
-                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balCobrar7ARS - balPagar7ARS)}</td>
-                    <td className="py-2 px-3 text-right font-mono">{formatCurrency(balCobrar15ARS - balPagar15ARS)}</td>
-                    <td className={`py-2 px-3 text-right font-mono text-lg ${(balCobrarARS - balPagarARS) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                      {formatCurrency(balCobrarARS - balPagarARS)}
-                    </td>
-                  </tr>
-                  {(balCobrarUSD > 0 || balPagarUSD > 0) && (
-                    <tr className="bg-zinc-50 dark:bg-zinc-800/50 font-semibold border-t border-zinc-200 dark:border-zinc-700">
-                      <td className="py-2 px-3">Balance neto USD</td>
-                      <td className="py-2 px-3 text-right font-mono" colSpan={3}></td>
-                      <td className={`py-2 px-3 text-right font-mono ${(balCobrarUSD - balPagarUSD) >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                        {formatCurrency(balCobrarUSD - balPagarUSD, "USD")}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
-
         {/* ── Cuentas ── */}
-        {tab === "cuentas" && <CuentasFinancieras onIrACheques={() => setTab("echeqs")} />}
+        {tab === "cuentas" && (
+          <CuentasFinancieras
+            onIrACheques={() => setTab("echeqs")}
+            resumen={(t) => (
+              <ResumenEconomico
+                sociedadId={sociedadActiva?.id}
+                montos={{
+                  disponible: { ARS: t.ARS.disponible, USD: t.USD.disponible },
+                  cartera: { ARS: t.ARS.chequesCartera + t.ARS.chequesDepositados, USD: t.USD.chequesCartera + t.USD.chequesDepositados },
+                  emitidos: { ARS: t.ARS.comprometidoEmitidos, USD: t.USD.comprometidoEmitidos },
+                  a_cobrar: resumenCC.cobrar.neto,
+                  a_pagar: resumenCC.pagar.neto,
+                  deudas: resumenCC.deudas,
+                }}
+                notas={{
+                  cartera: t.ARS.chequesDepositados ? `Incluye ${formatCurrency(t.ARS.chequesDepositados)} depositados sin acreditar` : undefined,
+                  a_cobrar: resumenCC.notaCobrar,
+                  a_pagar: resumenCC.notaPagar,
+                  vendido_sin_facturar: "Presupuestos aprobados o listos para facturar, sin factura",
+                }}
+                onIr={{
+                  cartera: () => setTab("echeqs"),
+                  emitidos: () => setTab("echeqs"),
+                  a_cobrar: () => setTab("cc_clientes"),
+                  a_pagar: () => setTab("cc_proveedores"),
+                  deudas: () => setTab("lineas_credito"),
+                }}
+              />
+            )}
+          />
+        )}
         {tab === "cheques_tercero" && <ChequesTercero />}
 
         {/* ── Movimientos ── */}

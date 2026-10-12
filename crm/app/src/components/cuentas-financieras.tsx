@@ -2,7 +2,7 @@
 
 // Finanzas > Cuentas: saldo de cada cuenta (bancos, FCI, efectivo, tarjetas y cheques) desde la fecha de corte.
 // El cálculo está en lib/saldo-cuentas.ts.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { traerTodo } from "@/lib/paginar";
@@ -10,7 +10,7 @@ import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import {
   calcularSaldosCuentas, sugerenciasCuentas, montoCuentaDeOp, debitosPorSemana, debitosACubrir, diaDeRescate, TIPO_CUENTA_LABEL,
-  type CuentaFinanciera, type MovimientoCuenta, type ChequeCuenta, type TipoCuenta, type PaseCuenta,
+  type CuentaFinanciera, type MovimientoCuenta, type ChequeCuenta, type TipoCuenta, type PaseCuenta, type TotalesCuentas,
 } from "@/lib/saldo-cuentas";
 import { clasificarMovimiento } from "@/lib/tipos-movimiento";
 import { AlertTriangle, Banknote, CreditCard, Landmark, Lightbulb, Loader2, PiggyBank, Plus, Pencil, Receipt, Send, Wallet, X } from "lucide-react";
@@ -77,7 +77,11 @@ function leerImporte(v: string): number | null {
   return Number.isFinite(num) ? num : null;
 }
 
-export default function CuentasFinancieras({ onIrACheques }: { onIrACheques?: () => void }) {
+export default function CuentasFinancieras({ onIrACheques, resumen }: {
+  onIrACheques?: () => void;
+  /** Si viene, reemplaza a los recuadros de totales (Finanzas → Hoy usa el Resumen económico). */
+  resumen?: (totales: { ARS: TotalesCuentas; USD: TotalesCuentas }) => ReactNode;
+}) {
   const { sociedadActiva } = useUser();
   const sociedadId = sociedadActiva?.id;
   const [cuentas, setCuentas] = useState<CuentaRow[]>([]);
@@ -263,12 +267,14 @@ export default function CuentasFinancieras({ onIrACheques }: { onIrACheques?: ()
   return (
     <div className="space-y-4">
       {/* Totales */}
+      {resumen ? resumen(resultado.totales) : (
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Total titulo="Disponible (bancos + FCI + efectivo)" valor={formatCurrency(tARS.disponible)} extra={tUSD.disponible ? `+ ${formatCurrency(tUSD.disponible, "USD")}` : undefined} color="text-emerald-600" />
         <Total titulo="Cheques en cartera" valor={formatCurrency(tARS.chequesCartera)} extra={tARS.chequesDepositados ? `+ ${formatCurrency(tARS.chequesDepositados)} depositados sin acreditar` : undefined} color="text-blue-600" onClick={onIrACheques} />
         <Total titulo="Comprometido en cheques emitidos" valor={formatCurrency(tARS.comprometidoEmitidos)} extra="Sale del banco cuando se debitan" color="text-orange-500" onClick={onIrACheques} />
         <Total titulo="Tarjetas" valor="Por resumen" extra="Se cargan con el resumen mensual (próxima etapa)" color="text-zinc-500" />
       </div>
+      )}
 
       {/* Rescate del día: aviso fuerte (nunca frena). La plata vive en el FCI y se rescata 1 día hábil antes de cada débito. */}
       {urgentes.length > 0 && (

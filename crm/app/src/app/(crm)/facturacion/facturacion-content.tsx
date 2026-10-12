@@ -1344,7 +1344,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     const saldo = Number(factura.total) - Number(factura.total_acreditado || 0) - cobroPrevios;
     const saldoComp = saldo;
     // Aviso, nunca bloqueo (regla de Augusto): puede haber un redondeo o un pago de más que se aplica después.
-    if (totalLineas > saldoComp + 0.01 && !confirm(`El total de cobros (${formatCurrency(totalLineas)}) supera el saldo de la factura (${formatCurrency(Math.max(0, saldoComp))}). ¿Guardar igual?`)) {
+    if (totalLineas > saldoComp + 0.01 && !confirm(`El total de cobros (${formatCurrency(totalLineas)}) supera el saldo de la factura (${formatCurrency(Math.max(0, saldoComp))}). La factura queda pagada y lo que sobra queda a favor del cliente en su cuenta corriente. ¿Guardar igual?`)) {
       return;
     }
     const avisoFecha = avisoFechaCobroFutura(cobroFecha, todayAR());

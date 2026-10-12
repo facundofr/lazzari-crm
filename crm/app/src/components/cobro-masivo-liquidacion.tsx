@@ -290,10 +290,14 @@ export default function CobroMasivoLiquidacion({
 
       const cotizSuffix = isUSD && cotizNum > 0 ? ` | TC: ${cotizNum.toFixed(2)} (${cotizModalidad})` : "";
 
+      // En dólares los montos van en pesos: la base necesita el tipo de cambio para aplicarlos a las facturas.
+      const tcPayload = isUSD ? { tipo_cambio: cotizNum } : {};
+
       // Build medios array (one movimiento per medio)
       const mediosPayload = medios.filter(m => num(m.monto) > 0).map(m => ({
         tipo: m.tipo === "echeq" ? "cheque_recibido" : m.tipo,
         monto: num(m.monto),
+        ...tcPayload,
         descripcion: buildDesc(
           `Cobro${clienteNombre ? ` — ${clienteNombre}` : ""}${cotizSuffix}`,
           m.referencia, m.observaciones, opReferencia
@@ -312,6 +316,7 @@ export default function CobroMasivoLiquidacion({
         return {
           tipo: mapTipoDB(r.tipo),
           monto: num(r.monto),
+          ...tcPayload,
           descripcion: buildDesc(
             label,
             r.certificado ? `Cert: ${r.certificado}` : "",
@@ -324,8 +329,8 @@ export default function CobroMasivoLiquidacion({
       if (mediosPayload.length === 0) throw new Error("No hay medios de pago");
 
       // Build facturas array
-      // La base reparte en proporción al "saldo" que recibe: si falta plata, a cada factura se le manda lo que le toca
-      // (más vieja primero) y el saldo queda en la más nueva. Sin faltante, va el saldo real.
+      // La base calcula el saldo real y reparte de la más vieja a la más nueva; si sobra, queda a favor del cliente.
+      // Si falta plata, van solo las facturas que reciben algo.
       // Con "diferencia a la cuenta corriente" van los saldos reales: la base cierra las facturas con un ajuste
       // y deja la diferencia como deuda suelta del cliente.
       const facturasPayload = usarDiferenciaCC ? facturasParaRegistrar({ filas: reparto.filas, falta: 0 }) : facturasParaRegistrar(reparto);
@@ -378,7 +383,7 @@ export default function CobroMasivoLiquidacion({
               ? `Faltan ${fc(diferenciaCC, m)} (¿retenciones sin certificado?). Facturas pagadas; la diferencia quedó como deuda en la cuenta corriente.`
               : falta
                 ? `Faltan ${fc(reparto.falta, m)} (¿retenciones sin certificado?). ${conSaldo.map((f) => `${f.numero} queda con ${fc(f.queda, m)}`).join("; ")}.`
-                : `Sobran ${fc(reparto.sobra, m)}: la base los suma a la última factura y hoy no se ven como saldo a favor. Revisar qué hacer.`,
+                : `Sobran ${fc(reparto.sobra, m)}: quedaron como saldo a favor del cliente en su cuenta corriente.`,
           ].filter(Boolean).join(" "),
         });
         notaRevisar = errRevisar ? `\n\nNo se pudo anotar en Revisar: ${errRevisar}` : "\n\nQuedó anotado en Finanzas > Hoy > Revisar.";
@@ -716,7 +721,7 @@ export default function CobroMasivoLiquidacion({
             {hayDiferencia && totalMedios > 0 && (
               <div className="mt-3 ml-auto max-w-md rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
                 <p className="font-semibold">
-                  {reparto.falta > 0 ? `Faltan ${fc(reparto.falta, m)}: podés confirmar igual.` : reparto.sobra > 0 ? `Sobran ${fc(reparto.sobra, m)}: la base los suma a la última factura (hoy no se ven como saldo a favor).` : "Hay diferencia: podés confirmar igual."}
+                  {reparto.falta > 0 ? `Faltan ${fc(reparto.falta, m)}: podés confirmar igual.` : reparto.sobra > 0 ? `Sobran ${fc(reparto.sobra, m)}: quedan a favor del cliente en su cuenta corriente.` : "Hay diferencia: podés confirmar igual."}
                 </p>
                 {reparto.falta > 0 && !isUSD && (
                   <div className="mt-2 space-y-1">

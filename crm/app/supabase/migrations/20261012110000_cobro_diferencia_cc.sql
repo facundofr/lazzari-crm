@@ -1,5 +1,5 @@
 -- Cobro masivo con faltante → "Diferencia a la cuenta corriente" (pedido de Augusto, 12/10/2026).
--- Las facturas quedan PAGADAS y lo que falta queda como deuda suelta del cliente en su cuenta corriente
+-- Las facturas quedan PAGADAS y lo que falta queda como deuda suelta dantel cliente en su cuenta corriente
 -- (ajuste débito, sin factura). Todo en una sola transacción: si algo falla, no se guarda nada.
 --
 -- Cómo: llama a registrar_cobro_masivo_seguro (la de siempre) agregando a las retenciones un renglón

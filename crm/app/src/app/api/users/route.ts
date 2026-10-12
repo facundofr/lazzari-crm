@@ -9,8 +9,8 @@ async function getAdminContext() {
   const { data: { user } } = await callerClient.auth.getUser();
   if (!user) return { error: Response.json({ error: "No autenticado" }, { status: 401 }) };
   const { data: profile } = await callerClient.from("profiles").select("role, active").eq("id", user.id).single();
-  if (!profile || profile.active === false || !["super_admin", "admin"].includes(profile.role)) {
-    return { error: Response.json({ error: "No tenés permisos para administrar usuarios" }, { status: 403 }) };
+  if (!profile || profile.active === false || profile.role !== "super_admin") {
+    return { error: Response.json({ error: "Solo el super admin puede administrar usuarios" }, { status: 403 }) };
   }
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!serviceKey) return { error: Response.json({ error: "Service role key no configurada" }, { status: 500 }) };
@@ -66,13 +66,9 @@ export async function DELETE(request: NextRequest) {
       return Response.json({ error: "Solo un super admin puede eliminar a otro super admin" }, { status: 403 });
     }
 
-    const { error: deleteError } = await context.admin!.auth.admin.deleteUser(id);
-    if (!deleteError) return Response.json({ success: true, mode: "deleted" });
-
-    // Si existen movimientos históricos con FK restrictiva, se revoca el acceso
-    // y se oculta el usuario sin borrar su trazabilidad contable.
+    // Nunca se borra: se revoca el acceso y queda su historial (quién cargó cada cosa).
     const { error: disableError } = await context.admin!.from("profiles").update({ active: false, role: "viewer" }).eq("id", id);
-    if (disableError) throw deleteError;
+    if (disableError) throw disableError;
     const { error: banError } = await context.admin!.auth.admin.updateUserById(id, { ban_duration: "876000h" });
     if (banError) throw banError;
     return Response.json({ success: true, mode: "disabled" });
