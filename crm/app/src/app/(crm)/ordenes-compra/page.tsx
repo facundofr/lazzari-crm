@@ -28,6 +28,9 @@ import { createPortal } from "react-dom";
 import { useUser } from "@/lib/auth-context";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { attachPurchaseOrderInvoices } from "@/lib/purchase-order-invoice-links";
+import { cargarOPsDeFacturas, abrirOrdenPagoPDF, type OPResumen } from "@/lib/orden-pago-pdf";
+import { analizarDiferenciaOC, type DiagnosticoOC } from "@/lib/oc-diferencia";
+import { ocAReclamar, avisoAtrasoOC, DIAS_PAGADA_SIN_RECIBIR, DIAS_SIN_RECIBIR } from "@/lib/oc-reclamos";
 import { isOwnStockPurchaseOrder, purchaseOrderProviderLabel } from "@/lib/own-stock-purchase-orders";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" | "outline" | "purple" }> = {
@@ -112,7 +115,20 @@ const ejePago = (oc: OCRow): Eje => {
   return (oc.facturas_vinculadas || []).some((f) => f.estado === "pagada") ? "parcial" : "pendiente";
 };
 const ocCompleta = (oc: OCRow) => oc.estado !== "cancelada" && ejeMercaderia(oc) === "completo" && ejeFactura(oc) === "completo" && ejePago(oc) === "completo";
-type FiltroOC = "todas" | "por_recibir" | "por_facturar" | "por_pagar" | "completas" | "borrador" | "cancelada";
+type FiltroOC = "todas" | "a_reclamar" | "con_diferencia" | "por_recibir" | "por_facturar" | "por_pagar" | "completas" | "borrador" | "cancelada";
+
+// Pagada y sin recibir: Seba y Jero le reclaman la entrega al proveedor. Los avisos de atraso solo avisan.
+const reclamoInput = (oc: OCRow) => ({
+  activa: oc.estado !== "cancelada" && oc.estado !== "borrador",
+  pagada: ocPagada(oc),
+  recibidaCompleta: ejeMercaderia(oc) === "completo",
+  fecha: oc.fecha,
+  pagadaAt: oc.pagada_at,
+});
+
+// Lo facturado ya está pagado pero no cubre toda la OC (descuento, precio distinto o faltan unidades): ajustar o cerrar.
+const ocConDiferencia = (oc: OCRow) =>
+  oc.estado !== "cancelada" && oc.estado !== "borrador" && !oc.saldo_cerrado && ocPagada(oc) && ejeFactura(oc) === "parcial";
 
 const ocPagadaConTarjeta = (oc: OCRow) => oc.estado_pago === "pagada" && oc.medio_pago === "tarjeta";
 
@@ -540,6 +556,34 @@ export default function OrdenesCompraPage() {
     }
   }, [ordenes]);
 
+  // ── Órdenes de pago de la OC (solo para ver y pasarle el PDF al proveedor) ──
+  const [detailOPs, setDetailOPs] = useState<OPResumen[]>([]);
+  const [detailOPsError, setDetailOPsError] = useState("");
+  const [abriendoOP, setAbriendoOP] = useState<string | null>(null);
+  const detailFacturaIds = (detailOC?.facturas_vinculadas || []).filter((fc) => fc.estado !== "anulada").map((fc) => fc.id).filter(Boolean).join(",");
+  useEffect(() => {
+    let cancelado = false;
+    setDetailOPs([]);
+    setDetailOPsError("");
+    if (!detailFacturaIds) return;
+    cargarOPsDeFacturas(supabase, detailFacturaIds.split(","))
+      .then((ops) => { if (!cancelado) setDetailOPs(ops); })
+      .catch((e) => { if (!cancelado) setDetailOPsError(e?.message || "No se pudieron cargar las órdenes de pago"); });
+    return () => { cancelado = true; };
+  }, [detailFacturaIds]);
+
+  const handleVerOP = async (opId: string) => {
+    if (!sociedadActiva) return;
+    setAbriendoOP(opId);
+    try {
+      await abrirOrdenPagoPDF(supabase, opId, sociedadActiva);
+    } catch (e: any) {
+      alert(`No se pudo abrir la orden de pago: ${e?.message || e}`);
+    } finally {
+      setAbriendoOP(null);
+    }
+  };
+
   // ── Fetch profiles for operator dropdown ──────────────────────────
   useEffect(() => {
     (async () => {
@@ -586,6 +630,83 @@ export default function OrdenesCompraPage() {
       setDetailLoading(false);
     }
   }, []);
+
+  // ── Diferencia entre la OC y lo facturado (cartel amarillo del detalle) ──
+  const [detailDiag, setDetailDiag] = useState<DiagnosticoOC | null>(null);
+  const [diagAccion, setDiagAccion] = useState<string | null>(null);
+  const detailDiagKey = detailOC && detailOC.estado !== "cancelada" && detailFacturaIds
+    ? `${detailOC.id}|${detailFacturaIds}|${detailOC.saldo_cerrado ? 1 : 0}|${detailOC.total}` : "";
+  const cargarDiagnostico = useCallback(async (ocId: string) => {
+    if (!sociedadActiva?.id) return;
+    const { data, error } = await (supabase as any).rpc("diagnostico_diferencia_oc", { p_sociedad_id: sociedadActiva.id, p_oc_id: ocId });
+    if (!error && data) {
+      const n = (k: string) => Number(data[k] ?? 0);
+      setDetailDiag({
+        oc_neto: n("oc_neto"), oc_total: n("oc_total"), saldo_cerrado: !!data.saldo_cerrado,
+        cant_pedida: n("cant_pedida"), cant_recibida: n("cant_recibida"),
+        cant_facturada: data.cant_facturada == null ? null : Number(data.cant_facturada),
+        n_facturas: n("n_facturas"), fc_neto: n("fc_neto"), fc_total: n("fc_total"),
+        todas_pagadas: !!data.todas_pagadas, compartida: !!data.compartida, otra_moneda: !!data.otra_moneda, ajuste_activo: !!data.ajuste_activo,
+      });
+    }
+  }, [sociedadActiva]);
+  useEffect(() => {
+    setDetailDiag(null);
+    if (detailDiagKey) cargarDiagnostico(detailDiagKey.split("|")[0]);
+  }, [detailDiagKey, cargarDiagnostico]);
+
+  const refrescarOCDetalle = async (ocId: string) => {
+    await fetchDetailItems(ocId);
+    const { data: fresh } = await (supabase as any).from("ordenes_compra")
+      .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
+      .eq("id", ocId).single();
+    if (fresh) setDetailOC((prev) => prev && prev.id === ocId ? { ...(fresh as OCRow), facturas_vinculadas: prev.facturas_vinculadas, facturas_vinculadas_estado: prev.facturas_vinculadas_estado } : prev);
+    await cargarDiagnostico(ocId);
+    fetchData();
+  };
+
+  const handleAjustarOCaFactura = async () => {
+    if (!detailOC || !sociedadActiva?.id) return;
+    if (!window.confirm(`Ajustar ${detailOC.numero} a la factura: los precios de la OC cambian en proporción a lo facturado y se actualiza el costo en el PR (el precio de venta no cambia). Se puede deshacer.\n\n¿Seguimos?`)) return;
+    setDiagAccion("ajustar");
+    try {
+      const { data, error } = await (supabase as any).rpc("ajustar_oc_a_factura", { p_sociedad_id: sociedadActiva.id, p_oc_id: detailOC.id });
+      if (error) { alert(error.message); return; }
+      const sinPR: string[] = data?.sin_pr || [];
+      alert(`Listo: ${data?.ajustados ?? 0} renglón(es) ajustados, ${data?.pr_actualizados ?? 0} costo(s) actualizados en el PR.`
+        + (sinPR.length ? `\n\nNo se encontró en el PR (revisalo a mano): ${sinPR.join(", ")}` : ""));
+      await refrescarOCDetalle(detailOC.id);
+    } finally {
+      setDiagAccion(null);
+    }
+  };
+
+  const handleDeshacerAjusteOC = async () => {
+    if (!detailOC || !sociedadActiva?.id) return;
+    if (!window.confirm(`Deshacer el ajuste de ${detailOC.numero}: la OC y el costo del PR vuelven a como estaban.`)) return;
+    setDiagAccion("deshacer");
+    try {
+      const { error } = await (supabase as any).rpc("deshacer_ajuste_oc", { p_sociedad_id: sociedadActiva.id, p_oc_id: detailOC.id });
+      if (error) { alert(error.message); return; }
+      await refrescarOCDetalle(detailOC.id);
+    } finally {
+      setDiagAccion(null);
+    }
+  };
+
+  const handleCerrarConDiferencia = async (motivoSugerido: string) => {
+    if (!detailOC || !sociedadActiva?.id) return;
+    const motivo = window.prompt(`Cerrar ${detailOC.numero}: lo que falta deja de figurar como pendiente (se puede reabrir). Si viene de un PR, le avisa al vendedor.\n\nMotivo:`, motivoSugerido);
+    if (motivo === null) return;
+    setDiagAccion("cerrar");
+    try {
+      const { error } = await (supabase as any).rpc("cerrar_saldo_oc", { p_sociedad_id: sociedadActiva.id, p_oc_id: detailOC.id, p_cerrar: true, p_motivo: motivo });
+      if (error) { alert(error.message); return; }
+      await refrescarOCDetalle(detailOC.id);
+    } finally {
+      setDiagAccion(null);
+    }
+  };
 
   // ── Handlers ─────────────────────────────────────────────────────
   const openCreateModal = () => {
@@ -1108,9 +1229,12 @@ export default function OrdenesCompraPage() {
           estado: newEstado,
           fecha_entrega_estimada: editOC.fecha_entrega_estimada || null,
           observaciones: editOC.observaciones || "",
-          estado_pago: editOC.pagada_con_tarjeta ? "pagada" : "pendiente",
-          medio_pago: editOC.pagada_con_tarjeta ? "tarjeta" : null,
-          pagada_at: editOC.pagada_con_tarjeta ? (detailOC.pagada_at || new Date().toISOString()) : null,
+          // "facturas" = pagada por sus facturas (lo completa la base sola): editar la OC no lo pisa.
+          ...(editOC.pagada_con_tarjeta || detailOC.medio_pago !== "facturas" ? {
+            estado_pago: editOC.pagada_con_tarjeta ? "pagada" : "pendiente",
+            medio_pago: editOC.pagada_con_tarjeta ? "tarjeta" : null,
+            pagada_at: editOC.pagada_con_tarjeta ? (detailOC.pagada_at || new Date().toISOString()) : null,
+          } : {}),
         } as any)
         .eq("id", detailOC.id)
         .eq("sociedad_id", sociedadActiva.id);
@@ -1968,6 +2092,8 @@ export default function OrdenesCompraPage() {
   const filtered = ordenes.filter((oc) => {
     if (filter !== "todas") {
       const activa = oc.estado !== "cancelada" && oc.estado !== "borrador";
+      if (filter === "a_reclamar" && !ocAReclamar(reclamoInput(oc))) return false;
+      if (filter === "con_diferencia" && !ocConDiferencia(oc)) return false;
       if (filter === "por_recibir" && !(activa && ejeMercaderia(oc) !== "completo")) return false;
       if (filter === "por_facturar" && !(activa && ejeFactura(oc) !== "completo")) return false;
       if (filter === "por_pagar" && !(activa && ejePago(oc) !== "completo")) return false;
@@ -2120,6 +2246,30 @@ export default function OrdenesCompraPage() {
           );
         })()}
 
+        {/* Avisos de atraso: solo avisan */}
+        {(() => {
+          const today = todayAR();
+          const avisos = ordenes.map((oc) => avisoAtrasoOC(reclamoInput(oc), today));
+          const pagadas = avisos.filter((a) => a?.tipo === "pagada_sin_recibir").length;
+          const viejas = avisos.filter((a) => a?.tipo === "sin_recibir").length;
+          if (pagadas === 0 && viejas === 0) return null;
+          return (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              {pagadas > 0 && (
+                <button type="button" className="underline-offset-2 hover:underline" onClick={() => setFilter("a_reclamar")}>
+                  <strong>{pagadas}</strong> OC pagadas hace más de {DIAS_PAGADA_SIN_RECIBIR} días sin recibir: reclamar entrega
+                </button>
+              )}
+              {viejas > 0 && (
+                <button type="button" className="underline-offset-2 hover:underline" onClick={() => setFilter("por_recibir")}>
+                  <strong>{viejas}</strong> OC sin recibir hace más de {DIAS_SIN_RECIBIR} días
+                </button>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Stats */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard title="Total OC este mes" value={String(ocEsteMes.length)} icon={ShoppingCart} iconColor="text-blue-600" />
@@ -2130,10 +2280,12 @@ export default function OrdenesCompraPage() {
 
         {/* Filter tabs */}
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {(["todas", "por_recibir", "por_facturar", "por_pagar", "completas", "borrador", "cancelada"] as const).map((status) => {
+          {(["todas", "a_reclamar", "con_diferencia", "por_recibir", "por_facturar", "por_pagar", "completas", "borrador", "cancelada"] as const).map((status) => {
             const activa = (oc: OCRow) => oc.estado !== "cancelada" && oc.estado !== "borrador";
             const count = status === "todas" ? ordenes.length : ordenes.filter((oc) =>
-              status === "por_recibir" ? activa(oc) && ejeMercaderia(oc) !== "completo"
+              status === "a_reclamar" ? ocAReclamar(reclamoInput(oc))
+              : status === "con_diferencia" ? ocConDiferencia(oc)
+              : status === "por_recibir" ? activa(oc) && ejeMercaderia(oc) !== "completo"
               : status === "por_facturar" ? activa(oc) && ejeFactura(oc) !== "completo"
               : status === "por_pagar" ? activa(oc) && ejePago(oc) !== "completo"
               : status === "completas" ? ocCompleta(oc)
@@ -2149,7 +2301,7 @@ export default function OrdenesCompraPage() {
                     : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700"
                 }`}
               >
-                {({ todas: "Todas", por_recibir: "Por recibir", por_facturar: "Por facturar", por_pagar: "Por pagar", completas: "Completas", borrador: "Borradores", cancelada: "Canceladas" } as Record<FiltroOC, string>)[status]}
+                {({ todas: "Todas", a_reclamar: "A reclamar", con_diferencia: "Con diferencia", por_recibir: "Por recibir", por_facturar: "Por facturar", por_pagar: "Por pagar", completas: "Completas", borrador: "Borradores", cancelada: "Canceladas" } as Record<FiltroOC, string>)[status]}
                 <span className={`rounded-full px-1.5 py-0.5 text-xs ${filter === status ? "bg-white/20" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"}`}>
                   {count}
                 </span>
@@ -2280,7 +2432,16 @@ export default function OrdenesCompraPage() {
                   if (ocPagadaConTarjeta(row)) {
                     return <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Pagada · Tarjeta</Badge>;
                   }
-                  if (ocPagada(row)) return <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada</Badge>;
+                  if (ocPagada(row)) {
+                    if (!ocAReclamar(reclamoInput(row))) return <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada</Badge>;
+                    const aviso = avisoAtrasoOC(reclamoInput(row), todayAR());
+                    return (
+                      <span className="inline-flex flex-col items-start gap-0.5" title="Pagada y todavía sin recibir: reclamarle la entrega al proveedor">
+                        <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada · reclamar</Badge>
+                        {aviso?.tipo === "pagada_sin_recibir" && <span className="text-[11px] text-amber-600">hace {aviso.dias} días</span>}
+                      </span>
+                    );
+                  }
                   if (ejePago(row) === "parcial") return <Badge variant="info">Pagada parcial</Badge>;
                   return <Badge variant="warning">Por pagar</Badge>;
                 },
@@ -3343,6 +3504,53 @@ export default function OrdenesCompraPage() {
                 </div>
               </div>
 
+              {/* ── Diferencia con lo facturado (solo sugiere) ──────── */}
+              {(() => {
+                const dif = analizarDiferenciaOC(detailDiag);
+                const mon = (detailOC.moneda || "ARS") as "ARS" | "USD";
+                if (detailDiag?.ajuste_activo && canManageCompras) {
+                  return (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+                      <span>OC ajustada a la factura (precios y costo del PR).</span>
+                      <button type="button" onClick={handleDeshacerAjusteOC} disabled={!!diagAccion}
+                        className="rounded-lg border border-emerald-300 px-2 py-0.5 text-xs font-medium hover:bg-emerald-100 disabled:opacity-50 dark:border-emerald-700">
+                        {diagAccion === "deshacer" ? "Deshaciendo..." : "Deshacer ajuste"}
+                      </button>
+                    </div>
+                  );
+                }
+                if (!dif || !detailDiag) return null;
+                return (
+                  <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <div>
+                        <p className="font-medium">
+                          {detailDiag.todas_pagadas ? "Facturado y pagado" : "Facturado"} {formatCurrency(detailDiag.fc_total, mon)} de {formatCurrency(detailDiag.oc_total, mon)}.
+                          {" "}Diferencia: {formatCurrency(Math.abs(dif.diferencia), mon)} ({Math.abs(Math.round(dif.porcentaje * 1000) / 10)} %{dif.diferencia < 0 ? " de más" : ""}).
+                        </p>
+                        <p className="text-xs opacity-90">{dif.motivo}</p>
+                      </div>
+                    </div>
+                    {canManageCompras && (
+                      <div className="flex flex-wrap gap-2 pl-6">
+                        {dif.puedeAjustar && (
+                          <button type="button" onClick={handleAjustarOCaFactura} disabled={!!diagAccion}
+                            className={`rounded-lg px-3 py-1 text-xs font-medium disabled:opacity-50 ${dif.sugerencia === "ajustar" ? "bg-amber-500 text-white hover:bg-amber-600" : "border border-amber-300 hover:bg-amber-100 dark:border-amber-700"}`}>
+                            {diagAccion === "ajustar" ? "Ajustando..." : "Ajustar OC a la factura"}
+                          </button>
+                        )}
+                        <button type="button" onClick={() => handleCerrarConDiferencia(dif.faltanUnidades > 0 ? `El proveedor no va a entregar ${dif.faltanUnidades} unidades` : "El proveedor no va a entregar el resto")} disabled={!!diagAccion}
+                          className={`rounded-lg px-3 py-1 text-xs font-medium disabled:opacity-50 ${dif.sugerencia === "cerrar" ? "bg-amber-500 text-white hover:bg-amber-600" : "border border-amber-300 hover:bg-amber-100 dark:border-amber-700"}`}>
+                          {diagAccion === "cerrar" ? "Cerrando..." : "Cerrar: no entrega el resto"}
+                        </button>
+                        <span className="self-center text-xs opacity-75">o dejala abierta si todavía falta algo</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* ── Facturas de compra vinculadas ──────────────────── */}
               {detailOC.estado !== "cancelada" && (
                 <div>
@@ -3384,6 +3592,36 @@ export default function OrdenesCompraPage() {
                     </div>
                   ) : (
                     <p className="text-sm text-zinc-400 italic">No hay facturas de compra cargadas para esta OC.</p>
+                  )}
+                  {(detailOPs.length > 0 || detailOPsError) && (
+                    <div className="mt-3">
+                      <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500">Órdenes de pago</h4>
+                      {detailOPsError && <p className="text-xs text-amber-600">{detailOPsError}</p>}
+                      <div className="space-y-2">
+                        {detailOPs.map((op) => (
+                          <div key={op.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Badge variant={op.estado === "pagada" ? "success" : "warning"}>{op.estado === "pagada" ? "Pagada" : "Pendiente"}</Badge>
+                              <span className="font-medium dark:text-white">{op.numero}</span>
+                              <span className="text-zinc-500">{formatDate(op.fecha)}</span>
+                              <span className="font-mono text-zinc-500">{formatCurrency(op.neto, op.moneda)}</span>
+                            </div>
+                            <div className="flex items-center gap-3 shrink-0">
+                              {op.certificado_retencion_url && (
+                                <a href={op.certificado_retencion_url} target="_blank" rel="noopener noreferrer"
+                                  className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 font-medium">
+                                  <Download className="h-3.5 w-3.5" /> Certificado de retención
+                                </a>
+                              )}
+                              <button type="button" onClick={() => handleVerOP(op.id)} disabled={abriendoOP === op.id}
+                                className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600 font-medium disabled:opacity-50">
+                                {abriendoOP === op.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileText className="h-3.5 w-3.5" />} Descargar OP
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </div>
               )}

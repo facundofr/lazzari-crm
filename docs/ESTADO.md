@@ -263,7 +263,54 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   $1.416.070,25 + US$ 39.774,43 (todo en pesos $61.753.880,56). Tarjetas de crédito: el sistema todavía no tiene su deuda como número
   (`deudaTarjetas` siempre 0; solo nota en la cuenta) → sumarla cuando se carguen los resúmenes. Quedan en el código (sin uso) los cálculos viejos de Caja.
   **TANDA V1.1.419 PUBLICADA (12/10/2026, commit 66166a2, vercel --prod Ready), con la migración 20261012140000 ya corrida por Augusto (Success).**
-  **PRÓXIMO: punto 3, trigger `recalcular_oc`** (pone IVA 21 % fijo a toda la OC en cada cambio de renglón): proponer plan y esperar OK.
+  **Punto 3 (`recalcular_oc`) HECHO Y MIGRACIÓN `20261012150000_recalcular_oc_iva.sql` CORRIDA (12/10/2026, verificado: 125 de 125 OC bien)** (rollback en `supabase/rollback/`).
+  Nueva regla: IVA por renglón (`iva_porcentaje`, sin dato = 21 %, redondeo por renglón como la pantalla); PR manual → 0; OC que ya estaba
+  sin IVA → sigue sin IVA; recepción (`cantidad_recibida`) no recalcula. Corrige OC de Lazzari (todas recibida), confirmado contra la factura
+  del proveedor: 1160/1166/1184/1194 (PR manual) y 1112/1142/1148 (FC sin IVA) → IVA 0; 1059/1216 → IVA por renglón 10,5 %. Respaldo en
+  `lz_backup_oc_iva_20261012`. OC-2026-1173 (con OK de Augusto): su factura vino al 21 % y los renglones decían 10,5 % → renglones pasan a 21 %
+  (10 OC en total). Después de correrla, verificar con `node scripts/lectura/oc-iva.cjs` (tiene que dar 0 con diferencias).
+  Simulación (`scripts/lectura/oc-iva-simular.cjs`): las otras 113 OC no cambian; 1104 y 1199 diferirían 3 centavos si se edita un renglón.
+  No cambia la app ni la versión.
+  **Forma de trabajo nueva (12/10/2026):** las lecturas de la base las corre Claude con scripts de SOLO LECTURA en `crm/app/scripts/lectura/`
+  (permiso agregado en `.claude/settings.local.json`); Augusto aprueba listas numeradas en bloque. Regla: si cambia el costo de una OC,
+  se actualiza el costo en el PR de origen.
+  **TANDA V1.1.420 EN CÓDIGO, SIN PUBLICAR (12/10/2026), con OK de Augusto ("todo"). Migración `20261012160000_oc_estados.sql` CORRIDA por Claude con `scripts/db/migrar.cjs`** (rollback en `supabase/rollback/`).
+  Verificado después: pago = 56 pagadas por facturas + 12 tarjeta + 57 pendientes; facturación = 64 facturada, 4 parcial, 57 sin factura;
+  IVA 125/125 bien; las 3 "recibida" con 0 ya están completas. Quedan "pendiente" con todas sus facturas pagadas solo las que están
+  facturadas en parte (1062, 1088, 1180, 1199) y la cancelada 1043: es la regla (pagada = facturada completa y todo pagado).
+  **Revisión de estados de OC (12/10/2026, `scripts/lectura/oc-estados.cjs`):** 125 OC: enviada 40, recibida 81, recibida_parcial 3, cancelada 1.
+  `estado_facturacion` y `estado_pago` casi nunca se actualizan solos: 60 OC facturadas completas con `estado_facturacion` vacío y 61 con
+  todas sus facturas pagadas pero `estado_pago` = pendiente (la pantalla de OC lo calcula bien desde las facturas, los campos guardados no).
+  17 OC "enviada" ya tienen factura (nadie registró la recepción); 3 "recibida" con 0 recibido (1134, 1130, 1173); OC-1043 cancelada con
+  recepción completa y factura. OC-1043: queda para que la revisen los vendedores (no se toca).
+  Qué tiene la tanda: (1) migración: `estado_facturacion`/`estado_pago` de la OC se completan SOLOS con disparadores en `facturas_compra`
+  y `factura_compra_ocs` (`lz_actualizar_fact_pago_oc`; pagada por facturas = `medio_pago` 'facturas', `pagada_at` = fecha de la última OP;
+  tarjeta y canceladas no se tocan) + corrige todas las OC (respaldo `lz_backup_oc_estados_20261012`); `auto_estado_oc` no revive canceladas;
+  OC-1130/1134/1173 recibidas completas (sin stock, son pedidos de PR); 3 centavos de OC-1104/1199. (2) Compras: filtro "A reclamar" (pagada y
+  sin recibir), cartel "Pagada · reclamar", avisos de atraso (pagada > 7 días sin recibir, sin recibir > 30 días; `lib/oc-reclamos.ts`, prueba
+  `scripts/test-oc-reclamos.mjs` OK); en el detalle de la OC, "Órdenes de pago" con "Descargar OP" y certificado de retención
+  (`lib/orden-pago-pdf.ts`, mismo PDF que Finanzas). Editar la OC no pisa el pago automático. Probado en local sin guardar (16 a reclamar,
+  OP de OC-1199 descargada). Los vendedores ya pueden leer `ordenes_pago`/`op_facturas_compra` (no hizo falta regla nueva).
+  SEGURIDAD HECHO (12/10/2026, migración `20261012170000_cerrar_tablas_sin_login.sql` CORRIDA por Claude, rollback en `supabase/rollback/`):
+  las reglas `public`+`true` de ordenes_pago, op_facturas_compra, cobro_aplicaciones, echeqs, email_templates, gastos_manuales y saldos_caja
+  pasan a `authenticated` (sin login ya no se ve ni se toca nada: probado con `scripts/lectura/probar-anonimo.cjs`; logueado sigue igual,
+  probado en local). Queda abierta a propósito `cotizaciones_dolar` (anon inserta/actualiza: la usa la carga del dólar).
+  Pendiente punto 6: afinar por rol (hoy cualquier logueado puede todo en esas tablas).
+  ⚠️ Augusto pegó el `.env.local` completo en el chat (12/10/2026): conviene cambiar la clave de Anthropic y, con cuidado (toca Vercel),
+  la `service_role` de Supabase. La contraseña de la base ya se regeneró.
+  **OC con diferencia (12/10/2026, OK de Augusto "dale 1 a 5", va en V1.1.420). Migración `20261012180000_oc_diferencias.sql` CORRIDA**
+  (probada antes con `migrar.cjs --probar scripts/db/pruebas/oc_diferencias.sql`, que deshace todo). Agrega `diagnostico_diferencia_oc`,
+  `ajustar_oc_a_factura` (precios de la OC × factura neta / OC neta, IVA de la factura si es 21/10,5/0, costo al PR con la misma búsqueda y
+  cuenta de margen que la conciliación; guarda lo anterior en `lz_oc_ajustes`), `deshacer_ajuste_oc`, y disparador al cerrar/reabrir saldo
+  (recalcula pago y avisa al vendedor del PR en `alertas`). Pantalla: filtro "Con diferencia" (hoy 4: OC-1062, 1088, 1180 por precio;
+  OC-1199 faltan 2 unidades) y cartel amarillo en el detalle con "Ajustar OC a la factura" / "Cerrar: no entrega el resto" (sugerida
+  marcada, `lib/oc-diferencia.ts`, prueba `scripts/test-oc-diferencia.mjs` OK) y "Deshacer ajuste". Las 4 OC NO se tocaron: las decide Augusto.
+  **Acceso directo a la base (OK de Augusto):** `pg` instalado (dev); `scripts/lectura/sql.cjs` (consulta en transacción READ ONLY) y
+  `scripts/db/migrar.cjs` (corre UN archivo de migración/rollback en transacción; solo con OK de Augusto; `--probar <scripts/db/pruebas/x.sql>` corre y deshace). Necesitan `SUPABASE_DB_URL` en
+  `.env.local` (ya cargada; permisos en `.claude/settings.local.json`: lectura y `migrar.cjs`). Claude corre las migraciones que Augusto aprueba.
+  **PRÓXIMO: carga de facturas de compra contra OC más fácil** (pedido de Augusto): emparejar renglones aunque el nombre/código/cantidad/precio
+  no coincidan exacto, mostrar solo lo que no cierra con la propuesta lista, y subir VARIAS facturas de VARIAS OC juntas con cruce automático.
+  Revisar `cargar-factura-oc.tsx`, `carga-masiva-facturas-compra.tsx`, `conciliacion-compras.tsx` y proponer plan numerado.
   Ojo (menor, no se tocó): editar el monto de un medio que dejó saldo a favor (`gestionar_cobro` 'editar') no ajusta ese saldo a favor.
   Ya estaba bien: las funciones directas ya no se podían llamar desde la app (lo cerró 20260925220000); igual se vuelve a cerrar.
   Pendiente (punto 6, más adelante): las reglas de lectura de la base dejan leer a cualquier usuario logueado; con el registro cerrado,
