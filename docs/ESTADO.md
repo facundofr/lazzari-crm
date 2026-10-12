@@ -379,7 +379,25 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
     Proveedor nuevo cargado desde Compras: en la OC / carga de factura el comprador indica la condición de pago que pide el proveedor (se guarda en el
     proveedor; aviso amarillo si falta, nunca bloquea). **"Nuevo proveedor" desde la factura** (`cargar-factura-oc.tsx`, `carga-masiva-facturas-compra.tsx`)
     hoy es un formulario aparte e incompleto (forma de pago vieja, sin vendedores): usar el MISMO formulario completo que Proveedores.
-    Preguntas abiertas: días desde fecha de factura o desde recepción; ¿descuento por pronto pago?
+    **OK de Augusto "Va 1 a 7" (12/10/2026):** 1) nombre en cada mail/WhatsApp (administración y vendedores), sección "Vendedores";
+    2) bloque "Cómo se le paga" en el proveedor; 3) 3 fechas de cheque por mes en Configuración, OP/plan de pagos proponen esas fechas
+    (escalonado: un cheque en cada fecha permitida dentro del rango); 4) factura calcula su vencimiento; 5) "Pago que pide el proveedor" en OC y
+    carga de factura (se guarda en el proveedor; aviso, nunca bloquea); 6) "Nuevo proveedor" desde factura (individual y masiva) = MISMO formulario
+    que Proveedores (extraer el modal de `proveedores/page.tsx` a `components/proveedor-form-modal.tsx`); 7) migración.
+    Respuestas: **días desde la FECHA DE FACTURA**; **pronto pago: Star-Tex 5 % y DPS 5 % por pago anticipado** (DPS casi obligatorio anticipado:
+    tiene CC de ~400 USD). Plazo del cheque: mismas opciones de días que la cuenta corriente (0-15-30-45-60-75-90).
+    **HECHO 1/7: migración `20261012230000_proveedores_formas_pago.sql` CORRIDA** (probada antes con `--probar scripts/db/pruebas/proveedores_formas_pago.sql`;
+    vuelta atrás en `rollback/`): proveedores.`administracion_nombre, condicion_pago` (anticipado|contra_entrega|cuenta_corriente|escalonado),
+    `dias_pago, dias_pago_hasta, medios_pago text[], medio_pago_preferido` (transferencia|echeq|cheque|tarjeta|efectivo), `plazo_cheque_dias,
+    descuento_pronto_pago`; ordenes_compra: `condicion_pago, dias_pago, dias_pago_hasta, medio_pago_preferido, plazo_cheque_dias, descuento_pronto_pago`;
+    facturas_compra: `condicion_pago, dias_pago, dias_pago_hasta` (fecha_vencimiento ya existía); tabla `cheque_fechas_mes` (sociedad, mes día 1,
+    dias int[]; lectura lz_es_de_sociedad, escritura lz_puede_operar_finanzas) con oct 12·21·31, nov 11·21·30, dic 11·20·30 en las 2 sociedades.
+    Datos: Prisina y TKW escalonado 30-75 eCheq; Segutécnica CC 60; Star-Tex 5 %; DPS anticipado 5 %; medios pasados desde forma_pago vieja.
+    **FALTA (en este orden):** a) `lib/condicion-pago.ts` (vencimiento, fechas de cheque propuestas con `cheque_fechas_mes` + días hábiles,
+    reparto escalonado) + prueba; b) componente `CondicionPagoEditor`; c) extraer el modal de proveedor a componente compartido y sumarle
+    administración (nombre) + "Cómo se le paga"; d) usarlo en `cargar-factura-oc.tsx` y `carga-masiva-facturas-compra.tsx` ("Nuevo proveedor");
+    e) "Pago que pide el proveedor" en OC y carga de factura + vencimiento de la factura; f) Configuración: fechas de cheque por mes;
+    g) OP / plan de pagos proponen fechas de cheque; h) tsc, hooks, probar en local sin guardar, publicar V1.1.424, probar en producción.
   1) Compras: filtro **"Abiertas"** por defecto (todas menos completas y canceladas; hoy 77 de 125). "Todas" y "Completas" siguen.
   2) Columnas Pago, Pedido y Factura con íconos (✓ verde, ½ azul, ✗ naranja/gris, tarjeta); el texto sale al pasar el mouse.
   3) Recibido (antes "Mercadería") solo con el punto de color (y "3/10" si es parcial); sin mail debajo del proveedor; "Copiar" solo ícono;
