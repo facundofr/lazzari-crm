@@ -359,6 +359,27 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   - **Pendientes de Augusto como checklist en Finanzas > Hoy > Revisar** (migración `20261012210000_pendientes_proveedores_augusto.sql`, corrida, con
     vuelta atrás; aviso en la campana el 13/10): Excel de vendedores, alta de Eslingar y Mariana SA, Ecoway/Fravida, CUIT de los talleres.
   - Los vendedores se cargan en Proveedores > ficha > "Contactos comerciales" (ya existía) con **Cargo = Ventas**: de ahí los toma "Enviar OC".
+  **Tanda V1.1.424 (12/10/2026) — EN CURSO, código SIN PUBLICAR (en el working tree, tsc 0 / hooks OK, probado en local sin guardar):**
+  - Regla de Augusto: **un mail de ADMINISTRACIÓN** (facturas, cobros y pagos = `proveedores.email` + `proveedores.telefono`) y **VENDEDORES**
+    (contactos, siempre cargo "Ventas"; no se puede cargar cobros/administración como contacto). Cada mail/WhatsApp con el **nombre de la persona**
+    (falta: columna nueva para el nombre de administración).
+  - WhatsApp en dos casillas: característica (2 a 4 dígitos) + número sin 15, suman 10 (`lib/whatsapp-ar.ts`, prueba `scripts/test-whatsapp-ar.ts`;
+    `components/ui/whatsapp-input.tsx`): en ficha, formulario de proveedor y Enviar OC. Formulario: secciones "Administración (facturas, cobros y pagos)"
+    y "Comercial (vendedores…)" con "+ Agregar vendedor" (se sacaron "+ email"/"+ celular"). Ficha: "Mail/WhatsApp de administración" y sección de vendedores.
+    ⚠️ La sección vieja "Comercial" (forma de pago, días CC, límite, saldo) NO se renombra ("Condiciones de pago" es otra cosa, dijo Augusto);
+    propuesta: la de vendedores se llama **"Vendedores"** (esperando OK).
+  - **Migración `20261012220000_proveedores_admin_comercial.sql` YA CORRIDA** (+ vuelta atrás con copia): Star-Tex (cuentascorrientes@startex.com.ar,
+    nota "Administración: Belén") y Matcom (info@felemax.com) pasan el contacto "Cobros" al mail de administración y se sacan esos 2 contactos;
+    Air Products y Amoblamientos Nexo → cargo Ventas; 15 WhatsApp con formato "característica número".
+  - **PLAN "Cómo se le paga a cada proveedor" (pedido de Augusto 12/10, esperando OK al plan numerado del chat):**
+    condición = Anticipado / Contra entrega / Cuenta corriente N días / **Escalonado de N a M días**; días 0-15-30-45-60-75-90; medios (varios + preferido):
+    transferencia, eCheq, cheque físico, tarjeta, efectivo; **plazo del cheque con las mismas opciones de días**.
+    **3 fechas de cheque por mes** (idea interna de Augusto, si el proveedor lo permite): ej. oct 12·21·31, nov 11·21·30, dic 11·20·30 → la OP / plan de pagos
+    proponen los cheques en esas fechas. Datos que dio Augusto: **Prisina escalonado 30 a 75 días, TKW escalonado 30 a 75, Segutécnica 60 días**; el resto lo irá pasando.
+    Proveedor nuevo cargado desde Compras: en la OC / carga de factura el comprador indica la condición de pago que pide el proveedor (se guarda en el
+    proveedor; aviso amarillo si falta, nunca bloquea). **"Nuevo proveedor" desde la factura** (`cargar-factura-oc.tsx`, `carga-masiva-facturas-compra.tsx`)
+    hoy es un formulario aparte e incompleto (forma de pago vieja, sin vendedores): usar el MISMO formulario completo que Proveedores.
+    Preguntas abiertas: días desde fecha de factura o desde recepción; ¿descuento por pronto pago?
   1) Compras: filtro **"Abiertas"** por defecto (todas menos completas y canceladas; hoy 77 de 125). "Todas" y "Completas" siguen.
   2) Columnas Pago, Pedido y Factura con íconos (✓ verde, ½ azul, ✗ naranja/gris, tarjeta); el texto sale al pasar el mouse.
   3) Recibido (antes "Mercadería") solo con el punto de color (y "3/10" si es parcial); sin mail debajo del proveedor; "Copiar" solo ícono;
