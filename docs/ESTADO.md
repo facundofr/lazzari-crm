@@ -274,7 +274,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   **Forma de trabajo nueva (12/10/2026):** las lecturas de la base las corre Claude con scripts de SOLO LECTURA en `crm/app/scripts/lectura/`
   (permiso agregado en `.claude/settings.local.json`); Augusto aprueba listas numeradas en bloque. Regla: si cambia el costo de una OC,
   se actualiza el costo en el PR de origen.
-  **TANDA V1.1.420 EN CÓDIGO, SIN PUBLICAR (12/10/2026), con OK de Augusto ("todo"). Migración `20261012160000_oc_estados.sql` CORRIDA por Claude con `scripts/db/migrar.cjs`** (rollback en `supabase/rollback/`).
+  **TANDA V1.1.420 PUBLICADA (12/10/2026, commit 2c97f12, vercel --prod Ready), con OK de Augusto ("todo"). Migración `20261012160000_oc_estados.sql` CORRIDA por Claude con `scripts/db/migrar.cjs`** (rollback en `supabase/rollback/`).
   Verificado después: pago = 56 pagadas por facturas + 12 tarjeta + 57 pendientes; facturación = 64 facturada, 4 parcial, 57 sin factura;
   IVA 125/125 bien; las 3 "recibida" con 0 ya están completas. Quedan "pendiente" con todas sus facturas pagadas solo las que están
   facturadas en parte (1062, 1088, 1180, 1199) y la cancelada 1043: es la regla (pagada = facturada completa y todo pagado).
