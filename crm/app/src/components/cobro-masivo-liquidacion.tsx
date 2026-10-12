@@ -7,6 +7,8 @@ import { supabase } from "@/lib/supabase/client";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { buildOrdenPagoPlan, type OpParsed } from "@/lib/orden-pago-plan";
 import { fechaMedioCobro, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
+import { repartirCobro, avisoDiferenciaCobro, facturasParaRegistrar } from "@/lib/cobro-reparto";
+import { guardarRevisar } from "@/components/dejar-revisar";
 
 // ── Types ────────────────────────────────────────────────
 export interface LiquidacionFactura {
@@ -154,7 +156,21 @@ export default function CobroMasivoLiquidacion({
   const totalSaldoARS = isUSD && cotizNum > 0 ? r2(totalSaldo * cotizNum) : totalSaldo;
   const totalEsperado = r2(totalSaldoARS - totalRetenciones);
   const diferencia = r2(totalMedios - totalEsperado);
-  const canConfirm = Math.abs(diferencia) < 0.01 && totalMedios > 0 && !saving && !parsingOP && (!isUSD || cotizNum > 0);
+  // Regla 1: con diferencia se puede confirmar igual (avisa y pregunta antes de guardar).
+  const hayDiferencia = Math.abs(diferencia) >= 0.01;
+  const canConfirm = totalMedios > 0 && !saving && !parsingOP && (!isUSD || cotizNum > 0);
+  // Cómo queda cada factura (en su moneda): de la más vieja a la más nueva.
+  const reparto = useMemo(() => {
+    const aplicadoARS = totalMedios + totalRetenciones;
+    const aplicado = isUSD ? (cotizNum > 0 ? aplicadoARS / cotizNum : 0) : aplicadoARS;
+    return repartirCobro(facturas.map((f) => ({ id: f.id, numero: f.numero, fecha: f.fecha, saldo: f.saldo })), aplicado);
+  }, [facturas, totalMedios, totalRetenciones, isUSD, cotizNum]);
+  const [dejarEnRevisar, setDejarEnRevisar] = useState(true);
+  // Si falta plata: dejar el saldo en la factura más nueva ("factura") o pasar la diferencia a la cuenta corriente ("cc").
+  // La opción "cc" es solo para facturas en pesos (en dólares el cobro va en pesos y la cuenta no cierra igual).
+  const [destinoDiferencia, setDestinoDiferencia] = useState<"factura" | "cc">("factura");
+  const diferenciaCC = r2(Math.max(0, -diferencia));
+  const usarDiferenciaCC = !isUSD && reparto.falta > 0 && destinoDiferencia === "cc" && diferenciaCC > 0;
 
   // ── Medio handlers ──
   const addMedio = () => setMedios(p => [...p, newMedio()]);
@@ -265,6 +281,12 @@ export default function CobroMasivoLiquidacion({
       const fechaPago = medios[0]?.fecha || todayStr();
       const avisoFecha = avisoFechaCobroFutura(fechaPago, todayStr());
       if (avisoFecha && !confirm(avisoFecha)) { setSaving(false); return; }
+      if (hayDiferencia) {
+        const aviso = usarDiferenciaCC
+          ? `Faltan ${fc(diferenciaCC, m)}.\n\nLas ${facturas.length} facturas quedan PAGADAS y los ${fc(diferenciaCC, m)} quedan como deuda del cliente en su cuenta corriente (sin factura).\n\n¿Registrar el cobro así?`
+          : avisoDiferenciaCobro(reparto, (n) => fc(n, m)) || `La diferencia es ${fc(diferencia, isUSD ? "ARS" : m)}.\n\n¿Registrar el cobro igual?`;
+        if (!confirm(aviso)) { setSaving(false); return; }
+      }
 
       const cotizSuffix = isUSD && cotizNum > 0 ? ` | TC: ${cotizNum.toFixed(2)} (${cotizModalidad})` : "";
 
@@ -302,16 +324,16 @@ export default function CobroMasivoLiquidacion({
       if (mediosPayload.length === 0) throw new Error("No hay medios de pago");
 
       // Build facturas array
-      const facturasPayload = facturas.map(f => ({
-        id: f.id,
-        numero: f.numero,
-        saldo: f.saldo,
-      }));
+      // La base reparte en proporción al "saldo" que recibe: si falta plata, a cada factura se le manda lo que le toca
+      // (más vieja primero) y el saldo queda en la más nueva. Sin faltante, va el saldo real.
+      // Con "diferencia a la cuenta corriente" van los saldos reales: la base cierra las facturas con un ajuste
+      // y deja la diferencia como deuda suelta del cliente.
+      const facturasPayload = usarDiferenciaCC ? facturasParaRegistrar({ filas: reparto.filas, falta: 0 }) : facturasParaRegistrar(reparto);
 
       if (!requestKeyRef.current) requestKeyRef.current = crypto.randomUUID();
 
       // Una unica RPC confirma movimientos, aplicaciones y cheques en cartera.
-      const { data, error: rpcErr } = await (supabase as any).rpc("registrar_cobro_masivo_seguro", {
+      const base = {
         p_cliente_id: clienteId,
         p_facturas: facturasPayload,
         p_medios: mediosPayload,
@@ -319,11 +341,49 @@ export default function CobroMasivoLiquidacion({
         p_fecha: fechaPago,
         p_sociedad_id: sociedadId,
         p_request_key: requestKeyRef.current,
-      });
-      if (rpcErr) throw new Error(rpcErr.message);
+      };
+      const { data, error: rpcErr } = usarDiferenciaCC
+        ? await (supabase as any).rpc("registrar_cobro_masivo_diferencia_cc", {
+          ...base,
+          p_diferencia: diferenciaCC,
+          p_descripcion: `Diferencia de cobro pasada a la cuenta corriente — Facturas: ${facturas.map((f) => f.numero).join(", ")}${opReferencia ? ` | OP: ${opReferencia}` : ""}`,
+        })
+        : await (supabase as any).rpc("registrar_cobro_masivo_seguro", base);
+      if (rpcErr) {
+        if (usarDiferenciaCC && /registrar_cobro_masivo_diferencia_cc/.test(String(rpcErr.message || ""))) {
+          throw new Error("Falta correr la migración 20261012110000 (diferencia a la cuenta corriente). Mientras tanto elegí \"Saldo en la factura más nueva\".");
+        }
+        throw new Error(rpcErr.message);
+      }
 
       const movCount = data?.movimientos_count || mediosPayload.length + retencionesPayload.length;
-      alert(`Cobro registrado: ${movCount} movimiento${movCount > 1 ? "s" : ""} para ${facturas.length} factura${facturas.length > 1 ? "s" : ""}`);
+      let notaRevisar = "";
+      if (hayDiferencia && dejarEnRevisar) {
+        const conSaldo = reparto.filas.filter((f) => f.queda > 0);
+        const ultima = conSaldo[conSaldo.length - 1] || reparto.filas[reparto.filas.length - 1];
+        const falta = reparto.falta > 0;
+        const errRevisar = await guardarRevisar(sociedadId, {
+          entidad_tipo: "factura_venta",
+          entidad_id: ultima?.id || null,
+          titulo: usarDiferenciaCC ? `Diferencia de cobro en la cuenta corriente — ${clienteNombre}`
+            : falta ? `Cobro con diferencia — ${clienteNombre}${ultima ? ` (${ultima.numero})` : ""}` : `Cobro de más — ${clienteNombre}`,
+          motivo: "diferencia_cobro",
+          importe: falta ? reparto.falta : reparto.sobra,
+          moneda: m,
+          cliente_id: clienteId,
+          nota: [
+            opReferencia ? `OP del cliente: ${opReferencia}.` : "",
+            `Recibido ${fc(totalMedios, isUSD ? "ARS" : m)}${totalRetenciones > 0 ? ` + retenciones ${fc(totalRetenciones, isUSD ? "ARS" : m)}` : ""}.`,
+            usarDiferenciaCC
+              ? `Faltan ${fc(diferenciaCC, m)} (¿retenciones sin certificado?). Facturas pagadas; la diferencia quedó como deuda en la cuenta corriente.`
+              : falta
+                ? `Faltan ${fc(reparto.falta, m)} (¿retenciones sin certificado?). ${conSaldo.map((f) => `${f.numero} queda con ${fc(f.queda, m)}`).join("; ")}.`
+                : `Sobran ${fc(reparto.sobra, m)}: la base los suma a la última factura y hoy no se ven como saldo a favor. Revisar qué hacer.`,
+          ].filter(Boolean).join(" "),
+        });
+        notaRevisar = errRevisar ? `\n\nNo se pudo anotar en Revisar: ${errRevisar}` : "\n\nQuedó anotado en Finanzas > Hoy > Revisar.";
+      }
+      alert(`Cobro registrado: ${movCount} movimiento${movCount > 1 ? "s" : ""} para ${facturas.length} factura${facturas.length > 1 ? "s" : ""}${notaRevisar}`);
       onSuccess();
     } catch (err: any) {
       setError(err.message || "Error al registrar el cobro");
@@ -641,7 +701,7 @@ export default function CobroMasivoLiquidacion({
               </div>
               <div className="flex justify-between"><span>Total recibido (medios)</span><span className="font-mono">{fc(totalMedios, isUSD ? "ARS" : m)}</span></div>
               <div className={`flex justify-between font-bold text-base pt-1 border-t border-zinc-300 dark:border-zinc-600 ${
-                Math.abs(diferencia) < 0.01 ? "text-green-600" : "text-red-600"
+                Math.abs(diferencia) < 0.01 ? "text-green-600" : "text-amber-600"
               }`}>
                 <span>Diferencia</span>
                 <span className="flex items-center gap-1.5">
@@ -653,6 +713,45 @@ export default function CobroMasivoLiquidacion({
                 </span>
               </div>
             </div>
+            {hayDiferencia && totalMedios > 0 && (
+              <div className="mt-3 ml-auto max-w-md rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
+                <p className="font-semibold">
+                  {reparto.falta > 0 ? `Faltan ${fc(reparto.falta, m)}: podés confirmar igual.` : reparto.sobra > 0 ? `Sobran ${fc(reparto.sobra, m)}: la base los suma a la última factura (hoy no se ven como saldo a favor).` : "Hay diferencia: podés confirmar igual."}
+                </p>
+                {reparto.falta > 0 && !isUSD && (
+                  <div className="mt-2 space-y-1">
+                    <label className="flex items-center gap-2">
+                      <input type="radio" name="destino-diferencia" checked={destinoDiferencia === "factura"} onChange={() => setDestinoDiferencia("factura")} />
+                      Saldo en la factura más nueva
+                    </label>
+                    <label className="flex items-center gap-2">
+                      <input type="radio" name="destino-diferencia" checked={destinoDiferencia === "cc"} onChange={() => setDestinoDiferencia("cc")} />
+                      Diferencia a la cuenta corriente (las facturas quedan pagadas)
+                    </label>
+                  </div>
+                )}
+                {reparto.falta > 0 && usarDiferenciaCC && (
+                  <p className="mt-2">Las {facturas.length} facturas quedan <b>pagadas</b> y {fc(diferenciaCC, m)} quedan como deuda del cliente en su cuenta corriente.</p>
+                )}
+                {reparto.falta > 0 && !usarDiferenciaCC && (
+                  <table className="mt-2 w-full">
+                    <tbody>
+                      {reparto.filas.map((f) => (
+                        <tr key={f.id}>
+                          <td className="py-0.5">{f.numero}</td>
+                          <td className="py-0.5 text-right font-mono">{fc(f.aplicado, m)}</td>
+                          <td className="py-0.5 pl-2 text-right">{f.queda > 0 ? <span className="font-semibold">queda {fc(f.queda, m)}</span> : "pagada"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                <label className="mt-2 flex items-center gap-2">
+                  <input type="checkbox" checked={dejarEnRevisar} onChange={(e) => setDejarEnRevisar(e.target.checked)} />
+                  Dejar en Revisar: diferencia a confirmar (¿retenciones?)
+                </label>
+              </div>
+            )}
           </section>
 
           {/* ── Error ── */}
@@ -668,7 +767,7 @@ export default function CobroMasivoLiquidacion({
           <div className="text-xs text-zinc-400">
             {Math.abs(diferencia) < 0.01
               ? "La diferencia es $0 — listo para confirmar"
-              : "La diferencia debe ser $0 para confirmar el cobro"}
+              : "Hay diferencia: al confirmar te avisa cómo queda cada factura"}
           </div>
           <div className="flex gap-3">
             <button onClick={onClose} className="px-4 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700">

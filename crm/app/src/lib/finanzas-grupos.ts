@@ -4,7 +4,7 @@
 export type FinanzasTab =
   | "cuentas" | "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago"
   | "gastos_manuales" | "echeqs" | "cheques_tercero" | "cc_clientes" | "cc_proveedores" | "extractos"
-  | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones";
+  | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones" | "revisar";
 
 export type FinanzasGrupo = "hoy" | "cobrar" | "pagar" | "cheques" | "deudas";
 
@@ -17,11 +17,12 @@ export interface FinanzasGrupoDef {
 
 export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
   {
-    id: "hoy", label: "Hoy", descripcion: "Cuentas, movimientos y conciliación con el banco",
+    id: "hoy", label: "Hoy", descripcion: "Cuentas, movimientos, conciliación con el banco y cosas para revisar",
     tabs: [
       { id: "cuentas", label: "Cuentas" },
       { id: "movimientos", label: "Movimientos" },
       { id: "extractos", label: "Extractos" },
+      { id: "revisar", label: "Revisar" },
       { id: "objetivos", label: "Objetivos" },
     ],
   },

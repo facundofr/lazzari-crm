@@ -11,6 +11,8 @@
  * - Las NC no suman deuda: se aplican vía total_acreditado de su factura.
  *   Lo que la NC no pudo aplicar (saldo_a_favor_cliente) queda como saldo a favor.
  * - ARS y USD siempre por separado.
+ * - Ajustes manuales de CC del cliente (movimientos sin factura con ajuste_sentido): débito = deuda,
+ *   crédito = a favor (p. ej. "Diferencia de cobro pasada a la cuenta corriente").
  *
  * Prueba: npx tsx scripts/test-saldo-clientes.ts
  */
@@ -44,6 +46,15 @@ export interface AplicacionCC {
   monto: number | string | null;
   /** Movimiento de la aplicación (si viene con join). Si está anulado no cuenta. */
   movimientos?: { anulado?: boolean | null } | { anulado?: boolean | null }[] | null;
+}
+
+/** Ajuste manual de cuenta corriente del cliente (sin factura). Sin sentido no cuenta. */
+export interface AjusteClienteCC {
+  cliente_id: string | null;
+  monto: number | string | null;
+  moneda?: string | null;
+  ajuste_sentido: "credito" | "debito" | string | null;
+  anulado?: boolean | null;
 }
 
 export interface SaldoClienteMoneda {
@@ -104,9 +115,17 @@ export function calcularSaldosClientes(
   facturas: FacturaCC[],
   movimientos: MovimientoCC[],
   aplicaciones: AplicacionCC[],
+  ajustes: AjusteClienteCC[] = [],
 ): Record<string, SaldoCliente> {
   const cobrado = cobradoPorFactura(facturas, movimientos, aplicaciones);
   const out: Record<string, SaldoCliente> = {};
+  for (const a of ajustes) {
+    if (!a.cliente_id || a.anulado || (a.ajuste_sentido !== "credito" && a.ajuste_sentido !== "debito")) continue;
+    const s = (out[a.cliente_id] ||= vacio());
+    const m = moneda(a.moneda);
+    if (a.ajuste_sentido === "debito") s[m].deuda += Number(a.monto) || 0;
+    else s[m].aFavor += Number(a.monto) || 0;
+  }
   for (const f of facturas) {
     if (!f.cliente_id || f.estado === "anulada") continue;
     const m = moneda(f.moneda);
@@ -153,6 +172,7 @@ export function superaLimiteCredito(limite: number | null | undefined, saldo: Sa
 export const SALDO_CLIENTES_SELECTS = {
   facturas: "id, cliente_id, tipo, total, total_acreditado, saldo_a_favor_cliente, factura_origen_id, moneda, estado",
   movimientos: "id, factura_id, monto, moneda, anulado",
+  ajustes: "id, cliente_id, monto, moneda, anulado, tipo, descripcion, ajuste_sentido",
   aplicaciones: "movimiento_id, factura_id, monto, movimientos!inner(anulado, sociedad_id)",
 } as const;
 
@@ -160,6 +180,7 @@ export interface DatosSaldoClientes {
   facturas: FacturaCC[];
   movimientos: MovimientoCC[];
   aplicaciones: AplicacionCC[];
+  ajustes: AjusteClienteCC[];
 }
 
 /**
@@ -181,15 +202,19 @@ export async function traerDatosSaldoClientes(
     // Por si la columna saldo_a_favor_cliente todavía no existe en la base.
     facturas = await traerTodo<FacturaCC>(armarFacturas("id, cliente_id, tipo, total, total_acreditado, moneda, estado"));
   }
-  const [movimientos, aplicaciones] = await Promise.all([
+  const [movimientos, aplicaciones, ajustes] = await Promise.all([
     traerTodo<MovimientoCC>(() => supabase.from("movimientos")
       .select(SALDO_CLIENTES_SELECTS.movimientos).eq("sociedad_id", sociedadId)
       .not("factura_id", "is", null).order("id")),
     traerTodo<AplicacionCC>(() => supabase.from("cobro_aplicaciones")
       .select(SALDO_CLIENTES_SELECTS.aplicaciones).eq("movimientos.sociedad_id", sociedadId)
       .order("movimiento_id").order("factura_id")),
+    // Ajustes de CC sin factura. Si la columna ajuste_sentido no existe todavía, no hay ajustes que sumar.
+    traerTodo<AjusteClienteCC>(() => supabase.from("movimientos")
+      .select(SALDO_CLIENTES_SELECTS.ajustes).eq("sociedad_id", sociedadId)
+      .not("cliente_id", "is", null).is("factura_id", null).not("ajuste_sentido", "is", null).order("id")).catch(() => []),
   ]);
-  return { facturas, movimientos, aplicaciones };
+  return { facturas, movimientos, aplicaciones, ajustes };
 }
 
 /** Atajo: trae los datos y devuelve el saldo por cliente. */
@@ -199,5 +224,5 @@ export async function traerSaldosClientes(
   traerTodo: <T = any>(armar: () => any) => Promise<T[]>,
 ): Promise<Record<string, SaldoCliente>> {
   const d = await traerDatosSaldoClientes(supabase, sociedadId, traerTodo);
-  return calcularSaldosClientes(d.facturas, d.movimientos, d.aplicaciones);
+  return calcularSaldosClientes(d.facturas, d.movimientos, d.aplicaciones, d.ajustes);
 }

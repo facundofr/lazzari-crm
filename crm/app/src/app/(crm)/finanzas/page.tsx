@@ -11,7 +11,7 @@ import { canMatchBankMovement } from "@/lib/extracto-match";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { traerTodo } from "@/lib/paginar";
 import { Autocompletar } from "@/components/ui/autocompletar";
-import { FINANZAS_GRUPOS, grupoDeTab, operacionVencimientos, pestanaInicial, type FinanzasGrupo, type FinanzasTab } from "@/lib/finanzas-grupos";
+import { FINANZAS_GRUPOS, esFinanzasTab, grupoDeTab, operacionVencimientos, pestanaInicial, type FinanzasGrupo, type FinanzasTab } from "@/lib/finanzas-grupos";
 import { clasificarMovimiento, esCobroDeCliente, sentidoAjuste, resumirCaja, TIPOS_RETENCION } from "@/lib/tipos-movimiento";
 import { filtrarCheques, MOTIVOS_RECHAZO_CHEQUE } from "@/lib/cheques-filtro";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
@@ -32,6 +32,8 @@ import PlanPagos from "@/components/plan-pagos";
 import CuentasFinancieras from "@/components/cuentas-financieras";
 import ExtractoBbva from "@/components/extracto-bbva";
 import ChequesTercero from "@/components/cheques-tercero";
+import FinanzasRevisar from "@/components/finanzas-revisar";
+import { BotonDejarRevisar } from "@/components/dejar-revisar";
 import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/payment-document-parser";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
@@ -1208,21 +1210,16 @@ export default function FinanzasPage() {
             };
           }).filter((deuda: VencimientoDeudaRow) => deuda.saldo > 0.01);
           setDeudasVenta(deudas);
-          const saldosCli = calcularSaldosClientes(facturasVenta, movsParaSaldo, aplicaciones);
           // Ajustes manuales de CC del cliente (sin factura): crédito = a favor del cliente, débito = cargo.
-          const ajustesCli: Record<string, { ARS: number; USD: number }> = {};
-          movimientosReales.forEach((mov) => {
-            if (!mov.cliente_id || mov.factura_id) return;
-            const sentido = sentidoAjuste(mov);
-            if (!sentido) return;
-            const mon = mov.moneda === "USD" ? "USD" : "ARS";
-            ajustesCli[mov.cliente_id] ||= { ARS: 0, USD: 0 };
-            ajustesCli[mov.cliente_id][mon] += sentido === "credito" ? -Number(mov.monto || 0) : Number(mov.monto || 0);
-          });
+          // Se suman en lib/saldo-clientes (misma regla que Clientes, Facturación y Ficha 360).
+          const ajustesCli = movimientosReales
+            .filter((mov) => mov.cliente_id && !mov.factura_id)
+            .map((mov) => ({ cliente_id: mov.cliente_id ?? null, monto: mov.monto, moneda: mov.moneda ?? null, anulado: mov.anulado ?? false, ajuste_sentido: sentidoAjuste(mov) }));
+          const saldosCli = calcularSaldosClientes(facturasVenta, movsParaSaldo, aplicaciones, ajustesCli);
           setCcClientes((prev) => prev.map((cliente) => {
             // Positivo = nos debe; negativo = saldo a favor del cliente (ya no se recorta a cero).
-            const ars = Math.round(((saldosCli[cliente.id]?.ARS.saldo || 0) + (ajustesCli[cliente.id]?.ARS || 0)) * 100) / 100;
-            const usd = Math.round(((saldosCli[cliente.id]?.USD.saldo || 0) + (ajustesCli[cliente.id]?.USD || 0)) * 100) / 100;
+            const ars = Math.round((saldosCli[cliente.id]?.ARS.saldo || 0) * 100) / 100;
+            const usd = Math.round((saldosCli[cliente.id]?.USD.saldo || 0) * 100) / 100;
             return { ...cliente, saldo_cuenta_corriente: ars, saldo_ars: ars, saldo_usd: usd };
           }));
         } catch (error) {
@@ -5105,7 +5102,10 @@ export default function FinanzasPage() {
                   <Card className="sticky top-6">
                     <div className="flex items-center justify-between border-b border-zinc-200 p-4 dark:border-zinc-700">
                       <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">Cheque #{selectedEcheq.numero}</h3>
+                      <div className="flex items-center gap-2">
+                      <BotonDejarRevisar key={selectedEcheq.id} datos={{ entidad_tipo: "cheque", entidad_id: selectedEcheq.id, titulo: `Cheque ${selectedEcheq.numero}${selectedEcheq.origen_nombre ? ` de ${selectedEcheq.origen_nombre}` : selectedEcheq.destino_nombre ? ` a ${selectedEcheq.destino_nombre}` : ""}`, importe: selectedEcheq.monto, moneda: selectedEcheq.moneda, motivo: selectedEcheq.direccion === "recibido" ? "fecha_recepcion" : "otro" }} />
                       <button onClick={() => setSelectedEcheq(null)} className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"><X className="h-5 w-5" /></button>
+                      </div>
                     </div>
                     <div className="p-4 space-y-4">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -5383,6 +5383,8 @@ export default function FinanzasPage() {
             </div>
           </>
         )}
+
+        {tab === "revisar" && <FinanzasRevisar onIrATab={(t) => { if (esFinanzasTab(t)) setTab(t); }} />}
 
         {/* ── Extractos bancarios ── */}
         {tab === "extractos" && (
@@ -6595,6 +6597,7 @@ export default function FinanzasPage() {
                 </Badge>
               </div>
               <div className="flex items-center gap-1">
+                <BotonDejarRevisar key={selectedFC.id} datos={{ entidad_tipo: "factura_compra", entidad_id: selectedFC.id, titulo: `${selectedFC.numero_factura} — ${selectedFC.proveedor_nombre}`, importe: selectedFC.total, moneda: selectedFC.moneda, proveedor_id: selectedFC.proveedor_id }} />
                 {!editingFC && ["pendiente", "borrador"].includes(selectedFC.estado) && (
                   <button onClick={() => startEditFC(selectedFC)} className="rounded-lg p-2 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-900/20" title="Editar">
                     <Pencil className="h-4 w-4" />
@@ -6893,6 +6896,7 @@ export default function FinanzasPage() {
                 </Badge>
               </div>
               <div className="flex items-center gap-1">
+                <BotonDejarRevisar key={selectedOP.id} datos={{ entidad_tipo: "orden_pago", entidad_id: selectedOP.id, titulo: `${selectedOP.numero || "Orden de pago"} — ${selectedOP.proveedor_nombre}`, importe: selectedOP.neto, moneda: selectedOP.moneda, proveedor_id: selectedOP.proveedor_id }} />
                 {!editingOP && selectedOP.estado !== "anulada" && (
                   <button onClick={() => startEditOP(selectedOP)} className="rounded-lg p-2 text-zinc-400 hover:bg-orange-100 hover:text-orange-600 dark:hover:bg-orange-900/20" title="Editar">
                     <Pencil className="h-4 w-4" />

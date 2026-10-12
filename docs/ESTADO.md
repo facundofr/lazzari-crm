@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 11/10/2026 · Versión publicada: **V1.1.416** (11/10/2026)
+Actualizado: 12/10/2026 · Versión publicada: **V1.1.417** (12/10/2026, commit f5b725c)
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -151,7 +151,52 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
 
 ## 4. Pendiente (próximas tandas)
 
-00. **Correcciones de la conciliación BBVA (V1.1.416)** — en código, SIN publicar (V1.1.417, sin migración). Revisión completa 12/10/2026:
+**Tanda V1.1.418 (12/10/2026, OK de Augusto) — EN CÓDIGO, SIN PUBLICAR. Plan y estudio: `docs/ESTUDIO-Y-PLAN-12-10-2026.md`.**
+- **Pestaña Revisar** (Finanzas > Hoy): `components/finanzas-revisar.tsx`, lógica `lib/revisar-finanzas.ts` (prueba `scripts/test-revisar-finanzas.mjs`).
+  A) lo anotado (tabla nueva `finanzas_revisar`: motivo, nota, "Recordarme el", Resuelto con nota, Posponer, Volver a pendiente; no se borra nada);
+  B) lo que encuentra el sistema (movimientos con fecha futura, cheques recibidos en cartera vencidos hace +3 días, líneas del extracto sin cruzar).
+  Botón "Dejar para revisar" (`components/dejar-revisar.tsx`) en: detalle de cheque, orden de pago, factura de compra, factura de venta y cada línea "Para revisar" del extracto.
+  La campana avisa el día de "Recordarme el" (cron `presupuestos-vencimiento`). Sin la migración muestra "Falta correr la migración" y no rompe.
+  **Migración nueva:** `20261012100000_finanzas_revisar.sql` (+ vuelta atrás). Aditiva, una tabla, sin DELETE.
+- **Cobro masivo con diferencia** (`cobro-masivo-liquidacion.tsx`, reparto en `lib/cobro-reparto.ts`, prueba `scripts/test-cobro-reparto.mjs`):
+  Confirmar ya no se traba; cuadro amarillo con cómo queda cada factura (más vieja primero, el saldo queda en la más nueva); antes de guardar avisa y pregunta;
+  casilla "Dejar en Revisar" (tildada) anota la diferencia. Las facturas se mandan a la base ordenadas de la más vieja a la más nueva.
+  Probado en local SIN guardar con Del Sol (eCheq $6.210.728,30 vs 5 facturas $6.463.222,05): FA 15-54 queda con $252.493,75.
+  **Función de la base leída (12/10/2026):** `registrar_cobro_masivo` reparte EN PROPORCIÓN al "saldo" que recibe y la última se lleva el resto
+  (copia en `supabase/diagnostico/registrar_cobro_masivo_actual.sql`). Por eso la pantalla manda a cada factura lo que le toca y deja afuera las que no reciben nada
+  (`facturasParaRegistrar`, simulado en la prueba): **no hace falta migración** para dejar el saldo en la más nueva. Si sobra plata, la base se lo aplica a la última (queda a favor en la CC).
+  Ojo: la base solo acepta facturas "emitida" o "parcial" (una "vencida" da error al cobrar en masa). Revisar.
+  **"Diferencia a la cuenta corriente" (OK de Augusto 12/10, HECHO en código):** en el cobro masivo con faltante (solo facturas en pesos) se elige
+  "Saldo en la factura más nueva" o "Diferencia a la cuenta corriente": las facturas quedan pagadas y la diferencia queda como deuda suelta del cliente.
+  **Migración nueva:** `20261012110000_cobro_diferencia_cc.sql` (+ vuelta atrás): función `registrar_cobro_masivo_diferencia_cc` (llama a la segura de siempre con un
+  renglón "ajuste" que cierra las facturas y graba un ajuste `ajuste_sentido = 'debito'` en la CC; todo junto; doble clic no duplica). Sin la migración avisa y se usa la otra opción.
+  **Saldo de clientes unificado:** `lib/saldo-clientes.ts` ahora suma los ajustes de CC sin factura (débito = deuda, crédito = a favor). Antes solo Finanzas > CC Clientes los sumaba;
+  el listado de Clientes, Facturación y Ficha 360 no (daban otro número si había ajustes manuales). Prueba `test-saldo-clientes.ts` ampliada.
+  Probado en local SIN guardar (Del Sol): las dos opciones se ven y explican bien.
+  ⚠️ Si sobra plata, la base se lo suma a la última factura y hoy NO se ve como saldo a favor (el saldo por factura no baja de 0). El cartel ahora lo dice; queda en Revisar. Resolver más adelante.
+  **Respuestas de Augusto para "Liquidar servicios":** internos = independientes, se les paga por viaje; liquidación mensual pero a veces piden cobrar antes (liquidar cuando quiera);
+  sin adelantos; pagos variados (transferencia, eCheq, efectivo); algunos sin CUIT; el flete a veces se le cobra al cliente, pero mezclado en los precios o con un renglón "Envío"
+  (no sirve "facturar el flete"). El flete es proporcional, no hay monto fijo por entrega; algunos clientes no quieren ver "Envío".
+  **Acordado (12/10):** cada viaje atado a su venta (por remito o eligiéndola); renglón "Envío/flete/traslado/entrega" del presupuesto = flete cobrado explícito;
+  en la venta: margen antes y después del flete real (si el flete estaba metido en los precios, se ve si el precio lo cubrió); reporte "Fletes del mes" por cliente.
+  Sin campo de "flete incluido" por ahora (no hay monto fijo); se suma solo si hace falta.
+- Visto de paso: en "Cobro masivo — Selección de facturas" de Del Sol aparece la **NCA 0015-5** ($1.242.839,98) como pendiente de cobro (no debería listar NC). Revisar.
+- **Decisiones de Augusto sobre mejoras (12/10/2026)** — lista en el chat:
+  Transportes: **A** (el viaje se arma desde el remito: "¿Quién lo lleva?") y **E** (liquidación del mes armada sola) = OK; **B** (salida con varias paradas) DESCARTADA; C y D no elegidas.
+  Pidió más info de: 2 (Esperando OC del cliente), 3 (margen real por venta), 4 (presupuestos que se enfrían), 5 (proyección de caja 30/60/90), 6 (un solo número de plata disponible), 12 (bandeja única de avisos), 15 (pruebas viejas).
+  Le sirven: 7 (cobros sugeridos desde el extracto), 9 (cobro masivo con facturas vencidas), 11 (Mercado Libre → Visa), 13 (ficha "cómo paga"), 14 (Finanzas más rápida), 16 (anular en vez de borrar).
+  10 (retención Ganancias por tipo): espera al contador el martes 13/10. 17 (seguridad): proponerlo más adelante.
+- **Clientes que piden OC para facturar (dato de Augusto 12/10/2026):** Synthon, Corteva Agriscience, Corteva Seeds, Adecco, Termocórdoba, SO Energy.
+  Del Sol manda OC pero no es imprescindible. (Cargar la marca "Pide OC para facturar" cuando se haga el punto 2; lleva migración.)
+- **Presupuestos que se enfrían (punto 4), gustos de Augusto:** mensaje amigable ("Hola Juan, ¿cómo estás? ¿Pudiste ver el PR N° …?");
+  estados Aprobado / Rechazado (no "ganado/perdido"); dentro de Rechazado, opción "Postergado". No pide adelantos a clientes.
+- **Margen real por venta (punto 3):** más adelante; revisar los "costos" que Augusto ya puso al armar un PR y ordenarlos.
+- **Prioridad de Augusto (12/10/2026): ARREGLAR LO ROTO primero**, de a un tema por vez y a fondo, empezando por las funciones viejas de Manu.
+  Paso 1: Augusto corre `supabase/diagnostico/todas_las_funciones.sql` (solo lectura, Download CSV) → comparar con el repo y listar lo roto.
+- **Arreglado (V1.1.418):** el cobro masivo desde Facturación listaba notas de crédito como si fueran facturas a cobrar (Finanzas ya las filtraba).
+- Chequeos: tsc 0 errores, check-hooks OK, tests revisar-finanzas, cobro-reparto y finanzas-grupos OK. Versión 1.1.418.
+
+00. **Correcciones de la conciliación BBVA (V1.1.416)** — **PUBLICADO como V1.1.417 (12/10/2026, commit f5b725c, sin migración)**; todo lo que abajo dice "sin publicar" ya está en producción. Revisión completa 12/10/2026:
    1. **"Saldo pendiente $0" (HECHO):** no era un error de datos: el cartel mostraba lo que queda DESPUÉS del cobro y el CRM precarga el total.
       Ahora dice "Saldo de la factura: X — Queda después de este cobro: Y". Además, cobrar de más ya no frena: avisa y pregunta (regla 1).
    2. **Tipo de cambio en cobros USD + BNA diaria:** HECHO en código (12/10/2026, V1.1.417 sin publicar, sin migración).

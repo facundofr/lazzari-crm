@@ -57,4 +57,14 @@ assert.equal(superaLimiteCredito(600, s.A, 1000), true, "USD convertidos con la 
 assert.equal(superaLimiteCredito(0, s.A), false, "sin límite no avisa");
 assert.equal(superaLimiteCredito(100, s.B), false, "saldo a favor no avisa");
 
+// Ajustes de CC sin factura (12/10/2026): débito = deuda, crédito = a favor; sin sentido o anulado no cuenta.
+const conAjustes = calcularSaldosClientes([], [], [], [
+  { cliente_id: "D", monto: 252493.75, moneda: "ARS", ajuste_sentido: "debito" },
+  { cliente_id: "D", monto: 1000, moneda: "ARS", ajuste_sentido: "credito" },
+  { cliente_id: "D", monto: 999, moneda: "ARS", ajuste_sentido: null },
+  { cliente_id: "D", monto: 5, moneda: "USD", ajuste_sentido: "debito", anulado: true },
+]);
+assert.deepEqual(conAjustes.D.ARS, { deuda: 252493.75, aFavor: 1000, saldo: 251493.75 });
+assert.deepEqual(conAjustes.D.USD, { deuda: 0, aFavor: 0, saldo: 0 });
+
 console.log("test-saldo-clientes OK");

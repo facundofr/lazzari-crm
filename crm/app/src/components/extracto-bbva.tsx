@@ -4,6 +4,7 @@
 // y preguntar lo que no cruza. También completa los cheques emitidos desde la planilla o los Excel de eCheq.
 // La lógica está en lib/extracto-bbva.ts (prueba: scripts/test-extracto-bbva.mjs).
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BotonDejarRevisar } from "@/components/dejar-revisar";
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { traerTodo } from "@/lib/paginar";
@@ -552,6 +553,7 @@ export default function ExtractoBbva({ onIrACheques }: { onIrACheques?: () => vo
                         <span className={`w-36 shrink-0 text-right font-mono ${imp < 0 ? "text-red-600" : "text-emerald-600"}`}>{formatCurrency(imp)}</span>
                         <span className="w-56 shrink-0 truncate text-xs text-zinc-500" title={p?.motivo}>{p?.clasificacion ? `${CLASIFICACION_LABEL[p.clasificacion]}? ` : ""}{p?.motivo}</span>
                         <button onClick={() => (abiertaEsta ? setAbierta(null) : abrir(l))} className="rounded-md border border-zinc-200 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800">{abiertaEsta ? "Cerrar" : "Resolver"}</button>
+                        <BotonDejarRevisar etiqueta="Revisar" datos={{ entidad_tipo: "extracto", entidad_id: l.id, titulo: `${formatDate(l.fecha)} ${l.descripcion} (${nombreCuenta(l.cuenta_id)})`, motivo: imp > 0 ? "falta_cargar" : "otro", importe: imp }} />
                       </div>
                       {abiertaEsta && (
                         <div className="mt-2 space-y-2 rounded-lg bg-zinc-50 p-3 text-sm dark:bg-zinc-800/50">

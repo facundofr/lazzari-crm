@@ -8,7 +8,7 @@ assert.deepEqual(FINANZAS_GRUPOS.map((g) => g.id), ["hoy", "cobrar", "pagar", "c
 // Ninguna pestaña quedó afuera (incluye Gastos fijos, que antes estaba oculta).
 const todas = new Set(FINANZAS_GRUPOS.flatMap((g) => g.tabs.map((t) => t.id)));
 for (const t of ["cuentas", "movimientos", "recibos", "vencimientos", "facturas_compra", "ordenes_pago", "gastos_manuales", "echeqs",
-  "cheques_tercero", "cc_clientes", "cc_proveedores", "extractos", "lineas_credito", "gastos_fijos", "objetivos", "facturacion", "retenciones"]) {
+  "cheques_tercero", "cc_clientes", "cc_proveedores", "extractos", "lineas_credito", "gastos_fijos", "objetivos", "facturacion", "retenciones", "revisar"]) {
   assert.ok(todas.has(t), `falta la pestaña ${t}`);
 }
 
@@ -19,6 +19,7 @@ assert.equal(grupoDeTab("vencimientos", "cheques"), "cobrar");
 assert.equal(operacionVencimientos("cobrar"), "venta");
 assert.equal(operacionVencimientos("pagar"), "compra");
 assert.equal(grupoDeTab("echeqs", "hoy"), "cheques");
+assert.equal(grupoDeTab("revisar"), "hoy");
 assert.equal(grupoDeTab("gastos_fijos"), "pagar");
 
 // Inicio: link de factura > link de pestaña > lo último guardado > Hoy.

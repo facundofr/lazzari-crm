@@ -15,7 +15,7 @@ import {
   type FacturaHist, type ItemHist, type PRHist, type TipoOportunidad,
 } from "@/lib/oportunidades";
 import { totalVentasNeto } from "@/lib/ventas-documentos";
-import { calcularSaldosClientes, superaLimiteCredito, type SaldoCliente, type MovimientoCC, type AplicacionCC } from "@/lib/saldo-clientes";
+import { calcularSaldosClientes, superaLimiteCredito, type SaldoCliente, type MovimientoCC, type AplicacionCC, type AjusteClienteCC } from "@/lib/saldo-clientes";
 import { ChevronDown, ChevronRight, Lightbulb, Loader2, Search } from "lucide-react";
 
 const db = supabase as any;
@@ -129,7 +129,10 @@ export function Ficha360({ sociedadId, cliente }: { sociedadId: string | undefin
               ]);
               movs.push(...mv); apls.push(...ap);
             }
-            saldo = calcularSaldosClientes(facturasCli.map(f => ({ ...f, cliente_id: cliente.id })), movs, apls)[cliente.id]
+            // Ajustes de CC del cliente sin factura (p. ej. diferencia de un cobro pasada a la cuenta corriente).
+            const ajs = await traerTodo<AjusteClienteCC>(() => db.from("movimientos").select("id, cliente_id, monto, moneda, anulado, ajuste_sentido")
+              .eq("cliente_id", cliente.id).eq("sociedad_id", sociedadId).is("factura_id", null).not("ajuste_sentido", "is", null).order("id")).catch(() => [] as AjusteClienteCC[]);
+            saldo = calcularSaldosClientes(facturasCli.map(f => ({ ...f, cliente_id: cliente.id })), movs, apls, ajs)[cliente.id]
               || { ARS: { deuda: 0, aFavor: 0, saldo: 0 }, USD: { deuda: 0, aFavor: 0, saldo: 0 } };
           } catch { saldo = null; }
         }

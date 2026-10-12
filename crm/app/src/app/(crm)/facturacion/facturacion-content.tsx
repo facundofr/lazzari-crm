@@ -1,5 +1,6 @@
 "use client";
 
+import { BotonDejarRevisar } from "@/components/dejar-revisar";
 import { AvisoBCRA } from "@/components/clientes/bcra-card";
 import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
@@ -596,7 +597,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           if (!sociedadActiva?.id) throw new Error("sin sociedad");
           const datosSaldo = await traerDatosSaldoClientes(supabase, sociedadActiva.id, traerTodo);
           setCobradoPorFactura(cobradoPorFacturaVenta(datosSaldo.facturas, datosSaldo.movimientos, datosSaldo.aplicaciones));
-          saldosCli = calcularSaldosClientes(datosSaldo.facturas, datosSaldo.movimientos, datosSaldo.aplicaciones);
+          saldosCli = calcularSaldosClientes(datosSaldo.facturas, datosSaldo.movimientos, datosSaldo.aplicaciones, datosSaldo.ajustes);
         } catch { setCobradoPorFactura(null); }
         saldosClientesRef.current = saldosCli;
         // El aviso de límite usa el saldo real en pesos (si no se pudo calcular, no se muestra).
@@ -1432,7 +1433,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
           const cobrado = cobradoMap[f.id] || 0;
           const saldo = Number(f.total) - Number(f.total_acreditado || 0) - cobrado;
           return { id: f.id, numero: f.numero ?? 0, tipo: f.tipo ?? "", punto_venta: f.punto_venta ?? 0, fecha: f.fecha, subtotal: Number(f.subtotal || 0), iva: Number(f.iva || 0), total: Number(f.total), total_acreditado: Number(f.total_acreditado || 0), moneda: f.moneda ?? "ARS", tipo_cambio:Number(f.tipo_cambio)||undefined, saldo: Math.max(0, saldo), selected: false };
-        }).filter((f: CobroMasivoFC) => f.saldo > 0.01));
+        // Las notas de crédito no se cobran: se aplican a su factura (antes aparecían en la lista).
+        }).filter((f: CobroMasivoFC) => f.saldo > 0.01 && !String(f.tipo || "").toUpperCase().startsWith("NC")));
       }
     } catch(error) {setCmFCs([]);alert(error instanceof Error?error.message:"No se pudieron verificar los saldos.");} finally { setCmLoadingFCs(false); }
   }
@@ -2586,6 +2588,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               <div>
                 <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Acciones</h4>
                 <div className="space-y-2">
+                  <BotonDejarRevisar key={detailFactura.id} className="w-full justify-center py-2" datos={{ entidad_tipo: "factura_venta", entidad_id: detailFactura.id, titulo: `${detailFactura.tipo} ${detailFactura.punto_venta}-${detailFactura.numero}`, importe: detailFactura.total, moneda: detailFactura.moneda === "USD" ? "USD" : "ARS", cliente_id: detailFactura.cliente_id }} />
                   {detailFactura.estado !== "pagada" && detailFactura.estado !== "anulada" && (
                     <>
                       <button onClick={() => openCobroModal(detailFactura)} className="flex w-full items-center gap-3 rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-700 hover:bg-emerald-50 hover:border-emerald-200 hover:text-emerald-700 transition-colors dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-emerald-950/30">
