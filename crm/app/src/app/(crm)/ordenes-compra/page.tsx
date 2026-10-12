@@ -117,7 +117,24 @@ const ejePago = (oc: OCRow): Eje => {
   return (oc.facturas_vinculadas || []).some((f) => f.estado === "pagada") ? "parcial" : "pendiente";
 };
 const ocCompleta = (oc: OCRow) => oc.estado !== "cancelada" && ejeMercaderia(oc) === "completo" && ejeFactura(oc) === "completo" && ejePago(oc) === "completo";
-type FiltroOC = "todas" | "a_reclamar" | "con_diferencia" | "por_recibir" | "por_facturar" | "por_pagar" | "completas" | "borrador" | "cancelada";
+// Ícono chico para las columnas de estado de la lista (el texto va en el título al pasar el mouse).
+const ESTILO_ICONO = {
+  ok: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400",
+  parcial: "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400",
+  falta: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400",
+  nada: "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500",
+} as const;
+function IconoEstado({ tipo, title, children }: { tipo: keyof typeof ESTILO_ICONO; title: string; children: React.ReactNode }) {
+  return (
+    <span title={title} aria-label={title} className={`inline-flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full px-1 text-xs font-semibold ${ESTILO_ICONO[tipo]}`}>
+      {children}
+    </span>
+  );
+}
+
+// Abiertas = todo lo que todavía falta recibir, facturar o pagar (sin completas ni canceladas). Es la vista por defecto.
+const ocAbierta = (oc: OCRow) => oc.estado !== "cancelada" && !ocCompleta(oc);
+type FiltroOC = "abiertas" | "todas" | "a_reclamar" | "con_diferencia" | "por_recibir" | "por_facturar" | "por_pagar" | "completas" | "borrador" | "cancelada";
 
 // Pagada y sin recibir: Seba y Jero le reclaman la entrega al proveedor. Los avisos de atraso solo avisan.
 const reclamoInput = (oc: OCRow) => ({
@@ -231,7 +248,7 @@ function ProveedorPicker({ value, options, onChange, placeholder = "Buscar prove
 export default function OrdenesCompraPage() {
   const { sociedadActiva, profile } = useUser();
   const canManageCompras = profile?.role === "super_admin" || profile?.role === "admin" || profile?.role === "administrativo" || profile?.role === "vendedor";
-  const [filter, setFilter] = useState<FiltroOC>("todas");
+  const [filter, setFilter] = useState<FiltroOC>("abiertas");
   const [search, setSearch] = useState("");
   const [operadorFilter, setOperadorFilter] = useState("");
   const [ordenes, setOrdenes] = useState<OCRow[]>([]);
@@ -2099,6 +2116,7 @@ export default function OrdenesCompraPage() {
   const filtered = ordenes.filter((oc) => {
     if (filter !== "todas") {
       const activa = oc.estado !== "cancelada" && oc.estado !== "borrador";
+      if (filter === "abiertas" && !ocAbierta(oc)) return false;
       if (filter === "a_reclamar" && !ocAReclamar(reclamoInput(oc))) return false;
       if (filter === "con_diferencia" && !ocConDiferencia(oc)) return false;
       if (filter === "por_recibir" && !(activa && ejeMercaderia(oc) !== "completo")) return false;
@@ -2282,22 +2300,25 @@ export default function OrdenesCompraPage() {
           <StatCard title="Total OC este mes" value={String(ocEsteMes.length)} icon={ShoppingCart} iconColor="text-blue-600" />
           <StatCard title="Monto pendiente" value={`${formatCurrency(totalPendienteARS, "ARS")}${totalPendienteUSD > 0 ? ` + ${formatCurrency(totalPendienteUSD, "USD")}` : ""}`} icon={Clock} iconColor="text-amber-500" />
           <StatCard title="Pend. recepcion" value={String(pendientesRecepcion)} icon={Truck} iconColor="text-violet-600" />
-          <StatCard title="Recibidas completas" value={String(ordenes.filter((oc) => oc.estado === "recibida").length)} icon={CheckCircle2} iconColor="text-emerald-600" />
+          <button type="button" className="text-left" onClick={() => setFilter("a_reclamar")} title="Pagadas y todavía sin recibir: ver la lista">
+            <StatCard title="A reclamar" value={String(ordenes.filter((oc) => ocAReclamar(reclamoInput(oc))).length)} icon={AlertTriangle} iconColor="text-amber-600" />
+          </button>
         </div>
 
         {/* Filter tabs */}
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {(["todas", "a_reclamar", "con_diferencia", "por_recibir", "por_facturar", "por_pagar", "completas", "borrador", "cancelada"] as const).map((status) => {
+          {(["abiertas", "todas", "a_reclamar", "con_diferencia", "por_recibir", "por_facturar", "por_pagar", "completas", "borrador", "cancelada"] as const).map((status) => {
             const activa = (oc: OCRow) => oc.estado !== "cancelada" && oc.estado !== "borrador";
             const count = status === "todas" ? ordenes.length : ordenes.filter((oc) =>
-              status === "a_reclamar" ? ocAReclamar(reclamoInput(oc))
+              status === "abiertas" ? ocAbierta(oc)
+              : status === "a_reclamar" ? ocAReclamar(reclamoInput(oc))
               : status === "con_diferencia" ? ocConDiferencia(oc)
               : status === "por_recibir" ? activa(oc) && ejeMercaderia(oc) !== "completo"
               : status === "por_facturar" ? activa(oc) && ejeFactura(oc) !== "completo"
               : status === "por_pagar" ? activa(oc) && ejePago(oc) !== "completo"
               : status === "completas" ? ocCompleta(oc)
               : oc.estado === status).length;
-            if (status !== "todas" && count === 0) return null;
+            if (status !== "todas" && status !== "abiertas" && count === 0) return null;
             return (
               <button
                 key={status}
@@ -2308,7 +2329,7 @@ export default function OrdenesCompraPage() {
                     : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700"
                 }`}
               >
-                {({ todas: "Todas", a_reclamar: "A reclamar", con_diferencia: "Con diferencia", por_recibir: "Por recibir", por_facturar: "Por facturar", por_pagar: "Por pagar", completas: "Completas", borrador: "Borradores", cancelada: "Canceladas" } as Record<FiltroOC, string>)[status]}
+                {({ abiertas: "Abiertas", todas: "Todas", a_reclamar: "A reclamar", con_diferencia: "Con diferencia", por_recibir: "Por recibir", por_facturar: "Por facturar", por_pagar: "Por pagar", completas: "Completas", borrador: "Borradores", cancelada: "Canceladas" } as Record<FiltroOC, string>)[status]}
                 <span className={`rounded-full px-1.5 py-0.5 text-xs ${filter === status ? "bg-white/20" : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800"}`}>
                   {count}
                 </span>
@@ -2353,7 +2374,7 @@ export default function OrdenesCompraPage() {
               },
               {
                 key: "numero",
-                label: "Orden de compra",
+                label: "OC",
                 sortable: true,
                 sortValue: (row) => row.numero || "",
                 render: (row) => (
@@ -2365,7 +2386,7 @@ export default function OrdenesCompraPage() {
               },
               {
                 key: "presupuesto_origen_id",
-                label: "PR origen",
+                label: "PR",
                 sortable: true,
                 sortValue: (row) => row.presupuesto_origen?.numero || "",
                 render: (row) =>
@@ -2383,9 +2404,6 @@ export default function OrdenesCompraPage() {
                 render: (row) => (
                   <div>
                     <span className={`font-medium ${!row.proveedores?.razon_social && !isOwnStockPurchaseOrder(row) ? "text-amber-500 italic" : isOwnStockPurchaseOrder(row) ? "text-blue-600 dark:text-blue-400" : ""}`}>{purchaseOrderProviderLabel(row)}</span>
-                    {row.proveedores?.email && (
-                      <a href={`mailto:${row.proveedores.email}`} className="text-xs text-zinc-400 hover:text-orange-500 truncate max-w-[200px] block" onClick={(e) => e.stopPropagation()}>{row.proveedores.email}</a>
-                    )}
                   </div>
                 ),
               },
@@ -2398,7 +2416,7 @@ export default function OrdenesCompraPage() {
                   const descripciones = row.orden_compra_items.map((item) => item.descripcion || item.codigo).filter(Boolean) as string[];
                   const detalle = descripciones.length > 0 ? descripciones.slice(0, 2).join(", ") : `${row.orden_compra_items.length} items`;
                   return (
-                    <div className="flex max-w-[320px] items-center gap-1.5" title={descripciones.join(", ")}>
+                    <div className="flex max-w-[260px] items-center gap-1.5" title={descripciones.join(", ")}>
                       <span className="truncate text-zinc-600 dark:text-zinc-300">{detalle}</span>
                       {descripciones.length > 2 && <span className="shrink-0 text-xs text-zinc-400">+{descripciones.length - 2}</span>}
                       {row.observaciones && (
@@ -2437,20 +2455,21 @@ export default function OrdenesCompraPage() {
                 render: (row) => {
                   if (row.estado === "cancelada") return <span className="text-zinc-300">—</span>;
                   if (ocPagadaConTarjeta(row)) {
-                    return <Badge variant="success"><CreditCard className="mr-1 h-3 w-3" /> Pagada · Tarjeta</Badge>;
+                    return <IconoEstado tipo="ok" title="Pagada con tarjeta"><CreditCard className="h-3.5 w-3.5" /></IconoEstado>;
                   }
                   if (ocPagada(row)) {
-                    if (!ocAReclamar(reclamoInput(row))) return <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada</Badge>;
+                    if (!ocAReclamar(reclamoInput(row))) return <IconoEstado tipo="ok" title="Pagada"><Check className="h-3.5 w-3.5" /></IconoEstado>;
                     const aviso = avisoAtrasoOC(reclamoInput(row), todayAR());
+                    const dias = aviso?.tipo === "pagada_sin_recibir" ? ` hace ${aviso.dias} días` : "";
                     return (
-                      <span className="inline-flex flex-col items-start gap-0.5" title="Pagada y todavía sin recibir: reclamarle la entrega al proveedor">
-                        <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Pagada · reclamar</Badge>
-                        {aviso?.tipo === "pagada_sin_recibir" && <span className="text-[11px] text-amber-600">hace {aviso.dias} días</span>}
+                      <span className="inline-flex items-center gap-1" title={`Pagada${dias} y todavía sin recibir: reclamarle la entrega al proveedor`}>
+                        <IconoEstado tipo="ok" title={`Pagada${dias}, sin recibir: reclamar`}><Check className="h-3.5 w-3.5" /></IconoEstado>
+                        <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
                       </span>
                     );
                   }
-                  if (ejePago(row) === "parcial") return <Badge variant="info">Pagada parcial</Badge>;
-                  return <Badge variant="warning">Por pagar</Badge>;
+                  if (ejePago(row) === "parcial") return <IconoEstado tipo="parcial" title="Pagada en parte">½</IconoEstado>;
+                  return <IconoEstado tipo="falta" title="Por pagar"><X className="h-3.5 w-3.5" /></IconoEstado>;
                 },
               },
               {
@@ -2460,39 +2479,20 @@ export default function OrdenesCompraPage() {
                 sortValue: (row) => row.pedido ? 1 : 0,
                 render: (row) => {
                   const isPedido = row.pedido ?? false;
-                  if (!canManageCompras) {
-                    return (
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                        isPedido
-                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                          : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
-                      }`}>
-                        {isPedido ? <><Check className="h-3 w-3" /> Si</> : <><X className="h-3 w-3" /> No</>}
-                      </span>
-                    );
-                  }
+                  const icono = isPedido
+                    ? <IconoEstado tipo="ok" title="Pedido al proveedor"><Check className="h-3.5 w-3.5" /></IconoEstado>
+                    : <IconoEstado tipo="nada" title={canManageCompras ? "Sin pedir — clic para marcar como pedido" : "Sin pedir"}><X className="h-3.5 w-3.5" /></IconoEstado>;
+                  if (!canManageCompras) return icono;
                   return (
-                    <button
-                      onClick={(e) => handleTogglePedido(row, e)}
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-colors ${
-                        isPedido
-                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                          : "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700"
-                      }`}
-                      title={isPedido ? "Pedido realizado" : "Marcar como pedido"}
-                    >
-                      {isPedido ? (
-                        <><Check className="h-3 w-3" /> Si</>
-                      ) : (
-                        <><X className="h-3 w-3" /> No</>
-                      )}
+                    <button onClick={(e) => handleTogglePedido(row, e)} className="rounded-full transition-opacity hover:opacity-70">
+                      {icono}
                     </button>
                   );
                 },
               },
               {
                 key: "id",
-                label: "Mercadería",
+                label: "Recibido",
                 sortable: true,
                 sortValue: (row) => {
                   const totalQty = row.orden_compra_items.reduce((a, i) => a + Number(i.cantidad), 0);
@@ -2533,7 +2533,7 @@ export default function OrdenesCompraPage() {
                         className={`inline-block h-3 w-3 rounded-full ${dotColor} shrink-0`}
                         title={label}
                       />
-                      <span className="text-xs text-zinc-500 hidden sm:inline">{label}</span>
+                      {recibido > 0 && recibido < totalQty && !row.saldo_cerrado && <span className="text-xs text-zinc-500">{recibido}/{totalQty}</span>}
                       {/* Note icon for parcial/demorado */}
                       {canManageCompras && (recibido > 0 || isLate) && row.estado !== "recibida" && (
                         <button
@@ -2558,11 +2558,12 @@ export default function OrdenesCompraPage() {
                   if (row.estado === "cancelada") return <span className="text-zinc-300">{"\u2014"}</span>;
                   if (row.facturas_vinculadas_estado === "desconocido") return <span title="No se pudieron verificar los vínculos de facturas" className="text-amber-500"><AlertTriangle className="h-4 w-4" /></span>;
                   const ef = ejeFactura(row);
+                  const cuantas = fcs.length ? ` (${fcs.length} factura${fcs.length === 1 ? "" : "s"})` : "";
                   return ef === "completo"
-                    ? <Badge variant="success"><Check className="mr-1 h-3 w-3" /> Facturada</Badge>
+                    ? <IconoEstado tipo="ok" title={`Facturada${cuantas}`}><Check className="h-3.5 w-3.5" /></IconoEstado>
                     : ef === "parcial"
-                      ? <Badge variant="info" className="whitespace-nowrap">Facturada parcial{fcs.length ? ` (${fcs.length})` : ""}</Badge>
-                      : <Badge variant="outline">Sin factura</Badge>;
+                      ? <IconoEstado tipo="parcial" title={`Facturada en parte${cuantas}`}>½</IconoEstado>
+                      : <IconoEstado tipo="nada" title="Sin factura"><X className="h-3.5 w-3.5" /></IconoEstado>;
                 },
               },
               {
@@ -2580,9 +2581,9 @@ export default function OrdenesCompraPage() {
                       title="Copiar resumen para enviar al proveedor"
                     >
                       {copiedRowId === row.id ? (
-                        <><Check className="h-3 w-3" /> Copiado</>
+                        <Check className="h-3.5 w-3.5" />
                       ) : (
-                        <><ClipboardCopy className="h-3 w-3" /> Copiar</>
+                        <ClipboardCopy className="h-3.5 w-3.5" />
                       )}
                     </button>
                     {row.proveedor_id && (
