@@ -21,6 +21,7 @@ import { Autocompletar } from "@/components/ui/autocompletar";
 import { buscarCandidatos, type CatalogoCandidato } from "@/lib/catalogo-busqueda";
 import { normalizarProveedor } from "@/components/presupuestos/catalogo-picker";
 import { parseVariant } from "@/lib/purchase-matching";
+import { nombreProveedor } from "@/lib/proveedor-nombre";
 
 const db = supabase as any;
 
@@ -322,8 +323,16 @@ export default function LimpiezaOC({ sociedadId, onClose, proveedorInicial }: Pr
   });
 
   const opcionesProv = proveedores
-    .map(p => ({ valor: p.id, texto: `${p.razon_social}${pendientesPorProv[p.id] ? ` · ${pendientesPorProv[p.id]} renglones sin ordenar` : ""}`, detalle: p.cuit || undefined }))
+    .map(p => ({ valor: p.id, texto: `${nombreProveedor(p)}${pendientesPorProv[p.id] ? ` · ${pendientesPorProv[p.id]} renglones sin ordenar` : ""}`, detalle: [p.cuit, p.nombre_fantasia].filter(Boolean).join(" · ") || undefined }))
     .sort((a, b) => (pendientesPorProv[b.valor] || 0) - (pendientesPorProv[a.valor] || 0));
+
+  // Sugeridos al abrir: los que tienen renglones sin ordenar Y lista de costos (con los demás no hay contra qué cruzar).
+  const enLista = useMemo(() => new Set(nombresLista.map(normalizarProveedor)), [nombresLista]);
+  const sugeridos = proveedores
+    .filter(p => (pendientesPorProv[p.id] || 0) > 0
+      && (enLista.has(normalizarProveedor(p.nombre_fantasia || "")) || enLista.has(normalizarProveedor(p.razon_social))))
+    .sort((a, b) => (pendientesPorProv[b.id] || 0) - (pendientesPorProv[a.id] || 0))
+    .slice(0, 10);
 
   if (typeof document === "undefined") return null;
   return createPortal(
@@ -375,7 +384,24 @@ export default function LimpiezaOC({ sociedadId, onClose, proveedorInicial }: Pr
 
         <div className="min-h-0 flex-1 overflow-auto px-5 py-3">
           {!proveedor ? (
-            <p className="py-16 text-center text-sm text-zinc-500">Elegí un proveedor. Arriba de la lista aparecen los que tienen más renglones sin ordenar.</p>
+            <div className="py-10 text-center">
+              {sugeridos.length > 0 ? (
+                <>
+                  <p className="mb-3 text-sm text-zinc-500">Con lista de costos y renglones sin ordenar — elegí uno:</p>
+                  <div className="mx-auto flex max-w-3xl flex-wrap justify-center gap-2">
+                    {sugeridos.map(p => (
+                      <button key={p.id} onClick={() => setProveedorId(p.id)}
+                        className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-900 dark:bg-orange-900/20 dark:text-orange-300">
+                        {nombreProveedor(p)} <span className="ml-1 rounded-full bg-white/70 px-1.5 text-xs dark:bg-black/30">{pendientesPorProv[p.id]}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-3 text-xs text-zinc-400">O escribí otro proveedor arriba.</p>
+                </>
+              ) : (
+                <p className="text-sm text-zinc-500">Elegí un proveedor. Arriba de la lista aparecen los que tienen más renglones sin ordenar.</p>
+              )}
+            </div>
           ) : cargando ? (
             <div className="flex justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-orange-500" /></div>
           ) : (

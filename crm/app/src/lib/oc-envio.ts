@@ -69,3 +69,11 @@ export function cuerpoMailConAviso(cuerpoHtml: string, numero: string): string {
   if (/indicar el N° de (orden de compra|OC)/i.test(cuerpoHtml)) return cuerpoHtml;
   return `${cuerpoHtml}<p style="margin-top:12px;padding:8px 12px;border:2px solid #FF4500;border-radius:6px"><strong>${avisoNumeroOC(numero)}</strong></p>`;
 }
+
+// Contactos que NO son de ventas: a ellos no se les manda la OC.
+const NO_VENTAS = /cobr|admin|pago|factur|tesor|contab/i;
+const ES_VENTAS = /vent|comercial|vendedor/i;
+/** El contacto al que se le manda la OC: primero el que dice Ventas; si no, uno sin cargo de cobros/administración. */
+export function contactoVentas<T extends { cargo?: string | null }>(cs: T[]): T | null {
+  return cs.find((c) => ES_VENTAS.test(c.cargo || "")) || cs.find((c) => !NO_VENTAS.test(c.cargo || "")) || null;
+}

@@ -1,3 +1,5 @@
+import { nombreProveedor } from "./proveedor-nombre";
+
 export type PurchaseCurrency = "ARS" | "USD";
 
 export const OWN_STOCK_PROVIDER_LABEL = "Stock propio";
@@ -13,9 +15,9 @@ export function isOwnStockPurchaseOrder(order: {
 export function purchaseOrderProviderLabel(order: {
   proveedor_id?: string | null;
   observaciones?: string | null;
-  proveedores?: { razon_social?: string | null } | null;
+  proveedores?: { razon_social?: string | null; nombre_fantasia?: string | null } | null;
 }) {
-  return order.proveedores?.razon_social
+  return (order.proveedores?.razon_social ? nombreProveedor(order.proveedores) : "")
     || (isOwnStockPurchaseOrder(order) ? OWN_STOCK_PROVIDER_LABEL : "Sin proveedor");
 }
 

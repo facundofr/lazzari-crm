@@ -3,7 +3,8 @@
 /**
  * Enviar OC al proveedor: WhatsApp, mail (con el PDF) o copiar.
  * Se propone sola al aprobar un PR (con las OC que generó) y también se abre desde Compras.
- * El WhatsApp y el mail salen del contacto principal del proveedor; si falta, se escribe acá y se puede guardar.
+ * El WhatsApp y el mail salen del contacto de VENTAS del proveedor (nunca del mail del proveedor, que es el de administración
+ * para las facturas, ni de un contacto de Cobros). Si falta, se escribe acá y se guarda como contacto "Ventas".
  * Es una sugerencia: cerrar sin enviar no frena nada.
  */
 import { useEffect, useState } from "react";
@@ -15,7 +16,7 @@ import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { htmlToPdfBase64, openPDFWindow } from "@/lib/pdf-templates";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { avisoNumeroOC, textoOCParaProveedor, linkWhatsAppOC, htmlOCParaProveedor, cuerpoMailConAviso, type OCEnvio, type OCEnvioItem } from "@/lib/oc-envio";
+import { avisoNumeroOC, textoOCParaProveedor, linkWhatsAppOC, htmlOCParaProveedor, cuerpoMailConAviso, contactoVentas, type OCEnvio, type OCEnvioItem } from "@/lib/oc-envio";
 
 const db = supabase as any;
 
@@ -28,6 +29,8 @@ interface Fila {
   email: string;
   /** Lo que había guardado, para saber si hay algo nuevo para guardar en el proveedor. */
   guardado: { whatsapp: string; email: string; contactoId: string | null };
+  /** Mail del proveedor (administración): se muestra como referencia, no se usa para mandar la OC. */
+  mailAdmin: string;
   pedido: boolean;
   enviadoPor: string[];
 }
@@ -55,17 +58,17 @@ export default function EnviarOCProveedor({ ocIds, titulo, onClose }: { ocIds: s
         if (e1 || e2) throw e1 || e2;
         const provIds = [...new Set((ocs || []).map((o: any) => o.proveedor_id).filter(Boolean))];
         const { data: contactos } = provIds.length
-          ? await db.from("contactos").select("id, entity_id, whatsapp, telefono, email, principal").eq("entity_type", "proveedor").in("entity_id", provIds).order("principal", { ascending: false })
+          ? await db.from("contactos").select("id, entity_id, cargo, whatsapp, telefono, email, principal").eq("entity_type", "proveedor").in("entity_id", provIds).order("principal", { ascending: false })
           : { data: [] };
         const out: Fila[] = (ocs || []).filter((o: any) => o.proveedor_id).map((o: any) => {
           const cs = (contactos || []).filter((c: any) => c.entity_id === o.proveedor_id);
-          const conWa = cs.find((c: any) => c.whatsapp) || cs.find((c: any) => c.telefono);
-          const conMail = cs.find((c: any) => c.email);
-          const whatsapp = String(conWa?.whatsapp || conWa?.telefono || o.proveedores?.telefono || "");
-          const email = String(conMail?.email || o.proveedores?.email || "");
+          const vend: any = contactoVentas(cs);
+          const whatsapp = String(vend?.whatsapp || vend?.telefono || "");
+          const email = String(vend?.email || "");
           return {
             id: o.id, proveedorId: o.proveedor_id, pedido: !!o.pedido, enviadoPor: [],
-            whatsapp, email, guardado: { whatsapp, email, contactoId: (cs[0]?.id as string) || null },
+            whatsapp, email, guardado: { whatsapp, email, contactoId: (vend?.id as string) || null },
+            mailAdmin: String(o.proveedores?.email || "").trim(),
             oc: { ...o, proveedor: { ...(o.proveedores || {}), razon_social: o.proveedores?.razon_social || "Proveedor" } },
             items: (items || []).filter((it: any) => it.orden_id === o.id),
           };
@@ -118,12 +121,12 @@ export default function EnviarOCProveedor({ ocIds, titulo, onClose }: { ocIds: s
     openPDFWindow(htmlOCParaProveedor(f.oc, f.items, sociedadActiva), `${f.oc.numero}.pdf`);
   }
 
-  /** Guarda el WhatsApp y el mail escritos acá en el contacto principal del proveedor (o crea uno). */
+  /** Guarda el WhatsApp y el mail escritos acá en el contacto de Ventas del proveedor (o crea uno "Ventas"). Nunca toca el de Cobros. */
   async function guardarContacto(f: Fila) {
     const datos = { whatsapp: f.whatsapp.trim() || null, email: f.email.trim() || null };
     const r = f.guardado.contactoId
       ? await db.from("contactos").update(datos).eq("id", f.guardado.contactoId).eq("entity_id", f.proveedorId)
-      : await db.from("contactos").insert({ ...datos, nombre: "Compras", principal: true, entity_type: "proveedor", entity_id: f.proveedorId }).select("id").single();
+      : await db.from("contactos").insert({ ...datos, nombre: "Ventas", cargo: "Ventas", principal: false, entity_type: "proveedor", entity_id: f.proveedorId }).select("id").single();
     if (r.error) { toast.error("No se pudo guardar el contacto"); return; }
     const contactoId = f.guardado.contactoId || r.data?.id || null;
     // Las demás OC del mismo proveedor toman el mismo contacto.
@@ -163,15 +166,18 @@ export default function EnviarOCProveedor({ ocIds, titulo, onClose }: { ocIds: s
                     : <span className="ml-auto text-xs text-amber-600">Sin enviar</span>}
                 </div>
                 <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
-                  <label className="text-xs text-zinc-500">WhatsApp
+                  <label className="text-xs text-zinc-500">WhatsApp del vendedor
                     <input value={f.whatsapp} onChange={(e) => actualizar(f.id, { whatsapp: e.target.value })} placeholder="Ej. 11 5555-1234" className={input} inputMode="tel" />
                   </label>
-                  <label className="text-xs text-zinc-500">Mail
-                    <input value={f.email} onChange={(e) => actualizar(f.id, { email: e.target.value })} placeholder="compras@proveedor.com" className={input} inputMode="email" />
+                  <label className="text-xs text-zinc-500">Mail del vendedor
+                    <input value={f.email} onChange={(e) => actualizar(f.id, { email: e.target.value })} placeholder="ventas@proveedor.com" className={input} inputMode="email" />
+                    {!f.email.trim() && f.mailAdmin && (
+                      <span className="mt-0.5 block text-[11px] text-zinc-400" title="Es el mail de administración (facturas): no se usa para mandar la OC">Administración: {f.mailAdmin} (no se usa)</span>
+                    )}
                   </label>
                   <div className="flex items-end">
                     {cambio && (f.whatsapp.trim() || f.email.trim()) && (
-                      <button onClick={() => guardarContacto(f)} className="flex items-center gap-1 rounded-lg border border-zinc-300 px-2 py-1.5 text-xs dark:border-zinc-600" title="Guardar este WhatsApp y mail en el contacto principal del proveedor">
+                      <button onClick={() => guardarContacto(f)} className="flex items-center gap-1 rounded-lg border border-zinc-300 px-2 py-1.5 text-xs dark:border-zinc-600" title="Guardar este WhatsApp y mail como contacto de Ventas del proveedor">
                         <Save className="h-3.5 w-3.5" /> Guardar en el proveedor
                       </button>
                     )}

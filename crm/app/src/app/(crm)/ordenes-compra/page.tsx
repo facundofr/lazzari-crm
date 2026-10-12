@@ -34,6 +34,7 @@ import { cargarOPsDeFacturas, abrirOrdenPagoPDF, type OPResumen } from "@/lib/or
 import { analizarDiferenciaOC, type DiagnosticoOC } from "@/lib/oc-diferencia";
 import { ocAReclamar, avisoAtrasoOC, DIAS_PAGADA_SIN_RECIBIR, DIAS_SIN_RECIBIR } from "@/lib/oc-reclamos";
 import { isOwnStockPurchaseOrder, purchaseOrderProviderLabel } from "@/lib/own-stock-purchase-orders";
+import { nombreProveedor, proveedorCoincide } from "@/lib/proveedor-nombre";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "info" | "outline" | "purple" }> = {
   borrador: { label: "Borrador", variant: "outline" },
@@ -47,6 +48,7 @@ const statusConfig: Record<string, { label: string; variant: "success" | "warnin
 
 interface ProveedorInfo {
   razon_social: string;
+  nombre_fantasia?: string | null;
   cuit: string | null;
   email: string | null;
   telefono: string | null;
@@ -179,6 +181,7 @@ interface DetailItem {
 interface ProveedorOption {
   id: string;
   razon_social: string;
+  nombre_fantasia?: string | null;
 }
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
@@ -215,7 +218,7 @@ function ProveedorPicker({ value, options, onChange, placeholder = "Buscar prove
   const inputRef = useRef<HTMLInputElement>(null);
   const [dropStyle, setDropStyle] = useState<React.CSSProperties>({});
   useEffect(() => { setQuery(selected?.razon_social || ""); }, [selected?.razon_social]);
-  const filteredOptions = options.filter((option) => option.razon_social.toLowerCase().includes(query.toLowerCase())).slice(0, 30);
+  const filteredOptions = options.filter((option) => query === selected?.razon_social || proveedorCoincide(option, query)).slice(0, 30);
 
   const updateDropPosition = () => {
     if (!inputRef.current) return;
@@ -238,7 +241,7 @@ function ProveedorPicker({ value, options, onChange, placeholder = "Buscar prove
     {open && createPortal(
       <><div className="fixed inset-0 z-[9998]" onClick={() => setOpen(false)} /><div style={dropStyle} className="max-h-52 overflow-y-auto rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-700 dark:bg-zinc-800">
       <button type="button" onClick={() => { onChange(""); setQuery(""); setOpen(false); }} className="block w-full px-3 py-2 text-left text-xs italic text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-700">Sin proveedor</button>
-      {filteredOptions.map((option) => <button type="button" key={option.id} onClick={() => { onChange(option.id); setQuery(option.razon_social); setOpen(false); }} className="block w-full px-3 py-2 text-left text-sm hover:bg-orange-50 dark:hover:bg-zinc-700">{option.razon_social}</button>)}
+      {filteredOptions.map((option) => <button type="button" key={option.id} onClick={() => { onChange(option.id); setQuery(option.razon_social); setOpen(false); }} className="block w-full px-3 py-2 text-left text-sm hover:bg-orange-50 dark:hover:bg-zinc-700">{nombreProveedor(option)}</button>)}
       {filteredOptions.length === 0 && <p className="px-3 py-3 text-xs text-zinc-400">No se encontraron proveedores</p>}
     </div></>,
     document.body)}
@@ -518,7 +521,7 @@ export default function OrdenesCompraPage() {
         .from("ordenes_compra")
         .select(`
           *,
-          proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva),
+          proveedores(razon_social, nombre_fantasia, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva),
           created_by_profile:created_by(full_name),
           presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision),
           orden_compra_items(codigo, descripcion, cantidad, cantidad_recibida)
@@ -619,7 +622,7 @@ export default function OrdenesCompraPage() {
     try {
       let q = supabase
         .from("proveedores")
-        .select("id, razon_social")
+        .select("id, razon_social, nombre_fantasia")
         .eq("activo", true)
         .order("razon_social");
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
@@ -678,7 +681,7 @@ export default function OrdenesCompraPage() {
   const refrescarOCDetalle = async (ocId: string) => {
     await fetchDetailItems(ocId);
     const { data: fresh } = await (supabase as any).from("ordenes_compra")
-      .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
+      .select("*, proveedores(razon_social, nombre_fantasia, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
       .eq("id", ocId).single();
     if (fresh) setDetailOC((prev) => prev && prev.id === ocId ? { ...(fresh as OCRow), facturas_vinculadas: prev.facturas_vinculadas, facturas_vinculadas_estado: prev.facturas_vinculadas_estado } : prev);
     await cargarDiagnostico(ocId);
@@ -1264,7 +1267,7 @@ export default function OrdenesCompraPage() {
       await fetchDetailItems(detailOC.id);
       const { data: freshOC } = await supabase
         .from("ordenes_compra")
-        .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
+        .select("*, proveedores(razon_social, nombre_fantasia, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
         .eq("id", detailOC.id)
         .single();
       if (freshOC) setDetailOC(prev => ({ ...(freshOC as unknown as OCRow), facturas_vinculadas: prev?.facturas_vinculadas || [] }));
@@ -1354,7 +1357,7 @@ export default function OrdenesCompraPage() {
       // Refresh
       const { data: freshOC } = await supabase
         .from("ordenes_compra")
-        .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
+        .select("*, proveedores(razon_social, nombre_fantasia, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
         .eq("id", oc.id)
         .single();
       if (freshOC) setDetailOC(freshOC as unknown as OCRow);
@@ -1873,7 +1876,7 @@ export default function OrdenesCompraPage() {
       setSinProveedorItems([...itemsDeOC, ...itemsDePR]);
 
       // Load proveedores for assignment
-      let provQ = supabase.from("proveedores").select("id, razon_social").eq("activo", true).order("razon_social");
+      let provQ = supabase.from("proveedores").select("id, razon_social, nombre_fantasia").eq("activo", true).order("razon_social");
       if (sociedadActiva?.id) provQ = provQ.eq("sociedad_id" as any, sociedadActiva.id);
       const { data: provs } = await provQ;
       if (provs) setSinProveedorProvs(provs as unknown as ProveedorOption[]);
@@ -1989,7 +1992,7 @@ export default function OrdenesCompraPage() {
       if (provId && !detailOC.proveedor_id) {
     const { error } = await (supabase as any).from("ordenes_compra").update({ proveedor_id: provId }).eq("id", detailOC.id).eq("sociedad_id", sociedadActiva.id);
         if (error) { alert("Error al asignar proveedor"); return; }
-        const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
+        const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, nombre_fantasia, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
         if (fresh) setDetailOC(fresh as any);
         await fetchData();
         alert("Todos los items son del mismo proveedor. Se asignó a la OC.");
@@ -2082,7 +2085,7 @@ export default function OrdenesCompraPage() {
 
         await fetchDetailItems(detailOC.id);
         const { data: freshOriginal } = await supabase.from("ordenes_compra")
-          .select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
+          .select("*, proveedores(razon_social, nombre_fantasia, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)")
           .eq("id", detailOC.id).single();
         if (freshOriginal) setDetailOC(freshOriginal as unknown as OCRow);
         await fetchData();
@@ -2132,6 +2135,7 @@ export default function OrdenesCompraPage() {
         oc.numero,
         purchaseOrderProviderLabel(oc),
         oc.proveedores?.razon_social,
+        oc.proveedores?.nombre_fantasia,
         oc.proveedores?.cuit,
         oc.proveedores?.email,
         oc.presupuesto_origen?.numero,
@@ -3351,7 +3355,7 @@ export default function OrdenesCompraPage() {
                           const { error: itemProvError } = await supabase.from("orden_compra_items").update({ proveedor_id: provId } as any).eq("orden_id", detailOC.id);
                           if (itemProvError) { alert("Se asignó la OC, pero no se pudo actualizar el proveedor de sus items"); return; }
                           // Re-fetch OC with full joins to get proveedor data
-                          const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
+                          const { data: fresh } = await supabase.from("ordenes_compra").select("*, proveedores(razon_social, nombre_fantasia, cuit, email, telefono, direccion, localidad, provincia, forma_pago, condicion_iva), presupuesto_origen:presupuesto_origen_id(numero, modalidad_emision), orden_compra_items(cantidad, cantidad_recibida)").eq("id", detailOC.id).single();
                           if (fresh) setDetailOC(fresh as any);
                           await fetchData();
                         }}
