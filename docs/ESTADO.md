@@ -262,6 +262,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   `components/resumen-economico.tsx`, `CuentasFinancieras` acepta `resumen` (reemplaza los 4 recuadros). Probado en local: posición neta
   $1.416.070,25 + US$ 39.774,43 (todo en pesos $61.753.880,56). Tarjetas de crédito: el sistema todavía no tiene su deuda como número
   (`deudaTarjetas` siempre 0; solo nota en la cuenta) → sumarla cuando se carguen los resúmenes. Quedan en el código (sin uso) los cálculos viejos de Caja.
+  **TANDA V1.1.419 PUBLICADA (12/10/2026, commit 66166a2, vercel --prod Ready), con la migración 20261012140000 ya corrida por Augusto (Success).**
   **PRÓXIMO: punto 3, trigger `recalcular_oc`** (pone IVA 21 % fijo a toda la OC en cada cambio de renglón): proponer plan y esperar OK.
   Ojo (menor, no se tocó): editar el monto de un medio que dejó saldo a favor (`gestionar_cobro` 'editar') no ajusta ese saldo a favor.
   Ya estaba bien: las funciones directas ya no se podían llamar desde la app (lo cerró 20260925220000); igual se vuelve a cerrar.
