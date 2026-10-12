@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 12/10/2026 · Versión publicada: **V1.1.418** (12/10/2026, commit 6d75961)
+Actualizado: 12/10/2026 · Versión publicada: **V1.1.422** (12/10/2026, commit 680e1f9)
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -308,9 +308,56 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   **Acceso directo a la base (OK de Augusto):** `pg` instalado (dev); `scripts/lectura/sql.cjs` (consulta en transacción READ ONLY) y
   `scripts/db/migrar.cjs` (corre UN archivo de migración/rollback en transacción; solo con OK de Augusto; `--probar <scripts/db/pruebas/x.sql>` corre y deshace). Necesitan `SUPABASE_DB_URL` en
   `.env.local` (ya cargada; permisos en `.claude/settings.local.json`: lectura y `migrar.cjs`). Claude corre las migraciones que Augusto aprueba.
-  **PRÓXIMO: carga de facturas de compra contra OC más fácil** (pedido de Augusto): emparejar renglones aunque el nombre/código/cantidad/precio
-  no coincidan exacto, mostrar solo lo que no cierra con la propuesta lista, y subir VARIAS facturas de VARIAS OC juntas con cruce automático.
-  Revisar `cargar-factura-oc.tsx`, `carga-masiva-facturas-compra.tsx`, `conciliacion-compras.tsx` y proponer plan numerado.
+  **Carga de facturas de compra contra OC más fácil — PUBLICADO V1.1.421 (12/10/2026, commit 56b6c2f, sin migración).** OK de Augusto al plan 1-9:
+  (1-3) motor `lib/purchase-matching.ts`: código tolerante (`mismoCodigo`: ceros adelante, guiones, talle pegado; nunca otro talle) y paso
+  nuevo "parecido" (`puntajeParecido`: nombre hasta 50 + misma cantidad que lo pendiente 35 + precio 15/5; mínimo 40; la cantidad sola no
+  alcanza, hace falta una palabra en común; siempre amarillo, se aprende al confirmar). La carga individual (`cargar-factura-oc.tsx`) usa
+  las mismas reglas (y la IA igual revisa lo propuesto por parecido). (4) "Facturado de más" (`sinAsignar.tipo = "de_mas"`, amarillo) ≠ "sin OC"
+  (rojo); las rojas ya no frenan el confirmar. Lo que vino sin OC o de más va a una **OC complementaria** creada y atada a la factura
+  (casilla marcada; si falla el guardado, la OC queda cancelada, no se borra); "Aceptar de más en la OC-x" la deja en la misma OC.
+  (5-6) conciliación: concilia sola al abrir, arranca mostrando solo lo que no cierra ("N renglones cierran solos — Ver todo"), botones
+  "Es este, OK" / "Aceptar precio" / "A reclamar" (queda en notas de la FC) / "Fuera de OC" y "¿Es este? OC-x … Asignar" en las rojas.
+  (7) la IA lee `referencias_oc` (N° de nuestra OC impreso en la factura) y el motor prefiere esa OC (`citaOc`, `ocPreferidas`).
+  (8) carga masiva: al terminar de leer cruza sola cada proveedor (análisis en `lib/conciliacion-compras-analisis.ts`, compartido con la
+  pantalla), muestra "Cierra con las OC" / "N para revisar" y el botón "Confirmar las que cierran" (abre cada una con `autoConfirmar` y la
+  guarda sola si todo está en verde; las demás quedan abiertas mostrando solo lo que no cierra). Varias facturas de la misma OC: se
+  reparten contra lo pendiente. (9) pruebas: `scripts/test-purchase-parecidos.cjs` y `test-purchase-matching.cjs` OK; lectura
+  `scripts/lectura/probar-parecidos.cjs` con las 3 FC reales conciliadas, sin IA: 29 propuestas por parecido, 0 erradas; sin cruzar 129 → 10 u.
+  tsc 0 errores, hooks OK; en local abren conciliación y carga masiva sin errores. NO probado guardando (base real): probar al publicar con una
+  factura real. "Cerrar saldo" de lo que falta sigue en el detalle de la OC (no se duplicó en la conciliación).
+  **Enviar OC al proveedor — PUBLICADO en la misma V1.1.421 (12/10/2026).** Pedido de Augusto:
+  al aprobar un PR se propone sola la ventana `components/enviar-oc-proveedor.tsx` con sus OC con proveedor aún no pedidas (sugerencia,
+  "Después" la cierra). Por OC: WhatsApp (wa.me con la OC escrita), Mail con PDF (`EmailComposeModal`), Copiar y PDF. Toma el WhatsApp
+  y mail del contacto principal del proveedor (`contactos` entity_type proveedor; si no, teléfono/mail del proveedor); si falta o se
+  cambia, botón "Guardar en el proveedor" (actualiza el contacto principal o crea "Compras"). Al enviar por WhatsApp o mail marca la
+  OC como pedida (`pedido = true`, con "deshacer"). También botón "Enviar" en cada fila y en el detalle de Compras.
+  Aviso "IMPORTANTE: por favor indicar el N° de orden de compra X en la factura (y en el remito)" en el PDF (recuadro arriba de los
+  renglones), en WhatsApp/copiar y en el mail (`lib/oc-envio.ts`). Con eso la IA lee `referencias_oc` y cruza la factura con su OC.
+  Probado en local: la ventana abre y arma todo sin errores; NO se envió nada.
+  **V1.1.421 publicada por Augusto (12/10/2026, Vercel Ready, se ve "V1.1.421").** Probado por Claude en producción: la ventana "Enviar OC" abre
+  (OC-1224 Prisina: mail cargado, WhatsApp vacío porque el proveedor no tiene teléfono, aviso del N° de OC) y se cerró SIN enviar.
+  **Falta:** cargar una factura de compra real contra su OC (necesita el PDF de Augusto; guarda datos reales → avisar antes).
+  **Tanda V1.1.422 (12/10/2026, OK de Augusto "Va 1 a 4") — PUBLICADA por Claude (commit 680e1f9, Vercel Ready), migración CORRIDA.**
+  Probado en producción: "Abiertas 77 / Todas 125 / Completas 47", tarjeta A reclamar, y el cartel de OC-1199 dice
+  "Facturado y pagado $2.340.164,27 de $2.412.764,36. Diferencia $72.600,09 (3 %). Faltan facturar 2 unidades".
+  1) Compras: filtro **"Abiertas"** por defecto (todas menos completas y canceladas; hoy 77 de 125). "Todas" y "Completas" siguen.
+  2) Columnas Pago, Pedido y Factura con íconos (✓ verde, ½ azul, ✗ naranja/gris, tarjeta); el texto sale al pasar el mouse.
+  3) Recibido (antes "Mercadería") solo con el punto de color (y "3/10" si es parcial); sin mail debajo del proveedor; "Copiar" solo ícono;
+     títulos cortos (OC, PR); tarjeta "Recibidas completas" → **"A reclamar"** (clic filtra). A 1920 px la tabla entra entera.
+  4) Cartel "OC con diferencia": sumaba la factura ENTERA aunque estuviera repartida entre varias OC (OC-1199 decía 141,8 % de más).
+     **Migración `20261012190000_oc_diferencia_compartida.sql` (+ vuelta atrás; solo reemplaza `diagnostico_diferencia_oc`, no toca datos):**
+     de una factura compartida cuenta lo asignado a la OC (renglones conciliados × precio de factura, con su IVA); sin renglones, reparte por total de OC.
+     Probada sin guardar (`--probar scripts/db/pruebas/oc_diferencia_compartida.sql`): OC-1199 $2.340.164 de $2.412.764 (faltan 2 u, $72.600);
+     las otras 10 OC con factura compartida dan $0. **CORRIDA por Claude (12/10/2026, `migrar.cjs` sin `cd` adelante, verificado).**
+  **Personalización desde el PR (bordado / estampa / reflectivo) — PLAN, se hace DESPUÉS de arreglar lo roto (decisión de Augusto 12/10):**
+  hoy el bordado es un renglón suelto ("BORDADOS", 37 renglones) que termina en OC a "Stock propio" (ej. OC-1197); el módulo Personalización está vacío.
+  Plan: botón "+ Personalizar" en cada prenda del PR (técnica; ubicación y logo OPCIONALES — casi nunca los tiene al cotizar; cantidad de la prenda;
+  quién lo hace: taller, o para reflectivo "el mismo proveedor de la prenda" = renglón extra en su OC con costo); al aprobar se arma el trabajo
+  para el taller y se manda por **WhatsApp**; sugerencia (no bloqueo) si un renglón dice bordado/estampa/reflectivo. Lleva migración chica.
+  Talleres a cargar: **Nora** (bordado), **Eve** y **Cordobés** (estampado); CUIT y documento los completa Augusto más adelante.
+  **Permisos (12/10/2026, OK de Augusto):** Claude publica (git add/commit/push, vercel.cmd --prod) y prueba haciendo clic en el CRM.
+  Nunca envía mensajes (WhatsApp/mail) ni toca nada de ARCA. Comandos sin `cd ... &&` adelante (si no, no coinciden con las reglas).
+  tsc 0 errores, hooks OK, probado en local sin guardar. Visto de paso: la campana da error 400 en la consulta de `alertas` (dos `or=`), ya estaba antes.
   Ojo (menor, no se tocó): editar el monto de un medio que dejó saldo a favor (`gestionar_cobro` 'editar') no ajusta ese saldo a favor.
   Ya estaba bien: las funciones directas ya no se podían llamar desde la app (lo cerró 20260925220000); igual se vuelve a cerrar.
   Pendiente (punto 6, más adelante): las reglas de lectura de la base dejan leer a cualquier usuario logueado; con el registro cerrado,
