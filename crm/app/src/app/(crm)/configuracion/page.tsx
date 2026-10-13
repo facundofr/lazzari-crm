@@ -7,12 +7,13 @@ import { DataTable } from "@/components/ui/data-table";
 import { mockUsers } from "@/lib/mock-data";
 import { ROLE_LABELS, ROLE_PERMISSIONS } from "@/lib/types";
 import type { User, Role } from "@/lib/types";
-import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2, Mail, Save, RotateCcw, Percent, Plus, Trash2, X, ShieldCheck } from "lucide-react";
+import { Users, Shield, Building2, Plug, Bell, Palette, Database, Key, Loader2, CheckCircle2, Mail, Save, RotateCcw, Percent, Plus, Trash2, X, ShieldCheck, CalendarDays } from "lucide-react";
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { normalizeEmail } from "@/lib/email";
 import { useUser } from "@/lib/auth-context";
 import { ArcaStatusCard } from "@/components/arca-status-card";
+import { FechasChequeConfig } from "@/components/fechas-cheque-config";
 
 type ComisionTipo = "porcentaje_venta" | "porcentaje_margen" | "monto_fijo";
 type ComisionAplicaA = "todos" | "vendedor_especifico";
@@ -99,7 +100,7 @@ export default function ConfiguracionPage() {
   const { sociedadActiva, profile } = useUser();
   // Solo el super_admin (Augusto) invita, cambia roles y da de baja usuarios.
   const canManageUsers = profile?.role === "super_admin";
-  const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas" | "comisiones" | "retenciones">("usuarios");
+  const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas" | "comisiones" | "retenciones" | "cheques">("usuarios");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dbUsers, setDbUsers] = useState<User[]>([]);
@@ -638,16 +639,17 @@ export default function ConfiguracionPage() {
     { id: "plantillas" as const, label: "Plantillas de Email", icon: Mail },
     { id: "comisiones" as const, label: "Comisiones", icon: Percent },
     { id: "retenciones" as const, label: "Retenciones", icon: ShieldCheck },
+    { id: "cheques" as const, label: "Fechas de cheque", icon: CalendarDays },
   ];
 
   return (
     <>
       <Header title="Configuracion" subtitle="Administracion del sistema" />
       <div className="p-3 sm:p-5 space-y-4">
-        <div className="flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
+        <div className="flex gap-1 overflow-x-auto border-b border-zinc-200 dark:border-zinc-800">
           {tabs.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
+              className={`flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
                 tab === t.id ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
               }`}>
               <t.icon className="h-4 w-4" />
@@ -655,6 +657,8 @@ export default function ConfiguracionPage() {
             </button>
           ))}
         </div>
+
+        {tab === "cheques" && <FechasChequeConfig />}
 
         {tab === "usuarios" && (
           <div className="space-y-6">

@@ -1,0 +1,21 @@
+// Prueba: WhatsApp argentino en característica + número.
+import { separarWhatsApp, unirWhatsApp, avisoWhatsApp, mostrarWhatsApp } from "../src/lib/whatsapp-ar";
+const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } };
+const s = (r: string, a: string, n: string) => { const x = separarWhatsApp(r); ok(x.area === a && x.numero === n, `${r} -> ${JSON.stringify(x)}`); };
+s("2477 688498", "2477", "688498");
+s("+54 9 2477 35-4035", "2477", "354035");
+s("54 9 11 3596-8714", "11", "35968714");
+s("011 15-5555-1234", "11", "55551234");
+s("1136591668", "11", "36591668");
+s("+54 9 3412 27-8686", "341", "2278686");
+s("3471 526043", "3471", "526043");
+s("54 9 2236 80-8666", "223", "6808666");
+s("", "", "");
+ok(unirWhatsApp("011", "15 5555-1234") === "11 55551234", "unir con 0 y 15");
+ok(unirWhatsApp("2477", "68-8498") === "2477 688498", "unir");
+ok(unirWhatsApp("", "") === "", "vacío");
+ok(avisoWhatsApp("2477", "688498") === "", "ok sin aviso");
+ok(avisoWhatsApp("11", "5555123") !== "", "corto avisa");
+ok(avisoWhatsApp("", "55551234") !== "", "sin característica avisa");
+ok(mostrarWhatsApp("1136591668") === "11 3659-1668", "mostrar");
+console.log("OK whatsapp-ar");

@@ -1,5 +1,6 @@
 "use client";
 
+import { proponerCheques, textoCondicionPago, type FechasChequeMes } from "@/lib/condicion-pago";
 import { Header } from "@/components/layout/header";
 import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -134,6 +135,13 @@ const emptyEcheqForm = {
 interface ProveedorOption {
   id: string;
   razon_social: string;
+  // Cómo se le paga (lib/condicion-pago.ts)
+  condicion_pago?: string | null;
+  dias_pago?: number | null;
+  dias_pago_hasta?: number | null;
+  medio_pago_preferido?: string | null;
+  plazo_cheque_dias?: number | null;
+  descuento_pronto_pago?: number | null;
   email?: string | null;
   cuit?: string | null;
   condicion_iva?: string | null;
@@ -761,6 +769,8 @@ export default function FinanzasPage() {
   // FC pendientes del proveedor para vincular a la OP
   interface OpFCPendiente { id: string; numero: string; tipo_comprobante: string; fecha: string; total: number; subtotal: number; iva: number; percepciones: number; saldo_pendiente: number; moneda: string; selected: boolean; monto_a_pagar: number }
   const [opFCPendientes, setOpFCPendientes] = useState<OpFCPendiente[]>([]);
+  // Fechas fijas de cheque de cada mes (Configuración → Fechas de cheque): la OP propone los cheques ahí.
+  const [opChequeFechas, setOpChequeFechas] = useState<FechasChequeMes[]>([]);
   // Notas de crédito del proveedor con crédito disponible (se usan en la OP restando del pago)
   interface OpNCDisponible { id: string; numero: string; tipo_comprobante: string; fecha: string; total: number; subtotal: number; disponible: number; moneda: string; selected: boolean; monto_a_aplicar: number }
   const [opNCDisponibles, setOpNCDisponibles] = useState<OpNCDisponible[]>([]);
@@ -1229,10 +1239,14 @@ export default function FinanzasPage() {
 
         // Fetch proveedores list for OP/gastos selectors
         try {
-          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, banco, cbu, alias_bancario, numero_cuenta, titular_cuenta, cuit_titular_cuenta, tipo_cuenta, alicuota_ganancias, concepto_retencion_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, exclusion_retencion_cert" as any).order("razon_social");
+          let qProv = supabase.from("proveedores").select("id, razon_social, email, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, banco, cbu, alias_bancario, numero_cuenta, titular_cuenta, cuit_titular_cuenta, tipo_cuenta, alicuota_ganancias, concepto_retencion_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, exclusion_retencion_cert, condicion_pago, dias_pago, dias_pago_hasta, medio_pago_preferido, plazo_cheque_dias, descuento_pronto_pago" as any).order("razon_social");
           if (sociedadActiva?.id) qProv = qProv.eq("sociedad_id" as any, sociedadActiva.id);
           const { data: provData } = await qProv;
           if (provData) setProveedoresOptions(provData as unknown as ProveedorOption[]);
+          if (sociedadActiva?.id) {
+            const { data: fechasCheque } = await (supabase as any).from("cheque_fechas_mes").select("mes, dias").eq("sociedad_id", sociedadActiva.id).gte("mes", `${todayAR().slice(0, 4)}-01-01`);
+            setOpChequeFechas((fechasCheque || []) as FechasChequeMes[]);
+          }
         } catch { /* ignore */ }
 
         // Fetch retencion config
@@ -1923,7 +1937,20 @@ export default function FinanzasPage() {
   })();
   const opMontoBruto = roundPaymentMoney(opForm.usar_monto_manual && opForm.monto_manual > 0 ? opForm.monto_manual : opMontoBrutoFC - opNCAplicado);
   const opProveedor = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
-  const opDiasPactados = Math.max(0, Number(opProveedor?.dias_cuenta_corriente) || 0);
+  const opDiasPactados = Math.max(0, Number(opProveedor?.condicion_pago ? opProveedor.dias_pago : opProveedor?.dias_cuenta_corriente) || 0);
+  // Cheques sugeridos (si el proveedor cobra con cheque): cada factura según cómo lo pide, en las fechas fijas del mes.
+  const opChequesSugeridos = (() => {
+    if (!opProveedor || !["echeq", "cheque"].includes(opProveedor.medio_pago_preferido || "")) return [];
+    const porFecha = new Map<string, number>();
+    const hoy = todayAR();
+    for (const f of opFCPendientes.filter(x => x.selected && x.monto_a_pagar > 0)) {
+      for (const c of proponerCheques(f.fecha, f.monto_a_pagar, opProveedor, opChequeFechas)) {
+        const fecha = c.fecha < hoy ? hoy : c.fecha;
+        porFecha.set(fecha, roundPaymentMoney((porFecha.get(fecha) || 0) + c.monto));
+      }
+    }
+    return [...porFecha.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([fecha, monto]) => ({ fecha, monto }));
+  })();
   const opFechaPactada = calcularFechaPactada(opFCPendientes.filter(f => f.selected).map(f => f.fecha), opDiasPactados);
 
   // Base sin IVA: para cada FC, la proporción sin IVA del monto a pagar
@@ -5937,9 +5964,14 @@ export default function FinanzasPage() {
                           </span>
                         )}
                         <span className="text-xs text-zinc-500">
-                          {opProveedor?.forma_pago || "Condición sin especificar"} · {opDiasPactados === 0 ? "pago inmediato" : `${opDiasPactados} días pactados`}
+                          {textoCondicionPago(opProveedor) || opProveedor?.forma_pago || "Condición sin especificar"} · {opDiasPactados === 0 ? "pago inmediato" : `${opDiasPactados} días pactados`}
                           {opFechaPactada ? ` · fecha sugerida ${formatDate(opFechaPactada)}` : " · seleccioná una factura para calcular la fecha sugerida"}
                         </span>
+                        {opChequesSugeridos.length > 0 && (
+                          <span className="basis-full text-xs text-blue-700 dark:text-blue-300" title="Sugerencia según las fechas de cheque del mes (Configuración → Fechas de cheque). Se puede cambiar.">
+                            Cheques sugeridos: {opChequesSugeridos.map(c => `${formatDate(c.fecha)} ${formatCurrency(c.monto, (opForm.moneda || "ARS") as "ARS" | "USD")}`).join(" · ")}
+                          </span>
+                        )}
                       </div>
                     )}
                     {!opForm.proveedor_id && proveedorSearch.trim() && filteredProveedoresOP.length > 0 && (

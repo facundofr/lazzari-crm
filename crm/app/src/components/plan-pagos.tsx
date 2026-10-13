@@ -23,6 +23,7 @@ import {
   r2, RETENCION_DEFAULT, baseSinIVADe, calcularRetencionGanancias, repartirNC, similitudNombre,
   type RetencionConfig, type ResultadoRetencion,
 } from "@/lib/plan-pagos";
+import { proponerCheques, textoCondicionPago, vencimientoFactura, type FechasChequeMes, type PlanPago } from "@/lib/condicion-pago";
 
 const db = supabase as any;
 
@@ -37,9 +38,13 @@ interface ProvInfo {
   cbu: string | null; alias_bancario: string | null; banco: string | null; titular_cuenta: string | null; tipo_cuenta: string | null;
   forma_pago: string | null; dias_cuenta_corriente: number | null; alicuota_ganancias: number | null;
   exclusion_retencion: boolean | null; exclusion_retencion_desde: string | null; exclusion_retencion_hasta: string | null;
+  // Cómo se le paga (lib/condicion-pago.ts)
+  condicion_pago?: string | null; dias_pago?: number | null; dias_pago_hasta?: number | null;
+  medio_pago_preferido?: string | null; plazo_cheque_dias?: number | null; descuento_pronto_pago?: number | null;
 }
 interface FC {
   id: string; proveedor_id: string; numero: string; tipo_comprobante: string; fecha: string; vencimiento: string;
+  plan: PlanPago;
   subtotal: number; total: number; saldo: number; enPlan: string | null;
   seleccionada: boolean; monto: string;
 }
@@ -83,6 +88,8 @@ export default function PlanPagos({ sociedadId, onClose, onPagosRegistrados }: P
   const [config, setConfig] = useState<RetencionConfig>(RETENCION_DEFAULT);
   const [mensual, setMensual] = useState<Record<string, { base: number; retenido: number; otraMoneda: boolean }>>({});
   const [usdPendientes, setUsdPendientes] = useState(0);
+  // Fechas fijas de cheque de cada mes (Configuración → Fechas de cheque)
+  const [chequeFechas, setChequeFechas] = useState<FechasChequeMes[]>([]);
   const [guardando, setGuardando] = useState(false);
   // Lote
   const [lotes, setLotes] = useState<Lote[]>([]);
@@ -113,7 +120,7 @@ export default function PlanPagos({ sociedadId, onClose, onPagosRegistrados }: P
       const facturas: any[] = [];
       for (let desde = 0; ; desde += 1000) {
         const { data, error: e } = await db.from("facturas_compra")
-          .select("id, proveedor_id, numero_factura, tipo_comprobante, fecha, fecha_vencimiento, subtotal, total, moneda")
+          .select("id, proveedor_id, numero_factura, tipo_comprobante, fecha, fecha_vencimiento, subtotal, total, moneda, condicion_pago, dias_pago, dias_pago_hasta")
           .eq("sociedad_id", sociedadId).in("estado", ["pendiente", "recibida"]).not("tipo_comprobante", "ilike", "NC%")
           .order("fecha").range(desde, desde + 999);
         if (e) throw e;
@@ -155,19 +162,30 @@ export default function PlanPagos({ sociedadId, onClose, onPagosRegistrados }: P
       for (let i = 0; i < provIds.length; i += 150) {
         const lote = provIds.slice(i, i + 150);
         let { data, error: e } = await db.from("proveedores")
-          .select("id, razon_social, cuit, condicion_iva, cbu, alias_bancario, banco, titular_cuenta, tipo_cuenta, forma_pago, dias_cuenta_corriente, alicuota_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta")
+          .select("id, razon_social, cuit, condicion_iva, cbu, alias_bancario, banco, titular_cuenta, tipo_cuenta, forma_pago, dias_cuenta_corriente, alicuota_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, condicion_pago, dias_pago, dias_pago_hasta, medio_pago_preferido, plazo_cheque_dias, descuento_pronto_pago")
           .in("id", lote);
         if (e) ({ data } = await db.from("proveedores").select("id, razon_social, cuit, condicion_iva, cbu, alias_bancario, forma_pago, dias_cuenta_corriente").in("id", lote));
         for (const p of data || []) mapa[p.id] = { banco: null, titular_cuenta: null, tipo_cuenta: null, alicuota_ganancias: null, exclusion_retencion: null, exclusion_retencion_desde: null, exclusion_retencion_hasta: null, ...p };
       }
       setProvs(mapa);
 
+      const { data: fechasCheque } = await db.from("cheque_fechas_mes").select("mes, dias").eq("sociedad_id", sociedadId).gte("mes", `${todayAR().slice(0, 4)}-01-01`);
+      setChequeFechas((fechasCheque || []) as FechasChequeMes[]);
+
       setFcs(enPesos.map(f => {
         const saldo = r2(Math.max(0, Number(f.total) - (pagado[f.id] || 0)));
         const p = mapa[f.proveedor_id];
+        // Lo que pidió el proveedor en esa factura; si no, lo del proveedor. Medio y plazo del cheque, siempre del proveedor.
+        const plan: PlanPago = {
+          condicion_pago: f.condicion_pago || p?.condicion_pago || null,
+          dias_pago: f.condicion_pago ? f.dias_pago : p?.dias_pago ?? null,
+          dias_pago_hasta: f.condicion_pago ? f.dias_pago_hasta : p?.dias_pago_hasta ?? null,
+          medio_pago_preferido: p?.medio_pago_preferido || null, plazo_cheque_dias: p?.plazo_cheque_dias ?? null, descuento_pronto_pago: p?.descuento_pronto_pago ?? null,
+        };
         return {
           id: f.id, proveedor_id: f.proveedor_id, numero: f.numero_factura || "S/N", tipo_comprobante: f.tipo_comprobante || "FC",
-          fecha: f.fecha, vencimiento: f.fecha_vencimiento || sumarDias(f.fecha, Number(p?.dias_cuenta_corriente) || 0),
+          plan,
+          fecha: f.fecha, vencimiento: f.fecha_vencimiento || vencimientoFactura(f.fecha, plan) || sumarDias(f.fecha, Number(p?.dias_cuenta_corriente) || 0),
           subtotal: Number(f.subtotal) || 0, total: Number(f.total) || 0, saldo, enPlan: enPlan[f.id] || null,
           seleccionada: false, monto: String(saldo),
         };
@@ -267,9 +285,22 @@ export default function PlanPagos({ sociedadId, onClose, onPagosRegistrados }: P
       const aPagar = r2(bruto - ncAplicado);
       const neto = r2(aPagar - ret.retencion);
       const vencidas = lista.filter(f => f.vencimiento <= todayAR()).length;
-      return { provId, p, lista, elegidas, bruto, ncDisp, reparto, ncAplicado, aPagar, ret, neto, vencidas, otraMoneda: mes.otraMoneda };
+      // Cheques sugeridos en las fechas fijas del mes (si paga con cheque): el neto repartido como lo pide el proveedor.
+      const medioCheque = p?.medio_pago_preferido === "echeq" || p?.medio_pago_preferido === "cheque";
+      const factor = bruto > 0 ? neto / bruto : 0;
+      const porFecha = new Map<string, number>();
+      if (medioCheque && neto > 0) {
+        for (const f of elegidas) {
+          for (const c of proponerCheques(f.fecha, f.aPagar * factor, f.plan, chequeFechas)) {
+            const fecha = c.fecha < fechaPago ? fechaPago : c.fecha; // ya vencido: va al día del pago
+            porFecha.set(fecha, r2((porFecha.get(fecha) || 0) + c.monto));
+          }
+        }
+      }
+      const cheques = [...porFecha.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([fecha, monto]) => ({ fecha, monto }));
+      return { provId, p, lista, elegidas, bruto, ncDisp, reparto, ncAplicado, aPagar, ret, neto, vencidas, otraMoneda: mes.otraMoneda, cheques };
     }).sort((a, b) => (b.elegidas.length ? 1 : 0) - (a.elegidas.length ? 1 : 0) || (a.p?.razon_social || "").localeCompare(b.p?.razon_social || "", "es"));
-  }, [fcs, provs, ncs, usarNC, mensual, config, fechaPago, venceHasta, busqueda]);
+  }, [fcs, provs, ncs, usarNC, mensual, config, fechaPago, venceHasta, busqueda, chequeFechas]);
 
   const conPago = grupos.filter(g => g.elegidas.length && g.aPagar > 0);
   const totalNeto = r2(conPago.reduce((s, g) => s + g.neto, 0));
@@ -296,7 +327,9 @@ export default function PlanPagos({ sociedadId, onClose, onPagosRegistrados }: P
         notas_credito: g.reparto,
         monto_bruto: g.aPagar, nc_aplicado: g.ncAplicado, base_retencion: g.ret.base,
         retencion_pct: g.ret.retencion > 0 ? g.ret.pct : 0, retencion_monto: g.ret.retencion, neto: g.neto,
-        forma_pago: g.p?.cbu || g.p?.alias_bancario ? "transferencia" : (String(g.p?.forma_pago || "").toLowerCase().includes("cheq") ? "echeq" : "transferencia"),
+        forma_pago: g.p?.medio_pago_preferido === "echeq" || g.p?.medio_pago_preferido === "cheque" ? "echeq"
+          : g.p?.medio_pago_preferido === "transferencia" || g.p?.cbu || g.p?.alias_bancario ? "transferencia"
+          : (String(g.p?.forma_pago || "").toLowerCase().includes("cheq") ? "echeq" : "transferencia"),
         cuit: g.p?.cuit || null, razon_social: g.p?.razon_social || null, cbu: g.p?.cbu || null, alias_bancario: g.p?.alias_bancario || null,
         banco: g.p?.banco || null, titular_cuenta: g.p?.titular_cuenta || g.p?.razon_social || null,
       }));
@@ -502,6 +535,8 @@ export default function PlanPagos({ sociedadId, onClose, onPagosRegistrados }: P
                                 {abierto ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}{g.p?.razon_social || "Proveedor"}
                               </button>
                               <span className="ml-5 text-[10px] text-zinc-500">CUIT {g.p?.cuit || "—"} · {g.lista.length} factura(s){g.vencidas ? ` · ${g.vencidas} vencida(s)` : ""}</span>
+                              <span className={`ml-5 block text-[10px] ${g.p?.condicion_pago ? "text-zinc-500" : "text-amber-600"}`}>{textoCondicionPago(g.p) || "Sin indicar cómo se le paga"}</span>
+                              {g.cheques.length > 0 && <span className="ml-5 block text-[10px] text-blue-700 dark:text-blue-300" title="Sugerencia según las fechas de cheque del mes (Configuración). Se puede cambiar.">Cheques sugeridos: {g.cheques.map(c => `${formatDate(c.fecha)} ${ars(c.monto)}`).join(" · ")}</span>}
                             </td>
                             <td className="px-2 py-2">
                               {sinBanco ? <span className="font-medium text-red-600">⚠ Sin CBU / alias</span> : <span className="font-mono text-[11px]">{g.p?.cbu || g.p?.alias_bancario}</span>}

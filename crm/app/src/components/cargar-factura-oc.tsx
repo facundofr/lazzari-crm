@@ -9,6 +9,9 @@ import { parseVariant, tallesCompatibles, mismoCodigo, puntajeParecido, PUNTAJE_
 import { aprenderNombreFantasiaDeFactura } from "@/lib/nombre-fantasia";
 import { useToast } from "@/components/ui/toast";
 import { duplicadosComprobanteCompra } from "@/lib/saldo-factura-compra";
+import { ProveedorFormModal, type ProveedorForm } from "@/components/proveedor-form-modal";
+import { CondicionPagoEditor } from "@/components/condicion-pago-editor";
+import { textoCondicionPago, vencimientoFactura, type PlanPago } from "@/lib/condicion-pago";
 
 // ── Types ────────────────────────────────────────────────
 export interface OCParaVincular {
@@ -68,26 +71,6 @@ function comoLoLlamaElProveedor(o: OCItemForMatch): OCItemForMatch {
   };
 }
 
-const emptyNuevoProveedor = {
-  razon_social: "",
-  nombre_fantasia: "",
-  cuit: "",
-  condicion_iva: "RI",
-  rubro: "",
-  email: "",
-  telefono: "",
-  direccion: "",
-  localidad: "",
-  provincia: "",
-  forma_pago: "Transferencia",
-  dias_cuenta_corriente: 30,
-  limite_credito: 0,
-  cbu: "",
-  alias_bancario: "",
-  numero_cuenta: "",
-  notas: "",
-};
-
 interface Props {
   sociedadId: string;
   profileId: string | null;
@@ -116,15 +99,19 @@ export default function CargarFacturaOC({
   const [proveedores, setProveedores] = useState<ProveedorOption[]>([]);
   const [proveedoresLoaded, setProveedoresLoaded] = useState(false);
   const [nuevoProveedorOpen, setNuevoProveedorOpen] = useState(false);
-  const [nuevoProveedor, setNuevoProveedor] = useState(emptyNuevoProveedor);
-  const [nuevoProveedorSaving, setNuevoProveedorSaving] = useState(false);
-  const [nuevoProveedorError, setNuevoProveedorError] = useState("");
+  const [nuevoProveedorInicial, setNuevoProveedorInicial] = useState<Partial<ProveedorForm>>({});
   // Datos del emisor leídos de la factura, para precargar el alta del proveedor.
   const proveedorFacturaRef = useRef<{ cuit: string; razon_social: string; nombre_fantasia?: string } | null>(null);
   const [tipoComprobante, setTipoComprobante] = useState("FC A");
   const [numeroFactura, setNumeroFactura] = useState("");
   const [fecha, setFecha] = useState(todayAR());
   const [fechaVencimiento, setFechaVencimiento] = useState("");
+  // Vencimiento escrito a mano (o leído de la factura): no se recalcula solo.
+  const [vencimientoManual, setVencimientoManual] = useState(false);
+  // Pago que pide el proveedor: el de la OC si lo tiene; si no, el del proveedor. Se guarda en la factura.
+  const [planPago, setPlanPago] = useState<PlanPago>({});
+  const [planProveedor, setPlanProveedor] = useState<PlanPago | null>(null);
+  const [editandoPlan, setEditandoPlan] = useState(false);
   const [cae, setCae] = useState("");
   const [moneda, setMoneda] = useState<"ARS" | "USD">("ARS");
   const [subtotal, setSubtotal] = useState(0);
@@ -145,7 +132,6 @@ export default function CargarFacturaOC({
   const [createExtrasOC, setCreateExtrasOC] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [pagadaSinOP, setPagadaSinOP] = useState(false);
-  const [cuitLoading, setCuitLoading] = useState(false);
 
   // ── File & parsing ──
   const [file, setFile] = useState<File | null>(null);
@@ -299,6 +285,34 @@ export default function CargarFacturaOC({
   const selectedProvNombre = proveedores.find(p => p.id === proveedorId)?.razon_social || "";
   const selectedOCKey = useMemo(() => Array.from(selectedOCIds).sort().join("|"), [selectedOCIds]);
   const selectedOCs = useMemo(() => ordenes.filter((oc) => selectedOCIds.has(oc.id)), [ordenes, selectedOCIds]);
+
+  // Pago que pide el proveedor (de la primera OC elegida o del proveedor).
+  const primeraOCId = Array.from(selectedOCIds).sort()[0] || "";
+  useEffect(() => {
+    let cancelado = false;
+    if (!proveedorId) { setPlanPago({}); setPlanProveedor(null); return; }
+    const campos = "condicion_pago, dias_pago, dias_pago_hasta, medio_pago_preferido, plazo_cheque_dias, descuento_pronto_pago";
+    (async () => {
+      const db = supabase as any;
+      const [prov, oc] = await Promise.all([
+        db.from("proveedores").select(`${campos}, medios_pago`).eq("id", proveedorId).maybeSingle(),
+        primeraOCId ? db.from("ordenes_compra").select(campos).eq("id", primeraOCId).maybeSingle() : Promise.resolve({ data: null }),
+      ]);
+      if (cancelado) return;
+      const p = (prov.data || null) as PlanPago | null;
+      const o = (oc.data || null) as PlanPago | null;
+      setPlanProveedor(p);
+      setPlanPago(o?.condicion_pago ? o : { ...(p || {}) });
+      setEditandoPlan(false);
+    })();
+    return () => { cancelado = true; };
+  }, [proveedorId, primeraOCId]);
+
+  // Vencimiento = fecha de factura + días que pide el proveedor (si no se escribió a mano).
+  const vencimientoSugerido = vencimientoFactura(fecha, planPago);
+  useEffect(() => {
+    if (!vencimientoManual && vencimientoSugerido) setFechaVencimiento(vencimientoSugerido);
+  }, [vencimientoSugerido, vencimientoManual]);
   const ocCurrencies = useMemo(() => new Set(selectedOCs.map((oc) => oc.moneda)), [selectedOCs]);
   const ocTotal = useMemo(() => roundMoney(selectedOCs.reduce((sum, oc) => sum + Number(oc.total || 0), 0)), [selectedOCs]);
   const alreadyInvoiced = useMemo(() => roundMoney(linkedInvoices.reduce((sum, invoice) => sum + Number(invoice.total || 0), 0)), [linkedInvoices]);
@@ -560,31 +574,6 @@ export default function CargarFacturaOC({
     void loadProveedores();
   }, [sociedadId]);
 
-  async function lookupNuevoProveedor(cuitDirecto?: string) {
-    const cuit = (cuitDirecto ?? nuevoProveedor.cuit).replace(/\D/g, "");
-    if (cuit.length !== 11) { setNuevoProveedorError("El CUIT debe tener 11 dígitos"); return; }
-    setCuitLoading(true);
-    setNuevoProveedorError("");
-    try {
-      const res = await fetch(`/api/cuit-lookup?cuit=${cuit}`);
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || "No se pudo consultar AFIP");
-      setNuevoProveedor((prev) => ({
-        ...prev,
-        cuit,
-        razon_social: data.razon_social || prev.razon_social,
-        condicion_iva: data.condicion_iva || prev.condicion_iva,
-        direccion: data.direccion || prev.direccion,
-        localidad: data.localidad || prev.localidad,
-        provincia: data.provincia || prev.provincia,
-      }));
-    } catch (err) {
-      setNuevoProveedorError(err instanceof Error ? err.message : "No se pudo consultar AFIP");
-    } finally {
-      setCuitLoading(false);
-    }
-  }
-
   // ── Load proveedores ──
   async function loadProveedores() {
     if (proveedoresLoaded) return;
@@ -600,47 +589,18 @@ export default function CargarFacturaOC({
   function openNuevoProveedor() {
     const fact = proveedorFacturaRef.current;
     const cuitFact = (fact?.cuit || "").replace(/\D/g, "");
-    setNuevoProveedor({ ...emptyNuevoProveedor, razon_social: proveedorSearch.trim() || fact?.razon_social || "", nombre_fantasia: fact?.nombre_fantasia || "", cuit: cuitFact });
-    setNuevoProveedorError("");
+    // Mismo formulario completo que en Proveedores; con el CUIT de la factura se traen solos los datos de ARCA.
+    setNuevoProveedorInicial({ razon_social: proveedorSearch.trim() || fact?.razon_social || "", nombre_fantasia: fact?.nombre_fantasia || "", cuit: cuitFact });
     setNuevoProveedorOpen(true);
-    // Con el CUIT de la factura se traen solos los datos de ARCA (razón social, IVA, domicilio).
-    if (cuitFact.length === 11) void lookupNuevoProveedor(cuitFact);
   }
 
-  async function handleCrearProveedor() {
-    if (!nuevoProveedor.razon_social.trim() || !nuevoProveedor.cuit.trim()) {
-      setNuevoProveedorError("Razón social y CUIT son obligatorios");
-      return;
-    }
-    setNuevoProveedorSaving(true);
-    setNuevoProveedorError("");
-    try {
-      const { data, error: insertError } = await (supabase as any)
-        .from("proveedores")
-        .insert({
-          ...nuevoProveedor,
-          razon_social: nuevoProveedor.razon_social.trim(),
-          nombre_fantasia: nuevoProveedor.nombre_fantasia.trim() || null,
-          cuit: nuevoProveedor.cuit.trim(),
-          cuit_titular_cuenta: nuevoProveedor.cuit.trim(),
-          sociedad_id: sociedadId,
-          created_by: profileId,
-        })
-        .select("id, razon_social, cuit")
-        .single();
-      if (insertError || !data) throw new Error(insertError?.message || "No se pudo crear el proveedor");
-
-      const created = data as ProveedorOption;
-      setProveedores(prev => [...prev.filter(p => p.id !== created.id), created].sort((a, b) => a.razon_social.localeCompare(b.razon_social)));
-      setProveedorId(created.id);
-      setProveedorSearch(created.razon_social);
-      setSelectedOCIds(new Set());
-      setNuevoProveedorOpen(false);
-    } catch (err: any) {
-      setNuevoProveedorError(err?.message || "Error al crear el proveedor");
-    } finally {
-      setNuevoProveedorSaving(false);
-    }
+  function proveedorCreado(row: Record<string, unknown>) {
+    const created = { id: row.id as string, razon_social: row.razon_social as string, cuit: row.cuit as string } as ProveedorOption;
+    setProveedores(prev => [...prev.filter(p => p.id !== created.id), created].sort((a, b) => a.razon_social.localeCompare(b.razon_social)));
+    setProveedorId(created.id);
+    setProveedorSearch(created.razon_social);
+    setSelectedOCIds(new Set());
+    setNuevoProveedorOpen(false);
   }
 
   // ── Parse PDF ──
@@ -702,7 +662,7 @@ export default function CargarFacturaOC({
       }
       if (d.numero_factura) setNumeroFactura(d.numero_factura);
       if (d.fecha) setFecha(d.fecha);
-      if (d.fecha_vencimiento) setFechaVencimiento(d.fecha_vencimiento);
+      if (d.fecha_vencimiento) { setFechaVencimiento(d.fecha_vencimiento); setVencimientoManual(true); }
       if (d.cae) setCae(d.cae);
       if (d.moneda) setMoneda(d.moneda === "USD" ? "USD" : "ARS");
       if (d.subtotal != null) {
@@ -1154,6 +1114,24 @@ export default function CargarFacturaOC({
         } catch { /* aprender es opcional: nunca frena la carga */ }
       }
 
+      // Pago que pide el proveedor: queda en la factura; si el proveedor no lo tenía cargado, se le guarda (nunca frena).
+      if (savedFacturaId && planPago.condicion_pago) {
+        try {
+          const db = supabase as any;
+          await db.from("facturas_compra").update({ condicion_pago: planPago.condicion_pago, dias_pago: planPago.dias_pago ?? null, dias_pago_hasta: planPago.condicion_pago === "escalonado" ? planPago.dias_pago_hasta ?? null : null })
+            .eq("id", savedFacturaId).eq("sociedad_id", sociedadId);
+          if (!planProveedor?.condicion_pago) {
+            const medios = Array.from(new Set([...(planProveedor?.medios_pago || []), ...(planPago.medio_pago_preferido ? [planPago.medio_pago_preferido] : [])]));
+            await db.from("proveedores").update({
+              condicion_pago: planPago.condicion_pago, dias_pago: planPago.dias_pago ?? null,
+              dias_pago_hasta: planPago.condicion_pago === "escalonado" ? planPago.dias_pago_hasta ?? null : null,
+              medio_pago_preferido: planPago.medio_pago_preferido || null, plazo_cheque_dias: planPago.plazo_cheque_dias ?? null,
+              descuento_pronto_pago: planPago.descuento_pronto_pago ?? null, medios_pago: medios,
+            }).eq("id", proveedorId).eq("sociedad_id", sociedadId);
+          }
+        } catch { /* es un dato de ayuda: nunca frena la carga */ }
+      }
+
       // Nombre de fantasía leído en la factura: si el proveedor no tiene, se guarda; si tiene otro, solo se avisa.
       const emisorLeido = proveedorFacturaRef.current;
       if (proveedorId && emisorLeido?.nombre_fantasia) {
@@ -1348,9 +1326,33 @@ export default function CargarFacturaOC({
               {/* Vencimiento */}
               <div>
                 <label className="block text-[10px] uppercase text-zinc-400 mb-1">Vencimiento</label>
-                <input type="date" value={fechaVencimiento} onChange={e => setFechaVencimiento(e.target.value)}
+                <input type="date" value={fechaVencimiento} onChange={e => { setFechaVencimiento(e.target.value); setVencimientoManual(Boolean(e.target.value)); }}
                   className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
               </div>
+
+              {/* Pago que pide el proveedor */}
+              {!isCreditNote && proveedorId && (
+                <div className={`col-span-full rounded-lg border px-3 py-2 text-sm ${planPago.condicion_pago ? "border-zinc-200 dark:border-zinc-700" : "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"}`}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] uppercase text-zinc-400">Pago que pide el proveedor</span>
+                    {planPago.condicion_pago
+                      ? <span className="font-medium">{textoCondicionPago(planPago)}</span>
+                      : <span className="font-medium text-amber-700 dark:text-amber-400">⚠️ Sin indicar — completalo así Pagos sabe cuándo y cómo pagar</span>}
+                    {vencimientoSugerido && <span className="text-xs text-zinc-500">· vence {vencimientoSugerido.split("-").reverse().join("/")} (desde la fecha de factura)</span>}
+                    {vencimientoManual && vencimientoSugerido && fechaVencimiento !== vencimientoSugerido && (
+                      <button type="button" onClick={() => { setVencimientoManual(false); setFechaVencimiento(vencimientoSugerido); }} className="text-xs text-orange-600 hover:underline">Usar el calculado</button>
+                    )}
+                    {!editandoPlan && <button type="button" onClick={() => setEditandoPlan(true)} className="ml-auto text-xs font-medium text-orange-600 hover:underline">{planPago.condicion_pago ? "Cambiar" : "Indicar"}</button>}
+                  </div>
+                  {editandoPlan && (
+                    <div className="mt-2 space-y-2">
+                      <CondicionPagoEditor value={planPago} onChange={setPlanPago} compacto />
+                      {!planProveedor?.condicion_pago && <p className="text-[11px] text-zinc-500">El proveedor no lo tiene cargado: al guardar la factura se le guarda también a él.</p>}
+                      <div className="flex justify-end"><button type="button" onClick={() => setEditandoPlan(false)} className="rounded-lg border border-zinc-200 px-3 py-1 text-xs dark:border-zinc-700">Listo</button></div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* CAE */}
               <div>
@@ -1700,50 +1702,15 @@ export default function CargarFacturaOC({
         </div>
       </div>
 
-      {nuevoProveedorOpen && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-black/65 p-4">
-          <div className="my-6 w-full max-w-2xl rounded-xl bg-white shadow-2xl dark:bg-zinc-900">
-            <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4 dark:border-zinc-700">
-              <div>
-                <h3 className="font-bold text-zinc-900 dark:text-white">Nuevo proveedor</h3>
-                <p className="text-xs text-zinc-500">Se guardará y quedará seleccionado en esta factura.</p>
-              </div>
-              <button type="button" onClick={() => setNuevoProveedorOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X size={18} /></button>
-            </div>
-
-            <div className="max-h-[72vh] overflow-y-auto p-6">
-              {nuevoProveedorError && <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400">{nuevoProveedorError}</div>}
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Razón social *</label><input value={nuevoProveedor.razon_social} onChange={e => setNuevoProveedor({ ...nuevoProveedor, razon_social: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-
-                <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Nombre de fantasía <span className="font-normal text-zinc-400">(como figura en la lista de costos, ej. "Segutécnica")</span></label><input value={nuevoProveedor.nombre_fantasia} onChange={e => setNuevoProveedor({ ...nuevoProveedor, nombre_fantasia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">CUIT *</label><div className="mt-1 flex gap-2"><input value={nuevoProveedor.cuit} onChange={e => setNuevoProveedor({ ...nuevoProveedor, cuit: e.target.value })} placeholder="XX-XXXXXXXX-X" className="min-w-0 flex-1 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-mono dark:border-zinc-600 dark:bg-zinc-800" /><button type="button" onClick={() => lookupNuevoProveedor()} disabled={cuitLoading} className="inline-flex items-center gap-1 rounded-lg border border-blue-300 px-3 text-xs font-semibold text-blue-600 hover:bg-blue-50 disabled:opacity-50">{cuitLoading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />} AFIP</button></div></div>
-                <div><label className="text-xs font-medium text-zinc-500">Condición IVA</label><select value={nuevoProveedor.condicion_iva} onChange={e => setNuevoProveedor({ ...nuevoProveedor, condicion_iva: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"><option value="RI">Responsable Inscripto</option><option value="Monotributo">Monotributo</option><option value="Exento">Exento</option></select></div>
-                <div><label className="text-xs font-medium text-zinc-500">Rubro</label><input value={nuevoProveedor.rubro} onChange={e => setNuevoProveedor({ ...nuevoProveedor, rubro: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">Email</label><input type="email" value={nuevoProveedor.email} onChange={e => setNuevoProveedor({ ...nuevoProveedor, email: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">Teléfono</label><input value={nuevoProveedor.telefono} onChange={e => setNuevoProveedor({ ...nuevoProveedor, telefono: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">Dirección</label><input value={nuevoProveedor.direccion} onChange={e => setNuevoProveedor({ ...nuevoProveedor, direccion: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">Localidad</label><input value={nuevoProveedor.localidad} onChange={e => setNuevoProveedor({ ...nuevoProveedor, localidad: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">Provincia</label><input value={nuevoProveedor.provincia} onChange={e => setNuevoProveedor({ ...nuevoProveedor, provincia: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">Forma de pago</label><select value={nuevoProveedor.forma_pago} onChange={e => setNuevoProveedor({ ...nuevoProveedor, forma_pago: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800"><option value="Transferencia">Transferencia</option><option value="Tarjeta">Tarjeta</option><option value="Cheque">Cheque</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option></select></div>
-                <div><label className="text-xs font-medium text-zinc-500">Días cuenta corriente</label><input type="number" value={nuevoProveedor.dias_cuenta_corriente} onChange={e => setNuevoProveedor({ ...nuevoProveedor, dias_cuenta_corriente: Number(e.target.value) || 0 })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">Límite de crédito</label><input type="number" value={nuevoProveedor.limite_credito} onChange={e => setNuevoProveedor({ ...nuevoProveedor, limite_credito: Number(e.target.value) || 0 })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-
-                <div className="sm:col-span-2 mt-2 border-t border-zinc-200 pt-4 dark:border-zinc-700"><h4 className="text-sm font-semibold">Datos bancarios <span className="font-normal text-zinc-400">(opcionales)</span></h4></div>
-                <div><label className="text-xs font-medium text-zinc-500">CBU / CVU</label><input value={nuevoProveedor.cbu} onChange={e => setNuevoProveedor({ ...nuevoProveedor, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm font-mono dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">Alias</label><input value={nuevoProveedor.alias_bancario} onChange={e => setNuevoProveedor({ ...nuevoProveedor, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div><label className="text-xs font-medium text-zinc-500">N° de cuenta</label><input value={nuevoProveedor.numero_cuenta} onChange={e => setNuevoProveedor({ ...nuevoProveedor, numero_cuenta: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-                <div className="sm:col-span-2"><label className="text-xs font-medium text-zinc-500">Notas</label><textarea rows={2} value={nuevoProveedor.notas} onChange={e => setNuevoProveedor({ ...nuevoProveedor, notas: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-600 dark:bg-zinc-800" /></div>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-3 border-t border-zinc-200 px-6 py-4 dark:border-zinc-700">
-              <button type="button" onClick={() => setNuevoProveedorOpen(false)} className="rounded-lg border border-zinc-300 px-4 py-2 text-sm dark:border-zinc-600">Cancelar</button>
-              <button type="button" onClick={handleCrearProveedor} disabled={nuevoProveedorSaving} className="inline-flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50">{nuevoProveedorSaving && <Loader2 size={15} className="animate-spin" />}{nuevoProveedorSaving ? "Creando..." : "Crear y seleccionar"}</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ProveedorFormModal
+        open={nuevoProveedorOpen}
+        proveedorId={null}
+        inicial={nuevoProveedorInicial}
+        consultarArcaAlAbrir
+        subtitulo="Se guarda y queda seleccionado en esta factura."
+        onClose={() => setNuevoProveedorOpen(false)}
+        onSaved={proveedorCreado}
+      />
     </div>
   );
 }

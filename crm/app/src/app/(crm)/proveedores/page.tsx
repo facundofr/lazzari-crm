@@ -10,8 +10,6 @@ import {
   calcularSaldosProveedores, ultimaCompraPorProveedor, linkWhatsApp, textoLocalidad,
   type FacturaCompraSaldo, type MovimientoPagoFC, type MovimientoNC, type OrdenCompraFecha, type SaldoProveedor,
 } from "@/lib/saldo-proveedores";
-import { LeerDocumentoImpositivo } from "@/components/leer-documento-impositivo";
-import type { DatosImpositivos } from "@/lib/documento-impositivo";
 import { mockProveedores, mockListasPrecios } from "@/lib/mock-data";
 import { supabase } from "@/lib/supabase/client";
 import type { Proveedor, ListaPrecios, ListaPreciosItem, ListaPreciosRegla } from "@/lib/types";
@@ -20,37 +18,16 @@ import {
   Search, Download, ListOrdered,
   AlertTriangle, ChevronDown, ChevronRight, ChevronUp, Loader2, X, Pencil, Tag,
   Sparkles, FileUp, Check, Trash2,
-  Maximize2, Minimize2, Power, Copy, MessageCircle, Plus,
+  Maximize2, Minimize2, Power, Copy, MessageCircle,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Modal } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 import { useUser } from "@/lib/auth-context";
-import { canonicalCondicionIva } from "@/lib/fiscal-condition";
-
-const CLASIFICACION_TAGS = [
-  "Buen precio", "Precio alto", "Entrega rapida", "Entrega lenta",
-  "Buena calidad", "Stock permanente", "Importador", "Nacional",
-] as const;
-
-const PROVINCIAS_ARGENTINA = [
-  "Buenos Aires", "CABA", "Catamarca", "Chaco", "Chubut", "Córdoba",
-  "Corrientes", "Entre Ríos", "Formosa", "Jujuy", "La Pampa", "La Rioja",
-  "Mendoza", "Misiones", "Neuquén", "Río Negro", "Salta", "San Juan",
-  "San Luis", "Santa Cruz", "Santa Fe", "Santiago del Estero",
-  "Tierra del Fuego", "Tucumán",
-];
-
-const TAG_COLORS: Record<string, string> = {
-  "Buen precio": "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950 dark:text-emerald-400",
-  "Entrega rapida": "bg-green-50 text-green-700 ring-1 ring-green-200 dark:bg-green-950 dark:text-green-400",
-  "Buena calidad": "bg-teal-50 text-teal-700 ring-1 ring-teal-200 dark:bg-teal-950 dark:text-teal-400",
-  "Stock permanente": "bg-lime-50 text-lime-700 ring-1 ring-lime-200 dark:bg-lime-950 dark:text-lime-400",
-  "Precio alto": "bg-red-50 text-red-700 ring-1 ring-red-200 dark:bg-red-950 dark:text-red-400",
-  "Entrega lenta": "bg-amber-50 text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950 dark:text-amber-400",
-  "Importador": "bg-blue-50 text-blue-700 ring-1 ring-blue-200 dark:bg-blue-950 dark:text-blue-400",
-  "Nacional": "bg-sky-50 text-sky-700 ring-1 ring-sky-200 dark:bg-sky-950 dark:text-sky-400",
-};
+import { mostrarWhatsApp } from "@/lib/whatsapp-ar";
+import { WhatsAppInput } from "@/components/ui/whatsapp-input";
+import { textoCondicionPago, type PlanPago } from "@/lib/condicion-pago";
+import { ProveedorFormModal, CONCEPTOS_RG830, TAG_COLORS, type ProveedorForm } from "@/components/proveedor-form-modal";
 
 function ClasificacionTag({ tag }: { tag: string }) {
   const color = TAG_COLORS[tag] ?? "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";
@@ -110,6 +87,12 @@ function mapSupabaseProveedor(row: Record<string, unknown>): Proveedor {
     toleranciaPrecioPct: row.tolerancia_precio_pct != null ? Number(row.tolerancia_precio_pct) : 1,
     esPersonalizador: (row.es_personalizador as boolean) ?? false,
     tipoPersonalizacion: (row.tipo_personalizacion as string) ?? "",
+    administracionNombre: (row.administracion_nombre as string) ?? "",
+    planPago: {
+      condicion_pago: row.condicion_pago as string | null, dias_pago: row.dias_pago as number | null, dias_pago_hasta: row.dias_pago_hasta as number | null,
+      medios_pago: (row.medios_pago as string[] | null) ?? [], medio_pago_preferido: row.medio_pago_preferido as string | null,
+      plazo_cheque_dias: row.plazo_cheque_dias as number | null, descuento_pronto_pago: row.descuento_pronto_pago != null ? Number(row.descuento_pronto_pago) : null,
+    } as PlanPago,
   } as Proveedor & { conceptoRetencionGanancias: string; alicuotaGanancias: number | null; exclusionRetencion: boolean; exclusionRetencionDesde: string | null; exclusionRetencionHasta: string | null; exclusionRetencionCert: string | null };
 }
 
@@ -147,36 +130,6 @@ function mapSupabaseLista(row: Record<string, unknown>): ListaPrecios {
   };
 }
 
-const CONCEPTOS_RG830: Record<string, string> = {
-  compraventa_bienes: "Compraventa de bienes",
-  servicios: "Servicios y locaciones",
-  honorarios: "Honorarios profesionales",
-  alquileres_inmuebles: "Alquileres de inmuebles",
-  alquileres_muebles: "Alquileres de muebles",
-  intereses_financieros: "Intereses (financieras)",
-  intereses_otros: "Intereses (otros)",
-  transporte: "Transporte de carga",
-  fletes: "Fletes",
-  comisiones: "Comisiones",
-  publicidad: "Publicidad y propaganda",
-  seguros: "Seguros",
-};
-
-// Estilos comunes del alta/edición: mismo alto y mismo espacio en todos los campos
-const INPUT_CLS = "mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800";
-const LABEL_CLS = "text-xs font-medium text-zinc-500";
-
-function SeccionModal({ titulo, extra, children }: { titulo: string; extra?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <section>
-      <div className="mb-3 flex items-center justify-between gap-3 border-b border-zinc-100 pb-1.5 dark:border-zinc-800">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{titulo}</h3>
-        {extra}
-      </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{children}</div>
-    </section>
-  );
-}
 
 function BotonCopiar({ valor, onCopiado }: { valor: string; onCopiado?: () => void }) {
   return (
@@ -188,58 +141,7 @@ function BotonCopiar({ valor, onCopiado }: { valor: string; onCopiado?: () => vo
   );
 }
 
-function normalizarProvincia(p: string): string {
-  const base = (x: string) => x.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-  const b = base(p);
-  if (/ciudad autonoma|capital federal|^caba$/.test(b)) return "CABA";
-  return PROVINCIAS_ARGENTINA.find((x) => base(x) === b) || p;
-}
-
-const CONDICION_IVA_LABEL: Record<string, string> = { RI: "Responsable Inscripto", Monotributo: "Monotributo", Exento: "Exento", CF: "Consumidor Final" };
-
 type FiltroRapido = "todos" | "deuda" | "transportes" | "talleres" | "inactivos";
-type ContactoExtra = { tipo: "email" | "telefono"; etiqueta: string; valor: string };
-type ContactoExistente = { id: string; nombre: string; cargo: string; email: string; telefono: string; whatsapp: string };
-
-const emptyForm = {
-  razon_social: "",
-  nombre_fantasia: "",
-  cuit: "",
-  condicion_iva: "RI",
-  email: "",
-  telefono: "",
-  direccion: "",
-  localidad: "",
-  provincia: "",
-  banco: "",
-  cbu: "",
-  alias_bancario: "",
-  numero_cuenta: "",
-  titular_cuenta: "",
-  cuit_titular_cuenta: "",
-  tipo_cuenta: "",
-  rubro: "",
-  forma_pago: "Transferencia",
-  dias_cuenta_corriente: 30,
-  limite_credito: 0,
-  notas: "",
-  clasificacion_tags: [] as string[],
-  marcas: "",
-  clasificacion_nota: "",
-  es_transportista: false,
-  concepto_retencion_ganancias: "" as string,
-  alicuota_ganancias: null as number | null,
-  exclusion_retencion: false,
-  exclusion_retencion_desde: null as string | null,
-  exclusion_retencion_hasta: null as string | null,
-  exclusion_retencion_cert: null as string | null,
-  // Talles especiales y tolerancia de precio NO van acá: se editan en Compras → Limpieza de OC
-  // (reglas del proveedor). Así el alta/edición nunca pisa esos valores.
-  // Personalización (bordados / estampados)
-  es_personalizador: false,
-  tipo_personalizacion: "" as "" | "bordado" | "estampado" | "ambos",
-};
-
 const emptyRuleForm = {
   tipo: "global" as ListaPreciosRegla["tipo"],
   nombre: "",
@@ -279,18 +181,8 @@ export default function ProveedoresPage() {
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);
-  const [modalFullscreen, setModalFullscreen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState(emptyForm);
-  const [formError, setFormError] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [contactosExtra, setContactosExtra] = useState<ContactoExtra[]>([]);
-  const [contactosExistentes, setContactosExistentes] = useState<ContactoExistente[]>([]);
-  // Si al abrir el proveedor era transporte Y taller a la vez, se ofrece "Los dos" para no perder ninguna marca.
-  const [ambosTiposAlCargar, setAmbosTiposAlCargar] = useState(false);
-  // editingId actual, para descartar respuestas de contactos que llegan tarde (si se abrió otro proveedor).
-  const editingIdRef = useRef<string | null>(null);
-  editingIdRef.current = editingId;
+  const [modalInicial, setModalInicial] = useState<Partial<ProveedorForm> | undefined>(undefined);
 
   // Auto-open create modal from ?crear= query param
   useEffect(() => {
@@ -298,9 +190,7 @@ export default function ProveedoresPage() {
     const crearNombre = params.get("crear");
     if (params.has("crear")) {
       setEditingId(null);
-      setAmbosTiposAlCargar(false);
-      setForm({ ...emptyForm, razon_social: crearNombre || "", es_transportista: params.get("tipo") === "transportista" });
-      setFormError("");
+      setModalInicial({ razon_social: crearNombre || "", es_transportista: params.get("tipo") === "transportista" });
       setModalOpen(true);
       window.history.replaceState({}, "", window.location.pathname);
     }
@@ -346,39 +236,6 @@ export default function ProveedoresPage() {
   const [aiNewProvSaving, setAiNewProvSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
-  const [cuitLoading, setCuitLoading] = useState(false);
-
-  async function handleCuitLookup() {
-    const cuit = form.cuit.replace(/\D/g, "");
-    if (cuit.length !== 11) { toast.warning("CUIT debe tener 11 digitos"); return; }
-    setCuitLoading(true);
-    try {
-      const res = await fetch(`/api/cuit-lookup?cuit=${cuit}`);
-      if (!res.ok) { toast.error("No se pudo consultar el CUIT"); return; }
-      const data = await res.json();
-      if (data.error) { toast.error(data.error); return; }
-      setForm((prev) => ({
-        ...prev,
-        razon_social: data.razon_social || prev.razon_social,
-        condicion_iva: data.condicion_iva || prev.condicion_iva,
-        direccion: data.direccion || prev.direccion,
-        localidad: data.localidad || prev.localidad,
-        // Conservar la provincia histórica/comercial si ya estaba cargada;
-        // la consulta de ARCA puede corresponder a otra sede fiscal.
-        provincia: prev.provincia || data.provincia || "",
-        concepto_retencion_ganancias: data.retencion_ganancias?.concepto || prev.concepto_retencion_ganancias,
-        alicuota_ganancias: data.retencion_ganancias?.alicuota_inscripto ?? prev.alicuota_ganancias,
-      }));
-      if (!data.condicion_iva) {
-        toast.warning("ARCA no pudo determinar la condicion IVA. Verificalo manualmente.");
-      } else {
-        const retInfo = data.retencion_ganancias ? ` | Ret. Gan.: ${data.retencion_ganancias.alicuota_inscripto}% (${data.retencion_ganancias.concepto_label})` : "";
-        toast.success(`Datos cargados desde AFIP — ${data.condicion_iva === "RI" ? "Resp. Inscripto" : data.condicion_iva}${retInfo}`);
-      }
-    } catch { toast.error("Error al consultar CUIT"); }
-    finally { setCuitLoading(false); }
-  }
-
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
@@ -493,7 +350,7 @@ export default function ProveedoresPage() {
     }
     setSavingProveedorContacto(true);
     try {
-      const payload = { nombre: proveedorContactoForm.nombre.trim(), cargo: proveedorContactoForm.cargo.trim() || null, email: proveedorContactoForm.email.trim() || null, telefono: proveedorContactoForm.telefono.trim() || null, whatsapp: proveedorContactoForm.whatsapp.trim() || null, notas: proveedorContactoForm.notas.trim() || null, principal: proveedorContactoForm.principal };
+      const payload = { nombre: proveedorContactoForm.nombre.trim(), cargo: "Ventas", email: proveedorContactoForm.email.trim() || null, telefono: proveedorContactoForm.telefono.trim() || null, whatsapp: proveedorContactoForm.whatsapp.trim() || null, notas: proveedorContactoForm.notas.trim() || null, principal: proveedorContactoForm.principal };
       const q = (supabase as any).from("contactos");
       const result = proveedorContactoForm.id
         ? await q.update(payload).eq("id", proveedorContactoForm.id).eq("entity_id", selectedProv.id)
@@ -694,155 +551,14 @@ export default function ProveedoresPage() {
 
   function openCreate() {
     setEditingId(null);
-    setAmbosTiposAlCargar(false);
-    setForm(emptyForm);
-    setFormError("");
-    setContactosExtra([]);
-    setContactosExistentes([]);
+    setModalInicial(undefined);
     setModalOpen(true);
-  }
-
-  async function cargarContactosExistentes(proveedorId: string) {
-    const { data, error } = await (supabase as any).from("contactos").select("id, nombre, cargo, email, telefono, whatsapp")
-      .eq("entity_type", "proveedor").eq("entity_id", proveedorId).order("principal", { ascending: false });
-    if (editingIdRef.current !== proveedorId) return; // se abrió otro proveedor mientras tanto
-    if (error) { console.error("Error cargando contactos:", error); return; }
-    setContactosExistentes((data || []).map((c: Record<string, unknown>) => ({
-      id: c.id as string, nombre: String(c.nombre ?? ""), cargo: String(c.cargo ?? ""),
-      email: String(c.email ?? ""), telefono: String(c.telefono ?? ""), whatsapp: String(c.whatsapp ?? ""),
-    })));
-  }
-
-  // Datos leídos con IA de un papel impositivo: completa lo vacío y pisa condición IVA / exclusión
-  function aplicarDocumentoImpositivo(d: DatosImpositivos) {
-    const next = { ...form };
-    const cambios: string[] = [];
-    const vacio = (v: unknown) => !String(v ?? "").trim();
-    if (d.cuit && vacio(next.cuit)) { next.cuit = d.cuit; cambios.push("CUIT"); }
-    if (d.razon_social && vacio(next.razon_social)) { next.razon_social = d.razon_social; cambios.push("razón social"); }
-    if (d.condicion_iva && d.condicion_iva !== next.condicion_iva) {
-      next.condicion_iva = d.condicion_iva;
-      cambios.push(`condición IVA: ${CONDICION_IVA_LABEL[d.condicion_iva] || d.condicion_iva}`);
-    }
-    if (d.direccion && vacio(next.direccion)) { next.direccion = d.direccion; cambios.push("dirección"); }
-    if (d.localidad && vacio(next.localidad)) { next.localidad = d.localidad; cambios.push("localidad"); }
-    if (d.provincia && vacio(next.provincia)) { next.provincia = normalizarProvincia(d.provincia); cambios.push("provincia"); }
-    if (d.tipo_documento === "exclusion_ganancias") {
-      next.exclusion_retencion = true;
-      if (d.exclusion_desde) next.exclusion_retencion_desde = d.exclusion_desde;
-      if (d.exclusion_hasta) next.exclusion_retencion_hasta = d.exclusion_hasta;
-      if (d.numero_certificado) next.exclusion_retencion_cert = d.numero_certificado;
-      cambios.push(`exclusión de retención de Ganancias${d.exclusion_hasta ? ` hasta ${formatDate(d.exclusion_hasta)}` : ""}`);
-    }
-    setForm(next);
-    toast.info(cambios.length ? `Del documento se cargó: ${cambios.join(", ")}. Revisalo y guardá.` : "El documento no trajo datos nuevos para este proveedor.");
   }
 
   function openEdit(p: Proveedor) {
     setEditingId(p.id);
-    setAmbosTiposAlCargar(Boolean(p.esTransportista) && Boolean((p as any).esPersonalizador));
-    setForm({
-      razon_social: p.razonSocial, nombre_fantasia: (p as any).nombreFantasia ?? "", cuit: p.cuit, condicion_iva: p.condicionIva,
-      email: p.email, telefono: p.telefono, direccion: p.direccion,
-      localidad: p.localidad, provincia: p.provincia, rubro: p.rubro,
-      banco: (p as any).banco ?? "", cbu: p.cbu ?? "", alias_bancario: p.aliasBancario ?? "", numero_cuenta: p.numeroCuenta ?? "",
-      titular_cuenta: (p as any).titularCuenta ?? "", cuit_titular_cuenta: p.cuit ?? "", tipo_cuenta: (p as any).tipoCuenta ?? "",
-      forma_pago: p.formaPago, dias_cuenta_corriente: p.diasCuentaCorriente,
-      limite_credito: p.limiteCredito, notas: p.notas,
-      clasificacion_tags: p.clasificacionTags ?? [], marcas: p.marcas ?? "",
-      clasificacion_nota: p.clasificacionNota ?? "",
-      es_transportista: Boolean(p.esTransportista),
-      concepto_retencion_ganancias: (p as any).conceptoRetencionGanancias ?? "",
-      alicuota_ganancias: (p as any).alicuotaGanancias ?? null,
-      exclusion_retencion: (p as any).exclusionRetencion ?? false,
-      exclusion_retencion_desde: (p as any).exclusionRetencionDesde ?? null,
-      exclusion_retencion_hasta: (p as any).exclusionRetencionHasta ?? null,
-      exclusion_retencion_cert: (p as any).exclusionRetencionCert ?? null,
-      es_personalizador: Boolean((p as any).esPersonalizador),
-      tipo_personalizacion: (p as any).tipoPersonalizacion ?? "",
-    });
-    setFormError("");
-    setContactosExtra([]);
-    setContactosExistentes([]);
+    setModalInicial(undefined);
     setModalOpen(true);
-    cargarContactosExistentes(p.id);
-  }
-
-  async function handleSave() {
-    if (!form.razon_social.trim() || !form.cuit.trim()) {
-      setFormError("Razon social y CUIT son obligatorios");
-      return;
-    }
-    const sociedadId = sociedadActiva?.id;
-    if (!sociedadId) {
-      setFormError("Seleccioná una sociedad antes de guardar el proveedor");
-      return;
-    }
-    const condicionIva = canonicalCondicionIva(form.condicion_iva);
-    if (!condicionIva) {
-      setFormError("La condición IVA no es válida");
-      return;
-    }
-    // Para pagos y eCheq la identidad fiscal siempre es la del proveedor.
-    // Conservamos la columna histórica por compatibilidad, pero nunca pedimos
-    // ni guardamos un CUIT bancario distinto.
-    const proveedorPayload = {
-      ...form,
-      condicion_iva: condicionIva,
-      cuit_titular_cuenta: form.cuit.trim(),
-      tipo_personalizacion: form.es_personalizador ? (form.tipo_personalizacion || "ambos") : null,
-    };
-    setSaving(true);
-    setFormError("");
-    try {
-      let proveedorId = editingId;
-      if (editingId) {
-        // talles_especiales y tolerancia_precio_pct no viajan: se conservan tal cual están
-        let updateQuery = supabase.from("proveedores").update(proveedorPayload as any).eq("id", editingId);
-        updateQuery = updateQuery.eq("sociedad_id" as any, sociedadId);
-        const { error } = await updateQuery;
-        if (error) throw error;
-      } else {
-        const insertData = { ...proveedorPayload, talles_especiales: [], tolerancia_precio_pct: 1 } as any;
-        insertData.sociedad_id = sociedadId;
-        const { data: creado, error } = await supabase.from("proveedores").insert(insertData).select("id").single();
-        if (error) throw error;
-        proveedorId = (creado as { id: string } | null)?.id ?? null;
-      }
-      // Emails y celulares adicionales → tabla contactos
-      const extras = contactosExtra.filter((c) => c.valor.trim());
-      if (extras.length > 0 && proveedorId) {
-        const { error: contactosError } = await (supabase as any).from("contactos").insert(extras.map((c) => ({
-          entity_type: "proveedor",
-          entity_id: proveedorId,
-          nombre: c.etiqueta.trim() || (c.tipo === "email" ? "Email adicional" : "Celular adicional"),
-          email: c.tipo === "email" ? c.valor.trim() : null,
-          telefono: c.tipo === "telefono" ? c.valor.trim() : null,
-          principal: false,
-        })));
-        if (contactosError) {
-          // El proveedor ya quedó guardado: seguimos en modo edición para no duplicarlo al reintentar
-          setEditingId(proveedorId);
-          setFormError(`El proveedor se guardó, pero no se pudieron guardar los contactos adicionales: ${contactosError.message}`);
-          toast.error("No se pudieron guardar los contactos adicionales");
-          await fetchData();
-          return;
-        }
-      }
-      setContactosExtra([]);
-      setModalOpen(false);
-      setSelectedProv(null);
-      await fetchData();
-    } catch (err: unknown) {
-      const msg = err instanceof Error
-        ? err.message
-        : typeof err === "object" && err !== null && "message" in err
-          ? String((err as { message: string }).message)
-          : "Error al guardar";
-      setFormError(msg);
-    } finally {
-      setSaving(false);
-    }
   }
 
   async function handleRuleSave(listaId: string) {
@@ -1363,15 +1079,19 @@ export default function ProveedoresPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div><p className="text-xs text-zinc-500">Rubro</p><p className="text-sm font-medium">{selectedProv.rubro || "—"}</p></div>
                 <div><p className="text-xs text-zinc-500">Condicion IVA</p><p className="text-sm font-medium">{selectedProv.condicionIva}</p></div>
-                <div><p className="text-xs text-zinc-500">Email</p><p className="text-sm font-medium">{selectedProv.email ? <a href={`mailto:${selectedProv.email}`} className="hover:text-orange-500">{selectedProv.email}</a> : "—"}</p></div>
-                <div><p className="text-xs text-zinc-500">Celular</p><p className="text-sm font-medium">{selectedProv.telefono ? <a href={`tel:${selectedProv.telefono}`} className="hover:text-orange-500">{selectedProv.telefono}</a> : "—"}</p></div>
+                {(selectedProv as any).administracionNombre && <div className="col-span-2"><p className="text-xs text-zinc-500">Administración</p><p className="text-sm font-medium">{(selectedProv as any).administracionNombre}</p></div>}
+                <div><p className="text-xs text-zinc-500">Mail de administración (facturas y cobros)</p><p className="text-sm font-medium">{selectedProv.email ? <a href={`mailto:${selectedProv.email}`} className="hover:text-orange-500">{selectedProv.email}</a> : "—"}</p></div>
+                <div><p className="text-xs text-zinc-500">WhatsApp de administración</p><p className="text-sm font-medium">{selectedProv.telefono ? <a href={linkWhatsApp(selectedProv.telefono) || `tel:${selectedProv.telefono}`} target="_blank" rel="noopener noreferrer" className="hover:text-orange-500">{mostrarWhatsApp(selectedProv.telefono)}</a> : "—"}</p></div>
                 <div className="col-span-2"><p className="text-xs text-zinc-500">Dirección</p><p className="text-sm font-medium">{[String(selectedProv.direccion || "").trim(), textoLocalidad(selectedProv.localidad, selectedProv.provincia)].filter(Boolean).join(", ") || "—"}</p></div>
               </div>
               <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                 <h3 className="text-sm font-semibold mb-3">Comercial</h3>
                 <div className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2"><p className="text-xs text-zinc-500">Cómo se le paga</p><p className="text-sm font-medium">{textoCondicionPago((selectedProv as any).planPago) || <span className="text-amber-600">Sin indicar — editá el proveedor para cargarlo</span>}</p></div>
+                  {!(selectedProv as any).planPago?.condicion_pago && <>
                   <div><p className="text-xs text-zinc-500">Forma de pago</p><p className="text-sm font-medium">{selectedProv.formaPago}</p></div>
                   <div><p className="text-xs text-zinc-500">Dias CC</p><p className="text-sm font-medium">{selectedProv.diasCuentaCorriente}</p></div>
+                  </>}
                   <div><p className="text-xs text-zinc-500">Limite credito</p><p className="text-sm font-medium">{formatCurrency(selectedProv.limiteCredito, "ARS")}</p></div>
                   <div><p className="text-xs text-zinc-500">Saldo a pagar</p><p className={`text-sm font-medium ${saldoDe(selectedProv.id).ARS > 0.005 ? "text-red-600" : "text-zinc-500"}`}>{formatCurrency(saldoDe(selectedProv.id).ARS, "ARS")}{Math.abs(saldoDe(selectedProv.id).USD) > 0.005 && <span className="block text-xs">{formatCurrency(saldoDe(selectedProv.id).USD, "USD")}</span>}</p><a href={`/finanzas?tab=cc_proveedores&proveedor=${selectedProv.id}`} className="text-xs font-medium text-orange-500 hover:text-orange-600">Ver cuenta corriente →</a></div>
                   {((selectedProv as any).conceptoRetencionGanancias || (selectedProv as any).alicuotaGanancias != null) && (
@@ -1397,15 +1117,15 @@ export default function ProveedoresPage() {
                 </div>
               )}
               <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                <div className="flex items-center justify-between mb-3"><h3 className="text-sm font-semibold">Contactos comerciales</h3><button type="button" onClick={() => startProveedorContacto()} className="rounded-lg bg-orange-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-orange-600">Agregar contacto</button></div>
+                <div className="flex items-center justify-between mb-3"><div><h3 className="text-sm font-semibold">Vendedores</h3><p className="text-[11px] text-zinc-400">A ellos se les mandan las OC. Administración va arriba, en los datos del proveedor.</p></div><button type="button" onClick={() => startProveedorContacto()} className="rounded-lg bg-orange-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-orange-600">Agregar vendedor</button></div>
                 {editingProveedorContacto && <div className="mb-3 rounded-lg border border-orange-200 bg-orange-50/50 p-3 space-y-2 dark:border-orange-900/40 dark:bg-orange-900/10">
-                  <div className="grid grid-cols-2 gap-2"><input placeholder="Nombre y apellido *" value={proveedorContactoForm.nombre} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, nombre: e.target.value }))} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /><input placeholder="Cargo" value={proveedorContactoForm.cargo} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, cargo: e.target.value }))} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-                  <div className="grid grid-cols-2 gap-2"><input type="email" placeholder="Email" value={proveedorContactoForm.email} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, email: e.target.value }))} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /><input placeholder="WhatsApp / teléfono" value={proveedorContactoForm.whatsapp} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, whatsapp: e.target.value }))} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+                  <div className="grid grid-cols-2 gap-2"><input placeholder="Nombre del vendedor *" value={proveedorContactoForm.nombre} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, nombre: e.target.value }))} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /><input type="email" placeholder="Mail comercial (ventas)" value={proveedorContactoForm.email} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, email: e.target.value }))} className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+                  <div><p className="mb-1 text-xs text-zinc-500">WhatsApp del vendedor</p><WhatsAppInput value={proveedorContactoForm.whatsapp || proveedorContactoForm.telefono} onChange={(v) => setProveedorContactoForm((p) => ({ ...p, whatsapp: v, telefono: "" }))} /></div>
                   <textarea placeholder="Notas" rows={2} value={proveedorContactoForm.notas} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, notas: e.target.value }))} className="w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
                   <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={proveedorContactoForm.principal} onChange={(e) => setProveedorContactoForm((p) => ({ ...p, principal: e.target.checked }))} /> Contacto principal</label>
                   <div className="flex justify-end gap-2"><button type="button" onClick={() => setEditingProveedorContacto(false)} className="rounded border px-2 py-1 text-xs">Cancelar</button><button type="button" disabled={savingProveedorContacto || !proveedorContactoForm.nombre.trim()} onClick={saveProveedorContacto} className="rounded bg-orange-500 px-2 py-1 text-xs text-white disabled:opacity-50">Guardar</button></div>
                 </div>}
-                {selectedProv.contactos?.length ? <div className="space-y-2">{selectedProv.contactos.map((c: any) => <div key={c.id} className="flex items-start justify-between rounded-lg bg-zinc-50 p-2.5 dark:bg-zinc-800"><div><p className="text-sm font-medium">{c.nombre} {c.principal && <span className="text-[10px] text-orange-600">Principal</span>}</p><p className="text-xs text-zinc-500">{[c.cargo, c.email, c.whatsapp || c.telefono].filter(Boolean).join(" · ") || "Sin datos"}</p></div><div className="flex gap-1"><button type="button" onClick={() => startProveedorContacto(c)} className="rounded p-1 text-zinc-400 hover:text-orange-500"><Pencil className="h-3.5 w-3.5" /></button><button type="button" onClick={() => deleteProveedorContacto(c.id)} className="rounded p-1 text-zinc-400 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button></div></div>)}</div> : <p className="text-sm italic text-zinc-400">Sin contactos registrados</p>}
+                {selectedProv.contactos?.length ? <div className="space-y-2">{selectedProv.contactos.map((c: any) => <div key={c.id} className="flex items-start justify-between rounded-lg bg-zinc-50 p-2.5 dark:bg-zinc-800"><div><p className="text-sm font-medium">{c.nombre} {c.principal && <span className="text-[10px] text-orange-600">Principal</span>}</p><p className="text-xs text-zinc-500">{[c.email, (c.whatsapp || c.telefono) ? `WhatsApp ${mostrarWhatsApp(c.whatsapp || c.telefono)}` : ""].filter(Boolean).join(" · ") || "Sin datos"}</p></div><div className="flex gap-1"><button type="button" onClick={() => startProveedorContacto(c)} className="rounded p-1 text-zinc-400 hover:text-orange-500"><Pencil className="h-3.5 w-3.5" /></button><button type="button" onClick={() => deleteProveedorContacto(c.id)} className="rounded p-1 text-zinc-400 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button></div></div>)}</div> : <p className="text-sm italic text-zinc-400">Sin contactos registrados</p>}
               </div>
               {(selectedProv.clasificacionTags?.length > 0 || selectedProv.marcas || selectedProv.clasificacionNota) && (
                 <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
@@ -1444,248 +1164,14 @@ export default function ProveedoresPage() {
         </>
       )}
 
-      {/* Create/Edit Modal */}
-      {modalOpen && (
-        <>
-          <div className="fixed inset-0 z-50 bg-black/40" onClick={() => { setModalOpen(false); setModalFullscreen(false); }} />
-          <div className={`fixed z-50 flex flex-col overflow-hidden rounded-2xl bg-white shadow-2xl transition-all dark:bg-zinc-900 ${modalFullscreen ? "inset-2" : "inset-4 m-auto h-fit max-h-[92vh] w-full max-w-4xl"}`}>
-            <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-3 dark:border-zinc-700">
-              <h2 className="text-lg font-bold">{editingId ? "Editar proveedor" : "Nuevo proveedor"}</h2>
-              <div className="flex items-center gap-1">
-                <button onClick={() => setModalFullscreen((value) => !value)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800" title={modalFullscreen ? "Reducir" : "Pantalla completa"}>{modalFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
-                <button onClick={() => { setModalOpen(false); setModalFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100" title="Cerrar"><X className="h-4 w-4" /></button>
-              </div>
-            </div>
-            <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
-              {formError && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{formError}</div>}
-
-              {/* Datos fiscales */}
-              <SeccionModal titulo="Datos fiscales" extra={<LeerDocumentoImpositivo compacto cuitEsperado={form.cuit} onDatos={aplicarDocumentoImpositivo} />}>
-                <div>
-                  <label className={LABEL_CLS}>CUIT *</label>
-                  <div className="mt-1 flex gap-1">
-                    <input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} onBlur={() => { if (form.cuit.replace(/\D/g, "").length === 11 && !form.razon_social) handleCuitLookup(); }} className="h-9 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" placeholder="XX-XXXXXXXX-X" />
-                    <button type="button" onClick={handleCuitLookup} disabled={cuitLoading} className="h-9 rounded-lg bg-blue-500 px-3 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50 whitespace-nowrap" title="Buscar en ARCA" aria-label="Buscar en ARCA">
-                      {cuitLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
-                <div className="lg:col-span-2">
-                  <label className={LABEL_CLS}>Razón social *</label>
-                  <input value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value })} className={INPUT_CLS} />
-                </div>
-                <div className="sm:col-span-2 lg:col-span-3">
-                  <label className={LABEL_CLS}>Nombre de fantasía</label>
-                  <input value={form.nombre_fantasia || ""} onChange={(e) => setForm({ ...form, nombre_fantasia: e.target.value })} placeholder="Ej.: Conoflex" className={INPUT_CLS} />
-                  <p className="mt-1 text-[11px] text-zinc-400">Es el nombre con el que figura en las listas de costos. Si no lo sabés, dejalo vacío: el sistema lo aprende de la primera factura.</p>
-                </div>
-                <div><label className={LABEL_CLS}>Condición IVA</label>
-                  <select value={form.condicion_iva} onChange={(e) => setForm({ ...form, condicion_iva: e.target.value })} className={INPUT_CLS}>
-                    <option value="RI">Responsable Inscripto</option>
-                    <option value="Monotributo">Monotributo</option>
-                    <option value="Exento">Exento</option>
-                    <option value="CF">Consumidor Final</option>
-                  </select>
-                </div>
-                <div><label className={LABEL_CLS}>Rubro</label><input value={form.rubro} onChange={(e) => setForm({ ...form, rubro: e.target.value })} className={INPUT_CLS} /></div>
-                <div><label className={LABEL_CLS}>Dirección</label><input value={form.direccion} onChange={(e) => setForm({ ...form, direccion: e.target.value })} className={INPUT_CLS} /></div>
-                <div><label className={LABEL_CLS}>Localidad</label><input value={form.localidad} onChange={(e) => setForm({ ...form, localidad: e.target.value })} className={INPUT_CLS} /></div>
-                <div><label className={LABEL_CLS}>Provincia</label>
-                  <select value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value })} className={INPUT_CLS}>
-                    <option value="">Seleccionar...</option>
-                    {form.provincia && !PROVINCIAS_ARGENTINA.includes(form.provincia) && <option value={form.provincia}>{form.provincia}</option>}
-                    {PROVINCIAS_ARGENTINA.map((provincia) => <option key={provincia} value={provincia}>{provincia}</option>)}
-                  </select>
-                </div>
-                <div className="flex flex-wrap items-center gap-3 sm:col-span-2 lg:col-span-3">
-                  <span className={LABEL_CLS}>¿Es transporte o taller?</span>
-                  <div role="radiogroup" aria-label="Tipo de proveedor" className="inline-flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
-                    {([
-                      { id: "no", label: "No" },
-                      { id: "transporte", label: "Transporte" },
-                      { id: "taller", label: "Taller" },
-                      ...(ambosTiposAlCargar ? [{ id: "ambos", label: "Los dos" }] : []),
-                    ] as Array<{ id: "no" | "transporte" | "taller" | "ambos"; label: string }>).map((op) => {
-                      const actual = form.es_personalizador && form.es_transportista && ambosTiposAlCargar ? "ambos" : form.es_personalizador ? "taller" : form.es_transportista ? "transporte" : "no";
-                      const elegido = actual === op.id;
-                      return (
-                        <button key={op.id} type="button" role="radio" aria-checked={elegido}
-                          onClick={() => setForm({
-                            ...form,
-                            es_transportista: op.id === "transporte" || op.id === "ambos",
-                            es_personalizador: op.id === "taller" || op.id === "ambos",
-                            tipo_personalizacion: op.id === "taller" || op.id === "ambos" ? (form.tipo_personalizacion || "ambos") : form.tipo_personalizacion,
-                          })}
-                          className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${elegido ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}>
-                          {op.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {form.es_personalizador && (
-                    <select value={form.tipo_personalizacion || "ambos"} onChange={(e) => setForm({ ...form, tipo_personalizacion: e.target.value as typeof form.tipo_personalizacion })}
-                      aria-label="Tipo de taller" className="h-8 rounded-lg border border-zinc-200 bg-white px-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
-                      <option value="bordado">Bordador</option>
-                      <option value="estampado">Estampador</option>
-                      <option value="ambos">Ambos</option>
-                    </select>
-                  )}
-                  <span className="text-[11px] text-zinc-400">
-                    {form.es_personalizador && form.es_transportista ? "Aparece en Personalización y en el catálogo de Transportes." : form.es_personalizador ? "Aparece en Personalización." : form.es_transportista ? "Aparece en el catálogo de Transportes." : ""}
-                  </span>
-                </div>
-              </SeccionModal>
-
-              {/* Contacto */}
-              <SeccionModal titulo="Contacto">
-                <div>
-                  <label className={LABEL_CLS}>Email de facturación</label>
-                  <input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className={INPUT_CLS} />
-                  <button type="button" onClick={() => setContactosExtra((prev) => [...prev, { tipo: "email", etiqueta: "", valor: "" }])} className="mt-1 inline-flex items-center gap-0.5 text-xs font-medium text-orange-600 hover:text-orange-700"><Plus className="h-3 w-3" /> email</button>
-                </div>
-                <div>
-                  <label className={LABEL_CLS}>Celular</label>
-                  <input value={form.telefono} onChange={(e) => setForm({ ...form, telefono: e.target.value })} placeholder="Ej.: 11 5555-1234" className={INPUT_CLS} />
-                  <button type="button" onClick={() => setContactosExtra((prev) => [...prev, { tipo: "telefono", etiqueta: "", valor: "" }])} className="mt-1 inline-flex items-center gap-0.5 text-xs font-medium text-orange-600 hover:text-orange-700"><Plus className="h-3 w-3" /> celular</button>
-                </div>
-                {contactosExtra.length > 0 && (
-                  <div className="space-y-2 sm:col-span-2 lg:col-span-3">
-                    {contactosExtra.map((c, i) => (
-                      <div key={i} className="flex items-center gap-2">
-                        <input value={c.etiqueta} onChange={(e) => setContactosExtra((prev) => prev.map((x, j) => j === i ? { ...x, etiqueta: e.target.value } : x))}
-                          placeholder={c.tipo === "email" ? "Etiqueta (ej. Ventas)" : "Etiqueta (ej. Depósito)"} aria-label="Etiqueta"
-                          className="h-9 w-44 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
-                        <input type={c.tipo === "email" ? "email" : "text"} value={c.valor} onChange={(e) => setContactosExtra((prev) => prev.map((x, j) => j === i ? { ...x, valor: e.target.value } : x))}
-                          placeholder={c.tipo === "email" ? "otro@proveedor.com" : "Celular"} aria-label={c.tipo === "email" ? "Email adicional" : "Celular adicional"}
-                          className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
-                        <button type="button" onClick={() => setContactosExtra((prev) => prev.filter((_, j) => j !== i))} className="rounded p-1.5 text-zinc-400 hover:text-red-500" title="Quitar" aria-label="Quitar"><X className="h-3.5 w-3.5" /></button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {contactosExistentes.length > 0 && (
-                  <div className="sm:col-span-2 lg:col-span-3">
-                    <p className="mb-1 text-[11px] text-zinc-400">Contactos ya cargados (se editan o borran desde la ficha del proveedor):</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {contactosExistentes.map((c) => (
-                        <span key={c.id} className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                          <span className="font-medium">{c.nombre}</span>
-                          {[c.cargo, c.email, c.whatsapp || c.telefono].filter(Boolean).join(" · ")}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </SeccionModal>
-
-              {/* Pago */}
-              <SeccionModal titulo="Pago">
-                <div><label className={LABEL_CLS}>Forma de pago</label>
-                  <select value={form.forma_pago} onChange={(e) => setForm({ ...form, forma_pago: e.target.value })} className={INPUT_CLS}>
-                    <option value="Transferencia">Transferencia</option><option value="Tarjeta">Tarjeta</option><option value="Cheque">Cheque</option><option value="Echeq">Echeq</option><option value="Efectivo">Efectivo</option><option value="Cuenta corriente">Cuenta corriente</option>
-                  </select>
-                </div>
-                <div><label className={LABEL_CLS}>Tiempo de pago (días)</label><input type="number" list="tiempos-pago-proveedor" value={form.dias_cuenta_corriente} onChange={(e) => setForm({ ...form, dias_cuenta_corriente: Number(e.target.value) })} className={INPUT_CLS} /><datalist id="tiempos-pago-proveedor"><option value="0" /><option value="15" /><option value="30" /><option value="45" /><option value="60" /></datalist></div>
-                <div><label className={LABEL_CLS}>Límite de crédito</label><input type="number" value={form.limite_credito} onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })} className={INPUT_CLS} /></div>
-              </SeccionModal>
-
-              {/* Datos bancarios */}
-              <SeccionModal titulo="Datos bancarios" extra={<span className="text-[11px] text-zinc-400">Opcionales</span>}>
-                <div><label className={LABEL_CLS}>Banco</label><select value={(form as any).banco} onChange={(e) => setForm({ ...form, banco: e.target.value } as any)} className={INPUT_CLS}><option value="">Seleccionar...</option>{["Banco Nación","Banco Provincia","Banco Ciudad","Banco Galicia","Banco Santander","Banco BBVA","Banco Macro","Banco HSBC","Banco ICBC","Banco Patagonia","Banco Credicoop","Banco Comafi","Banco Itaú","Banco Supervielle","Banco Columbia","Brubank","Mercado Pago","Ualá","Naranja X","Otro"].map(b => <option key={b} value={b}>{b}</option>)}</select></div>
-                <div><label className={LABEL_CLS}>CBU / CVU</label><input value={form.cbu} onChange={(e) => setForm({ ...form, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className={`${INPUT_CLS} font-mono`} /></div>
-                <div><label className={LABEL_CLS}>Alias</label><input value={form.alias_bancario} onChange={(e) => setForm({ ...form, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className={INPUT_CLS} /></div>
-                <div><label className={LABEL_CLS}>Titular</label><input value={(form as any).titular_cuenta} onChange={(e) => setForm({ ...form, titular_cuenta: e.target.value } as any)} className={INPUT_CLS} /></div>
-                <div><label className={LABEL_CLS}>Tipo de cuenta</label><select value={(form as any).tipo_cuenta} onChange={(e) => setForm({ ...form, tipo_cuenta: e.target.value } as any)} className={INPUT_CLS}><option value="">Seleccionar...</option><option value="CC">Cuenta corriente (CC)</option><option value="CA">Caja de ahorro (CA)</option><option value="CVU">CVU</option></select></div>
-                <div><label className={LABEL_CLS}>N° de cuenta</label><input value={form.numero_cuenta} onChange={(e) => setForm({ ...form, numero_cuenta: e.target.value })} className={INPUT_CLS} /></div>
-                <div className="sm:col-span-2 lg:col-span-3">
-                  <p className="text-[11px] text-zinc-400">CUIT para pagos y eCheq: <span className="font-mono font-medium text-zinc-600 dark:text-zinc-300">{form.cuit || "completá el CUIT del proveedor"}</span> (se usa siempre el CUIT fiscal del proveedor).</p>
-                </div>
-              </SeccionModal>
-
-              {/* Retención de Ganancias RG 830 */}
-              <SeccionModal titulo="Retención de Ganancias (RG 830)">
-                <div>
-                  <label className={LABEL_CLS}>Concepto de retención</label>
-                  <select value={form.concepto_retencion_ganancias} onChange={(e) => {
-                    const concepto = e.target.value;
-                    const alicuotas: Record<string, number> = { compraventa_bienes: 2, servicios: 2, honorarios: 2, alquileres_inmuebles: 6, alquileres_muebles: 2, intereses_financieros: 3, intereses_otros: 6, transporte: 0.25, fletes: 0.25, comisiones: 2, publicidad: 2, seguros: 2 };
-                    setForm({ ...form, concepto_retencion_ganancias: concepto, alicuota_ganancias: concepto ? (alicuotas[concepto] ?? 2) : null });
-                  }} className={INPUT_CLS}>
-                    <option value="">Sin definir (usa tasa global)</option>
-                    {Object.entries(CONCEPTOS_RG830).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className={LABEL_CLS}>Alícuota inscripto (%)</label>
-                  <input type="number" step="0.25" value={form.alicuota_ganancias ?? ""} onChange={(e) => setForm({ ...form, alicuota_ganancias: e.target.value ? Number(e.target.value) : null })}
-                    placeholder="Ej: 2" className={INPUT_CLS} />
-                  <p className="mt-0.5 text-[10px] text-zinc-400">Se autocompleta al consultar el CUIT en ARCA</p>
-                </div>
-                <div className="flex items-center gap-2 pt-5">
-                  <button type="button" role="switch" aria-checked={form.exclusion_retencion} aria-label="Excluido de retención" onClick={() => setForm({ ...form, exclusion_retencion: !form.exclusion_retencion })}
-                    className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full ${form.exclusion_retencion ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
-                    <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${form.exclusion_retencion ? "translate-x-4.5" : "translate-x-0.5"}`} />
-                  </button>
-                  <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">Excluido de retención</span>
-                </div>
-                {form.exclusion_retencion && (
-                  <>
-                    <div>
-                      <label className={LABEL_CLS}>Exclusión desde</label>
-                      <input type="date" value={form.exclusion_retencion_desde || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_desde: e.target.value || null })} className={INPUT_CLS} />
-                    </div>
-                    <div>
-                      <label className={LABEL_CLS}>Exclusión hasta</label>
-                      <input type="date" value={form.exclusion_retencion_hasta || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_hasta: e.target.value || null })} className={INPUT_CLS} />
-                    </div>
-                    <div>
-                      <label className={LABEL_CLS}>N° de certificado</label>
-                      <input value={form.exclusion_retencion_cert || ""} onChange={(e) => setForm({ ...form, exclusion_retencion_cert: e.target.value || null })} placeholder="N° cert." className={INPUT_CLS} />
-                    </div>
-                  </>
-                )}
-              </SeccionModal>
-
-              {/* Notas y clasificación */}
-              <SeccionModal titulo="Notas y clasificación">
-                <div className="sm:col-span-2 lg:col-span-3"><label className={LABEL_CLS}>Notas</label><textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-                <div className="sm:col-span-2 lg:col-span-3">
-                  <label className={`${LABEL_CLS} flex items-center gap-1`}><Tag className="h-3.5 w-3.5" /> Clasificación del proveedor</label>
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {CLASIFICACION_TAGS.map((tag) => {
-                      const selected = form.clasificacion_tags.includes(tag);
-                      const color = selected ? TAG_COLORS[tag] : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500";
-                      return (
-                        <button key={tag} type="button" aria-pressed={selected} onClick={() => {
-                          setForm({ ...form, clasificacion_tags: selected ? form.clasificacion_tags.filter((t) => t !== tag) : [...form.clasificacion_tags, tag] });
-                        }} className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-medium transition-all cursor-pointer border ${selected ? "border-transparent ring-1" : "border-zinc-200 dark:border-zinc-700"} ${color}`}>
-                          {tag}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="sm:col-span-2 lg:col-span-3">
-                  <label className={LABEL_CLS}>Marcas <span className="font-normal text-zinc-400">(separadas por coma)</span></label>
-                  <input value={form.marcas} onChange={(e) => setForm({ ...form, marcas: e.target.value })} placeholder="Ej: 3M, Funcional, Pampero" className={INPUT_CLS} />
-                </div>
-                <div className="sm:col-span-2 lg:col-span-3">
-                  <label className={LABEL_CLS}>Comentario de clasificación</label>
-                  <textarea value={form.clasificacion_nota} onChange={(e) => setForm({ ...form, clasificacion_nota: e.target.value })} rows={2} placeholder="Notas sobre precio, entrega, calidad..." className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
-                </div>
-              </SeccionModal>
-              <p className="text-[11px] text-zinc-400">Los talles especiales y la tolerancia de precio de este proveedor se editan en Compras → Limpieza de OC (reglas del proveedor).</p>
-            </div>
-            <div className="flex justify-end gap-3 border-t border-zinc-200 bg-white px-6 py-3 dark:border-zinc-700 dark:bg-zinc-900">
-              <button onClick={() => { setModalOpen(false); setModalFullscreen(false); }} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
-              <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
-                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                {editingId ? "Guardar" : "Crear"}
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+      {/* Alta / edición (mismo formulario que "Nuevo proveedor" desde una factura) */}
+      <ProveedorFormModal
+        open={modalOpen}
+        proveedorId={editingId}
+        inicial={modalInicial}
+        onClose={() => setModalOpen(false)}
+        onSaved={async () => { setModalOpen(false); setSelectedProv(null); await fetchData(); }}
+      />
 
       {/* AI Upload Modal */}
       <Modal

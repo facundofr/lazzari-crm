@@ -9,7 +9,7 @@ import { cargarLineasOc, sugerirEquivalencias, contarSemaforo, type AnalisisIA }
 import { matchPurchaseLines, citaOc } from "@/lib/purchase-matching";
 import { formatCurrency } from "@/lib/utils";
 import { canonicalPurchaseInvoiceNumber } from "@/lib/purchase-invoice-reconciliation";
-import { canonicalCondicionIva } from "@/lib/fiscal-condition";
+import { ProveedorFormModal, type ProveedorForm } from "@/components/proveedor-form-modal";
 
 type Provider = { id: string; razon_social: string; cuit?: string | null };
 type OC = { id: string; numero: string; proveedor_id: string; proveedor_nombre: string; moneda: string };
@@ -17,7 +17,7 @@ type RowState = "pending" | "parsing" | "ready" | "saved" | "error";
 type QueueRow = { id: string; file: File; state: RowState; message?: string; data?: any; provider?: Provider; oc?: OC; duplicada?: boolean };
 /** Resultado del cruce automático de un proveedor (todas sus facturas del lote juntas). */
 type Cruce = { estado: "analizando" | "listo" | "sin_renglones" | "error"; verde?: number; amarillo?: number; rojo?: number; analisis?: AnalisisIA; mensaje?: string };
-type NuevoProv = { rowId: string; cuit: string; razon_social: string; nombre_fantasia: string; condicion_iva: string; direccion: string; localidad: string; provincia: string; rubro: string };
+type NuevoProv = { rowId: string; cuit: string; inicial: Partial<ProveedorForm> };
 
 const onlyDigits = (v: unknown) => String(v ?? "").replace(/\D/g, "");
 
@@ -38,9 +38,6 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
   const [review, setReview] = useState<{ row: QueueRow; orders: OCParaVincular[] } | null>(null);
   const [enSecuencia, setEnSecuencia] = useState(false);
   const [nuevoProv, setNuevoProv] = useState<NuevoProv | null>(null);
-  const [arcaLoading, setArcaLoading] = useState(false);
-  const [arcaMsg, setArcaMsg] = useState("");
-  const [provError, setProvError] = useState("");
   const parsingRef = useRef(false);
   const rowsRef = useRef<QueueRow[]>([]);
   rowsRef.current = rows;
@@ -211,63 +208,30 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
     void openReview(next);
   }
 
-  async function abrirNuevoProv(row: QueueRow) {
+  // "Crear proveedor": abre el MISMO formulario completo que Proveedores (con los datos de ARCA si la factura trae CUIT).
+  function abrirNuevoProv(row: QueueRow) {
     const cuit = onlyDigits(row.data?.proveedor?.cuit);
-    const base: NuevoProv = { rowId: row.id, cuit, razon_social: String(row.data?.proveedor?.razon_social || "").trim(), nombre_fantasia: String(row.data?.proveedor?.nombre_fantasia || "").trim(), condicion_iva: "RI", direccion: "", localidad: "", provincia: "", rubro: "" };
-    setNuevoProv(base); setProvError(""); setArcaMsg("");
-    if (cuit.length !== 11) return;
-    setArcaLoading(true);
-    try {
-      const res = await fetch(`/api/cuit-lookup?cuit=${cuit}`);
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok || d.error) { setArcaMsg("ARCA no respondió: completá o corregí a mano."); return; }
-      setNuevoProv(p => p && p.rowId === row.id ? {
-        ...p,
-        razon_social: d.razon_social || p.razon_social,
-        condicion_iva: canonicalCondicionIva(d.condicion_iva) || p.condicion_iva,
-        direccion: d.direccion || "", localidad: d.localidad || "", provincia: d.provincia || "",
-      } : p);
-      setArcaMsg("Datos traídos de ARCA. Revisá y confirmá.");
-    } catch { setArcaMsg("ARCA no respondió: completá o corregí a mano."); }
-    finally { setArcaLoading(false); }
+    const existente = findProvider(cuit);
+    if (existente) { void asignarProveedor(existente, row.id, cuit); return; }
+    setNuevoProv({ rowId: row.id, cuit, inicial: {
+      cuit,
+      razon_social: String(row.data?.proveedor?.razon_social || "").trim(),
+      nombre_fantasia: String(row.data?.proveedor?.nombre_fantasia || "").trim(),
+    } });
   }
 
-  async function guardarNuevoProv() {
-    if (!nuevoProv) return;
-    if (!sociedadId) { setProvError("Seleccioná una sociedad"); return; }
-    if (!nuevoProv.razon_social.trim()) { setProvError("Falta la razón social"); return; }
-    const cuit = onlyDigits(nuevoProv.cuit);
-    const existente = findProvider(cuit);
-    setSaving(true); setProvError("");
+  // Asigna el proveedor a todas las facturas del lote con ese mismo CUIT.
+  async function asignarProveedor(provider: Provider, rowId: string, cuit: string) {
+    setSaving(true);
     try {
-      let provider = existente;
-      if (!provider) {
-        const insertData: Record<string, unknown> = {
-          sociedad_id: sociedadId, activo: true,
-          razon_social: nuevoProv.razon_social.trim(),
-          condicion_iva: canonicalCondicionIva(nuevoProv.condicion_iva) || "RI",
-          rubro: nuevoProv.rubro.trim() || "General",
-          direccion: nuevoProv.direccion.trim(), localidad: nuevoProv.localidad.trim(), provincia: nuevoProv.provincia.trim(),
-        };
-        if (cuit) { insertData.cuit = cuit; insertData.cuit_titular_cuenta = cuit; }
-        if (nuevoProv.nombre_fantasia.trim()) insertData.nombre_fantasia = nuevoProv.nombre_fantasia.trim();
-        const { data, error } = await (supabase as any).from("proveedores").insert(insertData).select("id, razon_social, cuit").single();
-        if (error) throw error;
-        provider = data as Provider;
-      }
-      const nuevos = [...provs, provider!];
-      setProvs(nuevos);
-      // Asigna el proveedor a todas las facturas del lote con ese mismo CUIT.
-      const afectadas = rowsRef.current.filter(r => r.state === "ready" && !r.provider && (r.id === nuevoProv.rowId || (cuit && onlyDigits(r.data?.proveedor?.cuit) === cuit)));
+      setProvs(prev => prev.some(p => p.id === provider.id) ? prev : [...prev, provider]);
+      const afectadas = rowsRef.current.filter(r => r.state === "ready" && !r.provider && (r.id === rowId || (cuit && onlyDigits(r.data?.proveedor?.cuit) === cuit)));
       const updates: Record<string, Partial<QueueRow>> = {};
       for (const r of afectadas) {
-        const dup = await esDuplicada(provider!.id, r.data?.numero_factura || "");
-        updates[r.id] = { provider: provider!, oc: ocFor(provider, r.data), duplicada: dup, message: dup ? "Ya está cargada en el sistema" : undefined };
+        const dup = await esDuplicada(provider.id, r.data?.numero_factura || "");
+        updates[r.id] = { provider, oc: ocFor(provider, r.data), duplicada: dup, message: dup ? "Ya está cargada en el sistema" : undefined };
       }
       setRows(prev => prev.map(r => updates[r.id] ? { ...r, ...updates[r.id] } : r));
-      setNuevoProv(null);
-    } catch (e: any) {
-      setProvError(e?.message || "No se pudo crear el proveedor");
     } finally { setSaving(false); }
   }
 
@@ -311,7 +275,6 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
       }
     }} />;
 
-  const input = "w-full rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white";
 
   return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4">
     <div className="w-full max-w-5xl rounded-xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
@@ -396,29 +359,19 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
         </div>;
       })()}
 
-      {nuevoProv && <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950/30">
-        <div className="mb-2 flex items-center justify-between">
-          <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">Nuevo proveedor {arcaLoading && <Loader2 className="ml-1 inline h-3.5 w-3.5 animate-spin" />}</p>
-          <button onClick={() => setNuevoProv(null)}><X className="h-4 w-4 text-zinc-400" /></button>
-        </div>
-        {arcaMsg && <p className="mb-2 text-xs text-amber-700 dark:text-amber-400">{arcaMsg}</p>}
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-          <div className="col-span-2"><label className="text-[11px] text-zinc-500">Razón social</label><input className={input} value={nuevoProv.razon_social} onChange={e => setNuevoProv({ ...nuevoProv, razon_social: e.target.value })} /></div>
-          <div><label className="text-[11px] text-zinc-500">CUIT</label><input className={input} value={nuevoProv.cuit} onChange={e => setNuevoProv({ ...nuevoProv, cuit: e.target.value })} /></div>
-          <div><label className="text-[11px] text-zinc-500">Condición IVA</label><select className={input} value={nuevoProv.condicion_iva} onChange={e => setNuevoProv({ ...nuevoProv, condicion_iva: e.target.value })}><option value="RI">Resp. Inscripto</option><option value="Monotributo">Monotributo</option><option value="Exento">Exento</option><option value="CF">Consumidor final</option></select></div>
-          <div className="col-span-2"><label className="text-[11px] text-zinc-500">Nombre de fantasía (opcional)</label><input className={input} value={nuevoProv.nombre_fantasia} onChange={e => setNuevoProv({ ...nuevoProv, nombre_fantasia: e.target.value })} /></div>
-          <div className="col-span-2"><label className="text-[11px] text-zinc-500">Rubro (opcional)</label><input className={input} value={nuevoProv.rubro} onChange={e => setNuevoProv({ ...nuevoProv, rubro: e.target.value })} /></div>
-          <div className="col-span-2"><label className="text-[11px] text-zinc-500">Dirección</label><input className={input} value={nuevoProv.direccion} onChange={e => setNuevoProv({ ...nuevoProv, direccion: e.target.value })} /></div>
-          <div><label className="text-[11px] text-zinc-500">Localidad</label><input className={input} value={nuevoProv.localidad} onChange={e => setNuevoProv({ ...nuevoProv, localidad: e.target.value })} /></div>
-          <div><label className="text-[11px] text-zinc-500">Provincia</label><input className={input} value={nuevoProv.provincia} onChange={e => setNuevoProv({ ...nuevoProv, provincia: e.target.value })} /></div>
-        </div>
-        {provError && <p className="mt-2 text-xs text-red-600">{provError}</p>}
-        <p className="mt-2 text-[11px] text-zinc-500">Los datos bancarios los completás después en Proveedores.</p>
-        <div className="mt-3 flex justify-end gap-2">
-          <button onClick={() => setNuevoProv(null)} className="rounded-lg border px-3 py-1.5 text-sm">Cancelar</button>
-          <button disabled={saving || arcaLoading} onClick={guardarNuevoProv} className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">{saving ? "Guardando…" : "Crear proveedor"}</button>
-        </div>
-      </div>}
+      <ProveedorFormModal
+        open={!!nuevoProv}
+        proveedorId={null}
+        inicial={nuevoProv?.inicial}
+        consultarArcaAlAbrir
+        subtitulo="Se guarda y queda asignado a las facturas del lote con ese CUIT."
+        onClose={() => setNuevoProv(null)}
+        onSaved={(row) => {
+          const np = nuevoProv;
+          setNuevoProv(null);
+          if (np) void asignarProveedor({ id: row.id as string, razon_social: row.razon_social as string, cuit: row.cuit as string } as Provider, np.rowId, onlyDigits(row.cuit as string) || np.cuit);
+        }}
+      />
 
       <div className="mt-5 flex items-center justify-between gap-2">
         <p className="text-[11px] text-zinc-500">Al terminar de leer, se cruzan solas contra las OC. Las que cierran se confirman con un botón; las demás se abren mostrando solo lo que no cierra.</p>

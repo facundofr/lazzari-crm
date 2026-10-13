@@ -12,6 +12,7 @@ import { X, Loader2, Mail, MessageCircle, ClipboardCopy, Check, Download, Save }
 import { supabase } from "@/lib/supabase/client";
 import { useUser } from "@/lib/auth-context";
 import { useToast } from "@/components/ui/toast";
+import { WhatsAppInput } from "@/components/ui/whatsapp-input";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { htmlToPdfBase64, openPDFWindow } from "@/lib/pdf-templates";
@@ -167,7 +168,7 @@ export default function EnviarOCProveedor({ ocIds, titulo, onClose }: { ocIds: s
                 </div>
                 <div className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
                   <label className="text-xs text-zinc-500">WhatsApp del vendedor
-                    <input value={f.whatsapp} onChange={(e) => actualizar(f.id, { whatsapp: e.target.value })} placeholder="Ej. 11 5555-1234" className={input} inputMode="tel" />
+                    <WhatsAppInput value={f.whatsapp} onChange={(v) => actualizar(f.id, { whatsapp: v })} className="mt-0.5" />
                   </label>
                   <label className="text-xs text-zinc-500">Mail del vendedor
                     <input value={f.email} onChange={(e) => actualizar(f.id, { email: e.target.value })} placeholder="ventas@proveedor.com" className={input} inputMode="email" />

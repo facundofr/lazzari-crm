@@ -1,5 +1,6 @@
 "use client";
 
+import { PagoProveedorOC } from "@/components/pago-proveedor-oc";
 import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -3321,13 +3322,10 @@ export default function OrdenesCompraPage() {
                           <CopyButton text={`${detailOC.proveedores.direccion}${detailOC.proveedores.localidad ? `, ${detailOC.proveedores.localidad}` : ""}${detailOC.proveedores.provincia ? `, ${detailOC.proveedores.provincia}` : ""}`} />
                         </div>
                       )}
-                      {detailOC.proveedores.forma_pago && (
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-3.5 w-3.5 text-zinc-400 shrink-0" />
-                          <span>Pago: {detailOC.proveedores.forma_pago}</span>
-                        </div>
-                      )}
                     </div>
+                    {detailOC.proveedor_id && sociedadActiva?.id && (
+                      <PagoProveedorOC key={`${detailOC.id}-${detailOC.proveedor_id}`} ocId={detailOC.id} proveedorId={detailOC.proveedor_id} sociedadId={sociedadActiva.id} puedeEditar={canManageCompras} />
+                    )}
                   </div>
                 ) : isOwnStockPurchaseOrder(detailOC) ? (
                   <div className="flex items-center gap-3 rounded-lg bg-blue-50 px-3 py-3 text-blue-700 dark:bg-blue-950/30 dark:text-blue-300">
