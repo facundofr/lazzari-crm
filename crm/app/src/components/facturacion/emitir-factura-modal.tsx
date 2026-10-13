@@ -55,7 +55,6 @@ export interface PresupuestoAFacturar {
     moneda_predeterminada?: string | null;
   } | null;
   items: { descripcion: string; cantidad: number; precio_venta: number | null; iva_porcentaje: number; total: number | null }[];
-  ordenesCompra?: { id: string; numero: string; fecha: string }[];
 }
 
 interface ClienteOption {
@@ -673,26 +672,18 @@ export function EmitirFacturaModal({
             </div>
             {emitManual && <p className="-mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">No se autoriza con ARCA: no tendrá CAE.</p>}
 
-            {/* Datos del presupuesto: OC del cliente, OC a proveedores y observaciones */}
-            {pr && (pr.oc_cliente || pr.oc_cliente_fecha || pr.archivo_url || pr.observaciones || (pr.ordenesCompra?.length || 0) > 0) && (
+            {/* Datos del presupuesto: OC del cliente (siempre a la vista) y observaciones. Las OC a proveedores no van acá. */}
+            {pr && (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-                {(pr.oc_cliente || pr.oc_cliente_fecha || pr.archivo_url) && (
+                {(pr.oc_cliente || pr.oc_cliente_fecha || pr.archivo_url) ? (
                   <span className="flex flex-wrap items-center gap-1.5">
                     <span className="text-zinc-500 font-medium">OC cliente:</span>
                     <span className="font-mono font-bold dark:text-white">{pr.oc_cliente || "Sin número"}</span>
                     <span className="text-zinc-600 dark:text-zinc-300">({pr.oc_cliente_fecha ? formatDate(pr.oc_cliente_fecha) : "sin fecha"})</span>
                     {pr.archivo_url && <a href={pr.archivo_url} target="_blank" rel="noreferrer" className="font-semibold text-orange-600 hover:underline">Abrir OC</a>}
                   </span>
-                )}
-                {(pr.ordenesCompra?.length || 0) > 0 && (
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-zinc-500 font-medium">OC proveedor:</span>
-                    {pr.ordenesCompra!.map(oc => (
-                      <span key={oc.id} className="rounded border border-blue-200 dark:border-blue-800 px-1.5 py-0.5 font-semibold text-blue-600 dark:text-blue-400">
-                        {oc.numero} <span className="font-normal text-zinc-400">({formatDate(oc.fecha)})</span>
-                      </span>
-                    ))}
-                  </span>
+                ) : (
+                  <span><span className="text-zinc-500 font-medium">OC cliente:</span> <span className="text-amber-600 dark:text-amber-400">no cargada</span></span>
                 )}
                 {pr.observaciones && (
                   <span className="basis-full text-zinc-600 dark:text-zinc-300"><span className="text-zinc-500 font-medium">Obs. PR:</span> {pr.observaciones}</span>

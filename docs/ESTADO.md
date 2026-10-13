@@ -629,6 +629,14 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
       - **Ventana compacta:** ARCA/Manual en el título, una fila Tipo/Cliente/PV/N°, OC en una línea, Moneda/Cotización/Fecha/Condición/Vencimiento en una fila, ítems finos,
         totales y botones fijos abajo. Probado en local sin guardar (PR-2026-1204): entra sin scroll en 1366x768, celular sin scroll horizontal.
       - Pruebas de texto actualizadas: fiscal-date-calendar, invoice-exchange-rate, invoice-oc-preview, fce-route. tsc 0, hooks OK. **PUBLICADA 13/10 (commit ced3c48)**; probada en producción sin emitir (PR-2026-1204: ARCA, USD divisa $1.517 del 09/10, sugerencia 09/10).
+   **V1.1.428 (13/10/2026, pedido de Augusto, sin migración de estructura):**
+      - Confusión aclarada: el chip rojo de la lista es la **OC del cliente** (`presupuestos.oc_cliente`); lo que se veía en la ventana de facturar era la **OC a proveedor** (`ordenes_compra.presupuesto_origen_id`). Claude no creó ni tocó OC.
+        PR-2026-1146 Corteva: sin OC del cliente; la OC-2026-1178 es la compra a AYRE LIBRE (30/09).
+      - Ventana de facturar: **se sacó la OC a proveedor**; siempre muestra "OC cliente: … / no cargada".
+      - Ventas, panel de la derecha **compacto** (340 px, renglones finos, una línea por remito/compra, botones chicos): "OC del cliente", "Entrega", "Compras a proveedor", "Factura y cobro".
+        Con el panel abierto, la tabla oculta Saldo y Días en pantallas < 1536 px (están en el panel) y el nombre del cliente va en una línea.
+      - **PENDIENTE (bloqueado por permisos, falta correr):** `supabase/migrations/20261013130000_clientes_pide_oc_marcar.sql` (+ vuelta atrás) marca "Pide OC para facturar"
+        en Synthon, Corteva Agriscience, Corteva Seeds, Adecco RRHH, Adecco Specialties, Termo Córdoba y Soenergy (hoy los 7 en false, por eso nadie aparece en "Esperando OC"). OK de Augusto dado.
 
 0. **PRÓXIMO: análisis a fondo de Finanzas** (lo más importante del CRM, pedido por Augusto 11/10/2026):
    - Cobros con eCheq guardados con **fecha futura** y ya "Conciliado": DEL SOL CONSTRUCTORA (20/11/2026, cobro $3.677.887,22 + ret. Ganancias $61.813,23)

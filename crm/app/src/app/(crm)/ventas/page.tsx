@@ -293,6 +293,8 @@ export default function VentasPage() {
   }, [ventasFiltradas, etapas, bandeja, sortOrder]);
 
   const selectedVenta = useMemo(() => ventas.find(v => v.presupuesto.id === selectedVentaId) || null, [ventas, selectedVentaId]);
+  // Con el panel abierto, Saldo y Días se ocultan en pantallas medianas (están en el panel).
+  const colChica = selectedVenta ? "hidden 2xl:table-cell" : "hidden sm:table-cell";
   const selectedEtapa = selectedVenta ? etapas.get(selectedVenta.presupuesto.id) || null : null;
 
   function superaLimite(v: Venta): boolean {
@@ -311,7 +313,6 @@ export default function VentasPage() {
       oc_cliente: p.oc_cliente, oc_cliente_fecha: p.oc_cliente_fecha, archivo_url: p.archivo_url, observaciones: p.observaciones,
       cliente: p.clientes ? { ...p.clientes } : null,
       items: p.presupuesto_items || [],
-      ordenesCompra: v.ordenesCompra.map(oc => ({ id: oc.id, numero: oc.numero, fecha: oc.fecha })),
     };
   }
 
@@ -447,7 +448,7 @@ export default function VentasPage() {
         {/* Main content */}
         <div className="flex gap-4 items-start">
           {/* Tabla */}
-          <div className={`min-w-0 ${selectedVenta ? "hidden lg:block lg:w-3/5" : "w-full"}`}>
+          <div className={`min-w-0 ${selectedVenta ? "hidden lg:block lg:flex-1" : "w-full"}`}>
             {ventasBandeja.length === 0 ? (
               <Card className="p-12 text-center">
                 <Package className="h-12 w-12 text-zinc-300 mx-auto mb-3" />
@@ -461,8 +462,8 @@ export default function VentasPage() {
                       <th className="px-3 py-2 text-left font-medium">PR / Cliente</th>
                       <th className="px-3 py-2 text-right font-medium">Total</th>
                       <th className="px-3 py-2 text-left font-medium hidden md:table-cell">Estado</th>
-                      <th className="px-3 py-2 text-right font-medium hidden sm:table-cell">Saldo</th>
-                      <th className="px-3 py-2 text-right font-medium hidden sm:table-cell">Días</th>
+                      <th className={`px-3 py-2 text-right font-medium ${colChica}`}>Saldo</th>
+                      <th className={`px-3 py-2 text-right font-medium ${colChica}`}>Días</th>
                       <th className="px-3 py-2 text-right font-medium">Próximo paso</th>
                     </tr>
                   </thead>
@@ -477,11 +478,11 @@ export default function VentasPage() {
                         <tr key={p.id} onClick={() => setSelectedVentaId(isSelected ? null : p.id)}
                           className={`cursor-pointer align-top ${isSelected ? "bg-orange-50/60 dark:bg-orange-950/20" : "hover:bg-zinc-50 dark:hover:bg-zinc-900/60"}`}>
                           <td className="px-3 py-2">
-                            <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-2 whitespace-nowrap">
                               <span className="font-mono text-xs font-bold text-zinc-900 dark:text-white">{p.numero}</span>
                               <span className="text-xs text-zinc-400">{formatDate(p.fecha)}</span>
                             </div>
-                            <p className="text-zinc-700 dark:text-zinc-300 leading-tight">{p.clientes?.razon_social}</p>
+                            <p className="max-w-[16rem] truncate text-zinc-700 dark:text-zinc-300 leading-tight" title={p.clientes?.razon_social}>{p.clientes?.razon_social}</p>
                             <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                               {p.vendedor_profile?.full_name && <span className="text-[11px] text-zinc-400">{p.vendedor_profile.full_name}</span>}
                               {p.oc_cliente && <span className="rounded bg-orange-100 px-1.5 text-[10px] font-semibold text-orange-700 dark:bg-orange-900/40 dark:text-orange-300" title={p.oc_cliente_fecha ? `OC del ${formatDate(p.oc_cliente_fecha)}` : undefined}>OC {p.oc_cliente}</span>}
@@ -490,14 +491,14 @@ export default function VentasPage() {
                           </td>
                           <td className="px-3 py-2 text-right font-semibold whitespace-nowrap">{formatCurrency(Number(p.total) || 0, p.moneda as "ARS" | "USD")}</td>
                           <td className="px-3 py-2 hidden md:table-cell"><EstadoChips v={v} e={e} /></td>
-                          <td className="px-3 py-2 text-right whitespace-nowrap hidden sm:table-cell">
+                          <td className={`px-3 py-2 text-right whitespace-nowrap ${colChica}`}>
                             {e.facturada
                               ? e.saldo === null ? <span className="text-zinc-400">…</span>
                                 : e.cobrado ? <span className="text-green-600">Cobrado</span>
                                 : <span className={e.vencida ? "font-semibold text-red-600" : e.cobradoParcial ? "text-amber-600" : ""}>{formatCurrency(e.saldo, e.monedaVenta)}</span>
                               : <span className="text-zinc-300">—</span>}
                           </td>
-                          <td className={`px-3 py-2 text-right hidden sm:table-cell ${avisoDias || e.vencida ? "font-semibold text-amber-600" : "text-zinc-500"}`}
+                          <td className={`px-3 py-2 text-right ${colChica} ${avisoDias || e.vencida ? "font-semibold text-amber-600" : "text-zinc-500"}`}
                             title={e.facturada ? "Días desde la factura" : "Días desde el presupuesto"}>
                             {e.terminada ? "" : e.dias}
                           </td>
@@ -523,7 +524,7 @@ export default function VentasPage() {
 
           {/* Detalle: todo a la vista */}
           {selectedVenta && selectedEtapa && (
-            <div className="w-full lg:w-2/5">
+            <div className="w-full lg:w-[340px] lg:shrink-0">
               <DetalleVenta
                 v={selectedVenta}
                 e={selectedEtapa}
@@ -583,25 +584,25 @@ function EstadoChips({ v, e }: { v: Venta; e: VentaEtapa }) {
 
 // ── Detalle de la venta ──────────────────────────────────────────
 
-function Seccion({ titulo, icon: Icon, estado, children }: { titulo: string; icon: React.ElementType; estado: "done" | "in-progress" | "pending"; children: React.ReactNode }) {
+function Seccion({ titulo, icon: Icon, estado, extra, children }: { titulo: string; icon: React.ElementType; estado: "done" | "in-progress" | "pending"; extra?: React.ReactNode; children: React.ReactNode }) {
+  const color = estado === "done" ? "text-green-600 dark:text-green-400" : estado === "in-progress" ? "text-orange-500" : "text-zinc-400";
   return (
-    <div className="p-4 space-y-2">
-      <div className="flex items-center gap-2">
-        <div className={`rounded-lg p-1.5 ${estado === "done" ? "bg-green-100 text-green-600 dark:bg-green-900/40 dark:text-green-400" : estado === "in-progress" ? "bg-orange-100 text-orange-600 dark:bg-orange-900/40 dark:text-orange-400" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"}`}>
-          <Icon className="h-4 w-4" />
-        </div>
-        <span className="flex-1 text-sm font-semibold dark:text-white">{titulo}</span>
-        {estado === "done" && <CheckCircle2 className="h-4 w-4 text-green-500" />}
-        {estado === "in-progress" && <Clock className="h-4 w-4 text-orange-500" />}
+    <div className="px-3 py-2">
+      <div className="flex items-center gap-1.5">
+        <Icon className={`h-3.5 w-3.5 ${color}`} />
+        <span className="flex-1 text-xs font-semibold text-zinc-700 dark:text-zinc-200">{titulo}</span>
+        {extra}
+        {estado === "done" && <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />}
+        {estado === "in-progress" && <Clock className="h-3.5 w-3.5 text-orange-500" />}
       </div>
-      <div className="pl-9 text-sm">{children}</div>
+      <div className="mt-1 pl-5 text-xs space-y-1">{children}</div>
     </div>
   );
 }
 
 const linkClass = "inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-700";
-const btnPrimario = "inline-flex items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-2 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-60";
-const btnSecundario = "inline-flex items-center gap-1.5 rounded-lg border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-60";
+const btnPrimario = "inline-flex items-center gap-1 rounded-md bg-orange-600 px-2 py-1 text-xs font-medium text-white hover:bg-orange-700 disabled:opacity-60";
+const btnSecundario = "inline-flex items-center gap-1 rounded-md border border-zinc-300 dark:border-zinc-700 px-2 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-60";
 
 function DetalleVenta({
   v, e, superaLimite, puedeFacturar, puedeCobrar, downloadingFacturaId, onClose, onFacturar, onDescargar, onMarcarEntregado, onCancelar,
@@ -617,148 +618,122 @@ function DetalleVenta({
 
   return (
     <Card className="lg:sticky lg:top-4 p-0 overflow-hidden">
-      <div className="flex items-start justify-between border-b border-zinc-200 dark:border-zinc-800 p-4">
-        <div>
-          <h3 className="font-bold text-zinc-900 dark:text-white">{p.numero} · {formatCurrency(Number(p.total) || 0, p.moneda as "ARS" | "USD")}</h3>
-          <Link href={`/clientes?id=${p.cliente_id}`} className="text-sm text-zinc-600 hover:text-orange-600 dark:text-zinc-300">{p.clientes?.razon_social}</Link>
-          <p className="text-xs text-zinc-400">{formatDate(p.fecha)}{p.vendedor_profile?.full_name ? ` · ${p.vendedor_profile.full_name}` : ""}</p>
+      <div className="flex items-start justify-between gap-2 border-b border-zinc-200 dark:border-zinc-800 px-3 py-2">
+        <div className="min-w-0">
+          <h3 className="text-sm font-bold text-zinc-900 dark:text-white">{p.numero} · {formatCurrency(Number(p.total) || 0, p.moneda as "ARS" | "USD")}</h3>
+          <Link href={`/clientes?id=${p.cliente_id}`} className="block truncate text-xs text-zinc-600 hover:text-orange-600 dark:text-zinc-300" title={p.clientes?.razon_social}>{p.clientes?.razon_social}</Link>
+          <p className="text-[11px] text-zinc-400">{formatDate(p.fecha)}{p.vendedor_profile?.full_name ? ` · ${p.vendedor_profile.full_name}` : ""} · {p.presupuesto_items?.length || 0} productos · <Link href={`/presupuestos?selected=${p.id}`} className="text-orange-600 hover:underline">Ver PR</Link></p>
         </div>
-        <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600"><X className="h-5 w-5" /></button>
+        <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600" title="Cerrar"><X className="h-4 w-4" /></button>
       </div>
       {superaLimite && (
-        <div className="mx-4 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300">
-          <AlertCircle className="mr-1 inline h-3.5 w-3.5" /> El cliente alcanzó o superó su límite de crédito (aviso: se puede seguir).
+        <div className="mx-3 mt-2 rounded-md bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700 dark:bg-red-950/30 dark:text-red-300">
+          <AlertCircle className="mr-1 inline h-3 w-3" /> Superó su límite de crédito (aviso: se puede seguir).
         </div>
       )}
 
-      <div className="divide-y divide-zinc-200 dark:divide-zinc-800">
-        {/* Presupuesto y OC del cliente */}
-        <Seccion titulo="Presupuesto y OC del cliente" icon={FileText} estado={e.esperandoOc ? "in-progress" : "done"}>
-          <div className="space-y-1">
-            <p className="text-zinc-600 dark:text-zinc-300">{p.presupuesto_items?.length || 0} productos</p>
-            {p.oc_cliente
-              ? <p>OC cliente: <span className="font-mono font-semibold">{p.oc_cliente}</span>{p.oc_cliente_fecha ? ` (${formatDate(p.oc_cliente_fecha)})` : ""}{p.archivo_url && <> · <a href={p.archivo_url} target="_blank" rel="noreferrer" className={linkClass}>Abrir OC</a></>}</p>
-              : <p className={e.esperandoOc ? "text-amber-600 dark:text-amber-400 font-medium" : "text-zinc-400"}>{e.esperandoOc ? "Esperando la OC del cliente (pide OC para facturar)" : "Sin OC del cliente"}</p>}
-            <div className="flex flex-wrap gap-3 pt-1">
-              <Link href={`/presupuestos?selected=${p.id}`} className={linkClass}>{p.oc_cliente ? "Ver presupuesto" : "Cargar OC en el presupuesto"} <ArrowRight className="h-3 w-3" /></Link>
-            </div>
-          </div>
+      <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        {/* OC del cliente */}
+        <Seccion titulo="OC del cliente" icon={FileText} estado={e.esperandoOc ? "in-progress" : "done"}>
+          {p.oc_cliente
+            ? <p><span className="font-mono font-semibold">{p.oc_cliente}</span>{p.oc_cliente_fecha ? ` · ${formatDate(p.oc_cliente_fecha)}` : ""}{p.archivo_url && <> · <a href={p.archivo_url} target="_blank" rel="noreferrer" className={linkClass}>Abrir</a></>}</p>
+            : <p className={e.esperandoOc ? "text-amber-600 dark:text-amber-400 font-medium" : "text-zinc-400"}>
+                {e.esperandoOc ? "Falta (el cliente pide OC para facturar)" : "No cargada"} · <Link href={`/presupuestos?selected=${p.id}`} className={linkClass}>Cargar</Link>
+              </p>}
         </Seccion>
 
         {/* Entrega */}
-        <Seccion titulo="Entrega" icon={Truck} estado={e.entregado ? "done" : e.enEntrega ? "in-progress" : "pending"}>
-          {v.remitos.length > 0 ? (
-            <div className="space-y-2">
-              {v.remitos.map(r => (
-                <div key={r.id} className="flex items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
-                  <div>
-                    <span className="font-mono text-xs font-bold">{r.numero || "Sin numero"}</span>
-                    <span className="text-xs text-zinc-400 ml-2">{formatDate(r.fecha)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant={r.estado === "entregado" ? "success" : r.estado === "parcial" ? "info" : "warning"}>{r.estado}</Badge>
-                    {r.estado !== "entregado" && <button onClick={() => onMarcarEntregado(r.id)} className="text-xs text-green-600 hover:text-green-700 font-medium">Marcar entregado</button>}
-                  </div>
-                </div>
-              ))}
-              <Link href="/remitos" className={linkClass}>Ver en remitos <ArrowRight className="h-3 w-3" /></Link>
+        <Seccion titulo="Entrega" icon={Truck} estado={e.entregado ? "done" : e.enEntrega ? "in-progress" : "pending"}
+          extra={v.remitos.length > 0 ? <Link href="/remitos" className="text-[11px] text-orange-600 hover:underline">Remitos</Link> : null}>
+          {v.remitos.length > 0 ? v.remitos.map(r => (
+            <div key={r.id} className="flex items-center gap-2">
+              <span className="font-mono font-semibold">{r.numero || "Sin número"}</span>
+              <span className="text-zinc-400">{formatDate(r.fecha)}</span>
+              <span className={`ml-auto rounded px-1.5 text-[10px] font-medium ${r.estado === "entregado" ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"}`}>{r.estado}</span>
+              {r.estado !== "entregado" && <button onClick={() => onMarcarEntregado(r.id)} className="text-green-600 hover:text-green-700 font-medium">Entregado</button>}
             </div>
-          ) : (
-            <div className="space-y-2">
-              <p className="text-zinc-500">Sin remito</p>
-              <Link href={`/presupuestos?selected=${p.id}`} className={btnPrimario}><Truck className="h-3.5 w-3.5" /> Remitar desde el presupuesto</Link>
-            </div>
+          )) : (
+            <p className="text-zinc-500">Sin remito · <Link href={`/presupuestos?selected=${p.id}`} className={linkClass}>Remitar desde el PR</Link></p>
           )}
         </Seccion>
 
-        {/* Compras para esta venta */}
+        {/* Compras a proveedores para esta venta */}
         {v.ordenesCompra.length > 0 && (
-          <Seccion titulo={`Órdenes de compra (${v.ordenesCompra.length})`} icon={ClipboardList} estado={v.ordenesCompra.every(oc => oc.estado === "completada" || oc.estado === "cancelada") ? "done" : "in-progress"}>
-            <div className="space-y-2">
-              {v.ordenesCompra.map(oc => (
-                <div key={oc.id} className="flex items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
-                  <div>
-                    <span className="font-mono text-xs font-bold">{oc.numero}</span>
-                    <span className="text-xs text-zinc-400 ml-2">{formatDate(oc.fecha)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300">{formatCurrency(Number(oc.total) || 0, (oc.moneda || "ARS") as "ARS" | "USD")}</span>
-                    <Badge variant={oc.estado === "completada" ? "success" : oc.estado === "cancelada" ? "danger" : ocPagadaConTarjeta(oc) ? "purple" : "warning"}>
-                      {ocPagadaConTarjeta(oc) ? "Pagada tarjeta" : oc.estado}
-                    </Badge>
-                  </div>
-                </div>
-              ))}
-              <Link href="/ordenes-compra" className={linkClass}>Ver en órdenes de compra <ArrowRight className="h-3 w-3" /></Link>
-            </div>
+          <Seccion titulo={`Compras a proveedor (${v.ordenesCompra.length})`} icon={ClipboardList} estado={v.ordenesCompra.every(oc => oc.estado === "completada" || oc.estado === "cancelada") ? "done" : "in-progress"}
+            extra={<Link href="/ordenes-compra" className="text-[11px] text-orange-600 hover:underline">Compras</Link>}>
+            {v.ordenesCompra.map(oc => (
+              <div key={oc.id} className="flex items-center gap-2">
+                <span className="font-mono font-semibold">{oc.numero}</span>
+                <span className="text-zinc-400">{formatDate(oc.fecha)}</span>
+                <span className="ml-auto text-zinc-600 dark:text-zinc-300">{formatCurrency(Number(oc.total) || 0, (oc.moneda || "ARS") as "ARS" | "USD")}</span>
+                <span className={`rounded px-1.5 text-[10px] font-medium ${oc.estado === "completada" ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" : oc.estado === "cancelada" ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400" : ocPagadaConTarjeta(oc) ? "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"}`}>
+                  {ocPagadaConTarjeta(oc) ? "tarjeta" : oc.estado}
+                </span>
+              </div>
+            ))}
           </Seccion>
         )}
 
         {/* Factura y cobro */}
         <Seccion titulo="Factura y cobro" icon={Receipt} estado={e.cobrado ? "done" : e.facturada ? "in-progress" : "pending"}>
-          <div className="space-y-2">
-            {historial.length > 1 && (
-              <div className="flex flex-wrap items-center gap-1 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 px-2 py-1.5">
-                <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium mr-1">Historial:</span>
-                {historial.map((f, idx) => (
-                  <span key={f.id} className="flex items-center gap-1">
-                    {idx > 0 && <ArrowRight className="h-3 w-3 text-amber-400 shrink-0" />}
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                      f.id === e.facturaVigenteId ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
-                      : esNotaCredito(f.tipo) ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
-                      : "bg-zinc-100 text-zinc-500 line-through dark:bg-zinc-800 dark:text-zinc-500"}`}>{comprobante(f)}</span>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {factura ? (<>
-              <div className="flex justify-between"><span className="text-zinc-500">Comprobante</span>
-                <span className="flex items-center gap-1.5"><span className="font-mono font-bold">{comprobante(factura)}</span>
-                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${factura.cae ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"}`}>{factura.cae ? "ARCA" : "Manual"}</span>
+          {historial.length > 1 && (
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">Historial:</span>
+              {historial.map((f, idx) => (
+                <span key={f.id} className="flex items-center gap-1">
+                  {idx > 0 && <ArrowRight className="h-3 w-3 text-amber-400 shrink-0" />}
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                    f.id === e.facturaVigenteId ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                    : esNotaCredito(f.tipo) ? "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+                    : "bg-zinc-100 text-zinc-500 line-through dark:bg-zinc-800 dark:text-zinc-500"}`}>{comprobante(f)}</span>
                 </span>
-              </div>
-              <div className="flex justify-between"><span className="text-zinc-500">Fecha</span><span>{formatDate(factura.fecha)}{factura.fecha_vencimiento ? ` · vence ${formatDate(factura.fecha_vencimiento)}` : ""}</span></div>
-              <div className="flex justify-between"><span className="text-zinc-500">Total{Number(factura.total_acreditado) > 0 ? " (menos NC)" : ""}</span><span className="font-bold">{formatCurrency(totalFactura, (factura.moneda || "ARS") as "ARS" | "USD")}</span></div>
-              {e.saldo !== null && (<>
-                <div className="flex justify-between"><span className="text-zinc-500">Cobrado</span><span className="text-green-600">{formatCurrency(Math.max(0, totalFactura - e.saldo), e.monedaVenta)}</span></div>
-                <div className="flex justify-between"><span className="text-zinc-500">Falta cobrar</span><span className={`font-bold ${e.saldo <= 0.01 ? "text-green-600" : e.vencida ? "text-red-600" : ""}`}>{e.saldo <= 0.01 ? "Nada" : formatCurrency(e.saldo, e.monedaVenta)}{e.vencida ? " (vencida)" : ""}</span></div>
-              </>)}
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <button onClick={() => onDescargar(factura.id)} disabled={downloadingFacturaId === factura.id} className={btnPrimario}>
-                  {downloadingFacturaId === factura.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} PDF
-                </button>
-                <button onClick={() => onDescargar(factura.id, true)} disabled={downloadingFacturaId === factura.id} className={btnSecundario}><Eye className="h-3.5 w-3.5" /> Ver</button>
-                {puedeCobrar && !e.cobrado && (
-                  <Link href={`/finanzas?tab=facturacion&grupo=cobrar&factura=${factura.id}&accion=cobro`} className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-xs font-medium text-white hover:bg-green-700"><DollarSign className="h-3.5 w-3.5" /> Registrar cobro</Link>
-                )}
-                <Link href={`/finanzas?tab=facturacion&grupo=cobrar&factura=${factura.id}`} className={linkClass}>Ver en facturación <ArrowRight className="h-3 w-3" /></Link>
-              </div>
-              {puedeFacturar && factura.estado !== "pagada" && (
-                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
-                  <Link href={`/finanzas?tab=facturacion&grupo=cobrar&factura=${factura.id}&accion=nc`} className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 dark:border-red-700 px-3 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30">
-                    <Ban className="h-3.5 w-3.5" /> Emitir NC
-                  </Link>
-                </div>
-              )}
-            </>) : (
-              <div className="space-y-2">
-                <p className="text-zinc-500">{e.refacturar ? "La factura fue anulada por nota de crédito. Podés volver a facturar o cancelar la venta." : "Sin factura emitida"}</p>
-                {e.esperandoOc && <p className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><AlertTriangle className="h-3.5 w-3.5" /> Falta la OC del cliente: se puede facturar igual (te pregunta antes).</p>}
-                {e.dias > DIAS_AVISO_SIN_FACTURAR && <p className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><Clock className="h-3.5 w-3.5" /> Lleva {e.dias} días aprobado sin facturar.</p>}
-                {puedeFacturar ? (
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={onFacturar} className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
-                      <Receipt className="h-4 w-4" /> {e.refacturar ? "Re-facturar" : "Facturar"}
-                    </button>
-                    <button onClick={onCancelar} className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-500 hover:bg-zinc-50 dark:hover:bg-zinc-800">
-                      <X className="h-4 w-4" /> Cancelar venta
-                    </button>
-                  </div>
-                ) : <p className="text-xs text-zinc-400">La factura la emite administración.</p>}
+              ))}
+            </div>
+          )}
+
+          {factura ? (<>
+            <div className="flex flex-wrap items-center gap-x-1.5">
+              <span className="font-mono font-bold whitespace-nowrap">{comprobante(factura)}</span>
+              <span className={`rounded px-1 text-[10px] font-semibold ${factura.cae ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"}`}>{factura.cae ? "ARCA" : "Manual"}</span>
+              <span className="ml-auto whitespace-nowrap text-[11px] text-zinc-400">{formatDate(factura.fecha)}{factura.fecha_vencimiento ? ` → vence ${formatDate(factura.fecha_vencimiento)}` : ""}</span>
+            </div>
+            <div className="flex justify-between"><span className="text-zinc-500">Total{Number(factura.total_acreditado) > 0 ? " (menos NC)" : ""}</span><span className="font-bold">{formatCurrency(totalFactura, (factura.moneda || "ARS") as "ARS" | "USD")}</span></div>
+            {e.saldo !== null && (
+              <div className="flex justify-between">
+                <span className="text-zinc-500">Cobrado <span className="text-green-600">{formatCurrency(Math.max(0, totalFactura - e.saldo), e.monedaVenta)}</span></span>
+                <span className={`font-bold ${e.saldo <= 0.01 ? "text-green-600" : e.vencida ? "text-red-600" : ""}`}>{e.saldo <= 0.01 ? "Cobrada" : `Falta ${formatCurrency(e.saldo, e.monedaVenta)}`}{e.vencida ? " (vencida)" : ""}</span>
               </div>
             )}
-          </div>
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <button onClick={() => onDescargar(factura.id)} disabled={downloadingFacturaId === factura.id} className={btnSecundario}>
+                {downloadingFacturaId === factura.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />} PDF
+              </button>
+              <button onClick={() => onDescargar(factura.id, true)} disabled={downloadingFacturaId === factura.id} className={btnSecundario}><Eye className="h-3 w-3" /> Ver</button>
+              {puedeCobrar && !e.cobrado && (
+                <Link href={`/finanzas?tab=facturacion&grupo=cobrar&factura=${factura.id}&accion=cobro`} className="inline-flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-700"><DollarSign className="h-3 w-3" /> Cobrar</Link>
+              )}
+              {puedeFacturar && factura.estado !== "pagada" && (
+                <Link href={`/finanzas?tab=facturacion&grupo=cobrar&factura=${factura.id}&accion=nc`} className="inline-flex items-center gap-1 rounded-md border border-red-300 dark:border-red-700 px-2 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30">
+                  <Ban className="h-3 w-3" /> NC
+                </Link>
+              )}
+              <Link href={`/finanzas?tab=facturacion&grupo=cobrar&factura=${factura.id}`} className={`${linkClass} ml-auto`}>Facturación <ArrowRight className="h-3 w-3" /></Link>
+            </div>
+          </>) : (<>
+            <p className="text-zinc-500">{e.refacturar ? "Anulada por NC: podés volver a facturar o cancelar la venta." : "Sin factura emitida"}</p>
+            {e.esperandoOc && <p className="flex items-center gap-1 text-amber-600 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Falta la OC del cliente: se puede facturar igual.</p>}
+            {e.dias > DIAS_AVISO_SIN_FACTURAR && <p className="flex items-center gap-1 text-amber-600 dark:text-amber-400"><Clock className="h-3 w-3" /> {e.dias} días aprobado sin facturar.</p>}
+            {puedeFacturar ? (
+              <div className="flex items-center gap-1.5 pt-0.5">
+                <button onClick={onFacturar} className="inline-flex items-center gap-1 rounded-md bg-green-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-green-700">
+                  <Receipt className="h-3.5 w-3.5" /> {e.refacturar ? "Re-facturar" : "Facturar"}
+                </button>
+                <button onClick={onCancelar} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-50 hover:text-red-600 dark:hover:bg-zinc-800">
+                  <X className="h-3.5 w-3.5" /> Cancelar venta
+                </button>
+              </div>
+            ) : <p className="text-zinc-400">La factura la emite administración.</p>}
+          </>)}
         </Seccion>
       </div>
     </Card>
