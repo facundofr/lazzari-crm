@@ -604,7 +604,7 @@ export default function FinanzasPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   // B5: créditos a favor con proveedores (anticipos, saldos a favor, ajustes, pagos sobre FC anuladas).
   const [creditosProv, setCreditosProv] = useState<CreditoProveedor[]>([]);
-  const puedeAdministrar = profile?.role === "super_admin" || profile?.role === "admin";
+  const puedeAdministrar = profile?.role === "super_admin" || profile?.role === "admin" || profile?.role === "administrativo";
 
   // Modal
   const [modalOpen, setModalOpen] = useState(false);

@@ -637,7 +637,8 @@ export default function ConfiguracionPage() {
     { id: "integraciones" as const, label: "Integraciones", icon: Plug },
     { id: "notificaciones" as const, label: "Notificaciones", icon: Bell },
     { id: "plantillas" as const, label: "Plantillas de Email", icon: Mail },
-    { id: "comisiones" as const, label: "Comisiones", icon: Percent },
+    // Comisiones: solo super_admin y admin (el rol administrativo no las ve).
+    ...(profile?.role === "super_admin" || profile?.role === "admin" ? [{ id: "comisiones" as const, label: "Comisiones", icon: Percent }] : []),
     { id: "retenciones" as const, label: "Retenciones", icon: ShieldCheck },
     { id: "cheques" as const, label: "Fechas de cheque", icon: CalendarDays },
   ];

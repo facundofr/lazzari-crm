@@ -28,6 +28,7 @@ import {
   Shirt,
   Zap,
   Scissors,
+  FileSearch,
 } from "lucide-react";
 import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -45,6 +46,7 @@ const navigation = [
   { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras" },
   { name: "Oportunidades", href: "/oportunidades", icon: Lightbulb, module: "clientes" },
   { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
+  { name: "Facturas", href: "/consulta-facturas", icon: FileSearch, module: "consulta_facturas" },
   // ── Compras & logistica ──
   { name: "Compras", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
   { name: "Personalización", href: "/personalizacion", icon: Scissors, module: "ordenes_compra" },

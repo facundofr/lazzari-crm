@@ -25,6 +25,7 @@ import { useUser } from "@/lib/auth-context";
 import { Ficha360 } from "@/components/clientes/ficha-360";
 import { AvisoDuplicadosCliente, SemaforoBCRAPrevio, type ClienteParecido } from "@/components/clientes/avisos-alta-cliente";
 import { LeerDocumentoImpositivo } from "@/components/leer-documento-impositivo";
+import { EliminarConMotivoModal } from "@/components/eliminar-con-motivo";
 import { TIPO_DOCUMENTO_LABEL, type DatosImpositivos } from "@/lib/documento-impositivo";
 import { traerTodo } from "@/lib/paginar";
 import { traerSaldosClientes, saldoClienteEn, type SaldoCliente } from "@/lib/saldo-clientes";
@@ -325,6 +326,7 @@ export default function ClientesPage() {
 
   // Detail
   const [selectedCliente, setSelectedCliente] = useState<ClienteExt | null>(null);
+  const [clienteAEliminar, setClienteAEliminar] = useState<{ id: string; nombre: string } | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("datos");
 
   // Abrir un cliente directo desde otro módulo: /clientes?id=<cliente> (va a la Ficha 360).
@@ -1396,40 +1398,13 @@ export default function ClientesPage() {
     }
   }
 
-  async function handleDelete(id: string) {
-    const sociedadId = sociedadActiva?.id;
-    if (!sociedadId) {
+  // Eliminar pide motivo (ventanita). La base decide: con historial se desactiva, sin historial se borra; todo queda guardado.
+  function handleDelete(c: ClienteExt) {
+    if (!sociedadActiva?.id) {
       toast.error("Seleccioná una sociedad antes de eliminar el cliente");
       return;
     }
-    try {
-      // Check for associated documents before deleting
-      const [{ count: presCount }, { count: factCount }, { count: remCount }] = await Promise.all([
-        (() => supabase.from("presupuestos").select("id", { count: "exact", head: true }).eq("cliente_id", id).eq("sociedad_id" as any, sociedadId))(),
-        (() => supabase.from("facturas").select("id", { count: "exact", head: true }).eq("cliente_id", id).eq("sociedad_id" as any, sociedadId))(),
-        (() => (supabase as any).from("remitos").select("id", { count: "exact", head: true }).eq("cliente_id", id).eq("sociedad_id", sociedadId))(),
-      ]);
-      const docs: string[] = [];
-      if ((presCount ?? 0) > 0) docs.push(`${presCount} presupuesto${presCount !== 1 ? "s" : ""}`);
-      if ((factCount ?? 0) > 0) docs.push(`${factCount} factura${factCount !== 1 ? "s" : ""}`);
-      if ((remCount ?? 0) > 0) docs.push(`${remCount} remito${remCount !== 1 ? "s" : ""}`);
-      if (docs.length > 0) {
-        alert(`No se puede eliminar este cliente porque tiene documentos asociados: ${docs.join(", ")}.`);
-        return;
-      }
-      if (!confirm("¿Seguro que queres eliminar este cliente? Esta accion no se puede deshacer.")) return;
-      let clienteDelete = supabase.from("clientes").delete().eq("id", id);
-      clienteDelete = clienteDelete.eq("sociedad_id" as any, sociedadId);
-      const { error } = await clienteDelete;
-      if (error) throw error;
-      setSelectedCliente(null);
-      setPanelFullscreen(false);
-      toast.success("Cliente eliminado");
-      await fetchClientes();
-    } catch (err) {
-      console.error("Error deleting cliente:", err);
-      toast.error("Error al eliminar cliente");
-    }
+    setClienteAEliminar({ id: c.id, nombre: c.razonSocial });
   }
 
   // Helpers
@@ -1836,7 +1811,7 @@ export default function ClientesPage() {
                   <button onClick={() => { openEdit(selectedCliente); setSelectedCliente(null); setPanelFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors" title="Editar">
                     <Pencil className="h-4 w-4" />
                   </button>
-                  <button onClick={() => handleDelete(selectedCliente.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 transition-colors" title="Eliminar">
+                  <button onClick={() => handleDelete(selectedCliente)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 transition-colors" title="Eliminar">
                     <Trash2 className="h-4 w-4" />
                   </button>
                   <button onClick={() => { setSelectedCliente(null); setPanelFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300 transition-colors" title="Cerrar">
@@ -3068,6 +3043,23 @@ export default function ClientesPage() {
           </div>
         </div>
       </Modal>
+
+      {clienteAEliminar && (
+        <EliminarConMotivoModal
+          tipo="cliente"
+          id={clienteAEliminar.id}
+          nombre={clienteAEliminar.nombre}
+          onCerrar={() => setClienteAEliminar(null)}
+          onListo={async (r) => {
+            setClienteAEliminar(null);
+            setSelectedCliente(null);
+            setPanelFullscreen(false);
+            if (r.accion === "desactivado") toast.info("Tiene historial: quedó desactivado (no se borró). El motivo quedó guardado.");
+            else toast.success("Cliente eliminado. El motivo quedó guardado.");
+            await fetchClientes();
+          }}
+        />
+      )}
     </>
   );
 }

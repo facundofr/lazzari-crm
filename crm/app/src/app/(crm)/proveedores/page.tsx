@@ -28,6 +28,7 @@ import { mostrarWhatsApp } from "@/lib/whatsapp-ar";
 import { WhatsAppInput } from "@/components/ui/whatsapp-input";
 import { textoCondicionPago, type PlanPago } from "@/lib/condicion-pago";
 import { ProveedorFormModal, CONCEPTOS_RG830, TAG_COLORS, type ProveedorForm } from "@/components/proveedor-form-modal";
+import { EliminarConMotivoModal } from "@/components/eliminar-con-motivo";
 
 function ClasificacionTag({ tag }: { tag: string }) {
   const color = TAG_COLORS[tag] ?? "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";
@@ -158,8 +159,9 @@ export default function ProveedoresPage() {
   const { sociedadActiva, role } = useUser();
   const canManagePriceRules = role === "super_admin" || role === "admin" || role === "administrativo";
   const canDeletePriceRules = role === "super_admin" || role === "admin";
-  const canManageProveedores = role === "super_admin" || role === "admin" || role === "administrativo";
-  const canDeleteProveedores = role === "super_admin" || role === "admin";
+  // Todos (menos solo lectura) ven, crean, editan y eliminan proveedores; eliminar pide motivo y queda guardado.
+  const canManageProveedores = role === "super_admin" || role === "admin" || role === "administrativo" || role === "vendedor";
+  const canDeleteProveedores = canManageProveedores;
   const [tab, setTab] = useState<"proveedores" | "listas">("proveedores");
   const [search, setSearch] = useState("");
   const [filtroRapido, setFiltroRapido] = useState<FiltroRapido>("todos");
@@ -198,6 +200,7 @@ export default function ProveedoresPage() {
 
   // Detail
   const [selectedProv, setSelectedProv] = useState<Proveedor | null>(null);
+  const [proveedorAEliminar, setProveedorAEliminar] = useState<{ id: string; nombre: string } | null>(null);
   const [panelFullscreen, setPanelFullscreen] = useState(false);
   type ProveedorContactoForm = { id?: string; nombre: string; cargo: string; email: string; telefono: string; whatsapp: string; principal: boolean; notas: string };
   const emptyProveedorContacto: ProveedorContactoForm = { nombre: "", cargo: "", email: "", telefono: "", whatsapp: "", principal: false, notas: "" };
@@ -411,7 +414,7 @@ export default function ProveedoresPage() {
     }
   }
 
-  async function handleDeleteProveedor(proveedor: Proveedor) {
+  function handleDeleteProveedor(proveedor: Proveedor) {
     const sociedadId = sociedadActiva?.id;
     if (!canDeleteProveedores) {
       toast.error("No tenés permiso para eliminar proveedores");
@@ -422,84 +425,8 @@ export default function ProveedoresPage() {
       return;
     }
 
-    setMutatingProveedorId(proveedor.id);
-    try {
-      const dependencyDefinitions = [
-        { table: "productos", column: "proveedor_id", label: "artículo" },
-        { table: "listas_precios", column: "proveedor_id", label: "lista de precios" },
-        { table: "ordenes_compra", column: "proveedor_id", label: "orden de compra" },
-        { table: "facturas_compra", column: "proveedor_id", label: "factura de compra" },
-        { table: "ordenes_pago", column: "proveedor_id", label: "orden de pago" },
-        { table: "movimientos", column: "proveedor_id", label: "movimiento financiero" },
-        { table: "presupuesto_items", column: "proveedor_id", label: "ítem de presupuesto" },
-        { table: "extracto_movimientos", column: "match_proveedor_id", label: "movimiento de extracto" },
-        { table: "lineas_credito", column: "proveedor_id", label: "línea de crédito" },
-        { table: "pago_solicitudes", column: "proveedor_id", label: "registro de pago" },
-        { table: "saldos_favor_proveedor", column: "proveedor_id", label: "saldo a favor" },
-      ];
-
-      const dependencyResults = await Promise.all(dependencyDefinitions.map(async (definition) => {
-        const { count, error } = await (supabase as any)
-          .from(definition.table)
-          .select("id", { count: "exact", head: true })
-          .eq(definition.column, proveedor.id);
-        if (error) throw new Error(`No se pudo verificar ${definition.label}: ${error.message}`);
-        return { ...definition, count: count ?? 0 };
-      }));
-
-      const dependencies = dependencyResults.filter((result) => result.count > 0);
-      if (dependencies.length > 0) {
-        const detail = dependencies
-          .map((result) => `${result.count} ${result.label}${result.count === 1 ? "" : "s"}`)
-          .join(", ");
-        if (!proveedor.activo) {
-          alert(`No se puede eliminar este proveedor porque conserva historial asociado: ${detail}. Ya se encuentra desactivado.`);
-          return;
-        }
-        if (confirm(`No se puede eliminar este proveedor porque conserva historial asociado: ${detail}.\n\n¿Querés desactivarlo para impedir nuevas operaciones?`)) {
-          await updateProveedorActivo(proveedor, false);
-        }
-        return;
-      }
-
-      if (!confirm(`¿Eliminar definitivamente a “${proveedor.razonSocial}”? Esta acción no se puede deshacer.`)) return;
-
-      const { data, error } = await (supabase as any)
-        .from("proveedores")
-        .delete()
-        .eq("id", proveedor.id)
-        .eq("sociedad_id", sociedadId)
-        .select("id");
-      if (error) throw error;
-      if (!data?.length) throw new Error("No se eliminó ningún proveedor");
-
-      const { error: contactosError } = await (supabase as any)
-        .from("contactos")
-        .delete()
-        .eq("entity_type", "proveedor")
-        .eq("entity_id", proveedor.id);
-      if (contactosError) console.error("No se pudieron limpiar los contactos del proveedor eliminado:", contactosError);
-
-      setSelectedProv(null);
-      setPanelFullscreen(false);
-      toast.success("Proveedor eliminado definitivamente");
-      await fetchData();
-    } catch (err: any) {
-      console.error("Error deleting proveedor:", err);
-      if (err?.code === "23503" && proveedor.activo) {
-        if (confirm("La base detectó historial relacionado y bloqueó la eliminación. ¿Querés desactivar el proveedor?")) {
-          try {
-            await updateProveedorActivo(proveedor, false);
-            return;
-          } catch (toggleError) {
-            console.error("Error deactivating proveedor:", toggleError);
-          }
-        }
-      }
-      toast.error(err instanceof Error ? err.message : "No se pudo eliminar el proveedor");
-    } finally {
-      setMutatingProveedorId(null);
-    }
+    // Pide motivo (ventanita). La base decide: con historial (OC, facturas, listas…) se desactiva; sin historial se borra. Todo queda guardado.
+    setProveedorAEliminar({ id: proveedor.id, nombre: proveedor.razonSocial });
   }
 
   const saldoDe = (id: string): SaldoProveedor => saldos[id] || { ARS: 0, USD: 0 };
@@ -1389,6 +1316,22 @@ export default function ProveedoresPage() {
           </div>
         )}
       </Modal>
+      {proveedorAEliminar && (
+        <EliminarConMotivoModal
+          tipo="proveedor"
+          id={proveedorAEliminar.id}
+          nombre={proveedorAEliminar.nombre}
+          onCerrar={() => setProveedorAEliminar(null)}
+          onListo={async (r) => {
+            setProveedorAEliminar(null);
+            setSelectedProv(null);
+            setPanelFullscreen(false);
+            if (r.accion === "desactivado") toast.info("Tiene historial: quedó desactivado (no se borró). El motivo quedó guardado.");
+            else toast.success("Proveedor eliminado. El motivo quedó guardado.");
+            await fetchData();
+          }}
+        />
+      )}
     </>
   );
 }

@@ -151,6 +151,34 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
 
 ## 4. Pendiente (próximas tandas)
 
+**Tanda V1.1.425 (13/10/2026) — Punto 6: PERMISOS POR ROL. HECHA EN CÓDIGO, SIN PUBLICAR. Migraciones SIN CORRER (probadas con `--probar`, todo OK).**
+- **Cómo trabaja Lazzari (Augusto):** él ve y hace todo. Mariana = administrativa (plata y compras). Los vendedores también compran
+  (pedidos, OC, mandarlas, recibir mercadería, cargar facturas de proveedores), llevan muestras, transportes y personalización, y NO pagan.
+  Todos ven, crean, editan y eliminan clientes y proveedores; eliminar pide motivo que queda guardado. Manu: NO desactivarlo por ahora.
+- **Migración 1 `20261013100000_permisos_por_rol.sql`** (+ vuelta atrás, probada): escribir órdenes de pago, aplicaciones de cobros, eCheqs,
+  saldos de caja, movimientos, retenciones y plantillas de mail = solo super_admin/admin/administrativo (leer sigue igual). Gastos manuales:
+  crear también vendedores (factura "solo IVA"). Rol administrativo: gastos fijos, crear presupuestos, notificaciones, configuración, plantillas.
+  Tabla nueva `registros_eliminados` + funciones `eliminar_cliente` / `eliminar_proveedor` (con historial → se desactiva, sin historial → se borra;
+  siempre guarda copia, motivo, quién y cuándo). `registrar_factura_compra_con_oc_extra` acepta vendedores (antes los trababa).
+  No se tocó: CAI de remitos (`next_cai_number` escribe `cai_config` con el usuario; es de ARCA), muestras, transportes, personalización, numeración.
+  Las 7 funciones de plata ya pedían administración (`lz_puede_operar_finanzas`). Prueba: `scripts/db/pruebas/permisos_por_rol.sql` (35 de 35 OK).
+- **Migración 2 `20261013110000_mariana_administrativa.sql`** (+ vuelta atrás): Mariana pasa a administrativa. Correrla DESPUÉS de publicar.
+- **App:** `components/eliminar-con-motivo.tsx` (ventanita) en Clientes y Proveedores; proveedores: vendedores crean/editan/eliminan;
+  `ROLE_PERMISSIONS` (vendedor: clientes y proveedores completos; administrativo: crear/eliminar clientes, eliminar proveedores, Configuración,
+  sin borrar presupuestos); Finanzas: el administrativo puede lo que antes era "solo administrador" (borrar movimientos, ajustes manuales);
+  Dashboard: cobertura de gastos fijos también para administrativo; Configuración: pestaña Comisiones solo super_admin/admin.
+  tsc 0 errores, hooks OK, probado en local sin guardar (ventanita en Clientes y Proveedores, aviso "Falta correr la migración", Configuración).
+- **Pantalla nueva "Facturas"** (`/consulta-facturas`, menú debajo de Ventas, todos los roles; módulo `consulta_facturas`): SOLO LECTURA.
+  De venta: buscar (cliente, CUIT, número, PR, OC del cliente), detalle con renglones, CAE y envío, "Ver / bajar PDF" y "Reenviar al cliente"
+  (mail con el PDF; la marca de envío la guarda la función nueva `marcar_factura_enviada`, en la migración 1). De compra: buscar (proveedor,
+  CUIT, número, OC), detalle con renglones, todas sus OC y "Ver factura del proveedor" (archivo). No emite, no cobra, no paga, no anula.
+  No se tocó Facturación (ARCA). Datos del emisor del PDF en `lib/emisor-sociedad.ts` (copia de `emisorData` de Facturación: si cambian, cambiar los dos).
+  Probado en local sin guardar ni enviar (101 de venta / 82 de compra en Lazzari; PDF, ventanita de mail cancelada, detalle de compra).
+  Prueba de la base: 39 de 39 OK (el vendedor ve las facturas, no las puede cambiar, sí marcar el envío).
+- **Para publicar, en orden:** correr migración 1 → publicar V1.1.425 → correr migración 2 → Mariana prueba (si algo no le anda: vuelta atrás 2).
+- **Calendario por rol:** queda para más adelante (pedido de Augusto). Hoy un administrativo solo edita/borra sus propios eventos.
+- Sugerencia futura: mostrar los clientes/proveedores eliminados (con motivo) en la Papelera.
+
 **Tanda V1.1.418 (12/10/2026) — PUBLICADA (commit 6d75961), migraciones 20261012100000 y 20261012110000 ya corridas por Augusto. Plan y estudio: `docs/ESTUDIO-Y-PLAN-12-10-2026.md`.**
 - **Pestaña Revisar** (Finanzas > Hoy): `components/finanzas-revisar.tsx`, lógica `lib/revisar-finanzas.ts` (prueba `scripts/test-revisar-finanzas.mjs`).
   A) lo anotado (tabla nueva `finanzas_revisar`: motivo, nota, "Recordarme el", Resuelto con nota, Posponer, Volver a pendiente; no se borra nada);

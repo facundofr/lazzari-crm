@@ -456,8 +456,8 @@ export default function DashboardPage() {
         {/* Cobertura de gastos + Objetivos */}
         {(totalGastosFijos > 0 || objetivosActivos.length > 0) && (
           <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
-            {/* Cobertura de gastos - solo admin */}
-            {isAdmin && totalGastosFijos > 0 && (
+            {/* Cobertura de gastos - admin y administrativo */}
+            {(isAdmin || userRole === "administrativo") && totalGastosFijos > 0 && (
               <Card>
                 <CardHeader>
                   <CardTitle>Cobertura de gastos fijos</CardTitle>
