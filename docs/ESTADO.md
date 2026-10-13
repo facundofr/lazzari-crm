@@ -688,7 +688,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
       **V1.1.432 (13/10) — ventana Nueva Orden de Pago compacta:** Ret. Ganancias en una fila (%, botones y monto) con el acumulado en una línea;
         Monto manual en una línea; Resumen y Datos bancarios lado a lado; tabla de facturas, notas y pie más finos. Entra entera sin bajar.
         Botón copiar (`components/copiar-btn.tsx`) al lado del Neto a pagar (copia `3104080.00`) y en CBU, Alias y CUIT. Probado en local sin guardar.
-      **Tanda V1.1.433 (13/10, EN CURSO, sin publicar):**
+      **Tanda V1.1.433 (13/10, PUBLICADA en producción, commit 184465e):**
         - HECHO: Medios de pago de la OP en una fila por medio (sin CUIT repetido). OP única: se sacó "+ Parcial";
           si faltan > $1 aparece "Faltan $X · Pagar parcial" (y al Crear lo arma solo y avisa en amarillo): recorta lo aplicado
           a la factura más nueva y recalcula la retención (`lib/op-parcial.ts`, prueba `scripts/test-op-parcial.ts`). Probado con Bruno Francione sin guardar.
@@ -705,9 +705,26 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
           completa solo lo vacío; si la cuenta es de otro CUIT avisa en amarillo (`lib/documento-impositivo.ts`, prueba `scripts/test-documento-impositivo.ts`).
         - Probado en local sin guardar. tsc 0, hooks OK. Versión 1.1.433.
         - PENDIENTE para otra tanda: compactar detalle de factura de compra y cobro/recibo.
+      **V1.1.434 (13/10) — OP en pesos de facturas en US$** (Augusto: "el pago lo hago en $ siempre"):
+        - Nueva OP con facturas USD: ya no salta a la ventana FX; la OP queda en $ con barra "Se paga en pesos · Dólar" (BNA divisa vendedor del día hábil
+          anterior, se completa sola y es editable). Bruto = Σ round(US$ × TC) por factura (`lib/op-usd-pesos.ts`, prueba `scripts/test-op-usd-pesos.ts`, con enteros).
+          Retención de Ganancias, base, medios (cheque propio, eCheq, etc.) y certificado en pesos, igual que una OP en pesos. NC en US$ se aplican en la misma OP.
+          Pago parcial en US$ redondea para abajo al centavo de dólar. Saldo de facturas redondeado (ya no muestra 954,07999999).
+        - Migración `20261013190000_op_usd_en_pesos.sql` (CORRIDA 13/10, + vuelta atrás): columnas ordenes_pago.cotizacion / cotizacion_fecha / moneda_documentos
+          y función `registrar_op_usd_en_pesos` (número OP-0000xx normal; op_facturas_compra.monto en US$; recalcula el bruto y rechaza si no coincide).
+          Probada con Segufer contra la base con ROLLBACK (crear + anular) y en local sin guardar: US$ 1.127,65 × 1.517 = $ 1.710.645,05, ret. $ 23.448,88, neto $ 1.687.196,17.
+        - El PDF de la OP muestra cada factura en $ con "US$ X × TC". No hay TC original en facturas_compra: la diferencia de cambio contra la factura no se calcula.
+      **Segufer (HECHO 13/10, por script con las funciones de la pantalla, OK de Augusto):** FC A 00042-00101199 (número corregido, antes "0001-") conciliada con OC-2026-1138
+        (6006 y 6800; 2 × 6007 y 2 × 6200 "Fuera de OC", cliente del sistema viejo) y FC A 00042-00100558 con OC complementaria OC-2026-1234 (4 × 6007). Ambas aprobadas, SIN aceptar costos
+        (la diferencia contra la OC la bonificó Segufer con NC). NC A 00042-00004630 (US$ 28,80) y 00042-00004674 (US$ 158,50) cargadas con PDF y aplicadas a su factura.
+        Saldo para la OP: US$ 173,57 + US$ 954,08 = US$ 1.127,65. La OP la hace Augusto.
+        Mejora propuesta (no hecha): en Facturas de compra, "en_conciliacion" se muestra como "Pendiente" (`finanzas/page.tsx` ~4405): mostrar "En conciliación" + botón Retomar.
       **Del Sol (pendiente, 13/10):** OP 0001-00017009 = eCheq 3968 $6.210.728,30 (11/12, no cargado) + ret. Ganancias cert. 11672 $99.826,69 = $6.310.554,99;
         paga FA 16-16, 16-17, 16-18, 15-45 y "FC 39" ($1.242.839,98). La FA 15-39 está ANULADA por la NCA 15-5 (emitida desde el CRM el 30/09 con CAE, sin usuario ni motivo);
-        la FA 15-54 ($1.395.507,04) sigue impaga. Falta que Augusto diga por qué se hizo la NCA 15-5 (¿refacturada como 15-54?). Nada cargado todavía.
+        la FA 15-54 ($1.395.507,04) sigue impaga. Nada cargado todavía.
+        ENCONTRADO 13/10: la 15-39 (300 bolsas + 6 carretillas) se anuló con la NCA 15-5 (30/09 18:50) y se REFACTURÓ como FA 16-17 (18:51, mismos artículos, $1.225.125).
+        Del Sol paga la 16-17 Y la "39" → pagó dos veces lo mismo ($1.242.839,98 de más). La 15-54 es otra venta (detector Bosch + martillo demoledor).
+        FA 16-18 ($1.370.733,34, renglón genérico "ARTICULO FERRETERIA Y ELECTRICIDAD", creada 30/09 19:17) tiene el MISMO importe que la FC-A 9-399 del sistema viejo (20/08): preguntar si es reemisión y si la 9-399 ya estaba cobrada.
         Detalle para corroborar: PDF en `C:\Users\lazza\Downloads\OP 17009 LAZZARI AUGUSTO .pdf` (escaneado, 3 hojas: remesa, certificado, eCheq Galicia LRA9FdZ685).
         Importes por factura en la OP: 16-16 $926.374,49 · 16-18 $1.370.733,34 · 16-17 $1.225.125,00 · "39" $1.242.839,98 (fecha 30/9 en la OP; en el CRM la FA 15-39 es del 25/09) · 15-45 $1.545.482,18.
         Certificado 11672: régimen 078, pago neto de IVA $5.215.334,70, no sujeto $224.000, 2 % s/ $4.991.334,70. Fecha de la OP y recepción: 09/10/2026.

@@ -43,6 +43,9 @@ import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } fr
 import { pctRetencion, reglaPorConcepto } from "@/lib/retencion-conceptos";
 import { roundPaymentMoney, sumPaymentMoney } from "@/lib/payment-money";
 import { calcularPagoParcial } from "@/lib/op-parcial";
+import { pesosDeUsd, brutoPesosDeUsd, cotizacionValida } from "@/lib/op-usd-pesos";
+import { diaHabilAnterior } from "@/lib/dias-habiles";
+import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import ResumenEconomico from "@/components/resumen-economico";
 import { netoCuentaCorriente, sumarPorMoneda } from "@/lib/resumen-economico";
 
@@ -782,6 +785,11 @@ export default function FinanzasPage() {
   const [opNCDisponibles, setOpNCDisponibles] = useState<OpNCDisponible[]>([]);
   const [opMedios, setOpMedios] = useState<OpMedioPago[]>([makeOpMedio()]);
   const [opMonthlyBase, setOpMonthlyBase] = useState(0); // Acumulado mensual de bases sin IVA (de OPs previas)
+  // Facturas en US$ se pagan en pesos: cotización BNA divisa vendedor del día hábil anterior al pago (editable).
+  const [opCotizacion, setOpCotizacion] = useState("");
+  const [opCotizacionBna, setOpCotizacionBna] = useState<{ valor: number; fecha: string } | null>(null);
+  const [opCotizacionLoading, setOpCotizacionLoading] = useState(false);
+  const opCotizacionEditada = useRef(false);
   const [opDatosError, setOpDatosError] = useState("");
   const [opMonthlyRetenido, setOpMonthlyRetenido] = useState(0); // Retenciones ya practicadas en el mes
   const [opFCLoading, setOpFCLoading] = useState(false);
@@ -1848,7 +1856,7 @@ export default function FinanzasPage() {
         if (cancelled) return;
         setOpFCPendientes((data || []).map((fc: any) => {
           const pagado = pagadoPorFC[fc.id] || 0;
-          const saldo = Math.max(0, Number(fc.total) - pagado);
+          const saldo = roundPaymentMoney(Math.max(0, Number(fc.total) - pagado));
           const esDirecta = pagoParcialDirecto && pagoParcialFCId === fc.id;
           return { id: fc.id, numero: fc.numero_factura || "S/N", tipo_comprobante: fc.tipo_comprobante || "FC", fecha: fc.fecha, total: Number(fc.total), subtotal: Number(fc.subtotal || 0), iva: Number(fc.iva || 0), percepciones: Number(fc.percepciones || 0), saldo_pendiente: saldo, moneda: fc.moneda || "ARS", selected: esDirecta, monto_a_pagar: esDirecta ? saldo : 0 };
         }).filter((fc: any) => fc.saldo_pendiente > 0));
@@ -1911,18 +1919,46 @@ export default function FinanzasPage() {
     return () => { cancelled = true; };
   }, [opForm.proveedor_id, opForm.fecha, opModalOpen, sociedadActiva?.id]);
 
-  // La moneda de la OP sigue a las facturas elegidas (si son todas USD, la OP se muestra en US$).
+  // La moneda de la OP sigue a las facturas elegidas. Las facturas en US$ se pagan SIEMPRE en pesos
+  // (pedido de Augusto 13/10): la OP queda en $ y las facturas se convierten con la cotización.
   useEffect(() => {
     const sel = opFCPendientes.filter(f => f.selected);
     if (!sel.length || opForm.usar_monto_manual) return;
     const monedas = [...new Set(sel.map(f => f.moneda))];
-    if (monedas.length === 1 && monedas[0] !== opForm.moneda) setOpForm(prev => ({ ...prev, moneda: monedas[0] as typeof prev.moneda }));
+    const destino = monedas.length === 1 ? (monedas[0] === "USD" ? "ARS" : monedas[0]) : null;
+    if (destino && destino !== opForm.moneda) setOpForm(prev => ({ ...prev, moneda: destino as typeof prev.moneda }));
   }, [opFCPendientes, opForm.usar_monto_manual, opForm.moneda]);
+
+  // OP en pesos de facturas en US$: todas las elegidas en dólares (no monto manual).
+  const opEnPesosUsd = !opForm.usar_monto_manual && opFCPendientes.some(f => f.selected) && opFCPendientes.filter(f => f.selected).every(f => f.moneda === "USD");
+  const opMonedaDocs: "ARS" | "USD" = opEnPesosUsd ? "USD" : opForm.moneda;
+  const opTC = opEnPesosUsd ? parseDecimalInput(opCotizacion) : 1;
+  const opTCOk = !opEnPesosUsd || cotizacionValida(opTC);
+
+  // Cotización BNA divisa (vendedor) del día hábil anterior a la fecha de la OP. Si no la tocaron, se completa sola.
+  useEffect(() => {
+    if (!opModalOpen || !opEnPesosUsd) return;
+    const fechaTc = diaHabilAnterior(opForm.fecha || todayAR());
+    let cancelled = false;
+    setOpCotizacionLoading(true);
+    fetch(`/api/cotizacion-bna?modalidad=divisas&fecha=${encodeURIComponent(fechaTc)}`, { cache: "no-store" })
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return;
+        const valor = Number(data?.valor_venta);
+        if (!Number.isFinite(valor) || valor <= 0) { setOpCotizacionBna(null); return; }
+        setOpCotizacionBna({ valor, fecha: String(data.fecha || fechaTc) });
+        if (!opCotizacionEditada.current) setOpCotizacion(toDecimalInput(valor));
+      })
+      .catch(() => { if (!cancelled) setOpCotizacionBna(null); })
+      .finally(() => { if (!cancelled) setOpCotizacionLoading(false); });
+    return () => { cancelled = true; };
+  }, [opModalOpen, opEnPesosUsd, opForm.fecha]);
 
   // 2. Base sin IVA de esta OP (Art. 23 RG 830: IVA se excluye de la base de retención)
   const opMontoBrutoFC = sumPaymentMoney(opFCPendientes.filter(f => f.selected).map(f => f.monto_a_pagar));
   // NC aplicadas en esta OP (no en monto manual ni en pago parcial directo). Nunca más que las facturas elegidas.
-  const opNCUsables = opForm.usar_monto_manual || pagoParcialDirecto ? [] : opNCDisponibles.filter(n => n.selected && n.moneda === opForm.moneda && n.monto_a_aplicar > 0);
+  const opNCUsables = opForm.usar_monto_manual || pagoParcialDirecto ? [] : opNCDisponibles.filter(n => n.selected && n.moneda === opMonedaDocs && n.monto_a_aplicar > 0);
   const opNCAplicado = Math.min(opMontoBrutoFC, sumPaymentMoney(opNCUsables.map(n => n.monto_a_aplicar)));
   // Reparto de las NC entre las facturas elegidas, en orden: [{nc_id, factura_compra_id, monto}]
   const opNCAsignaciones = (() => {
@@ -1941,7 +1977,15 @@ export default function FinanzasPage() {
     }
     return out;
   })();
-  const opMontoBruto = roundPaymentMoney(opForm.usar_monto_manual && opForm.monto_manual > 0 ? opForm.monto_manual : opMontoBrutoFC - opNCAplicado);
+  // En US$: lo que se paga en dinero de cada factura (descontadas las NC), en dólares.
+  const opFCDineroUsd = opFCPendientes.filter(f => f.selected).map(f => ({
+    id: f.id,
+    monto: roundPaymentMoney(f.monto_a_pagar - opNCAsignaciones.filter(a => a.factura_compra_id === f.id).reduce((s, a) => s + a.monto, 0)),
+  }));
+  const opMontoBrutoDocs = roundPaymentMoney(opMontoBrutoFC - opNCAplicado);
+  const opMontoBruto = opEnPesosUsd
+    ? (opTCOk ? brutoPesosDeUsd(opFCDineroUsd.map(f => Math.max(0, f.monto)), opTC) : 0)
+    : roundPaymentMoney(opForm.usar_monto_manual && opForm.monto_manual > 0 ? opForm.monto_manual : opMontoBrutoFC - opNCAplicado);
   const opProveedor = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
   const opDiasPactados = Math.max(0, Number(opProveedor?.condicion_pago ? opProveedor.dias_pago : opProveedor?.dias_cuenta_corriente) || 0);
   // Cheques sugeridos (si el proveedor cobra con cheque): cada factura según cómo lo pide, en las fechas fijas del mes.
@@ -1959,8 +2003,8 @@ export default function FinanzasPage() {
   })();
   const opFechaPactada = calcularFechaPactada(opFCPendientes.filter(f => f.selected).map(f => f.fecha), opDiasPactados);
 
-  // Base sin IVA: para cada FC, la proporción sin IVA del monto a pagar
-  const opBaseSinIVA = (() => {
+  // Base sin IVA: para cada FC, la proporción sin IVA del monto a pagar (en la moneda de las facturas)
+  const opBaseSinIVADocs = (() => {
     if (opForm.usar_monto_manual && opForm.monto_manual > 0) {
       // Monto manual: descontar IVA estimado (el usuario puede ajustar el % manualmente)
       const ivaPct = opForm.iva_manual_pct ?? 21;
@@ -1983,6 +2027,8 @@ export default function FinanzasPage() {
     }, 0);
     return roundPaymentMoney(Math.max(0, baseFC - baseNC));
   })();
+  // Base de retención siempre en pesos (RG 830): en US$ se convierte con la cotización de la OP.
+  const opBaseSinIVA = opEnPesosUsd ? (opTCOk ? pesosDeUsd(opBaseSinIVADocs, opTC) : 0) : opBaseSinIVADocs;
 
   // 3. Auto-calcular retención ganancias según RG 830
   // Si el usuario activó/desactivó manualmente, no sobreescribir
@@ -2098,6 +2144,9 @@ export default function FinanzasPage() {
     setOpMedios([makeOpMedio()]);
     setOpMonthlyBase(0);
     setOpMonthlyRetenido(0);
+    setOpCotizacion("");
+    setOpCotizacionBna(null);
+    opCotizacionEditada.current = false;
     setOpModalOpen(true);
   }
 
@@ -2195,6 +2244,9 @@ export default function FinanzasPage() {
       .select("factura_compra_id, monto, facturas_compra!inner(id, numero_factura, fecha, total, tipo, notas)")
       .eq("orden_pago_id", opId);
     if (error) throw error;
+    // OP en pesos de facturas en US$: lo aplicado está en dólares; en la OP se muestra en pesos con su cotización.
+    const { data: opTc } = await (supabase as any).from("ordenes_pago").select("cotizacion, moneda_documentos").eq("id", opId).maybeSingle();
+    const tcOp = opTc?.moneda_documentos === "USD" && Number(opTc?.cotizacion) > 0 ? Number(opTc.cotizacion) : null;
 
     const seenInvoiceIds = new Set<string>();
     return (data || []).map((link: any) => {
@@ -2208,11 +2260,14 @@ export default function FinanzasPage() {
       const detalle = isTransport
         ? invoiceNotes.replace(/^Factura de transporte\s*[—-]?\s*/i, "").trim()
         : "";
+      const montoDoc = Number(link.monto ?? invoice.total);
+      const detalleUsd = tcOp ? `${formatCurrency(montoDoc, "USD")} \u00d7 ${formatCurrency(tcOp, "ARS")}` : "";
+      const detalleFinal = [detalle, detalleUsd].filter(Boolean).join(" \u00b7 ");
       return {
         numero: invoice.numero_factura || "\u2014",
         fecha: invoice.fecha,
-        monto: Number(link.monto ?? invoice.total),
-        ...(detalle ? { detalle } : {}),
+        monto: tcOp ? pesosDeUsd(montoDoc, tcOp) : montoDoc,
+        ...(detalleFinal ? { detalle: detalleFinal } : {}),
       };
     });
   }
@@ -2228,22 +2283,26 @@ export default function FinanzasPage() {
       ratioNeto: f.total <= 0 || sinIVA(f.tipo_comprobante) ? 1 : f.subtotal > 0 ? Math.min(1, f.subtotal / f.total) : 1,
     }));
     const baseFC = facturas.reduce((s, f) => s + roundPaymentMoney(f.monto * f.ratioNeto), 0);
-    const baseNC = Math.max(0, roundPaymentMoney(baseFC - opBaseSinIVA));
+    const baseNC = Math.max(0, roundPaymentMoney(baseFC - opBaseSinIVADocs));
+    // En US$ todo el reparto se hace en dólares; la retención se calcula en pesos (base × cotización) y se vuelve a pasar a US$.
+    const tc = opEnPesosUsd ? opTC : 1;
     const retencionDe = (base: number) => {
-      if (opMontoRetencionManual !== null) return roundPaymentMoney(opMontoRetencionManual);
+      if (opMontoRetencionManual !== null) return roundPaymentMoney(opMontoRetencionManual) / tc;
       if (!opForm.aplica_ganancias) return 0;
-      const acumulada = Math.max(0, (opMonthlyBase + base) - opMinimoGanancias) * (opForm.retencion_ganancias_pct / 100);
+      const acumulada = Math.max(0, (opMonthlyBase + base * tc) - opMinimoGanancias) * (opForm.retencion_ganancias_pct / 100);
       const r = Math.max(0, acumulada - opMonthlyRetenido);
-      return r < retencionConfig.minimo_retencion_ganancias ? 0 : r;
+      return (r < retencionConfig.minimo_retencion_ganancias ? 0 : r) / tc;
     };
-    const res = calcularPagoParcial(facturas, opTotalMedios, retencionDe, opNCAplicado, baseNC);
+    const res = calcularPagoParcial(facturas, opTotalMedios / tc, retencionDe, opNCAplicado, baseNC);
     if (!res.quedan.length) return false;
+    // En US$ lo parcial se redondea para abajo al centavo de dólar: así el neto en pesos nunca supera los medios.
+    if (opEnPesosUsd) for (const q of res.quedan) res.montos[q.id] = Math.floor((res.montos[q.id] || 0) * 100 + 1e-6) / 100;
     setOpFCPendientes(prev => prev.map(f => res.montos[f.id] !== undefined ? { ...f, monto_a_pagar: res.montos[f.id] } : f));
     const detalle = res.quedan.map(q => {
       const fc = elegidas.find(f => f.id === q.id);
-      return `${fc?.numero || "S/N"} queda debiendo ${formatCurrency(roundPaymentMoney((fc?.saldo_pendiente || 0) - (res.montos[q.id] || 0)), opForm.moneda)}`;
+      return `${fc?.numero || "S/N"} queda debiendo ${formatCurrency(roundPaymentMoney((fc?.saldo_pendiente || 0) - (res.montos[q.id] || 0)), opMonedaDocs)}`;
     }).join(" · ");
-    setOpAviso(`Pago parcial: ${detalle}. La retención se recalculó sobre lo que pagás (${formatCurrency(res.retencion, opForm.moneda)}). Revisá y apretá «Crear Orden de Pago».`);
+    setOpAviso(`Pago parcial: ${detalle}. La retención se recalculó sobre lo que pagás (${formatCurrency(roundPaymentMoney(res.retencion * tc), opForm.moneda)}). Revisá y apretá «Crear Orden de Pago».`);
     return true;
   }
 
@@ -2261,12 +2320,9 @@ export default function FinanzasPage() {
     if (!isKnownCondicionIva(opProvCondicion)) {
       setOpError("La condición fiscal del proveedor no está reconocida. Revisá su ficha antes de generar la OP."); return;
     }
-    if (selectedFCs.length > 0 && selectedFCs.every(f => f.moneda === "USD")) {
-      setOpModalOpen(false);
-      setFxPago({proveedorId: opForm.proveedor_id, documents: selectedFCs.map(fc => ({id:fc.id,numero:fc.numero,saldo:fc.saldo_pendiente,total:fc.total,subtotal:fc.subtotal,cotizacion:undefined}))});
-      return;
-    }
-    if (selectedFCs.some(f => f.moneda !== opForm.moneda) || opMedios.some(m => m.moneda !== opForm.moneda)) {
+    // Facturas en US$: se pagan en pesos con la cotización de la OP (ver lib/op-usd-pesos.ts).
+    if (opEnPesosUsd && !opTCOk) { setOpError("Falta la cotización del dólar (BNA divisa) para pasar las facturas a pesos."); return; }
+    if ((!opEnPesosUsd && selectedFCs.some(f => f.moneda !== opForm.moneda)) || opMedios.some(m => m.moneda !== opForm.moneda)) {
       setOpError("Hay documentos o medios en otra moneda. No se puede sumar pesos y dólares sin conversión: esta OP debe tener todos sus importes en la misma moneda."); return;
     }
     if (selectedFCs.some(f => !Number.isFinite(f.monto_a_pagar) || f.monto_a_pagar <= 0 || f.monto_a_pagar > f.saldo_pendiente + 0.005)) {
@@ -2279,7 +2335,12 @@ export default function FinanzasPage() {
       setOpSaving(true); setOpError("");
       try {
         if (!opRequestKeyRef.current) opRequestKeyRef.current = crypto.randomUUID();
-        const { error } = await (supabase as any).rpc("registrar_pago_proveedor_con_nc", {
+        const { error } = opEnPesosUsd ? await (supabase as any).rpc("registrar_op_usd_en_pesos", {
+          p_sociedad_id: sociedadActiva.id, p_request_key: opRequestKeyRef.current, p_proveedor_id: opForm.proveedor_id,
+          p_fecha: opForm.fecha, p_cotizacion: opTC, p_cotizacion_fecha: diaHabilAnterior(opForm.fecha || todayAR()),
+          p_facturas: opFCDineroUsd.map(f => ({ id: f.id, monto: Math.max(0, f.monto) })), p_notas_credito: opNCAsignaciones, p_medios: [],
+          p_monto_bruto: 0, p_base_retencion: 0, p_retencion_pct: 0, p_retencion_monto: 0, p_notas: opForm.notas || "", p_sobre_verde: false,
+        }) : await (supabase as any).rpc("registrar_pago_proveedor_con_nc", {
           p_sociedad_id: sociedadActiva.id, p_request_key: opRequestKeyRef.current, p_modo: "op", p_proveedor_id: opForm.proveedor_id,
           p_fecha: opForm.fecha, p_moneda: opForm.moneda, p_facturas: [], p_medios: [], p_monto_bruto: 0, p_base_retencion: 0,
           p_retencion_pct: 0, p_retencion_monto: 0, p_notas: opForm.notas || "", p_sobre_verde: false, p_notas_credito: opNCAsignaciones,
@@ -2346,7 +2407,23 @@ export default function FinanzasPage() {
         monto: roundPaymentMoney(fc.monto_a_pagar - opNCAsignaciones.filter(a => a.factura_compra_id === fc.id).reduce((s, a) => s + a.monto, 0)),
       })).filter(f => f.monto > 0.004);
       const conNC = opNCAsignaciones.length > 0;
-      const { data: opData, error } = await (supabase as any).rpc(conNC ? "registrar_pago_proveedor_con_nc" : "registrar_pago_proveedor_seguro", {
+      const { data: opData, error } = opEnPesosUsd ? await (supabase as any).rpc("registrar_op_usd_en_pesos", {
+        p_sociedad_id: sociedadActiva.id,
+        p_request_key: opRequestKeyRef.current,
+        p_proveedor_id: opForm.proveedor_id,
+        p_fecha: opForm.fecha,
+        p_cotizacion: opTC,
+        p_cotizacion_fecha: diaHabilAnterior(opForm.fecha || todayAR()),
+        p_facturas: opFCDineroUsd.filter(f => f.monto > 0.004),
+        p_notas_credito: opNCAsignaciones,
+        p_medios: mediosPayload,
+        p_monto_bruto: montoBrutoEfectivo,
+        p_base_retencion: baseRetencionEfectiva,
+        p_retencion_pct: opForm.aplica_ganancias ? opForm.retencion_ganancias_pct : 0,
+        p_retencion_monto: retencionEfectiva,
+        p_notas: opForm.notas,
+        p_sobre_verde: opForm.sobre_verde || false,
+      }) : await (supabase as any).rpc(conNC ? "registrar_pago_proveedor_con_nc" : "registrar_pago_proveedor_seguro", {
         ...(conNC ? { p_notas_credito: opNCAsignaciones } : {}),
         p_sociedad_id: sociedadActiva.id,
         p_request_key: opRequestKeyRef.current,
@@ -6095,12 +6172,12 @@ export default function FinanzasPage() {
                       </table>
                     </div>
                   )}
-                  {!opForm.usar_monto_manual && !pagoParcialDirecto && opNCDisponibles.some(n => n.moneda === opForm.moneda) && (
+                  {!opForm.usar_monto_manual && !pagoParcialDirecto && opNCDisponibles.some(n => n.moneda === opMonedaDocs) && (
                     <div className="mt-3 border border-emerald-200 dark:border-emerald-800 rounded-lg overflow-hidden">
                       <div className="bg-emerald-50 dark:bg-emerald-900/20 px-2 py-1.5 text-xs font-semibold text-emerald-800 dark:text-emerald-300">Notas de crédito disponibles del proveedor (restan del pago)</div>
                       <table className="w-full text-sm">
                         <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                          {opNCDisponibles.filter(n => n.moneda === opForm.moneda).map(nc => (
+                          {opNCDisponibles.filter(n => n.moneda === opMonedaDocs).map(nc => (
                             <tr key={nc.id} className={nc.selected ? "bg-emerald-50/60 dark:bg-emerald-900/10" : ""}>
                               <td className="px-2 py-1 w-8 text-center">
                                 <input type="checkbox" checked={nc.selected}
@@ -6126,11 +6203,27 @@ export default function FinanzasPage() {
                       </table>
                     </div>
                   )}
+                  {opEnPesosUsd && (
+                    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-sky-200 bg-sky-50/60 px-2 py-1.5 text-xs dark:border-sky-800 dark:bg-sky-950/20">
+                      <span className="font-semibold text-sky-800 dark:text-sky-300">Se paga en pesos · Dólar</span>
+                      <span className="inline-flex items-center gap-1">$
+                        <input type="text" inputMode="decimal" value={opCotizacion}
+                          onChange={(e) => { opCotizacionEditada.current = true; setOpCotizacion(e.target.value); }}
+                          className={`w-24 rounded border px-2 py-0.5 text-right font-mono text-xs dark:bg-zinc-800 dark:text-white ${opTCOk ? "border-zinc-200 dark:border-zinc-700" : "border-red-400"}`} />
+                      </span>
+                      {opCotizacionLoading ? <span className="text-zinc-400 flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" />BNA…</span>
+                        : opCotizacionBna ? (
+                          <button type="button" title="Usar la cotización del BNA" onClick={() => { opCotizacionEditada.current = false; setOpCotizacion(toDecimalInput(opCotizacionBna.valor)); }}
+                            className="text-sky-700 underline-offset-2 hover:underline dark:text-sky-300">BNA divisa vendedor {formatDate(opCotizacionBna.fecha)}: {formatCurrency(opCotizacionBna.valor, "ARS")}</button>
+                        ) : <span className="text-amber-700 dark:text-amber-400">Sin BNA: cargá la cotización a mano</span>}
+                      {opTCOk && <span className="ml-auto font-mono text-zinc-600 dark:text-zinc-300">{formatCurrency(opMontoBrutoDocs, "USD")} × {formatCurrency(opTC, "ARS")} = <strong>{formatCurrency(opMontoBruto, "ARS")}</strong></span>}
+                    </div>
+                  )}
                   {(opMontoBruto > 0 || opNCAplicado > 0) && (
                     <div className="mt-2 space-y-0.5 text-sm">
                       {opNCAplicado > 0 && <>
-                        <div className="flex justify-between text-zinc-500"><span>Facturas</span><span className="font-mono">{formatCurrency(opMontoBrutoFC, opForm.moneda)}</span></div>
-                        <div className="flex justify-between text-emerald-700 dark:text-emerald-400"><span>− Notas de crédito</span><span className="font-mono">−{formatCurrency(opNCAplicado, opForm.moneda)}</span></div>
+                        <div className="flex justify-between text-zinc-500"><span>Facturas</span><span className="font-mono">{formatCurrency(opMontoBrutoFC, opMonedaDocs)}</span></div>
+                        <div className="flex justify-between text-emerald-700 dark:text-emerald-400"><span>− Notas de crédito</span><span className="font-mono">−{formatCurrency(opNCAplicado, opMonedaDocs)}</span></div>
                       </>}
                       <div className="flex justify-between items-center">
                         <span className="text-zinc-500">{opFCPendientes.filter(f => f.selected).length} documento(s) seleccionado(s){opNCAplicado > 0 ? " · a pagar en dinero" : ""}</span>
