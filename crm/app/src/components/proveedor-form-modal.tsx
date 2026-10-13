@@ -12,7 +12,7 @@ import { canonicalCondicionIva } from "@/lib/fiscal-condition";
 import { mostrarWhatsApp } from "@/lib/whatsapp-ar";
 import { WhatsAppInput } from "@/components/ui/whatsapp-input";
 import { LeerDocumentoImpositivo } from "@/components/leer-documento-impositivo";
-import type { DatosImpositivos } from "@/lib/documento-impositivo";
+import { bancoDeLista, type DatosImpositivos } from "@/lib/documento-impositivo";
 import { CondicionPagoEditor } from "@/components/condicion-pago-editor";
 import { legacyDesdePlan } from "@/lib/condicion-pago";
 
@@ -56,17 +56,18 @@ export const CONCEPTOS_RG830: Record<string, string> = {
 };
 
 // Estilos comunes del alta/edición: mismo alto y mismo espacio en todos los campos
-const INPUT_CLS = "mt-1 h-9 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800";
+const INPUT_CLS = "mt-0.5 h-8 w-full rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800";
 const LABEL_CLS = "text-xs font-medium text-zinc-500";
+const BANCOS_FORM = ["Banco Nación","Banco Provincia","Banco Ciudad","Banco Galicia","Banco Santander","Banco BBVA","Banco Macro","Banco HSBC","Banco ICBC","Banco Patagonia","Banco Credicoop","Banco Comafi","Banco Itaú","Banco Supervielle","Banco Columbia","Brubank","Mercado Pago","Ualá","Naranja X","Otro"];
 
 function SeccionModal({ titulo, extra, children }: { titulo: string; extra?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section>
-      <div className="mb-3 flex items-center justify-between gap-3 border-b border-zinc-100 pb-1.5 dark:border-zinc-800">
+      <div className="mb-1.5 flex items-center justify-between gap-3 border-b border-zinc-100 pb-1 dark:border-zinc-800">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">{titulo}</h3>
         {extra}
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">{children}</div>
+      <div className="grid grid-cols-1 gap-x-3 gap-y-2 sm:grid-cols-2 lg:grid-cols-4">{children}</div>
     </section>
   );
 }
@@ -278,6 +279,14 @@ export function ProveedorFormModal({
       if (d.numero_certificado) next.exclusion_retencion_cert = d.numero_certificado;
       cambios.push(`exclusión de retención de Ganancias${d.exclusion_hasta ? ` hasta ${formatDate(d.exclusion_hasta)}` : ""}`);
     }
+    // Datos bancarios: solo completa lo vacío (nunca pisa lo que ya estaba cargado).
+    const banco = bancoDeLista(d.banco, BANCOS_FORM);
+    if (banco && vacio(next.banco)) { next.banco = banco; cambios.push("banco"); }
+    if (d.tipo_cuenta && vacio(next.tipo_cuenta)) { next.tipo_cuenta = d.tipo_cuenta; cambios.push("tipo de cuenta"); }
+    if (d.numero_cuenta && vacio(next.numero_cuenta)) { next.numero_cuenta = d.numero_cuenta; cambios.push("N° de cuenta"); }
+    if (d.cbu && vacio(next.cbu)) { next.cbu = d.cbu; cambios.push("CBU"); }
+    if (d.alias && vacio(next.alias_bancario)) { next.alias_bancario = d.alias; cambios.push("alias"); }
+    if (d.titular_cuenta && vacio(next.titular_cuenta)) { next.titular_cuenta = d.titular_cuenta; cambios.push("titular"); }
     setForm(next);
     toast.info(cambios.length ? `Del documento se cargó: ${cambios.join(", ")}. Revisalo y guardá.` : "El documento no trajo datos nuevos para este proveedor.");
   }
@@ -368,9 +377,9 @@ export function ProveedorFormModal({
     <>
       <div className="fixed inset-0 z-[80] bg-black/40" onClick={cerrar} />
       <div className={`fixed z-[80] flex flex-col overflow-hidden rounded-2xl bg-white shadow-2xl transition-all dark:bg-zinc-900 ${modalFullscreen ? "inset-2" : "inset-4 m-auto h-fit max-h-[92vh] w-full max-w-4xl"}`}>
-        <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-3 dark:border-zinc-700">
+        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-2 dark:border-zinc-700">
           <div>
-            <h2 className="text-lg font-bold">{editingId ? "Editar proveedor" : "Nuevo proveedor"}</h2>
+            <h2 className="text-base font-bold">{editingId ? "Editar proveedor" : "Nuevo proveedor"}</h2>
             {subtitulo && <p className="text-xs text-zinc-500">{subtitulo}</p>}
           </div>
           <div className="flex items-center gap-1">
@@ -378,17 +387,17 @@ export function ProveedorFormModal({
             <button onClick={cerrar} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100" title="Cerrar"><X className="h-4 w-4" /></button>
           </div>
         </div>
-        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-3">
           {formError && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{formError}</div>}
           {cargando && <p className="flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Cargando el proveedor…</p>}
 
           {/* Datos fiscales */}
-          <SeccionModal titulo="Datos fiscales" extra={<LeerDocumentoImpositivo compacto cuitEsperado={form.cuit} onDatos={aplicarDocumentoImpositivo} />}>
+          <SeccionModal titulo="Datos fiscales" extra={<LeerDocumentoImpositivo compacto conBancarios cuitEsperado={form.cuit} onDatos={aplicarDocumentoImpositivo} />}>
             <div>
               <label className={LABEL_CLS}>CUIT *</label>
-              <div className="mt-1 flex gap-1">
-                <input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} onBlur={() => { if (form.cuit.replace(/\D/g, "").length === 11 && !form.razon_social) handleCuitLookup(); }} className="h-9 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" placeholder="XX-XXXXXXXX-X" />
-                <button type="button" onClick={() => handleCuitLookup()} disabled={cuitLoading} className="h-9 rounded-lg bg-blue-500 px-3 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50 whitespace-nowrap" title="Buscar en ARCA" aria-label="Buscar en ARCA">
+              <div className="mt-0.5 flex gap-1">
+                <input value={form.cuit} onChange={(e) => setForm({ ...form, cuit: e.target.value })} onBlur={() => { if (form.cuit.replace(/\D/g, "").length === 11 && !form.razon_social) handleCuitLookup(); }} className="h-8 min-w-0 flex-1 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" placeholder="XX-XXXXXXXX-X" />
+                <button type="button" onClick={() => handleCuitLookup()} disabled={cuitLoading} className="h-8 rounded-lg bg-blue-500 px-2.5 text-xs font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-50 whitespace-nowrap" title="Buscar en ARCA" aria-label="Buscar en ARCA">
                   {cuitLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
                 </button>
               </div>
@@ -397,10 +406,9 @@ export function ProveedorFormModal({
               <label className={LABEL_CLS}>Razón social *</label>
               <input value={form.razon_social} onChange={(e) => setForm({ ...form, razon_social: e.target.value })} className={INPUT_CLS} />
             </div>
-            <div className="sm:col-span-2 lg:col-span-3">
-              <label className={LABEL_CLS}>Nombre de fantasía</label>
-              <input value={form.nombre_fantasia || ""} onChange={(e) => setForm({ ...form, nombre_fantasia: e.target.value })} placeholder="Ej.: Conoflex" className={INPUT_CLS} />
-              <p className="mt-1 text-[11px] text-zinc-400">Es el nombre con el que figura en las listas de costos. Si no lo sabés, dejalo vacío: el sistema lo aprende de la primera factura.</p>
+            <div className="sm:col-span-2" title="Es el nombre con el que figura en las listas de costos. Si no lo sabés, dejalo vacío: el sistema lo aprende de la primera factura.">
+              <label className={LABEL_CLS}>Nombre de fantasía <span className="font-normal text-zinc-400">(como figura en las listas)</span></label>
+              <input value={form.nombre_fantasia || ""} onChange={(e) => setForm({ ...form, nombre_fantasia: e.target.value })} placeholder="Ej.: Conoflex — si no lo sabés, dejalo vacío" className={INPUT_CLS} />
             </div>
             <div><label className={LABEL_CLS}>Condición IVA</label>
               <select value={form.condicion_iva} onChange={(e) => setForm({ ...form, condicion_iva: e.target.value })} className={INPUT_CLS}>
@@ -420,7 +428,7 @@ export function ProveedorFormModal({
                 {PROVINCIAS_ARGENTINA.map((provincia) => <option key={provincia} value={provincia}>{provincia}</option>)}
               </select>
             </div>
-            <div className="flex flex-wrap items-center gap-3 sm:col-span-2 lg:col-span-3">
+            <div className="flex flex-wrap items-center gap-3 sm:col-span-2 lg:col-span-4">
               <span className={LABEL_CLS}>¿Es transporte o taller?</span>
               <div role="radiogroup" aria-label="Tipo de proveedor" className="inline-flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
                 {([
@@ -471,20 +479,20 @@ export function ProveedorFormModal({
             </div>
             <div>
               <label className={LABEL_CLS}>WhatsApp de administración</label>
-              <WhatsAppInput value={form.telefono} onChange={(v) => setForm({ ...form, telefono: v })} className="mt-1" />
+              <WhatsAppInput value={form.telefono} onChange={(v) => setForm({ ...form, telefono: v })} className="mt-0.5" />
             </div>
           </SeccionModal>
 
           <SeccionModal titulo="Vendedores (a ellos se les mandan las OC)">
-            <div className="space-y-2 sm:col-span-2 lg:col-span-3">
+            <div className="space-y-1.5 sm:col-span-2 lg:col-span-4">
               {contactosExtra.map((c, i) => (
                 <div key={i} className="grid items-start gap-2 sm:grid-cols-[1fr_1fr_1.3fr_auto]">
                   <input value={c.nombre} onChange={(e) => setContactosExtra((prev) => prev.map((x, j) => j === i ? { ...x, nombre: e.target.value } : x))}
                     placeholder="Nombre del vendedor" aria-label="Nombre del vendedor"
-                    className="h-9 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+                    className="h-8 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
                   <input type="email" value={c.email} onChange={(e) => setContactosExtra((prev) => prev.map((x, j) => j === i ? { ...x, email: e.target.value } : x))}
                     placeholder="Mail comercial (ventas)" aria-label="Mail comercial"
-                    className="h-9 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+                    className="h-8 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
                   <WhatsAppInput value={c.whatsapp} onChange={(v) => setContactosExtra((prev) => prev.map((x, j) => j === i ? { ...x, whatsapp: v } : x))} />
                   <button type="button" onClick={() => setContactosExtra((prev) => prev.filter((_, j) => j !== i))} className="rounded p-1.5 text-zinc-400 hover:text-red-500" title="Quitar" aria-label="Quitar"><X className="h-3.5 w-3.5" /></button>
                 </div>
@@ -492,7 +500,7 @@ export function ProveedorFormModal({
               <button type="button" onClick={() => setContactosExtra((prev) => [...prev, { nombre: "", email: "", whatsapp: "" }])} className="inline-flex items-center gap-0.5 text-xs font-medium text-orange-600 hover:text-orange-700"><Plus className="h-3 w-3" /> Agregar vendedor</button>
             </div>
             {contactosExistentes.length > 0 && (
-              <div className="sm:col-span-2 lg:col-span-3">
+              <div className="sm:col-span-2 lg:col-span-4">
                 <p className="mb-1 text-[11px] text-zinc-400">Vendedores ya cargados (se editan o borran desde la ficha del proveedor):</p>
                 <div className="flex flex-wrap gap-1.5">
                   {contactosExistentes.map((c) => (
@@ -508,27 +516,22 @@ export function ProveedorFormModal({
 
           {/* Cómo se le paga */}
           <section>
-            <div className="mb-3 flex items-center justify-between gap-3 border-b border-zinc-100 pb-1.5 dark:border-zinc-800">
+            <div className="mb-1.5 flex items-center justify-between gap-3 border-b border-zinc-100 pb-1 dark:border-zinc-800">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Cómo se le paga</h3>
               <span className="text-[11px] text-zinc-400">Los días se cuentan desde la fecha de factura</span>
             </div>
-            <CondicionPagoEditor value={form} onChange={(v) => setForm({ ...form, ...v, medios_pago: v.medios_pago || [] })} />
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div><label className={LABEL_CLS}>Límite de crédito</label><input type="number" value={form.limite_credito} onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })} className={INPUT_CLS} /></div>
-            </div>
+            <CondicionPagoEditor value={form} onChange={(v) => setForm({ ...form, ...v, medios_pago: v.medios_pago || [] })}
+              extra={<div className="w-36"><label className={LABEL_CLS}>Límite de crédito</label><input type="number" value={form.limite_credito} onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })} className={INPUT_CLS} /></div>} />
           </section>
 
           {/* Datos bancarios */}
-          <SeccionModal titulo="Datos bancarios" extra={<span className="text-[11px] text-zinc-400">Opcionales</span>}>
-            <div><label className={LABEL_CLS}>Banco</label><select value={(form as any).banco} onChange={(e) => setForm({ ...form, banco: e.target.value } as any)} className={INPUT_CLS}><option value="">Seleccionar...</option>{["Banco Nación","Banco Provincia","Banco Ciudad","Banco Galicia","Banco Santander","Banco BBVA","Banco Macro","Banco HSBC","Banco ICBC","Banco Patagonia","Banco Credicoop","Banco Comafi","Banco Itaú","Banco Supervielle","Banco Columbia","Brubank","Mercado Pago","Ualá","Naranja X","Otro"].map(b => <option key={b} value={b}>{b}</option>)}</select></div>
+          <SeccionModal titulo="Datos bancarios" extra={<span className="text-[11px] text-zinc-400">Opcionales · CUIT para pagos y eCheq: <span className="font-mono font-medium text-zinc-600 dark:text-zinc-300">{form.cuit || "completá el CUIT"}</span> (siempre el fiscal)</span>}>
+            <div><label className={LABEL_CLS}>Banco</label><select value={(form as any).banco} onChange={(e) => setForm({ ...form, banco: e.target.value } as any)} className={INPUT_CLS}><option value="">Seleccionar...</option>{BANCOS_FORM.map(b => <option key={b} value={b}>{b}</option>)}</select></div>
             <div><label className={LABEL_CLS}>CBU / CVU</label><input value={form.cbu} onChange={(e) => setForm({ ...form, cbu: e.target.value.replace(/\s/g, "") })} placeholder="22 dígitos" className={`${INPUT_CLS} font-mono`} /></div>
             <div><label className={LABEL_CLS}>Alias</label><input value={form.alias_bancario} onChange={(e) => setForm({ ...form, alias_bancario: e.target.value })} placeholder="alias.del.proveedor" className={INPUT_CLS} /></div>
             <div><label className={LABEL_CLS}>Titular</label><input value={(form as any).titular_cuenta} onChange={(e) => setForm({ ...form, titular_cuenta: e.target.value } as any)} className={INPUT_CLS} /></div>
             <div><label className={LABEL_CLS}>Tipo de cuenta</label><select value={(form as any).tipo_cuenta} onChange={(e) => setForm({ ...form, tipo_cuenta: e.target.value } as any)} className={INPUT_CLS}><option value="">Seleccionar...</option><option value="CC">Cuenta corriente (CC)</option><option value="CA">Caja de ahorro (CA)</option><option value="CVU">CVU</option></select></div>
             <div><label className={LABEL_CLS}>N° de cuenta</label><input value={form.numero_cuenta} onChange={(e) => setForm({ ...form, numero_cuenta: e.target.value })} className={INPUT_CLS} /></div>
-            <div className="sm:col-span-2 lg:col-span-3">
-              <p className="text-[11px] text-zinc-400">CUIT para pagos y eCheq: <span className="font-mono font-medium text-zinc-600 dark:text-zinc-300">{form.cuit || "completá el CUIT del proveedor"}</span> (se usa siempre el CUIT fiscal del proveedor).</p>
-            </div>
           </SeccionModal>
 
           {/* Retención de Ganancias RG 830 */}
@@ -547,10 +550,9 @@ export function ProveedorFormModal({
             <div>
               <label className={LABEL_CLS}>Alícuota inscripto (%)</label>
               <input type="number" step="0.25" value={form.alicuota_ganancias ?? ""} onChange={(e) => setForm({ ...form, alicuota_ganancias: e.target.value ? Number(e.target.value) : null })}
-                placeholder="Ej: 2" className={INPUT_CLS} />
-              <p className="mt-0.5 text-[10px] text-zinc-400">Se autocompleta al consultar el CUIT en ARCA</p>
+                placeholder="Ej: 2 (se completa con ARCA)" title="Se autocompleta al consultar el CUIT en ARCA" className={INPUT_CLS} />
             </div>
-            <div className="flex items-center gap-2 pt-5">
+            <div className="flex items-center gap-2 pt-4">
               <button type="button" role="switch" aria-checked={form.exclusion_retencion} aria-label="Excluido de retención" onClick={() => setForm({ ...form, exclusion_retencion: !form.exclusion_retencion })}
                 className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full ${form.exclusion_retencion ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"}`}>
                 <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${form.exclusion_retencion ? "translate-x-4.5" : "translate-x-0.5"}`} />
@@ -577,35 +579,35 @@ export function ProveedorFormModal({
 
           {/* Notas y clasificación */}
           <SeccionModal titulo="Notas y clasificación">
-            <div className="sm:col-span-2 lg:col-span-3"><label className={LABEL_CLS}>Notas</label><textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={2} className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
-            <div className="sm:col-span-2 lg:col-span-3">
+            <div className="sm:col-span-2 lg:col-span-4"><label className={LABEL_CLS}>Notas</label><textarea value={form.notas} onChange={(e) => setForm({ ...form, notas: e.target.value })} rows={1} className="mt-0.5 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" /></div>
+            <div className="sm:col-span-2 lg:col-span-4">
               <label className={`${LABEL_CLS} flex items-center gap-1`}><Tag className="h-3.5 w-3.5" /> Clasificación del proveedor</label>
-              <div className="mt-1 flex flex-wrap gap-2">
+              <div className="mt-0.5 flex flex-wrap gap-1.5">
                 {CLASIFICACION_TAGS.map((tag) => {
                   const selected = form.clasificacion_tags.includes(tag);
                   const color = selected ? TAG_COLORS[tag] : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500";
                   return (
                     <button key={tag} type="button" aria-pressed={selected} onClick={() => {
                       setForm({ ...form, clasificacion_tags: selected ? form.clasificacion_tags.filter((t) => t !== tag) : [...form.clasificacion_tags, tag] });
-                    }} className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-medium transition-all cursor-pointer border ${selected ? "border-transparent ring-1" : "border-zinc-200 dark:border-zinc-700"} ${color}`}>
+                    }} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-all cursor-pointer border ${selected ? "border-transparent ring-1" : "border-zinc-200 dark:border-zinc-700"} ${color}`}>
                       {tag}
                     </button>
                   );
                 })}
               </div>
             </div>
-            <div className="sm:col-span-2 lg:col-span-3">
+            <div className="sm:col-span-2">
               <label className={LABEL_CLS}>Marcas <span className="font-normal text-zinc-400">(separadas por coma)</span></label>
               <input value={form.marcas} onChange={(e) => setForm({ ...form, marcas: e.target.value })} placeholder="Ej: 3M, Funcional, Pampero" className={INPUT_CLS} />
             </div>
-            <div className="sm:col-span-2 lg:col-span-3">
+            <div className="sm:col-span-2">
               <label className={LABEL_CLS}>Comentario de clasificación</label>
-              <textarea value={form.clasificacion_nota} onChange={(e) => setForm({ ...form, clasificacion_nota: e.target.value })} rows={2} placeholder="Notas sobre precio, entrega, calidad..." className="mt-1 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+              <textarea value={form.clasificacion_nota} onChange={(e) => setForm({ ...form, clasificacion_nota: e.target.value })} rows={1} placeholder="Notas sobre precio, entrega, calidad..." className="mt-0.5 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
             </div>
           </SeccionModal>
           <p className="text-[11px] text-zinc-400">Los talles especiales y la tolerancia de precio de este proveedor se editan en Compras → Limpieza de OC (reglas del proveedor).</p>
         </div>
-        <div className="flex justify-end gap-3 border-t border-zinc-200 bg-white px-6 py-3 dark:border-zinc-700 dark:bg-zinc-900">
+        <div className="flex justify-end gap-3 border-t border-zinc-200 bg-white px-4 py-2 dark:border-zinc-700 dark:bg-zinc-900">
           <button onClick={cerrar} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
           <button onClick={handleSave} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
             {saving && <Loader2 className="h-4 w-4 animate-spin" />}

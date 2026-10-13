@@ -9,12 +9,12 @@ const MODELOS = [process.env.DOCUMENTO_IMPOSITIVO_MODEL || "claude-sonnet-4-5", 
 
 const EXTRACTION_PROMPT = `Sos un experto en documentación impositiva argentina (ARCA, ex AFIP, y rentas provinciales).
 
-Te voy a pasar un PDF o imagen de un papel impositivo de una empresa o persona: puede ser una constancia de inscripción de ARCA/AFIP, un certificado de exención de IVA, un certificado de exclusión de retención del impuesto a las Ganancias, un certificado de exclusión / no retención de Ingresos Brutos (IIBB), u otro documento impositivo.
+Te voy a pasar un PDF o imagen de un papel de una empresa o persona: puede ser una constancia de inscripción de ARCA/AFIP, un certificado de exención de IVA, un certificado de exclusión de retención del impuesto a las Ganancias, un certificado de exclusión / no retención de Ingresos Brutos (IIBB), una constancia de CBU / datos bancarios (o un mail o captura con los datos de la cuenta), u otro documento.
 
 Devolvé SOLO un JSON con esta estructura exacta:
 
 {
-  "tipo_documento": "constancia_inscripcion" | "exencion_iva" | "exclusion_ganancias" | "exclusion_iibb" | "otro",
+  "tipo_documento": "constancia_inscripcion" | "exencion_iva" | "exclusion_ganancias" | "exclusion_iibb" | "datos_bancarios" | "otro",
   "cuit": "solo números, 11 dígitos, o null",
   "razon_social": "apellido y nombre o razón social del contribuyente, o null",
   "condicion_iva": "RI" | "Monotributo" | "Exento" | "CF" | null,
@@ -25,6 +25,13 @@ Devolvé SOLO un JSON con esta estructura exacta:
   "exclusion_hasta": "YYYY-MM-DD o null",
   "numero_certificado": "número de certificado o de constancia, o null",
   "porcentaje_exclusion": 100,
+  "banco": "nombre del banco o billetera, o null",
+  "tipo_cuenta": "CC" | "CA" | "CVU" | null,
+  "numero_cuenta": "número de cuenta tal como figura, o null",
+  "cbu": "CBU o CVU, solo números, 22 dígitos, o null",
+  "alias": "alias de la cuenta, o null",
+  "titular_cuenta": "titular de la cuenta, o null",
+  "cuit_titular_cuenta": "CUIT del titular de la cuenta, solo números, o null",
   "resumen": "una línea en español que resuma lo que dice el papel"
 }
 
@@ -32,7 +39,9 @@ Reglas:
 - condicion_iva: "RI" si es Responsable Inscripto en IVA; "Monotributo" si está adherido al Régimen Simplificado (Monotributo); "Exento" si es IVA Exento o tiene certificado de exención de IVA; "CF" solo si es consumidor final. Si no se puede saber, null.
 - Las fechas siempre en formato YYYY-MM-DD. "exclusion_desde" y "exclusion_hasta" son la vigencia del certificado de exclusión o exención (si es una constancia de inscripción sin exclusión, dejalas en null).
 - porcentaje_exclusion: número sin el signo % (ej. 100), o null si no figura.
-- El CUIT es el del contribuyente titular del papel, no el del organismo.
+- El CUIT es el del contribuyente titular del papel, no el del organismo ni el del banco.
+- tipo_cuenta: "CC" cuenta corriente, "CA" caja de ahorro, "CVU" cuenta virtual (billeteras). Si no figura, null.
+- Si el papel solo trae datos bancarios, tipo_documento = "datos_bancarios" y los datos impositivos en null (salvo CUIT y razón social del titular si figuran).
 - Si un dato no figura, usá null. No inventes datos.
 - Devolvé SOLO el JSON, sin texto adicional ni markdown.`;
 
@@ -70,7 +79,7 @@ export async function POST(request: NextRequest) {
       const mediaType = file.type === "image/png" ? "image/png" : file.type === "image/webp" ? "image/webp" : "image/jpeg";
       contentBlocks.push({ type: "image", source: { type: "base64", media_type: mediaType, data: base64 } });
     }
-    contentBlocks.push({ type: "text", text: "Extraé los datos de este papel impositivo y devolvé el JSON según las instrucciones." });
+    contentBlocks.push({ type: "text", text: "Extraé los datos de este papel (impositivo o bancario) y devolvé el JSON según las instrucciones." });
 
     let ultimoError: unknown = null;
     for (const model of MODELOS) {

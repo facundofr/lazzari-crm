@@ -42,6 +42,7 @@ import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
 import { pctRetencion, reglaPorConcepto } from "@/lib/retencion-conceptos";
 import { roundPaymentMoney, sumPaymentMoney } from "@/lib/payment-money";
+import { calcularPagoParcial } from "@/lib/op-parcial";
 import ResumenEconomico from "@/components/resumen-economico";
 import { netoCuentaCorriente, sumarPorMoneda } from "@/lib/resumen-economico";
 
@@ -758,6 +759,8 @@ export default function FinanzasPage() {
   const [opModalFullscreen, setOpModalFullscreen] = useState(false);
   const [pagoParcialDirecto, setPagoParcialDirecto] = useState(false);
   const [pagoParcialFCId, setPagoParcialFCId] = useState<string | null>(null);
+  // Aviso amarillo de la OP (pago parcial): informa, nunca frena.
+  const [opAviso, setOpAviso] = useState("");
   const [opForm, setOpForm] = useState(emptyOPForm);
   const [opSaving, setOpSaving] = useState(false);
   const opRequestKeyRef = useRef("");
@@ -2080,6 +2083,7 @@ export default function FinanzasPage() {
     setOpModalFullscreen(false);
     setOpForm(preloadProveedorId ? { ...emptyOPForm, proveedor_id: preloadProveedorId } : emptyOPForm);
     setOpError("");
+    setOpAviso("");
     setOpFiles([]);
     setOpProvCondicion(null);
     setOpManualGanancias(false);
@@ -2213,6 +2217,36 @@ export default function FinanzasPage() {
     });
   }
 
+  // Pago parcial: recorta lo aplicado a las facturas más nuevas para que el neto cierre con los medios.
+  // La retención se recalcula sobre lo que realmente se paga (misma cuenta que arriba, con la alícuota actual).
+  function aplicarPagoParcial(): boolean {
+    const elegidas = opFCPendientes.filter(f => f.selected && f.monto_a_pagar > 0);
+    if (opForm.usar_monto_manual || elegidas.length === 0) return false;
+    const sinIVA = (tipo: string) => /\bC\b|\sC$/i.test(String(tipo || "")) || /monotrib|exento/i.test(String(opProvCondicion || ""));
+    const facturas = elegidas.map(f => ({
+      id: f.id, fecha: f.fecha, monto: roundPaymentMoney(f.monto_a_pagar),
+      ratioNeto: f.total <= 0 || sinIVA(f.tipo_comprobante) ? 1 : f.subtotal > 0 ? Math.min(1, f.subtotal / f.total) : 1,
+    }));
+    const baseFC = facturas.reduce((s, f) => s + roundPaymentMoney(f.monto * f.ratioNeto), 0);
+    const baseNC = Math.max(0, roundPaymentMoney(baseFC - opBaseSinIVA));
+    const retencionDe = (base: number) => {
+      if (opMontoRetencionManual !== null) return roundPaymentMoney(opMontoRetencionManual);
+      if (!opForm.aplica_ganancias) return 0;
+      const acumulada = Math.max(0, (opMonthlyBase + base) - opMinimoGanancias) * (opForm.retencion_ganancias_pct / 100);
+      const r = Math.max(0, acumulada - opMonthlyRetenido);
+      return r < retencionConfig.minimo_retencion_ganancias ? 0 : r;
+    };
+    const res = calcularPagoParcial(facturas, opTotalMedios, retencionDe, opNCAplicado, baseNC);
+    if (!res.quedan.length) return false;
+    setOpFCPendientes(prev => prev.map(f => res.montos[f.id] !== undefined ? { ...f, monto_a_pagar: res.montos[f.id] } : f));
+    const detalle = res.quedan.map(q => {
+      const fc = elegidas.find(f => f.id === q.id);
+      return `${fc?.numero || "S/N"} queda debiendo ${formatCurrency(roundPaymentMoney((fc?.saldo_pendiente || 0) - (res.montos[q.id] || 0)), opForm.moneda)}`;
+    }).join(" · ");
+    setOpAviso(`Pago parcial: ${detalle}. La retención se recalculó sobre lo que pagás (${formatCurrency(res.retencion, opForm.moneda)}). Revisá y apretá «Crear Orden de Pago».`);
+    return true;
+  }
+
   async function handleCreateOP() {
     if (!sociedadActiva?.id) { setOpError("No se pudo determinar la sociedad activa"); return; }
     if (!opForm.proveedor_id) { setOpError("Selecciona un proveedor"); return; }
@@ -2273,8 +2307,10 @@ export default function FinanzasPage() {
     if (totalMediosVal <= 0) { setOpError("Ingresá al menos un medio de pago con monto mayor a 0"); return; }
     if (!Number.isFinite(opRetencionGanancias) || opRetencionGanancias < 0 || opRetencionGanancias > opMontoBruto) { setOpError("La retención debe estar entre cero y el importe bruto a pagar"); return; }
     const opDiffMedios = totalMediosVal - opNetoAPagar;
-    if (opDiffMedios < -0.01) {
-      setOpError("Los medios suman menos que el neto a pagar (faltan $" + Math.abs(opDiffMedios).toFixed(2) + "). Para un pago parcial, modificá primero «A pagar» en cada factura; así se recalcula la retención sobre lo que realmente cancelás."); return;
+    // Hasta $1 menos es redondeo (la base lo acepta). Si falta más, se arma el pago parcial y se avisa: nunca se traba.
+    if (opDiffMedios < -1) {
+      if (aplicarPagoParcial()) { setOpError(""); return; }
+      setOpError("Los medios suman menos que el neto a pagar (faltan $" + Math.abs(opDiffMedios).toFixed(2) + "). Bajá «A pagar» en la factura que queda con saldo."); return;
     }
     if (opDiffMedios > 0.01) {
       if (!confirm(`Los medios superan el neto a pagar en $${opDiffMedios.toFixed(2)}. El excedente quedará como crédito a nuestro favor en la CC del proveedor. ¿Continuar?`)) return;
@@ -4379,14 +4415,9 @@ export default function FinanzasPage() {
                           </Badge>
                         </button>
                       ) : !row.factura_origen_id && (row.estado === "pendiente" || row.estado === "recibida") ? (
-                        <div className="flex items-center gap-1">
-                          <button onClick={() => handlePagarFC(row.id)} className="rounded px-2 py-1 text-xs text-orange-600 border border-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20 font-medium" title="Crear orden de pago">
-                            + OP
-                          </button>
-                          <button onClick={() => handlePagoParcialDirecto(row.id)} className="rounded px-2 py-1 text-xs text-blue-600 border border-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 font-medium" title="Registrar pago parcial sin OP">
-                            + Parcial
-                          </button>
-                        </div>
+                        <button onClick={() => handlePagarFC(row.id)} className="rounded px-2 py-1 text-xs text-orange-600 border border-orange-300 hover:bg-orange-50 dark:hover:bg-orange-900/20 font-medium" title="Crear orden de pago (si los medios no cubren todo, queda como pago parcial)">
+                          + OP
+                        </button>
                       ) : (
                         <span className="text-zinc-300 text-xs">—</span>
                       )}
@@ -5950,6 +5981,7 @@ export default function FinanzasPage() {
               </div>
             </div>
             {opError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{opError}</div>}
+            {opAviso && <div className="mb-2 flex items-start justify-between gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300"><span>⚠️ {opAviso}</span><button type="button" onClick={() => setOpAviso("")} className="shrink-0 text-amber-500 hover:text-amber-700"><X className="h-3 w-3" /></button></div>}
             {opDatosError && <div role="alert" className="mb-4 rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-300">{opDatosError}</div>}
             {pagoParcialDirecto && <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-300">Este pago se registra como movimiento directo contra una sola factura y no crea una Orden de Pago. Si corresponde, la retención RG 830 se calcula sobre este pago y queda registrada junto al movimiento.</div>}
             <div className="space-y-2.5">
@@ -6275,9 +6307,9 @@ export default function FinanzasPage() {
                     <button type="button" onClick={() => setOpMedios([...opMedios, makeOpMedio(opForm.moneda)])}
                       className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium"><Plus className="h-3 w-3" />Agregar medio</button>
                   </div>
-                  <div className="space-y-2">
+                  <div className="space-y-1">
                     {opMedios.map((m, idx) => (
-                      <div key={m.tempId} className="flex items-start gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
+                      <div key={m.tempId} className="flex flex-wrap items-center gap-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 px-2 py-1">
                         <select value={m.tipo} onChange={(e) => setOpMedios(prev => prev.map((x, i) => {
                           if (i !== idx) return x;
                           const tipo = e.target.value as OpMedioPago["tipo"];
@@ -6288,7 +6320,7 @@ export default function FinanzasPage() {
                             origen_cheque: tipo === "echeq" || tipo === "cheque_propio" ? "propio" : tipo === "cheque" ? "cartera" : undefined,
                           };
                         }))}
-                          className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                          className="w-28 shrink-0 rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                           <option value="transferencia">Transferencia</option>
                           <option value="deposito">Depósito</option>
                           {!pagoParcialDirecto && <option value="cheque">Cheque tercero</option>}
@@ -6297,29 +6329,25 @@ export default function FinanzasPage() {
                           <option value="efectivo">Efectivo</option>
                           <option value="tarjeta">Tarjeta</option>
                         </select>
-                        <div className="relative w-28">
+                        <div className="relative w-32 shrink-0">
                           <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-zinc-400 font-mono">$</span>
                           <input type="number" value={m.monto || ""} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, monto: Number(e.target.value) } : x))}
-                            placeholder="Monto" className="w-full rounded border border-zinc-200 pl-5 pr-2 py-1.5 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                            placeholder="Monto" className="w-full rounded border border-zinc-200 pl-5 pr-2 py-1 text-right text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                         </div>
-                        <button type="button" title="Completar con lo que falta del neto a pagar" onClick={() => setOpMedios(prev => { const otros = prev.reduce((s, x, i) => i === idx ? s : s + (Number(x.monto) || 0), 0); return prev.map((x, i) => i === idx ? { ...x, monto: Math.max(0, Math.round((opNetoAPagar - otros) * 100) / 100) } : x); })} className="shrink-0 rounded p-1 text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/40 self-center"><Sparkles className="h-3.5 w-3.5" /></button>
-                        <div className="grid w-36 gap-1">
-                          <label className="text-[10px] text-zinc-400">Cobro / acreditación</label>
-                          <input type="date" value={m.fecha_cobro || m.fecha} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, fecha: e.target.value, fecha_cobro: e.target.value } : x))}
-                            className="rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                          {m.fecha_emision && <span className="text-[10px] text-zinc-500">Emitido: {formatDate(m.fecha_emision)}</span>}
-                        </div>
+                        <button type="button" title="Completar con lo que falta del neto a pagar" onClick={() => setOpMedios(prev => { const otros = prev.reduce((s, x, i) => i === idx ? s : s + (Number(x.monto) || 0), 0); return prev.map((x, i) => i === idx ? { ...x, monto: Math.max(0, Math.round((opNetoAPagar - otros) * 100) / 100) } : x); })} className="shrink-0 rounded p-1 text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-950/40"><Sparkles className="h-3.5 w-3.5" /></button>
+                        <input type="date" title="Cobro / acreditación" value={m.fecha_cobro || m.fecha} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, fecha: e.target.value, fecha_cobro: e.target.value } : x))}
+                          className="w-32 shrink-0 rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                         {(m.tipo !== "efectivo" && m.tipo !== "tarjeta") && (
                           <>
                             <select value={m.banco === "Otro" || (m.banco && !BANCOS_ARGENTINA.includes(m.banco)) ? "Otro" : m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: e.target.value, banco_otro: e.target.value === "Otro" ? (x.banco === "Otro" ? x.banco_otro : x.banco) : undefined } : x))}
-                              className="w-32 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                              className="w-32 shrink-0 rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                               <option value="">Banco…</option>
                               {BANCOS_ARGENTINA.filter((b, i, a) => a.indexOf(b) === i).map(b => <option key={b} value={b}>{b}</option>)}
                             </select>
                             {(m.banco === "Otro" || (m.banco && !BANCOS_ARGENTINA.includes(m.banco))) && <input value={m.banco === "Otro" ? (m.banco_otro || "") : m.banco} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, banco: "Otro", banco_otro: e.target.value } : x))}
-                              placeholder="Nombre del banco" className="w-28 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />}
+                              placeholder="Nombre del banco" className="w-28 rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />}
                             <input value={m.numero_cheque} onChange={(e) => setOpMedios(prev => prev.map((x, i) => i === idx ? { ...x, numero_cheque: e.target.value } : x))}
-                              placeholder="N° cheque" className="w-24 rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                              placeholder="N° cheque" className="w-24 shrink-0 rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                           </>
                         )}
                         {/* Un e-cheq manual se emite ahora; solo los cheques elegidos de cartera son de terceros. */}
@@ -6341,39 +6369,39 @@ export default function FinanzasPage() {
                                 banco: sel?.banco_emisor || x.banco,
                                 numero_cheque: sel?.numero || x.numero_cheque,
                               } : x));
-                            }} className="max-w-[180px] rounded border border-zinc-200 px-2 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                            }} className="max-w-[160px] rounded border border-zinc-200 px-1.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                               <option value="" disabled={m.tipo === "cheque"}>{m.tipo === "echeq" ? "Emitido manualmente" : m.tipo === "cheque_propio" ? "Nuevo cheque" : "Elegí de cartera"}</option>
                               {available.map(e => <option key={e.id} value={e.id}>{e.numero} — {formatCurrency(e.monto, (e.moneda as "ARS" | "USD") || "ARS")}{e.banco_emisor ? ` (${e.banco_emisor})` : ""}</option>)}
                             </select>
                           ) : m.tipo === "cheque_propio" || m.tipo === "echeq" ? (
-                            <span className="text-[10px] text-zinc-400 self-center">Se registrará como emitido al confirmar</span>
+                            <span className="text-[10px] text-zinc-400">Se registrará como emitido al confirmar</span>
                           ) : m.tipo === "cheque" ? (
-                            <span className="text-[10px] text-red-500 self-center">No hay cheques de terceros disponibles en cartera</span>
+                            <span className="text-[10px] text-red-500">No hay cheques de terceros disponibles en cartera</span>
                           ) : null;
                         })()}
-                        {["cheque", "cheque_propio", "echeq"].includes(m.tipo) && (() => {
-                          const proveedor = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
-                          return proveedor?.cuit ? (
-                            <span className="self-center whitespace-nowrap text-[10px] font-medium text-blue-600 dark:text-blue-300">CUIT: {proveedor.cuit}</span>
-                          ) : null;
-                        })()}
+                        {m.fecha_emision && <span className="text-[10px] text-zinc-500">Emitido {formatDate(m.fecha_emision)}</span>}
                         {opMedios.length > 1 && (
-                          <button type="button" onClick={() => setOpMedios(prev => prev.filter((_, i) => i !== idx))} className="text-zinc-400 hover:text-red-500 mt-0.5"><Trash2 className="h-3.5 w-3.5" /></button>
+                          <button type="button" onClick={() => setOpMedios(prev => prev.filter((_, i) => i !== idx))} className="ml-auto text-zinc-400 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button>
                         )}
                       </div>
                     ))}
                   </div>
                   <div className="flex justify-between items-center mt-1 text-sm">
                     <span className="text-zinc-500">Total medios</span>
-                    <span className={`font-mono font-bold ${opSaldoFavor > 0.01 || Math.abs(opDiferencia) < 1 ? "text-emerald-600" : "text-red-500"}`}>
+                    <span className={`font-mono font-bold ${opSaldoFavor > 0.01 || Math.abs(opDiferencia) <= 1 ? "text-emerald-600" : "text-amber-600"}`}>
                       {formatCurrency(opTotalMedios, opForm.moneda)}
                     </span>
                   </div>
                   {opSaldoFavor > 0.01 && (
                     <p className="text-xs text-emerald-600 mt-1">Crédito a nuestro favor en CC: {formatCurrency(opSaldoFavor, opForm.moneda)}</p>
                   )}
-                  {opDiferencia >= 1 && opTotalMedios > 0 && (
-                    <p className="text-xs text-red-500 mt-1">Faltan: {formatCurrency(opDiferencia, opForm.moneda)}</p>
+                  {opDiferencia > 1 && opTotalMedios > 0 && (
+                    <p className="text-xs text-amber-600 mt-1 flex items-center gap-2">
+                      Faltan {formatCurrency(opDiferencia, opForm.moneda)}
+                      {!pagoParcialDirecto && !opForm.usar_monto_manual && (
+                        <button type="button" onClick={() => aplicarPagoParcial()} className="rounded border border-amber-300 px-1.5 py-0.5 font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/20">Pagar parcial</button>
+                      )}
+                    </p>
                   )}
                   {opMedios.length === 1 && opMedios[0].monto === 0 && opNetoAPagar > 0 && (
                     <button type="button" onClick={() => setOpMedios([{ ...opMedios[0], monto: Math.round(opNetoAPagar * 100) / 100 }])}
@@ -6555,11 +6583,11 @@ export default function FinanzasPage() {
                   </div>
                   <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
                     <button onClick={handleSaveFC} disabled={savingFC}
-                      className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors">
+                      className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors">
                       {savingFC ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} Guardar
                     </button>
                     <button onClick={() => setEditingFC(false)}
-                      className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-4 py-2.5 text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
+                      className="flex items-center justify-center gap-2 rounded-lg border border-zinc-300 dark:border-zinc-600 px-3 py-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">
                       Cancelar
                     </button>
                   </div>
@@ -6768,10 +6796,10 @@ export default function FinanzasPage() {
         <>
           <div className="fixed inset-0 z-50 bg-black/30" onClick={() => { setSelectedOP(null); setEditingOP(false); setDetailFullscreen(false); }} />
           <div className={detailFullscreen ? "fixed inset-4 z-50 overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-zinc-900" : "fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700"}>
-            <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
+            <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700">
               <div className="flex items-center gap-2">
-                <FileText className="h-5 w-5 text-orange-500" />
-                <h2 className="text-lg font-bold dark:text-white">Orden de Pago</h2>
+                <FileText className="h-4 w-4 text-orange-500" />
+                <h2 className="text-base font-bold dark:text-white">Orden de Pago</h2>
                 {selectedOP.numero && <span className="font-mono text-sm text-zinc-500">{selectedOP.numero}</span>}
                 <Badge variant={selectedOP.estado === "pagada" ? "success" : selectedOP.estado === "anulada" ? "danger" : "warning"}>
                   {selectedOP.estado === "pagada" ? "Pagada" : selectedOP.estado === "anulada" ? "Anulada" : "Pendiente"}
@@ -6789,7 +6817,7 @@ export default function FinanzasPage() {
               </div>
             </div>
 
-            <div className="p-6 space-y-6">
+            <div className="p-4 space-y-3">
               {editingOP ? (
                 <>
                   {/* Edit mode */}
@@ -6832,172 +6860,100 @@ export default function FinanzasPage() {
                 </>
               ) : (
               <>
-              {/* Info general */}
-              <div className="space-y-3">
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p className="text-xs font-medium text-zinc-500">Proveedor</p>
-                    <p className="font-semibold dark:text-white">{selectedOP.proveedor_nombre}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-zinc-500">Fecha</p>
-                    <p className="font-medium dark:text-white">{formatDate(selectedOP.fecha)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-zinc-500">Medios de pago</p>
-                    {selectedOP.medios_pago && selectedOP.medios_pago.length > 0 ? (
-                      <div className="space-y-1 mt-1">
-                        {selectedOP.medios_pago.map((m, i) => {
-                          const ml = m.tipo === "transferencia" ? "Transf." : m.tipo === "cheque" ? "Cheque" : m.tipo === "cheque_propio" ? "Ch. propio" : m.tipo === "echeq" ? "E-Cheq" : m.tipo === "deposito" ? "Depósito" : m.tipo === "tarjeta" ? "Tarjeta" : "Efectivo";
-                          return <div key={i} className="flex items-center gap-2 text-sm dark:text-white">
-                            <span>{ml}{m.banco ? ` — ${m.banco}` : ""} <span className="font-mono text-xs">{formatCurrency(m.monto, m.moneda || selectedOP.moneda)}</span></span>
-                            {m.comprobante_url && <a href={m.comprobante_url} target="_blank" rel="noopener noreferrer" className="text-orange-500 hover:text-orange-600" title={m.comprobante_nombre || "Ver comprobante de este medio"}><Paperclip className="h-3.5 w-3.5" /></a>}
-                          </div>;
-                        })}
-                      </div>
-                    ) : (
-                      <p className="font-medium dark:text-white">{selectedOP.medio_pago === "transferencia" ? "Transferencia" : selectedOP.medio_pago === "cheque" ? "Cheque tercero" : selectedOP.medio_pago === "cheque_propio" ? "Cheque propio" : selectedOP.medio_pago === "echeq" ? "E-Cheq" : selectedOP.medio_pago === "deposito" ? "Depósito" : selectedOP.medio_pago === "tarjeta" ? "Tarjeta" : "Efectivo"}</p>
-                    )}
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-zinc-500">Moneda</p>
-                    <p className="font-medium dark:text-white">{selectedOP.moneda}</p>
-                  </div>
+              {/* Info general: proveedor, fecha y medios en filas finas */}
+              <div className="space-y-1 text-sm">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="font-semibold dark:text-white truncate">{selectedOP.proveedor_nombre}</p>
+                  <p className="shrink-0 text-xs text-zinc-500">{formatDate(selectedOP.fecha)} · {selectedOP.moneda}</p>
                 </div>
-                {selectedOP.notas && (
-                  <div>
-                    <p className="text-xs font-medium text-zinc-500">Notas</p>
-                    <p className="text-sm text-zinc-600 dark:text-zinc-400">{selectedOP.notas}</p>
+                {selectedOP.medios_pago && selectedOP.medios_pago.length > 0 ? (
+                  <div className="space-y-0.5">
+                    {selectedOP.medios_pago.map((m, i) => {
+                      const ml = m.tipo === "transferencia" ? "Transf." : m.tipo === "cheque" ? "Cheque" : m.tipo === "cheque_propio" ? "Ch. propio" : m.tipo === "echeq" ? "E-Cheq" : m.tipo === "deposito" ? "Depósito" : m.tipo === "tarjeta" ? "Tarjeta" : "Efectivo";
+                      return <div key={i} className="flex items-center gap-2 text-xs dark:text-white">
+                        <span className="text-zinc-500">{ml}{m.banco ? ` — ${m.banco}` : ""}{m.numero_cheque ? ` n° ${m.numero_cheque}` : ""}</span>
+                        <span className="ml-auto font-mono">{formatCurrency(m.monto, m.moneda || selectedOP.moneda)}</span>
+                        {m.comprobante_url && <a href={m.comprobante_url} target="_blank" rel="noopener noreferrer" className="text-orange-500 hover:text-orange-600" title={m.comprobante_nombre || "Ver comprobante de este medio"}><Paperclip className="h-3.5 w-3.5" /></a>}
+                      </div>;
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-zinc-500">{selectedOP.medio_pago === "transferencia" ? "Transferencia" : selectedOP.medio_pago === "cheque" ? "Cheque tercero" : selectedOP.medio_pago === "cheque_propio" ? "Cheque propio" : selectedOP.medio_pago === "echeq" ? "E-Cheq" : selectedOP.medio_pago === "deposito" ? "Depósito" : selectedOP.medio_pago === "tarjeta" ? "Tarjeta" : "Efectivo"}</p>
+                )}
+                {selectedOP.notas && <p className="text-xs text-zinc-600 dark:text-zinc-400"><span className="text-zinc-400">Notas:</span> {selectedOP.notas}</p>}
+              </div>
+
+              {/* Importes */}
+              <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 space-y-0.5 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-500">Monto bruto</span>
+                  <span className="font-mono dark:text-white">{formatCurrency(selectedOP.monto_bruto, selectedOP.moneda)}</span>
+                </div>
+                {selectedOP.retencion_ganancias_monto > 0 && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-500 flex items-center gap-1"><ShieldCheck className="h-3 w-3 text-violet-500" />Ret. Ganancias ({selectedOP.retencion_ganancias_pct}%)</span>
+                    <span className="font-mono text-violet-600">- {formatCurrency(selectedOP.retencion_ganancias_monto, selectedOP.moneda)}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between font-bold border-t border-zinc-200 dark:border-zinc-700 pt-1">
+                  <span className="text-zinc-700 dark:text-white">Total entregado</span>
+                  <span className="flex items-center gap-1">
+                    <span className="font-mono text-emerald-600">{formatCurrency(selectedOP.neto, selectedOP.moneda)}</span>
+                    <CopiarBtn texto={(Math.round(selectedOP.neto * 100) / 100).toFixed(2)} title="Copiar total entregado" />
+                  </span>
+                </div>
+                {selectedOP.estado !== "anulada" && selectedOP.neto - Math.max(0, selectedOP.monto_bruto - selectedOP.retencion_ganancias_monto) > 0.01 && (
+                  <div className="flex items-center justify-between text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                    <span>Crédito a nuestro favor</span>
+                    <span className="font-mono">{formatCurrency(selectedOP.neto - Math.max(0, selectedOP.monto_bruto - selectedOP.retencion_ganancias_monto), selectedOP.moneda)}</span>
                   </div>
                 )}
               </div>
 
-              {/* Desglose de importes */}
-              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
-                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Desglose de importes</p>
-                </div>
-                <div className="p-4 space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-500">Monto bruto</span>
-                    <span className="font-mono font-semibold dark:text-white">{formatCurrency(selectedOP.monto_bruto, selectedOP.moneda)}</span>
-                  </div>
-                  {selectedOP.retencion_ganancias_monto > 0 && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-zinc-500 flex items-center gap-1">
-                        <ShieldCheck className="h-3 w-3 text-violet-500" />
-                        Ret. Ganancias ({selectedOP.retencion_ganancias_pct}%)
-                      </span>
-                      <span className="font-mono text-violet-600">- {formatCurrency(selectedOP.retencion_ganancias_monto, selectedOP.moneda)}</span>
-                    </div>
-                  )}
-                  {selectedOP.retencion_ganancias_monto > 0 && (
-                    <div className="flex items-center justify-between text-sm border-t border-zinc-100 dark:border-zinc-700 pt-2">
-                      <span className="text-zinc-500">Total retenciones</span>
-                      <span className="font-mono text-amber-600 font-medium">- {formatCurrency(selectedOP.retencion_ganancias_monto, selectedOP.moneda)}</span>
-                    </div>
-                  )}
-                  <div className="flex items-center justify-between text-base font-bold border-t border-zinc-200 dark:border-zinc-700 pt-2">
-                    <span className="text-zinc-700 dark:text-white">Total entregado</span>
-                    <span className="font-mono text-emerald-600">{formatCurrency(selectedOP.neto, selectedOP.moneda)}</span>
-                  </div>
-                  {selectedOP.estado !== "anulada" && selectedOP.neto - Math.max(0, selectedOP.monto_bruto - selectedOP.retencion_ganancias_monto) > 0.01 && (
-                    <div className="flex items-center justify-between text-sm font-semibold text-emerald-700 dark:text-emerald-400">
-                      <span>Crédito a nuestro favor</span>
-                      <span className="font-mono">{formatCurrency(selectedOP.neto - Math.max(0, selectedOP.monto_bruto - selectedOP.retencion_ganancias_monto), selectedOP.moneda)}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Comprobante de pago */}
-              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
-                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Comprobante de pago</p>
-                </div>
-                <div className="p-4 space-y-2">
-                  <button
-                    onClick={() => handleGenerarComprobante(selectedOP)}
-                    className="w-full flex items-center justify-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 px-4 py-2.5 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
-                  >
-                    <Printer className="h-4 w-4" />
-                    Generar comprobante
+              {/* Comprobante, adjuntos y certificado en pocas líneas */}
+              <div className="space-y-1.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={() => handleGenerarComprobante(selectedOP)}
+                    className="flex items-center gap-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800">
+                    <Printer className="h-3.5 w-3.5" /> Generar comprobante
                   </button>
-                  {/* Archivos adjuntos */}
-                  {(() => {
-                    const allFiles = selectedOP.archivos && selectedOP.archivos.length > 0
-                      ? selectedOP.archivos
-                      : selectedOP.archivo_url
-                        ? [{ url: selectedOP.archivo_url, nombre: selectedOP.archivo_nombre || "Archivo adjunto" }]
-                        : [];
-                    if (allFiles.length === 0) return null;
-                    return (
-                      <div className="space-y-1 pt-2 border-t border-zinc-100 dark:border-zinc-700">
-                        <p className="text-[10px] uppercase text-zinc-400 font-medium">Archivos adjuntos</p>
-                        {allFiles.map((af, i) => (
-                          <a key={i} href={af.url} target="_blank" rel="noopener noreferrer"
-                            className="flex items-center gap-2 text-sm text-orange-500 hover:text-orange-600">
-                            <Paperclip className="h-3.5 w-3.5 flex-shrink-0" />
-                            <span className="truncate">{af.nombre}</span>
-                          </a>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </div>
-              </div>
-
-              {/* Certificado de retención */}
-              {selectedOP.retencion_ganancias_monto > 0 && (
-                <div className="rounded-lg border border-violet-200 dark:border-violet-800 overflow-hidden">
-                  <div className="bg-violet-50 dark:bg-violet-950/30 px-4 py-2">
-                    <p className="text-xs font-semibold text-violet-600 dark:text-violet-400 uppercase tracking-wide flex items-center gap-1.5">
-                      <ShieldCheck className="h-3.5 w-3.5" />
-                      Certificado de retención
-                    </p>
-                  </div>
-                  <div className="p-4 space-y-3">
-                    {selectedOP.certificado_retencion_url ? (
-                      <div className="flex items-center gap-3 rounded-lg bg-violet-50 dark:bg-violet-950/20 p-3 border border-violet-100 dark:border-violet-800">
-                        <Paperclip className="h-4 w-4 text-violet-500 flex-shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-violet-700 dark:text-violet-300 truncate">Certificado adjunto</p>
-                          <p className="text-xs text-violet-500 truncate">{selectedOP.certificado_retencion_url.split("/").pop()}</p>
-                        </div>
-                        <a
-                          href={selectedOP.certificado_retencion_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-600 transition-colors flex-shrink-0"
-                        >
-                          <Download className="h-3 w-3" />
-                          Descargar
+                  {selectedOP.retencion_ganancias_monto > 0 && (
+                    <>
+                      {selectedOP.certificado_retencion_url && (
+                        <a href={selectedOP.certificado_retencion_url} target="_blank" rel="noopener noreferrer" title={selectedOP.certificado_retencion_url.split("/").pop()}
+                          className="flex items-center gap-1.5 rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-violet-600">
+                          <Download className="h-3.5 w-3.5" /> Certificado
                         </a>
-                      </div>
-                    ) : (
-                      <p className="text-xs text-zinc-400">No se adjuntó certificado de retención</p>
-                    )}
-                    <label className="block">
-                      <input
-                        type="file"
-                        accept=".pdf,.png,.jpg,.jpeg"
-                        className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleUploadCertificado(selectedOP.id, file);
-                        }}
-                      />
-                      <span className={`w-full flex items-center justify-center gap-2 rounded-lg border border-dashed border-violet-300 dark:border-violet-700 px-4 py-2.5 text-sm font-medium cursor-pointer transition-colors ${uploadingCert ? "text-zinc-400" : "text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-950/20"}`}>
-                        {uploadingCert ? (
-                          <><Loader2 className="h-4 w-4 animate-spin" /> Subiendo...</>
-                        ) : (
-                          <><Upload className="h-4 w-4" /> {selectedOP.certificado_retencion_url ? "Reemplazar certificado" : "Adjuntar certificado"}</>
-                        )}
-                      </span>
-                    </label>
-                  </div>
+                      )}
+                      <label className="cursor-pointer">
+                        <input type="file" accept=".pdf,.png,.jpg,.jpeg" className="hidden"
+                          onChange={(e) => { const file = e.target.files?.[0]; if (file) handleUploadCertificado(selectedOP.id, file); }} />
+                        <span className={`flex items-center gap-1.5 rounded-lg border border-dashed border-violet-300 dark:border-violet-700 px-3 py-1.5 text-xs font-medium ${uploadingCert ? "text-zinc-400" : "text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-950/20"}`}>
+                          {uploadingCert ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Subiendo...</> : <><Upload className="h-3.5 w-3.5" /> {selectedOP.certificado_retencion_url ? "Reemplazar certificado" : "Adjuntar certificado"}</>}
+                        </span>
+                      </label>
+                      {!selectedOP.certificado_retencion_url && <span className="text-[11px] text-amber-600">Falta el certificado de retención</span>}
+                    </>
+                  )}
                 </div>
-              )}
+                {(() => {
+                  const allFiles = selectedOP.archivos && selectedOP.archivos.length > 0
+                    ? selectedOP.archivos
+                    : selectedOP.archivo_url
+                      ? [{ url: selectedOP.archivo_url, nombre: selectedOP.archivo_nombre || "Archivo adjunto" }]
+                      : [];
+                  if (allFiles.length === 0) return null;
+                  return (
+                    <div className="space-y-0.5">
+                      {allFiles.map((af, i) => (
+                        <a key={i} href={af.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs text-orange-500 hover:text-orange-600">
+                          <Paperclip className="h-3 w-3 flex-shrink-0" /><span className="truncate">{af.nombre}</span>
+                        </a>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
 
               {/* Acciones */}
               <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">

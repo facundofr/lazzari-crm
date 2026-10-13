@@ -688,6 +688,23 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
       **V1.1.432 (13/10) — ventana Nueva Orden de Pago compacta:** Ret. Ganancias en una fila (%, botones y monto) con el acumulado en una línea;
         Monto manual en una línea; Resumen y Datos bancarios lado a lado; tabla de facturas, notas y pie más finos. Entra entera sin bajar.
         Botón copiar (`components/copiar-btn.tsx`) al lado del Neto a pagar (copia `3104080.00`) y en CBU, Alias y CUIT. Probado en local sin guardar.
+      **Tanda V1.1.433 (13/10, EN CURSO, sin publicar):**
+        - HECHO: Medios de pago de la OP en una fila por medio (sin CUIT repetido). OP única: se sacó "+ Parcial";
+          si faltan > $1 aparece "Faltan $X · Pagar parcial" (y al Crear lo arma solo y avisa en amarillo): recorta lo aplicado
+          a la factura más nueva y recalcula la retención (`lib/op-parcial.ts`, prueba `scripts/test-op-parcial.ts`). Probado con Bruno Francione sin guardar.
+        - HECHO y CORRIDA por Augusto (13/10): migración `20261013170000_op_tolerancia_redondeo.sql` (+ vuelta atrás):
+          la OP acepta hasta $1 menos en los medios (caso Sesenta Once OP-000053: los eCheqs daban $0,01 menos y tuvo que poner $1 en efectivo; Augusto decidió dejarla así;
+          esa OP quedó con $1 efectivo ficticio y crédito a favor $0,99 — Augusto decide si se limpia).
+        - HECHO: "Cómo se le paga" (`condicion-pago-editor.tsx`): "Se paga a (desde factura)" y "Cheque diferido a", en 2 filas;
+          "Queda así: … eCheq diferido 45 días → el proveedor cobra a los 75 días de la factura" (textoCondicionPago dice "diferido").
+        - HECHO: Cargar factura sin OC: casilla "Crear una OC nueva con los artículos de esta factura" (marcada sola si el proveedor no tiene OCs);
+          al guardar crea la OC (enviada, recibida, atada a la factura). Si falla, la factura queda y avisa. Casillas de la carga en una línea.
+        - HECHO: ventana Nuevo/Editar proveedor compacta (4 columnas, campos h-8, límite de crédito junto al descuento, CUIT de pagos en el encabezado bancario).
+        - HECHO: detalle de OP compacto (medios en filas, importes en un recuadro, botón copiar total, comprobante y certificado en una línea).
+        - HECHO: IA del proveedor: "Leer papeles con IA (ARCA, CBU…)" acepta varios archivos y lee también banco, tipo y n° de cuenta, CBU, alias y titular;
+          completa solo lo vacío; si la cuenta es de otro CUIT avisa en amarillo (`lib/documento-impositivo.ts`, prueba `scripts/test-documento-impositivo.ts`).
+        - Probado en local sin guardar. tsc 0, hooks OK. Versión 1.1.433.
+        - PENDIENTE para otra tanda: compactar detalle de factura de compra y cobro/recibo.
       **Del Sol (pendiente, 13/10):** OP 0001-00017009 = eCheq 3968 $6.210.728,30 (11/12, no cargado) + ret. Ganancias cert. 11672 $99.826,69 = $6.310.554,99;
         paga FA 16-16, 16-17, 16-18, 15-45 y "FC 39" ($1.242.839,98). La FA 15-39 está ANULADA por la NCA 15-5 (emitida desde el CRM el 30/09 con CAE, sin usuario ni motivo);
         la FA 15-54 ($1.395.507,04) sigue impaga. Falta que Augusto diga por qué se hizo la NCA 15-5 (¿refacturada como 15-54?). Nada cargado todavía.

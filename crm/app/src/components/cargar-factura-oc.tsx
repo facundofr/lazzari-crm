@@ -134,6 +134,8 @@ export default function CargarFacturaOC({
   // "1 unidad de la OC/PR = N unidades de la factura" (texto editable).
   const [reemplazos, setReemplazos] = useState<Record<string, string>>({});
   const [createExtrasOC, setCreateExtrasOC] = useState(false);
+  // Factura sin OC: crear una OC nueva con sus artículos (queda recibida y atada a la factura).
+  const [crearOCNueva, setCrearOCNueva] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [pagadaSinOP, setPagadaSinOP] = useState(false);
 
@@ -277,6 +279,9 @@ export default function CargarFacturaOC({
       return true;
     });
   }, [ordenes, proveedorId, ocSearch, showAllOCs]);
+  // Viene marcada sola si el proveedor no tiene ninguna OC abierta (ej. proveedor nuevo).
+  const ocsDelProveedor = useMemo(() => (proveedorId ? ordenes.filter((oc) => oc.proveedor_id === proveedorId).length : 0), [ordenes, proveedorId]);
+  useEffect(() => { setCrearOCNueva(!!proveedorId && ocsDelProveedor === 0); }, [proveedorId, ocsDelProveedor]);
 
   const filteredProveedores = useMemo(() => {
     if (!proveedorSearch.trim()) return proveedores.slice(0, 20);
@@ -783,8 +788,8 @@ export default function CargarFacturaOC({
     if (!numeroFactura.trim()) { setError("Ingresá el número de factura"); return; }
     if (subtotal <= 0) { setError("El subtotal debe ser mayor a 0"); return; }
     // La OC es opcional: si no se eligió ninguna, se avisa pero se puede guardar igual.
-    if (!isCreditNote && tipoFC === "mercaderia" && selectedOCIds.size === 0 && ocsFiltered.length > 0
-      && !window.confirm("No elegiste ninguna orden de compra. ¿Guardar la factura igual, sin OC?")) return;
+    if (!isCreditNote && tipoFC === "mercaderia" && selectedOCIds.size === 0 && !crearOCNueva && ocsFiltered.length > 0
+      && !window.confirm("No elegiste ninguna orden de compra ni marcaste «Crear una OC nueva con los artículos de esta factura». ¿Guardar la factura igual, sin OC?")) return;
     // La NC puede quedar sin factura: el total queda como crédito disponible para usar en una Orden de Pago.
     if (isCreditNote && facturaOrigenId && (!Number.isFinite(creditoAplicado) || creditoAplicado < 0 || !selectedCreditOrigin || creditoAplicado > selectedCreditOrigin.saldo_acreditable + 0.005 || creditoAplicado > total + 0.005)) {
       setError("El monto aplicado no puede superar el total de la nota ni el saldo de la factura elegida"); return;
@@ -1049,6 +1054,32 @@ export default function CargarFacturaOC({
         }
       }
       savedFacturaId = fcData?.id || null;
+
+      // Factura sin OC: OC nueva con sus artículos, recibida y atada a la factura. Si falla, la factura queda igual y se avisa.
+      if (!isCreditNote && isMercaderia && selectedOCIds.size === 0 && crearOCNueva && fcData?.id && items.length > 0) {
+        try {
+          const db = supabase as any;
+          const sub = roundMoney(items.reduce((s2, it) => s2 + Number(it.cantidad) * Number(it.precio_unitario) * (1 - Number(it.descuento_porcentaje || 0) / 100), 0));
+          const ivaOC = roundMoney(items.reduce((s2, it) => s2 + Number(it.cantidad) * Number(it.precio_unitario) * (1 - Number(it.descuento_porcentaje || 0) / 100) * Number(it.iva_porcentaje ?? 21) / 100, 0));
+          const { data: ocRow, error: ocErr } = await db.from("ordenes_compra").insert({
+            proveedor_id: proveedorId, fecha, moneda, estado: "enviada", estado_pago: "pendiente",
+            subtotal: sub, iva: ivaOC, total: roundMoney(sub + ivaOC), sociedad_id: sociedadId, presupuesto_origen_id: null,
+            observaciones: `OC creada desde la FC ${numeroFactura.trim()} (factura sin OC)`, created_by: profileId,
+          }).select("id, numero").single();
+          if (ocErr || !ocRow) throw new Error(ocErr?.message || "sin respuesta");
+          const { error: itErr } = await db.from("orden_compra_items").insert(items.map((it, idx) => ({
+            orden_id: ocRow.id, codigo: it.codigo || "", descripcion: it.descripcion, cantidad: it.cantidad, cantidad_recibida: it.cantidad,
+            unidad: it.unidad || "u", precio_unitario: roundMoney(Number(it.precio_unitario) * (1 - Number(it.descuento_porcentaje || 0) / 100)),
+            iva_porcentaje: it.iva_porcentaje ?? 21, orden: idx,
+          })));
+          if (itErr) throw new Error(`artículos: ${itErr.message}`);
+          const { error: linkErr } = await db.from("factura_compra_ocs").insert({ factura_compra_id: fcData.id, orden_compra_id: ocRow.id });
+          if (linkErr) throw new Error(`vínculo: ${linkErr.message}`);
+          avisosReemplazo.push(`Se creó la ${ocRow.numero || "OC"} con los artículos de esta factura.`);
+        } catch (e: any) {
+          avisosReemplazo.push(`⚠️ La factura se guardó, pero no se pudo crear la OC (${e?.message || "error"}). Creala a mano desde Compras.`);
+        }
+      }
 
       // Reemplazos: la OC queda igual a la factura; el PR conserva lo vendido y cambia solo el costo, con leyenda.
       if (reemplazosAplicados.length) {
@@ -1619,6 +1650,12 @@ export default function CargarFacturaOC({
               </div>
               <div className="relative w-72 max-w-full"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" /><input value={ocSearch} onChange={(e) => setOcSearch(e.target.value)} placeholder="Buscar OC, proveedor o estado..." className="w-full rounded-lg border border-zinc-200 bg-transparent py-1.5 pl-8 pr-2 text-xs dark:border-zinc-700" /></div>
             </div>
+            {!isCreditNote && tipoFC === "mercaderia" && proveedorId && selectedOCIds.size === 0 && (
+              <label className="mb-1.5 flex cursor-pointer items-center gap-2 rounded-lg border border-orange-200 bg-orange-50/50 px-2.5 py-1.5 text-xs dark:border-orange-900 dark:bg-orange-950/20">
+                <input type="checkbox" checked={crearOCNueva} onChange={(e) => setCrearOCNueva(e.target.checked)} className="accent-orange-600" />
+                <span><strong>Crear una OC nueva con los artículos de esta factura</strong> <span className="text-zinc-500">— queda recibida y atada a la factura{ocsDelProveedor > 0 ? " (o elegí una OC de abajo)" : ""}</span></span>
+              </label>
+            )}
             {ocsFiltered.length === 0 ? (
               <div className="space-y-2">
                 <p className="text-sm text-zinc-400 italic">
@@ -1782,9 +1819,9 @@ export default function CargarFacturaOC({
                 )}
 
                 {!ocItemsLoading && !ocItemsError && selectedOCItems.length > 0 && unresolvedItemCount > 0 && (
-                  <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-zinc-200 bg-white p-3 text-xs dark:border-zinc-700 dark:bg-zinc-900">
-                    <input type="checkbox" checked={createExtrasOC} onChange={(event) => setCreateExtrasOC(event.target.checked)} className="mt-0.5 accent-orange-600" />
-                    <span><strong>Crear una OC adicional con las cantidades no asignadas</strong><span className="mt-0.5 block font-normal text-zinc-500">Opcional. Si no la marcás, la factura se carga igual y los artículos quedan informados como no vinculados.</span></span>
+                  <label className="mt-2 flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900" title="Si no la marcás, la factura se carga igual y los artículos quedan informados como no vinculados.">
+                    <input type="checkbox" checked={createExtrasOC} onChange={(event) => setCreateExtrasOC(event.target.checked)} className="accent-orange-600" />
+                    <span><strong>Crear una OC adicional con las cantidades no asignadas</strong> <span className="font-normal text-zinc-500">(opcional)</span></span>
                   </label>
                 )}
               </div>
@@ -1794,10 +1831,10 @@ export default function CargarFacturaOC({
           {/* ── Notas ── */}
           <section>
             <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Notas / observaciones</label>
-            <textarea value={notas} onChange={e => setNotas(e.target.value)} rows={2}
+            <textarea value={notas} onChange={e => setNotas(e.target.value)} rows={1}
               placeholder="Opcional"
               className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
-            <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-700"><input type="checkbox" checked={pagadaSinOP} onChange={(e) => setPagadaSinOP(e.target.checked)} className="mt-0.5 accent-orange-600" /><span><strong>Ya pagada con tarjeta / marketplace</strong><span className="block text-xs font-normal text-zinc-500">La factura queda pagada sin generar una orden de pago ni duplicar el gasto.</span></span></label>
+            <label className="mt-2 flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs dark:border-zinc-700"><input type="checkbox" checked={pagadaSinOP} onChange={(e) => setPagadaSinOP(e.target.checked)} className="accent-orange-600" /><span><strong>Ya pagada con tarjeta / marketplace</strong> <span className="font-normal text-zinc-500">— queda pagada sin orden de pago ni gasto duplicado</span></span></label>
           </section>
 
           {/* Error */}

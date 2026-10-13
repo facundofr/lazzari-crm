@@ -1,0 +1,14 @@
+import { normalizarDatosImpositivos, combinarDatosImpositivos, bancoDeLista } from "../src/lib/documento-impositivo";
+const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } console.log("ok", m); };
+const arca = normalizarDatosImpositivos({ tipo_documento: "constancia_inscripcion", cuit: "30-58531404-4", razon_social: "ESPUMAS PILAR SRL", condicion_iva: "RI", resumen: "Constancia" });
+const cbu = normalizarDatosImpositivos({ tipo_documento: "datos_bancarios", banco: "Banco Santander Argentina S.A.", tipo_cuenta: "cc", numero_cuenta: "014 4518/4", cbu: "0720014420000000451840", alias: "SANT.ESPUPIL.AR", titular_cuenta: "ESPUMAS PILAR SRL", cuit_titular_cuenta: "30585314044", resumen: "CBU" });
+ok(cbu.tipo_cuenta === "CC" && cbu.cbu?.length === 22, "normaliza tipo de cuenta y CBU");
+ok(normalizarDatosImpositivos({ cbu: "123" }).cbu === null, "CBU que no tiene 22 dígitos se descarta");
+const c = combinarDatosImpositivos([cbu, arca])!;
+ok(c.tipo_documento === "constancia_inscripcion", "la constancia pesa más que los datos bancarios");
+ok(c.condicion_iva === "RI" && c.cbu === "0720014420000000451840" && c.alias === "SANT.ESPUPIL.AR", "junta impositivo y bancario");
+const lista = ["Banco Nación", "Banco Galicia", "Banco Santander", "Banco BBVA", "Mercado Pago"];
+ok(bancoDeLista("BANCO DE GALICIA Y BUENOS AIRES S.A.U.", lista) === "Banco Galicia", "Galicia");
+ok(bancoDeLista("Banco de la Nación Argentina", lista) === "Banco Nación", "Nación con tilde");
+ok(bancoDeLista("BBVA Banco Francés", lista) === "Banco BBVA", "BBVA");
+ok(bancoDeLista("Banco Inventado", lista) === null, "banco desconocido no se completa");

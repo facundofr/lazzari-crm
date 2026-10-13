@@ -58,7 +58,7 @@ export function textoCondicionPago(p: PlanPago | null | undefined): string {
   else if (p.condicion_pago === "escalonado") t = `Escalonado ${p.dias_pago ?? "?"} a ${p.dias_pago_hasta ?? "?"} días`;
   const medio = medioLabel(p.medio_pago_preferido);
   if (medio) t += ` · ${medio}`;
-  if (esCheque(p.medio_pago_preferido) && p.plazo_cheque_dias && p.condicion_pago !== "escalonado") t += ` a ${p.plazo_cheque_dias} días`;
+  if (esCheque(p.medio_pago_preferido) && p.plazo_cheque_dias && p.condicion_pago !== "escalonado") t += ` diferido ${p.plazo_cheque_dias} días`;
   if (p.descuento_pronto_pago) t += ` · ${p.descuento_pronto_pago} % pronto pago`;
   return t;
 }
