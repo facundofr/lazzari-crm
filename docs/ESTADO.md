@@ -705,7 +705,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
           completa solo lo vacío; si la cuenta es de otro CUIT avisa en amarillo (`lib/documento-impositivo.ts`, prueba `scripts/test-documento-impositivo.ts`).
         - Probado en local sin guardar. tsc 0, hooks OK. Versión 1.1.433.
         - PENDIENTE para otra tanda: compactar detalle de factura de compra y cobro/recibo.
-      **V1.1.434 (13/10) — OP en pesos de facturas en US$** (Augusto: "el pago lo hago en $ siempre"):
+      **V1.1.434 (13/10, PUBLICADA y probada en producción sin guardar) — OP en pesos de facturas en US$** (Augusto: "el pago lo hago en $ siempre"):
         - Nueva OP con facturas USD: ya no salta a la ventana FX; la OP queda en $ con barra "Se paga en pesos · Dólar" (BNA divisa vendedor del día hábil
           anterior, se completa sola y es editable). Bruto = Σ round(US$ × TC) por factura (`lib/op-usd-pesos.ts`, prueba `scripts/test-op-usd-pesos.ts`, con enteros).
           Retención de Ganancias, base, medios (cheque propio, eCheq, etc.) y certificado en pesos, igual que una OP en pesos. NC en US$ se aplican en la misma OP.
