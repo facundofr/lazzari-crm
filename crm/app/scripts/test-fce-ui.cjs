@@ -19,10 +19,10 @@ function respond(index,data,ok=true){requests[index].resolve({ok,json:async()=>d
  respond(2,{obligado:true,montoDesde:null});await flush();assert.equal(render().ready,false);assert.ok(render().error);
  render().retry();assert.equal(render().ready,false);await flush();respond(3,{obligado:false,montoDesde:null});await flush();assert.equal(render().ready,true);
  props=[false,'soc-b','client-b','2026-09-11'];render();props=[true,'soc-b','client-b','2026-09-11'];assert.equal(render().ready,false);
- for(const file of ['src/app/(crm)/ventas/page.tsx','src/app/(crm)/facturacion/facturacion-content.tsx']){const ui=fs.readFileSync(file,'utf8');for(const token of ['fceBlocked','fce_cbu','fce_transmision','fceExpectedTipo','Reintentar verificación FCE'])assert.ok(ui.includes(token),`${file}: ${token}`);}
+ for(const file of ['src/components/facturacion/emitir-factura-modal.tsx']){const ui=fs.readFileSync(file,'utf8');for(const token of ['fceBlocked','fce_cbu','fce_transmision','fceExpectedTipo','Reintentar verificación FCE'])assert.ok(ui.includes(token),`${file}: ${token}`);}
  const billing=fs.readFileSync('src/app/(crm)/facturacion/facturacion-content.tsx','utf8');
  for(const token of ['ncEsFce','código ARCA','disabled={ncEsFce}','nota_credito_modo: ncMode','Importe libre','Por ítems']) assert.ok(billing.includes(token),`facturación NC: ${token}`);
  assert.match(billing,/setNcManual\(!\["FCEA", "FCEB"\]\.includes\(factura\.tipo\)/);
- const ventas=fs.readFileSync('src/app/(crm)/ventas/page.tsx','utf8');assert.ok(ventas.includes('visibilitychange'));assert.ok(ventas.includes('ventas-presupuestos-'));assert.ok(ventas.includes('v.presupuesto.estado !== "facturar"'));
+ const ventas=fs.readFileSync('src/app/(crm)/ventas/page.tsx','utf8');assert.ok(ventas.includes('visibilitychange'));assert.ok(ventas.includes('ventas-presupuestos-'));assert.ok(ventas.includes('<EmitirFacturaModal'));assert.ok(billing.includes('<EmitirFacturaModal'));assert.ok(!ventas.includes('fce_cbu'));assert.ok(!billing.includes('fce_cbu'));
  console.log('OK: FCE UI race guards, society/client/date isolation, malformed threshold fails closed, retry, reopen, required fields and filter refresh wiring. No network or real invoices.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

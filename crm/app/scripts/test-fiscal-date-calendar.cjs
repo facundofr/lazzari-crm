@@ -20,6 +20,6 @@ function respond(req,soc,pv,type,date,ok=true,warning=''){req.resolve({ok,json:a
  respond(requests[4],'soc-b',10,'FB',null,false);await flush();assert.equal(render().ready,false);assert.equal(render().error,'No disponible');
  props=[false,'soc-b',10,'FB'];assert.equal(render().ready,true);
  props=[true,'soc-b',10,'FB'];assert.equal(render().ready,false);
- for(const file of ['src/app/(crm)/ventas/page.tsx','src/app/(crm)/facturacion/facturacion-content.tsx']){const ui=fs.readFileSync(file,'utf8');assert.ok(ui.includes('min={emitManual ? minFecha : fiscalMinDate}'));assert.ok(ui.includes('disabled={!emitManual && !fiscalDates.ready}'));assert.ok(ui.includes('fiscalDateBlocked'));}
+ for(const file of ['src/components/facturacion/emitir-factura-modal.tsx']){const ui=fs.readFileSync(file,'utf8');assert.ok(ui.includes('min={emitManual ? minFecha : fiscalMinDate}'));assert.ok(ui.includes('disabled={!emitManual && !fiscalDates.ready}'));assert.ok(ui.includes('fiscalDateBlocked'));}
  console.log('OK: calendario valida por sociedad/PV/tipo, admite respaldo local advertido, descarta respuestas viejas, reintento y reapertura. Sin red ni emisión.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

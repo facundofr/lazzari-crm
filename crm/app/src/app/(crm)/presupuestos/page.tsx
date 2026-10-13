@@ -3202,44 +3202,17 @@ export default function PresupuestosPage() {
                       className="mt-0.5 rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                   </div>
                 </div>
-                {selected.estado === "aprobado" && (
+                {(selected.estado === "aprobado" || selected.estado === "facturar") && (
                   <div className="col-span-2">
-                    <button
-                      onClick={async () => {
-                        let readyQuery = supabase.from("presupuestos").update({ estado: "facturar", listo_para_facturar: true } as any).eq("id", selected.id);
-                        if (sociedadActiva?.id) readyQuery = readyQuery.eq("sociedad_id" as any, sociedadActiva.id);
-                        const { error } = await readyQuery;
-                        if (error) { toast.error("Error al actualizar"); return; }
-                        setSelected({ ...selected, estado: "facturar" as any, listoParaFacturar: true } as any);
-                        await fetchPresupuestos();
-                        toast.success("PR marcado como listo para facturar");
-                      }}
+                    <a
+                      href={`/ventas?venta=${selected.id}`}
                       className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors w-full justify-center"
                     >
                       <Receipt className="h-4 w-4" />
-                      Marcar listo para facturar
-                    </button>
-                    <p className="text-xs text-zinc-400 mt-1 text-center">El PR aparecera en Ventas con estado &ldquo;Facturar&rdquo;</p>
-                  </div>
-                )}
-                {selected.estado === "facturar" && (
-                  <div className="col-span-2">
-                    <button
-                      onClick={async () => {
-                        let revertQuery = supabase.from("presupuestos").update({ estado: "aprobado", listo_para_facturar: false } as any).eq("id", selected.id);
-                        if (sociedadActiva?.id) revertQuery = revertQuery.eq("sociedad_id" as any, sociedadActiva.id);
-                        const { error } = await revertQuery;
-                        if (error) { toast.error("Error al actualizar"); return; }
-                        setSelected({ ...selected, estado: "aprobado" as any, listoParaFacturar: false } as any);
-                        await fetchPresupuestos();
-                        toast.success("PR desmarcado — vuelve a estado Aprobado");
-                      }}
-                      className="flex items-center gap-2 rounded-lg border border-zinc-300 px-4 py-2.5 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors w-full justify-center"
-                    >
-                      <Receipt className="h-4 w-4" />
-                      Desmarcar listo para facturar
-                    </button>
-                    <p className="text-xs text-zinc-400 mt-1 text-center">Vuelve a estado &ldquo;Aprobado&rdquo; y se quita de Ventas</p>
+                      Ver en Ventas (entregar, facturar, cobrar)
+                      <ArrowRight className="h-4 w-4" />
+                    </a>
+                    <p className="text-xs text-zinc-400 mt-1 text-center">Aprobado: la venta ya está en Ventas. Si el cliente manda OC, cargala acá arriba.</p>
                   </div>
                 )}
                 {selected.enviadoAt && (

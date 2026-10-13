@@ -583,6 +583,36 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         (02/10 $325.500,12 y $620.329,99); la retención de Electronic ($5.870,42) sigue activa y el 08/10 salió una transferencia por ese importe.
         OP-000038 y OP-000052 pagadas con tarjeta: ¿cuál? 21 cobros del banco son de facturas del sistema anterior (no están en el CRM): ¿cómo registrarlos?
       - Las 125 líneas pendientes del extracto, con lo que se sabe de cada una: `Claude outputs/extracto_pendiente_revision_12_10_2026.csv`.
+   **Análisis de la pantalla Ventas (12/10/2026, solo ideas, esperando OK de Augusto):** `src/app/(crm)/ventas/page.tsx` (2.091 líneas, el modal de
+      emitir factura ocupa ~500 y está repetido con Facturación). Problemas: 7 PR "aprobado" sin remito NO aparecen (filtro línea 379: Corteva x3, Adecco,
+      Synthon con OC, Coronel Bogado, Limagrain); PR-"facturar" ya facturados (2) quedan con estado viejo; "Cobrado" solo si la factura está "pagada"
+      (cobros parciales no se ven); KPIs solo cuentan (sin $ ni US$); lista de tarjetas grandes sin filtro de fechas (82 facturadas crecen sin fin);
+      detalle con 4 secciones cerradas (un clic más cada una); links "Ir a"/"Registrar cobro" van a pantallas genéricas sin filtrar; vendedores sin filtrar por sociedad.
+      Propuesta numerada pasada en el chat (bandeja por "qué falta", tabla compacta, montos, detalle abierto, links directos, sacar modal duplicado).
+   **Ventas nueva HECHA en código (13/10/2026, OK de Augusto "avanzamos con todo", sin duplicados). V1.1.426 SIN PUBLICAR:**
+      - **Una sola ventana de emitir factura** `components/facturacion/emitir-factura-modal.tsx` para Facturación (libre) y Ventas (desde PR).
+        Se borró la copia de Ventas (~500 líneas) y la de Facturación. Con PR: cliente fijo, renglones y OC del PR, conversión de moneda PR→factura,
+        condición de venta según el cliente (`lib/factura-condicion.ts`, prueba `scripts/test-factura-condicion.ts`), observaciones, PDF al terminar,
+        y el PR pasa a "facturado". La manual va por `/api/facturacion` (antes Ventas insertaba directo en la base). ARCA status: `lib/use-arca-status.ts`.
+        PDF de factura: `lib/factura-pdf.ts`.
+      - **API manual X:** el comprobante X se guarda sin IVA (iva 0, renglones 0 %), como estaban todos los X. Solo rama manual; ARCA no se tocó.
+      - **Arreglado:** factura X de un PR manual de cliente RI le sacaba el IVA al precio. Caso real: X 0000-00000007 de COOPERATIVA LA NUEVA LEYENDA
+        (PR-2026-1189): PR $251.640, factura $207.966,96 (faltan $43.673,04). **CORREGIDA 13/10 con OK de Augusto** a $251.640 (6 x $41.940;
+        migración `20261013122000_factura_x7_nueva_leyenda.sql` con vuelta atrás; antes: `Claude outputs/antes_factura_x7_nueva_leyenda_13_10_2026.txt`).
+        Sin cobros, vence 28/10. **Falta (Augusto):** avisar al cliente y reenviarle el PDF corregido desde Facturación (al cliente le llegó el 28/09 con el monto viejo).
+      - **Ventas** (`ventas/page.tsx`): bandejas Esperando OC / Para facturar / Para entregar / Para cobrar / Terminadas / Todas con cantidad, $ y US$
+        (`lib/ventas-etapas.ts`, prueba `scripts/test-ventas-etapas.ts`); tabla compacta con saldo, días y botón "Próximo paso"; detalle con todo abierto;
+        filtro de fechas; busca también por OC y factura; vendedores sacados de las propias ventas. Ahora aparecen los aprobados sin remito (antes 7 ocultos).
+        Saldo real por factura (cobros parciales y NC) con `lib/saldo-clientes`. Una NC ya no cuenta como "factura vigente" (PR-2026-1062 sale "Re-facturar").
+        "Cobrar" y "Emitir NC" abren Finanzas en esa factura con la ventana ya abierta (`&accion=cobro|nc` en `facturacion-content.tsx`).
+        Arreglado: las OC de cada venta no se veían nunca (pedía la columna `pago`, que no existe; ahora `medio_pago`/`estado_pago`).
+      - **Esperando OC:** casilla "Pide OC para facturar" en la ficha del cliente (migración `20261013120000_clientes_pide_oc.sql`, CORRIDA).
+        Facturar sin OC: pregunta y deja seguir. Presupuestos: "Marcar listo para facturar" reemplazado por "Ver en Ventas" (la OC se carga en el PR).
+      - **Dato corregido:** PR-2026-1148 de "facturar" a "facturado" (migración `20261013121000_pr1148_facturado.sql`, CORRIDA, con vuelta atrás).
+      - Pruebas que leían el código viejo apuntan a la ventana única. tsc 0 errores, check-hooks OK. Probado en local sin guardar: bandejas, detalle,
+        ventana de facturar (en local siempre sale "manual": ARCA solo en Vercel), "Cobrar" abre el cobro de esa factura, celular sin scroll horizontal.
+        Fallaban ANTES de este cambio (no son de esto): `test-presupuesto-exact-price.mjs` y `test-checklist-email-credit.mjs`.
+      - **⚠️ Al publicar:** la primera factura ARCA desde Ventas y desde Facturación la emite Augusto (Claude no toca ARCA) y avisa; revisar PDF y total.
 
 0. **PRÓXIMO: análisis a fondo de Finanzas** (lo más importante del CRM, pedido por Augusto 11/10/2026):
    - Cobros con eCheq guardados con **fecha futura** y ya "Conciliado": DEL SOL CONSTRUCTORA (20/11/2026, cobro $3.677.887,22 + ret. Ganancias $61.813,23)

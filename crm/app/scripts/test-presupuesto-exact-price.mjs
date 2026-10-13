@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const source = fs.readFileSync(new URL("../src/app/(crm)/presupuestos/page.tsx", import.meta.url), "utf8");
-const salesSource = fs.readFileSync(new URL("../src/app/(crm)/ventas/page.tsx", import.meta.url), "utf8");
+const salesSource = fs.readFileSync(new URL("../src/lib/factura-condicion.ts", import.meta.url), "utf8");
 
 // Regresión real de PR-2026-1151: $133.940 era el precio confirmado. Volver a
 // calcularlo desde costo + markup redondeado produce $133.941,03.
@@ -18,6 +18,6 @@ assert.match(source, /options\.preserveItemPrices \? p\.items : p\.items\.map/);
 assert.match(source, /fetchCotizBna\("divisas", undefined, \{ preserveItemPrices: true \}\)/);
 assert.match(source, /const pv = Number\(it\.precio_venta\) \|\| 0/);
 assert.match(source, /precio_venta: pv/);
-assert.match(salesSource, /precioNeto = it\.precio_venta/);
+assert.match(salesSource, /if \(it\.precio_venta != null\) return Number\(it\.precio_venta\)/);
 
 console.log("OK presupuesto: editar o facturar conserva el precio de venta exacto confirmado.");

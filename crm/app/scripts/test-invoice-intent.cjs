@@ -27,6 +27,7 @@ const keyAt=i=>requests[i].init.headers.get('Idempotency-Key');
  const rejected=tabA.postInvoiceIntent('rejected',{body:'invalid'});await flush();requests[9].resolve(response({error:'ARCA rejected',emission_completed:true},422));await rejected;
  tabA.beginInvoiceIntent('rejected');const corrected=tabA.postInvoiceIntent('rejected',{body:'corrected'});await flush();assert.notEqual(keyAt(9),keyAt(10));requests[10].resolve(response({success:true}));await corrected;
  const uncertain=tabA.postInvoiceIntent('reconcile',{body:'x'});await flush();requests[11].resolve(response({success:true,reconciliation_required:true}));await uncertain;tabA.beginInvoiceIntent('reconcile');const uncertainRetry=tabA.postInvoiceIntent('reconcile',{body:'x'});await flush();assert.equal(keyAt(11),keyAt(12));requests[12].resolve(response({success:true}));await uncertainRetry;
- for(const name of ['ventas/page.tsx','facturacion/facturacion-content.tsx']){const ui=fs.readFileSync('src/app/(crm)/'+name,'utf8');assert.ok(!ui.includes('fetch("/api/facturacion", {'));assert.ok(ui.includes('postInvoiceIntent'));}
+ for(const file of ['src/components/facturacion/emitir-factura-modal.tsx','src/app/(crm)/facturacion/facturacion-content.tsx']){const ui=fs.readFileSync(file,'utf8');assert.ok(!ui.includes('fetch("/api/facturacion", {'));assert.ok(ui.includes('postInvoiceIntent'));}
+ assert.ok(!fs.readFileSync('src/app/(crm)/ventas/page.tsx','utf8').includes('/api/facturacion'));
  console.log('OK: cross-tab exclusive lock and single rotation, retry/reload UUID stable, definitive rejection reset only on reopen, reconciliation remains pending, absent locks/storage fail closed. No network.');
 })().catch(e=>{console.error(e);process.exitCode=1;});

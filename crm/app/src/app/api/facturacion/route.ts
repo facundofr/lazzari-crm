@@ -255,6 +255,8 @@ export async function POST(req: NextRequest) {
       }
 
       const isFacturaA = tipo.endsWith("A");
+      // Comprobante X: precio final, sin IVA (así quedaron todos los X guardados).
+      const sinIva = tipo === "X";
       const isUSD = moneda === "USD";
       const tc = Number(tipo_cambio) || 0;
       if (isUSD && tc <= 0) {
@@ -269,7 +271,9 @@ export async function POST(req: NextRequest) {
       let totalIva = 0;
       for (const item of items) {
         const precioItem = Number(item.precio_unitario);
-        if (isFacturaA) {
+        if (sinIva) {
+          totalNeto += Number(item.cantidad) * precioItem;
+        } else if (isFacturaA) {
           const neto = Number(item.cantidad) * precioItem;
           const ivaPct = Number(item.iva_porcentaje ?? 21);
           totalNeto += neto;
@@ -338,7 +342,7 @@ export async function POST(req: NextRequest) {
         descripcion: item.descripcion || "Item",
         cantidad: Number(item.cantidad),
         precio_unitario: Number(item.precio_unitario),
-        iva_porcentaje: isFacturaA ? Number(item.iva_porcentaje ?? 21) : 21,
+        iva_porcentaje: sinIva ? 0 : isFacturaA ? Number(item.iva_porcentaje ?? 21) : 21,
         orden: idx,
       }));
 

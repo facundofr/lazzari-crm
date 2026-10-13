@@ -4,7 +4,7 @@ const path = require("node:path");
 
 const read = (file) => fs.readFileSync(path.join(__dirname, "..", file), "utf8");
 const facturacion = read("src/app/(crm)/facturacion/facturacion-content.tsx");
-const ventas = read("src/app/(crm)/ventas/page.tsx");
+const facturaPdf = read("src/lib/factura-pdf.ts");
 const pdf = read("src/lib/pdf-templates.ts");
 
 assert.match(facturacion, /const \[ncFecha, setNcFecha\] = useState\(todayAR\(\)\)/);
@@ -16,6 +16,6 @@ assert.match(facturacion, /p_fecha: ncFecha,/); // NC manual: RPC atómica crear
 assert.match(pdf, /observaciones\?: string \| null/);
 assert.match(pdf, /f\.observaciones \? `<div class="obs-block">/);
 assert.match(facturacion, /observaciones: f\.observaciones/);
-assert.match(ventas, /observaciones: factura\.observaciones/);
+assert.match(facturaPdf, /observaciones: factura\.observaciones/);
 
 console.log("OK factura: la NC permite elegir fecha validada y las observaciones guardadas aparecen en el PDF.");

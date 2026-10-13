@@ -77,6 +77,7 @@ interface ClienteRow {
   moneda_predeterminada?: string | null;
   email_facturacion?: string | null;
   envio_automatico?: boolean;
+  pide_oc_para_facturar?: boolean;
   flete?: string | null;
   alias_cbu?: string | null;
   tipo_cuenta?: string | null;
@@ -89,7 +90,7 @@ interface ClienteRow {
   cliente_sucursales: unknown[];
 }
 
-function mapRow(row: ClienteRow): Client & { vendedorNombre: string; monedaPredeterminada: string; aliasCbu: string; tipoCuenta: string; fechaPago: string; emailComprobante: string } {
+function mapRow(row: ClienteRow): Client & { vendedorNombre: string; monedaPredeterminada: string; aliasCbu: string; tipoCuenta: string; fechaPago: string; emailComprobante: string; pideOcParaFacturar: boolean } {
   return {
     id: row.id,
     type: (row.type as Client["type"]) ?? "empresa",
@@ -119,6 +120,7 @@ function mapRow(row: ClienteRow): Client & { vendedorNombre: string; monedaPrede
     tipoCuenta: row.tipo_cuenta ?? "",
     fechaPago: row.fecha_pago ?? "",
     emailComprobante: row.email_comprobante ?? "",
+    pideOcParaFacturar: row.pide_oc_para_facturar ?? false,
     createdAt: row.created_at ?? "",
     updatedAt: row.updated_at ?? "",
     contactos: Array.isArray(row.contactos) ? (row.contactos as Array<Record<string, unknown>>).map((c) => ({
@@ -222,6 +224,7 @@ const emptyForm = {
   moneda_predeterminada: "ARS",
   email_facturacion: "",
   envio_automatico: true,
+  pide_oc_para_facturar: false,
   assigned_to: "" as string | null,
   flete: "",
   alias_cbu: "",
@@ -1050,6 +1053,7 @@ export default function ClientesPage() {
       moneda_predeterminada: (c as any).monedaPredeterminada ?? "ARS",
       email_facturacion: c.emailFacturacion ?? "",
       envio_automatico: c.envioAutomatico ?? true,
+      pide_oc_para_facturar: (c as any).pideOcParaFacturar ?? false,
       assigned_to: (c as any).assignedTo || null,
       flete: (c as any).flete || "",
       alias_cbu: (c as any).aliasCbu || "",
@@ -3010,6 +3014,10 @@ export default function ClientesPage() {
                 value={String(form.limite_credito)}
                 onChange={(e) => setForm({ ...form, limite_credito: Number(e.target.value) })}
               />
+              <label className="flex items-start gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200" title="Ventas muestra sus ventas en «Esperando OC» hasta que el presupuesto tenga la OC. Es solo un aviso: se puede facturar igual.">
+                <input type="checkbox" className="mt-0.5" checked={!!form.pide_oc_para_facturar} onChange={(e) => setForm({ ...form, pide_oc_para_facturar: e.target.checked })} />
+                <span>Pide OC para facturar<span className="block text-xs text-zinc-400">Ventas avisa «Esperando OC» (no bloquea)</span></span>
+              </label>
               <Input
                 label="Markup predeterminado (%)"
                 type="number"

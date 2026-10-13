@@ -22,7 +22,7 @@ const row=(date,value)=>`<td>Dolar U.S.A</td><td>1500</td><td>${value}</td><td>$
  const api=fs.readFileSync('src/app/api/facturacion/route.ts','utf8');
  assert.ok(api.indexOf('if (manual === true)')<api.indexOf('getInvoiceExchangeRate(fechaFacturaInput, inheritedRateModality)'));
  assert.ok(api.includes('Math.abs(tc - quote.valor_venta)'));
- for(const file of ['src/app/(crm)/ventas/page.tsx','src/app/(crm)/facturacion/facturacion-content.tsx']){
+ for(const file of ['src/components/facturacion/emitir-factura-modal.tsx']){
    const ui=fs.readFileSync(file,'utf8');assert.ok(ui.includes('readOnly='));assert.ok(ui.includes('fecha_factura'));assert.ok(ui.includes('canOverrideInvoiceRate(profile?.email)'));assert.ok(ui.includes('cotizacion_override: canOverrideRate && rateOverride'));
  }
  const permission=load('src/lib/invoice-rate-permission.ts').canOverrideInvoiceRate;
