@@ -685,6 +685,9 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
           Avisos (nunca frenan, salen al guardar): PR sin facturar con costo que cambia > 5 %, markup < 15 % (con ⚠️), y PR facturado siempre informativo.
         - Ventana de carga más compacta (datos en 6 columnas, menos espacios).
         - tsc 0, hooks OK. Probado en local SIN guardar con la FC A 00005-00134131 de Espumas Pilar y OC-2026-1186 (equivalencia 500, costo PR $252.000).
+      **V1.1.432 (13/10) — ventana Nueva Orden de Pago compacta:** Ret. Ganancias en una fila (%, botones y monto) con el acumulado en una línea;
+        Monto manual en una línea; Resumen y Datos bancarios lado a lado; tabla de facturas, notas y pie más finos. Entra entera sin bajar.
+        Botón copiar (`components/copiar-btn.tsx`) al lado del Neto a pagar (copia `3104080.00`) y en CBU, Alias y CUIT. Probado en local sin guardar.
       **Del Sol (pendiente, 13/10):** OP 0001-00017009 = eCheq 3968 $6.210.728,30 (11/12, no cargado) + ret. Ganancias cert. 11672 $99.826,69 = $6.310.554,99;
         paga FA 16-16, 16-17, 16-18, 15-45 y "FC 39" ($1.242.839,98). La FA 15-39 está ANULADA por la NCA 15-5 (emitida desde el CRM el 30/09 con CAE, sin usuario ni motivo);
         la FA 15-54 ($1.395.507,04) sigue impaga. Falta que Augusto diga por qué se hizo la NCA 15-5 (¿refacturada como 15-54?). Nada cargado todavía.
