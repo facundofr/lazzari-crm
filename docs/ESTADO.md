@@ -589,7 +589,8 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
       (cobros parciales no se ven); KPIs solo cuentan (sin $ ni US$); lista de tarjetas grandes sin filtro de fechas (82 facturadas crecen sin fin);
       detalle con 4 secciones cerradas (un clic más cada una); links "Ir a"/"Registrar cobro" van a pantallas genéricas sin filtrar; vendedores sin filtrar por sociedad.
       Propuesta numerada pasada en el chat (bandeja por "qué falta", tabla compacta, montos, detalle abierto, links directos, sacar modal duplicado).
-   **Ventas nueva HECHA en código (13/10/2026, OK de Augusto "avanzamos con todo", sin duplicados). V1.1.426 SIN PUBLICAR:**
+   **Ventas nueva (13/10/2026, OK de Augusto "avanzamos con todo", sin duplicados). V1.1.426 PUBLICADA 13/10 (commit 9636f47).** Probado en producción sin emitir:
+      la ventana de facturar desde Ventas sale "Emitir factura ARCA", FA 0015, total igual al PR, consulta FCE y fechas OK.
       - **Una sola ventana de emitir factura** `components/facturacion/emitir-factura-modal.tsx` para Facturación (libre) y Ventas (desde PR).
         Se borró la copia de Ventas (~500 líneas) y la de Facturación. Con PR: cliente fijo, renglones y OC del PR, conversión de moneda PR→factura,
         condición de venta según el cliente (`lib/factura-condicion.ts`, prueba `scripts/test-factura-condicion.ts`), observaciones, PDF al terminar,
