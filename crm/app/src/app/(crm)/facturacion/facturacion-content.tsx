@@ -19,6 +19,7 @@ import { useFiscalDateLimits } from "@/lib/use-fiscal-date-limits";
 import { beginInvoiceIntent, postInvoiceIntent } from "@/lib/invoice-intent";
 import { useArcaStatus } from "@/lib/use-arca-status";
 import { EmitirFacturaModal } from "@/components/facturacion/emitir-factura-modal";
+import { leyendaCotizacion, modalidadFactura } from "@/lib/factura-moneda";
 import { parseDecimalInput, toDecimalInput } from "@/lib/decimal-input";
 import { buildOrdenPagoPlan, comprobanteKey, type OpParsed } from "@/lib/orden-pago-plan";
 import { fechaCobroSugerida, avisoFechaCobroFutura } from "@/lib/fecha-cobro";
@@ -584,7 +585,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     try {
       const { data: rows, error } = await (supabase as any)
         .from("presupuestos")
-        .select("id, numero, fecha, moneda, tipo_cambio, tipo_cambio_divisas, cotizacion_modalidad, total, cliente_id, tipo_comprobante, estado, modalidad_emision, clientes(razon_social, condicion_iva), presupuesto_items(codigo, descripcion, cantidad, precio_venta, iva_porcentaje, total, orden)")
+        .select("id, numero, fecha, moneda, tipo_cambio, tipo_cambio_divisas, cotizacion_modalidad, total, cliente_id, tipo_comprobante, estado, modalidad_emision, clientes(razon_social, condicion_iva, moneda_predeterminada), presupuesto_items(codigo, descripcion, cantidad, precio_venta, iva_porcentaje, total, orden)")
         .eq("sociedad_id", sociedadActiva.id)
         .eq("cliente_id", clienteId)
         .in("estado", ["facturar", "aprobado"])
@@ -609,7 +610,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         fecha: r.fecha,
         moneda: r.moneda === "USD" ? "USD" : "ARS",
         tipo_cambio: Number(r.tipo_cambio || r.tipo_cambio_divisas || 0) || null,
-        cotizacion_modalidad: r.cotizacion_modalidad === "billetes" ? "billetes" : "divisas",
+        // Manda la ficha del cliente ("USD Divisa" / "USD"); si no dice, el del presupuesto (lib/factura-moneda).
+        cotizacion_modalidad: modalidadFactura(r.clientes?.moneda_predeterminada, r.cotizacion_modalidad),
         total: Number(r.total || 0),
         cliente_id: r.cliente_id,
         clienteNombre: r.clientes?.razon_social || "",
@@ -659,11 +661,13 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       }));
       try {
         let automaticRate: number | null = null;
+        let leyendaTc: string | null = null;
         if (pr.moneda === "USD") {
           const quoteRes = await fetch(`/api/cotizacion-bna?fecha_factura=${encodeURIComponent(fmFecha)}&modalidad=${pr.cotizacion_modalidad || "divisas"}`);
           const quote = await quoteRes.json();
           if (!quoteRes.ok || !(quote.valor_venta > 0)) throw new Error(quote.error || "No se pudo verificar el tipo de cambio automático.");
           automaticRate = quote.valor_venta;
+          leyendaTc = leyendaCotizacion({ modalidad: pr.cotizacion_modalidad === "billetes" ? "billetes" : "divisas", valor: quote.valor_venta, fecha: quote.fecha });
         }
         const res = await postInvoiceIntent(`presupuesto:${sociedadActiva.id}:${pr.id}`, {
           method: "POST",
@@ -673,6 +677,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             moneda: pr.moneda, tipo_cambio: automaticRate,
             cotizacion_modalidad: pr.moneda === "USD" ? (pr.cotizacion_modalidad || "divisas") : null,
             fecha: fmFecha, items: itemsFactura, presupuesto_id: pr.id, sociedad_id: sociedadActiva.id,
+            observaciones: leyendaTc,
           }),
         });
         const data = await res.json().catch(() => ({}));

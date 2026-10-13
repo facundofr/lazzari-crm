@@ -39,6 +39,7 @@ const context={exports:{},console:{error(){}},Buffer,URL,Date:FixedDate,Intl,pro
  if(name==='@/lib/arca-wsfecred-node')return {consultarObligacionFce:async()=>({obligado,montoDesde:obligado?5549862:null}),consultarComprobanteFce:async()=>({estado:fceState,fechaHora:'2026-09-12T10:00:00-03:00',historial:[]})};
  if(name==='@/lib/invoice-exchange-rate')return {getInvoiceExchangeRate:async()=>({valor_venta:1500,fecha:'2026-09-11'})};
  if(name==='@/lib/invoice-rate-permission')return {canOverrideInvoiceRate:()=>true};
+ if(name==='@/lib/factura-moneda'){const m={exports:{},require};vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/lib/factura-moneda.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,m);return m.exports;}
  if(name==='@/lib/fce-invoice')return helper.exports;
  throw new Error(`Unexpected dependency ${name}`);
 }};

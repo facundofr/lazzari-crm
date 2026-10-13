@@ -38,7 +38,7 @@ const row=(date,value)=>`<td>Dolar U.S.A</td><td>1500</td><td>${value}</td><td>$
  await rate.getInvoiceExchangeRate('2026-09-09','divisas');assert.ok(requested.includes('id=divisas'));assert.ok(requested.includes('idMoneda=55'));
  await assert.rejects(rate.getInvoiceExchangeRate('2026-09-09','blue'));
  assert.ok(api.includes('inheritedRateModality = pr.cotizacion_modalidad'));
- assert.ok(api.includes('automaticInvoiceRate ? inheritedRateModality'));
+ assert.ok(api.includes('modalidadFicha(cliFicha?.moneda_predeterminada)'));assert.ok(api.includes('puedeDestrabarFactura(perfil?.role)'));
  console.log('OK: fecha automática, fin de semana, cambio de año/bisiesto, BNA ausente/futuro/antiguo bloqueados, sin caché, protección servidor y controles manuales separados. Sin emisión real.');
  if(process.argv.includes('--live')) {
    const live=load('src/lib/invoice-exchange-rate.ts',{require:()=>parser,AbortSignal,fetch});

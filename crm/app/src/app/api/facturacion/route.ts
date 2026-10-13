@@ -5,6 +5,7 @@ import * as path from "path";
 import { crearFacturaWsfeNode, consultarLimiteFechaPv, consultarUltimoWsfeNode } from "@/lib/arca-wsfe-node";
 import { getInvoiceExchangeRate } from "@/lib/invoice-exchange-rate";
 import { canOverrideInvoiceRate } from "@/lib/invoice-rate-permission";
+import { modalidadFicha, puedeDestrabarFactura } from "@/lib/factura-moneda";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { consultarObligacionFce, consultarComprobanteFce } from "@/lib/arca-wsfecred-node";
 import { fceRequired, validateFceFields, withFceMetadata, type FceInvoiceData } from "@/lib/fce-invoice";
@@ -239,6 +240,24 @@ export async function POST(req: NextRequest) {
       if (prError || !pr || pr.cliente_id !== cliente_id) return NextResponse.json({ error: "El presupuesto no pertenece al cliente y sociedad de la factura" }, { status: 400 });
       inheritedRateModality = pr.cotizacion_modalidad === "billetes" ? "billetes" : "divisas";
     }
+    // Tipo de dólar: manda la ficha del cliente ("USD Divisa" / "USD"); el pedido explícito de la pantalla se respeta,
+    // pero ir contra la ficha solo lo puede destrabar administración (lib/factura-moneda).
+    if (moneda === "USD" && cliente_id && cliente_id !== "consumidor_final") {
+      const { data: cliFicha } = await supabase.from("clientes").select("moneda_predeterminada").eq("id", cliente_id).maybeSingle();
+      const fichaModality = modalidadFicha(cliFicha?.moneda_predeterminada);
+      if (fichaModality) inheritedRateModality = fichaModality;
+      const pedida = cotizacion_modalidad === "billetes" || cotizacion_modalidad === "divisas" ? cotizacion_modalidad as "divisas" | "billetes" : null;
+      if (pedida && pedida !== inheritedRateModality) {
+        if (fichaModality) {
+          const { data: { user } } = await supabase.auth.getUser();
+          const { data: perfil } = user ? await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle() : { data: null };
+          if (!puedeDestrabarFactura(perfil?.role)) {
+            return NextResponse.json({ error: `Este cliente se factura en dólar ${fichaModality === "divisas" ? "divisa" : "billete"} (ficha del cliente). Solo administración puede cambiarlo.` }, { status: 403 });
+          }
+        }
+        inheritedRateModality = pedida;
+      }
+    }
 
     // ── Manual mode: skip ARCA entirely ──
     if (manual === true) {
@@ -317,7 +336,7 @@ export async function POST(req: NextRequest) {
           total: totalFinal,
           moneda: isUSD ? "USD" : "ARS",
           tipo_cambio: isUSD ? tc : null,
-          cotizacion_modalidad: isUSD ? (cotizacion_modalidad === "billetes" ? "billetes" : "divisas") : null,
+          cotizacion_modalidad: isUSD ? inheritedRateModality : null,
           estado: "emitida",
           sociedad_id: sociedadId,
           oc_cliente: oc_cliente || null,
@@ -855,7 +874,7 @@ export async function POST(req: NextRequest) {
         total: totalFinal,
         moneda: isUSD ? "USD" : "ARS",
         tipo_cambio: isUSD ? tc : null,
-        cotizacion_modalidad: isUSD ? (automaticInvoiceRate ? inheritedRateModality : (cotizacion_modalidad === "billetes" ? "billetes" : "divisas")) : null,
+        cotizacion_modalidad: isUSD ? inheritedRateModality : null,
         estado: "emitida",
         sociedad_id: arcaConfig.id,
         factura_origen_id: factura_origen_id || null,

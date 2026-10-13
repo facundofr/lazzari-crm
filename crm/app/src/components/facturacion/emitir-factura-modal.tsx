@@ -4,6 +4,7 @@
  * Ventana ÚNICA para emitir una factura de venta (ARCA o manual sin CAE).
  * La usan Facturación (factura libre, se elige el cliente) y Ventas (factura de un presupuesto).
  * Con `presupuesto`: cliente fijo, renglones y OC del PR, y al emitir el PR pasa a "facturado".
+ * Tipo de dólar según la ficha del cliente, sin fecha anterior a la OC y sugerencia de fecha (lib/factura-moneda).
  * Se monta solo cuando está abierta: cada apertura arranca de cero.
  */
 
@@ -21,6 +22,10 @@ import {
   CONDICIONES_VENTA, calcFechaVencimiento, condicionVentaCliente, puntosVentaSociedad, tipoFacturaPorCondicionIva,
   precioNetoItemPresupuesto, convertirItemsEntreAyB, convertirPrecioMoneda,
 } from "@/lib/factura-condicion";
+import {
+  type Modalidad, puedeDestrabarFactura, modalidadFicha, modalidadFactura, modalidadContraFicha, nombreModalidad,
+  fechaMinimaFactura, fechaAntesDeOc, sugerenciaFechaFactura, leyendaCotizacion, observacionesConCotizacion,
+} from "@/lib/factura-moneda";
 import {
   AlertTriangle, CheckCircle2, Download, FileCheck, Loader2, Maximize2, Minimize2, Minus, Plus, Search, ShieldCheck, X, XCircle,
 } from "lucide-react";
@@ -47,6 +52,7 @@ export interface PresupuestoAFacturar {
   cliente: {
     razon_social: string; cuit: string | null; condicion_iva: string | null;
     forma_pago?: string | null; dias_cuenta_corriente?: number | null; limite_credito?: number | null;
+    moneda_predeterminada?: string | null;
   } | null;
   items: { descripcion: string; cantidad: number; precio_venta: number | null; iva_porcentaje: number; total: number | null }[];
   ordenesCompra?: { id: string; numero: string; fecha: string }[];
@@ -60,19 +66,16 @@ interface ClienteOption {
   limite_credito?: number | null;
   dias_cuenta_corriente?: number | null;
   forma_pago?: string | null;
+  moneda_predeterminada?: string | null;
 }
 
 const esA = (tipo: string) => tipo.endsWith("A"); // X se cobra como B: precio final
 
+const INPUT = "w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2.5 py-1.5 text-sm dark:text-white";
+const LABEL = "block text-xs font-medium mb-0.5 text-zinc-600 dark:text-zinc-300";
+
 function formatComprobante(tipo: string, pv: number, num: number) {
   return `${tipo} ${String(pv).padStart(4, "0")}-${String(num).padStart(8, "0")}`;
-}
-
-function previousBusinessDay(iso: string): string {
-  const d = new Date(`${iso || todayAR()}T12:00:00`);
-  d.setDate(d.getDate() - 1);
-  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
 }
 
 export function EmitirFacturaModal({
@@ -89,12 +92,13 @@ export function EmitirFacturaModal({
   const { sociedadActiva, profile } = useUser();
   const pr = presupuesto || null;
   const canOverrideRate = canOverrideInvoiceRate(profile?.email);
+  const puedeDestrabar = puedeDestrabarFactura(profile?.role);
   const pvOpciones = puntosVentaSociedad(sociedadActiva?.nombre);
   const intentScope = pr ? `presupuesto:${sociedadActiva?.id}:${pr.id}` : `facturacion:${sociedadActiva?.id}:emit`;
   const sourceIsManual = pr?.modalidad_emision === "manual";
   const forceManual = arcaCertOk === false;
   const tipoCliente = pr ? tipoFacturaPorCondicionIva(pr.cliente?.condicion_iva) : "FB";
-  const modalidadPr: "divisas" | "billetes" = pr?.cotizacion_modalidad === "billetes" ? "billetes" : "divisas";
+  const ocFecha = pr?.oc_cliente_fecha ? String(pr.oc_cliente_fecha).slice(0, 10) : null;
 
   const [emitManual, setEmitManual] = useState(forceManual || sourceIsManual);
   const [rateOverride, setRateOverride] = useState(false);
@@ -108,7 +112,9 @@ export function EmitirFacturaModal({
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
   const [cotizError, setCotizError] = useState("");
   const cotizRequest = useRef(0);
-  const [cotizModalidad, setCotizModalidad] = useState<"divisas" | "billetes">(modalidadPr);
+  // Tipo de dólar: manda la ficha del cliente; si no dice, el del presupuesto.
+  const [modalidad, setModalidad] = useState<Modalidad>(() => modalidadFactura(pr?.cliente?.moneda_predeterminada, pr?.cotizacion_modalidad));
+  const [permitirAntesOc, setPermitirAntesOc] = useState(false);
   const [cotizFecha, setCotizFecha] = useState("");
   const [latestFacturaDate, setLatestFacturaDate] = useState("");
   const [descargando, setDescargando] = useState(false);
@@ -156,15 +162,18 @@ export function EmitirFacturaModal({
     () => emitData.items.map(it => ({ ...it, precio_unitario: convertirPrecioMoneda(it.precio_unitario, monedaOrigen, emitData.moneda, tc) })),
     [emitData.items, monedaOrigen, emitData.moneda, tc],
   );
-  const diasCliente = pr?.cliente?.dias_cuenta_corriente ?? clientes.find(c => c.id === emitData.cliente_id)?.dias_cuenta_corriente ?? null;
+  const clienteElegido = pr ? null : clientes.find(c => c.id === emitData.cliente_id) || null;
+  const diasCliente = pr?.cliente?.dias_cuenta_corriente ?? clienteElegido?.dias_cuenta_corriente ?? null;
+  const fichaMoneda = pr ? pr.cliente?.moneda_predeterminada ?? null : clienteElegido?.moneda_predeterminada ?? null;
+  const fichaModalidad = modalidadFicha(fichaMoneda);
 
   // ── Apertura: intención anti-duplicados, clientes y número ─────
   useEffect(() => {
     beginInvoiceIntent(intentScope);
     if (!pr) {
-      const q = supabase.from("clientes").select("id, razon_social, cuit, condicion_iva, limite_credito, dias_cuenta_corriente, forma_pago").eq("activo", true).order("razon_social");
+      const q = supabase.from("clientes").select("id, razon_social, cuit, condicion_iva, limite_credito, dias_cuenta_corriente, forma_pago, moneda_predeterminada").eq("activo", true).order("razon_social");
       (sociedadActiva?.id ? q.eq("sociedad_id" as any, sociedadActiva.id) : q)
-        .then(({ data }) => { if (data) setClientes(data as ClienteOption[]); });
+        .then(({ data }) => { if (data) setClientes(data as unknown as ClienteOption[]); });
     }
     void fetchNumero(emitData.tipo, emitData.punto_venta);
     // Solo al abrir.
@@ -191,6 +200,24 @@ export function EmitirFacturaModal({
   const dateWindowMin = dateWindow.toISOString().slice(0, 10);
   const fiscalMinDate = fiscalDates.minDate && fiscalDates.minDate > dateWindowMin ? fiscalDates.minDate : dateWindowMin;
   const fiscalDateBlocked = !emitManual && (!fiscalDates.ready || emitData.fecha < fiscalMinDate || emitData.fecha > todayAR());
+  // OC del cliente: no se factura antes de su fecha (administración lo puede destrabar).
+  const ocActiva = permitirAntesOc ? null : ocFecha;
+  const minBase = emitManual ? minFecha : fiscalMinDate;
+  const minPermitida = fechaMinimaFactura(minBase, ocActiva);
+  const ocBlocked = fechaAntesDeOc(emitData.fecha, ocActiva);
+  const sugerenciaFecha = (emitManual || fiscalDates.ready)
+    ? sugerenciaFechaFactura({ fecha: emitData.fecha, hoy: todayAR(), minFiscal: minBase, ocFecha: ocActiva })
+    : null;
+
+  function cambiarFecha(fecha: string) {
+    setEmitData(p => ({ ...p, fecha, fecha_vencimiento: calcFechaVencimiento(p.condicion_venta, fecha, diasCliente) }));
+  }
+
+  function destrabarOc() {
+    if (!puedeDestrabar) return;
+    if (!confirm(`La OC del cliente es del ${formatDate(ocFecha!)}.\n\n¿Permitir facturar con fecha anterior a la OC?`)) return;
+    setPermitirAntesOc(true);
+  }
 
   useEffect(() => {
     if (!sociedadActiva?.id || !emitData.tipo) return;
@@ -205,25 +232,38 @@ export function EmitirFacturaModal({
     })();
   }, [emitManual, emitData.tipo, emitData.punto_venta, sociedadActiva?.id]);
 
+  // ── Moneda y tipo de dólar ─────────────────────────────────────
+  function elegirMoneda(valor: string) {
+    if (valor === "ARS") { setEmitData(p => ({ ...p, moneda: "ARS" })); return; }
+    const nueva: Modalidad = valor === "USD:billetes" ? "billetes" : "divisas";
+    if (modalidadContraFicha(fichaMoneda, nueva)) {
+      const ficha = nombreModalidad(fichaModalidad!);
+      if (!puedeDestrabar) { alert(`Este cliente se factura en dólar ${ficha} (ficha del cliente). Solo administración lo puede cambiar.`); return; }
+      if (!confirm(`Según la ficha, este cliente se factura en dólar ${ficha}.\n\n¿Facturar en dólar ${nombreModalidad(nueva)} igual?`)) return;
+    }
+    setModalidad(nueva);
+    setEmitData(p => ({ ...p, moneda: "USD" }));
+  }
+
   // ── Cotización ─────────────────────────────────────────────────
-  async function fetchCotizBna(modalidad: "divisas" | "billetes" = "divisas", fecha?: string) {
+  async function fetchCotizBna(fecha?: string) {
     const requestId = ++cotizRequest.current;
-    setCotizModalidad(modalidad);
     setCotizBnaLoading(true);
     setCotizError("");
     setCotizBna(null);
     setEmitData(p => ({ ...p, tipo_cambio: 0 }));
     try {
       const params = new URLSearchParams({ modalidad });
-      // Por defecto se usa el día hábil anterior a la fecha de la factura.
-      // Solo un valor explícito en el selector permite cambiar esta regla.
-      if (editRate) params.set("fecha", fecha || cotizFecha || previousBusinessDay(emitData.fecha));
+      // Por defecto: último día hábil del BNA anterior a la fecha de la factura (saltea feriados).
+      // Solo una fecha explícita en el selector cambia esta regla.
+      const fechaExplicita = editRate ? fecha || cotizFecha : "";
+      if (fechaExplicita) params.set("fecha", fechaExplicita);
       else params.set("fecha_factura", emitData.fecha);
       const res = await fetch(`/api/cotizacion-bna?${params}`);
       const data = await res.json();
       if (requestId !== cotizRequest.current) return;
       if (!res.ok) throw new Error(data.error || "No se pudo consultar la cotización.");
-      if (editRate && (data.stale || data.fecha !== params.get("fecha"))) {
+      if (fechaExplicita && (data.stale || data.fecha !== fechaExplicita)) {
         throw new Error(`La cotización disponible es del ${data.fecha}, no del ${params.get("fecha")}. No se aplicó; ingresá el valor correcto manualmente.`);
       }
       if (Number(data.valor_venta) > 0) {
@@ -235,13 +275,15 @@ export function EmitirFacturaModal({
     }
   }
 
-  // Automática: BNA venta (modalidad del PR, o divisas), día hábil anterior a la fecha de la factura (fecha_factura).
+  // Automática: BNA venta del tipo de dólar elegido, día hábil anterior a la fecha de la factura (se rehace al cambiar la fecha).
+  // En manual también se trae sola (se puede corregir a mano); solo "Modificar (Augusto)" en ARCA la deja a mano.
+  const rateAMano = editRate && !emitManual;
   useEffect(() => {
     if (!needsRate) return;
-    if (editRate) { setCotizBnaLoading(false); return; }
-    void fetchCotizBna(modalidadPr);
+    if (rateAMano) { setCotizBnaLoading(false); return; }
+    void fetchCotizBna();
     return () => { cotizRequest.current += 1; };
-  }, [needsRate, emitData.fecha, editRate, modalidadPr]);
+  }, [needsRate, emitData.fecha, rateAMano, modalidad]);
 
   // ── FCE ────────────────────────────────────────────────────────
   const fceApplies = !emitManual && ["FA", "FB", "FCEA", "FCEB"].includes(emitData.tipo);
@@ -293,15 +335,25 @@ export function EmitirFacturaModal({
     );
   }, [clientes, emitClienteSearch]);
 
-  const limiteCliente = pr ? pr.cliente?.limite_credito : clientes.find(c => c.id === emitData.cliente_id)?.limite_credito;
+  const limiteCliente = pr ? pr.cliente?.limite_credito : clienteElegido?.limite_credito;
   const saldoCliente = emitData.cliente_id && emitData.cliente_id !== "consumidor_final" && saldoClienteArs ? saldoClienteArs(emitData.cliente_id) : null;
   const alcanzoLimite = !!limiteCliente && saldoCliente != null && saldoCliente >= Number(limiteCliente);
+
+  // Leyenda de la cotización usada: va sola en las observaciones de la factura.
+  const leyendaTc = needsRate && tc > 0
+    ? leyendaCotizacion({
+      modalidad, valor: tc,
+      fecha: cotizBna?.fecha || (editRate ? cotizFecha || null : null),
+      conversion: convierteMoneda ? { desde: monedaOrigen, hacia: emitData.moneda } : null,
+    })
+    : null;
 
   // ── Emitir ─────────────────────────────────────────────────────
   function validarComun(): string | null {
     if (!emitData.cliente_id) return "Selecciona un cliente";
     if (emitData.items.some((it) => !it.descripcion || !(it.precio_unitario > 0) || !(it.cantidad > 0))) return "Completá todos los ítems con descripción, cantidad mayor a 0 y precio.";
     if (needsRate && !(tc > 0)) return convierteMoneda ? `Ingresá el tipo de cambio para pasar de ${monedaOrigen} a ${emitData.moneda}.` : "Factura en USD requiere tipo de cambio";
+    if (ocBlocked) return `La OC del cliente es del ${formatDate(ocFecha!)}: la factura no puede tener fecha anterior.${puedeDestrabar ? " Podés destrabarlo al lado de la fecha." : ""}`;
     return null;
   }
 
@@ -312,11 +364,11 @@ export function EmitirFacturaModal({
       punto_venta: emitData.punto_venta,
       moneda: emitData.moneda,
       tipo_cambio: isUSD ? tc : null,
-      cotizacion_modalidad: isUSD ? cotizModalidad : null,
+      cotizacion_modalidad: isUSD ? modalidad : null,
       fecha: emitData.fecha || null,
       condicion_venta: emitData.condicion_venta || null,
       fecha_vencimiento: emitData.fecha_vencimiento || null,
-      observaciones: emitData.observaciones.trim() || null,
+      observaciones: observacionesConCotizacion(emitData.observaciones, leyendaTc) || null,
       items: itemsFactura,
       sociedad_id: sociedadActiva?.id,
       presupuesto_id: pr?.id || undefined,
@@ -421,17 +473,50 @@ export function EmitirFacturaModal({
   }
 
   const cerrar = () => { if (emitStep !== "emitting") onClose(); };
-  const clienteNombre = pr ? pr.cliente?.razon_social || "" : emitData.cliente_id === "consumidor_final" ? "Consumidor Final" : clientes.find(c => c.id === emitData.cliente_id)?.razon_social || "";
+  const clienteNombre = pr ? pr.cliente?.razon_social || "" : emitData.cliente_id === "consumidor_final" ? "Consumidor Final" : clienteElegido?.razon_social || "";
+  const monedaTotal = isUSD ? "USD" : "ARS";
+  const valorMoneda = isUSD ? `USD:${modalidad}` : "ARS";
+  const emitDisabled = emitManual ? ocBlocked : (ocBlocked || fiscalDateBlocked || fceBlocked || (needsRate && (cotizBnaLoading || (!editRate && !cotizBna) || tc <= 0)));
+
+  const toggleArca = (
+    <div className="flex items-center gap-0.5 rounded-lg border border-zinc-200 dark:border-zinc-700 p-0.5">
+      <button
+        onClick={() => {
+          if (!emitManual) return;
+          const tipoArca = pr ? tipoCliente : "FA";
+          setEmitManual(false);
+          cambiarTipo(tipoArca, { punto_venta: pvOpciones[0] });
+          void fetchNumero(tipoArca, pvOpciones[0]);
+        }}
+        disabled={forceManual}
+        className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${!emitManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"} disabled:opacity-40 disabled:cursor-not-allowed`}
+      >
+        <ShieldCheck className="h-3.5 w-3.5" /> ARCA
+      </button>
+      <button
+        onClick={() => {
+          if (emitManual) return;
+          setEmitManual(true);
+          cambiarTipo("X", { punto_venta: 0 });
+          void fetchNumero("X", 0);
+        }}
+        className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${emitManual ? "bg-zinc-700 text-white dark:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
+      >
+        <FileCheck className="h-3.5 w-3.5" /> Manual
+      </button>
+    </div>
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className={`bg-white dark:bg-zinc-900 rounded-xl shadow-2xl overflow-y-auto ${emitFullscreen ? "fixed inset-2 max-w-none max-h-none mx-0" : "w-full max-w-2xl mx-4 max-h-[90vh]"}`}>
-        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
-          <div>
-            <h2 className="text-lg font-bold dark:text-white">{emitManual ? "Factura manual" : "Emitir factura ARCA"}{pr ? ` — ${pr.numero}` : ""}</h2>
-            <p className="text-sm text-zinc-400">{emitManual ? "Se guarda sin autorizar en ARCA (sin CAE)" : "Se autorizara en tiempo real con ARCA"}</p>
+      <div className={`bg-white dark:bg-zinc-900 rounded-xl shadow-2xl flex flex-col overflow-hidden ${emitFullscreen ? "fixed inset-2 max-w-none max-h-none mx-0" : "w-full max-w-4xl mx-2 sm:mx-4 max-h-[94vh]"}`}>
+        <div className="flex items-center justify-between gap-2 px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700 shrink-0">
+          <div className="min-w-0">
+            <h2 className="text-base font-bold dark:text-white truncate">{emitManual ? "Factura manual" : "Emitir factura ARCA"}{pr ? ` — ${pr.numero}` : ""}</h2>
+            <p className="text-xs text-zinc-400">{emitManual ? "Se guarda sin autorizar en ARCA (sin CAE)" : "Se autoriza en tiempo real con ARCA"}</p>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5 shrink-0">
+            {emitStep === "form" && toggleArca}
             <button onClick={() => setEmitFullscreen(f => !f)} className="p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400" title={emitFullscreen ? "Restaurar" : "Maximizar"}>
               {emitFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
             </button>
@@ -441,55 +526,25 @@ export function EmitirFacturaModal({
           </div>
         </div>
 
-        {emitStep === "form" && (
-          <div className="p-6 space-y-5">
-            {emitError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{emitError}</div>}
+        {emitStep === "form" && (<>
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+            {emitError && <div className="text-sm text-red-600 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-1.5">{emitError}</div>}
             {emitData.cliente_id && emitData.cliente_id !== "consumidor_final" && <AvisoBCRA clienteId={emitData.cliente_id} />}
+            {forceManual && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> ARCA no configurado para esta sociedad — solo modo manual disponible.
+              </p>
+            )}
 
-            {/* Toggle ARCA / Manual */}
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2 rounded-lg border border-zinc-200 dark:border-zinc-700 p-2">
-                <button
-                  onClick={() => {
-                    if (!emitManual) return;
-                    const tipoArca = pr ? tipoCliente : "FA";
-                    setEmitManual(false);
-                    cambiarTipo(tipoArca, { punto_venta: pvOpciones[0] });
-                    void fetchNumero(tipoArca, pvOpciones[0]);
-                  }}
-                  disabled={forceManual}
-                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${!emitManual ? "bg-orange-500 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"} disabled:opacity-40 disabled:cursor-not-allowed`}
-                >
-                  <ShieldCheck className="h-3.5 w-3.5" /> Con ARCA
-                </button>
-                <button
-                  onClick={() => {
-                    if (emitManual) return;
-                    setEmitManual(true);
-                    cambiarTipo("X", { punto_venta: 0 });
-                    void fetchNumero("X", 0);
-                  }}
-                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${emitManual ? "bg-zinc-700 text-white dark:bg-zinc-600" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}
-                >
-                  <FileCheck className="h-3.5 w-3.5" /> Manual (sin CAE)
-                </button>
-              </div>
-              {forceManual && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                  <AlertTriangle className="h-3 w-3" /> ARCA no configurado para esta sociedad — solo modo manual disponible.
-                </p>
-              )}
-            </div>
-
-            {/* Tipo + Cliente + PV */}
-            <div className="grid grid-cols-12 gap-4">
+            {/* Tipo + Cliente + PV + Número */}
+            <div className="grid grid-cols-12 gap-2">
               <div className="col-span-12 sm:col-span-3">
-                <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Tipo *</label>
+                <label className={LABEL}>Tipo *</label>
                 <select value={emitData.tipo} disabled={emitManual} onChange={(e) => {
                   const nuevo = e.target.value;
                   cambiarTipo(nuevo);
                   void fetchNumero(nuevo, emitData.punto_venta);
-                }} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white disabled:cursor-not-allowed disabled:bg-zinc-100 dark:disabled:bg-zinc-800/60">
+                }} className={`${INPUT} disabled:cursor-not-allowed disabled:bg-zinc-100 dark:disabled:bg-zinc-800/60`}>
                   {emitManual ? (
                     <option value="X">Comprobante X (sin IVA)</option>
                   ) : pr ? (<>
@@ -515,16 +570,16 @@ export function EmitirFacturaModal({
                   </>)}
                 </select>
               </div>
-              <div className="col-span-8 sm:col-span-7 relative">
-                <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cliente *</label>
+              <div className="col-span-12 sm:col-span-5 relative">
+                <label className={LABEL}>Cliente *</label>
                 {pr ? (
-                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-1.5">
-                    <p className="text-sm font-medium dark:text-white">{clienteNombre}</p>
-                    <p className="text-xs text-zinc-400">{pr.cliente?.condicion_iva || "—"} · {pr.cliente?.cuit || "Sin CUIT"}</p>
+                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-2.5 py-1.5 min-w-0">
+                    <p className="text-sm font-medium dark:text-white truncate" title={clienteNombre}>{clienteNombre}</p>
+                    <p className="text-[11px] leading-tight text-zinc-400">{pr.cliente?.condicion_iva || "—"} · {pr.cliente?.cuit || "Sin CUIT"}{fichaModalidad ? ` · dólar ${nombreModalidad(fichaModalidad)}` : ""}</p>
                   </div>
                 ) : (<>
                   <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 pointer-events-none" />
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 pointer-events-none" />
                     <input
                       value={emitData.cliente_id ? clienteNombre : emitClienteSearch}
                       onChange={(e) => {
@@ -534,7 +589,7 @@ export function EmitirFacturaModal({
                       onFocus={() => { if (emitData.cliente_id) { setEmitClienteSearch(""); setEmitData(p => ({ ...p, cliente_id: "" })); } }}
                       placeholder="Buscar cliente por nombre o CUIT..."
                       autoComplete="off"
-                      className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 pl-9 pr-8 py-2 text-sm dark:text-white"
+                      className={`${INPUT} pl-8 pr-8`}
                     />
                     {emitData.cliente_id && (
                       <button onClick={() => { setEmitData(p => ({ ...p, cliente_id: "" })); setEmitClienteSearch(""); }}
@@ -557,6 +612,7 @@ export function EmitirFacturaModal({
                           const extra = { cliente_id: c.id, condicion_venta: condicion, fecha_vencimiento: calcFechaVencimiento(condicion, emitData.fecha, c.dias_cuenta_corriente) };
                           if (emitManual || !["FA", "FB", "FCEA", "FCEB"].includes(emitData.tipo)) setEmitData(p => ({ ...p, ...extra }));
                           else cambiarTipo(tipoFacturaPorCondicionIva(c.condicion_iva), extra);
+                          setModalidad(modalidadFactura(c.moneda_predeterminada, null));
                           setEmitClienteSearch("");
                         }}
                           className="w-full text-left px-3 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 dark:text-white flex justify-between">
@@ -571,19 +627,19 @@ export function EmitirFacturaModal({
                   )}
                 </>)}
                 {alcanzoLimite && (
-                  <p className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
-                    <AlertTriangle className="h-3.5 w-3.5" /> Límite de crédito alcanzado; podés continuar con la emisión.
+                  <p className="mt-0.5 flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="h-3 w-3" /> Límite de crédito alcanzado; podés continuar con la emisión.
                   </p>
                 )}
               </div>
-              <div className="col-span-4 sm:col-span-2">
-                <label className="block text-sm font-medium mb-1 dark:text-zinc-300">PV</label>
+              <div className="col-span-5 sm:col-span-2">
+                <label className={LABEL}>PV</label>
                 {emitManual ? (
                   <input type="number" min={0} value={emitData.punto_venta} onChange={(e) => {
                     const newPv = Number(e.target.value);
                     setEmitData((p) => ({ ...p, punto_venta: newPv }));
                     void fetchNumero(emitData.tipo, newPv);
-                  }} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                  }} className={`${INPUT} font-mono`} />
                 ) : pvOpciones.length > 1 ? (
                   <select
                     value={emitData.punto_venta}
@@ -592,178 +648,178 @@ export function EmitirFacturaModal({
                       setEmitData((p) => ({ ...p, punto_venta: newPv }));
                       void fetchNumero(emitData.tipo, newPv);
                     }}
-                    className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white"
+                    className={`${INPUT} font-mono`}
                   >
                     {pvOpciones.map((pv) => (
                       <option key={pv} value={pv}>{String(pv).padStart(4, "0")}</option>
                     ))}
                   </select>
                 ) : (
-                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 text-sm font-mono text-zinc-500 dark:text-zinc-400">
+                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-2.5 py-1.5 text-sm font-mono text-zinc-500 dark:text-zinc-400">
                     {String(emitData.punto_venta).padStart(4, "0")}
                   </div>
                 )}
               </div>
-            </div>
-
-            {emitManual ? (
-              <div className="grid grid-cols-12 gap-4">
-                <div className="col-span-4">
-                  <label className="block text-sm font-medium mb-1 dark:text-zinc-300">N° Comprobante *</label>
-                  <input type="number" min={1} value={emitData.numero_manual} onChange={(e) => setEmitData((p) => ({ ...p, numero_manual: e.target.value }))} placeholder="00000001" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
-                </div>
-                <div className="col-span-8 flex items-end">
-                  <p className="text-xs text-amber-600 dark:text-amber-400 pb-2">Esta factura no se autoriza con ARCA. No tendrá CAE.</p>
-                </div>
+              <div className="col-span-7 sm:col-span-2">
+                <label className={LABEL}>{emitManual ? "N° *" : "Próximo N°"}</label>
+                {emitManual ? (
+                  <input type="number" min={1} value={emitData.numero_manual} onChange={(e) => setEmitData((p) => ({ ...p, numero_manual: e.target.value }))} placeholder="00000001" className={`${INPUT} font-mono`} />
+                ) : (
+                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-2.5 py-1.5 text-sm font-mono font-semibold text-orange-600 dark:text-orange-400" title="Lo confirma ARCA">
+                    {emitData.numero_manual ? String(Number(emitData.numero_manual)).padStart(8, "0") : "…"}
+                  </div>
+                )}
               </div>
-            ) : emitData.numero_manual && (
-              <p className="text-xs text-zinc-500">Próximo número: <span className="font-mono font-semibold text-orange-600 dark:text-orange-400">{formatComprobante(emitData.tipo, emitData.punto_venta, Number(emitData.numero_manual))}</span> (lo confirma ARCA)</p>
-            )}
+            </div>
+            {emitManual && <p className="-mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">No se autoriza con ARCA: no tendrá CAE.</p>}
 
             {/* Datos del presupuesto: OC del cliente, OC a proveedores y observaciones */}
             {pr && (pr.oc_cliente || pr.oc_cliente_fecha || pr.archivo_url || pr.observaciones || (pr.ordenesCompra?.length || 0) > 0) && (
-              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 p-3 space-y-1">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
                 {(pr.oc_cliente || pr.oc_cliente_fecha || pr.archivo_url) && (
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="flex flex-wrap items-center gap-1.5">
                     <span className="text-zinc-500 font-medium">OC cliente:</span>
-                    <span className="font-mono font-bold dark:text-white">{pr.oc_cliente || "Sin número informado"}</span>
-                    <span className="text-zinc-600 dark:text-zinc-300">Fecha: {pr.oc_cliente_fecha ? formatDate(pr.oc_cliente_fecha) : "Sin informar"}</span>
-                    {pr.archivo_url && <a href={pr.archivo_url} target="_blank" rel="noreferrer" className="rounded border border-orange-200 bg-white px-2 py-1 text-xs font-semibold text-orange-600 hover:bg-orange-50 dark:border-orange-800 dark:bg-zinc-900">Abrir OC adjunta</a>}
-                  </div>
+                    <span className="font-mono font-bold dark:text-white">{pr.oc_cliente || "Sin número"}</span>
+                    <span className="text-zinc-600 dark:text-zinc-300">({pr.oc_cliente_fecha ? formatDate(pr.oc_cliente_fecha) : "sin fecha"})</span>
+                    {pr.archivo_url && <a href={pr.archivo_url} target="_blank" rel="noreferrer" className="font-semibold text-orange-600 hover:underline">Abrir OC</a>}
+                  </span>
                 )}
                 {(pr.ordenesCompra?.length || 0) > 0 && (
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="flex flex-wrap items-center gap-1.5">
                     <span className="text-zinc-500 font-medium">OC proveedor:</span>
                     {pr.ordenesCompra!.map(oc => (
-                      <span key={oc.id} className="inline-flex items-center gap-1 rounded border border-blue-200 dark:border-blue-800 bg-white dark:bg-zinc-900 px-2 py-0.5 text-xs font-semibold text-blue-600 dark:text-blue-400">
+                      <span key={oc.id} className="rounded border border-blue-200 dark:border-blue-800 px-1.5 py-0.5 font-semibold text-blue-600 dark:text-blue-400">
                         {oc.numero} <span className="font-normal text-zinc-400">({formatDate(oc.fecha)})</span>
                       </span>
                     ))}
-                  </div>
+                  </span>
                 )}
                 {pr.observaciones && (
-                  <div className="text-sm">
-                    <span className="text-zinc-500 font-medium">Observaciones PR:</span>
-                    <p className="text-zinc-700 dark:text-zinc-300 mt-0.5">{pr.observaciones}</p>
-                  </div>
+                  <span className="basis-full text-zinc-600 dark:text-zinc-300"><span className="text-zinc-500 font-medium">Obs. PR:</span> {pr.observaciones}</span>
                 )}
               </div>
             )}
 
-            {/* Moneda + Tipo de cambio */}
-            <div className="grid grid-cols-12 gap-4">
-              <div className="col-span-12 sm:col-span-4">
-                <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Moneda factura</label>
-                <select value={emitData.moneda} onChange={(e) => setEmitData((p) => ({ ...p, moneda: e.target.value as "ARS" | "USD" }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
-                  <option value="ARS">ARS — Pesos</option>
-                  <option value="USD">USD — Dolares</option>
+            {/* Moneda + Cotización + Fecha + Condición + Vencimiento */}
+            <div className="grid grid-cols-2 sm:grid-cols-12 gap-2">
+              <div className="col-span-1 sm:col-span-2">
+                <label className={LABEL}>Moneda</label>
+                <select value={valorMoneda} onChange={(e) => elegirMoneda(e.target.value)} className={INPUT}>
+                  <option value="ARS">$ Pesos</option>
+                  <option value="USD:divisas" disabled={fichaModalidad === "billetes" && !puedeDestrabar}>USD divisa{fichaModalidad === "billetes" ? " (no es la de la ficha)" : ""}</option>
+                  <option value="USD:billetes" disabled={fichaModalidad === "divisas" && !puedeDestrabar}>USD billete{fichaModalidad === "divisas" ? " (no es la de la ficha)" : ""}</option>
                 </select>
-                {convierteMoneda && <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">PR en {monedaOrigen} → factura en {emitData.moneda}</p>}
+                {convierteMoneda && <p className="mt-0.5 text-[11px] text-amber-600 dark:text-amber-400">PR en {monedaOrigen} → factura en {emitData.moneda}</p>}
+                {isUSD && modalidadContraFicha(fichaMoneda, modalidad) && <p className="mt-0.5 text-[11px] text-amber-600 dark:text-amber-400">Ficha: dólar {nombreModalidad(fichaModalidad!)}</p>}
               </div>
-              {needsRate && (
-                <div className="col-span-12 sm:col-span-8">
-                  <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Cotizacion USD/ARS {emitManual ? "" : "*"}</label>
-                  <input type="number" readOnly={!editRate} step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => { cotizRequest.current += 1; setCotizBnaLoading(false); setCotizBna(null); setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) })); }} placeholder={editRate ? "Ej: 1450.00" : "Verificando BNA…"} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
-                  <div className="mt-1 flex items-center gap-2 flex-wrap">
+              <div className="col-span-1 sm:col-span-3">
+                <label className={LABEL}>Cotización {needsRate ? `USD ${nombreModalidad(modalidad)}` : ""}{needsRate && !emitManual ? " *" : ""}</label>
+                {needsRate ? (<>
+                  <input type="number" readOnly={!editRate} step="0.01" min={0} value={emitData.tipo_cambio || ""} onChange={(e) => { cotizRequest.current += 1; setCotizBnaLoading(false); setCotizBna(null); setEmitData((p) => ({ ...p, tipo_cambio: Number(e.target.value) })); }} placeholder={editRate ? "Ej: 1450.00" : "Verificando BNA…"} className={`${INPUT} font-mono ${!editRate ? "bg-zinc-50 dark:bg-zinc-800/50" : ""}`} />
+                  <div className="mt-0.5 flex items-center gap-1.5 flex-wrap text-[11px]">
+                    {cotizBnaLoading && <span className="text-zinc-400">Consultando BNA…</span>}
+                    {cotizBna && <span className="text-zinc-500">BNA {nombreModalidad(modalidad)} venta del {formatDate(cotizBna.fecha)}</span>}
                     {editRate && <>
-                      <span className="text-xs text-zinc-400">BNA:</span>
-                      <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
-                        {cotizBnaLoading ? "…" : "Divisas"}
-                      </button>
-                      <span className="text-xs text-zinc-300">·</span>
-                      <button type="button" onClick={() => fetchCotizBna("billetes", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
-                        {cotizBnaLoading ? "…" : "Billetes"}
-                      </button>
-                      <input type="date" value={cotizFecha} onChange={e => { cotizRequest.current += 1; setCotizFecha(e.target.value); setCotizBnaLoading(false); setCotizBna(null); setCotizError(""); setEmitData(p => ({ ...p, tipo_cambio: 0 })); }} className="text-xs border border-zinc-300 dark:border-zinc-600 rounded px-1 py-0.5 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
+                      <button type="button" onClick={() => fetchCotizBna(cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-blue-600 hover:underline disabled:opacity-50">Traer BNA</button>
+                      <input type="date" value={cotizFecha} onChange={e => { cotizRequest.current += 1; setCotizFecha(e.target.value); setCotizBnaLoading(false); setCotizBna(null); setCotizError(""); setEmitData(p => ({ ...p, tipo_cambio: 0 })); }} className="border border-zinc-300 dark:border-zinc-600 rounded px-1 bg-white dark:bg-zinc-800 dark:text-white" title="Fecha cotización (vacío = día hábil anterior)" />
                     </>}
-                    {!editRate && <span className="text-xs text-zinc-500">Automática: BNA {modalidadPr} venta, día hábil anterior a la factura (fecha_factura).</span>}
-                    {!emitManual && canOverrideRate && <label className="text-xs"><input type="checkbox" checked={rateOverride} onChange={e => setRateOverride(e.target.checked)} /> Modificar cotización (Augusto)</label>}
-                    {cotizBna && <span className="text-xs text-zinc-400">→ Venta {cotizBna.modalidad}: ${cotizBna.valor_venta.toLocaleString("es-AR")} ({cotizBna.fecha})</span>}
+                    {!emitManual && canOverrideRate && <label className="text-zinc-500"><input type="checkbox" checked={rateOverride} onChange={e => setRateOverride(e.target.checked)} /> Modificar (Augusto)</label>}
                   </div>
-                  {cotizError && <p role="alert" className="mt-1 text-xs text-amber-700 dark:text-amber-400">{cotizError}</p>}
-                  {convierteMoneda && tc > 0 && <p className="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400">Los ítems se convierten de {monedaOrigen} a {emitData.moneda} al tipo de cambio {tc.toLocaleString("es-AR")}.</p>}
-                </div>
-              )}
-            </div>
-
-            {/* Fecha facturación + Condicion de venta + Fecha vencimiento */}
-            <div className="grid grid-cols-12 gap-4">
-              <div className="col-span-12 sm:col-span-4">
-                <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha facturación</label>
-                <input type="date" value={emitData.fecha} min={emitManual ? minFecha : fiscalMinDate} max={todayAR()} disabled={!emitManual && !fiscalDates.ready}
-                  onChange={(e) => setEmitData((p) => ({ ...p, fecha: e.target.value, fecha_vencimiento: calcFechaVencimiento(p.condicion_venta, e.target.value, diasCliente) }))}
-                  className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
-                {!emitManual && <div className="mt-1 text-xs text-zinc-500">{fiscalDates.error ? <><span className="text-red-600">{fiscalDates.error}</span> <button type="button" onClick={fiscalDates.retry} className="underline">Reintentar</button></> : !fiscalDates.ready ? "Consultando fechas habilitadas en ARCA…" : <>{fiscalDates.warning ? <span className="text-amber-600 dark:text-amber-400">{fiscalDates.warning} </span> : <>Primera fecha habilitada: {formatDate(fiscalMinDate)}. </>}{emitData.fecha < fiscalMinDate && <span className="text-red-600">Cambiá la fecha seleccionada.</span>}</>}</div>}
+                  {cotizError && <p role="alert" className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-400">{cotizError}</p>}
+                </>) : (
+                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-2.5 py-1.5 text-sm text-zinc-400">No hace falta</div>
+                )}
               </div>
-              <div className="col-span-6 sm:col-span-4">
-                <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Condición de venta</label>
+              <div className="col-span-2 sm:col-span-3">
+                <label className={LABEL}>Fecha facturación</label>
+                <input type="date" value={emitData.fecha} min={minPermitida} max={todayAR()} disabled={!emitManual && !fiscalDates.ready}
+                  onChange={(e) => cambiarFecha(e.target.value)} className={INPUT} />
+                <div className="mt-0.5 text-[11px] text-zinc-500 space-y-0.5">
+                  {!emitManual && fiscalDates.error && <p><span className="text-red-600">{fiscalDates.error}</span> <button type="button" onClick={fiscalDates.retry} className="underline">Reintentar</button></p>}
+                  {!emitManual && !fiscalDates.error && !fiscalDates.ready && <p>Consultando fechas habilitadas en ARCA…</p>}
+                  {!emitManual && fiscalDates.ready && fiscalDates.warning && <p className="text-amber-600 dark:text-amber-400">{fiscalDates.warning}</p>}
+                  {!emitManual && fiscalDates.ready && emitData.fecha < fiscalMinDate && <p className="text-red-600">ARCA permite desde el {formatDate(fiscalMinDate)}.</p>}
+                  {ocBlocked && (
+                    <p className="text-red-600">
+                      No puede ser antes de la OC ({formatDate(ocFecha!)}).{" "}
+                      {puedeDestrabar && <button type="button" onClick={destrabarOc} className="underline text-zinc-600 dark:text-zinc-300">Destrabar</button>}
+                    </p>
+                  )}
+                  {!ocBlocked && sugerenciaFecha && (
+                    <p className="text-emerald-700 dark:text-emerald-400">
+                      Podés facturar con fecha {formatDate(sugerenciaFecha.fecha)} ({sugerenciaFecha.dias} {sugerenciaFecha.dias === 1 ? "día" : "días"} antes).{" "}
+                      <button type="button" onClick={() => cambiarFecha(sugerenciaFecha.fecha)} className="font-semibold underline">Usar</button>
+                    </p>
+                  )}
+                  {permitirAntesOc && ocFecha && <p className="text-amber-600 dark:text-amber-400">Destrabado: se permite antes de la OC.</p>}
+                </div>
+              </div>
+              <div className="col-span-1 sm:col-span-2">
+                <label className={LABEL}>Condición</label>
                 <select value={emitData.condicion_venta}
                   onChange={(e) => setEmitData((p) => ({ ...p, condicion_venta: e.target.value, fecha_vencimiento: calcFechaVencimiento(e.target.value, p.fecha, diasCliente) }))}
-                  className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                  className={INPUT}>
                   {CONDICIONES_VENTA.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
-              <div className="col-span-6 sm:col-span-4">
-                <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Fecha vencimiento</label>
-                <input type="date" value={emitData.fecha_vencimiento} onChange={(e) => setEmitData((p) => ({ ...p, fecha_vencimiento: e.target.value }))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+              <div className="col-span-1 sm:col-span-2">
+                <label className={LABEL}>Vencimiento</label>
+                <input type="date" value={emitData.fecha_vencimiento} onChange={(e) => setEmitData((p) => ({ ...p, fecha_vencimiento: e.target.value }))} className={INPUT} />
               </div>
             </div>
 
-            {fceApplies && <div className="text-sm text-zinc-600 dark:text-zinc-300" role="status">
+            {fceApplies && <div className="text-xs text-zinc-500 dark:text-zinc-400" role="status">
               {fceCheck.error ? <><span className="text-red-600">{fceCheck.error}</span> <button type="button" onClick={fceCheck.retry} className="underline">Reintentar verificación FCE</button></>
                 : !emitData.cliente_id ? "Seleccioná un cliente para verificar el régimen FCE."
                 : !fceCheck.ready ? "Consultando encuadre FCE del cliente en ARCA…"
                 : !fceRateReady ? "Esperando cotización para determinar si corresponde FCE…"
                 : fceRequired ? `Corresponde FCE por consulta ARCA e importe. Mínimo: ${formatCurrency(fceCheck.montoDesde || 0, "ARS")}.`
-                : `Corresponde factura común según la consulta y el importe.${fceCheck.obligado ? ` Mínimo FCE: ${formatCurrency(fceCheck.montoDesde || 0, "ARS")}.` : ""}`}
+                : `Factura común (consulta ARCA e importe).${fceCheck.obligado ? ` Mínimo FCE: ${formatCurrency(fceCheck.montoDesde || 0, "ARS")}.` : ""}`}
             </div>}
             {!emitManual && ["FCEA", "FCEB"].includes(emitData.tipo) && (
-              <div className="rounded-lg border border-blue-200 p-3 space-y-3 dark:border-blue-900">
-                <p className="text-sm dark:text-zinc-200">Datos obligatorios de la FCE. La CBU debe pertenecer al emisor de esta sociedad. El vencimiento es obligatorio y no puede ser anterior a hoy ni a la emisión.</p>
-                <label className="block text-sm dark:text-zinc-300">CBU del emisor *
-                  <input inputMode="numeric" maxLength={22} value={emitData.fce_cbu} onChange={e => setEmitData(p => ({ ...p, fce_cbu: e.target.value.replace(/\D/g, "") }))} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900" />
-                </label>
-                <label className="block text-sm dark:text-zinc-300">Transmisión de la FCE *
-                  <select value={emitData.fce_transmision} onChange={e => setEmitData(p => ({ ...p, fce_transmision: e.target.value }))} className="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900">
-                    <option value="">Seleccioná una modalidad</option>
-                    <option value="SCA">SCA — Sistema de Circulación Abierta</option>
-                    <option value="ADC">ADC — Agente de Depósito Colectivo</option>
-                  </select>
-                </label>
+              <div className="rounded-lg border border-blue-200 p-2.5 dark:border-blue-900">
+                <p className="text-xs mb-1.5 dark:text-zinc-200">Datos obligatorios de la FCE. La CBU debe ser del emisor de esta sociedad. El vencimiento no puede ser anterior a hoy ni a la emisión.</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <label className={LABEL}>CBU del emisor *
+                    <input inputMode="numeric" maxLength={22} value={emitData.fce_cbu} onChange={e => setEmitData(p => ({ ...p, fce_cbu: e.target.value.replace(/\D/g, "") }))} className={`${INPUT} mt-0.5 font-mono`} />
+                  </label>
+                  <label className={LABEL}>Transmisión de la FCE *
+                    <select value={emitData.fce_transmision} onChange={e => setEmitData(p => ({ ...p, fce_transmision: e.target.value }))} className={`${INPUT} mt-0.5`}>
+                      <option value="">Seleccioná una modalidad</option>
+                      <option value="SCA">SCA — Sistema de Circulación Abierta</option>
+                      <option value="ADC">ADC — Agente de Depósito Colectivo</option>
+                    </select>
+                  </label>
+                </div>
               </div>
             )}
 
             {/* Items (en la moneda del PR si viene de un presupuesto) */}
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <label className="text-sm font-medium dark:text-zinc-300">Items *{convierteMoneda ? ` (precios en ${monedaOrigen})` : ""}</label>
-                <button onClick={addItem} className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium">
-                  <Plus className="h-3 w-3" /> Agregar item
+              <div className="grid grid-cols-12 gap-2 items-end mb-0.5">
+                <span className={`${isFacturaA ? "col-span-6" : "col-span-8"} text-xs font-medium text-zinc-600 dark:text-zinc-300`}>Ítems *{convierteMoneda ? ` (precios en ${monedaOrigen})` : ""}</span>
+                <span className="col-span-1 text-[11px] text-zinc-400">Cant.</span>
+                <span className="col-span-2 text-[11px] text-zinc-400">{isFacturaA ? "Neto unit." : "Precio"}</span>
+                {isFacturaA && <span className="col-span-2 text-[11px] text-zinc-400">IVA</span>}
+                <button onClick={addItem} className="col-span-1 flex items-center justify-end text-orange-500 hover:text-orange-600" title="Agregar ítem">
+                  <Plus className="h-4 w-4" />
                 </button>
               </div>
-              <div className="space-y-3">
+              <div className="space-y-1">
                 {emitData.items.map((item, idx) => (
-                  <div key={idx} className="grid grid-cols-12 gap-2 items-start">
-                    <div className={isFacturaA ? "col-span-5" : "col-span-7"}>
-                      {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">Descripcion</label>}
-                      <input
-                        value={item.descripcion} onChange={(e) => updateItem(idx, "descripcion", e.target.value)}
-                        placeholder="Ej: Botín de seguridad"
-                        className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white"
-                      />
+                  <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                    <div className={isFacturaA ? "col-span-6" : "col-span-8"}>
+                      <input value={item.descripcion} onChange={(e) => updateItem(idx, "descripcion", e.target.value)} placeholder="Ej: Botín de seguridad" className={INPUT} />
+                    </div>
+                    <div className="col-span-1">
+                      <input type="number" min={1} value={item.cantidad} onChange={(e) => updateItem(idx, "cantidad", Number(e.target.value))} className={`${INPUT} font-mono px-1.5`} />
                     </div>
                     <div className="col-span-2">
-                      {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">Cantidad</label>}
-                      <input type="number" min={1} value={item.cantidad} onChange={(e) => updateItem(idx, "cantidad", Number(e.target.value))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
-                    </div>
-                    <div className="col-span-2">
-                      {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">{isFacturaA ? "Neto unit." : "Precio"}</label>}
-                      <input type="number" step="0.01" min={0} value={item.precio_unitario || ""} onChange={(e) => updateItem(idx, "precio_unitario", Number(e.target.value))} placeholder="0.00" className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm font-mono dark:text-white" />
+                      <input type="number" step="0.01" min={0} value={item.precio_unitario || ""} onChange={(e) => updateItem(idx, "precio_unitario", Number(e.target.value))} placeholder="0.00" className={`${INPUT} font-mono px-1.5`} />
                     </div>
                     {isFacturaA && (
                       <div className="col-span-2">
-                        {idx === 0 && <label className="block text-xs text-zinc-400 mb-1">IVA %</label>}
-                        <select value={item.iva_porcentaje} onChange={(e) => updateItem(idx, "iva_porcentaje", Number(e.target.value))} className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white">
+                        <select value={item.iva_porcentaje} onChange={(e) => updateItem(idx, "iva_porcentaje", Number(e.target.value))} className={`${INPUT} px-1.5`}>
                           <option value={21}>21%</option>
                           <option value={10.5}>10.5%</option>
                           <option value={27}>27%</option>
@@ -771,9 +827,9 @@ export function EmitirFacturaModal({
                         </select>
                       </div>
                     )}
-                    <div className="col-span-1 flex items-end">
+                    <div className="col-span-1 flex justify-end">
                       {emitData.items.length > 1 && (
-                        <button onClick={() => removeItem(idx)} className="p-2 rounded hover:bg-red-50 text-red-400 hover:text-red-500">
+                        <button onClick={() => removeItem(idx)} className="p-1.5 rounded hover:bg-red-50 text-red-400 hover:text-red-500" title="Quitar ítem">
                           <Minus className="h-4 w-4" />
                         </button>
                       )}
@@ -784,44 +840,36 @@ export function EmitirFacturaModal({
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Observaciones (salen en la factura)</label>
-              <input value={emitData.observaciones} onChange={e => setEmitData(p => ({ ...p, observaciones: e.target.value }))} placeholder="Notas para la factura..." className="w-full rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm dark:text-white" />
+              <label className={LABEL}>Observaciones (salen en la factura)</label>
+              <input value={emitData.observaciones} onChange={e => setEmitData(p => ({ ...p, observaciones: e.target.value }))} placeholder="Notas para la factura..." className={INPUT} />
+              {leyendaTc && <p className="mt-0.5 text-[11px] text-zinc-500">Se agrega sola: “{leyendaTc}”</p>}
             </div>
+          </div>
 
-            {/* Totals preview (en la moneda de la factura) */}
-            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 p-4 space-y-2 text-sm">
-              {isFacturaA ? (
-                <>
-                  <div className="flex justify-between"><span className="text-zinc-500">Neto gravado</span><span className="font-mono">{formatCurrency(emitTotals.neto, isUSD ? "USD" : "ARS")}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(emitTotals.iva, isUSD ? "USD" : "ARS")}</span></div>
-                  <div className="flex justify-between border-t border-zinc-200 dark:border-zinc-700 pt-2 font-semibold text-base">
-                    <span>Total</span><span className="font-mono">{formatCurrency(emitTotals.total, isUSD ? "USD" : "ARS")}</span>
-                  </div>
-                </>
-              ) : (
-                <div className="flex justify-between font-semibold text-base">
-                  <span>{emitManual || emitData.tipo === "X" ? "Total (sin IVA)" : "Total (IVA incluido)"}</span><span className="font-mono">{formatCurrency(emitTotals.total, isUSD ? "USD" : "ARS")}</span>
-                </div>
-              )}
-              {isUSD && tc > 0 && (
-                <div className="text-xs text-zinc-400 text-right">Cotizacion ARCA: 1 USD = {tc.toLocaleString("es-AR")} ARS</div>
-              )}
+          {/* Totales y botones: siempre a la vista */}
+          <div className="shrink-0 border-t border-zinc-200 dark:border-zinc-700 px-4 py-2.5 flex flex-col sm:flex-row sm:items-center gap-2 sm:justify-between">
+            <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 text-sm">
+              {isFacturaA && <>
+                <span className="text-zinc-500">Neto <span className="font-mono text-zinc-800 dark:text-zinc-200">{formatCurrency(emitTotals.neto, monedaTotal)}</span></span>
+                <span className="text-zinc-500">IVA <span className="font-mono text-zinc-800 dark:text-zinc-200">{formatCurrency(emitTotals.iva, monedaTotal)}</span></span>
+              </>}
+              <span className="font-semibold text-base dark:text-white">{isFacturaA ? "Total" : emitManual || emitData.tipo === "X" ? "Total (sin IVA)" : "Total (IVA incl.)"} <span className="font-mono">{formatCurrency(emitTotals.total, monedaTotal)}</span></span>
+              {isUSD && tc > 0 && <span className="text-xs text-zinc-400">1 USD = {tc.toLocaleString("es-AR")} ARS</span>}
             </div>
-
-            <div className="flex justify-end gap-3 pt-2">
-              <button onClick={cerrar} className="px-4 py-2 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cancelar</button>
+            <div className="flex justify-end gap-2">
+              <button onClick={cerrar} className="px-3 py-1.5 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 dark:text-zinc-300 transition-colors">Cancelar</button>
               {emitManual ? (
-                <button onClick={handleEmitManual} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-zinc-700 text-white hover:bg-zinc-800 transition-colors">
+                <button onClick={handleEmitManual} disabled={emitDisabled} className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-lg bg-zinc-700 text-white hover:bg-zinc-800 transition-colors disabled:opacity-50">
                   <FileCheck className="h-4 w-4" /> Guardar manual
                 </button>
               ) : (
-                <button onClick={handleEmit} disabled={fiscalDateBlocked || fceBlocked || (needsRate && (cotizBnaLoading || (!editRate && !cotizBna) || tc <= 0))} className="flex items-center gap-2 px-5 py-2 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
+                <button onClick={handleEmit} disabled={emitDisabled} className="flex items-center gap-2 px-4 py-1.5 text-sm font-medium rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors disabled:opacity-50">
                   <ShieldCheck className="h-4 w-4" /> Emitir con ARCA
                 </button>
               )}
             </div>
           </div>
-        )}
+        </>)}
 
         {emitStep === "emitting" && (
           <div className="p-12 flex flex-col items-center gap-4">
@@ -832,7 +880,7 @@ export function EmitirFacturaModal({
         )}
 
         {emitStep === "success" && emitResult && (
-          <div className="p-8 space-y-6">
+          <div className="p-8 space-y-6 overflow-y-auto">
             <div className="flex flex-col items-center gap-3">
               <div className="rounded-full bg-emerald-100 p-3 dark:bg-emerald-900/30">
                 <CheckCircle2 className="h-8 w-8 text-emerald-600" />

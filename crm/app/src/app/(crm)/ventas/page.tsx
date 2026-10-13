@@ -49,7 +49,7 @@ interface VentaPresupuesto {
   vendedor_profile: { full_name: string } | null;
   clientes: {
     razon_social: string; cuit: string; condicion_iva: string; forma_pago: string | null;
-    dias_cuenta_corriente?: number | null; limite_credito?: number | null;
+    dias_cuenta_corriente?: number | null; limite_credito?: number | null; moneda_predeterminada?: string | null;
     email?: string | null; email_facturacion?: string | null; pide_oc_para_facturar?: boolean | null;
   } | null;
   presupuesto_items: { descripcion: string; cantidad: number; precio_venta: number | null; iva_porcentaje: number; total: number | null }[];
@@ -170,7 +170,7 @@ export default function VentasPage() {
         .select(`
           id, numero, cliente_id, fecha, estado, total, moneda, cotizacion_modalidad, vendedor_id, modalidad_emision, oc_cliente, oc_cliente_fecha, archivo_url, archivo_nombre, observaciones,
           vendedor_profile:vendedor_id(full_name),
-          clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, limite_credito, email, email_facturacion, pide_oc_para_facturar),
+          clientes(razon_social, cuit, condicion_iva, forma_pago, dias_cuenta_corriente, limite_credito, email, email_facturacion, pide_oc_para_facturar, moneda_predeterminada),
           presupuesto_items(id, descripcion, cantidad, precio_venta, iva_porcentaje, total, orden)
         `)
         .in("estado" as any, ["aprobado", "facturar", "facturado"])

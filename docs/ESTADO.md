@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 12/10/2026 · Versión publicada: **V1.1.424** (12/10/2026, commit d26c557)
+Actualizado: 13/10/2026 · Versión publicada: **V1.1.427** (13/10/2026)
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -614,6 +614,21 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         ventana de facturar (en local siempre sale "manual": ARCA solo en Vercel), "Cobrar" abre el cobro de esa factura, celular sin scroll horizontal.
         Fallaban ANTES de este cambio (no son de esto): `test-presupuesto-exact-price.mjs` y `test-checklist-email-credit.mjs`.
       - **⚠️ Al publicar:** la primera factura ARCA desde Ventas y desde Facturación la emite Augusto (Claude no toca ARCA) y avisa; revisar PDF y total.
+   **V1.1.427 (13/10/2026, pedido de Augusto, sin migración) — ventana de emitir factura:**
+      - **Tipo de dólar según la ficha del cliente** (`lib/factura-moneda.ts`, prueba `scripts/test-factura-moneda.ts`): Moneda = "$ Pesos / USD divisa / USD billete".
+        Pesos siempre; el dólar que no es el de la ficha queda trabado y lo destraba solo administración (super_admin, admin, administrativo = Augusto y Mariana; ojo: Manu sigue como admin).
+        El servidor (`api/facturacion`) también toma la ficha y rechaza el otro tipo si no es administración. Facturación masiva también usa la ficha.
+        Clientes con "USD Divisa": Corteva Seeds, Corteva Agriscience, Synthon, Cargill (Lazzari) y Aerolíneas (Grupo LA). **Aerolíneas en Lazzari figura "ARS"**: confirmar con Augusto.
+        Con "USD" (billete): Alca Agrotech, Soenergy, Termo Córdoba. Caso real: PR-2026-1204 Corteva estaba en billetes ($1.535) y divisa del 09/10 era $1.517.
+      - **Cotización automática** del tipo elegido: último día hábil BNA anterior a la fecha de factura (saltea feriados), se rehace al cambiar la fecha; en manual también se trae sola.
+        Leyenda en las observaciones de la factura: "Cotización BNA dólar divisa venta del dd/mm/aaaa: $ x" (también en facturación masiva).
+        Arreglo en `lib/invoice-exchange-rate.ts`: el respaldo de la base salteaba la de 09/10 porque agarraba la fila no confiable del feriado 12/10 (`dolarapi_cron`); ahora busca la última confiable.
+        ⚠️ El cron guardó el 12/10 (feriado) con dolarapi 1535 para divisa y billete: dato malo (no se usa para facturar). Revisar el cron (D1).
+      - **No facturar antes de la OC del cliente** (`oc_cliente_fecha` del PR); "Destrabar" para administración. **Sugerencia:** "Podés facturar con fecha dd/mm (N días antes) [Usar]" = la más vieja que permiten ARCA y la OC.
+        Ojo: en la captura de Augusto la OC-2026-1222 (09/10) es **OC a proveedor**, no del cliente; la regla usa la OC del cliente. Confirmar con él.
+      - **Ventana compacta:** ARCA/Manual en el título, una fila Tipo/Cliente/PV/N°, OC en una línea, Moneda/Cotización/Fecha/Condición/Vencimiento en una fila, ítems finos,
+        totales y botones fijos abajo. Probado en local sin guardar (PR-2026-1204): entra sin scroll en 1366x768, celular sin scroll horizontal.
+      - Pruebas de texto actualizadas: fiscal-date-calendar, invoice-exchange-rate, invoice-oc-preview, fce-route. tsc 0, hooks OK.
 
 0. **PRÓXIMO: análisis a fondo de Finanzas** (lo más importante del CRM, pedido por Augusto 11/10/2026):
    - Cobros con eCheq guardados con **fecha futura** y ya "Conciliado": DEL SOL CONSTRUCTORA (20/11/2026, cobro $3.677.887,22 + ret. Ganancias $61.813,23)

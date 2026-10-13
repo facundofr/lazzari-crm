@@ -44,15 +44,15 @@ export async function getInvoiceExchangeRate(fechaFactura: string, modalidad: "d
     if (isTrustedBnaCache(exact)) {
       return { fecha: exact.fecha, valor_venta: Number(exact.valor_venta), valor_compra: Number(exact.valor_compra), modalidad, fuente: exact.fuente, automatica: true };
     }
-    // Look for most recent trusted entry ≤ target
-    const { data: latest } = await (supabase as any)
+    // Look for most recent trusted entry ≤ target (skip untrusted rows, e.g. a holiday saved by the cron)
+    const { data: recientes } = await (supabase as any)
       .from("cotizaciones_dolar")
       .select("fecha, tipo, valor_compra, valor_venta, fuente, es_manual")
       .eq("tipo", tipoDb)
       .lte("fecha", target)
       .order("fecha", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(10);
+    const latest = (recientes || []).find((row: any) => isTrustedBnaCache(row)) || null;
     if (isTrustedBnaCache(latest) && Date.parse(target) - Date.parse(latest.fecha) <= 7 * 86400000) {
       return { fecha: latest.fecha, valor_venta: Number(latest.valor_venta), valor_compra: Number(latest.valor_compra), modalidad, fuente: latest.fuente, automatica: true };
     }
