@@ -151,7 +151,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
 
 ## 4. Pendiente (próximas tandas)
 
-**Tanda V1.1.425 (13/10/2026) — Punto 6: PERMISOS POR ROL. HECHA EN CÓDIGO, SIN PUBLICAR. Migraciones SIN CORRER (probadas con `--probar`, todo OK).**
+**Tanda V1.1.425 (13/10/2026) — Punto 6: PERMISOS POR ROL. PUBLICADA (commit db0e841). Migraciones 20261013100000 y 20261013110000 CORRIDAS: Mariana ya es administrativo. Falta: que Mariana y un vendedor la prueben (si algo falla, hay rollback).**
 - **Cómo trabaja Lazzari (Augusto):** él ve y hace todo. Mariana = administrativa (plata y compras). Los vendedores también compran
   (pedidos, OC, mandarlas, recibir mercadería, cargar facturas de proveedores), llevan muestras, transportes y personalización, y NO pagan.
   Todos ven, crean, editan y eliminan clientes y proveedores; eliminar pide motivo que queda guardado. Manu: NO desactivarlo por ahora.
