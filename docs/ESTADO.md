@@ -688,6 +688,13 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
       **Del Sol (pendiente, 13/10):** OP 0001-00017009 = eCheq 3968 $6.210.728,30 (11/12, no cargado) + ret. Ganancias cert. 11672 $99.826,69 = $6.310.554,99;
         paga FA 16-16, 16-17, 16-18, 15-45 y "FC 39" ($1.242.839,98). La FA 15-39 está ANULADA por la NCA 15-5 (emitida desde el CRM el 30/09 con CAE, sin usuario ni motivo);
         la FA 15-54 ($1.395.507,04) sigue impaga. Falta que Augusto diga por qué se hizo la NCA 15-5 (¿refacturada como 15-54?). Nada cargado todavía.
+        Detalle para corroborar: PDF en `C:\Users\lazza\Downloads\OP 17009 LAZZARI AUGUSTO .pdf` (escaneado, 3 hojas: remesa, certificado, eCheq Galicia LRA9FdZ685).
+        Importes por factura en la OP: 16-16 $926.374,49 · 16-18 $1.370.733,34 · 16-17 $1.225.125,00 · "39" $1.242.839,98 (fecha 30/9 en la OP; en el CRM la FA 15-39 es del 25/09) · 15-45 $1.545.482,18.
+        Certificado 11672: régimen 078, pago neto de IVA $5.215.334,70, no sujeto $224.000, 2 % s/ $4.991.334,70. Fecha de la OP y recepción: 09/10/2026.
+        En la base no hay otra factura de $1.242.839,98 ni otra n° 39. La migración del 11/10 solo ató la NCA 15-5 a la 15-39 (ya estaba anulada; NC creada 30/09 15:50, sin usuario).
+        La diferencia de $252.493,75 anotada antes salía de suponer la 15-54 en vez de la 39: con la retención la OP cierra exacta.
+        Propuesta dada a Augusto (esperando OK): cobro con las 4 facturas completas y los $1.242.839,98 de la "39" a cuenta de la FA 15-54 (queda debiendo $152.667,06), y pedir a Del Sol que registre la NCA 15-5;
+        o, si la NCA 15-5 era por otra cosa, revisarla antes de cargar. Sigue pendiente también: eCheq 3644 (diferencia $193.792,37, faltan certificados) y confirmar que FA 16-18 no sea la misma venta que la FC-A 9-399.
       **Próximo (pedido de Augusto 13/10):** Cotización express con un primer paso (cliente, moneda, dólar divisas y billetes del BNA editables);
         Pegaso es MARCA, la vende Mariana SA (verificar cómo figura en catalogo_costos y Proveedores). Hoy el PR trae un solo TC del BNA
         y usa el mismo para proveedores en divisa y en billete: traer los dos.
