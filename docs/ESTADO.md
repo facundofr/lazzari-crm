@@ -271,6 +271,13 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   (10 OC en total). Después de correrla, verificar con `node scripts/lectura/oc-iva.cjs` (tiene que dar 0 con diferencias).
   Simulación (`scripts/lectura/oc-iva-simular.cjs`): las otras 113 OC no cambian; 1104 y 1199 diferirían 3 centavos si se edita un renglón.
   No cambia la app ni la versión.
+  **Punto 5 (`get_dashboard_kpis`) HECHO Y MIGRACIÓN `20261012240000_dashboard_kpis_monedas.sql` CORRIDA (12/10/2026)** (rollback = la función
+  vieja copiada de la base). Ventas/facturado/cobranzas del mes y pendiente de cobro: ARS solo en las claves de siempre, USD en claves nuevas `_usd`;
+  NC restan (sin anuladas ni NC de factura anulada); pendiente = saldo real por factura (total − NC aplicadas − cobrado, como Facturación);
+  cobranzas sin anulados; mes según hora de Argentina. Probado antes sin guardar: coincide al centavo con `lib/reportes-comprobantes` y
+  `lib/saldo-clientes` en las dos sociedades (Lazzari oct $8.881.926,69 / US$8.228,31; pendiente $48.401.672,76 / US$45.323,02).
+  Dashboard en producción OK. La pantalla ya calculaba bien el facturado por su cuenta (no mostraba los números rotos), así que no cambia la app
+  ni la versión. Queda la versión vieja `get_dashboard_kpis()` sin sociedad (nadie la usa; va con el punto 6).
   **Forma de trabajo nueva (12/10/2026):** las lecturas de la base las corre Claude con scripts de SOLO LECTURA en `crm/app/scripts/lectura/`
   (permiso agregado en `.claude/settings.local.json`); Augusto aprueba listas numeradas en bloque. Regla: si cambia el costo de una OC,
   se actualiza el costo en el PR de origen.
