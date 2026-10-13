@@ -3359,6 +3359,23 @@ export default function OrdenesCompraPage() {
                         }}
                       />
                     </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!detailOC || !sociedadActiva?.id) return;
+                        // Stock propio = OC sin proveedor con observaciones que empiezan con "Stock propio" (lib/own-stock-purchase-orders).
+                        const obs = String(detailOC.observaciones || "").trim();
+                        const nuevas = obs ? `Stock propio — ${obs}` : "Stock propio";
+                        const { error } = await (supabase as any).from("ordenes_compra").update({ observaciones: nuevas }).eq("id", detailOC.id).eq("sociedad_id", sociedadActiva.id).is("proveedor_id", null);
+                        if (error) { alert(`No se pudo marcar como stock propio: ${error.message}`); return; }
+                        setDetailOC({ ...detailOC, observaciones: nuevas } as any);
+                        await fetchData();
+                      }}
+                      className="flex items-center gap-2 w-full justify-center px-3 py-2 text-sm font-medium rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-300 dark:hover:bg-blue-950/30 transition-colors"
+                    >
+                      <Package className="h-4 w-4" />
+                      Es stock propio (no lleva proveedor)
+                    </button>
                     {detailItems.some(it => it.proveedor_id) && (
                       <button
                         onClick={handleDividirPorProveedor}

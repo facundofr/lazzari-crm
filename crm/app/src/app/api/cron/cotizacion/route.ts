@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { parseBnaHistorical, BNA_VERIFIED_SOURCE } from "@/lib/bna-historical";
+import { esDiaHabil } from "@/lib/dias-habiles";
 
 /**
  * GET /api/cron/cotizacion
- * Cron (lun a vie 18:00 ART / 21:00 UTC) — guarda la cotización BNA divisas + billetes.
+ * Cron (lun a vie 11:00 y 18:00 ART / 14:00 y 21:00 UTC) — guarda la cotización BNA divisas + billetes.
+ * A la mañana deja el valor de apertura (y completa el cierre anterior si faltaba); a las 18 el cierre del día.
  * - Exige CRON_SECRET (sin la clave configurada o con otra clave responde 401).
  * - Escribe con la clave de servicio (el cron no tiene sesión de usuario), como el cron del BCRA.
  * - Lo leído del BNA se graba con la fuente verificada (BNA_VERIFIED_SOURCE), la misma que
@@ -85,7 +87,8 @@ export async function GET(req: NextRequest) {
     const bna = await scrapeBna(modalidad, today);
     if (bna) {
       fila = { fecha: bna.fecha, compra: bna.compra, venta: bna.venta, fuente: BNA_VERIFIED_SOURCE, verificada: true };
-    } else if (modalidad === "billetes") {
+    } else if (modalidad === "billetes" && esDiaHabil(today)) {
+      // En feriados y fines de semana no hay cotización del día: DolarAPI repetiría la anterior con fecha de hoy.
       const api = await fetchDolarApi();
       if (api) fila = { fecha: today, compra: api.compra, venta: api.venta, fuente: "dolarapi_cron", verificada: false };
     }

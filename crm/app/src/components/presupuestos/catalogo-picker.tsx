@@ -9,8 +9,36 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Search, Loader2, Check, Plus, Minus } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { normalizarTexto, palabrasBusqueda, coincideTodas } from "@/lib/buscar-texto";
 
 const db = supabase as any;
+
+// La lista completa (~17 mil artículos) se trae UNA vez por sesión y después se busca, filtra y ordena en pantalla:
+// abre con todo, la búsqueda ignora tildes/mayúsculas y el orden por costo ordena toda la lista, no solo 300.
+export type FilaLista = CatalogoRow & { rubro?: string | null; _txt: string };
+let listaCache: Promise<FilaLista[]> | null = null;
+export function traerListaCompleta(): Promise<FilaLista[]> {
+  if (listaCache) return listaCache;
+  listaCache = (async () => {
+    const cols = "id, proveedor, codigo, codigo_interno, descripcion, moneda, costo, precio_venta, marca, rubro";
+    const { count, error: ec } = await db.from("catalogo_costos").select("id", { count: "exact", head: true }).eq("activo", true);
+    if (ec) throw ec;
+    const paginas = Math.ceil((count || 0) / 1000);
+    const partes = await Promise.all(Array.from({ length: paginas }, (_, i) =>
+      db.from("catalogo_costos").select(cols).eq("activo", true).order("id").range(i * 1000, i * 1000 + 999)));
+    const filas: FilaLista[] = [];
+    for (const { data, error } of partes) {
+      if (error) throw error;
+      for (const r of data || []) filas.push({ ...r, costo: Number(r.costo), precio_venta: Number(r.precio_venta),
+        _txt: normalizarTexto(`${r.codigo} ${r.codigo_interno || ""} ${r.descripcion} ${r.proveedor} ${r.marca || ""} ${r.rubro || ""}`) });
+    }
+    filas.sort((a, b) => a.proveedor.localeCompare(b.proveedor, "es") || a.descripcion.localeCompare(b.descripcion, "es"));
+    return filas;
+  })();
+  listaCache.catch(() => { listaCache = null; });
+  return listaCache;
+}
+const POR_PAGINA = 300;
 
 export interface CatalogoRow {
   id: string;
@@ -73,6 +101,31 @@ export function convertirAMonedaPR(importe: number, monedaLista: string, prMoned
   return esUSD ? importe * t : importe / t;
 }
 
+/** Artículo de la lista → renglón del presupuesto (costo en su moneda, venta de la lista convertida, margen calculado). */
+export function filaListaAItem(row: CatalogoRow, prMoneda: string, tc: number, tcDivisas: number, proveedorIdCRM: string): CatalogoItemParaPR | null {
+  const costoPR = convertirAMonedaPR(row.costo, row.moneda, prMoneda, tc, tcDivisas);
+  const ventaPR = convertirAMonedaPR(row.precio_venta, row.moneda, prMoneda, tc, tcDivisas);
+  if (costoPR === null || ventaPR === null) return null;
+  const markup = costoPR > 0 ? Math.round(((ventaPR / costoPR) - 1) * 10000) / 100 : 0;
+  return {
+    codigo: row.codigo_interno || row.codigo,
+    descripcion: row.descripcion,
+    categoria: "",
+    cantidad: 1,
+    unidad: "UN",
+    precio_costo: row.costo,
+    markup_porcentaje: markup,
+    precio_venta: Math.round(ventaPR * 100) / 100,
+    iva_porcentaje: 21,
+    proveedor_nombre: row.proveedor,
+    proveedor_id: proveedorIdCRM,
+    proveedor_lista: row.proveedor,
+    stock_propio: false,
+    lista_item_id: "",
+    costo_moneda: row.moneda === "ARS" ? "ARS" : row.moneda === "USD divisa" ? "USD Divisa" : "USD",
+  };
+}
+
 /** "40x3, 42 x5; 44*2" → [{talle:"40",cant:3},...] */
 export function parseTalles(texto: string): Array<{ talle: string; cantidad: number }> {
   return String(texto || "")
@@ -132,7 +185,8 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
   const [rubros, setRubros] = useState<string[]>([]);
   const [rubroSel, setRubroSel] = useState<Set<string>>(new Set());
   const [verFiltros, setVerFiltros] = useState<"" | "prov" | "marca" | "rubro">("");
-  const [rows, setRows] = useState<CatalogoRow[]>([]);
+  const [todas, setTodas] = useState<FilaLista[]>([]);
+  const [mostrar, setMostrar] = useState(POR_PAGINA);
   const [orden, setOrden] = useState<{ col: "codigo" | "descripcion" | "proveedor" | "costo" | "venta"; dir: 1 | -1 } | null>(null);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
@@ -148,16 +202,18 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
     setTimeout(() => inputRef.current?.focus(), 50);
     if (proveedores.length) return;
     (async () => {
-      const set = new Set<string>(), setM = new Set<string>(), setR = new Set<string>();
-      for (let desde = 0; desde < 60000; desde += 1000) {
-        let { data, error: e } = await db.from("catalogo_costos").select("proveedor, marca, rubro").eq("activo", true).range(desde, desde + 999);
-        if (e) ({ data } = await db.from("catalogo_costos").select("proveedor").eq("activo", true).range(desde, desde + 999));
-        (data || []).forEach((r: any) => { set.add(r.proveedor); if (r.marca) setM.add(r.marca); if (r.rubro) setR.add(r.rubro); });
-        if (!data || data.length < 1000) break;
-      }
-      setRubros([...setR].sort((a, b) => a.localeCompare(b, "es")));
-      setProveedores([...set].sort((a, b) => a.localeCompare(b, "es")));
-      setMarcas([...setM].sort((a, b) => a.localeCompare(b, "es")));
+      setCargando(true); setError("");
+      try {
+        const filas = await traerListaCompleta();
+        setTodas(filas);
+        const set = new Set<string>(), setM = new Set<string>(), setR = new Set<string>();
+        filas.forEach((r) => { set.add(r.proveedor); if (r.marca) setM.add(r.marca); if (r.rubro) setR.add(r.rubro); });
+        setRubros([...setR].sort((a, b) => a.localeCompare(b, "es")));
+        setProveedores([...set].sort((a, b) => a.localeCompare(b, "es")));
+        setMarcas([...setM].sort((a, b) => a.localeCompare(b, "es")));
+      } catch (e: any) {
+        setError(String(e?.message || "").includes("catalogo_costos") ? "La lista de costos todavía no está cargada." : (e?.message || "No se pudo traer la lista de costos."));
+      } finally { setCargando(false); }
       const traer = (cols: string) => { let qp = db.from("proveedores").select(cols).eq("activo", true).order("razon_social"); if (sociedadId) qp = qp.eq("sociedad_id", sociedadId); return qp; };
       let { data: ps, error: ep } = await traer("id, razon_social, marcas, nombre_fantasia");
       if (ep) ({ data: ps } = await traer("id, razon_social, marcas"));
@@ -176,27 +232,16 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
       .then(({ data: vs }: any) => setVinculos(Object.fromEntries((vs || []).map((v: any) => [v.proveedor_lista, v.proveedor_id]))));
   }, [open, sociedadId]);
 
-  // Búsqueda: todas las palabras tienen que aparecer (en código, descripción o proveedor)
-  useEffect(() => {
-    if (!open) return;
-    const palabras = q.trim().split(/\s+/).map(w => w.replace(/[,()%*\\]/g, "")).filter(w => w.length >= 2);
-    if (!palabras.length && !provSel.size && !marcaSel.size && !rubroSel.size) { setRows([]); return; }
-    let cancelado = false;
-    const t = setTimeout(async () => {
-      setCargando(true); setError("");
-      let query = db.from("catalogo_costos").select(marcas.length || rubros.length ? "id, proveedor, codigo, codigo_interno, descripcion, moneda, costo, precio_venta, marca, rubro" : "id, proveedor, codigo, codigo_interno, descripcion, moneda, costo, precio_venta").eq("activo", true);
-      if (provSel.size) query = query.in("proveedor", [...provSel]);
-      if (marcaSel.size) query = query.in("marca", [...marcaSel]);
-      if (rubroSel.size) query = query.in("rubro", [...rubroSel]);
-      for (const w of palabras) query = query.or(`descripcion.ilike.%${w}%,codigo.ilike.%${w}%,codigo_interno.ilike.%${w}%,proveedor.ilike.%${w}%`);
-      const { data, error: e } = await query.order("proveedor").order("descripcion").limit(300);
-      if (cancelado) return;
-      setCargando(false);
-      if (e) { setError(e.message.includes("catalogo_costos") ? "La lista de costos todavía no está cargada." : e.message); return; }
-      setRows((data || []).map((r: any) => ({ ...r, costo: Number(r.costo), precio_venta: Number(r.precio_venta) })));
-    }, 250);
-    return () => { cancelado = true; clearTimeout(t); };
-  }, [q, provSel, marcaSel, rubroSel, open, marcas.length, rubros.length]);
+  // Búsqueda: todas las palabras tienen que aparecer (código, descripción, proveedor, marca o rubro), sin tildes ni mayúsculas.
+  const rows = useMemo(() => {
+    const palabras = palabrasBusqueda(q);
+    return todas.filter((r) =>
+      (!provSel.size || provSel.has(r.proveedor))
+      && (!marcaSel.size || (!!r.marca && marcaSel.has(r.marca)))
+      && (!rubroSel.size || (!!r.rubro && rubroSel.has(r.rubro)))
+      && coincideTodas(r._txt, palabras));
+  }, [todas, q, provSel, marcaSel, rubroSel]);
+  useEffect(() => { setMostrar(POR_PAGINA); }, [q, provSel, marcaSel, rubroSel, orden]);
 
   // Orden: 1) vínculo guardado, 2) nombre parecido a la razón social, 3) el nombre figura en "marcas" del proveedor.
   const proveedorId = (nombre: string): string => {
@@ -240,11 +285,12 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
       if (orden.col === "descripcion") return r.descripcion;
       if (orden.col === "proveedor") return `${r.proveedor} ${r.descripcion}`;
       const imp = orden.col === "costo" ? r.costo : r.precio_venta;
-      return convertirAMonedaPR(imp, r.moneda, prMoneda, tc, tcDivisas) ?? imp;
+      // Sin dólar no se puede comparar US$ con $: esos van al final.
+      return convertirAMonedaPR(imp, r.moneda, prMoneda, tc, tcDivisas) ?? Number.POSITIVE_INFINITY;
     };
     return [...rows].sort((a, b) => {
       const va = valor(a), vb = valor(b);
-      const c = typeof va === "number" && typeof vb === "number" ? va - vb : String(va).localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" });
+      const c = typeof va === "number" && typeof vb === "number" ? (va === vb ? 0 : va < vb ? -1 : 1) : String(va).localeCompare(String(vb), "es", { numeric: true, sensitivity: "base" });
       return c * orden.dir;
     });
   }, [rows, orden, prMoneda, tc, tcDivisas]);
@@ -261,27 +307,8 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
   function agregar() {
     const out: CatalogoItemParaPR[] = [];
     for (const { row, cantidad, talles } of sel.values()) {
-      const costoPR = convertirAMonedaPR(row.costo, row.moneda, prMoneda, tc, tcDivisas);
-      const ventaPR = convertirAMonedaPR(row.precio_venta, row.moneda, prMoneda, tc, tcDivisas);
-      if (costoPR === null || ventaPR === null) continue;
-      const markup = costoPR > 0 ? Math.round(((ventaPR / costoPR) - 1) * 10000) / 100 : 0;
-      const base: CatalogoItemParaPR = {
-        codigo: row.codigo_interno || row.codigo,
-        descripcion: row.descripcion,
-        categoria: "",
-        cantidad: 1,
-        unidad: "UN",
-        precio_costo: row.costo,
-        markup_porcentaje: markup,
-        precio_venta: Math.round(ventaPR * 100) / 100,
-        iva_porcentaje: 21,
-        proveedor_nombre: row.proveedor,
-        proveedor_id: proveedorId(row.proveedor),
-        proveedor_lista: row.proveedor,
-        stock_propio: false,
-        lista_item_id: "",
-        costo_moneda: row.moneda === "ARS" ? "ARS" : row.moneda === "USD divisa" ? "USD Divisa" : "USD",
-      };
+      const base = filaListaAItem(row, prMoneda, tc, tcDivisas, proveedorId(row.proveedor));
+      if (!base) continue;
       const porTalle = parseTalles(talles);
       if (porTalle.length) for (const t of porTalle) out.push({ ...base, descripcion: `${row.descripcion} - Talle ${t.talle}`, cantidad: t.cantidad });
       else out.push({ ...base, cantidad: Math.max(0, Number(String(cantidad).replace(",", "."))) || 1 });
@@ -339,9 +366,9 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
         <div className="flex-1 overflow-y-auto">
           {error && <p className="p-4 text-sm text-red-600">{error}</p>}
           {!error && !rows.length && !cargando && (
-            <p className="p-8 text-center text-sm text-zinc-500">{q.trim().length < 2 && !provSel.size && !marcaSel.size && !rubroSel.size ? "Escribí al menos 2 letras o elegí un proveedor." : "No se encontró nada con esa búsqueda."}</p>
+            <p className="p-8 text-center text-sm text-zinc-500">No se encontró nada con esa búsqueda.</p>
           )}
-          {cargando && <p className="p-4 flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Buscando…</p>}
+          {cargando && <p className="p-4 flex items-center gap-2 text-sm text-zinc-500"><Loader2 className="h-4 w-4 animate-spin" /> Trayendo la lista de costos…</p>}
           {rows.length > 0 && (
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-10 bg-slate-300 dark:bg-zinc-700 text-xs font-semibold text-slate-700 dark:text-zinc-200">
@@ -356,7 +383,7 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-zinc-800">
-                {rowsOrdenadas.map((r, i) => {
+                {rowsOrdenadas.slice(0, mostrar).map((r, i) => {
                   const marcado = sel.has(r.id);
                   const c = colorProveedor(r.proveedor);
                   return (
@@ -375,7 +402,12 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
               </tbody>
             </table>
           )}
-          {rows.length === 300 && <p className="p-2 text-center text-xs text-zinc-500">Se muestran los primeros 300: agregá otra palabra para afinar.</p>}
+          {rows.length > 0 && (
+            <p className="p-2 text-center text-xs text-zinc-500">
+              {Math.min(mostrar, rows.length).toLocaleString("es-AR")} de {rows.length.toLocaleString("es-AR")} artículos
+              {rows.length > mostrar && <> · <button onClick={() => setMostrar((m) => m + POR_PAGINA * 3)} className="underline text-orange-600">Ver más</button></>}
+            </p>
+          )}
         </div>
 
         {seleccionados.length > 0 && (

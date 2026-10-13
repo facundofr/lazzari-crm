@@ -31,6 +31,7 @@ import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import EnviarOCProveedor from "@/components/enviar-oc-proveedor";
 import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalizePurchaseCurrency } from "@/lib/own-stock-purchase-orders";
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
+import { convertirCostoPR, leerDolaresGuardados, fechaDolarPresupuesto, dolarAtrasado, etiquetaDolar, esCostoUsd, esCostoDivisa, tcParaCosto, type DolaresGuardados } from "@/lib/dolar-presupuesto";
 
 /** Number input that allows typing decimals (e.g. "10.") without losing the dot */
 function NumInput({ value, onChange, className, ...props }: { value: number | string; onChange: (n: number) => void; className?: string } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "type">) {
@@ -374,29 +375,17 @@ const emptyItem: NewPRItem = {
   proveedor_nombre: "", proveedor_id: "", stock_propio: false, lista_item_id: "", costo_moneda: "USD",
 };
 
-const COSTO_MONEDAS = ["ARS", "USD"] as const;
+const COSTO_MONEDAS = ["ARS", "USD", "USD Divisa"] as const;
 function nextCostoMoneda(current: string): string {
-  // Normalize legacy "USD Divisa" to "USD"
-  const normalized = current === "USD Divisa" ? "USD" : current;
-  const idx = COSTO_MONEDAS.indexOf(normalized as typeof COSTO_MONEDAS[number]);
+  // AR$ → US$ billete → US$ divisa
+  const idx = COSTO_MONEDAS.indexOf(current as typeof COSTO_MONEDAS[number]);
   return COSTO_MONEDAS[(idx + 1) % COSTO_MONEDAS.length];
 }
 
 /** Convierte precio_costo a la moneda del presupuesto */
 function convertCosto(costoBase: number, costoMoneda: string, prMoneda: string, tc: number, tcDivisas?: number): number {
-  const isUSD = costoMoneda === "USD" || costoMoneda === "USD Divisa";
-  const tcToUse = tc > 0 ? tc : (tcDivisas || 0);
-  // Para ARS→USD: usar el TC que esté disponible (billetes preferido, sino divisas)
-  const tcForArs = tcToUse;
-  if (isUSD && prMoneda === "ARS") {
-    return tcToUse > 0 ? costoBase * tcToUse : costoBase;
-  }
-  if (isUSD && prMoneda === "USD") return costoBase;
-  if (costoMoneda === "ARS" && prMoneda === "USD") {
-    return tcForArs > 0 ? costoBase / tcForArs : costoBase;
-  }
-  if (costoMoneda === "ARS" && prMoneda === "ARS") return costoBase;
-  return costoBase;
+  // US$ billete × billete, US$ divisa × divisa (lib/dolar-presupuesto).
+  return convertirCostoPR(costoBase, costoMoneda, prMoneda, tc, tcDivisas || 0);
 }
 
 export default function PresupuestosPage() {
@@ -536,6 +525,44 @@ export default function PresupuestosPage() {
   const [cotizBnaLoading, setCotizBnaLoading] = useState(false);
 
   const [cotizFecha, setCotizFecha] = useState("");
+  const [dolaresGuardados, setDolaresGuardados] = useState<DolaresGuardados | null>(null);
+
+  /** Tipo de dólar con el que cotiza un proveedor, según sus listas de costos (DPS y Segufer = divisa). */
+  async function dolarDelProveedor(provId: string, provNombre: string): Promise<"USD" | "USD Divisa" | null> {
+    const db = supabase as any;
+    const nombres = new Set<string>([provNombre].filter(Boolean));
+    const prov = proveedoresOptions.find((o) => o.id === provId) as any;
+    if (prov?.nombre_fantasia) nombres.add(prov.nombre_fantasia);
+    if (sociedadActiva?.id) {
+      const { data } = await db.from("catalogo_proveedores").select("proveedor_lista").eq("sociedad_id", sociedadActiva.id).eq("proveedor_id", provId);
+      (data || []).forEach((r: any) => r.proveedor_lista && nombres.add(r.proveedor_lista));
+    }
+    if (!nombres.size) return null;
+    const { data } = await db.from("catalogo_costos").select("moneda").in("proveedor", [...nombres]).ilike("moneda", "USD%").limit(20);
+    const filas = (data || []) as Array<{ moneda: string }>;
+    if (!filas.length) return null;
+    const divisas = filas.filter((r) => esCostoDivisa(r.moneda)).length;
+    return divisas * 2 > filas.length ? "USD Divisa" : "USD";
+  }
+
+  /** PR en pesos: completa dólar billete y divisa con lo guardado (cierre del día hábil anterior). */
+  async function cargarDolaresPesos(preservarPrecios: boolean) {
+    let g: DolaresGuardados;
+    try { g = await leerDolaresGuardados(supabase); } catch { return; }
+    setDolaresGuardados(g);
+    setNewPR((p) => {
+      if (p.moneda !== "ARS") return p;
+      const tc = p.tipo_cambio > 0 ? p.tipo_cambio : (g.billete?.valor || 0);
+      const tcD = p.tipo_cambio_divisas > 0 ? p.tipo_cambio_divisas : (g.divisa?.valor || 0);
+      if (tc === p.tipo_cambio && tcD === p.tipo_cambio_divisas) return p;
+      const items = preservarPrecios ? p.items : p.items.map(it => {
+        if (!esCostoUsd(it.costo_moneda)) return it;
+        const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc, tcD);
+        return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+      });
+      return { ...p, tipo_cambio: tc, tipo_cambio_divisas: tcD, items };
+    });
+  }
 
   async function fetchCotizBna(
     modalidad: "divisas" | "billetes" = "divisas",
@@ -544,16 +571,22 @@ export default function PresupuestosPage() {
   ): Promise<boolean> {
     setCotizBnaLoading(true);
     try {
-      const params = new URLSearchParams({ modalidad, force: "1" });
-      if (fecha) params.set("fecha", fecha);
-      let res = await fetch(`/api/cotizacion-bna?${params}`);
-      if (!res.ok) {
-        // Si el BNA no contesta, reintenta sin forzar (usa el último valor guardado).
-        params.delete("force");
-        res = await fetch(`/api/cotizacion-bna?${params}`);
+      // Primero lo guardado en la base (el cron trae el BNA todos los días): no se espera al BNA.
+      const fechaBuscada = fecha || fechaDolarPresupuesto();
+      let data: { valor_venta: number; fecha: string; fuente: string } | null = null;
+      try {
+        const g = await leerDolaresGuardados(supabase, fechaBuscada);
+        setDolaresGuardados(g);
+        const d = modalidad === "billetes" ? g.billete : g.divisa;
+        if (d && !dolarAtrasado(d, fechaBuscada)) data = { valor_venta: d.valor, fecha: d.fecha, fuente: d.manual ? "manual" : "BNA guardado" };
+      } catch { /* sin acceso a lo guardado: va al BNA */ }
+      if (!data) {
+        // No está guardado: lo pide al BNA (la API lo guarda) y, si falla, usa el último guardado.
+        const params = new URLSearchParams({ modalidad, fecha: fechaBuscada });
+        const res = await fetch(`/api/cotizacion-bna?${params}`);
+        if (res.ok) data = await res.json();
       }
-      if (res.ok) {
-        const data = await res.json();
+      if (data) {
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
         if (modalidad === "divisas") {
           setNewPR((p) => {
@@ -565,7 +598,7 @@ export default function PresupuestosPage() {
               const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, p.tipo_cambio, data.valor_venta);
               return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
             });
-            return { ...p, tipo_cambio_divisas: data.valor_venta, cotizacion_modalidad: modalidad, items };
+            return { ...p, tipo_cambio_divisas: data.valor_venta, ...(p.moneda === "USD" ? { tipo_cambio: 0 } : {}), cotizacion_modalidad: modalidad, items };
           });
         } else {
           setNewPR((p) => {
@@ -573,7 +606,7 @@ export default function PresupuestosPage() {
               const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, data.valor_venta, p.tipo_cambio_divisas);
               return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
             });
-            return { ...p, tipo_cambio: data.valor_venta, cotizacion_modalidad: modalidad, items };
+            return { ...p, tipo_cambio: data.valor_venta, ...(p.moneda === "USD" ? { tipo_cambio_divisas: 0 } : {}), cotizacion_modalidad: modalidad, items };
           });
         }
         return true;
@@ -634,6 +667,14 @@ export default function PresupuestosPage() {
       setClienteContactos((conRes.data || []) as { id: string; nombre: string; cargo: string; sucursal_id: string | null }[]);
     })();
   }, [newPR.cliente_id]);
+
+  // PR en pesos: el dólar sale de lo guardado (no se espera al BNA). Al editar, no se tocan los precios ya dados.
+  useEffect(() => {
+    if (!showNewPR || newPR.moneda !== "ARS") return;
+    if (newPR.tipo_cambio > 0 && newPR.tipo_cambio_divisas > 0) return;
+    void cargarDolaresPesos(!!editingPRId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showNewPR, newPR.moneda, editingPRId]);
 
   // Client search
   const [clientSearch, setClientSearch] = useState("");
@@ -1330,8 +1371,8 @@ export default function PresupuestosPage() {
             iva: ivaTotal,
             total: subtotal + ivaTotal,
             moneda: newPR.moneda,
-            tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
-            tipo_cambio_divisas: newPR.moneda === "USD" && newPR.tipo_cambio_divisas > 0 ? newPR.tipo_cambio_divisas : null,
+            tipo_cambio: newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
+            tipo_cambio_divisas: newPR.tipo_cambio_divisas > 0 ? newPR.tipo_cambio_divisas : null,
             descuento_general_porcentaje: descGeneral || 0,
             cotizacion_modalidad: newPR.moneda === "USD" ? newPR.cotizacion_modalidad : null,
             observaciones: newPR.observaciones,
@@ -1381,8 +1422,8 @@ export default function PresupuestosPage() {
             iva: ivaTotal,
             total: subtotal + ivaTotal,
             moneda: newPR.moneda,
-            tipo_cambio: newPR.moneda === "USD" && newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
-            tipo_cambio_divisas: newPR.moneda === "USD" && newPR.tipo_cambio_divisas > 0 ? newPR.tipo_cambio_divisas : null,
+            tipo_cambio: newPR.tipo_cambio > 0 ? newPR.tipo_cambio : null,
+            tipo_cambio_divisas: newPR.tipo_cambio_divisas > 0 ? newPR.tipo_cambio_divisas : null,
             descuento_general_porcentaje: descGeneral || 0,
             cotizacion_modalidad: newPR.moneda === "USD" ? newPR.cotizacion_modalidad : null,
             observaciones: newPR.observaciones,
@@ -2112,7 +2153,8 @@ export default function PresupuestosPage() {
       // Sólo hace falta cotización si hay costos en USD. Al cargarla para editar,
       // conservar siempre el precio de venta exacto que ya fue aceptado.
       const needsDivisasRate = items.some((item) => item.costo_moneda === "USD" || item.costo_moneda === "USD Divisa");
-      if (needsDivisasRate && !Number(fullPR.tipo_cambio_divisas)) {
+      // En pesos el dólar lo completa el efecto de PR en pesos (billete y divisa, sin tocar precios).
+      if (needsDivisasRate && prMoneda !== "ARS" && !Number(fullPR.tipo_cambio_divisas)) {
         fetchCotizBna("divisas", undefined, { preserveItemPrices: true });
       }
     } catch (err) {
@@ -2399,6 +2441,7 @@ export default function PresupuestosPage() {
       modalidadEmision: p.modalidadEmision,
       cotizacionModalidad: p.cotizacionModalidad,
       tipoCambio: p.tipoCambio,
+      tipoCambioDivisas: (p as any).tipoCambioDivisas,
       items: pr.items.map(it => ({
         codigo: it.codigo,
         descripcion: it.descripcion,
@@ -3657,17 +3700,20 @@ export default function PresupuestosPage() {
             value={newPR.moneda}
             onChange={(e) => {
               const mon = e.target.value as "USD" | "ARS";
+              const modal = (newPR.cotizacion_modalidad || "divisas") as "divisas" | "billetes";
               setNewPR((p) => {
-                const tc = mon === "ARS" ? 0 : p.tipo_cambio;
-                // Keep tipo_cambio_divisas for USD→ARS cost conversion even on ARS PRs
-                const tcD = p.tipo_cambio_divisas;
+                // En pesos se guardan los dos dólares (billete y divisa) para convertir cada costo con el suyo.
+                // En dólares queda solo el del tipo del presupuesto (es el que divide los costos en pesos).
+                const tc = mon === "ARS" ? (p.tipo_cambio || dolaresGuardados?.billete?.valor || 0) : (modal === "billetes" ? p.tipo_cambio : 0);
+                const tcD = mon === "ARS" ? (p.tipo_cambio_divisas || dolaresGuardados?.divisa?.valor || 0) : (modal === "divisas" ? p.tipo_cambio_divisas : 0);
                 const items = p.items.map(it => {
                   const costoConv = convertCosto(it.precio_costo, it.costo_moneda, mon, tc, tcD);
                   return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
                 });
                 return { ...p, moneda: mon, tipo_cambio: tc, tipo_cambio_divisas: tcD, items };
               });
-              fetchCotizBna("divisas");
+              if (mon === "ARS") void cargarDolaresPesos(false);
+              else fetchCotizBna(modal);
             }}
             options={[{ value: "ARS", label: "ARS — Pesos" }, { value: "USD", label: "USD — Dolares" }]}
           />
@@ -3721,6 +3767,48 @@ export default function PresupuestosPage() {
               )}
             </div>
           </div>}
+          {newPR.moneda === "ARS" && (() => {
+            // PR en pesos: los costos en US$ se pasan a pesos con su dólar (billete o divisa). Editable.
+            const fechaB = dolaresGuardados?.fechaBuscada || fechaDolarPresupuesto();
+            const cambiar = (campo: "tipo_cambio" | "tipo_cambio_divisas", valor: number) => setNewPR((p) => {
+              const tc = campo === "tipo_cambio" ? valor : p.tipo_cambio;
+              const tcD = campo === "tipo_cambio_divisas" ? valor : p.tipo_cambio_divisas;
+              const items = p.items.map(it => {
+                if (!esCostoUsd(it.costo_moneda)) return it;
+                const costoConv = convertCosto(it.precio_costo, it.costo_moneda, p.moneda, tc, tcD);
+                return { ...it, precio_venta: Number((costoConv * (1 + it.markup_porcentaje / 100)).toFixed(2)) };
+              });
+              return { ...p, tipo_cambio: tc, tipo_cambio_divisas: tcD, items };
+            });
+            const fila = (tipo: "billete" | "divisa", campo: "tipo_cambio" | "tipo_cambio_divisas") => {
+              const guardado = tipo === "billete" ? dolaresGuardados?.billete ?? null : dolaresGuardados?.divisa ?? null;
+              const valor = newPR[campo];
+              const aMano = !!guardado && valor > 0 && valor !== guardado.valor;
+              return (
+                <label className="flex items-center gap-1">
+                  <span className="text-zinc-500">US$ {tipo}</span>
+                  <NumInput value={valor} onChange={(n) => cambiar(campo, n)}
+                    className="w-24 rounded border border-zinc-200 px-1.5 py-0.5 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none" />
+                  <span className={`text-[10px] ${aMano ? "text-amber-600" : "text-zinc-400"}`}>
+                    {aMano ? "a mano" : guardado ? etiquetaDolar(tipo, guardado).replace(/^.*· /, "") : ""}
+                  </span>
+                </label>
+              );
+            };
+            const atrasado = !!dolaresGuardados && (dolarAtrasado(dolaresGuardados.billete, fechaB) || dolarAtrasado(dolaresGuardados.divisa, fechaB));
+            return (
+              <div className="col-span-full rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-xs">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <span className="font-medium text-zinc-600 dark:text-zinc-300">Dólar para costos en US$:</span>
+                  {fila("billete", "tipo_cambio")}
+                  {fila("divisa", "tipo_cambio_divisas")}
+                </div>
+                {atrasado && (
+                  <div className="mt-1 text-amber-700 dark:text-amber-400">⚠️ No está guardado el dólar del cierre del {fechaB.slice(8, 10)}/{fechaB.slice(5, 7)}: se usa el último guardado. Si querés, cargalo a mano.</div>
+                )}
+              </div>
+            );
+          })()}
           {newPR.moneda === "USD" && newPR.cliente_id && (() => {
             const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
             if (!cli) return null;
@@ -4043,6 +4131,15 @@ export default function PresupuestosPage() {
                               })();
                             }
                             if (isOwnSociedad) toast.info("Proveedor propio detectado → marcado como stock propio");
+                            // Artículo cargado a mano en US$: el dólar (billete/divisa) es el del proveedor elegido.
+                            if (provId && !esStockPropio && !isOwnSociedad && !item.lista_item_id && esCostoUsd(item.costo_moneda)) {
+                              void dolarDelProveedor(provId, provNombre).then((m) => {
+                                if (m && m !== item.costo_moneda) {
+                                  updateNewPRItem(idx, "costo_moneda", m);
+                                  toast.info(`${provNombre} cotiza en ${m === "USD Divisa" ? "dólar divisa" : "dólar billete"}: costo recalculado`);
+                                }
+                              });
+                            }
                           }}
                         />
                       </td>
@@ -4060,16 +4157,26 @@ export default function PresupuestosPage() {
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1">
-                          <button type="button" onClick={() => updateNewPRItem(idx, "costo_moneda", nextCostoMoneda(item.costo_moneda))} title="Click para cambiar moneda (ARS / USD)" className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border cursor-pointer hover:opacity-80 transition-opacity ${
+                          <button type="button" onClick={() => updateNewPRItem(idx, "costo_moneda", nextCostoMoneda(item.costo_moneda))} title="Click para cambiar moneda (AR$ / US$ billete / US$ divisa)" className={`shrink-0 rounded px-1.5 py-1 text-[10px] font-bold border cursor-pointer hover:opacity-80 transition-opacity ${
                             item.costo_moneda === "USD" || item.costo_moneda === "USD Divisa"
                               ? "border-blue-200 bg-blue-50 text-blue-600 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-400"
                               : "border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"
                           }`}>
-                            {item.costo_moneda === "USD" || item.costo_moneda === "USD Divisa" ? "US$" : "AR$"}
+                            {esCostoDivisa(item.costo_moneda) ? "US$ div" : esCostoUsd(item.costo_moneda) ? "US$" : "AR$"}
                           </button>
                           <NumInput value={item.precio_costo} onChange={(n) => updateNewPRItem(idx, "precio_costo", n)}
                             className="w-full min-w-0 rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                         </div>
+                        {newPR.moneda === "ARS" && esCostoUsd(item.costo_moneda) && item.precio_costo > 0 && (() => {
+                          const t = tcParaCosto(item.costo_moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas);
+                          return (
+                            <div className={`mt-0.5 text-right text-[10px] ${t > 0 ? "text-zinc-400" : "text-amber-600"}`} title="Costo en pesos con el dólar del presupuesto">
+                              {t > 0
+                                ? `× ${esCostoDivisa(item.costo_moneda) ? "divisa" : "billete"} ${t.toLocaleString("es-AR")} = $ ${(item.precio_costo * t).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                : "⚠️ falta el dólar"}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-2 py-1.5">
                         <NumInput value={item.markup_porcentaje} onChange={(n) => updateNewPRItem(idx, "markup_porcentaje", n)}
@@ -4646,6 +4753,7 @@ export default function PresupuestosPage() {
             modalidadEmision: p.modalidadEmision,
             cotizacionModalidad: p.cotizacionModalidad,
             tipoCambio: p.tipoCambio,
+            tipoCambioDivisas: (p as any).tipoCambioDivisas,
             items: pr.items.map(it => ({
               codigo: it.codigo,
               descripcion: it.descripcion,

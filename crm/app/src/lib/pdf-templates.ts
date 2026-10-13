@@ -317,6 +317,7 @@ interface PRData {
   modalidadEmision?: string;
   cotizacionModalidad?: "divisas" | "billetes";
   tipoCambio?: number | null;
+  tipoCambioDivisas?: number | null;
   items: PRItem[];
 }
 
@@ -364,7 +365,14 @@ export function generatePresupuestoPDF(
       ${pr.vendedorNombre ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Vendedor</span><span>${textoSeguro(pr.vendedorNombre)}</span></div>` : ""}
       ${pr.condicionPago ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Pago</span><span>${textoSeguro(pr.condicionPago)}</span></div>` : ""}
       <div class="compact-line compact-line-aligned"><span class="compact-label">Moneda</span><span>${mon === "USD" ? `USD ${pr.cotizacionModalidad === "billetes" ? "billete" : "divisa"}` : "ARS - Pesos argentinos"}</span></div>
-      ${mon === "USD" && pr.tipoCambio ? `<div class="compact-line compact-line-aligned"><span class="compact-label">Tipo de cambio</span><span>$ ${Number(pr.tipoCambio).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>` : ""}
+      ${(() => {
+        // TC del tipo de dólar cotizado (divisa o billete); si falta ese, el otro que tenga el PR.
+        if (mon !== "USD") return "";
+        const divisa = pr.cotizacionModalidad !== "billetes";
+        const tc = Number(divisa ? (pr.tipoCambioDivisas || pr.tipoCambio) : (pr.tipoCambio || pr.tipoCambioDivisas)) || 0;
+        if (!(tc > 0)) return "";
+        return `<div class="compact-line compact-line-aligned"><span class="compact-label">Tipo de cambio</span><span>BNA ${divisa ? "divisa" : "billete"} vendedor $ ${tc.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></div>`;
+      })()}
     </td>
   </tr>
 </table>`;

@@ -705,6 +705,28 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
           completa solo lo vacío; si la cuenta es de otro CUIT avisa en amarillo (`lib/documento-impositivo.ts`, prueba `scripts/test-documento-impositivo.ts`).
         - Probado en local sin guardar. tsc 0, hooks OK. Versión 1.1.433.
         - PENDIENTE para otra tanda: compactar detalle de factura de compra y cobro/recibo.
+      **PRÓXIMA TANDA (pedida por Augusto 13/10, espera su "OK" para arrancar; todo es sugerencia/aviso, nunca bloqueo):**
+        0. Dólar automático: el sistema trae del BNA divisa Y billete (venta) cada día hábil (mañana y cierre) y los guarda en la base; todas las pantallas
+           leen lo guardado (nunca esperan al BNA). Presupuestos usan el CIERRE DEL DÍA HÁBIL ANTERIOR. Si el BNA falla: usa el último guardado + cartel para cargarlo a mano.
+           Cada presupuesto muestra qué dólar usó ("billete $X · cierre dd/mm") y se puede cambiar a mano.
+        1. OC "Sin proveedor asignado": poder elegir "Stock propio" como proveedor.
+        2. PR en $ ARS con costo en US$: convertir a pesos (hoy pone 1,09 de lista = dólares como pesos). Dólar según el proveedor (ficha: cotiza en divisa o billete);
+           sin proveedor → billete. Mostrar al lado del costo "US$ 0,78 × billete $X"; si se asigna proveedor después, recalcula; dólar editable por artículo.
+        3. Lista de costos (ventana del PR): a) al abrir mostrar la lista completa con filtros Proveedores/Marcas/Rubros cargados (hoy abre vacía);
+           b) el orden por costo no ordena bien; c) búsqueda sin tildes ni mayúsculas ("pantalon" encuentra "pantalón").
+        4. Ventana de presupuestos (las 8 aprobadas): 1) datos de arriba en una fila; 2) tabla sin scroll lateral (IVA oculto salvo ≠21 %, Código+Descripción en un campo);
+           3) buscar en lista de costos mientras se escribe la descripción; 4) Enter en el último artículo crea otro; 5) totales fijos abajo (subtotal, IVA, total, margen, ganancia $);
+           6) margen en rojo si < 15 % (aviso); 7) último precio vendido a ese cliente por artículo; 8) "Repetir presupuesto anterior" del cliente con precios de hoy.
+      **V1.1.435 (13/10, PUBLICADA) — puntos 0, 1, 2 y 3 de la tanda + PDF con TC:**
+        - Dólar: `lib/dolar-presupuesto.ts` (prueba `scripts/test-dolar-presupuesto.ts`): los presupuestos leen `cotizaciones_dolar` (cierre del día hábil anterior,
+          solo BNA verificado o manual), una vez por sesión; si no está, `/api/cotizacion-bna` sin force. Cron también a las 11 (14 UTC); DolarAPI no se usa en feriados.
+        - PR en $: guarda billete y divisa (tipo_cambio / tipo_cambio_divisas también en PR ARS); costo "USD" × billete, "USD Divisa" × divisa; barra "Dólar para costos en US$"
+          editable con "cierre dd/mm" y aviso si no está guardado; debajo del costo "× billete 1.535 = $ X". Botón de moneda: AR$ → US$ → US$ div.
+          Artículo a mano en US$: al elegir proveedor toma billete/divisa de sus listas (DPS y Segufer = divisa).
+        - PDF del presupuesto en US$: "Tipo de cambio: BNA divisa/billete vendedor $ X" (antes solo salía si era billete).
+        - Lista de costos: trae la lista completa una vez (`traerListaCompleta`), abre con todo, filtros cargados, búsqueda sin tildes (`lib/buscar-texto.ts`), orden por costo sobre toda la lista, "Ver más".
+        - OC sin proveedor: botón "Es stock propio" (observaciones "Stock propio — …").
+        - FALTA de la tanda: punto 4 (las 8 mejoras de la ventana de presupuestos). Empezado: `filaListaAItem` exportado en catalogo-picker para la búsqueda en la descripción.
       **V1.1.434 (13/10, PUBLICADA y probada en producción sin guardar) — OP en pesos de facturas en US$** (Augusto: "el pago lo hago en $ siempre"):
         - Nueva OP con facturas USD: ya no salta a la ventana FX; la OP queda en $ con barra "Se paga en pesos · Dólar" (BNA divisa vendedor del día hábil
           anterior, se completa sola y es editable). Bruto = Σ round(US$ × TC) por factura (`lib/op-usd-pesos.ts`, prueba `scripts/test-op-usd-pesos.ts`, con enteros).
