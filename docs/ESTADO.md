@@ -637,6 +637,20 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         Con el panel abierto, la tabla oculta Saldo y Días en pantallas < 1536 px (están en el panel) y el nombre del cliente va en una línea.
       - **PENDIENTE (bloqueado por permisos, falta correr):** `supabase/migrations/20261013130000_clientes_pide_oc_marcar.sql` (+ vuelta atrás) marca "Pide OC para facturar"
         en Synthon, Corteva Agriscience, Corteva Seeds, Adecco RRHH, Adecco Specialties, Termo Córdoba y Soenergy (hoy los 7 en false, por eso nadie aparece en "Esperando OC"). OK de Augusto dado.
+        Se corre con `node scripts/db/migrar.cjs supabase/migrations/20261013130000_clientes_pide_oc_marcar.sql` (desde crm/app) cuando Augusto diga "corré la migración de pide OC".
+   **LISTA NUEVA DE AUGUSTO (13/10/2026) — NO HACER NADA sin su OK; él elige el orden:**
+      Ventas y presupuestos: a) sacar "Fichas de relevamiento" de Ventas; b) Personalización (bordado/estampado) dentro del presupuesto (hoy no existe ahí:
+        renglón con logo, taller, costo y cantidad que sume al precio y al margen); c) PR express con "margen objetivo %" o "total aproximado" (aviso si algún renglón < 15 %).
+      Oportunidades y clientes: d) estudiar mejor las oportunidades; e) preguntas por cliente para conocerlo (rubro, empleados, temporadas, quién decide, qué usa hoy)
+        y con eso propuestas de venta; f) armar propuestas entre todos dentro del CRM (borrador, comentarios, versión final).
+      Finanzas y riesgo: g) riesgo BCRA pasa a Finanzas; h) mismo chequeo BCRA para proveedores; i) alerta de CUIT apócrifo en facturas de proveedores:
+        fuentes a confirmar: ARCA base APOC (facturas apócrifas), ARCA padrón/constancia (CUIT activo, condición IVA), ARCA constatación de comprobantes (CAE real), BCRA. Solo avisos.
+      Listas de precios: j) llevar al CRM la página "Costos Lazzari" (https://claude.ai/artifact/6gMWMKDhDnYPHyVA3qiBQG: Buscar con fotos/costo/venta sugerida/$-USD-divisa,
+        Comparar proveedores, Reglas por proveedor, Chat, Subir listas con aprobación), tomando siempre el último catalogo_crm.csv (regla 7). Grande: por etapas.
+      IA: preguntó si la IA cobra (sí: la del CRM por uso con la clave de Anthropic en Vercel, centavos por documento; este chat va por su plan).
+        Propuestas de más IA: cobros sugeridos desde el extracto, leer OC de clientes que llegan por mail, tanda de facturas de compra conciliadas solas,
+        avisos con mensaje listo, chat del CRM; contador de uso de IA del mes en Configuración.
+      Regla de Augusto: siempre optimizar espacios, optimizar procesos y ofrecer mejoras.
 
 0. **PRÓXIMO: análisis a fondo de Finanzas** (lo más importante del CRM, pedido por Augusto 11/10/2026):
    - Cobros con eCheq guardados con **fecha futura** y ya "Conciliado": DEL SOL CONSTRUCTORA (20/11/2026, cobro $3.677.887,22 + ret. Ganancias $61.813,23)
