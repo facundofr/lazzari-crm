@@ -24,7 +24,9 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { SmartFilters, type FilterConfig, type FilterValues } from "@/components/ui/smart-filters";
 import { useUser } from "@/lib/auth-context";
-import CatalogoPicker from "@/components/presupuestos/catalogo-picker";
+import CatalogoPicker, { filaListaAItem, traerListaCompleta, buscarProveedorCRM, type FilaLista } from "@/components/presupuestos/catalogo-picker";
+import DescripcionLista from "@/components/presupuestos/descripcion-lista";
+import { claveArticulo, ultimosPrecios, filaPorCodigo, resumenPresupuesto, type PRVendido } from "@/lib/presupuesto-ayudas";
 import CotizacionExpress from "@/components/presupuestos/cotizacion-express";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
@@ -394,7 +396,12 @@ export default function PresupuestosPage() {
   const [descGeneral, setDescGeneral] = useState(0);
   const [catalogoFila, setCatalogoFila] = useState<number | null>(null); // fila desde la que se abrió la lista (lupa)
   // Ancho de columnas de la tabla de ítems (se arrastra el borde del título; se recuerda en este navegador)
-  const COLS_DEFAULT: Record<string, number> = { codigo: 128, descripcion: 280, proveedor: 176, cantidad: 80, costo: 144, markup: 80, venta: 104, desc: 76, iva: 76, subtotal: 120 };
+  // La descripción (con el código adentro) no tiene ancho fijo: ocupa lo que sobra, así la tabla no tiene scroll lateral.
+  const COLS_DEFAULT: Record<string, number> = { proveedor: 150, cantidad: 64, costo: 130, markup: 70, venta: 100, desc: 70, iva: 64, subtotal: 112 };
+  const [verIva, setVerIva] = useState(false); // la columna IVA se ve sola si algún renglón no es 21 %
+  const [verRepetir, setVerRepetir] = useState(false);
+  const [repitiendo, setRepitiendo] = useState(false);
+  const vinculosListaRef = useRef<Record<string, string> | null>(null); // nombre en la lista de costos → proveedor del CRM
   const [colW, setColW] = useState<Record<string, number>>(COLS_DEFAULT);
   useEffect(() => {
     try { const g = JSON.parse(localStorage.getItem("pr_col_widths") || "null"); if (g && typeof g === "object") setColW((w) => ({ ...w, ...g })); } catch { /* sin preferencias guardadas */ }
@@ -1220,6 +1227,104 @@ export default function PresupuestosPage() {
       items[index] = item;
       return { ...prev, items };
     });
+  }
+
+  // ── Ayudas de la ventana (Augusto 13/10): último precio al cliente, buscar en la lista al escribir, repetir un PR ──
+  // Último precio (neto) al que se le vendió cada artículo a este cliente (presupuestos aprobados / facturados).
+  const ultimosDelCliente = useMemo(() => {
+    if (!newPR.cliente_id) return new Map<string, { precio: number; moneda: string; fecha: string; numero: string }>();
+    const vendidos: PRVendido[] = presupuestos
+      .filter((p) => p.clienteId === newPR.cliente_id && p.id !== editingPRId && !(p as any).eliminado
+        && (["aprobado", "facturar", "facturado"].includes(p.estado) || facturadoIds.has(p.id)))
+      .map((p) => ({ numero: p.numero, fecha: p.fecha || "", moneda: p.moneda, items: p.items.map((it) => ({ codigo: it.codigo, descripcion: it.descripcion, precioVenta: Number(it.precioVenta) })) }));
+    return ultimosPrecios(vendidos);
+  }, [presupuestos, newPR.cliente_id, editingPRId, facturadoIds]);
+  // Presupuestos anteriores del cliente, para "Repetir presupuesto anterior".
+  const anterioresDelCliente = useMemo(() => presupuestos
+    .filter((p) => !!newPR.cliente_id && p.clienteId === newPR.cliente_id && p.id !== editingPRId && !(p as any).eliminado && p.estado !== "solicitud")
+    .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || b.numero.localeCompare(a.numero))
+    .slice(0, 12), [presupuestos, newPR.cliente_id, editingPRId]);
+
+  /** Proveedor del CRM para un nombre de la lista de costos: vínculo guardado o nombre parecido. */
+  async function proveedorDeLista(nombre: string): Promise<string> {
+    if (!vinculosListaRef.current) {
+      vinculosListaRef.current = {};
+      if (sociedadActiva?.id) {
+        const { data } = await (supabase as any).from("catalogo_proveedores").select("proveedor_lista, proveedor_id").eq("sociedad_id", sociedadActiva.id);
+        vinculosListaRef.current = Object.fromEntries((data || []).map((v: any) => [v.proveedor_lista, v.proveedor_id]));
+      }
+    }
+    return vinculosListaRef.current[nombre] || buscarProveedorCRM(nombre, proveedoresOptions);
+  }
+
+  /** Artículo elegido en la descripción (lista de costos) → reemplaza el renglón, conserva la cantidad. */
+  async function elegirDeLista(idx: number, fila: FilaLista) {
+    const base = filaListaAItem(fila, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas, await proveedorDeLista(fila.proveedor));
+    if (!base) {
+      toast.warning("Falta el dólar del presupuesto: lo traigo del BNA. Elegilo de nuevo en un segundo.");
+      const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
+      void fetchCotizBna(cli?.moneda_predeterminada === "USD" ? "billetes" : "divisas");
+      return;
+    }
+    setNewPR((p) => ({ ...p, items: p.items.map((it, i) => (i === idx ? { ...base, cantidad: it.cantidad || 1, iva_porcentaje: it.iva_porcentaje ?? 21 } : it)) }));
+    focoPendiente.current = { campo: "cant", idx }; // el cursor pasa a la cantidad del mismo renglón
+  }
+  // Foco después de dibujar los renglones (agregar renglón / elegir de la lista).
+  const focoPendiente = useRef<{ campo: "desc" | "cant"; idx: number } | null>(null);
+  useEffect(() => {
+    const f = focoPendiente.current;
+    if (!f) return;
+    focoPendiente.current = null;
+    const els = document.querySelectorAll<HTMLInputElement>(f.campo === "desc" ? "[data-desc]" : "[data-pr-cant]");
+    (f.idx < 0 ? els[els.length - 1] : els[f.idx])?.focus();
+  }, [newPR.items]);
+  // La lista de costos se trae al abrir la ventana, así la búsqueda en la descripción responde al toque.
+  useEffect(() => { if (showNewPR) void traerListaCompleta().catch(() => { /* sin lista: se carga a mano */ }); }, [showNewPR]);
+
+  /** Enter en el último renglón (con algo escrito) agrega otro y pone el cursor en su descripción. */
+  function agregarRenglonYEnfocar() {
+    focoPendiente.current = { campo: "desc", idx: -1 };
+    setNewPR((p) => ({ ...p, items: [...p.items, { ...emptyItem, markup_porcentaje: p.markup_general }] }));
+  }
+
+  /** Copia los artículos de un presupuesto anterior del cliente con los precios de HOY de la lista de costos. */
+  async function repetirPresupuesto(prId: string) {
+    setRepitiendo(true);
+    try {
+      const [{ data: its, error }, lista] = await Promise.all([
+        (supabase as any).from("presupuesto_items").select("*").eq("presupuesto_id", prId).order("orden", { ascending: true }),
+        traerListaCompleta().catch(() => [] as FilaLista[]),
+      ]);
+      if (error) { toast.error(`No se pudo traer el presupuesto: ${error.message}`); return; }
+      const { moneda, tipo_cambio: tc, tipo_cambio_divisas: tcD, markup_general: mg } = newPR;
+      let conLista = 0, sinLista = 0;
+      const nuevos: NewPRItem[] = [];
+      for (const it of its || []) {
+        const fila = filaPorCodigo(lista, it.codigo || "");
+        const base = fila ? filaListaAItem(fila, moneda, tc, tcD, it.proveedor_id || await proveedorDeLista(fila.proveedor)) : null;
+        if (base) {
+          conLista++;
+          nuevos.push({ ...base, descripcion: it.descripcion || base.descripcion, cantidad: Number(it.cantidad) || 1, iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21, unidad: it.unidad || "UN", stock_propio: !!it.stock_propio });
+          continue;
+        }
+        // No está en la lista de hoy: queda el costo anterior con su markup, recalculado con el dólar de hoy.
+        sinLista++;
+        const costo = Number(it.precio_costo) || 0;
+        const cm = (it.costo_moneda || "ARS") as NewPRItem["costo_moneda"];
+        const markup = it.markup_porcentaje != null ? Number(it.markup_porcentaje) : mg;
+        nuevos.push({
+          ...emptyItem, codigo: it.codigo || "", descripcion: it.descripcion || "", categoria: it.categoria || "", cantidad: Number(it.cantidad) || 1, unidad: it.unidad || "UN",
+          precio_costo: costo, costo_moneda: cm, markup_porcentaje: markup,
+          precio_venta: costo > 0 ? Number((convertCosto(costo, cm, moneda, tc, tcD) * (1 + markup / 100)).toFixed(2)) : Number(it.precio_lista ?? it.precio_venta) || 0,
+          iva_porcentaje: it.iva_porcentaje != null ? Number(it.iva_porcentaje) : 21,
+          proveedor_nombre: it.proveedor_nombre || "", proveedor_id: it.proveedor_id || "", stock_propio: !!it.stock_propio,
+        });
+      }
+      if (!nuevos.length) { toast.warning("Ese presupuesto no tiene artículos"); return; }
+      setNewPR((p) => ({ ...p, items: [...p.items.filter((x) => x.codigo.trim() || x.descripcion.trim()), ...nuevos] }));
+      setVerRepetir(false);
+      toast.success(`${nuevos.length} artículos copiados: ${conLista} con precio de hoy de la lista${sinLista ? ` · ${sinLista} no están en la lista (quedó el costo anterior, revisalos)` : ""}`);
+    } finally { setRepitiendo(false); }
   }
 
   async function handleCreatePR() {
@@ -2474,6 +2579,13 @@ export default function PresupuestosPage() {
     newPRSub += t.subtotal;
     newPRIva += newPR.modalidad_emision === "manual" ? 0 : t.iva;
   });
+  // Resumen fijo abajo de la ventana: subtotal, IVA, total, margen y ganancia (margen < 15 % en rojo: aviso, nunca bloquea).
+  const resumenPR = resumenPresupuesto(newPR.items.map((it) => ({
+    cantidad: it.cantidad, neto: precioNeto(it, descGeneral), iva: newPR.modalidad_emision === "manual" ? 0 : it.iva_porcentaje,
+    costo: convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas),
+  })), MARGEN_MINIMO);
+  const mostrarIva = verIva || newPR.items.some((it) => Number(it.iva_porcentaje) !== 21);
+  const colsVisibles = Object.keys(COLS_DEFAULT).filter((c) => c !== "iva" || mostrarIva);
 
   return (
     <>
@@ -3479,10 +3591,25 @@ export default function PresupuestosPage() {
         onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
         title={editingPRId && esSolicitud ? "Convertir Solicitud en Presupuesto" : editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
         description={editingPRId && esSolicitud ? "Completa la cotización. La solicitud se convertirá en PR sin crear un registro duplicado." : editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
-        size="xl"
+        size="2xl"
         allowFullscreen
         footer={
           <>
+            {(!esSolicitud || editingPRId) && (() => {
+              const r = resumenPR;
+              const color = r.margen === null ? "text-zinc-400" : r.margen < MARGEN_MINIMO ? "text-red-600" : r.margen < MARGEN_MINIMO + 5 ? "text-amber-600" : "text-emerald-600";
+              const m = newPR.moneda;
+              return (
+                <div className="mr-auto flex flex-wrap items-center gap-x-4 gap-y-0.5 text-xs">
+                  <span className="text-zinc-500">Subtotal <b className="font-mono text-zinc-800 dark:text-zinc-100">{formatCurrency(r.subtotal, m)}</b></span>
+                  {newPR.modalidad_emision !== "manual" && <span className="text-zinc-500">IVA <b className="font-mono text-zinc-800 dark:text-zinc-100">{formatCurrency(r.iva, m)}</b></span>}
+                  <span className="text-zinc-500">Total <b className="font-mono text-sm text-orange-600 dark:text-orange-400">{formatCurrency(r.total, m)}</b></span>
+                  <span className={color} title="Margen real sobre el costo, con descuentos. Solo interno.">Margen <b className="font-mono">{r.margen === null ? "—" : `${r.margen.toFixed(1)}%`}</b></span>
+                  <span className={color} title="Ganancia sin IVA. Solo interno.">Ganancia <b className="font-mono">{r.ganancia === null ? "—" : formatCurrency(r.ganancia, m)}</b></span>
+                  {r.bajoMargen > 0 && <span className="text-red-600" title="Es un aviso: se puede guardar igual">⚠️ {r.bajoMargen} art. con margen &lt; {MARGEN_MINIMO}%</span>}
+                </div>
+              );
+            })()}
             <button
               onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
               className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
@@ -3503,8 +3630,8 @@ export default function PresupuestosPage() {
         }
       >
         {/* Creado por (auto) */}
-        <div className="mb-5 flex items-center justify-between gap-4">
-          <div className="rounded-lg bg-zinc-50 px-3 py-2 text-sm dark:bg-zinc-800">
+        <div className="mb-2 flex items-center justify-between gap-4">
+          <div className="rounded-lg bg-zinc-50 px-3 py-1 text-xs dark:bg-zinc-800">
             <span className="text-zinc-500">{editingPRId ? "Editando:" : "Creado por:"}</span>{" "}
             <span className="font-medium text-zinc-900 dark:text-white">{editingPRId ? presupuestos.find(p => p.id === editingPRId)?.numero || "" : (profile?.full_name ?? profile?.email ?? "---")}</span>
           </div>
@@ -3600,9 +3727,9 @@ export default function PresupuestosPage() {
             </div>
           </div>
         ) : (
-        /* ── MODO PRESUPUESTO: formulario completo ── */
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-          <div className="relative" ref={clientSearchRef}>
+        /* ── MODO PRESUPUESTO: formulario completo (datos en una fila, campos chicos) ── */
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-11 gap-x-2 gap-y-2 mb-3 items-start [&_label]:text-xs [&_label]:mb-0.5 [&>div]:space-y-0.5 [&_input:not([type=checkbox])]:h-8 [&_select]:h-8 [&_input]:py-1 [&_select]:py-1 [&_select]:px-2">
+          <div className="relative col-span-2" ref={clientSearchRef}>
             <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Cliente *</label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
@@ -3616,7 +3743,7 @@ export default function PresupuestosPage() {
                 }}
                 onFocus={() => setClientDropdownOpen(true)}
                 placeholder="Buscar cliente..."
-                className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-3 text-sm text-zinc-800 placeholder:text-zinc-400 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white dark:focus:border-orange-600 dark:focus:ring-orange-900/30"
+                className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-3 text-sm text-zinc-800 placeholder:text-zinc-400 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white dark:focus:border-orange-600 dark:focus:ring-orange-900/30"
               />
               {newPR.cliente_id && (
                 <button
@@ -3663,7 +3790,7 @@ export default function PresupuestosPage() {
                 )}
               </div>
             )}
-            {newPR.cliente_id && <div className="mt-2"><AvisoBCRA clienteId={newPR.cliente_id} /></div>}
+            {newPR.cliente_id && <div className="mt-1"><AvisoBCRA clienteId={newPR.cliente_id} /></div>}
           </div>
           <Select
             label="Vendedor *"
@@ -3696,7 +3823,7 @@ export default function PresupuestosPage() {
             />
           )}
           <Select
-            label="Moneda presupuesto"
+            label="Moneda"
             value={newPR.moneda}
             onChange={(e) => {
               const mon = e.target.value as "USD" | "ARS";
@@ -3715,9 +3842,9 @@ export default function PresupuestosPage() {
               if (mon === "ARS") void cargarDolaresPesos(false);
               else fetchCotizBna(modal);
             }}
-            options={[{ value: "ARS", label: "ARS — Pesos" }, { value: "USD", label: "USD — Dolares" }]}
+            options={[{ value: "ARS", label: "$ Pesos" }, { value: "USD", label: "US$ Dólares" }]}
           />
-          {newPR.moneda === "USD" && <div className="grid grid-cols-2 gap-2">
+          {newPR.moneda === "USD" && <div className="col-span-2 grid grid-cols-2 gap-2">
             <Input
               label="TC Billetes"
               type="number"
@@ -3749,7 +3876,7 @@ export default function PresupuestosPage() {
               placeholder="Divisas"
             />
           </div>}
-          {newPR.moneda === "USD" && <div>
+          {newPR.moneda === "USD" && <div className="col-span-full lg:col-span-6 order-last self-center">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs text-zinc-400">BNA:</span>
               <button type="button" onClick={() => fetchCotizBna("divisas", cotizFecha || undefined)} disabled={cotizBnaLoading} className="text-xs text-blue-600 hover:underline disabled:opacity-50">
@@ -3797,7 +3924,7 @@ export default function PresupuestosPage() {
             };
             const atrasado = !!dolaresGuardados && (dolarAtrasado(dolaresGuardados.billete, fechaB) || dolarAtrasado(dolaresGuardados.divisa, fechaB));
             return (
-              <div className="col-span-full rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-xs">
+              <div className="col-span-full order-last rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1 text-xs [&_input]:!h-6">
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                   <span className="font-medium text-zinc-600 dark:text-zinc-300">Dólar para costos en US$:</span>
                   {fila("billete", "tipo_cambio")}
@@ -3823,7 +3950,7 @@ export default function PresupuestosPage() {
               toast.success(`${cli.razon_social}: queda ${nombre(actual)} como predeterminado`);
             };
             return (
-              <div className={`rounded-lg border px-3 py-2 text-xs ${pref && pref !== actual ? "border-amber-400 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300" : "border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400"}`}>
+              <div className={`col-span-full lg:col-span-5 order-last rounded-lg border px-3 py-1 text-xs ${pref && pref !== actual ? "border-amber-400 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300" : "border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400"}`}>
                 Tipo de dólar del cliente: <b>{pref ? nombre(pref) : "sin definir"}</b>
                 {pref && pref !== actual && <> · <b>¡Este presupuesto está en {nombre(actual)}!</b> <button type="button" onClick={() => fetchCotizBna(pref)} className="underline">Pasar a {nombre(pref)}</button></>}
                 {pref !== actual && <> · <button type="button" onClick={guardar} className="underline">Guardar {nombre(actual)} como predeterminado del cliente</button></>}
@@ -3831,7 +3958,7 @@ export default function PresupuestosPage() {
             );
           })()}
           <Input
-            label="Markup general %"
+            label="Markup %"
             type="number"
             value={newPR.markup_general}
             onChange={(e) => setNewPR((p) => {
@@ -3844,14 +3971,14 @@ export default function PresupuestosPage() {
             })}
           />
           <Input
-            label="Fecha de vencimiento"
+            label="Vence"
             type="date"
             value={newPR.vencimiento}
             min={new Date().toISOString().split("T")[0]}
             onChange={(e) => setNewPR((p) => ({ ...p, vencimiento: e.target.value }))}
           />
           <Select
-            label="Tipo de documento"
+            label="Documento"
             value={newPR.tipo_comprobante === "A" ? "A" : newPR.tipo_comprobante === "B" ? "B" : newPR.modalidad_emision === "manual" ? "manual" : ""}
             onChange={(e) => {
               const v = e.target.value;
@@ -3867,8 +3994,8 @@ export default function PresupuestosPage() {
             }}
             options={[
               { value: "", label: "Sin definir" },
-              { value: "A", label: "A — Resp. Inscripto (IVA discriminado)" },
-              { value: "B", label: "B — Consumidor Final / Monotributo / Exento (IVA incluido)" },
+              { value: "A", label: "A (IVA aparte)" },
+              { value: "B", label: "B (IVA incluido)" },
               { value: "manual", label: "Manual (sin ARCA)" },
             ]}
           />
@@ -3894,12 +4021,41 @@ export default function PresupuestosPage() {
               >
                 Restablecer columnas
               </button>
+              {!mostrarIva && (
+                <button type="button" onClick={() => setVerIva(true)} title="Todos los artículos van con IVA 21 %. Tocá para ver la columna y cambiarlo."
+                  className="rounded-lg border border-zinc-300 px-2.5 py-1.5 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors">
+                  IVA 21 % · cambiar
+                </button>
+              )}
               <button
                 onClick={() => { setCatalogoFila(null); setShowCatalogo(true); }}
                 className="flex items-center gap-1.5 rounded-lg border border-orange-300 px-3 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-50 dark:border-orange-700 dark:text-orange-300 dark:hover:bg-orange-950/30 transition-colors"
               >
                 <Search className="h-3.5 w-3.5" /> Lista de costos
               </button>
+              {newPR.cliente_id && anterioresDelCliente.length > 0 && (
+                <div className="relative">
+                  <button type="button" onClick={() => setVerRepetir((v) => !v)} disabled={repitiendo}
+                    title="Copia los artículos de un presupuesto anterior de este cliente, con los precios de hoy de la lista de costos"
+                    className="flex items-center gap-1.5 rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors">
+                    {repitiendo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Copy className="h-3.5 w-3.5" />} Repetir presupuesto anterior
+                  </button>
+                  {verRepetir && (
+                    <div className="absolute left-0 top-full z-40 mt-1 w-[26rem] max-h-72 overflow-y-auto rounded-lg border border-zinc-200 bg-white text-xs shadow-xl dark:border-zinc-700 dark:bg-zinc-900">
+                      <div className="px-3 py-1.5 text-[10px] text-zinc-400">Se copian los artículos con el precio de HOY de la lista de costos</div>
+                      {anterioresDelCliente.map((p) => (
+                        <button key={p.id} type="button" onClick={() => void repetirPresupuesto(p.id)}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-orange-50 dark:hover:bg-orange-950/30">
+                          <span className="w-24 shrink-0 font-mono text-zinc-700 dark:text-zinc-200">{p.numero}</span>
+                          <span className="w-16 shrink-0 text-zinc-500">{p.fecha ? `${p.fecha.slice(8, 10)}/${p.fecha.slice(5, 7)}/${p.fecha.slice(2, 4)}` : ""}</span>
+                          <span className="flex-1 truncate text-zinc-500">{p.items.length} art. · {p.estado}</span>
+                          <span className="shrink-0 font-mono text-zinc-700 dark:text-zinc-200">{formatCurrency(p.total, p.moneda)}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <button
               onClick={() => setShowExpress(true)}
@@ -4020,11 +4176,14 @@ export default function PresupuestosPage() {
             </div>
           )}
           <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
-            <table className="w-full table-fixed text-sm [&_td]:border-r [&_td]:border-zinc-200 dark:[&_td]:border-zinc-700 [&_th]:border-r [&_th]:border-zinc-300 dark:[&_th]:border-zinc-600" style={{ minWidth: 70 + Object.values(colW).reduce((x, y) => x + y, 0) }}>
+            <table className="w-full table-fixed text-sm [&_td]:border-r [&_td]:border-zinc-200 dark:[&_td]:border-zinc-700 [&_th]:border-r [&_th]:border-zinc-300 dark:[&_th]:border-zinc-600" style={{ minWidth: 70 + 300 + colsVisibles.reduce((x, c) => x + (colW[c] || COLS_DEFAULT[c] || 80), 0) }}>
               <thead>
                 <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
                   <th className="w-7"></th>
-                  {([["codigo", "Codigo", "text-left"], ["descripcion", "Descripcion", "text-left"], ["proveedor", "Proveedor", "text-left"], ["cantidad", "Cant.", "text-right"], ["costo", "P. Costo", "text-right"], ["markup", "Markup%", "text-right"], ["venta", "P. Lista", "text-right"], ["desc", "Desc.%", "text-right"], ["iva", "IVA%", "text-right"], ["subtotal", "Subtotal", "text-right"]] as const).map(([col, label, align]) => (
+                  <th className="px-2 py-2 text-left text-xs font-semibold text-zinc-500">
+                    Código · Descripción <span className="font-normal text-zinc-400">(escribí y elegí de la lista; Enter en el último agrega otro)</span>
+                  </th>
+                  {([["proveedor", "Proveedor", "text-left"], ["cantidad", "Cant.", "text-right"], ["costo", "P. Costo", "text-right"], ["markup", "Markup%", "text-right"], ["venta", "P. Lista", "text-right"], ["desc", "Desc.%", "text-right"], ["iva", "IVA%", "text-right"], ["subtotal", "Subtotal", "text-right"]] as const).filter(([col]) => col !== "iva" || mostrarIva).map(([col, label, align]) => (
                     <th key={col} style={{ width: colW[col] }} className={`relative px-2 py-2 ${align} text-xs font-semibold text-zinc-500`}>
                       {label}
                       <span onMouseDown={(e) => empezarResize(col, e)} title="Arrastrá para cambiar el ancho"
@@ -4063,6 +4222,13 @@ export default function PresupuestosPage() {
                         setDragIdx(null);
                         setDragOverIdx(null);
                       }}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter" || idx !== newPR.items.length - 1) return;
+                        if ((e.target as HTMLElement).tagName !== "INPUT") return;
+                        if (!item.codigo.trim() && !item.descripcion.trim()) return;
+                        e.preventDefault();
+                        agregarRenglonYEnfocar();
+                      }}
                       className={`${belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""} ${dragIdx === idx ? "opacity-40" : ""} ${dragOverIdx === idx && dragIdx !== idx ? "border-t-2 border-blue-500" : ""}`}
                     >
                       <td className="px-1 py-1.5 cursor-grab active:cursor-grabbing">
@@ -4071,29 +4237,44 @@ export default function PresupuestosPage() {
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1">
                           <input value={item.codigo} onChange={(e) => updateNewPRItem(idx, "codigo", e.target.value)}
-                            placeholder="Codigo"
-                            className="w-full rounded border border-zinc-200 px-2 py-1 text-sm font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
-                          <button type="button" onClick={() => { setCatalogoFila(idx); setShowCatalogo(true); }} title="Buscar en la lista de costos"
+                            placeholder="Código" title={item.codigo}
+                            className="w-24 shrink-0 rounded border border-zinc-200 px-1.5 py-1 text-xs font-mono dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                          <DescripcionLista value={item.descripcion} onChange={(t) => updateNewPRItem(idx, "descripcion", t)}
+                            onElegir={(f) => void elegirDeLista(idx, f)}
+                            onKeyDown={(e) => {
+                              if (e.key !== "Enter") return;
+                              e.preventDefault();
+                              if (!item.descripcion.trim()) return;
+                              // En los renglones del medio, Enter pasa a la cantidad; en el último lo maneja el renglón (agrega otro).
+                              if (idx < newPR.items.length - 1) { e.stopPropagation(); (document.querySelectorAll<HTMLInputElement>("[data-pr-cant]")[idx])?.focus(); }
+                            }}
+                            placeholder="Escribí para buscar en la lista de costos, o cargalo a mano…"
+                            className="min-w-0 flex-1 rounded border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                          <button type="button" onClick={() => { setCatalogoFila(idx); setShowCatalogo(true); }} title="Abrir la lista de costos completa"
                             className="shrink-0 rounded border border-zinc-200 p-1 text-zinc-400 hover:bg-orange-50 hover:text-orange-600 hover:border-orange-300 dark:border-zinc-700 dark:hover:bg-orange-950/30 dark:hover:text-orange-400 transition-colors">
                             <Search className="h-3.5 w-3.5" />
                           </button>
                         </div>
-                      </td>
-                      <td className="px-2 py-1.5">
-                        <input value={item.descripcion} onChange={(e) => updateNewPRItem(idx, "descripcion", e.target.value)}
-                          onKeyDown={(e) => {
-                            // Prevent Enter on empty description of last item from triggering form actions
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              // Only move to next field if description is not empty
-                              if (item.descripcion.trim()) {
-                                const nextInput = (e.target as HTMLElement).closest("td")?.nextElementSibling?.querySelector("input, select") as HTMLElement;
-                                nextInput?.focus();
-                              }
-                            }
-                          }}
-                          placeholder="Descripcion del item..."
-                          className="w-full rounded border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
+                        {(() => {
+                          // Último precio al que se le vendió este artículo a este cliente
+                          const u = ultimosDelCliente.get(claveArticulo(item.codigo, item.descripcion));
+                          if (!u) return null;
+                          const misma = u.moneda === newPR.moneda;
+                          const neto = precioNeto(item, descGeneral);
+                          const dif = misma && neto > 0 ? ((neto / u.precio) - 1) * 100 : null;
+                          return (
+                            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-violet-600 dark:text-violet-400" title={`Último precio vendido a este cliente (neto, sin IVA) en ${u.numero}`}>
+                              <span>Últ. venta {formatCurrency(u.precio, u.moneda as "USD" | "ARS")} · {u.fecha.slice(8, 10)}/{u.fecha.slice(5, 7)}/{u.fecha.slice(2, 4)} · {u.numero}</span>
+                              {dif !== null && Math.abs(dif) >= 0.05 && <span className={dif < 0 ? "text-amber-600" : "text-zinc-400"}>({dif > 0 ? "+" : ""}{dif.toFixed(1)}% hoy)</span>}
+                              {misma && Math.abs(neto - u.precio) > 0.004 && (
+                                <button type="button" className="underline hover:text-violet-800" onClick={() => {
+                                  setNewPR((p) => ({ ...p, items: p.items.map((x, i) => (i === idx ? { ...x, descuento_porcentaje: 0 } : x)) }));
+                                  updateNewPRItem(idx, "precio_venta", u.precio);
+                                }}>usar</button>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-2 py-1.5">
                         <ProveedorItemPicker
@@ -4145,7 +4326,7 @@ export default function PresupuestosPage() {
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="relative">
-                          <NumInput value={item.cantidad} onChange={(n) => updateNewPRItem(idx, "cantidad", n)}
+                          <NumInput value={item.cantidad} onChange={(n) => updateNewPRItem(idx, "cantidad", n)} data-pr-cant=""
                             className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                           {priceTiersMap[idx] && priceTiersMap[idx].length > 0 && (
                             <span title={`Precios escalonados:\n${priceTiersMap[idx].map(t => `${t.variante}: ${t.moneda === "USD" ? "US$" : "$"}${t.precio_neto}`).join("\n")}`}
@@ -4202,7 +4383,7 @@ export default function PresupuestosPage() {
                           return <div className={`mt-0.5 text-right text-[10px] font-semibold ${color}`} title="Margen real sobre el costo, con descuentos">mg {m.toFixed(1)}%</div>;
                         })()}
                       </td>
-                      <td className="px-2 py-1.5">
+                      {mostrarIva && <td className="px-2 py-1.5">
                         <select value={item.iva_porcentaje} onChange={(e) => updateNewPRItem(idx, "iva_porcentaje", Number(e.target.value))}
                           onKeyDown={(e) => {
                             // Auto-add new item when Tab on last field of last item
@@ -4230,7 +4411,7 @@ export default function PresupuestosPage() {
                           <option value={27}>27</option>
                           <option value={0}>0</option>
                         </select>
-                      </td>
+                      </td>}
                       <td className="px-2 py-1.5 text-right font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-200 whitespace-nowrap">
                         {formatCurrency(calcItemTotals(item, descGeneral).subtotal, newPR.moneda)}
                       </td>
@@ -4267,11 +4448,9 @@ export default function PresupuestosPage() {
                 }
                 const descArt = lista - conDescArt;
                 const descGen = conDescArt - newPRSub;
-                const margen = costo > 0 && newPRSub > 0 ? ((newPRSub / costo) - 1) * 100 : null;
                 // Margen neto: descontando ~7 % de gastos e impuestos sobre la venta.
                 const margenNeto = costo > 0 && newPRSub > 0 ? (((newPRSub * (1 - GASTOS_PORCENTAJE / 100)) / costo) - 1) * 100 : null;
                 const colorNeto = margenNeto === null ? "text-zinc-400" : margenNeto < MARGEN_MINIMO ? "text-red-600" : margenNeto < MARGEN_MINIMO + 5 ? "text-amber-600" : "text-emerald-600";
-                const color = margen === null ? "text-zinc-400" : margen < MARGEN_MINIMO ? "text-red-600" : margen < MARGEN_MINIMO + 5 ? "text-amber-600" : "text-emerald-600";
                 return <>
                   {(descArt > 0.004 || descGeneral > 0) && <div className="flex justify-between"><span className="text-zinc-500">Precio de lista</span><span className="font-mono">{formatCurrency(lista, newPR.moneda)}</span></div>}
                   {descArt > 0.004 && <div className="flex justify-between"><span className="text-zinc-500">Desc. por artículo</span><span className="font-mono text-red-600">−{formatCurrency(descArt, newPR.moneda)}</span></div>}
@@ -4284,25 +4463,17 @@ export default function PresupuestosPage() {
                       <span className="text-xs text-zinc-500">%</span>
                     </span>
                   </div>
-                  <div className={`flex justify-between text-xs ${color}`} title="Solo interno: no aparece en el PDF">
-                    <span>Margen real (interno)</span><span className="font-mono font-semibold">{margen === null ? "—" : `${margen.toFixed(1)}%`}</span>
-                  </div>
                   <div className={`flex justify-between text-xs ${colorNeto}`} title={`Margen real menos ${GASTOS_PORCENTAJE}% de gastos e impuestos sobre la venta. Solo interno.`}>
                     <span>Margen neto (−{GASTOS_PORCENTAJE}% gastos)</span><span className="font-mono font-semibold">{margenNeto === null ? "—" : `${margenNeto.toFixed(1)}%`}</span>
                   </div>
                   {costo > 0 && newPRSub > 0 && (
                     <div className="mt-1 space-y-0.5 border-t border-dashed border-zinc-300 pt-1 text-xs dark:border-zinc-600" title="Solo interno: ganancia en plata, sin IVA">
-                      <div className={`flex justify-between ${color}`}><span>Ganancia (sin IVA)</span><span className="font-mono font-semibold">{formatCurrency(newPRSub - costo, newPR.moneda)}</span></div>
                       <div className={`flex justify-between ${colorNeto}`}><span>Ganancia neta (−{GASTOS_PORCENTAJE}% gastos)</span><span className="font-mono font-semibold">{formatCurrency(newPRSub * (1 - GASTOS_PORCENTAJE / 100) - costo, newPR.moneda)}</span></div>
                     </div>
                   )}
                 </>;
               })()}
-              {newPR.modalidad_emision !== "manual" && <>
-                <div className="flex justify-between"><span className="text-zinc-500">Subtotal</span><span className="font-mono">{formatCurrency(newPRSub, newPR.moneda)}</span></div>
-                <div className="flex justify-between"><span className="text-zinc-500">IVA</span><span className="font-mono">{formatCurrency(newPRIva, newPR.moneda)}</span></div>
-              </>}
-              <div className="flex justify-between font-bold border-t border-zinc-200 pt-1 dark:border-zinc-700"><span>Total</span><span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(newPRSub + newPRIva, newPR.moneda)}</span></div>
+              <div className="text-[10px] text-zinc-400">Subtotal, IVA, total, margen y ganancia: abajo, fijos.</div>
               {newPR.moneda === "USD" && (newPR.tipo_cambio > 0 || newPR.tipo_cambio_divisas > 0) && (
                 <div className="text-xs text-zinc-400 text-right pt-1 space-x-2">
                   {newPR.tipo_cambio > 0 && <span>TC Billetes: {newPR.tipo_cambio.toLocaleString("es-AR")}</span>}

@@ -1,0 +1,40 @@
+import { claveArticulo, ultimosPrecios, buscarEnLista, filaPorCodigo, resumenPresupuesto } from "../src/lib/presupuesto-ayudas";
+import { normalizarTexto } from "../src/lib/buscar-texto";
+const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } console.log("ok", m); };
+
+ok(claveArticulo(" P 24 ") === "c:p24", "código sin espacios ni mayúsculas");
+ok(claveArticulo("", "Pantalón  Cargo") === "d:pantalon cargo", "sin código usa la descripción");
+ok(claveArticulo("", "") === "", "vacío");
+
+const up = ultimosPrecios([
+  { numero: "PR-1", fecha: "2026-08-01", moneda: "ARS", items: [{ codigo: "P24", descripcion: "x", precioVenta: 100 }] },
+  { numero: "PR-3", fecha: "2026-09-10", moneda: "ARS", items: [{ codigo: "p24", descripcion: "x", precioVenta: 130 }, { codigo: "Z", descripcion: "z", precioVenta: 0 }] },
+  { numero: "PR-2", fecha: "2026-09-01", moneda: "USD", items: [{ codigo: "P24", descripcion: "x", precioVenta: 1 }] },
+]);
+ok(up.get("c:p24")?.precio === 130 && up.get("c:p24")?.numero === "PR-3", "toma el más nuevo");
+ok(!up.has("c:z"), "precio 0 no cuenta");
+
+const filas = [
+  { codigo: "AB1", codigo_interno: null, descripcion: "Pantalón cargo beige" },
+  { codigo: "P24", codigo_interno: "LZ-P24", descripcion: "Botín pampero" },
+  { codigo: "X9", codigo_interno: null, descripcion: "Guante nitrilo" },
+].map((f) => ({ ...f, _txt: normalizarTexto(`${f.codigo} ${f.codigo_interno || ""} ${f.descripcion}`) }));
+ok(buscarEnLista(filas, "pantalon")[0]?.codigo === "AB1", "busca sin tildes");
+ok(buscarEnLista(filas, "pa").length === 0, "menos de 3 letras no busca");
+ok(buscarEnLista(filas, "lz-p")[0]?.codigo === "P24", "por código interno");
+ok(filaPorCodigo(filas, "lz-p24")?.codigo === "P24", "código interno exacto");
+ok(filaPorCodigo(filas, "x9")?.codigo === "X9", "código proveedor exacto");
+ok(filaPorCodigo(filas, "nada") === null, "no encontrado");
+
+const r = resumenPresupuesto([
+  { cantidad: 2, neto: 100, costo: 80, iva: 21 },   // 25 %
+  { cantidad: 1, neto: 110, costo: 100, iva: 10.5 }, // 10 % → bajo
+  { cantidad: 1, neto: 50, costo: 0, iva: 21 },      // sin costo: no cuenta como bajo
+]);
+ok(r.subtotal === 360, "subtotal");
+ok(Math.abs(r.iva - (200 * 0.21 + 110 * 0.105 + 50 * 0.21)) < 1e-9, "IVA por renglón");
+ok(r.costo === 260 && r.ganancia === 100, "costo y ganancia");
+ok(Math.abs((r.margen ?? 0) - (360 / 260 - 1) * 100) < 1e-9, "margen");
+ok(r.bajoMargen === 1, "uno bajo el 15 %");
+ok(resumenPresupuesto([]).margen === null, "sin renglones");
+console.log("TODO OK");

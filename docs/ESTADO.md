@@ -717,6 +717,29 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         4. Ventana de presupuestos (las 8 aprobadas): 1) datos de arriba en una fila; 2) tabla sin scroll lateral (IVA oculto salvo ≠21 %, Código+Descripción en un campo);
            3) buscar en lista de costos mientras se escribe la descripción; 4) Enter en el último artículo crea otro; 5) totales fijos abajo (subtotal, IVA, total, margen, ganancia $);
            6) margen en rojo si < 15 % (aviso); 7) último precio vendido a ese cliente por artículo; 8) "Repetir presupuesto anterior" del cliente con precios de hoy.
+      **TANDA (pedido de Augusto 13/10), punto 5, hacer DESPUÉS del punto 4: simplificar "Cargar factura o nota de pedido" (cargar-factura-oc.tsx).**
+        Caso de ejemplo: FC A 0003-00005284 de Amoblamientos Nexo (PDF `C:\Users\lazza\Downloads\Factura (2).pdf`) contra OC-2026-1229 (mesa 1 × 378.800 + caja porta toma 1 × 49.000 = neto 427.800).
+        La factura trae mesa 1 × 378.800 + caja 2 × 49.000 + "Costo de envío" 90.000 = neto 566.800, IVA 21 % 119.028, total 685.828.
+        a) BUG de la IA: leyó "Iva 0%" (es solo el título de una columna vacía) y puso IVA 0 % en la mesa y la caja y 10,5 % en el envío, con total $576.250 en vez de $685.828.
+           Hay que controlar que neto + IVA + percepciones = total leído del PDF; si no da, avisar y proponer 21 %. Ojo con "IVA 0%" o "10.5%" que vienen vacíos.
+        b) Proceso simple (Augusto: "los ítems son casi iguales, solo agrega el envío; ese envío se tendría que poder agregar a esa OC y listo"):
+           - Una sola tabla "Factura vs. OC", cada renglón al lado del de la OC; las diferencias de cantidad o precio se marcan con color.
+           - Renglón que no está en la OC (envío): tilde "Agregar a la OC" marcado por defecto.
+           - Más cantidad que en la OC: "Actualizar la OC a 2" en vez de crear una OC nueva.
+           - "Compré otra cosa" y "OC adicional" pasan a "más opciones".
+           - Un botón: "Guardar y enviar para aprobación".
+        c) Espacios: datos de la factura en una o dos filas; arriba solo las OC pendientes de ese proveedor ("Ver todas" para el resto);
+           la lista de ítems detectados se pliega cuando coincide con la OC.
+      **V1.1.436 (13/10, PUBLICADA) — punto 4: las 8 mejoras de la ventana de presupuestos:**
+        - Ventana más ancha (Modal size "2xl"); datos de arriba en una fila (grilla de 11, campos h-8); avisos del dólar al final en una línea.
+        - Tabla sin scroll lateral: Código + Descripción en una celda (la descripción ocupa lo que sobra); IVA oculto salvo que algún renglón ≠ 21 % (botón "IVA 21 % · cambiar").
+        - Descripción busca en la lista de costos al escribir (`components/presupuestos/descripcion-lista.tsx`, ↓/Enter o clic; la lista se precarga al abrir).
+        - Enter en el último renglón agrega otro y pone el cursor en su descripción.
+        - Pie fijo: Subtotal, IVA, Total, Margen, Ganancia y "⚠️ N art. con margen < 15 %" (aviso, no bloquea).
+        - "Últ. venta" por artículo (PR aprobados/facturados del cliente, en memoria) con diferencia % y botón "usar".
+        - "Repetir presupuesto anterior": últimos 12 PR del cliente; copia artículos con precio de HOY de la lista (por código); los que no están quedan con su costo anterior + aviso.
+        - Lógica en `lib/presupuesto-ayudas.ts` (prueba `scripts/test-presupuesto-ayudas.ts`). Probado en local sin guardar (Corteva): fila única, búsqueda, elegir, Enter, sin scroll lateral.
+        - FALTA: punto 5 (Cargar factura contra OC con control del IVA).
       **V1.1.435 (13/10, PUBLICADA) — puntos 0, 1, 2 y 3 de la tanda + PDF con TC:**
         - Dólar: `lib/dolar-presupuesto.ts` (prueba `scripts/test-dolar-presupuesto.ts`): los presupuestos leen `cotizaciones_dolar` (cierre del día hábil anterior,
           solo BNA verificado o manual), una vez por sesión; si no está, `/api/cotizacion-bna` sin force. Cron también a las 11 (14 UTC); DolarAPI no se usa en feriados.
