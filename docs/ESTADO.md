@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 12/10/2026 · Versión publicada: **V1.1.423** (12/10/2026, commit 525a675)
+Actualizado: 12/10/2026 · Versión publicada: **V1.1.424** (12/10/2026, commit d26c557)
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -393,11 +393,17 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
     facturas_compra: `condicion_pago, dias_pago, dias_pago_hasta` (fecha_vencimiento ya existía); tabla `cheque_fechas_mes` (sociedad, mes día 1,
     dias int[]; lectura lz_es_de_sociedad, escritura lz_puede_operar_finanzas) con oct 12·21·31, nov 11·21·30, dic 11·20·30 en las 2 sociedades.
     Datos: Prisina y TKW escalonado 30-75 eCheq; Segutécnica CC 60; Star-Tex 5 %; DPS anticipado 5 %; medios pasados desde forma_pago vieja.
-    **FALTA (en este orden):** a) `lib/condicion-pago.ts` (vencimiento, fechas de cheque propuestas con `cheque_fechas_mes` + días hábiles,
-    reparto escalonado) + prueba; b) componente `CondicionPagoEditor`; c) extraer el modal de proveedor a componente compartido y sumarle
-    administración (nombre) + "Cómo se le paga"; d) usarlo en `cargar-factura-oc.tsx` y `carga-masiva-facturas-compra.tsx` ("Nuevo proveedor");
-    e) "Pago que pide el proveedor" en OC y carga de factura + vencimiento de la factura; f) Configuración: fechas de cheque por mes;
-    g) OP / plan de pagos proponen fechas de cheque; h) tsc, hooks, probar en local sin guardar, publicar V1.1.424, probar en producción.
+    **PUBLICADO V1.1.424 (commit d26c557), probado en local sin guardar y versión verificada en producción:**
+    `lib/condicion-pago.ts` (+ `scripts/test-condicion-pago.ts`): texto, vencimiento desde fecha de factura, fechas de cheque permitidas
+    (31 → último día del mes), cheques propuestos (CC: última fecha fija ≤ vencimiento; escalonado: una en cada fecha fija del rango, monto
+    repartido; anticipado: fecha + plazo cheque), `legacyDesdePlan` mantiene forma_pago/dias_cuenta_corriente viejos al guardar.
+    `components/condicion-pago-editor.tsx`; `components/proveedor-form-modal.tsx` (formulario ÚNICO: Proveedores, cargar factura y carga masiva;
+    nombre de administración, "Vendedores", "Cómo se le paga" + límite de crédito); ficha muestra "Cómo se le paga" y "Vendedores".
+    `components/pago-proveedor-oc.tsx` en el detalle de la OC (si el proveedor no tenía, se le guarda). Cargar factura: bloque "Pago que pide
+    el proveedor", vencimiento automático (botón "Usar el calculado" si se escribió a mano), se guarda en la factura y en el proveedor si faltaba.
+    Configuración → **Fechas de cheque** (`components/fechas-cheque-config.tsx`, 6 meses, avisa feriado/fin de semana y cuándo se debita).
+    Plan de pagos y OP: muestran cómo se le paga y "Cheques sugeridos" (solo si el medio preferido es eCheq/cheque).
+    ⚠️ Para Augusto: 12/10 es feriado, 31/10 sábado, 21/11 sábado (se debita 24/11), 20/12 domingo: revisar fechas en Configuración.
   1) Compras: filtro **"Abiertas"** por defecto (todas menos completas y canceladas; hoy 77 de 125). "Todas" y "Completas" siguen.
   2) Columnas Pago, Pedido y Factura con íconos (✓ verde, ½ azul, ✗ naranja/gris, tarjeta); el texto sale al pasar el mouse.
   3) Recibido (antes "Mercadería") solo con el punto de color (y "3/10" si es parcial); sin mail debajo del proveedor; "Copiar" solo ícono;
