@@ -39,6 +39,7 @@ import { BotonDejarRevisar } from "@/components/dejar-revisar";
 import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/payment-document-parser";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
+import { pctRetencion, reglaPorConcepto } from "@/lib/retencion-conceptos";
 import { roundPaymentMoney, sumPaymentMoney } from "@/lib/payment-money";
 import ResumenEconomico from "@/components/resumen-economico";
 import { netoCuentaCorriente, sumarPorMoneda } from "@/lib/resumen-economico";
@@ -1259,7 +1260,7 @@ export default function FinanzasPage() {
               minimo_iva: retCfg.minimo_iva ?? 130000,
               tasa_iva_ri: retCfg.tasa_iva_ri ?? 10.5,
               aplica_ganancias: retCfg.aplica_ganancias ?? true,
-              minimo_ganancias: retCfg.minimo_ganancias ?? 400000,
+              minimo_ganancias: retCfg.minimo_ganancias ?? 224000,
               tasa_ganancias_ri: retCfg.tasa_ganancias_ri ?? 2,
               tasa_ganancias_no_inscripto: retCfg.tasa_ganancias_no_inscripto ?? 28,
               minimo_retencion_ganancias: retCfg.minimo_retencion_ganancias ?? 240,
@@ -2004,10 +2005,12 @@ export default function FinanzasPage() {
     if (esResponsableInscripto && retencionConfig.aplica_ganancias) {
       // Art. 26: acumular bases sin IVA del mes + esta OP
       const acumuladoMensual = opMonthlyBase + opBaseSinIVA;
-      if (acumuladoMensual >= retencionConfig.minimo_ganancias) {
+      // Mínimo y alícuota según el concepto del proveedor (sin concepto = bienes)
+      const regla = reglaPorConcepto(prov?.concepto_retencion_ganancias, retencionConfig.minimo_ganancias);
+      const minimoConcepto = regla ? regla.minimo : retencionConfig.minimo_ganancias;
+      if (acumuladoMensual >= minimoConcepto) {
         aplica_ganancias = true;
-        // Usar alícuota específica del proveedor (RG 830 por actividad), fallback a tasa global
-        retencion_ganancias_pct = prov?.alicuota_ganancias ?? retencionConfig.tasa_ganancias_ri;
+        retencion_ganancias_pct = pctRetencion(regla, acumuladoMensual - minimoConcepto, prov?.alicuota_ganancias, retencionConfig.tasa_ganancias_ri);
       }
     }
     setOpForm(prev => ({ ...prev, aplica_ganancias, retencion_ganancias_pct }));
@@ -2099,9 +2102,13 @@ export default function FinanzasPage() {
   // 3. Aplicar alícuota
   // 4. Restar retenciones ya practicadas en el mes
   // 5. Verificar monto mínimo de retención (Art. 29)
+  const opMinimoGanancias = (() => {
+    const prov = proveedoresOptions.find(p => p.id === opForm.proveedor_id);
+    return reglaPorConcepto(prov?.concepto_retencion_ganancias, retencionConfig.minimo_ganancias)?.minimo ?? retencionConfig.minimo_ganancias;
+  })();
   const opBaseGanancias = (() => {
     if (!opForm.aplica_ganancias) return 0;
-    const minimo = retencionConfig.minimo_ganancias;
+    const minimo = opMinimoGanancias;
     if (opMonthlyBase >= minimo) return opBaseSinIVA; // ya superó antes → retener sobre toda la base sin IVA de esta OP
     return (opMonthlyBase + opBaseSinIVA) - minimo; // esta OP cruza → solo excedente
   })();
@@ -2109,7 +2116,7 @@ export default function FinanzasPage() {
   // Retención bruta sobre acumulado, menos retenciones ya practicadas (Art. 26)
   const opRetencionGananciaBruta = (() => {
     if (!opForm.aplica_ganancias || opBaseGanancias <= 0) return 0;
-    const minimo = retencionConfig.minimo_ganancias;
+    const minimo = opMinimoGanancias;
     // Calcular retención sobre el acumulado total del mes
     const baseAcumulada = Math.max(0, (opMonthlyBase + opBaseSinIVA) - minimo);
     const retencionAcumulada = baseAcumulada * (opForm.retencion_ganancias_pct / 100);
@@ -6129,7 +6136,7 @@ export default function FinanzasPage() {
                         <div className="flex justify-between"><span>Acumulado mes (base sin IVA):</span><span className="font-mono">{formatCurrency(opMonthlyBase, opForm.moneda)}</span></div>
                         <div className="flex justify-between"><span>+ Esta OP:</span><span className="font-mono">{formatCurrency(opBaseSinIVA, opForm.moneda)}</span></div>
                         <div className="flex justify-between font-semibold"><span>Total acumulado:</span><span className="font-mono">{formatCurrency(opMonthlyBase + opBaseSinIVA, opForm.moneda)}</span></div>
-                        <div className="flex justify-between"><span>Mínimo no imponible:</span><span className="font-mono">{formatCurrency(retencionConfig.minimo_ganancias, opForm.moneda)}</span></div>
+                        <div className="flex justify-between"><span>Mínimo no imponible:</span><span className="font-mono">{formatCurrency(opMinimoGanancias, opForm.moneda)}</span></div>
                         {opMonthlyRetenido > 0 && <div className="flex justify-between"><span>Ya retenido en el mes:</span><span className="font-mono">{formatCurrency(opMonthlyRetenido, opForm.moneda)}</span></div>}
                       </div>
                     )}

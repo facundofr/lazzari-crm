@@ -36,7 +36,7 @@ interface Props {
 interface ProvInfo {
   id: string; razon_social: string; cuit: string | null; condicion_iva: string | null;
   cbu: string | null; alias_bancario: string | null; banco: string | null; titular_cuenta: string | null; tipo_cuenta: string | null;
-  forma_pago: string | null; dias_cuenta_corriente: number | null; alicuota_ganancias: number | null;
+  forma_pago: string | null; dias_cuenta_corriente: number | null; alicuota_ganancias: number | null; concepto_retencion_ganancias?: string | null;
   exclusion_retencion: boolean | null; exclusion_retencion_desde: string | null; exclusion_retencion_hasta: string | null;
   // Cómo se le paga (lib/condicion-pago.ts)
   condicion_pago?: string | null; dias_pago?: number | null; dias_pago_hasta?: number | null;
@@ -111,7 +111,7 @@ export default function PlanPagos({ sociedadId, onClose, onPagosRegistrados }: P
       const { data: cfg } = await db.from("retencion_config").select("*").eq("sociedad_id", sociedadId).maybeSingle();
       if (cfg) setConfig({
         aplica_ganancias: cfg.aplica_ganancias ?? true,
-        minimo_ganancias: Number(cfg.minimo_ganancias ?? 400000),
+        minimo_ganancias: Number(cfg.minimo_ganancias ?? 224000),
         tasa_ganancias_ri: Number(cfg.tasa_ganancias_ri ?? 2),
         minimo_retencion_ganancias: Number(cfg.minimo_retencion_ganancias ?? 240),
       });
@@ -162,7 +162,7 @@ export default function PlanPagos({ sociedadId, onClose, onPagosRegistrados }: P
       for (let i = 0; i < provIds.length; i += 150) {
         const lote = provIds.slice(i, i + 150);
         let { data, error: e } = await db.from("proveedores")
-          .select("id, razon_social, cuit, condicion_iva, cbu, alias_bancario, banco, titular_cuenta, tipo_cuenta, forma_pago, dias_cuenta_corriente, alicuota_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, condicion_pago, dias_pago, dias_pago_hasta, medio_pago_preferido, plazo_cheque_dias, descuento_pronto_pago")
+          .select("id, razon_social, cuit, condicion_iva, cbu, alias_bancario, banco, titular_cuenta, tipo_cuenta, forma_pago, dias_cuenta_corriente, alicuota_ganancias, concepto_retencion_ganancias, exclusion_retencion, exclusion_retencion_desde, exclusion_retencion_hasta, condicion_pago, dias_pago, dias_pago_hasta, medio_pago_preferido, plazo_cheque_dias, descuento_pronto_pago")
           .in("id", lote);
         if (e) ({ data } = await db.from("proveedores").select("id, razon_social, cuit, condicion_iva, cbu, alias_bancario, forma_pago, dias_cuenta_corriente").in("id", lote));
         for (const p of data || []) mapa[p.id] = { banco: null, titular_cuenta: null, tipo_cuenta: null, alicuota_ganancias: null, exclusion_retencion: null, exclusion_retencion_desde: null, exclusion_retencion_hasta: null, ...p };

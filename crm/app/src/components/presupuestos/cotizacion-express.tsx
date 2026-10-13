@@ -25,7 +25,7 @@ interface Props {
   tc: number;
   tcDivisas: number;
   onAgregar: (items: CatalogoItemParaPR[]) => void;
-  onPedirTc?: () => void;
+  onPedirTc?: () => void | Promise<boolean>;
   proveedoresCRM?: Array<{ id: string; razon_social: string }>;
   sociedadId?: string;
 }
@@ -144,7 +144,14 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
   }
 
   const sinTc = useMemo(() => lineas.some(l => l.incluir && l.elegido !== null && convertirAMonedaPR(1, l.candidatos[l.elegido]?.moneda || prMoneda, prMoneda, tc, tcDivisas) === null), [lineas, prMoneda, tc, tcDivisas]);
-  useEffect(() => { if (sinTc && onPedirTc && !tcPedido.current) { tcPedido.current = true; onPedirTc(); } }, [sinTc, onPedirTc]);
+  const [tcFallo, setTcFallo] = useState(false);
+  const pedirTc = async () => {
+    if (!onPedirTc) return;
+    setTcFallo(false);
+    const ok = await onPedirTc();
+    if (ok === false) setTcFallo(true);
+  };
+  useEffect(() => { if (sinTc && onPedirTc && !tcPedido.current) { tcPedido.current = true; void pedirTc(); } }, [sinTc, onPedirTc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function reset() { setMensaje(""); setArchivo(null); setImagen(null); setLineas([]); setFase("entrada"); setProgreso(""); setError(""); setNotas(""); }
   function cerrar() { reset(); onClose(); }
@@ -336,7 +343,8 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
           <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-xs">
             <span className="text-zinc-500">{lineas.length} líneas:</span>
             {(["alta", "media", "baja", "manual", "ninguna"] as Confianza[]).filter(c => cuenta(c)).map(c => <span key={c} className={`rounded-full px-2 py-0.5 font-medium ${COLOR[c]}`}>{cuenta(c)} {ETIQUETA[c]}</span>)}
-            {sinTc && <span className="text-amber-600">Trayendo tipo de cambio BNA…</span>}
+            {sinTc && !tcFallo && <span className="text-amber-600">Trayendo tipo de cambio BNA…</span>}
+            {sinTc && tcFallo && <span className="text-red-600">No se pudo traer el BNA. Cargá el tipo de cambio en el presupuesto o <button onClick={() => { tcPedido.current = true; void pedirTc(); }} className="underline">reintentá</button>.</span>}
             {notas && <span className="text-zinc-500">· {notas}</span>}
           </div>
           <div className="min-h-0 flex-1 overflow-auto px-5">

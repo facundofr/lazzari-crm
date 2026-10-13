@@ -669,6 +669,16 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         - **MIGRACIÓN SIN CORRER:** `supabase/migrations/20261013150000_bcra_proveedores_y_uso_ia.sql` (+ vuelta atrás en `supabase/rollback/`). Crea `proveedor_bcra_informes` e `ia_uso`. Se corre con
           `node scripts/db/migrar.cjs supabase/migrations/20261013150000_bcra_proveedores_y_uso_ia.sql` (desde crm/app) con OK de Augusto. Hasta que se corra, "BCRA proveedores" y "Uso de IA" muestran vacío/aviso (no rompen nada).
         - tsc 0, hooks OK. Probado en local sin guardar: Informes (clientes con números reales, proveedores lista 408), Ventas sin la pestaña. **PUBLICADA 13/10 como V1.1.429 (commit d3a6c45), migración corrida y probada en producción (Uso de IA carga).
+      **Tanda V1.1.430 (13/10/2026) — PUBLICADA, sin migración. Salió junto con A5 (retenciones por concepto) y el SICORE de 198 caracteres (ver más abajo):**
+        - Estados del PR: el desplegable (lista, tarjeta y detalle) solo ofrece Solicitud, Pendiente, Aprobado y Rechazado (`ESTADOS_MANUALES` en `presupuestos/page.tsx`).
+          "Rechazado" abre la ventanita con "Rechazado" o "Postergado" + motivo (se guarda `postergado` como siempre: Dashboard, avisos y filtros sin cambios).
+          Facturado lo pone solo la emisión de la factura (también se sacó para super_admin, pedido de Augusto); Vencido lo pone el aviso diario; "Facturar" quedó del circuito anterior a Ventas.
+          Los PR viejos en Facturar/Vencido se siguen viendo con su estado. Probado en local sin guardar.
+        - Cotización express: si el BNA no contesta, reintenta con el último valor guardado; si tampoco hay, avisa en rojo con "reintentá" (antes quedaba colgado "Trayendo tipo de cambio BNA…").
+        - tsc 0 errores, hooks OK.
+      **Próximo (pedido de Augusto 13/10):** Cotización express con un primer paso (cliente, moneda, dólar divisas y billetes del BNA editables);
+        Pegaso es MARCA, la vende Mariana SA (verificar cómo figura en catalogo_costos y Proveedores). Hoy el PR trae un solo TC del BNA
+        y usa el mismo para proveedores en divisa y en billete: traer los dos.
       **PENDIENTES PARA MAÑANA (13/10, orden propuesto):**
         0. Tanda 1: Augusto da OK → correr migración, subir versión, publicar y probar en producción (Informes proveedores, Uso de IA, Ventas).
         1. Tanda 2 (c): PR express "margen 25 %" sobre el costo, aviso si algún renglón < 15 %.
@@ -757,6 +767,16 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
      4) Puesta al día: cruce del listado de eCheqs del BBVA (✅ coinciden / ➕ faltan / ✏️ estado distinto) y OP de clientes por mail.
 0b. **Tests viejos que fallan** (ver punto 2): actualizarlos a cómo quedó el código.
 1. **A5 Retención RG 830:** mínimo y escala por concepto (bienes, servicios, honorarios), unificar 224.000 vs 400.000 y no "congelar" en el Plan de pagos. Comparar con el archivo de Netegia que va a pasar Augusto y confirmar montos con el contador.
+   **Respuestas del contador (13/10/2026):** valores del Anexo VIII (RG 4525) vigentes: bienes cód. 78 = 2 % y mínimo $224.000; servicios cód. 94 = 2 % y mínimo $67.170;
+   transporte de carga cód. 95 = 0,25 % y $67.170; honorarios cód. 116 = escala y $67.170; no inscriptos: 10 % bienes, 25 %/28 % servicios, sin mínimo. Retención mínima $240 vigente.
+   No hay padrón de ARCA que consultar (la RG 830 no cambió; si cambia, ARCA lo publica). Cálculo sobre acumulado mensual menos lo ya retenido: correcto. **Conviene separar por concepto.**
+   Solo **Lazzari** retiene (Grupo LA no; `retencion_config` ya lo tiene en aplica=false). HECHO sin publicar: el valor de respaldo 400.000 pasó a 224.000 (plan-pagos.ts, plan-pagos.tsx, configuracion, finanzas).
+   **A5 HECHO en código (13/10), SIN PUBLICAR, sin subir versión:** `lib/retencion-conceptos.ts` (bienes 2 % / $224.000 de la config; servicios 2 % / $67.170; transporte y fletes 0,25 % / $67.170;
+   honorarios por escala / $67.170; sin concepto = bienes; otros conceptos siguen como antes). Usado en Plan de pagos (`lib/plan-pagos.ts`) y en la Orden de pago de Finanzas. No inscriptos no se retienen.
+   Prueba: `scripts/test-retencion-conceptos.ts`. tsc 0, hooks OK. Sin migración (el campo `concepto_retencion_ganancias` ya existía).
+   **Pendiente (lo corre Augusto en el SQL Editor):** poner concepto `transporte` a Conte, Illia, Speed Business, Transporte de Cargas Mayo, Transporte Hero y Cruz del Sur (12 filas, 2 sociedades).
+   **SICORE (13/10):** el aplicativo v9.0 r24 rechazaba el TXT ("las longitudes de los registros no son todas iguales"). El CRM generaba 165 caracteres; el diseño "Estándar Retenciones Versión 9.0" es de 198 (21 campos).
+   Corregido en `lib/sicore-linea.ts` + `api/sicore/route.ts` (prueba `scripts/test-sicore-linea.ts`); además códigos de régimen: transporte/fletes 095 (estaba 078), alquileres 030/031 (estaba 027). Falta que Augusto lo importe en SICORE para confirmar.
 2. **Diagnóstico sin tocar:** D1 (cron cotización BNA, revisar lo que quedó), D4 (saldo inicial de caja automático), D5 (cuentas bancarias), D6 (errores sin revisar en Plan de pagos y Finanzas), sección E.
 3. **Cheque vs echeq:** unificar en "Cheque" Físico / Electrónico en todas las pantallas y reglas claras para la IA. Falta un ejemplo de Augusto.
 4. **Importar cheques** desde 01/01/2026: `ideas/cheques_desde_2026.csv` (695 cheques; 5 con año "2925" a corregir; los 15 de Martín Fernández aparte).

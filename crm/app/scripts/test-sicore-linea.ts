@@ -1,0 +1,21 @@
+import { armarLineaSicore, LONGITUD_REGISTRO_SICORE, montoSicore, fechaSicore } from "../src/lib/sicore-linea";
+const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } };
+ok(montoSicore(1234.5, 16) === "0000000001234,50", "monto 16");
+ok(montoSicore(2000, 14) === "00000002000,00", "monto 14");
+ok(fechaSicore("2026-10-05") === "05/10/2026", "fecha");
+const l = armarLineaSicore({ fecha: "2026-10-05", numeroComprobante: "OP-0000123", importeComprobante: 1210000, conceptoRetencion: "transporte", baseCalculo: 100000, importeRetencion: 250, cuit: "30-71234567-8" });
+ok(l.length === LONGITUD_REGISTRO_SICORE && l.length === 198, "largo 198, dio " + l.length);
+const campo = (d: number, n: number) => l.slice(d - 1, d - 1 + n);
+ok(campo(1, 2) === "06" && campo(3, 10) === "05/10/2026", "comprobante y fecha");
+ok(campo(13, 16) === "0000000000000123", "nro comprobante");
+ok(campo(29, 16) === "0000001210000,00", "importe");
+ok(campo(45, 4) === "0217" && campo(49, 3) === "095" && campo(52, 1) === "1", "impuesto, régimen transporte, operación");
+ok(campo(53, 14) === "00000100000,00", "base");
+ok(campo(67, 10) === "05/10/2026" && campo(77, 2) === "01" && campo(79, 1) === "0", "fecha ret, condición, suspendidos");
+ok(campo(80, 14) === "00000000250,00", "retención");
+ok(campo(94, 6) === "000,00" && campo(100, 10) === "05/10/2026" && campo(110, 2) === "80", "exclusión, boletín, tipo doc");
+ok(campo(112, 20) === "30712345678         ", "cuit");
+ok(campo(132, 14) === "00000000000000" && campo(146, 30).trim() === "" && campo(176, 1) === "0" && campo(177, 11).trim() === "" && campo(188, 11).trim() === "", "cola");
+// largo fijo aunque el nombre/número sean raros
+ok(armarLineaSicore({ fecha: "2026-01-31", numeroComprobante: "", importeComprobante: 0, baseCalculo: 0, importeRetencion: 0.5, cuit: "20123456789", conceptoRetencion: "inexistente" }).length === 198, "largo con datos vacíos");
+console.log("OK sicore-linea");

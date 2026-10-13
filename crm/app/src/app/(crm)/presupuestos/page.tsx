@@ -285,6 +285,10 @@ const statusConfig: Record<PRStatus, { label: string; variant: "success" | "warn
   facturado: { label: "Facturado", variant: "purple" as const, icon: Receipt },
 };
 
+// Estados que se eligen a mano. Postergado se elige dentro de "Rechazado"; facturado y vencido se ponen solos
+// (al emitir la factura y con el aviso diario); "facturar" quedó del circuito anterior a Ventas.
+const ESTADOS_MANUALES: PRStatus[] = ["solicitud", "pendiente", "aprobado", "rechazado"];
+
 interface NewPRItem {
   codigo: string;
   descripcion: string;
@@ -486,6 +490,7 @@ export default function PresupuestosPage() {
   // Rechazo modal
   const [rechazoModal, setRechazoModal] = useState<string | null>(null);
   const [motivoRechazo, setMotivoRechazo] = useState("");
+  const [rechazoTipo, setRechazoTipo] = useState<"rechazado" | "postergado">("rechazado");
 
   // Costos faltantes modal (al aprobar)
   const [costosFaltantesModal, setCostosFaltantesModal] = useState<{ id: string; count: number; motivo?: string } | null>(null);
@@ -536,12 +541,17 @@ export default function PresupuestosPage() {
     modalidad: "divisas" | "billetes" = "divisas",
     fecha?: string,
     options: { preserveItemPrices?: boolean } = {},
-  ) {
+  ): Promise<boolean> {
     setCotizBnaLoading(true);
     try {
       const params = new URLSearchParams({ modalidad, force: "1" });
       if (fecha) params.set("fecha", fecha);
-      const res = await fetch(`/api/cotizacion-bna?${params}`);
+      let res = await fetch(`/api/cotizacion-bna?${params}`);
+      if (!res.ok) {
+        // Si el BNA no contesta, reintenta sin forzar (usa el último valor guardado).
+        params.delete("force");
+        res = await fetch(`/api/cotizacion-bna?${params}`);
+      }
       if (res.ok) {
         const data = await res.json();
         setCotizBna({ valor_venta: data.valor_venta, fecha: data.fecha, fuente: data.fuente, modalidad });
@@ -566,8 +576,10 @@ export default function PresupuestosPage() {
             return { ...p, tipo_cambio: data.valor_venta, cotizacion_modalidad: modalidad, items };
           });
         }
+        return true;
       }
-    } catch { /* silencioso */ } finally {
+      return false;
+    } catch { return false; } finally {
       setCotizBnaLoading(false);
     }
   }
@@ -2284,9 +2296,10 @@ export default function PresupuestosPage() {
 
   function handleRechazoConfirm() {
     if (rechazoModal && motivoRechazo.trim()) {
-      handleEstadoChange(rechazoModal, "rechazado", motivoRechazo.trim());
+      handleEstadoChange(rechazoModal, rechazoTipo, motivoRechazo.trim());
       setRechazoModal(null);
       setMotivoRechazo("");
+      setRechazoTipo("rechazado");
     }
   }
 
@@ -2691,8 +2704,8 @@ export default function PresupuestosPage() {
                               className="h-7 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-600 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                             >
                               <option value="">Cambiar estado...</option>
-                              {([...["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"], ...(profile?.role === "super_admin" ? ["facturado"] : [])] as PRStatus[])
-                                .filter((s) => s !== pr.estado)
+                              {ESTADOS_MANUALES
+                                .filter((s) => s !== pr.estado || s === "rechazado")
                                 .map((s) => {
                                   const cfg = statusConfig[s] || { label: s };
                                   return <option key={s} value={s}>{cfg.label}</option>;
@@ -2903,8 +2916,8 @@ export default function PresupuestosPage() {
                           title="Cambiar estado"
                         >
                           <option value="">Cambiar...</option>
-                          {([...["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"], ...(profile?.role === "super_admin" ? ["facturado"] : [])] as PRStatus[])
-                            .filter((s) => s !== row.estado)
+                          {ESTADOS_MANUALES
+                            .filter((s) => s !== row.estado || s === "rechazado")
                             .map((s) => {
                               const cfg = statusConfig[s] || { label: s };
                               return <option key={s} value={s}>{cfg.label}</option>;
@@ -3404,8 +3417,8 @@ export default function PresupuestosPage() {
                   className="h-9 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                 >
                   <option value="">Seleccionar...</option>
-                  {([...["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido"], ...(profile?.role === "super_admin" ? ["facturado"] : [])] as PRStatus[])
-                    .filter((s) => s !== selected.estado)
+                  {ESTADOS_MANUALES
+                    .filter((s) => s !== selected.estado || s === "rechazado")
                     .map((s) => {
                       const cfg = statusConfig[s] || { label: s };
                       return <option key={s} value={s}>{cfg.label}</option>;
@@ -3818,7 +3831,7 @@ export default function PresupuestosPage() {
             sociedadId={sociedadActiva?.id}
             onPedirTc={() => {
               const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
-              fetchCotizBna(cli?.moneda_predeterminada === "USD" ? "billetes" : "divisas");
+              return fetchCotizBna(cli?.moneda_predeterminada === "USD" ? "billetes" : "divisas");
             }}
             onAgregar={(nuevos) => setNewPR((p) => ({
               ...p,
@@ -3836,7 +3849,7 @@ export default function PresupuestosPage() {
             sociedadId={sociedadActiva?.id}
             onPedirTc={() => {
               const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
-              fetchCotizBna(cli?.moneda_predeterminada === "USD" ? "billetes" : "divisas");
+              return fetchCotizBna(cli?.moneda_predeterminada === "USD" ? "billetes" : "divisas");
             }}
             onAgregar={(nuevos) => setNewPR((p) => {
               // Abierta desde la lupa de una fila: lo elegido reemplaza esa fila (y el resto se inserta debajo).
@@ -4317,14 +4330,14 @@ export default function PresupuestosPage() {
       {/* ==================== RECHAZO MODAL ==================== */}
       <Modal
         open={!!rechazoModal}
-        onClose={() => setRechazoModal(null)}
-        title="Motivo de rechazo"
-        description="Ingresa el motivo por el cual se rechaza este presupuesto"
+        onClose={() => { setRechazoModal(null); setRechazoTipo("rechazado"); }}
+        title="Rechazar presupuesto"
+        description="Elegí si se rechaza o se posterga, y anotá el motivo"
         size="sm"
         footer={
           <>
             <button
-              onClick={() => setRechazoModal(null)}
+              onClick={() => { setRechazoModal(null); setRechazoTipo("rechazado"); }}
               className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
             >
               Cancelar
@@ -4332,17 +4345,26 @@ export default function PresupuestosPage() {
             <button
               onClick={handleRechazoConfirm}
               disabled={!motivoRechazo.trim()}
-              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+              className={`rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50 transition-colors ${rechazoTipo === "postergado" ? "bg-purple-600 hover:bg-purple-700" : "bg-red-600 hover:bg-red-700"}`}
             >
-              Confirmar rechazo
+              {rechazoTipo === "postergado" ? "Confirmar postergado" : "Confirmar rechazo"}
             </button>
           </>
         }
       >
+        <div className="mb-3 grid grid-cols-2 gap-2">
+          {([["rechazado", "Rechazado", "No lo compra"], ["postergado", "Postergado", "Lo deja para más adelante"]] as const).map(([v, titulo, ayuda]) => (
+            <button key={v} type="button" onClick={() => setRechazoTipo(v)}
+              className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${rechazoTipo === v ? (v === "rechazado" ? "border-red-500 bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-300" : "border-purple-500 bg-purple-50 text-purple-700 dark:bg-purple-950/30 dark:text-purple-300") : "border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>
+              <span className="block font-semibold">{titulo}</span>
+              <span className="block text-xs opacity-75">{ayuda}</span>
+            </button>
+          ))}
+        </div>
         <Textarea
           value={motivoRechazo}
           onChange={(e) => setMotivoRechazo(e.target.value)}
-          placeholder="Ingresa el motivo del rechazo..."
+          placeholder={rechazoTipo === "postergado" ? "¿Por qué lo posterga? (ej: vuelve a pedir en marzo)" : "Ingresa el motivo del rechazo..."}
           rows={4}
           autoFocus
         />
