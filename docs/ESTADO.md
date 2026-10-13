@@ -628,7 +628,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         Ojo: en la captura de Augusto la OC-2026-1222 (09/10) es **OC a proveedor**, no del cliente; la regla usa la OC del cliente. Confirmar con él.
       - **Ventana compacta:** ARCA/Manual en el título, una fila Tipo/Cliente/PV/N°, OC en una línea, Moneda/Cotización/Fecha/Condición/Vencimiento en una fila, ítems finos,
         totales y botones fijos abajo. Probado en local sin guardar (PR-2026-1204): entra sin scroll en 1366x768, celular sin scroll horizontal.
-      - Pruebas de texto actualizadas: fiscal-date-calendar, invoice-exchange-rate, invoice-oc-preview, fce-route. tsc 0, hooks OK.
+      - Pruebas de texto actualizadas: fiscal-date-calendar, invoice-exchange-rate, invoice-oc-preview, fce-route. tsc 0, hooks OK. **PUBLICADA 13/10 (commit ced3c48)**; probada en producción sin emitir (PR-2026-1204: ARCA, USD divisa $1.517 del 09/10, sugerencia 09/10).
 
 0. **PRÓXIMO: análisis a fondo de Finanzas** (lo más importante del CRM, pedido por Augusto 11/10/2026):
    - Cobros con eCheq guardados con **fecha futura** y ya "Conciliado": DEL SOL CONSTRUCTORA (20/11/2026, cobro $3.677.887,22 + ret. Ganancias $61.813,23)
