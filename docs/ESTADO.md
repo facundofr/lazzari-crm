@@ -668,7 +668,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         - IA-6) HECHO (código): `lib/ia-uso.ts` anota cada llamada a la IA (10 funciones en `api/*`); Configuración > "Uso de IA" (solo admin) muestra llamadas, tokens y costo estimado por mes.
         - **MIGRACIÓN SIN CORRER:** `supabase/migrations/20261013150000_bcra_proveedores_y_uso_ia.sql` (+ vuelta atrás en `supabase/rollback/`). Crea `proveedor_bcra_informes` e `ia_uso`. Se corre con
           `node scripts/db/migrar.cjs supabase/migrations/20261013150000_bcra_proveedores_y_uso_ia.sql` (desde crm/app) con OK de Augusto. Hasta que se corra, "BCRA proveedores" y "Uso de IA" muestran vacío/aviso (no rompen nada).
-        - tsc 0, hooks OK. Probado en local sin guardar: Informes (clientes con números reales, proveedores lista 408), Ventas sin la pestaña. **SIN PUBLICAR, versión sin subir** (al publicar: subir `app-version.ts`, correr migración antes).
+        - tsc 0, hooks OK. Probado en local sin guardar: Informes (clientes con números reales, proveedores lista 408), Ventas sin la pestaña. **PUBLICADA 13/10 como V1.1.429 (commit d3a6c45), migración corrida y probada en producción (Uso de IA carga).
       **PENDIENTES PARA MAÑANA (13/10, orden propuesto):**
         0. Tanda 1: Augusto da OK → correr migración, subir versión, publicar y probar en producción (Informes proveedores, Uso de IA, Ventas).
         1. Tanda 2 (c): PR express "margen 25 %" sobre el costo, aviso si algún renglón < 15 %.
@@ -682,6 +682,9 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         5b. NUEVO — Motivación del equipo (idea base de Augusto, NO definir todavía): a) al aprobar un presupuesto sale un cartel felicitando a los chicos; b) una ventana del CRM siempre visible con
            frases motivadoras de vendedores que cambian día a día; c) todos ven el monto NETO de venta facturado, unificado en $ ARG (USD convertido), contra el objetivo de $120.000.000 netos, con una barra que se va cargando.
            A definir con Augusto: período de la barra (¿mensual?), de qué sociedad suma (¿Lazzari + Grupo LA o la activa?), cómo convertir USD (cotización de cada factura), quién ve qué, y si el cartel es solo para el vendedor o para todos.
+        5c. NUEVO — Ventas: **botón de facturar masivo, inteligente** (hoy no hay): que calcule la mejor manera de facturar varias ventas juntas respetando las reglas ya definidas
+           (tipo de dólar del cliente, no facturar antes de la OC del cliente, fecha más vieja permitida por ARCA, clientes que piden OC, etc.). Se desarrolla con Augusto; solo sugiere, nada se emite solo.
+        5d. NUEVO — **Ranking por compradores y por empresas** (para preparar los regalos de fin de año): quién y qué empresa compró más, en pesos netos unificados. A definir: período (año en curso), cómo agrupar comprador/empresa.
         6. Aviso BCRA en ficha de proveedor/OC; Finanzas: análisis a fondo (punto 0 de abajo, cobros con fecha futura, etc.).
       Aviso de modelos (Augusto lo pidió): Opus para diseñar j y el armado de presupuestos; Sonnet para programar; Haiku para cambios chicos.
 
