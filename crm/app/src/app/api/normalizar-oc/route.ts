@@ -1,3 +1,4 @@
+import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 
@@ -48,6 +49,7 @@ export async function POST(request: NextRequest) {
       for (const model of MODELOS) {
         try {
           const res = await client.messages.create({ model, max_tokens: 8000, system: SISTEMA, messages: [{ role: "user", content: texto }] });
+          await registrarUsoIA("normalizar_oc", model, res.usage);
           const raw = res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
           const out = parseJson(raw);
           if (Array.isArray(out.elecciones)) return out.elecciones;

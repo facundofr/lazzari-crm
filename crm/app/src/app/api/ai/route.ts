@@ -1,3 +1,4 @@
+import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
@@ -243,6 +244,8 @@ export async function POST(request: NextRequest) {
         tools: TOOLS,
         messages: currentMessages,
       });
+
+      await registrarUsoIA("chat_ia", "claude-haiku-4-5-20251001", response.usage);
 
       // Check if there are tool uses
       const toolUses = response.content.filter((b) => b.type === "tool_use");

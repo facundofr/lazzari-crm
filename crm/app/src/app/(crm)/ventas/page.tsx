@@ -21,7 +21,6 @@ import { esNotaCredito } from "@/lib/ventas-documentos";
 import { abrirFacturaPDF } from "@/lib/factura-pdf";
 import { useArcaStatus } from "@/lib/use-arca-status";
 import { EmitirFacturaModal, type PresupuestoAFacturar } from "@/components/facturacion/emitir-factura-modal";
-import { FichasRelevamiento } from "@/components/ventas/fichas-relevamiento";
 import Link from "next/link";
 import {
   FileText, Receipt, Truck, CheckCircle2, Loader2, X, DollarSign, Eye, AlertCircle, AlertTriangle,
@@ -135,7 +134,6 @@ export default function VentasPage() {
   const arcaStatus = useArcaStatus(sociedadActiva?.id);
   const hoy = todayAR();
 
-  const [ventasTab, setVentasTab] = useState<"pipeline" | "fichas">("pipeline");
   const [ventas, setVentas] = useState<Venta[]>([]);
   const ventasRequest = useRef(0);
   const [loading, setLoading] = useState(true);
@@ -379,19 +377,7 @@ export default function VentasPage() {
       <Header title="Ventas" subtitle={`${pendientesTotal} ventas en proceso`} />
       <div className="p-3 sm:p-5 space-y-4">
 
-        {/* Tab toggle */}
-        <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-fit">
-          {([["pipeline", "Seguimiento", Package], ["fichas", "Fichas de relevamiento", ClipboardList]] as const).map(([key, label, Icon]) => (
-            <button key={key} onClick={() => setVentasTab(key)}
-              className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${ventasTab === key ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400"}`}>
-              <span className="flex items-center gap-2"><Icon className="h-4 w-4" /> {label}</span>
-            </button>
-          ))}
-        </div>
-
-        {ventasTab === "fichas" ? (
-          <FichasRelevamiento />
-        ) : (
+        {/* "Fichas de relevamiento" oculto (13/10/2026): el componente y la tabla siguen, no se borró nada. */}
         <>
         {/* Bandejas: qué falta, con cantidad y plata */}
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
@@ -542,7 +528,6 @@ export default function VentasPage() {
           )}
         </div>
         </>
-        )}
       </div>
 
       {emitVenta && (

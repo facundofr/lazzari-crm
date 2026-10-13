@@ -1,3 +1,4 @@
+import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { heuristicEquivalences, productGroups, type InvoiceLineInput, type OcLineInput } from "@/lib/purchase-matching";
@@ -32,6 +33,7 @@ export async function POST(request: NextRequest) {
           model, max_tokens: 4000, system: SISTEMA_CONCILIACION,
           messages: [{ role: "user", content: promptConciliacion(proveedor, grupos.factura, grupos.oc) }],
         });
+        await registrarUsoIA("conciliar_compra", model, res.usage);
         const texto = res.content.map(b => (b.type === "text" ? b.text : "")).join("");
         const ia = leerRespuestaConciliacion(texto, grupos.factura, grupos.oc);
         // Lo que la IA no resolvió se completa con la similitud de palabras, marcado como confianza baja.

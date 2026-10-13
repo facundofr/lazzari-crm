@@ -651,6 +651,39 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         Propuestas de más IA: cobros sugeridos desde el extracto, leer OC de clientes que llegan por mail, tanda de facturas de compra conciliadas solas,
         avisos con mensaje listo, chat del CRM; contador de uso de IA del mes en Configuración.
       Regla de Augusto: siempre optimizar espacios, optimizar procesos y ofrecer mejoras.
+      **Respuestas de Augusto (13/10/2026), todavía sin hacer nada:** OK a, g, h, i, IA-1 (cobros desde extracto), IA-3 (facturas de compra conciliadas), IA-6 (contador).
+        Desarrollar: b, d, e, f, j. c: escribir "margen 25 %" y que cotice todo con ese margen. IA-2 (OC por mail) por ahora no.
+        IA-4: le expliqué (aviso + mensaje listo para copiar, nunca se manda solo). IA-5: el botón de chat IA actual responde mal; falta definir si es chat IA o interno.
+        j: Augusto propone que el CRM absorba el Excel de reglas y las listas de proveedores y se actualicen en el CRM (deja de usarse catalogo_crm.csv,
+        cambia la regla 7: falta su OK final y la ruta del Excel); después conectar la web al CRM para precios.
+        **Segunda tanda de respuestas (13/10):** c = margen sobre el COSTO (costo 100 + 25 % = 125). j = OK para cambiar la regla 7 (por etapas: el CSV
+        manda hasta que el CRM esté probado; recién ahí se cambia CLAUDE.md). IA-5 = chat con IA (que conteste con datos reales del CRM, solo lectura).
+        Orden propuesto: tanda 1 = a + g + h + IA-6; tanda 2 = c; después IA-1, IA-3, i, IA-5 y lo de desarrollar (b, d, e, f, j).
+      **Tanda 1 (13/10), avance, SIN PUBLICAR y sin subir versión todavía:**
+        - a) HECHO: Ventas ya no muestra "Fichas de relevamiento" (solo se ocultó; el componente y la tabla `fichas_relevamiento` siguen; la pestaña Relevamiento de la ficha del cliente sigue).
+        - g) HECHO: el riesgo BCRA ahora está en Finanzas > Hoy > "Riesgo BCRA" (`components/finanzas/riesgo-bcra.tsx`). Oportunidades conserva el aviso por cliente y un link a Finanzas.
+        - Pedido de Augusto: en Finanzas > Hoy hay una solapa **Informes** con 3 informes: BCRA clientes, BCRA proveedores y Facturas apócrifas (esta última solo placeholder; falta confirmar fuentes ARCA, punto i).
+        - h) HECHO (código): BCRA de proveedores (`proveedor_bcra_informes`), `/api/bcra` acepta `proveedor_id`, el cron mensual también recorre proveedores, alerta en la campanita si empeora. Solo aviso.
+          Pendiente chico: aviso BCRA en la ficha del proveedor y en la OC (hoy solo está en Finanzas > Informes).
+        - IA-6) HECHO (código): `lib/ia-uso.ts` anota cada llamada a la IA (10 funciones en `api/*`); Configuración > "Uso de IA" (solo admin) muestra llamadas, tokens y costo estimado por mes.
+        - **MIGRACIÓN SIN CORRER:** `supabase/migrations/20261013150000_bcra_proveedores_y_uso_ia.sql` (+ vuelta atrás en `supabase/rollback/`). Crea `proveedor_bcra_informes` e `ia_uso`. Se corre con
+          `node scripts/db/migrar.cjs supabase/migrations/20261013150000_bcra_proveedores_y_uso_ia.sql` (desde crm/app) con OK de Augusto. Hasta que se corra, "BCRA proveedores" y "Uso de IA" muestran vacío/aviso (no rompen nada).
+        - tsc 0, hooks OK. Probado en local sin guardar: Informes (clientes con números reales, proveedores lista 408), Ventas sin la pestaña. **SIN PUBLICAR, versión sin subir** (al publicar: subir `app-version.ts`, correr migración antes).
+      **PENDIENTES PARA MAÑANA (13/10, orden propuesto):**
+        0. Tanda 1: Augusto da OK → correr migración, subir versión, publicar y probar en producción (Informes proveedores, Uso de IA, Ventas).
+        1. Tanda 2 (c): PR express "margen 25 %" sobre el costo, aviso si algún renglón < 15 %.
+        2. j) Lista de costos dentro del CRM (Opus para diseñar la etapa 1). Augusto busca el "archivo madre" (¿catalogo_crm.csv u otro Excel de reglas?, falta ruta; fotos: ¿de dónde salen?).
+           Etapas: 1) cargar el CSV a tablas y mostrarlo en Proveedores > Lista de costo (el CSV sigue mandando), 2) Buscar/Comparar, 3) Reglas y subir listas con IA y aprobación, 4) recién ahí cambiar la regla 7.
+        3. IA-1 cobros sugeridos desde el extracto; IA-3 facturas de compra conciliadas solas; i) CUIT apócrifos (confirmar fuentes ARCA); IA-5 chat con IA con datos reales (solo lectura).
+        4. Desarrollar con Augusto: b (personalización en el presupuesto), d (oportunidades), e (preguntas por cliente), f (propuestas entre todos).
+        5. NUEVO — Armado de presupuestos (idea base, NO definir todavía, se desarrolla con Augusto): pantalla que deja escribir y va sugiriendo productos. Prioridad: comprar barato, pero también
+           ahorrar tiempo y plata de flete cuando son pocas cantidades: con poca mercadería, centralizar en la menor cantidad de proveedores; si un proveedor solo vende bulto cerrado y se necesitan pocas unidades,
+           puede convenir otro con poca diferencia de precio que además cubra otro artículo del mismo PR. Ejemplo: Prisina sale más caro pero está en Pergamino (a 500 m), da cuenta corriente: para 10 pantalones conviene.
+        5b. NUEVO — Motivación del equipo (idea base de Augusto, NO definir todavía): a) al aprobar un presupuesto sale un cartel felicitando a los chicos; b) una ventana del CRM siempre visible con
+           frases motivadoras de vendedores que cambian día a día; c) todos ven el monto NETO de venta facturado, unificado en $ ARG (USD convertido), contra el objetivo de $120.000.000 netos, con una barra que se va cargando.
+           A definir con Augusto: período de la barra (¿mensual?), de qué sociedad suma (¿Lazzari + Grupo LA o la activa?), cómo convertir USD (cotización de cada factura), quién ve qué, y si el cartel es solo para el vendedor o para todos.
+        6. Aviso BCRA en ficha de proveedor/OC; Finanzas: análisis a fondo (punto 0 de abajo, cobros con fecha futura, etc.).
+      Aviso de modelos (Augusto lo pidió): Opus para diseñar j y el armado de presupuestos; Sonnet para programar; Haiku para cambios chicos.
 
 0. **PRÓXIMO: análisis a fondo de Finanzas** (lo más importante del CRM, pedido por Augusto 11/10/2026):
    - Cobros con eCheq guardados con **fecha futura** y ya "Conciliado": DEL SOL CONSTRUCTORA (20/11/2026, cobro $3.677.887,22 + ret. Ganancias $61.813,23)

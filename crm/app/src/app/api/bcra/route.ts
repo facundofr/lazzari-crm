@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServer } from "@/lib/supabase/server";
 import { cuitLimpio } from "@/lib/bcra";
-import { actualizarInformeCliente } from "@/lib/bcra-server";
+import { actualizarInformeCliente, actualizarInformeProveedor } from "@/lib/bcra-server";
 
 /**
  * POST /api/bcra  { sociedad_id, cliente_id }
@@ -17,10 +17,26 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const clienteId = String(body?.cliente_id || "");
+  const proveedorId = String(body?.proveedor_id || "");
   const sociedadId = String(body?.sociedad_id || "");
-  if (!clienteId || !sociedadId) return NextResponse.json({ error: "Faltan datos" }, { status: 400 });
+  if ((!clienteId && !proveedorId) || !sociedadId) return NextResponse.json({ error: "Faltan datos" }, { status: 400 });
 
   const db = supabase as any;
+
+  // Proveedor: mismo informe, guardado en proveedor_bcra_informes. Solo avisa.
+  if (proveedorId) {
+    const { data: prov, error: errProv } = await db.from("proveedores").select("id, cuit, razon_social, sociedad_id").eq("id", proveedorId).eq("sociedad_id", sociedadId).maybeSingle();
+    if (errProv || !prov) return NextResponse.json({ error: "Proveedor no encontrado" }, { status: 404 });
+    const cuitProv = cuitLimpio(prov.cuit);
+    if (!cuitProv) return NextResponse.json({ error: "El proveedor no tiene un CUIT válido de 11 números" }, { status: 400 });
+    try {
+      const r = await actualizarInformeProveedor(db, { sociedad_id: sociedadId, proveedor_id: proveedorId, cuit: cuitProv, razon_social: prov.razon_social });
+      return NextResponse.json(r);
+    } catch (e: any) {
+      return NextResponse.json({ error: e?.message || "No se pudo guardar el informe" }, { status: 500 });
+    }
+  }
+
   const { data: cliente, error } = await db.from("clientes").select("id, cuit, razon_social, sociedad_id").eq("id", clienteId).eq("sociedad_id", sociedadId).maybeSingle();
   if (error || !cliente) return NextResponse.json({ error: "Cliente no encontrado" }, { status: 404 });
   const cuit = cuitLimpio(cliente.cuit);

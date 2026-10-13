@@ -1,3 +1,4 @@
+import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 
@@ -103,6 +104,7 @@ export async function POST(request: NextRequest) {
     });
 
     const response = await stream.finalMessage();
+    await registrarUsoIA("oc_cliente", response.model, response.usage);
     const textBlock = response.content.find((block) => block.type === "text");
     const rawText = textBlock && textBlock.type === "text" ? textBlock.text : "";
 

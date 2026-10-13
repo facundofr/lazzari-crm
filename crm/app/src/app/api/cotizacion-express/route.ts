@@ -1,3 +1,4 @@
+import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 
@@ -20,6 +21,7 @@ function parseJson(raw: string) {
 
 async function ask(client: Anthropic, system: string, content: Anthropic.MessageParam["content"]) {
   const res = await client.messages.stream({ model: MODEL, max_tokens: 16000, system, messages: [{ role: "user", content }] }).finalMessage();
+  await registrarUsoIA("cotizacion_express", MODEL, res.usage);
   const t = res.content.find(b => b.type === "text");
   return parseJson(t && t.type === "text" ? t.text : "{}");
 }

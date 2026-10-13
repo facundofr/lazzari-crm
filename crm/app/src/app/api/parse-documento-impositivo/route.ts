@@ -1,3 +1,4 @@
+import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { normalizarDatosImpositivos } from "@/lib/documento-impositivo";
@@ -80,6 +81,7 @@ export async function POST(request: NextRequest) {
           system: EXTRACTION_PROMPT,
           messages: [{ role: "user", content: contentBlocks }],
         });
+        await registrarUsoIA("documento_impositivo", model, response.usage);
 
         const rawText = response.content.map((b) => (b.type === "text" ? b.text : "")).join("");
         let jsonText = rawText.trim();

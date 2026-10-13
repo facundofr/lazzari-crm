@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { cuitLimpio, mesActual } from "@/lib/bcra";
-import { actualizarInformeCliente } from "@/lib/bcra-server";
+import { actualizarInformeCliente, actualizarInformeProveedor } from "@/lib/bcra-server";
 import { traerTodo } from "@/lib/paginar";
 
 /**
@@ -37,9 +37,21 @@ export async function GET(req: NextRequest) {
   }
   const listos = new Set((hechos || []).filter((h: any) => h.semaforo !== "gris").map((h: any) => h.cliente_id));
 
-  const pendientes = (clientes || [])
-    .map((c: any) => ({ ...c, cuit: cuitLimpio(c.cuit) }))
-    .filter((c: any) => c.cuit && c.sociedad_id && !listos.has(c.id));
+  // Proveedores activos con CUIT (si la tabla todavía no existe, se saltea y sigue con clientes).
+  let proveedores: any[] = [];
+  let listosProv = new Set<string>();
+  try {
+    proveedores = await traerTodo(() => db.from("proveedores").select("id, cuit, razon_social, sociedad_id").eq("activo", true).order("id"));
+    const hechosProv = await traerTodo<any>(() => db.from("proveedor_bcra_informes").select("proveedor_id, semaforo").eq("mes", mes).order("proveedor_id"));
+    listosProv = new Set((hechosProv || []).filter((h: any) => h.semaforo !== "gris").map((h: any) => h.proveedor_id));
+  } catch {
+    proveedores = [];
+  }
+
+  const pendientes = [
+    ...(clientes || []).map((c: any) => ({ ...c, cuit: cuitLimpio(c.cuit), tipo: "cliente" as const })).filter((c: any) => c.cuit && c.sociedad_id && !listos.has(c.id)),
+    ...proveedores.map((c: any) => ({ ...c, cuit: cuitLimpio(c.cuit), tipo: "proveedor" as const })).filter((c: any) => c.cuit && c.sociedad_id && !listosProv.has(c.id)),
+  ];
 
   const stats = { mes, pendientes: pendientes.length, consultados: 0, empeoraron: 0, errores: 0 };
   let i = 0;
@@ -47,7 +59,9 @@ export async function GET(req: NextRequest) {
     while (i < pendientes.length && Date.now() - inicio < PRESUPUESTO_MS) {
       const c = pendientes[i++];
       try {
-        const r = await actualizarInformeCliente(db, { sociedad_id: c.sociedad_id, cliente_id: c.id, cuit: c.cuit, razon_social: c.razon_social });
+        const r = c.tipo === "proveedor"
+          ? await actualizarInformeProveedor(db, { sociedad_id: c.sociedad_id, proveedor_id: c.id, cuit: c.cuit, razon_social: c.razon_social })
+          : await actualizarInformeCliente(db, { sociedad_id: c.sociedad_id, cliente_id: c.id, cuit: c.cuit, razon_social: c.razon_social });
         stats.consultados++;
         if (r.semaforo === "gris") stats.errores++;
         if (r.empeoro) stats.empeoraron++;

@@ -75,30 +75,52 @@ export async function actualizarInformeCliente(
   db: any,
   c: { sociedad_id: string; cliente_id: string; cuit: string; razon_social?: string | null },
 ): Promise<ResumenBCRA & { empeoro: string | null }> {
+  return actualizarInforme(db, "cliente", c.cliente_id, c);
+}
+
+/** Igual que el de clientes, para proveedores (tabla proveedor_bcra_informes). Solo avisa. */
+export async function actualizarInformeProveedor(
+  db: any,
+  c: { sociedad_id: string; proveedor_id: string; cuit: string; razon_social?: string | null },
+): Promise<ResumenBCRA & { empeoro: string | null }> {
+  return actualizarInforme(db, "proveedor", c.proveedor_id, c);
+}
+
+async function actualizarInforme(
+  db: any,
+  tipo: "cliente" | "proveedor",
+  entidadId: string,
+  c: { sociedad_id: string; cuit: string; razon_social?: string | null },
+): Promise<ResumenBCRA & { empeoro: string | null }> {
+  const tabla = `${tipo}_bcra_informes`;
+  const col = `${tipo}_id`;
   const r = await consultarBCRA(c.cuit);
   const mes = mesActual();
-  const { data: previos } = await db.from("cliente_bcra_informes")
+  const { data: previos } = await db.from(tabla)
     .select("mes, semaforo, peor_situacion, cheques_sin_pagar")
-    .eq("cliente_id", c.cliente_id).neq("semaforo", "gris").neq("mes", mes)
+    .eq(col, entidadId).neq("semaforo", "gris").neq("mes", mes)
     .order("mes", { ascending: false }).limit(1);
   const motivo = empeoro(previos?.[0] || null, r);
 
   // Si la consulta falló y ya había un informe bueno este mes, no lo pisa con el error.
   if (r.semaforo === "gris") {
-    const { data: actual } = await db.from("cliente_bcra_informes").select("id, semaforo").eq("cliente_id", c.cliente_id).eq("mes", mes).maybeSingle();
+    const { data: actual } = await db.from(tabla).select("id, semaforo").eq(col, entidadId).eq("mes", mes).maybeSingle();
     if (actual && actual.semaforo !== "gris") return { ...r, empeoro: null };
   }
-  const { error } = await db.from("cliente_bcra_informes").upsert(filaInforme(r, c.sociedad_id, c.cliente_id, mes), { onConflict: "cliente_id,mes" });
+  const { cliente_id: _omitido, ...fila } = filaInforme(r, c.sociedad_id, entidadId, mes);
+  const { error } = await db.from(tabla).upsert({ ...fila, [col]: entidadId }, { onConflict: `${col},mes` });
   if (error) throw new Error(error.message);
 
   if (motivo) {
     await db.from("alertas").insert({
       tipo: "seguimiento",
       title: `BCRA: ${c.razon_social || r.denominacion || c.cuit}`,
-      description: `En la Central de Deudores ${motivo}. Revisá la ficha del cliente antes de darle más cuenta corriente.`,
-      module: "clientes",
-      entity_type: "cliente",
-      entity_id: c.cliente_id,
+      description: tipo === "cliente"
+        ? `En la Central de Deudores ${motivo}. Revisá la ficha del cliente antes de darle más cuenta corriente.`
+        : `En la Central de Deudores ${motivo}. Es solo un aviso: revisá la ficha del proveedor antes de comprarle o pagarle por adelantado.`,
+      module: tipo === "cliente" ? "clientes" : "proveedores",
+      entity_type: tipo,
+      entity_id: entidadId,
       user_id: null,
       sociedad_id: c.sociedad_id,
     });

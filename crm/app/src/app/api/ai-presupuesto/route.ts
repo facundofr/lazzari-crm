@@ -1,3 +1,4 @@
+import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
@@ -139,6 +140,7 @@ Respondé SOLO con un JSON válido, sin markdown ni explicaciones:
     });
 
     const response = await stream.finalMessage();
+    await registrarUsoIA("presupuesto_ia", response.model, response.usage);
     const textBlock = response.content.find((b) => b.type === "text");
     const rawText = textBlock && textBlock.type === "text" ? textBlock.text : "{}";
 

@@ -34,6 +34,7 @@ import CuentasFinancieras from "@/components/cuentas-financieras";
 import ExtractoBbva from "@/components/extracto-bbva";
 import ChequesTercero from "@/components/cheques-tercero";
 import FinanzasRevisar from "@/components/finanzas-revisar";
+import { InformesFinanzas } from "@/components/finanzas/informes";
 import { BotonDejarRevisar } from "@/components/dejar-revisar";
 import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/payment-document-parser";
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
@@ -5246,6 +5247,8 @@ export default function FinanzasPage() {
         )}
 
         {tab === "revisar" && <FinanzasRevisar onIrATab={(t) => { if (esFinanzasTab(t)) setTab(t); }} />}
+
+        {tab === "informes" && <InformesFinanzas />}
 
         {/* ── Extractos bancarios ── */}
         {tab === "extractos" && (

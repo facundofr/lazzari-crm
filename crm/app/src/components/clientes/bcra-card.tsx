@@ -34,9 +34,9 @@ export function pesosDesdeMiles(miles: number): string {
 
 const periodoTexto = (p: string | null) => (p && p.length === 6 ? `${p.slice(4)}/${p.slice(0, 4)}` : "—");
 
-export async function actualizarBCRA(sociedadId: string, clienteId: string): Promise<{ ok: boolean; error?: string; empeoro?: string | null }> {
+export async function actualizarBCRA(sociedadId: string, clienteId: string, tipo: "cliente" | "proveedor" = "cliente"): Promise<{ ok: boolean; error?: string; empeoro?: string | null }> {
   try {
-    const res = await fetch("/api/bcra", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sociedad_id: sociedadId, cliente_id: clienteId }) });
+    const res = await fetch("/api/bcra", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sociedad_id: sociedadId, ...(tipo === "proveedor" ? { proveedor_id: clienteId } : { cliente_id: clienteId }) }) });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, error: j.error || `Error ${res.status}` };
     if (j.semaforo === "gris") return { ok: false, error: j.error || "El BCRA no respondió" };

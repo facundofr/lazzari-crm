@@ -14,6 +14,7 @@ import { normalizeEmail } from "@/lib/email";
 import { useUser } from "@/lib/auth-context";
 import { ArcaStatusCard } from "@/components/arca-status-card";
 import { FechasChequeConfig } from "@/components/fechas-cheque-config";
+import { UsoIAConfig } from "@/components/uso-ia-config";
 
 type ComisionTipo = "porcentaje_venta" | "porcentaje_margen" | "monto_fijo";
 type ComisionAplicaA = "todos" | "vendedor_especifico";
@@ -100,7 +101,7 @@ export default function ConfiguracionPage() {
   const { sociedadActiva, profile } = useUser();
   // Solo el super_admin (Augusto) invita, cambia roles y da de baja usuarios.
   const canManageUsers = profile?.role === "super_admin";
-  const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas" | "comisiones" | "retenciones" | "cheques">("usuarios");
+  const [tab, setTab] = useState<"usuarios" | "roles" | "empresa" | "integraciones" | "notificaciones" | "plantillas" | "comisiones" | "retenciones" | "cheques" | "uso_ia">("usuarios");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dbUsers, setDbUsers] = useState<User[]>([]);
@@ -641,6 +642,7 @@ export default function ConfiguracionPage() {
     ...(profile?.role === "super_admin" || profile?.role === "admin" ? [{ id: "comisiones" as const, label: "Comisiones", icon: Percent }] : []),
     { id: "retenciones" as const, label: "Retenciones", icon: ShieldCheck },
     { id: "cheques" as const, label: "Fechas de cheque", icon: CalendarDays },
+    ...(profile?.role === "super_admin" || profile?.role === "admin" ? [{ id: "uso_ia" as const, label: "Uso de IA", icon: Key }] : []),
   ];
 
   return (
@@ -660,6 +662,7 @@ export default function ConfiguracionPage() {
         </div>
 
         {tab === "cheques" && <FechasChequeConfig />}
+        {tab === "uso_ia" && <UsoIAConfig />}
 
         {tab === "usuarios" && (
           <div className="space-y-6">
