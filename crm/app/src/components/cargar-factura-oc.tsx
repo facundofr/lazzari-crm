@@ -12,6 +12,7 @@ import { duplicadosComprobanteCompra } from "@/lib/saldo-factura-compra";
 import { ProveedorFormModal, type ProveedorForm } from "@/components/proveedor-form-modal";
 import { CondicionPagoEditor } from "@/components/condicion-pago-editor";
 import { textoCondicionPago, vencimientoFactura, type PlanPago } from "@/lib/condicion-pago";
+import { equivalenciaSugerida, costoPorUnidadPR, avisoCambioCostoPR } from "@/lib/reemplazo-oc";
 
 // ── Types ────────────────────────────────────────────────
 export interface OCParaVincular {
@@ -129,6 +130,9 @@ export default function CargarFacturaOC({
   const [ocItemsLoading, setOCItemsLoading] = useState(false);
   const [ocItemsError, setOCItemsError] = useState("");
   const [manualItemMatches, setManualItemMatches] = useState<Record<string, string>>({});
+  // Renglones de la factura que REEMPLAZAN al de la OC (se compró otra medida/artículo). Valor = equivalencia
+  // "1 unidad de la OC/PR = N unidades de la factura" (texto editable).
+  const [reemplazos, setReemplazos] = useState<Record<string, string>>({});
   const [createExtrasOC, setCreateExtrasOC] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [pagadaSinOP, setPagadaSinOP] = useState(false);
@@ -735,7 +739,7 @@ export default function CargarFacturaOC({
     const ids = Array.from(selectedOCIds);
     const { data: freshOCs, error: ocError } = await (supabase as any)
       .from("ordenes_compra")
-      .select("id, numero, subtotal, iva, total, moneda, sociedad_id, proveedor_id, estado, observaciones, presupuesto_origen_id, orden_compra_items(id, orden_id, codigo, descripcion, cantidad, precio_unitario, iva_porcentaje, unidad)")
+      .select("id, numero, subtotal, iva, total, moneda, sociedad_id, proveedor_id, estado, observaciones, presupuesto_origen_id, orden_compra_items(id, orden_id, codigo, descripcion, cantidad, cantidad_recibida, precio_unitario, iva_porcentaje, unidad)")
       .eq("sociedad_id", sociedadId)
       .in("id", ids);
     if (ocError || !freshOCs || freshOCs.length !== ids.length) {
@@ -815,6 +819,27 @@ export default function CargarFacturaOC({
         alignmentResult = await validateOCAlignmentLive();
       }
 
+      // Reemplazos: el renglón de la OC pasa a ser el de la factura (misma OC, sin crear otra).
+      // Se aplica en memoria antes de conciliar, así no quedan "sobrantes" ni OC adicional.
+      type Reemplazo = { oc: any; line: any; original: any; item: (typeof items)[number]; equivalencia: number; costo: number; pr?: any; prItem?: any; costoPR?: number; markup?: number | null };
+      const reemplazosAplicados: Reemplazo[] = [];
+      const avisosReemplazo: string[] = [];
+      if (alignmentResult) {
+        for (const [tempId, eqTxt] of Object.entries(reemplazos)) {
+          const target = asignacionesEfectivas[tempId];
+          const item = items.find((i) => i.tempId === tempId);
+          if (!item || !target || target === "__extra__") continue;
+          const oc = alignmentResult.freshOCs.find((o: any) => (o.orden_compra_items || []).some((l: any) => l.id === target));
+          const line = oc?.orden_compra_items.find((l: any) => l.id === target);
+          if (!oc || !line) continue;
+          const original = { ...line };
+          const costo = Number(item.precio_unitario) * (1 - Number(item.descuento_porcentaje || 0) / 100);
+          const equivalencia = Number(String(eqTxt).replace(",", ".")) || equivalenciaSugerida(item.cantidad, Number(original.cantidad));
+          Object.assign(line, { codigo: item.codigo || null, descripcion: item.descripcion, cantidad: Number(item.cantidad), precio_unitario: costo, iva_porcentaje: Number(item.iva_porcentaje ?? 21), unidad: item.unidad || line.unidad });
+          reemplazosAplicados.push({ oc, line, original, item, equivalencia, costo });
+        }
+      }
+
       let reconciliation: ReturnType<typeof reconcilePurchaseLines> | null = null;
       const verifiedPresupuestos = new Map<string, any>();
       const verifiedMarkupByItemId = new Map<string, number>();
@@ -862,7 +887,7 @@ export default function CargarFacturaOC({
           }
           if (!oc.presupuesto_origen_id) continue;
           const { data: pr, error: prError } = await (supabase as any).from("presupuestos")
-            .select("id, observaciones, moneda, tipo_cambio, tipo_cambio_divisas, presupuesto_items(id, codigo, descripcion, cantidad, precio_costo, costo_moneda, markup_porcentaje, precio_venta)")
+            .select("id, estado, observaciones, moneda, tipo_cambio, tipo_cambio_divisas, presupuesto_items(id, codigo, descripcion, cantidad, precio_costo, costo_moneda, markup_porcentaje, precio_venta)")
             .eq("id", oc.presupuesto_origen_id).eq("sociedad_id", sociedadId).single();
           if (prError || !pr) throw new Error(`No se pudo comprobar el presupuesto de la OC ${oc.numero}. No se guardó la factura.`);
           for (const change of costChanges) {
@@ -874,6 +899,36 @@ export default function CargarFacturaOC({
             verifiedMarkupByItemId.set(prItem.id, recalculatedMarkup);
           }
           verifiedPresupuestos.set(pr.id, pr);
+        }
+        // PR de origen de cada reemplazo: se conserva lo vendido y cambia solo el costo (pasado a la unidad del PR).
+        // Nunca frena: si no se encuentra el renglón, se avisa para corregirlo a mano.
+        for (const r of reemplazosAplicados) {
+          if (!r.oc.presupuesto_origen_id) continue;
+          let pr = verifiedPresupuestos.get(r.oc.presupuesto_origen_id);
+          if (!pr) {
+            const { data } = await (supabase as any).from("presupuestos")
+              .select("id, numero, estado, observaciones, moneda, tipo_cambio, tipo_cambio_divisas, presupuesto_items(id, codigo, descripcion, cantidad, precio_costo, costo_moneda, markup_porcentaje, precio_venta)")
+              .eq("id", r.oc.presupuesto_origen_id).eq("sociedad_id", sociedadId).maybeSingle();
+            if (!data) { avisosReemplazo.push(`No se encontró el presupuesto de ${r.oc.numero}: actualizá el costo a mano.`); continue; }
+            pr = data;
+            verifiedPresupuestos.set(pr.id, pr);
+          }
+          const k = purchaseLineKey(r.original), kSinCodigo = purchaseLineKey({ ...r.original, codigo: null });
+          const matching = (pr.presupuesto_items || []).filter((it: PurchaseLine) => purchaseLineKey(it) === k || purchaseLineKey({ ...it, codigo: null }) === kSinCodigo);
+          if (matching.length !== 1) { avisosReemplazo.push(`«${r.original.descripcion}» no tiene un renglón único en el presupuesto de ${r.oc.numero}: actualizá su costo a mano.`); continue; }
+          const prItem = matching[0] as any;
+          const costoPR = costoPorUnidadPR(r.costo, r.equivalencia);
+          const markup = markupForFixedSalePrice(Number(prItem.precio_venta || 0), costoPR, moneda, pr.moneda, Number(pr.tipo_cambio || 0), Number(pr.tipo_cambio_divisas || 0));
+          Object.assign(r, { pr, prItem, costoPR, markup });
+          const aviso = avisoCambioCostoPR({
+            articulo: prItem.descripcion,
+            costoViejo: Number(prItem.precio_costo || 0),
+            costoNuevo: costoPR,
+            mismaMoneda: String(prItem.costo_moneda || pr.moneda || "ARS").toUpperCase().startsWith("USD") === moneda.toUpperCase().startsWith("USD"),
+            markupNuevo: markup,
+            facturado: pr.estado === "facturado",
+          });
+          if (aviso.avisar) avisosReemplazo.push(`${aviso.bajoMinimo ? "⚠️ " : ""}${aviso.texto}`);
         }
         generateExtrasOC = createExtrasOC && reconciliation.extras.length > 0;
         // Si sobran artículos y no se marcó la opción, se pregunta (nunca se traba la carga).
@@ -994,6 +1049,46 @@ export default function CargarFacturaOC({
         }
       }
       savedFacturaId = fcData?.id || null;
+
+      // Reemplazos: la OC queda igual a la factura; el PR conserva lo vendido y cambia solo el costo, con leyenda.
+      if (reemplazosAplicados.length) {
+        const stamp = new Date().toLocaleString("es-AR");
+        const histOC = new Map<any, string[]>();
+        const histPR = new Map<any, string[]>();
+        for (const r of reemplazosAplicados) {
+          const recibida = Number(r.original.cantidad_recibida || 0);
+          const recibidaNueva = recibida > 0 ? Math.min(Number(r.line.cantidad), Math.round(recibida * r.equivalencia * 10000) / 10000) : 0;
+          const { error: repError } = await (supabase as any).from("orden_compra_items").update({
+            codigo: r.line.codigo, descripcion: r.line.descripcion, cantidad: r.line.cantidad, precio_unitario: r.line.precio_unitario,
+            iva_porcentaje: r.line.iva_porcentaje, unidad: r.line.unidad, codigo_proveedor: r.item.codigo || null, descripcion_proveedor: r.item.descripcion,
+            ...(recibida > 0 ? { cantidad_recibida: recibidaNueva } : {}),
+          }).eq("id", r.line.id).eq("orden_id", r.oc.id);
+          if (repError) throw repError;
+          r.line.cantidad_recibida = recibida > 0 ? recibidaNueva : r.line.cantidad_recibida;
+          (histOC.get(r.oc) || histOC.set(r.oc, []).get(r.oc)!).push(`reemplazo «${r.original.descripcion}» (${r.original.cantidad} ${r.original.unidad || "UN"} a ${r.original.precio_unitario}) → «${r.item.descripcion}» (${r.item.cantidad} a ${r.costo} ${moneda})`);
+          if (r.pr && r.prItem && r.costoPR !== undefined) {
+            const { error: prCostError } = await (supabase as any).from("presupuesto_items")
+              .update({ precio_costo: r.costoPR, costo_moneda: moneda, ...(r.markup !== null && r.markup !== undefined ? { markup_porcentaje: r.markup } : {}) })
+              .eq("id", r.prItem.id).eq("presupuesto_id", r.pr.id);
+            if (prCostError) throw prCostError;
+            (histPR.get(r.pr) || histPR.set(r.pr, []).get(r.pr)!).push(`«${r.prItem.descripcion}» se compró como «${r.item.descripcion}» (${selectedProvNombre || "proveedor"}, FC ${numeroFactura.trim()}): ${r.item.cantidad} a ${r.costo} ${moneda}; 1 ${r.original.unidad || "UN"} = ${r.equivalencia} → costo ${r.costoPR} (antes ${r.prItem.precio_costo} ${r.prItem.costo_moneda || ""})`);
+          }
+        }
+        for (const [oc, hist] of histOC) {
+          const lines = oc.orden_compra_items || [];
+          const net = roundMoney(lines.reduce((s: number, it: any) => s + Number(it.cantidad) * Number(it.precio_unitario), 0));
+          const vat = roundMoney(lines.reduce((s: number, it: any) => s + Number(it.cantidad) * Number(it.precio_unitario) * Number(it.iva_porcentaje ?? 21) / 100, 0));
+          oc.observaciones = `${oc.observaciones || ""}\n[${stamp}] FC ${numeroFactura.trim()}: ${hist.join("; ")}`;
+          const { error: ocHeadError } = await (supabase as any).from("ordenes_compra")
+            .update({ subtotal: net, iva: vat, total: roundMoney(net + vat), observaciones: oc.observaciones }).eq("id", oc.id).eq("sociedad_id", sociedadId);
+          if (ocHeadError) throw ocHeadError;
+        }
+        for (const [pr, hist] of histPR) {
+          pr.observaciones = `${pr.observaciones || ""}\n[${stamp}] ${hist.join("; ")}`;
+          const { error: prObsError } = await (supabase as any).from("presupuestos").update({ observaciones: pr.observaciones }).eq("id", pr.id).eq("sociedad_id", sociedadId);
+          if (prObsError) throw prObsError;
+        }
+      }
 
       // Actualizar costos por identidad de artículo, conservando cantidades y recepciones.
       if (reconciliation && alignmentResult) {
@@ -1142,7 +1237,8 @@ export default function CargarFacturaOC({
         }
       }
 
-      alert(isCreditNote ? (facturaOrigenId ? "Nota de crédito registrada y aplicada a la factura elegida" : "Nota de crédito registrada: queda como crédito disponible del proveedor") : pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación");
+      const avisosTxt = avisosReemplazo.length ? `\n\nAvisos de costo (no frenan nada):\n• ${avisosReemplazo.join("\n• ")}` : "";
+      alert((isCreditNote ? (facturaOrigenId ? "Nota de crédito registrada y aplicada a la factura elegida" : "Nota de crédito registrada: queda como crédito disponible del proveedor") : pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación") + avisosTxt);
       onSuccess();
     } catch (err: any) {
       setError(savedFacturaId ? `La factura ${numeroFactura} quedó registrada, pero falta completar una operación: ${err.message || "Error"}. Abrila desde Facturas de compra para revisarla; no vuelvas a cargarla.` : err.message || "Error al guardar");
@@ -1156,10 +1252,10 @@ export default function CargarFacturaOC({
     <div className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center overflow-y-auto p-4 pt-8 pb-8">
       <div className={`bg-white dark:bg-zinc-900 w-full rounded-xl shadow-2xl ${fullscreen ? "min-h-[calc(100vh-2rem)] max-w-none" : "max-w-5xl"}`}>
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
+        <div className="flex items-center justify-between px-5 py-2.5 border-b border-zinc-200 dark:border-zinc-700">
           <div>
             <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Cargar factura o nota de pedido</h2>
-            <p className="text-sm text-zinc-500">Cargá el comprobante y vinculalo a las órdenes de compra correspondientes</p>
+            <p className="text-xs text-zinc-500">Cargá el comprobante y vinculalo a las órdenes de compra correspondientes</p>
           </div>
           <div className="flex items-center gap-1">
             <button onClick={() => setFullscreen((value) => !value)} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800" title={fullscreen ? "Reducir" : "Ampliar"}>{fullscreen ? <Minimize2 size={19} /> : <Maximize2 size={19} />}</button>
@@ -1167,10 +1263,10 @@ export default function CargarFacturaOC({
           </div>
         </div>
 
-        <div className={`px-6 py-5 space-y-6 overflow-y-auto ${fullscreen ? "max-h-[calc(100vh-10rem)]" : "max-h-[75vh]"}`}>
+        <div className={`px-5 py-3 space-y-3 overflow-y-auto ${fullscreen ? "max-h-[calc(100vh-8rem)]" : "max-h-[80vh]"}`}>
           {/* ── 1. Upload ── */}
           <section>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-1.5">
               1. Cargar factura
             </h3>
             {!parsed && !parsing && (
@@ -1206,7 +1302,7 @@ export default function CargarFacturaOC({
               </div>
             )}
             {parsed && (
-              <div className="flex items-center gap-2 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg text-green-700 dark:text-green-400 text-sm">
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 dark:bg-green-900/20 rounded-lg text-green-700 dark:text-green-400 text-sm">
                 <Check size={16} />
                 Factura procesada: <span className="font-mono font-bold">{file?.name}</span>
                 <button onClick={() => { setParsed(false); setFile(null); setParseError(""); }}
@@ -1235,15 +1331,15 @@ export default function CargarFacturaOC({
 
           {/* ── 2. Datos de la factura ── */}
           <section>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-1.5">
               2. Datos de la factura
             </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-3 gap-y-2">
               {/* Proveedor */}
-              <div className="sm:col-span-2 lg:col-span-3 relative">
-                <label className="block text-[10px] uppercase text-zinc-400 mb-1">Proveedor</label>
+              <div className="col-span-2 sm:col-span-3 lg:col-span-2 relative">
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Proveedor</label>
                 {proveedorId ? (
-                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-sm">
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-sm">
                     <Check size={14} className="text-green-600" />
                     <span className="font-medium">{selectedProvNombre}</span>
                     <button onClick={() => { setProveedorId(""); setProveedorSearch(""); setSelectedOCIds(new Set()); }}
@@ -1287,9 +1383,9 @@ export default function CargarFacturaOC({
 
               {/* Tipo de comprobante */}
               <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-1">Tipo</label>
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Tipo</label>
                 <select value={tipoComprobante} onChange={e => setTipoComprobante(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
                   <option value="FC A">FC A</option>
                   <option value="FC B">FC B</option>
                   <option value="FC C">FC C</option>
@@ -1309,30 +1405,30 @@ export default function CargarFacturaOC({
 
               {/* N° Factura */}
               <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-1">N° Factura</label>
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">N° Factura</label>
                 <input type="text" value={numeroFactura} onChange={e => setNumeroFactura(e.target.value)}
                   placeholder="0001-00012345"
-                  className={`w-full px-3 py-2 rounded-lg border text-sm font-mono ${duplicateWarning ? "border-red-400 bg-red-50 dark:bg-red-950/30" : "border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"}`} />
+                  className={`w-full px-2.5 py-1.5 rounded-lg border text-sm font-mono ${duplicateWarning ? "border-red-400 bg-red-50 dark:bg-red-950/30" : "border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800"}`} />
                 {duplicateWarning && <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertTriangle size={12} />{duplicateWarning}</p>}
               </div>
 
               {/* Fecha */}
               <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-1">Fecha</label>
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Fecha</label>
                 <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
               </div>
 
               {/* Vencimiento */}
               <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-1">Vencimiento</label>
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Vencimiento</label>
                 <input type="date" value={fechaVencimiento} onChange={e => { setFechaVencimiento(e.target.value); setVencimientoManual(Boolean(e.target.value)); }}
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
               </div>
 
               {/* Pago que pide el proveedor */}
               {!isCreditNote && proveedorId && (
-                <div className={`col-span-full rounded-lg border px-3 py-2 text-sm ${planPago.condicion_pago ? "border-zinc-200 dark:border-zinc-700" : "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"}`}>
+                <div className={`col-span-full rounded-lg border px-3 py-1 text-xs ${planPago.condicion_pago ? "border-zinc-200 dark:border-zinc-700" : "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"}`}>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[10px] uppercase text-zinc-400">Pago que pide el proveedor</span>
                     {planPago.condicion_pago
@@ -1356,16 +1452,16 @@ export default function CargarFacturaOC({
 
               {/* CAE */}
               <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-1">CAE</label>
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">CAE</label>
                 <input type="text" value={cae} onChange={e => setCae(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
               </div>
 
               {/* Moneda */}
               <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-1">Moneda</label>
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Moneda</label>
                 <select value={moneda} onChange={e => setMoneda(e.target.value as "ARS" | "USD")}
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
                   <option value="ARS">ARS</option>
                   <option value="USD">USD</option>
                 </select>
@@ -1373,20 +1469,20 @@ export default function CargarFacturaOC({
 
               {/* Subtotal */}
               <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-1">Subtotal (neto)</label>
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Subtotal (neto)</label>
                 <input type="number" step="0.01" min="0" value={subtotal || ""} onChange={e => setSubtotal(Number(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
               </div>
 
               {/* IVA % */}
               <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-1">IVA %</label>
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">IVA %</label>
                 <select value={ivaPorcentaje} onChange={e => {
                   const value = Number(e.target.value);
                   setIvaPorcentaje(value);
                   setItems((prev) => prev.map((item) => ({ ...item, iva_porcentaje: value })));
                 }}
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
                   <option value={0}>0% (Exento)</option>
                   <option value={10.5}>10.5%</option>
                   <option value={21}>21%</option>
@@ -1396,14 +1492,14 @@ export default function CargarFacturaOC({
 
               {/* Percepciones */}
               <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-1">Percepciones</label>
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Percepciones</label>
                 <input type="number" step="0.01" min="0" value={percepciones || ""} onChange={e => setPercepciones(Number(e.target.value) || 0)}
-                  className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
               </div>
             </div>
 
             {/* Totals summary */}
-            <div className="mt-3 flex items-center justify-end gap-6 text-sm">
+            <div className="mt-1.5 flex items-center justify-end gap-6 text-sm">
               <span className="text-zinc-500">IVA: <span className="font-mono font-medium">{formatCurrency(iva, moneda)}</span></span>
               <span className="font-bold text-zinc-900 dark:text-zinc-100">Total: <span className="font-mono text-orange-600">{formatCurrency(total, moneda)}</span></span>
             </div>
@@ -1462,8 +1558,8 @@ export default function CargarFacturaOC({
 
             {/* Items editables */}
             {items.length > 0 && (
-              <div className="mt-4">
-                <div className="mb-2 flex items-center justify-between"><p className="text-[10px] uppercase text-zinc-400">Items detectados y editables ({items.length})</p><button type="button" onClick={() => setItems((prev) => [...prev, { tempId: uid(), codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, iva_porcentaje: ivaPorcentaje, unidad: "UN" }])} className="inline-flex items-center gap-1 text-xs font-medium text-orange-600"><Plus size={13} /> Agregar item</button></div>
+              <div className="mt-2">
+                <div className="mb-1 flex items-center justify-between"><p className="text-[10px] uppercase text-zinc-400">Items detectados y editables ({items.length})</p><button type="button" onClick={() => setItems((prev) => [...prev, { tempId: uid(), codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, iva_porcentaje: ivaPorcentaje, unidad: "UN" }])} className="inline-flex items-center gap-1 text-xs font-medium text-orange-600"><Plus size={13} /> Agregar item</button></div>
                 <div className="max-h-64 overflow-auto">
                   <table className="w-full min-w-[900px] text-xs">
                     <thead>
@@ -1481,12 +1577,12 @@ export default function CargarFacturaOC({
                     <tbody>
                       {items.map((it, index) => (
                         <tr key={it.tempId} className="border-b border-zinc-100 dark:border-zinc-800">
-                          <td className="px-1 py-1"><input value={it.codigo || ""} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, codigo: e.target.value } : item))} placeholder="Sin código" className="w-32 rounded border border-zinc-200 bg-transparent px-2 py-1.5 font-mono dark:border-zinc-700" /></td>
-                          <td className="px-1 py-1"><input value={it.descripcion} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, descripcion: e.target.value } : item))} className="w-full rounded border border-zinc-200 bg-transparent px-2 py-1.5 dark:border-zinc-700" /></td>
-                          <td className="px-1 py-1"><input type="number" min="0" step="0.01" value={it.cantidad} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, cantidad: Number(e.target.value) || 0 } : item))} className="w-20 rounded border border-zinc-200 bg-transparent px-2 py-1.5 text-right font-mono dark:border-zinc-700" /></td>
-                          <td className="px-1 py-1"><input type="number" min="0" step="0.01" value={it.precio_unitario} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, precio_unitario: Number(e.target.value) || 0 } : item))} className="w-28 rounded border border-zinc-200 bg-transparent px-2 py-1.5 text-right font-mono dark:border-zinc-700" /></td>
-                          <td className="px-1 py-1"><input type="number" min="0" max="100" step="0.01" value={it.descuento_porcentaje || ""} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, descuento_porcentaje: Math.max(0, Math.min(100, Number(e.target.value) || 0)) } : item))} placeholder="0" className="w-20 rounded border border-zinc-200 bg-transparent px-2 py-1.5 text-right font-mono dark:border-zinc-700" /></td>
-                          <td className="px-1 py-1"><select value={it.iva_porcentaje} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, iva_porcentaje: Number(e.target.value) } : item))} className="rounded border border-zinc-200 bg-transparent px-1 py-1.5 dark:border-zinc-700"><option value={0}>0%</option><option value={10.5}>10,5%</option><option value={21}>21%</option><option value={27}>27%</option></select></td>
+                          <td className="px-1 py-1"><input value={it.codigo || ""} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, codigo: e.target.value } : item))} placeholder="Sin código" className="w-32 rounded border border-zinc-200 bg-transparent px-2 py-1 font-mono dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><input value={it.descripcion} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, descripcion: e.target.value } : item))} className="w-full rounded border border-zinc-200 bg-transparent px-2 py-1 dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><input type="number" min="0" step="0.01" value={it.cantidad} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, cantidad: Number(e.target.value) || 0 } : item))} className="w-20 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><input type="number" min="0" step="0.01" value={it.precio_unitario} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, precio_unitario: Number(e.target.value) || 0 } : item))} className="w-28 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><input type="number" min="0" max="100" step="0.01" value={it.descuento_porcentaje || ""} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, descuento_porcentaje: Math.max(0, Math.min(100, Number(e.target.value) || 0)) } : item))} placeholder="0" className="w-20 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><select value={it.iva_porcentaje} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, iva_porcentaje: Number(e.target.value) } : item))} className="rounded border border-zinc-200 bg-transparent px-1 py-1 dark:border-zinc-700"><option value={0}>0%</option><option value={10.5}>10,5%</option><option value={21}>21%</option><option value={27}>27%</option></select></td>
                           <td className="px-2 py-1 text-right font-mono font-medium">{formatCurrency(itemNeto(it), moneda)}</td>
                           <td><button type="button" onClick={() => setItems((prev) => prev.filter((_, i) => i !== index))} className="rounded p-1 text-zinc-400 hover:text-red-500"><Trash2 size={14} /></button></td>
                         </tr>
@@ -1501,17 +1597,17 @@ export default function CargarFacturaOC({
           {/* ── Costo real (solo_iva) ── */}
           {tipoFC === "solo_iva" && (
             <section>
-              <label className="block text-[10px] uppercase text-zinc-400 mb-1">Costo real del crédito fiscal (opcional)</label>
+              <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Costo real del crédito fiscal (opcional)</label>
               <input type="number" step="0.01" value={costoReal || ""} onChange={e => setCostoReal(Number(e.target.value))}
                 placeholder="Monto real pagado por el crédito fiscal"
-                className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
+                className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
               <p className="text-xs text-zinc-400 mt-1">Si se ingresa, se crea un gasto manual asociado.</p>
             </section>
           )}
 
           {/* ── 3. Vincular OCs ── */}
           {tipoFC === "mercaderia" && <section>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-3">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600">3. Vincular órdenes de compra</h3>
                 {proveedorId && (
@@ -1589,15 +1685,15 @@ export default function CargarFacturaOC({
                   <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"><Check size={15} />Importe conciliado: comprobante y OC coinciden.</div>
                 ) : (
                   <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
-                    {alignmentDifference < 0 ? "El comprobante supera el importe actual de las OC. Se actualizarán los costos de artículos coincidentes; las cantidades adicionales crearán una OC independiente sin PR." : `Factura parcial: saldo estimado ${formatCurrency(alignmentDifference, moneda)}. Los costos finales se concilian al confirmar.`}
+                    {Object.keys(reemplazos).length > 0 ? "Hay renglones marcados como «Compré otra cosa»: se reemplazan en la misma OC y en el PR cambia solo el costo." : alignmentDifference < 0 ? "El comprobante supera el importe actual de las OC. Se actualizarán los costos de artículos coincidentes; las cantidades adicionales crearán una OC independiente sin PR." : `Factura parcial: saldo estimado ${formatCurrency(alignmentDifference, moneda)}. Los costos finales se concilian al confirmar.`}
                   </div>
                 )}
               </div>
             )}
 
             {selectedOCIds.size > 0 && items.length > 0 && (
-              <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50/70 p-3 dark:border-zinc-700 dark:bg-zinc-800/40">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="mt-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-2.5 dark:border-zinc-700 dark:bg-zinc-800/40">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-100">Comparación de artículos: factura vs. OC</p>
                     <p className="text-[11px] text-zinc-500">Las coincidencias seguras se aplican solas. Podés corregir cualquier vínculo manualmente.</p>
@@ -1651,6 +1747,34 @@ export default function CargarFacturaOC({
                               <option key={ocItem.id} value={ocItem.id}>{ocItem.ocNumero} · {ocItem.codigo ? `[${ocItem.codigo}] ` : ""}{ocItem.descripcion} · {ocItem.cantidad} {ocItem.unidad || "UN"}</option>
                             ))}
                           </select>
+                          {(() => {
+                            const target = assignedId && assignedId !== "__extra__" ? selectedOCItems.find((o) => o.id === assignedId) : comparison.matched;
+                            if (!target) return null;
+                            const tempId = comparison.item.tempId;
+                            const activo = tempId in reemplazos;
+                            const eq = Number(String(reemplazos[tempId] ?? "").replace(",", ".")) || equivalenciaSugerida(comparison.item.cantidad, target.cantidad);
+                            const costoUnit = Number(comparison.item.precio_unitario) * (1 - Number(comparison.item.descuento_porcentaje || 0) / 100);
+                            return (
+                              <div className={`md:col-span-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md px-2 py-1 text-[11px] ${activo ? "bg-sky-50 text-sky-900 dark:bg-sky-950/30 dark:text-sky-200" : "text-zinc-500"}`}>
+                                <label className="flex cursor-pointer items-center gap-1.5">
+                                  <input type="checkbox" checked={activo} className="accent-sky-600"
+                                    onChange={(e) => {
+                                      setReemplazos((cur) => { const n = { ...cur }; if (e.target.checked) n[tempId] = String(equivalenciaSugerida(comparison.item.cantidad, target.cantidad)); else delete n[tempId]; return n; });
+                                      if (e.target.checked && !assignedId) setManualItemMatches((cur) => ({ ...cur, [tempId]: target.id }));
+                                    }} />
+                                  <span><strong>Compré otra cosa:</strong> reemplaza «{target.descripcion}» en {target.ocNumero} (sin OC nueva)</span>
+                                </label>
+                                {activo && (
+                                  <span className="flex items-center gap-1">
+                                    1 {target.unidad || "UN"} del PR =
+                                    <input value={reemplazos[tempId]} onChange={(e) => setReemplazos((cur) => ({ ...cur, [tempId]: e.target.value }))}
+                                      className="w-16 rounded border border-sky-300 bg-white px-1 py-0.5 text-right dark:border-sky-800 dark:bg-zinc-800" />
+                                    de la factura → costo PR <strong>{formatCurrency(costoPorUnidadPR(costoUnit, eq), moneda)}</strong>
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       );
                     })}
@@ -1669,10 +1793,10 @@ export default function CargarFacturaOC({
 
           {/* ── Notas ── */}
           <section>
-            <label className="block text-[10px] uppercase text-zinc-400 mb-1">Notas / observaciones</label>
+            <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Notas / observaciones</label>
             <textarea value={notas} onChange={e => setNotas(e.target.value)} rows={2}
               placeholder="Opcional"
-              className="w-full px-3 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
+              className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
             <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-700"><input type="checkbox" checked={pagadaSinOP} onChange={(e) => setPagadaSinOP(e.target.checked)} className="mt-0.5 accent-orange-600" /><span><strong>Ya pagada con tarjeta / marketplace</strong><span className="block text-xs font-normal text-zinc-500">La factura queda pagada sin generar una orden de pago ni duplicar el gasto.</span></span></label>
           </section>
 
@@ -1685,7 +1809,7 @@ export default function CargarFacturaOC({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-6 py-4 border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 rounded-b-xl">
+        <div className="flex items-center justify-between px-5 py-2.5 border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 rounded-b-xl">
           <p className="text-xs text-zinc-400">
             La factura quedara pendiente de aprobacion por administracion
           </p>

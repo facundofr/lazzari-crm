@@ -32,6 +32,8 @@ export const REGIMEN_RG830: Record<string, string> = {
 const izq = (s: string, len: number) => s.slice(0, len).padEnd(len, " ");
 /** Número a la derecha, relleno con ceros a la izquierda. */
 const cer = (s: string, len: number) => s.slice(-len).padStart(len, "0");
+/** Código a la derecha, sin ceros adelante, relleno con espacios (ej. "078" → " 78", "217" → " 217"). */
+const cod = (s: string, len: number) => String(Number(s) || 0).slice(-len).padStart(len, " ");
 
 /** Importe con coma decimal, ceros a la izquierda y largo fijo (ej. 14 → 0000000012345,67). */
 export function montoSicore(n: number, len: number): string {
@@ -60,25 +62,26 @@ export function armarLineaSicore(l: LineaSicore): string {
   const linea = [
     "06",                                                   // código de comprobante: orden de pago
     fecha,                                                  // fecha del comprobante
-    cer(String(l.numeroComprobante || "").replace(/\D/g, ""), 16),
+    // Formato tomado del archivo que acepta el contador (cpsicore.txt, 13/10/2026).
+    "   " + cer(String(l.numeroComprobante || "").replace(/\D/g, ""), 13),
     montoSicore(l.importeComprobante, 16),
-    "0217",                                                 // impuesto: Ganancias
-    REGIMEN_RG830[l.conceptoRetencion || "compraventa_bienes"] || "078",
+    cod("217", 4),                                          // impuesto: Ganancias → " 217"
+    cod(REGIMEN_RG830[l.conceptoRetencion || "compraventa_bienes"] || "078", 3), // ej. " 78"
     "1",                                                    // operación: retención
     montoSicore(l.baseCalculo, 14),
     fecha,                                                  // fecha de emisión de la retención
     "01",                                                   // condición: inscripto
-    "0",                                                    // retención a sujetos suspendidos
+    " ",                                                    // retención a sujetos suspendidos
     montoSicore(l.importeRetencion, 14),
     "000,00",                                               // % de exclusión
-    fecha,                                                  // fecha de publicación / vigencia
+    izq("", 10),                                            // fecha de publicación (vacía)
     "80",                                                   // tipo de documento: CUIT
     izq(l.cuit.replace(/\D/g, ""), 20),
     "00000000000000",                                       // certificado original
     izq("", 30),                                            // denominación del ordenante
     "0",                                                    // acrecentamiento
-    izq("", 11),                                            // CUIT del país retenido
-    izq("", 11),                                            // CUIT del ordenante
+    "00000000000",                                          // CUIT del país retenido
+    "00000000000",                                          // CUIT del ordenante
   ].join("");
   if (linea.length !== LONGITUD_REGISTRO_SICORE) {
     throw new Error(`Registro SICORE de ${linea.length} caracteres (debe medir ${LONGITUD_REGISTRO_SICORE})`);

@@ -162,7 +162,7 @@ export async function GET(req: NextRequest) {
     lines.push(line);
   }
 
-  const content = lines.join("\r\n");
+  const content = lines.length ? lines.join("\r\n") + "\r\n" : ""; // cada línea termina en CRLF, como el archivo del contador
   const filename = `SICORE_${desde}_${hasta}.txt`;
 
   return new NextResponse(content, {

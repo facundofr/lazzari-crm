@@ -676,6 +676,18 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
           Los PR viejos en Facturar/Vencido se siguen viendo con su estado. Probado en local sin guardar.
         - Cotización express: si el BNA no contesta, reintenta con el último valor guardado; si tampoco hay, avisa en rojo con "reintentá" (antes quedaba colgado "Trayendo tipo de cambio BNA…").
         - tsc 0 errores, hooks OK.
+      **Tanda V1.1.431 (13/10/2026) — PUBLICADA, sin migración:**
+        - SICORE con el formato exacto del archivo del contador (ver punto SICORE más abajo).
+        - Carga de facturas de compra: opción **"Compré otra cosa"** por renglón (`cargar-factura-oc.tsx`, cálculo en `lib/reemplazo-oc.ts`, prueba `scripts/test-reemplazo-oc.ts`).
+          El renglón de la OC pasa a ser el de la factura (misma OC, sin OC nueva; recepción escalada por la equivalencia; historial en observaciones de la OC).
+          En el PR cambia SOLO el costo, pasado a la unidad del PR con la equivalencia editable (ej. 5000 m ÷ 10 rollos = 500 → $504 × 500 = $252.000 por rollo);
+          precio de venta igual (markup recalculado) y leyenda en observaciones del PR con lo que vino en la factura del proveedor.
+          Avisos (nunca frenan, salen al guardar): PR sin facturar con costo que cambia > 5 %, markup < 15 % (con ⚠️), y PR facturado siempre informativo.
+        - Ventana de carga más compacta (datos en 6 columnas, menos espacios).
+        - tsc 0, hooks OK. Probado en local SIN guardar con la FC A 00005-00134131 de Espumas Pilar y OC-2026-1186 (equivalencia 500, costo PR $252.000).
+      **Del Sol (pendiente, 13/10):** OP 0001-00017009 = eCheq 3968 $6.210.728,30 (11/12, no cargado) + ret. Ganancias cert. 11672 $99.826,69 = $6.310.554,99;
+        paga FA 16-16, 16-17, 16-18, 15-45 y "FC 39" ($1.242.839,98). La FA 15-39 está ANULADA por la NCA 15-5 (emitida desde el CRM el 30/09 con CAE, sin usuario ni motivo);
+        la FA 15-54 ($1.395.507,04) sigue impaga. Falta que Augusto diga por qué se hizo la NCA 15-5 (¿refacturada como 15-54?). Nada cargado todavía.
       **Próximo (pedido de Augusto 13/10):** Cotización express con un primer paso (cliente, moneda, dólar divisas y billetes del BNA editables);
         Pegaso es MARCA, la vende Mariana SA (verificar cómo figura en catalogo_costos y Proveedores). Hoy el PR trae un solo TC del BNA
         y usa el mismo para proveedores en divisa y en billete: traer los dos.
@@ -776,7 +788,11 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
    Prueba: `scripts/test-retencion-conceptos.ts`. tsc 0, hooks OK. Sin migración (el campo `concepto_retencion_ganancias` ya existía).
    **Pendiente (lo corre Augusto en el SQL Editor):** poner concepto `transporte` a Conte, Illia, Speed Business, Transporte de Cargas Mayo, Transporte Hero y Cruz del Sur (12 filas, 2 sociedades).
    **SICORE (13/10):** el aplicativo v9.0 r24 rechazaba el TXT ("las longitudes de los registros no son todas iguales"). El CRM generaba 165 caracteres; el diseño "Estándar Retenciones Versión 9.0" es de 198 (21 campos).
-   Corregido en `lib/sicore-linea.ts` + `api/sicore/route.ts` (prueba `scripts/test-sicore-linea.ts`); además códigos de régimen: transporte/fletes 095 (estaba 078), alquileres 030/031 (estaba 027). Falta que Augusto lo importe en SICORE para confirmar.
+   Corregido en `lib/sicore-linea.ts` + `api/sicore/route.ts` (prueba `scripts/test-sicore-linea.ts`); además códigos de régimen: transporte/fletes 095 (estaba 078), alquileres 030/031 (estaba 027).
+  **13/10 (después de V1.1.430):** el contador dijo que el archivo estaba mal y mandó uno que SICORE acepta (`Downloads\cpsicore.txt`). Ajustado al suyo, SIN PUBLICAR:
+  nro de comprobante = 3 espacios + 13 dígitos; impuesto " 217"; régimen sin cero adelante (" 78", " 94", " 95"); suspendidos en blanco; fecha de boletín en blanco;
+  CUIT país y CUIT ordenante en ceros; cada línea termina en CRLF. Las 16 líneas del contador se regeneran idénticas. tsc 0. Falta publicar y que el contador lo importe.
+  Transportistas: las 12 fichas ya tenían concepto "transporte" (verificado 13/10).
 2. **Diagnóstico sin tocar:** D1 (cron cotización BNA, revisar lo que quedó), D4 (saldo inicial de caja automático), D5 (cuentas bancarias), D6 (errores sin revisar en Plan de pagos y Finanzas), sección E.
 3. **Cheque vs echeq:** unificar en "Cheque" Físico / Electrónico en todas las pantallas y reglas claras para la IA. Falta un ejemplo de Augusto.
 4. **Importar cheques** desde 01/01/2026: `ideas/cheques_desde_2026.csv` (695 cheques; 5 con año "2925" a corregir; los 15 de Martín Fernández aparte).
