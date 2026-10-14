@@ -756,7 +756,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
           pagada $ 620.329,99 sin retención (exento; no vuelve a SICORE) + los $ 5.870,42 del 08/10 como pago directo. Copia: `Claude outputs/antes_op4_op43_13_10_2026.json`.
         - `20261013210000_datos_pagos_visa_8_facturas.sql` CORRIDA: 8 pagos con Visa ·1582 por $ 1.241.528,69 (Bomberomania, Casella, Fernández, Frávega,
           García, Horni, Mercado Libre, Terra Vita). Vuelta atrás los anula (no borra).
-      **PRÓXIMA TANDA (14/10, SIN PUBLICAR) — Configuración → Integraciones con datos reales:**
+      **TANDA V1.1.443 (14/10, publicada junto con la V1.1.442 de Claude, en dos deploys seguidos) — Configuración → Integraciones con datos reales:**
         - Tarjeta Email: `/api/email/config` (nuevo, pide login, solo dice si está RESEND_API_KEY / EMAIL_FROM, nunca la clave) → "Conectado" o
           "No configurado"; muestra facturas enviadas por mail este mes y rebotadas (`facturas.email_enviado_at` / `email_estado`).
         - Tarjetas Banco CC y E-cheques: "Por archivo" con link a Finanzas → Extractos / Cheques (no hay API gratis de BBVA).
@@ -1097,7 +1097,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
 6. **(HECHO en V1.1.440, según el commit)** **Lista de costos dentro de Proveedores** (idea 9): fotos (`recursos/fotos_costos.zip`), rubro, marca y reglas por proveedor.
 7. **Comisiones** (idea 1) y **Torneo** (idea 7): faltan respuestas de Augusto.
 8. **Archivo BBVA Net Cash:** falta el formato del banco (el botón ya está, desactivado).
-9a. **(HECHO 14/10/2026, SIN PUBLICAR, V1.1.442, sin migración)** **Descuento visible en el PDF del presupuesto:** cada renglón con descuento muestra "Precio de lista $X · Descuento Y%" (en Factura B, la lista con IVA) y al pie "Incluye descuento general del Z%". Sin descuento, el PDF queda igual que antes (PR viejos sin `precio_lista` tampoco cambian). Archivos: `lib/pdf-templates.ts`, `lib/types.ts`, `presupuestos/page.tsx` (las dos llamadas al PDF). Prueba: `scripts/test-pdf-descuento.ts`. **Filtro por moneda en facturas de venta:** desplegable "Todas las monedas / Pesos / Dólares" en Facturación (`facturacion-content.tsx`), cuenta en "X de Y". tsc 0 errores, hooks OK. No probado en pantalla (necesita sesión).
+9a. **(HECHO y PUBLICADO 14/10/2026, V1.1.442, commit 98c866e, sin migración)** **Descuento visible en el PDF del presupuesto:** cada renglón con descuento muestra "Precio de lista $X · Descuento Y%" (en Factura B, la lista con IVA) y al pie "Incluye descuento general del Z%". Sin descuento, el PDF queda igual que antes (PR viejos sin `precio_lista` tampoco cambian). Archivos: `lib/pdf-templates.ts`, `lib/types.ts`, `presupuestos/page.tsx` (las dos llamadas al PDF). Prueba: `scripts/test-pdf-descuento.ts`. **Filtro por moneda en facturas de venta:** desplegable "Todas las monedas / Pesos / Dólares" en Facturación (`facturacion-content.tsx`), cuenta en "X de Y". tsc 0 errores, hooks OK. No probado en pantalla (necesita sesión).
 9. Otros: propuestas de `PROPUESTA-REPORTES-DASHBOARD.md`, centro de alertas unificado, descuento visible en el PDF del presupuesto, filtro por moneda en facturas de venta, revisar migraciones viejas de Manu.
 10. **Seguridad:** rotar la clave de Anthropic y activar MFA en Supabase y Vercel.
 

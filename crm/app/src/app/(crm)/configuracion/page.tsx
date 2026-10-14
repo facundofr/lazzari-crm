@@ -305,6 +305,28 @@ export default function ConfiguracionPage() {
     fetchEmpresaConfig();
   }, [sociedadActiva]);
 
+  // Estado real del envío de mails (Integraciones): si está la clave y cuántas facturas se mandaron este mes
+  const [emailEstado, setEmailEstado] = useState<{ configurado: boolean | null; enviados: number | null; rebotados: number | null }>({ configurado: null, enviados: null, rebotados: null });
+  useEffect(() => {
+    if (tab !== "integraciones" || !sociedadActiva) return;
+    let cancelado = false;
+    (async () => {
+      let configurado: boolean | null = null;
+      try {
+        const res = await fetch("/api/email/config", { cache: "no-store" });
+        if (res.ok) configurado = !!(await res.json()).configurado;
+      } catch { /* queda sin dato */ }
+      const hoy = new Date();
+      const desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString();
+      const base = () => (supabase as any).from("facturas").select("id", { count: "exact", head: true })
+        .eq("sociedad_id", sociedadActiva.id).gte("email_enviado_at", desde);
+      const [env, reb] = await Promise.all([base(), base().eq("email_estado", "bounced")]);
+      if (cancelado) return;
+      setEmailEstado({ configurado, enviados: env.error ? null : env.count ?? 0, rebotados: reb.error ? null : reb.count ?? 0 });
+    })();
+    return () => { cancelado = true; };
+  }, [tab, sociedadActiva]);
+
   // Fetch email templates when sociedadActiva changes
   useEffect(() => {
     async function fetchTemplates() {
@@ -877,31 +899,39 @@ export default function ConfiguracionPage() {
           <div className="space-y-2.5">
           <ArcaStatusCard />
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              { name: "AFIP — Remitos electronicos", desc: "COT para remitos con codigo de autorizacion", icon: Key, connected: false, note: "Requiere certificado digital" },
-              { name: "Banco — Cuenta corriente", desc: "Sincronizacion de movimientos bancarios", icon: Database, connected: false, note: "API bancaria pendiente" },
-              { name: "Banco — E-cheques", desc: "Gestion de echeqs emitidos y recibidos", icon: Database, connected: false, note: "API bancaria pendiente" },
-              { name: "Email — Envio de PR", desc: "SMTP para envio de presupuestos al cliente", icon: Plug, connected: false, note: "Configurar servidor SMTP" },
-              { name: "IA — Asistente", desc: "Claude AI para asistencia en remitos y documentos", icon: Palette, connected: true, note: "" },
-            ].map((integration) => (
+            {([
+              { name: "AFIP — Remitos electronicos", desc: "COT para remitos con codigo de autorizacion", icon: Key, estado: "no", note: "Requiere certificado digital", pie: "Próximamente" },
+              { name: "Banco — Cuenta corriente", desc: "Movimientos del banco subiendo el extracto (Excel del BBVA)", icon: Database, estado: "archivo", note: "Cruce automático con cobros, pagos y cheques", link: { href: "/finanzas?tab=extractos", label: "Ir a Extractos →" } },
+              { name: "Banco — E-cheques", desc: "eCheqs emitidos y recibidos subiendo la planilla del banco", icon: Database, estado: "archivo", note: "Completa los que faltan y marca los debitados", link: { href: "/finanzas?tab=echeqs", label: "Ir a Cheques →" } },
+              {
+                name: "Email — Envio de PR", desc: "Presupuestos y facturas por mail (Resend)", icon: Mail,
+                estado: emailEstado.configurado === null ? "cargando" : emailEstado.configurado ? "si" : "no",
+                note: emailEstado.configurado === false ? "Falta la clave de envío en Vercel" : "Plan gratis: hasta 3.000 mails por mes",
+                pie: emailEstado.enviados === null ? undefined
+                  : `Facturas enviadas este mes: ${emailEstado.enviados}${emailEstado.rebotados ? ` · ⚠️ rebotadas: ${emailEstado.rebotados}` : ""}`,
+              },
+              { name: "IA — Asistente", desc: "Claude AI para asistencia en remitos y documentos", icon: Palette, estado: "si", note: "" },
+            ] as { name: string; desc: string; icon: typeof Key; estado: "si" | "no" | "archivo" | "cargando"; note: string; pie?: string; link?: { href: string; label: string } }[]).map((integration) => (
               <Card key={integration.name} className="flex items-start gap-3 p-3">
-                <div className={`rounded-lg p-2 ${integration.connected ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"}`}>
+                <div className={`rounded-lg p-2 ${integration.estado === "si" || integration.estado === "archivo" ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"}`}>
                   <integration.icon className="h-5 w-5" />
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
                     <h4 className="font-medium text-zinc-900 dark:text-white">{integration.name}</h4>
-                    <Badge variant={integration.connected ? "success" : "outline"}>
-                      {integration.connected ? "Conectado" : "No configurado"}
+                    <Badge variant={integration.estado === "si" || integration.estado === "archivo" ? "success" : "outline"}>
+                      {integration.estado === "si" ? "Conectado" : integration.estado === "archivo" ? "Por archivo" : integration.estado === "cargando" ? "…" : "No configurado"}
                     </Badge>
                   </div>
                   <p className="mt-1 text-sm text-zinc-500">{integration.desc}</p>
                   {integration.note && <p className="mt-1 text-xs text-zinc-400">{integration.note}</p>}
-                  {integration.connected ? (
+                  {integration.link ? (
+                    <a href={integration.link.href} className="mt-1.5 inline-block text-xs font-medium text-orange-500 hover:underline">{integration.link.label}</a>
+                  ) : integration.pie ? (
+                    <span className="mt-1.5 inline-block text-xs text-zinc-500">{integration.pie}</span>
+                  ) : integration.estado === "si" ? (
                     <span className="mt-1.5 inline-block text-xs font-medium text-emerald-500">Activo</span>
-                  ) : (
-                    <span className="mt-1.5 inline-block text-xs text-zinc-400">Próximamente</span>
-                  )}
+                  ) : null}
                 </div>
               </Card>
             ))}
