@@ -39,11 +39,11 @@ check("pagos, OP y NC comparten una validación serializada de saldo", () => {
   assert.match(migration, /v_aplicado \+ v_nuevo > v_total \+ 0\.005/);
 });
 
-check("la UI exige factura origen y usa la RPC idempotente", () => {
-  assert.match(loader, /Seleccioná la factura origen de la nota de crédito/);
-  assert.match(loader, /registrar_nota_credito_compra/);
+check("la UI usa la RPC idempotente v2 y aplica el crédito a la factura elegida (sugerida, nunca obligatoria)", () => {
+  assert.match(loader, /registrar_nota_credito_compra_v2/);
   assert.match(loader, /p_request_key: creditRequestKeyRef\.current/);
-  assert.match(loader, /p_credito_aplicado: roundMoney\(creditoAplicado\)/);
+  assert.match(loader, /p_aplicaciones: facturaOrigenId && creditoAplicado > 0/);
+  assert.match(loader, /monto: roundMoney\(creditoAplicado\)/);
 });
 
 check("la aplicación no se cuenta como caja ni retención y las NC no aparecen para OP", () => {

@@ -217,6 +217,7 @@ export interface Presupuesto {
   estado: PRStatus;
   motivoRechazo?: string;
   markupGeneral: number;
+  descuentoGeneralPorcentaje?: number;
   items: PresupuestoItem[];
   subtotal: number;
   iva: number;
@@ -256,6 +257,8 @@ export interface PresupuestoItem {
   costoMoneda?: "ARS" | "USD" | "USD Divisa";
   markupPorcentaje: number;
   precioVenta: number;
+  /** Precio de lista antes de descuentos (precioVenta es el neto). */
+  precioLista?: number | null;
   subtotal: number;
   ivaPorcentaje?: number;
   iva: number;

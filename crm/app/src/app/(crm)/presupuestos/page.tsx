@@ -153,6 +153,7 @@ interface SupabasePresupuesto {
   estado: PRStatus;
   motivo_rechazo?: string | null;
   markup_general: number;
+  descuento_general_porcentaje?: number | null;
   subtotal: number;
   iva: number;
   total: number;
@@ -196,6 +197,7 @@ interface PresupuestoItem {
   costo_moneda?: string;
   markup_porcentaje: number;
   precio_venta: number;
+  precio_lista?: number | null;
   subtotal: number;
   iva_porcentaje?: number;
   iva: number;
@@ -215,6 +217,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     estado: row.estado,
     motivoRechazo: row.motivo_rechazo ?? undefined,
     markupGeneral: row.markup_general,
+    descuentoGeneralPorcentaje: Number(row.descuento_general_porcentaje) || 0,
     items: (row.presupuesto_items ?? []).map((it, idx) => ({
       id: it.id ?? `item-${idx}`,
       productoId: "",
@@ -227,6 +230,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
       costoMoneda: (it.costo_moneda || "ARS") as "ARS" | "USD" | "USD Divisa",
       markupPorcentaje: it.markup_porcentaje,
       precioVenta: it.precio_venta,
+      precioLista: it.precio_lista ?? null,
       subtotal: it.subtotal,
       ivaPorcentaje: it.iva_porcentaje ?? 21,
       iva: isManual ? 0 : it.iva,
@@ -2548,12 +2552,14 @@ export default function PresupuestosPage() {
       cotizacionModalidad: p.cotizacionModalidad,
       tipoCambio: p.tipoCambio,
       tipoCambioDivisas: (p as any).tipoCambioDivisas,
+      descuentoGeneralPorcentaje: pr.descuentoGeneralPorcentaje,
       items: pr.items.map(it => ({
         codigo: it.codigo,
         descripcion: it.descripcion,
         cantidad: it.cantidad,
         unidad: it.unidad,
         precioVenta: it.precioVenta,
+        precioLista: it.precioLista,
         total: it.total,
         ivaPorcentaje: it.ivaPorcentaje ?? (it.subtotal ? (it.iva / it.subtotal) * 100 : 21),
       })),
@@ -4817,12 +4823,14 @@ export default function PresupuestosPage() {
             cotizacionModalidad: p.cotizacionModalidad,
             tipoCambio: p.tipoCambio,
             tipoCambioDivisas: (p as any).tipoCambioDivisas,
+            descuentoGeneralPorcentaje: pr.descuentoGeneralPorcentaje,
             items: pr.items.map(it => ({
               codigo: it.codigo,
               descripcion: it.descripcion,
               cantidad: it.cantidad,
               unidad: it.unidad,
               precioVenta: it.precioVenta,
+              precioLista: it.precioLista,
               total: it.total,
               ivaPorcentaje: it.ivaPorcentaje ?? (it.subtotal ? (it.iva / it.subtotal) * 100 : 21),
             })),

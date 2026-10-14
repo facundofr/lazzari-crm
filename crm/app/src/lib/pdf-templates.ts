@@ -287,6 +287,8 @@ interface PRItem {
   precioVenta: number;
   total: number;
   ivaPorcentaje?: number;
+  /** Precio de lista antes de descuentos (sin IVA). precioVenta es el neto que se factura. */
+  precioLista?: number | null;
 }
 
 interface PRData {
@@ -318,6 +320,8 @@ interface PRData {
   cotizacionModalidad?: "divisas" | "billetes";
   tipoCambio?: number | null;
   tipoCambioDivisas?: number | null;
+  /** Descuento general (%) ya incluido en cada precio. Solo se muestra si es mayor a 0. */
+  descuentoGeneralPorcentaje?: number | null;
   items: PRItem[];
 }
 
@@ -339,8 +343,16 @@ export function generatePresupuestoPDF(
   let currentPage: PaginatedItem[] = [];
   let usedRows = 0;
   const pageCapacity = 12;
+  // Descuento efectivo del renglón (artículo + general) contra el precio de lista; null si no hay.
+  const descuentoRenglon = (it: PRItem): { lista: number; pct: number } | null => {
+    const lista = Number(it.precioLista) || 0;
+    const neto = Number(it.precioVenta) || 0;
+    if (!(lista > 0) || !(neto > 0) || lista - neto < 0.005) return null;
+    return { lista, pct: Math.round((1 - neto / lista) * 1000) / 10 };
+  };
+  const hayDescuento = pr.items.some((it) => descuentoRenglon(it) !== null);
   pr.items.forEach((item, originalIndex) => {
-    const visualRows = Math.max(1, Math.min(3, Math.ceil(String(item.descripcion || "").length / 68)));
+    const visualRows = Math.max(1, Math.min(3, Math.ceil(String(item.descripcion || "").length / 68))) + (descuentoRenglon(item) ? 1 : 0);
     if (currentPage.length > 0 && usedRows + visualRows > pageCapacity) {
       pages.push(currentPage);
       currentPage = [];
@@ -396,6 +408,7 @@ export function generatePresupuestoPDF(
         <tr><td style="font-size:11px;color:#333;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(pr.iva, mon)}</td></tr>
         <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
       </table>`}
+    ${hayDescuento ? `<div style="margin-top:6px;font-size:9px;color:#666;text-align:right">${Number(pr.descuentoGeneralPorcentaje) > 0 ? `Incluye descuento general del ${Number(pr.descuentoGeneralPorcentaje).toLocaleString("es-AR")}%. ` : ""}Los precios ya tienen el descuento aplicado.</div>` : ""}
   </td></tr>
 </table>`;
 
@@ -407,7 +420,12 @@ export function generatePresupuestoPDF(
       return `<tr>
         <td class="center pr-nowrap">${originalIndex + 1}</td>
         <td class="mono pr-code pr-nowrap">${textoSeguro(it.codigo)}</td>
-        <td>${textoSeguro(it.descripcion)}</td>
+        <td>${textoSeguro(it.descripcion)}${(() => {
+          const d = descuentoRenglon(it);
+          if (!d) return "";
+          const lista = isB ? d.lista * (1 + ivaPct / 100) : d.lista;
+          return `<div style="font-size:9px;color:#666;margin-top:2px">Precio de lista ${formatCurrency(lista, mon)} &middot; Descuento ${d.pct.toLocaleString("es-AR")}%</div>`;
+        })()}</td>
         <td class="right pr-nowrap">${it.cantidad}</td>
         <td class="center pr-nowrap">${it.unidad || "u"}</td>
         <td class="right mono pr-nowrap">${formatCurrency(precioUnitarioCliente, mon)}</td>

@@ -18,7 +18,7 @@ assert.equal(sumPaymentMoney([0.1, 0.2]), 0.3);
 const finanzas = fs.readFileSync(new URL("../src/app/(crm)/finanzas/page.tsx", import.meta.url), "utf8");
 assert.match(finanzas, /const montoBrutoEfectivo = roundPaymentMoney\(opMontoBruto\)/);
 assert.match(finanzas, /const baseRetencionEfectiva = roundPaymentMoney\(opBaseSinIVA\)/);
-assert.match(finanzas, /monto: roundPaymentMoney\(fc\.monto_a_pagar\)/);
+assert.match(finanzas, /monto: roundPaymentMoney\(f\.monto_a_pagar\)/);
 assert.match(finanzas, /monto: roundPaymentMoney\(m\.monto\)/);
 assert.match(finanzas, /p_base_retencion: roundPaymentMoney\(opBaseSinIVA\)/);
 

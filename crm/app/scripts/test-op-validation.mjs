@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import ts from "typescript";
 
 const file = fs.readFileSync(new URL("../src/app/(crm)/finanzas/page.tsx", import.meta.url), "utf8");
-const proveedoresFile = fs.readFileSync(new URL("../src/app/(crm)/proveedores/page.tsx", import.meta.url), "utf8");
+const proveedoresFile = fs.readFileSync(new URL("../src/components/proveedor-form-modal.tsx", import.meta.url), "utf8");
 const fiscalConditionFile = fs.readFileSync(new URL("../src/lib/fiscal-condition.ts", import.meta.url), "utf8");
 const paymentMoneyFile = fs.readFileSync(new URL("../src/lib/payment-money.ts", import.meta.url), "utf8");
 const purchaseReconciliationFile = fs.readFileSync(new URL("../src/lib/purchase-invoice-reconciliation.ts", import.meta.url), "utf8");
@@ -54,7 +54,7 @@ const defaults = () => ({
   sociedadActiva: { id: "sociedad" },
   opForm: { proveedor_id: "proveedor", moneda: "ARS", usar_monto_manual: false },
   opFCPendientes: [{ id: "fc-1", numero: "00001-00000123", tipo_comprobante: "FC A", selected: true, moneda: "ARS", monto_a_pagar: 100, saldo_pendiente: 100 }],
-  opDatosError: "", opFCLoading: false, opCondicionLoading: false, opProvCondicion: "RI", opParsingCount: 0,
+  opEnPesosUsd: false, opTCOk: true, opNCAsignaciones: [], opNCAplicado: 0, aplicarPagoParcial: () => false, opDatosError: "", opFCLoading: false, opCondicionLoading: false, opProvCondicion: "RI", opParsingCount: 0,
   opMontoBruto: 100, opRetencionGanancias: 10, opBaseSinIVA: 82.64, opNetoAPagar: 90,
   proveedoresOptions: [{ id: "proveedor", razon_social: "PROVEEDOR TEST", cuit: "30-12345678-9" }],
   opMedios: [{ moneda: "ARS", monto: 90 }],

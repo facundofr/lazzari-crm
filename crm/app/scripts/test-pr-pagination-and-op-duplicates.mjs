@@ -25,6 +25,6 @@ assert.match(pdf, /fc\.detalle/);
 assert.match(compras, /Number\(change\.line\.iva_porcentaje \?\? 21\) !== change\.vat/);
 
 assert.match(fceRoute, /NCEA: 203/);
-assert.match(fceRoute, /expectedFceOrigin = tipo === "NCEA" \? "FCEA"/);
+assert.match(fceRoute, /NCEA: "FCEA"/);
 
 console.log("OK PR multipágina, OP vinculada por id con referencia de viaje, markup IVA verificado y NC MiPyME código 203.");

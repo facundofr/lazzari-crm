@@ -9,7 +9,7 @@ const start = source.indexOf("async function handleCreateOP()");
 const end = source.indexOf("async function handleAnularOP", start);
 const handler = source.slice(start, end);
 
-assert.match(handler, /rpc\("registrar_pago_proveedor_seguro"/);
+assert.match(handler, /"registrar_pago_proveedor_seguro"/);
 assert.match(handler, /p_modo:\s*"op"/);
 assert.match(handler, /p_request_key:\s*opRequestKeyRef\.current/);
 assert.match(handler, /deben seleccionarse desde la cartera/);

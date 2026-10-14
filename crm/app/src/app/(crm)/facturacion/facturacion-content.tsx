@@ -439,6 +439,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const fvAllEstados = Object.keys(ESTADO_GROUPS);
   const [fvSelectedEstados, setFvSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [fvTipoFilter, setFvTipoFilter] = useState("");
+  const [fvMonedaFilter, setFvMonedaFilter] = useState<"" | "ARS" | "USD">("");
   const [clienteSearch, setClienteSearch] = useState("");
   const [fvEnvioFilter, setFvEnvioFilter] = useState<"todos" | "enviada" | "no_enviada">("todos");
   const fvIsAll = fvSelectedEstados.has("todos");
@@ -465,11 +466,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const filteredFacturas = useMemo(() => facturas.filter((f) => {
     if (!fvIsAll && !Array.from(fvSelectedEstados).some(grp => (ESTADO_GROUPS[grp] || [grp]).includes(f.estado))) return false;
     if (fvTipoFilter && f.tipo !== fvTipoFilter) return false;
+    if (fvMonedaFilter && (f.moneda === "USD" ? "USD" : "ARS") !== fvMonedaFilter) return false;
     if (clienteSearch.trim() && !facturaCoincideBusqueda(f, clienteSearch)) return false;
     if (fvEnvioFilter === "enviada" && !f.email_enviado_at) return false;
     if (fvEnvioFilter === "no_enviada" && f.email_enviado_at) return false;
     return true;
-  }), [facturas, fvIsAll, fvSelectedEstados, fvTipoFilter, clienteSearch, fvEnvioFilter]);
+  }), [facturas, fvIsAll, fvSelectedEstados, fvTipoFilter, fvMonedaFilter, clienteSearch, fvEnvioFilter]);
 
   // ── Fetch data ─────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -1424,13 +1426,19 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             <option value="NCEA">NCEA</option>
             <option value="NCEB">NCEB</option>
           </select>
+          <select value={fvMonedaFilter} onChange={(e) => setFvMonedaFilter(e.target.value as "" | "ARS" | "USD")}
+            className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+            <option value="">Todas las monedas</option>
+            <option value="ARS">Pesos (ARS)</option>
+            <option value="USD">Dólares (USD)</option>
+          </select>
           <select value={fvEnvioFilter} onChange={(e) => setFvEnvioFilter(e.target.value as any)}
             className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
             <option value="todos">Envío: todas</option>
             <option value="enviada">Enviadas</option>
             <option value="no_enviada">No enviadas</option>
           </select>
-          {(clienteSearch || !fvIsAll || fvTipoFilter || fvEnvioFilter !== "todos") && (
+          {(clienteSearch || !fvIsAll || fvTipoFilter || fvMonedaFilter || fvEnvioFilter !== "todos") && (
             <span className="text-xs text-zinc-500">{filteredFacturas.length} de {facturas.length}</span>
           )}
         </div>

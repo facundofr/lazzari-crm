@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 13/10/2026 · Versión publicada: **V1.1.427** (13/10/2026)
+Actualizado: 14/10/2026 · Último commit: **V1.1.441** (V1.1.428 a V1.1.441 están en los commits; el detalle de esas tandas está en `git log`, este archivo quedó atrasado en esa parte).
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -763,8 +763,19 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         - tsc 0 errores, hooks OK. No probado en local (pide login) → probar en producción. Falta subir app-version al publicar.
         - Seguridad revisada 14/10: el middleware (`lib/supabase/middleware.ts`) ya exige login en TODO `/api/` salvo `/api/cron/*` y
           `/api/cotizacion-bna` (probado en producción: email/send y rutas IA dan 401 sin login). Registro público en Supabase deshabilitado.
-          7 tablas de `probar-anonimo.cjs` cerradas. Falta (con OK): probar TODAS las tablas sin login; headers anti-iframe/CSP en `next.config`
-          (hoy solo HSTS); web lazzari.com.ar (Netlify) solo tiene HSTS.
+          7 tablas de `probar-anonimo.cjs` cerradas. Web lazzari.com.ar (Netlify) solo tiene HSTS.
+        - **A) Prueba de TODAS las tablas sin login (OK 14/10, solo lectura):** 100 nombres (del código + migraciones), con la clave pública.
+          80 cerradas, 15 dan permiso denegado/no existen, 5 abiertas: `cotizaciones_dolar` (dólar, público, se deja) y **4 vistas con datos
+          reales**: v_cuenta_corriente_clientes (205), v_cuenta_corriente_proveedores (822), v_ordenes_compra_progreso (139), v_stock_alertas (46).
+          Las vistas corren como su dueño y saltean el RLS. Arreglo: `20261014130000_cerrar_vistas_anonimo.sql` (revoke a `anon`; el CRM las lee
+          logueado = rol authenticated, no cambia) + rollback. **CORRIDA por Augusto 14/10; re-probado: las 4 dan 401, solo queda abierta
+          cotizaciones_dolar.** Ninguna pantalla usa esas 4 vistas (solo `queries/*.ts` sin importar), así que no rompe nada. Re-probar con el script (en
+          el scratchpad de la sesión: lee .env.local, prueba cada tabla con limit 1 y no imprime datos). El esquema (OpenAPI) no se ve sin login. Las
+          funciones `rpc` NO se probaron (podrían escribir).
+        - **B) Encabezados de seguridad (`next.config.ts` → `headers()`):** X-Frame-Options SAMEORIGIN + CSP `frame-ancestors 'self'`
+          (anti-recuadro), nosniff, Referrer-Policy, Permissions-Policy (cámara/mic/ubicación apagados; el CRM no los usa). Probado en local:
+          login carga y devuelve los 5 encabezados. Al publicar, verificar con `curl -I https://lazzari-crm.vercel.app/login`.
+          (Error local `Cannot find module './5611.js'` = caché `.next` vieja, no es de este cambio.)
         - Banco "en vivo": opciones conversadas con Augusto (preguntar al ejecutivo BBVA por API/host-to-host o envío automático de extractos).
       **V1.1.440 (14/10, PUBLICADA — un solo commit 4c41788 con lo de este chat + Lista de costos del otro chat) — gasto fijo con proveedor + Tanda 4 de pantallas compactas:**
         - `20261013231000_gasto_fijo_proveedor.sql` CORRIDA (14/10, con OK, cuando terminó la transacción de las fotos): `gastos_fijos.proveedor_id`.
@@ -1060,7 +1071,9 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         queda pagada con tarjeta Visa (sin OP) y se cruza con el resumen de la Visa y su pago en el extracto. Ojo con compras en cuotas.
         Sugerencia: anotar el N° de compra de ML en la OC al comprar (ayuda mucho al cruce).
      4) Puesta al día: cruce del listado de eCheqs del BBVA (✅ coinciden / ➕ faltan / ✏️ estado distinto) y OP de clientes por mail.
-0b. **Tests viejos que fallan** (ver punto 2): actualizarlos a cómo quedó el código.
+0b. **(HECHO 14/10/2026, sin publicar, sin subir versión: solo tests)** Los 6 tests viejos ya pasan (`financial-ledger-ui`, `op-echeqs`, `op-money-rounding`, `op-validation`, `pr-pagination-and-op-duplicates`, `purchase-credit-note`).
+   No faltaba ninguna función: cambiaron textos y lugares (pestañas Recibos/Vencimientos en `lib/finanzas-grupos.ts`, reporte de NC en `lib/reportes-comprobantes.ts`, formulario de proveedor en `components/proveedor-form-modal.tsx`,
+   NC de compra con `registrar_nota_credito_compra_v2` y factura origen sugerida pero no obligatoria, OP con facturas en USD, pago parcial). Los botones Caja/Balance ya no existen (se sacaron el 12/10): el test ahora verifica que no estén.
 1. **A5 Retención RG 830:** mínimo y escala por concepto (bienes, servicios, honorarios), unificar 224.000 vs 400.000 y no "congelar" en el Plan de pagos. Comparar con el archivo de Netegia que va a pasar Augusto y confirmar montos con el contador.
    **Respuestas del contador (13/10/2026):** valores del Anexo VIII (RG 4525) vigentes: bienes cód. 78 = 2 % y mínimo $224.000; servicios cód. 94 = 2 % y mínimo $67.170;
    transporte de carga cód. 95 = 0,25 % y $67.170; honorarios cód. 116 = escala y $67.170; no inscriptos: 10 % bienes, 25 %/28 % servicios, sin mínimo. Retención mínima $240 vigente.
@@ -1076,13 +1089,15 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
   nro de comprobante = 3 espacios + 13 dígitos; impuesto " 217"; régimen sin cero adelante (" 78", " 94", " 95"); suspendidos en blanco; fecha de boletín en blanco;
   CUIT país y CUIT ordenante en ceros; cada línea termina en CRLF. Las 16 líneas del contador se regeneran idénticas. tsc 0. Falta publicar y que el contador lo importe.
   Transportistas: las 12 fichas ya tenían concepto "transporte" (verificado 13/10).
-2. **Diagnóstico sin tocar:** D1 (cron cotización BNA, revisar lo que quedó), D4 (saldo inicial de caja automático), D5 (cuentas bancarias), D6 (errores sin revisar en Plan de pagos y Finanzas), sección E.
+2. **Diagnóstico sin tocar:** D1 (cron cotización BNA: **revisado 14/10/2026, el código está bien**: corre lun a vie 11:00 y 18:00, no pisa cotizaciones manuales, usa fuente verificada del BNA y responde 500 si falla una escritura; falta solo mirar en Vercel > Logs que haya corrido estos días), D4 (saldo inicial de caja automático), D5 (cuentas bancarias), D6 (errores sin revisar en Plan de pagos y Finanzas), sección E.
 3. **Cheque vs echeq:** unificar en "Cheque" Físico / Electrónico en todas las pantallas y reglas claras para la IA. Falta un ejemplo de Augusto.
 4. **Importar cheques** desde 01/01/2026: `ideas/cheques_desde_2026.csv` (695 cheques; 5 con año "2925" a corregir; los 15 de Martín Fernández aparte).
 5. **"Para revisar"** (idea 8): mandar OC, clientes y proveedores a la Papelera; lleva migración. Incluye borrar OC con facturas vinculadas.
-6. **Lista de costos dentro de Proveedores** (idea 9): fotos (`recursos/fotos_costos.zip`), rubro, marca y reglas por proveedor.
+   **14/10/2026: propuesta escrita en `docs/PROPUESTA-PAPELERA-14-10-2026.md`, ESPERANDO el OK de Augusto (no se tocó código ni base).**
+6. **(HECHO en V1.1.440, según el commit)** **Lista de costos dentro de Proveedores** (idea 9): fotos (`recursos/fotos_costos.zip`), rubro, marca y reglas por proveedor.
 7. **Comisiones** (idea 1) y **Torneo** (idea 7): faltan respuestas de Augusto.
 8. **Archivo BBVA Net Cash:** falta el formato del banco (el botón ya está, desactivado).
+9a. **(HECHO 14/10/2026, SIN PUBLICAR, V1.1.442, sin migración)** **Descuento visible en el PDF del presupuesto:** cada renglón con descuento muestra "Precio de lista $X · Descuento Y%" (en Factura B, la lista con IVA) y al pie "Incluye descuento general del Z%". Sin descuento, el PDF queda igual que antes (PR viejos sin `precio_lista` tampoco cambian). Archivos: `lib/pdf-templates.ts`, `lib/types.ts`, `presupuestos/page.tsx` (las dos llamadas al PDF). Prueba: `scripts/test-pdf-descuento.ts`. **Filtro por moneda en facturas de venta:** desplegable "Todas las monedas / Pesos / Dólares" en Facturación (`facturacion-content.tsx`), cuenta en "X de Y". tsc 0 errores, hooks OK. No probado en pantalla (necesita sesión).
 9. Otros: propuestas de `PROPUESTA-REPORTES-DASHBOARD.md`, centro de alertas unificado, descuento visible en el PDF del presupuesto, filtro por moneda en facturas de venta, revisar migraciones viejas de Manu.
 10. **Seguridad:** rotar la clave de Anthropic y activar MFA en Supabase y Vercel.
 
