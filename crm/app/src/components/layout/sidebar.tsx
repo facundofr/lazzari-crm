@@ -62,6 +62,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   ] },
   { grupo: "Entregar", items: [
     { name: "Remitos", href: "/remitos", icon: Receipt, module: "remitos" },
+    { name: "Stock", href: "/stock", icon: Package, module: "stock" },
     { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
   ] },
   { grupo: "Plata", items: [

@@ -2905,7 +2905,7 @@ export default function PresupuestosPage() {
                         <th className="px-2 py-1.5">Estado</th>
                         <th className="px-2 py-1.5">Cliente</th>
                         <th className="px-2 py-1.5 hidden md:table-cell">Vendedor</th>
-                        <th className="px-2 py-1.5 hidden sm:table-cell">Enviado</th>
+                        <th className="px-2 py-1.5">Enviado</th>
                         <th className="px-2 py-1.5 text-right">Subtotal s/IVA</th>
                         <th className="px-2 py-1.5 hidden lg:table-cell">Motivo</th>
                         <th className="px-2 py-1.5"></th>
@@ -2927,8 +2927,8 @@ export default function PresupuestosPage() {
                             <td className="px-2 py-1"><Badge variant={cfg.variant}>{cfg.label}</Badge></td>
                             <td className="px-2 py-1 max-w-[220px] truncate font-medium text-zinc-700 dark:text-zinc-300" title={pr.clienteNombre}>{pr.clienteNombre}</td>
                             <td className="px-2 py-1 hidden md:table-cell text-zinc-500 whitespace-nowrap">{(pr as any).vendedorNombre || "—"}</td>
-                            <td className="px-2 py-1 hidden sm:table-cell text-zinc-500 whitespace-nowrap">{formatDate(pr.fechaRef)}</td>
-                            <td className="px-2 py-1 text-right font-mono font-semibold whitespace-nowrap text-zinc-700 dark:text-zinc-200" title={`Total: ${formatCurrency(pr.total, pr.moneda)}`}>{formatCurrency(pr.subtotal, pr.moneda)}</td>
+                            <td className="px-2 py-1 text-zinc-500 whitespace-nowrap">{formatDate(pr.fechaRef)}</td>
+                            <td className="px-2 py-1 text-right font-mono whitespace-nowrap font-semibold whitespace-nowrap text-zinc-700 dark:text-zinc-200" title={`Total: ${formatCurrency(pr.total, pr.moneda)}`}>{formatCurrency(pr.subtotal, pr.moneda)}</td>
                             <td className="px-2 py-1 hidden lg:table-cell max-w-[200px] truncate text-purple-700 dark:text-purple-300" title={pr.motivoRechazo || ""}>{pr.estado === "postergado" ? pr.motivoRechazo || "" : ""}</td>
                             <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center justify-end gap-1">
@@ -3222,14 +3222,14 @@ export default function PresupuestosPage() {
             <div className="fixed inset-0 z-40 bg-black/20 transition-opacity" onClick={() => { setSelected(null); setPanelFullscreen(false); }} />
           )}
           <div className={panelFullscreen
-            ? "fixed inset-4 z-50 overflow-y-auto bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl animate-slide-in-right"
-            : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-2xl"
+            ? "@container fixed inset-4 z-50 overflow-y-auto bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl animate-slide-in-right"
+            : "@container fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-3xl"
           }>
             {/* Panel header */}
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-200 bg-white/95 backdrop-blur-sm px-4 sm:px-5 py-2.5 dark:border-zinc-700 dark:bg-zinc-900/95">
-              <div>
-                <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-bold text-zinc-900 dark:text-white">PR {selected.numero}</h2>
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-2 border-b border-zinc-200 bg-white/95 backdrop-blur-sm px-3 @lg:px-5 py-2 dark:border-zinc-700 dark:bg-zinc-900/95">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                  <h2 className="whitespace-nowrap text-base font-bold text-zinc-900 @lg:text-lg dark:text-white">{selected.numero}</h2>
                   {(() => {
                     const cfg = statusConfig[selected.estado] || { label: selected.estado, variant: "outline" as const };
                     const sinCostos = selected.estado === "aprobado" && prsSinCostos.has(selected.id);
@@ -3246,21 +3246,21 @@ export default function PresupuestosPage() {
                     );
                   })()}
                 </div>
-                <p className="text-sm text-zinc-500 mt-0.5">{selected.clienteNombre}</p>
+                <p className="truncate text-sm text-zinc-500" title={selected.clienteNombre}>{selected.clienteNombre}</p>
                 {!!(selected as any).clienteLimiteCredito && (selected as any).clienteSaldoCC >= (selected as any).clienteLimiteCredito && (
                   <div className="flex items-center gap-1 mt-1 rounded-md bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 px-2 py-1 text-xs font-medium text-red-700 dark:text-red-300">
                     <AlertTriangle className="h-3 w-3 shrink-0" /> Límite de crédito excedido
                   </div>
                 )}
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex shrink-0 items-center gap-0.5">
                 <button
                   onClick={() => handleCopyPR(selected)}
                   className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 transition-colors"
                   title="Copiar resumen"
                 >
                   {copiedPR ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <ClipboardCopy className="h-3.5 w-3.5" />}
-                  {copiedPR ? "Copiado" : "Copiar"}
+                  <span className="hidden @2xl:inline">{copiedPR ? "Copiado" : "Copiar"}</span>
                 </button>
                 <button
                   onClick={() => handlePrint(selected)}
@@ -3268,7 +3268,7 @@ export default function PresupuestosPage() {
                   title="Descargar PDF"
                 >
                   <Download className="h-3.5 w-3.5" />
-                  PDF
+                  <span className="hidden @2xl:inline">PDF</span>
                 </button>
                 <button
                   onClick={() => openEmailModal(selected)}
@@ -3276,7 +3276,7 @@ export default function PresupuestosPage() {
                   title="Enviar por email"
                 >
                   <Mail className="h-3.5 w-3.5" />
-                  Email
+                  <span className="hidden @2xl:inline">Email</span>
                 </button>
                 {["solicitud", "pendiente", "rechazado", "postergado", "aprobado"].includes(selected.estado) && (
                   <button
@@ -3285,7 +3285,7 @@ export default function PresupuestosPage() {
                     title={selected.estado === "solicitud" ? "Convertir esta solicitud en presupuesto" : "Editar presupuesto"}
                   >
                     {selected.estado === "solicitud" ? <ArrowRight className="h-3.5 w-3.5" /> : <Edit3 className="h-3.5 w-3.5" />}
-                    {selected.estado === "solicitud" ? "Convertir" : "Editar"}
+                    <span className="hidden @2xl:inline">{selected.estado === "solicitud" ? "Convertir" : "Editar"}</span>
                   </button>
                 )}
                 {selected.estado !== "solicitud" && remitidoStatus[selected.id] !== "total" && (
@@ -3295,7 +3295,7 @@ export default function PresupuestosPage() {
                     title="Generar remito"
                   >
                     <Truck className="h-3.5 w-3.5" />
-                    {remitidoStatus[selected.id] === "parcial" ? "Remitar pendiente" : "Remitar"}
+                    <span className="hidden @xl:inline">{remitidoStatus[selected.id] === "parcial" ? "Remitar pendiente" : "Remitar"}</span>
                   </button>
                 )}
                 <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
@@ -3315,9 +3315,9 @@ export default function PresupuestosPage() {
               </div>
             </div>
 
-            <div className="p-3 sm:p-4 space-y-3">
+            <div className="p-3 @lg:p-4 space-y-3">
               {/* Info grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">
+              <div className="grid grid-cols-2 @lg:grid-cols-3 @3xl:grid-cols-4 gap-x-3 gap-y-1.5">
                 <div>
                   <p className="text-xs text-zinc-500">Fecha</p>
                   <p className="text-sm font-medium">{formatDate(selected.fecha)}</p>
@@ -3345,7 +3345,7 @@ export default function PresupuestosPage() {
                       await fetchPresupuestos();
                       toast.success("Vendedor actualizado");
                     }}
-                    className="mt-0.5 w-full rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    className="mt-0.5 w-full rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                   >
                     <option value="">Sin asignar</option>
                     {vendedores.map(v => (
@@ -3381,7 +3381,7 @@ export default function PresupuestosPage() {
                       await fetchPresupuestos();
                       toast.success("Operador actualizado");
                     }}
-                    className="mt-0.5 w-full rounded-md border border-zinc-200 bg-white px-2 py-1 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    className="mt-0.5 w-full rounded-md border border-zinc-200 bg-white px-1.5 py-0.5 text-sm font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                   >
                     <option value="">Sin asignar</option>
                     {vendedores.map(v => (
@@ -3468,7 +3468,7 @@ export default function PresupuestosPage() {
                   ) : null;
                 })()}
                 {/* Celular: cada renglón como tarjeta */}
-                <div className="space-y-1.5 sm:hidden">
+                <div className="space-y-1.5 @xl:hidden">
                   {selected.items.map((item) => {
                     const costoConv = convertCosto(item.precioCosto, (item as any).costoMoneda || "ARS", selected.moneda, selected.tipoCambio || 0, (selected as any).tipoCambioDivisas || 0);
                     const belowCost = item.precioVenta < costoConv;
@@ -3486,12 +3486,11 @@ export default function PresupuestosPage() {
                     );
                   })}
                 </div>
-                <div className="hidden overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700 sm:block">
-                  <table className="w-full text-sm">
+                <div className="hidden overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700 @xl:block">
+                  <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
-                        <th className="px-3 py-1.5 text-left text-xs font-semibold text-zinc-500">Codigo</th>
-                        <th className="px-3 py-1.5 text-left text-xs font-semibold text-zinc-500">Descripcion</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold text-zinc-500">Descripción</th>
                         <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500">Cant.</th>
                         {!ocultarCostos && <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">P. Costo</th>}
                         {!ocultarCostos && <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">Markup</th>}
@@ -3506,8 +3505,7 @@ export default function PresupuestosPage() {
                         const av = avisosRenglon({ cantidad: item.cantidad, unidad: item.unidad, precio: item.precioVenta, descripcion: item.descripcion });
                         return (
                         <tr key={item.id} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
-                          <td className="px-3 py-1.5 font-mono text-xs">{item.codigo}</td>
-                          <td className="px-3 py-1.5">{item.descripcion}{av.length > 0 && <div className="text-[10px] text-amber-600" title="Es un aviso, no frena nada">⚠️ {av.join(" · ")}</div>}</td>
+                          <td className="px-3 py-1.5 leading-snug">{item.descripcion}{item.codigo && <span className="ml-1 font-mono text-[10px] text-zinc-400">{item.codigo}</span>}{av.length > 0 && <div className="text-[10px] text-amber-600" title="Es un aviso, no frena nada">⚠️ {av.join(" · ")}</div>}</td>
                           <td className="px-3 py-1.5 text-right whitespace-nowrap">{formatCantidad(item.cantidad)} {item.unidad}</td>
                           {!ocultarCostos && <td className="px-3 py-1.5 text-right font-mono hidden sm:table-cell">
                             <div>{formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")}</div>

@@ -755,7 +755,7 @@ export default function FinanzasPage() {
   // Gastos fijos modal
   const [gastoModalOpen, setGastoModalOpen] = useState(false);
   const [editingGasto, setEditingGasto] = useState<GastoFijo | null>(null);
-  const [gastoForm, setGastoForm] = useState({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS" as "USD" | "ARS", notas: "", proveedorId: "", diaVencimiento: "", calculo: "" });
+  const [gastoForm, setGastoForm] = useState({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS" as "USD" | "ARS", notas: "", proveedorId: "", diaVencimiento: "", calculo: "", dolarReferencia: "" });
   const [gastoSaving, setGastoSaving] = useState(false);
 
   // OP state
@@ -1174,6 +1174,7 @@ export default function FinanzasPage() {
             monto: Number(g.monto), moneda: g.moneda, activo: g.activo,
             notas: g.notas ?? "", createdAt: g.created_at, proveedorId: g.proveedor_id ?? null,
             diaVencimiento: g.dia_vencimiento ?? null, calculo: g.calculo ?? null,
+            dolarReferencia: g.dolar_referencia != null ? Number(g.dolar_referencia) : null,
           })));
         }
 
@@ -1675,10 +1676,10 @@ export default function FinanzasPage() {
   function openGastoModal(gasto?: GastoFijo) {
     if (gasto) {
       setEditingGasto(gasto);
-      setGastoForm({ descripcion: gasto.descripcion, categoria: gasto.categoria, monto: gasto.monto, moneda: gasto.moneda, notas: gasto.notas, proveedorId: gasto.proveedorId ?? "", diaVencimiento: gasto.diaVencimiento ? String(gasto.diaVencimiento) : "", calculo: gasto.calculo ?? "" });
+      setGastoForm({ descripcion: gasto.descripcion, categoria: gasto.categoria, monto: gasto.monto, moneda: gasto.moneda, notas: gasto.notas, proveedorId: gasto.proveedorId ?? "", diaVencimiento: gasto.diaVencimiento ? String(gasto.diaVencimiento) : "", calculo: gasto.calculo ?? "", dolarReferencia: gasto.dolarReferencia ? String(gasto.dolarReferencia) : "" });
     } else {
       setEditingGasto(null);
-      setGastoForm({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS", notas: "", proveedorId: "", diaVencimiento: "", calculo: "" });
+      setGastoForm({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS", notas: "", proveedorId: "", diaVencimiento: "", calculo: "", dolarReferencia: "" });
     }
     setGastoModalOpen(true);
   }
@@ -1693,6 +1694,8 @@ export default function FinanzasPage() {
       proveedor_id: gastoForm.proveedorId || null,
       dia_vencimiento: dia >= 1 && dia <= 31 ? Math.round(dia) : null,
       calculo: gastoForm.calculo || null,
+      // Solo viaja en gastos en US$ (en pesos no hace falta y no se toca la columna)
+      ...(gastoForm.moneda === "USD" ? { dolar_referencia: Number(String(gastoForm.dolarReferencia).replace(",", ".")) > 0 ? Number(String(gastoForm.dolarReferencia).replace(",", ".")) : null } : {}),
     };
     try {
       if (editingGasto) {
@@ -5826,6 +5829,11 @@ export default function FinanzasPage() {
                     {g.activo && !pm && g.diaVencimiento && <span className="text-xs text-zinc-500">· vence el {g.diaVencimiento}</span>}
                     {g.notas && <span className="text-xs text-zinc-500 truncate">· {g.notas}</span>}
                   </div>
+                  {g.activo && g.moneda === "USD" && (
+                    <span className={`text-xs ${g.dolarReferencia ? "text-zinc-500" : "rounded bg-amber-50 px-1.5 py-0.5 font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"}`} title="Dólar con el que se pasa a pesos en el recuadro de gastos fijos del Dashboard">
+                      {g.dolarReferencia ? `× dólar ${formatCurrency(g.dolarReferencia)} = ${formatCurrency(g.monto * g.dolarReferencia)}` : "⚠️ Falta el dólar (Editar)"}
+                    </span>
+                  )}
                   <span className="font-mono font-bold text-sm text-zinc-900 dark:text-white" title={g.calculo === "sicore" ? `Automático: retenciones de Ganancias de ${sicoreAuto.mes}` : undefined}>
                     {g.calculo === "sicore" && <span className="mr-1 text-[10px] font-normal text-zinc-400">auto</span>}
                     {formatCurrency(montoGastoFijo(g), g.moneda)}
@@ -6028,6 +6036,13 @@ export default function FinanzasPage() {
                 </select>
                 <p className="mt-0.5 text-[11px] text-zinc-400">Si lo elegís, avisa cuando falte la factura del mes. Si no, espera el pago del mes en "Gastos".</p>
               </div>
+              {gastoForm.moneda === "USD" && (
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Dólar para pasarlo a pesos (el que usás, ej. blue)</label>
+                  <input type="number" min={0} step="0.01" value={gastoForm.dolarReferencia} onChange={(e) => setGastoForm({ ...gastoForm, dolarReferencia: e.target.value })} className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: 1500" />
+                  <p className="mt-0.5 text-[11px] text-zinc-400">Lo usa el recuadro "¿Cubro los gastos fijos?" del Dashboard y de Hoy.</p>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-zinc-500">Vence el día</label>

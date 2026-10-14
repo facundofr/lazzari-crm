@@ -13,6 +13,7 @@ import { Target, TrendingUp } from "lucide-react";
 const CLAVE_DOLAR = "lz-dolar-fijos";
 const ESTADOS_VENDIDOS = ["aprobado", "facturar", "facturado"];
 
+// Respaldo: el dólar que antes se guardaba en esta compu, hasta que se cargue en Finanzas > Gastos fijos.
 function leerDolar(): string {
   try { return localStorage.getItem(CLAVE_DOLAR) || ""; } catch { return ""; }
 }
@@ -33,7 +34,7 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
   const [prsPorFacturar, setPrsPorFacturar] = useState<PRDelMes[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
-  const [dolar, setDolar] = useState("");
+  const [dolar, setDolar] = useState("");  // respaldo local, ya no se edita acá
 
   useEffect(() => { setDolar(leerDolar()); }, []);
 
@@ -55,7 +56,7 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
             .select("id, estado, moneda, tipo_cambio, tipo_cambio_divisas, modalidad_emision, costo_envio_interno, presupuesto_items(cantidad, precio_venta, precio_costo, costo_moneda)")
             .eq("sociedad_id", sociedadId).eq("eliminado", false).in("estado", ESTADOS_VENDIDOS)
             .gte("fecha", `${mes}-01`).lt("fecha", mesSiguiente),
-          db.from("gastos_fijos").select("descripcion, monto, moneda, activo").eq("sociedad_id", sociedadId),
+          db.from("gastos_fijos").select("*").eq("sociedad_id", sociedadId),
           db.from("objetivos").select("monto_target, moneda, periodo_inicio, periodo_fin, activo, usuario_id").eq("activo", true)
             .lte("periodo_inicio", hoy).gte("periodo_fin", hoy)
             .or(`sociedad_id.is.null,sociedad_id.eq.${sociedadId}`),
@@ -88,7 +89,7 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
             precioCosto: Number(it.precio_costo) || 0, costoMoneda: it.costo_moneda,
           })),
         })));
-        setFijos(((fijosRes.data || []) as any[]).map((g) => ({ descripcion: g.descripcion, monto: Number(g.monto) || 0, moneda: g.moneda || "ARS", activo: !!g.activo })));
+        setFijos(((fijosRes.data || []) as any[]).map((g) => ({ descripcion: g.descripcion, monto: Number(g.monto) || 0, moneda: g.moneda || "ARS", activo: !!g.activo, dolar: Number(g.dolar_referencia) > 0 ? Number(g.dolar_referencia) : null })));
         const globales = ((objRes.data || []) as any[]).filter((o) => !o.usuario_id && (o.moneda || "ARS") === "ARS");
         setObjetivo(globales.length ? Math.max(...globales.map((o) => Number(o.monto_target) || 0)) : null);
       } catch (e: any) {
@@ -108,11 +109,6 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
     if (!onMargen || cargando) return;
     onMargen(c.margenSobreVenta === null ? null : Math.round(c.margenSobreVenta * 1000) / 10);
   }, [onMargen, cargando, c.margenSobreVenta]);
-
-  function guardarDolar(v: string) {
-    setDolar(v);
-    try { localStorage.setItem(CLAVE_DOLAR, v); } catch { /* sin guardado: sigue andando */ }
-  }
 
   if (!sociedadId) return null;
   const ventaTotal = c.ventaNeta + c.ventaSinCosto;
@@ -163,7 +159,7 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
               <>
                 <p className="font-mono text-xl font-bold text-zinc-900 dark:text-white">{formatCurrency(c.ganancia)}</p>
                 <p className="text-[11px] text-zinc-500">de ganancia en el mes</p>
-                <p className="text-sm text-amber-700 dark:text-amber-300">Poné abajo el dólar del alquiler para ver el porcentaje.</p>
+                <p className="text-sm text-amber-700 dark:text-amber-300">Falta el dólar del alquiler: cargalo en Gastos fijos (Editar) para ver el porcentaje.</p>
               </>
             ) : (
               <>
@@ -172,12 +168,8 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
                 <p className="text-[11px] text-zinc-500">Ganancia {formatCurrency(c.ganancia)} de {formatCurrency(c.fijosTotal || 0)} de fijos</p>
               </>
             )}
-            {c.fijosUSD > 0 && (
-              <label className="flex items-center gap-1 text-[11px] text-zinc-500" title="Dólar que usás para el alquiler (blue). Se guarda solo en esta compu.">
-                Alquiler US$ {c.fijosUSD} × dólar
-                <input value={dolar} inputMode="decimal" placeholder="ej. 1500" onChange={(e) => guardarDolar(e.target.value)}
-                  className="w-20 rounded border border-zinc-200 px-1 py-0.5 text-right font-mono dark:border-zinc-700 dark:bg-zinc-800" />
-              </label>
+            {c.fijosUSD > 0 && c.fijosTotal !== null && (
+              <p className="text-[11px] text-zinc-500">Incluye alquiler US$ {c.fijosUSD} al dólar cargado en <Link href="/finanzas?tab=gastos_fijos" className="text-orange-600 hover:underline">Gastos fijos</Link>.</p>
             )}
           </div>
 
@@ -194,7 +186,7 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
                 <p className="text-[11px] text-zinc-500">de venta neta, con tu margen del mes ({((c.margenSobreVenta || 0) * 100).toFixed(1)}% sobre la venta)</p>
               </>
             ) : c.fijosTotal === null ? (
-              <p className="text-sm text-zinc-500">Falta el dólar del alquiler para calcularlo.</p>
+              <p className="text-sm text-zinc-500">Falta el dólar del alquiler (Finanzas → Gastos fijos) para calcularlo.</p>
             ) : (
               <p className="text-sm text-zinc-500">Todavía no hay ventas con costo para calcular.</p>
             )}

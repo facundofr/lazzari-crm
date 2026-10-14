@@ -560,6 +560,8 @@ export interface GastoFijo {
   diaVencimiento?: number | null;
   /** Monto automático: "sicore" = retenciones de Ganancias del mes anterior. */
   calculo?: "sicore" | null;
+  /** Dólar de referencia para pasar a pesos un gasto en US$ (ej. alquiler). */
+  dolarReferencia?: number | null;
 }
 
 // ── Objetivos ───────────────────────────────────────────────────

@@ -14,12 +14,14 @@ export interface FijoEntrada {
   monto: number;
   moneda: string;
   activo: boolean;
+  /** Dólar de referencia de este gasto (Finanzas > Gastos fijos). Si falta, se usa `dolarFijos`. */
+  dolar?: number | null;
 }
 
 export interface CoberturaEntrada {
   prs: PRDelMes[];
   fijos: FijoEntrada[];
-  /** Dólar que carga Augusto para el alquiler (blue). Sin él, los fijos en US$ no se pueden pasar a pesos. */
+  /** Dólar de respaldo para los fijos en US$ que no tienen el suyo. Sin ninguno, no se pueden pasar a pesos. */
   dolarFijos: number;
   /** Día del mes (1..31) y cantidad de días del mes, para saber el ritmo. */
   diaDelMes: number;
@@ -67,7 +69,10 @@ export function calcularCobertura(e: CoberturaEntrada): Cobertura {
   }
   const fijosARS = e.fijos.filter((f) => f.activo && f.moneda !== "USD").reduce((s, f) => s + (Number(f.monto) || 0), 0);
   const fijosUSD = e.fijos.filter((f) => f.activo && f.moneda === "USD").reduce((s, f) => s + (Number(f.monto) || 0), 0);
-  const fijosTotal = fijosUSD > 0 && !(e.dolarFijos > 0) ? null : r2(fijosARS + fijosUSD * (e.dolarFijos > 0 ? e.dolarFijos : 0));
+  const usd = e.fijos.filter((f) => f.activo && f.moneda === "USD" && (Number(f.monto) || 0) > 0);
+  const dolarDe = (f: FijoEntrada) => (Number(f.dolar) > 0 ? Number(f.dolar) : e.dolarFijos > 0 ? e.dolarFijos : 0);
+  const faltaDolar = usd.some((f) => !(dolarDe(f) > 0));
+  const fijosTotal = faltaDolar ? null : r2(fijosARS + usd.reduce((s, f) => s + (Number(f.monto) || 0) * dolarDe(f), 0));
   const margenSobreVenta = ventaNeta > 0 ? ganancia / ventaNeta : null;
   const coberturaPct = fijosTotal && fijosTotal > 0 ? Math.round((ganancia / fijosTotal) * 100) : null;
   const faltaGanancia = fijosTotal === null ? null : Math.max(0, r2(fijosTotal - ganancia));

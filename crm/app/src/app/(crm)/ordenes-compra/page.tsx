@@ -3072,10 +3072,10 @@ export default function OrdenesCompraPage() {
           )}
           <div className={panelFullscreen
             ? "fixed inset-4 z-50 overflow-y-auto bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl animate-slide-in-right"
-            : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-2xl"
+            : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-3xl"
           }>
             {/* Header */}
-            <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10 space-y-2">
+            <div className="px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10 space-y-1.5">
               {/* Row 1: Number + close/fullscreen */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 min-w-0">
@@ -3207,7 +3207,7 @@ export default function OrdenesCompraPage() {
               </div>
             </div>
 
-            <div className="px-6 py-5 pb-40 space-y-6">
+            <div className="px-4 py-3 pb-40 space-y-4">
               {/* ── Action Buttons ─────────────────────────────────────── */}
               {canManageCompras && !["cancelada"].includes(detailOC.estado) && (
                 <div className="flex flex-wrap gap-2">
@@ -3712,7 +3712,7 @@ export default function OrdenesCompraPage() {
                   <p className="text-sm text-zinc-400 py-4 text-center">Sin items — editá la OC para agregar</p>
                 ) : (
                   <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-xs">
                       <thead>
                         <tr className="bg-zinc-50 dark:bg-zinc-800 text-left text-xs text-zinc-500 uppercase">
                           <th className="px-2.5 py-1.5">Codigo</th>
@@ -3764,13 +3764,13 @@ export default function OrdenesCompraPage() {
                                   formatCurrency(Number(item.precio_unitario), detailOC.moneda as "ARS" | "USD")
                                 )}
                               </td>
-                              <td className="px-3 py-2 text-right font-mono">
+                              <td className="px-2 py-1.5 text-right font-mono">
                                 {editMode
                                   ? formatCurrency(Number(item.cantidad) * Number(item.precio_unitario), detailOC.moneda as "ARS" | "USD")
                                   : formatCurrency(Number(item.subtotal), detailOC.moneda as "ARS" | "USD")}
                               </td>
                               {!detailOC.proveedores && !isOwnStockPurchaseOrder(detailOC) && (
-                                <td className="px-3 py-2">
+                                <td className="px-2 py-1.5">
                                   {canManageCompras ? <ProveedorPicker value={item.proveedor_id || ""} options={proveedores} onChange={(proveedorId) => handleItemProveedorChange(item.id, proveedorId)} compact /> : (
                                     <span className="text-xs text-zinc-500">
                                       {proveedores.find(p => p.id === item.proveedor_id)?.razon_social || "Sin proveedor"}
@@ -3778,7 +3778,7 @@ export default function OrdenesCompraPage() {
                                   )}
                                 </td>
                               )}
-                              <td className="px-3 py-2">
+                              <td className="px-2 py-1.5">
                                 {editMode ? (
                                   <div className="flex items-center justify-center">
                                     <input type="number" step="1" min={0} max={item.cantidad} value={item.cantidad_recibida}
@@ -3836,14 +3836,14 @@ export default function OrdenesCompraPage() {
                   </div>
 
                   <div className="border border-violet-200 dark:border-violet-700 rounded-lg overflow-hidden bg-white dark:bg-zinc-900">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-xs">
                       <thead>
                         <tr className="bg-violet-50 dark:bg-violet-900/30 text-left text-xs text-violet-600 dark:text-violet-300 uppercase">
-                          <th className="px-3 py-2">Descripcion</th>
-                          <th className="px-3 py-2 text-center">Pedido</th>
-                          <th className="px-3 py-2 text-center">Ya recibido</th>
-                          <th className="px-3 py-2 text-center">Pendiente</th>
-                          <th className="px-3 py-2 text-center">Recibir ahora</th>
+                          <th className="px-2 py-1.5">Descripcion</th>
+                          <th className="px-2 py-1.5 text-center">Pedido</th>
+                          <th className="px-2 py-1.5 text-center">Ya recibido</th>
+                          <th className="px-2 py-1.5 text-center">Pendiente</th>
+                          <th className="px-2 py-1.5 text-center">Recibir ahora</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -3855,24 +3855,24 @@ export default function OrdenesCompraPage() {
                               key={item.id}
                               className={fullyReceived ? "opacity-50 bg-emerald-50/50 dark:bg-emerald-900/10" : ""}
                             >
-                              <td className="px-3 py-2">
+                              <td className="px-2 py-1.5">
                                 <div className="max-w-[220px] truncate" title={item.descripcion}>
                                   {item.codigo && <span className="font-mono text-xs text-zinc-400 mr-1">{item.codigo}</span>}
                                   {item.descripcion}
                                 </div>
                               </td>
-                              <td className="px-3 py-2 text-center font-medium">{item.cantidad}</td>
-                              <td className="px-3 py-2 text-center">
+                              <td className="px-2 py-1.5 text-center font-medium">{item.cantidad}</td>
+                              <td className="px-2 py-1.5 text-center">
                                 <span className={Number(item.cantidad_recibida) > 0 ? "text-emerald-600 font-medium" : "text-zinc-400"}>
                                   {item.cantidad_recibida}
                                 </span>
                               </td>
-                              <td className="px-3 py-2 text-center">
+                              <td className="px-2 py-1.5 text-center">
                                 <span className={pendiente > 0 ? "text-amber-600 font-medium" : "text-emerald-600"}>
                                   {pendiente}
                                 </span>
                               </td>
-                              <td className="px-3 py-2">
+                              <td className="px-2 py-1.5">
                                 <div className="flex items-center justify-center">
                                   {fullyReceived ? (
                                     <Check className="h-4 w-4 text-emerald-500" />

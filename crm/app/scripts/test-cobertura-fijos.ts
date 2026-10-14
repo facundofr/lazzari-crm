@@ -49,4 +49,12 @@ const vacio = calcularCobertura({ ...base, prs: [], fijos: [{ monto: 1000, moned
 assert.equal(vacio.margenSobreVenta, null);
 assert.equal(vacio.faltaVender, null);
 assert.equal(vacio.coberturaPct, 0);
+// Dólar propio del gasto (Finanzas > Gastos fijos): manda sobre el de respaldo, y alcanza solo
+const propio = calcularCobertura({ ...base, prs: [pr1], fijos: [{ monto: 800, moneda: "USD", activo: true, dolar: 1400 }], dolarFijos: 0 });
+assert.equal(propio.fijosTotal, 1120000);
+const propioManda = calcularCobertura({ ...base, prs: [pr1], fijos: [{ monto: 800, moneda: "USD", activo: true, dolar: 1400 }], dolarFijos: 1500 });
+assert.equal(propioManda.fijosTotal, 1120000);
+// Un US$ sin dólar propio ni de respaldo: se avisa (null), no se inventa
+const unoSinDolar = calcularCobertura({ ...base, prs: [pr1], fijos: [{ monto: 800, moneda: "USD", activo: true, dolar: 1400 }, { monto: 100, moneda: "USD", activo: true }], dolarFijos: 0 });
+assert.equal(unoSinDolar.fijosTotal, null);
 console.log("OK test-cobertura-fijos");
