@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 14/10/2026 · Último commit: **V1.1.441** (V1.1.428 a V1.1.441 están en los commits; el detalle de esas tandas está en `git log`, este archivo quedó atrasado en esa parte).
+Actualizado: 14/10/2026 · Publicadas esta noche, en dos deploys seguidos y verificadas desde afuera (login 200, encabezados de seguridad activos): **V1.1.442** (commit 98c866e) y **V1.1.443** (commit 99b3a77). Detalle de V1.1.428 a V1.1.441: `git log` (este archivo quedó atrasado en esa parte). Falta chequearlas con sesión (el sidebar tiene que decir V1.1.443).
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
