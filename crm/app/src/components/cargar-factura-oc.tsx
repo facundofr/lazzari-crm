@@ -13,6 +13,7 @@ import { ProveedorFormModal, type ProveedorForm } from "@/components/proveedor-f
 import { CondicionPagoEditor } from "@/components/condicion-pago-editor";
 import { textoCondicionPago, vencimientoFactura, type PlanPago } from "@/lib/condicion-pago";
 import { equivalenciaSugerida, costoPorUnidadPR, avisoCambioCostoPR } from "@/lib/reemplazo-oc";
+import { controlIva, emparejarPorPrecio, elegirOC } from "@/lib/factura-vs-oc";
 
 // ── Types ────────────────────────────────────────────────
 export interface OCParaVincular {
@@ -88,6 +89,18 @@ const roundMoney = (value: number) => Math.round(value * 100) / 100;
 const itemNeto = (item: FCItem) => (
   Number(item.cantidad) * Number(item.precio_unitario) * (1 - Number(item.descuento_porcentaje || 0) / 100)
 );
+const costoUnitario = (item: FCItem) => Number(item.precio_unitario) * (1 - Number(item.descuento_porcentaje || 0) / 100);
+/** Qué hacer con lo que la factura trae de más: va a la misma OC, a una OC nueva o queda solo en la factura. */
+type DecisionSobrante = "oc" | "nueva" | "nada";
+type Comparacion = {
+  item: FCItem;
+  status: "matched" | "unmatched" | "ambiguous";
+  matched: OCItemForMatch | null;
+  manual: boolean;
+  aprendido: boolean;
+  parecido?: string;
+  porPrecio?: boolean;
+};
 // ── Component ────────────────────────────────────────────
 export default function CargarFacturaOC({
   sociedadId, profileId, ordenes, preselectedOCId, initialImport, showTipoToggle, onClose, onSuccess,
@@ -133,7 +146,14 @@ export default function CargarFacturaOC({
   // Renglones de la factura que REEMPLAZAN al de la OC (se compró otra medida/artículo). Valor = equivalencia
   // "1 unidad de la OC/PR = N unidades de la factura" (texto editable).
   const [reemplazos, setReemplazos] = useState<Record<string, string>>({});
-  const [createExtrasOC, setCreateExtrasOC] = useState(false);
+  // Lo que la factura trae de más (renglón que no está en la OC o más cantidad): por defecto va a la misma OC.
+  const [decisiones, setDecisiones] = useState<Record<string, DecisionSobrante>>({});
+  const [verDetalle, setVerDetalle] = useState(false);
+  const [cambiarOC, setCambiarOC] = useState(false);
+  const [ocAuto, setOcAuto] = useState(false);
+  // Total impreso y OC que nombra la factura (los lee la IA): para controlar el IVA y elegir la OC sola.
+  const [totalLeido, setTotalLeido] = useState<number | null>(null);
+  const [referenciasOC, setReferenciasOC] = useState<string[]>([]);
   // Factura sin OC: crear una OC nueva con sus artículos (queda recibida y atada a la factura).
   const [crearOCNueva, setCrearOCNueva] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -349,7 +369,6 @@ export default function CargarFacturaOC({
       setSelectedOCItems([]);
       setManualItemMatches({});
       setOCItemsError("");
-      setCreateExtrasOC(false);
       return;
     }
     let cancelled = false;
@@ -404,9 +423,9 @@ export default function CargarFacturaOC({
 
   // Mismas reglas que la conciliación por línea (lib/purchase-matching): código tolerante y, si no aparece,
   // el renglón más parecido por nombre + cantidad + precio (queda en amarillo con el motivo).
-  const itemComparisons = useMemo(() => {
+  const itemComparisons = useMemo((): Comparacion[] => {
     const usadosParecido = new Set<string>();
-    return items.map((item) => {
+    const base = items.map((item): Comparacion => {
     const manualTarget = manualItemMatches[item.tempId];
     if (manualTarget === "__extra__") return { item, status: "unmatched" as const, matched: null, manual: true, aprendido: false };
     if (manualTarget) {
@@ -455,6 +474,17 @@ export default function CargarFacturaOC({
     }
     return { item, status: inspection.status, matched: null, manual: false, aprendido: false };
     });
+    // El proveedor llama distinto a los artículos: lo que no coincidió por código o nombre se empareja por precio.
+    const usados = new Set(base.filter((c) => c.status === "matched" && c.matched).map((c) => c.matched!.id));
+    const pares = emparejarPorPrecio(
+      base.filter((c) => c.status !== "matched" && !c.manual).map((c) => ({ key: c.item.tempId, cantidad: Number(c.item.cantidad) || 0, precio: costoUnitario(c.item), iva: 0 })),
+      selectedOCItems.filter((o) => !usados.has(o.id)).map((o) => ({ id: o.id, cantidad: Number(o.cantidad) || 0, precio: Number(o.precio_unitario) || 0 })),
+    );
+    return base.map((c) => {
+      const id = pares[c.item.tempId];
+      const matched = id ? selectedOCItems.find((o) => o.id === id) || null : null;
+      return matched ? { ...c, status: "matched" as const, matched, porPrecio: true } : c;
+    });
   }, [items, selectedOCItems, ocItemsComparables, manualItemMatches, equivalenciasProv]);
 
   // Vínculos efectivos para guardar: los automáticos (incluidos los aprendidos) + los manuales.
@@ -465,6 +495,101 @@ export default function CargarFacturaOC({
   }, [itemComparisons, manualItemMatches]);
 
   const unresolvedItemCount = itemComparisons.filter((comparison) => comparison.status !== "matched").length;
+
+  // ── Factura vs. OC: solo lo que es distinto ──
+  const decisionDe = (tempId?: string): DecisionSobrante => (tempId && decisiones[tempId])
+    || (tempId && manualItemMatches[tempId] === "__extra__" ? "nada" : "oc");
+  const diferencias = useMemo(() => {
+    const porLinea = new Map<string, { oc: OCItemForMatch; cantidad: number; ultimo: FCItem; costos: number[] }>();
+    const faltan: FCItem[] = [];
+    for (const c of itemComparisons) {
+      if (c.status !== "matched" || !c.matched) { faltan.push(c.item); continue; }
+      const g = porLinea.get(c.matched.id) || { oc: c.matched, cantidad: 0, ultimo: c.item, costos: [] };
+      g.cantidad += Number(c.item.cantidad) || 0;
+      g.ultimo = c.item;
+      g.costos.push(costoUnitario(c.item));
+      porLinea.set(c.matched.id, g);
+    }
+    const mas: { oc: OCItemForMatch; cantidad: number; tempId: string }[] = [];
+    const menos: { oc: OCItemForMatch; cantidad: number }[] = [];
+    const precio: { oc: OCItemForMatch; costo: number }[] = [];
+    for (const g of porLinea.values()) {
+      const enOC = Number(g.oc.cantidad) || 0;
+      if (g.cantidad > enOC + 0.0001) mas.push({ oc: g.oc, cantidad: g.cantidad, tempId: g.ultimo.tempId });
+      else if (g.cantidad < enOC - 0.0001) menos.push({ oc: g.oc, cantidad: g.cantidad });
+      const costo = g.costos[g.costos.length - 1];
+      if (Math.abs(costo - Number(g.oc.precio_unitario)) >= 0.005) precio.push({ oc: g.oc, costo });
+    }
+    const noVinieron = selectedOCItems.filter((o) => !porLinea.has(o.id));
+    const coinciden = itemComparisons.filter((c) => c.status === "matched").length;
+    const otroNombre = itemComparisons.filter((c) => c.status === "matched" && (c.porPrecio || c.parecido || c.aprendido || c.manual)).length;
+    return { mas, menos, precio, faltan, noVinieron, coinciden, otroNombre };
+  }, [itemComparisons, selectedOCItems]);
+
+  // neto + IVA + percepciones = total del PDF (aviso; propone 21 % si con eso da).
+  const ivaControl = useMemo(() => controlIva({
+    renglones: items.length
+      ? items.map((it) => ({ key: it.tempId, cantidad: Number(it.cantidad) || 0, precio: costoUnitario(it), iva: Number(it.iva_porcentaje || 0) }))
+      : [{ key: "neto", cantidad: 1, precio: subtotal, iva: ivaPorcentaje }],
+    neto: subtotal, percepciones, totalLeido,
+  }), [items, subtotal, ivaPorcentaje, percepciones, totalLeido]);
+  function usarIva21() {
+    setIvaPorcentaje(21);
+    setItems((prev) => prev.map((it) => ({ ...it, iva_porcentaje: 21 })));
+  }
+
+  // ── OC pendientes del proveedor (sin facturar del todo) y elección automática ──
+  const ordenesKey = useMemo(() => ordenes.map((oc) => `${oc.id}:${oc.proveedor_id}`).join(","), [ordenes]);
+  const [ocInfo, setOcInfo] = useState<{ prov: string; porOC: Record<string, { facturado: number; precios: number[]; nombres: string[]; cantidades: number[] }> }>({ prov: "", porOC: {} });
+  useEffect(() => {
+    const ids = ordenes.filter((oc) => proveedorId && oc.proveedor_id === proveedorId).map((oc) => oc.id);
+    if (!ids.length) { setOcInfo({ prov: proveedorId, porOC: {} }); return; }
+    let cancelado = false;
+    (async () => {
+      const db = supabase as any;
+      const [links, lineas] = await Promise.all([
+        db.from("factura_compra_ocs").select("orden_compra_id, facturas_compra(total, percepciones, estado, sociedad_id)").in("orden_compra_id", ids),
+        db.from("orden_compra_items").select("orden_id, descripcion, descripcion_proveedor, cantidad, precio_unitario").in("orden_id", ids),
+      ]);
+      if (cancelado) return;
+      const porOC: Record<string, { facturado: number; precios: number[]; nombres: string[]; cantidades: number[] }> = {};
+      for (const id of ids) porOC[id] = { facturado: 0, precios: [], nombres: [], cantidades: [] };
+      for (const l of links.data || []) {
+        const f = Array.isArray(l.facturas_compra) ? l.facturas_compra[0] : l.facturas_compra;
+        if (!f || f.estado === "anulada" || f.sociedad_id !== sociedadId) continue;
+        porOC[l.orden_compra_id].facturado += Number(f.total || 0) - Number(f.percepciones || 0);
+      }
+      for (const l of lineas.data || []) {
+        const o = porOC[l.orden_id];
+        if (!o) continue;
+        o.precios.push(Number(l.precio_unitario) || 0);
+        o.nombres.push(`${l.descripcion || ""} ${l.descripcion_proveedor || ""}`);
+        o.cantidades.push(Number(l.cantidad) || 0);
+      }
+      setOcInfo({ prov: proveedorId, porOC });
+    })();
+    return () => { cancelado = true; };
+  }, [proveedorId, sociedadId, ordenesKey]);
+  const ocsPendientes = useMemo(() => ordenes.filter((oc) => proveedorId && oc.proveedor_id === proveedorId
+    && Number(oc.total || 0) - (ocInfo.porOC[oc.id]?.facturado || 0) > 1), [ordenes, proveedorId, ocInfo]);
+  // Arriba se ven solo las pendientes del proveedor; "Ver todas" muestra el resto.
+  const ocsVisibles = useMemo(() => {
+    if (showAllOCs || !proveedorId) return ocsFiltered;
+    const q = ocSearch.trim().toLowerCase();
+    return ocsPendientes.filter((oc) => !q || `${oc.numero} ${oc.estado}`.toLowerCase().includes(q));
+  }, [showAllOCs, proveedorId, ocsFiltered, ocsPendientes, ocSearch]);
+  const autoOCHecho = useRef("");
+  useEffect(() => {
+    if (!parsed || !proveedorId || ocInfo.prov !== proveedorId || selectedOCIds.size > 0 || isCreditNote || tipoFC !== "mercaderia") return;
+    const clave = `${proveedorId}|${file?.name || ""}|${numeroFactura}`;
+    if (autoOCHecho.current === clave) return;
+    autoOCHecho.current = clave;
+    const elegida = elegirOC(
+      ocsPendientes.map((oc) => ({ id: oc.id, numero: oc.numero, total: Number(oc.total || 0), ...(ocInfo.porOC[oc.id] || { precios: [] }) })),
+      { precios: items.map(costoUnitario), total: totalSinPercepciones, referencias: referenciasOC, nombres: items.map((it) => it.descripcion), cantidades: items.map((it) => Number(it.cantidad) || 0) },
+    );
+    if (elegida) { setSelectedOCIds(new Set([elegida])); setOcAuto(true); }
+  }, [parsed, proveedorId, ocInfo, isCreditNote, tipoFC]);
 
   // ── Sugerencias de la IA para los artículos que no coinciden por código/nombre ──
   const [aiMatching, setAiMatching] = useState(false);
@@ -684,7 +809,9 @@ export default function CargarFacturaOC({
 
       // Auto-fill items
       setManualItemMatches({});
-      setCreateExtrasOC(false);
+      setDecisiones({});
+      setTotalLeido(Number(d.total) > 0 ? Number(d.total) : null);
+      setReferenciasOC(Array.isArray(d.referencias_oc) ? d.referencias_oc.map(String) : []);
       if (d.items && Array.isArray(d.items) && d.items.length > 0) {
         setItems(d.items.map((it: any, idx: number) => ({
           tempId: `ai-${Date.now()}-${idx}`,
@@ -732,6 +859,7 @@ export default function CargarFacturaOC({
 
   // ── Toggle OC ──
   function toggleOC(ocId: string) {
+    setOcAuto(false);
     setSelectedOCIds(prev => {
       const next = new Set(prev);
       if (next.has(ocId)) next.delete(ocId);
@@ -788,7 +916,7 @@ export default function CargarFacturaOC({
     if (!numeroFactura.trim()) { setError("Ingresá el número de factura"); return; }
     if (subtotal <= 0) { setError("El subtotal debe ser mayor a 0"); return; }
     // La OC es opcional: si no se eligió ninguna, se avisa pero se puede guardar igual.
-    if (!isCreditNote && tipoFC === "mercaderia" && selectedOCIds.size === 0 && !crearOCNueva && ocsFiltered.length > 0
+    if (!isCreditNote && tipoFC === "mercaderia" && selectedOCIds.size === 0 && !crearOCNueva && ocsPendientes.length > 0
       && !window.confirm("No elegiste ninguna orden de compra ni marcaste «Crear una OC nueva con los artículos de esta factura». ¿Guardar la factura igual, sin OC?")) return;
     // La NC puede quedar sin factura: el total queda como crédito disponible para usar en una Orden de Pago.
     if (isCreditNote && facturaOrigenId && (!Number.isFinite(creditoAplicado) || creditoAplicado < 0 || !selectedCreditOrigin || creditoAplicado > selectedCreditOrigin.saldo_acreditable + 0.005 || creditoAplicado > total + 0.005)) {
@@ -799,7 +927,7 @@ export default function CargarFacturaOC({
     setSaving(true);
     setError("");
     let savedFacturaId: string | null = null;
-    let generateExtrasOC = createExtrasOC;
+    let generateExtrasOC = false;
 
     try {
       // Aviso de duplicado: mismo proveedor, número y TIPO de comprobante (una NC 0001-00000045
@@ -846,6 +974,9 @@ export default function CargarFacturaOC({
       }
 
       let reconciliation: ReturnType<typeof reconcilePurchaseLines> | null = null;
+      // Cambios a la misma OC por lo que la factura trae de más (se guardan después de la factura).
+      type CambioOC = { tipo: "nuevo" | "cantidad"; oc: any; line: any; antes: number };
+      const cambiosOC: CambioOC[] = [];
       const verifiedPresupuestos = new Map<string, any>();
       const verifiedMarkupByItemId = new Map<string, number>();
       if (alignmentResult) {
@@ -877,9 +1008,44 @@ export default function CargarFacturaOC({
           previousItems,
           asignacionesEfectivas,
         );
+        // Lo que sobra va a la misma OC (sube la cantidad o agrega el renglón), salvo que se haya elegido OC nueva o solo factura.
+        if (reconciliation.extras.some((extra) => decisionDe(extra.tempId) === "oc")) {
+          const ocsVivas = alignmentResult.freshOCs;
+          const destino = ocsVivas.find((oc: any) => oc.id === selectedOCs[0]?.id) || ocsVivas[0];
+          const todoRecibido = (oc: any) => (oc.orden_compra_items || []).length > 0
+            && oc.orden_compra_items.every((l: any) => Number(l.cantidad_recibida || 0) >= Number(l.cantidad) - 0.000001);
+          const asignaciones = { ...asignacionesEfectivas };
+          for (const extra of reconciliation.extras) {
+            if (decisionDe(extra.tempId) !== "oc") continue;
+            const target = extra.tempId ? asignaciones[extra.tempId] : undefined;
+            const oc = target && target !== "__extra__" ? ocsVivas.find((o: any) => (o.orden_compra_items || []).some((l: any) => l.id === target)) : null;
+            const line = oc?.orden_compra_items.find((l: any) => l.id === target);
+            if (oc && line) {
+              const antes = Number(line.cantidad);
+              const recibido = todoRecibido(oc);
+              line.cantidad = Math.round((antes + Number(extra.cantidad)) * 10000) / 10000;
+              if (recibido) line.cantidad_recibida = line.cantidad;
+              cambiosOC.push({ tipo: "cantidad", oc, line, antes });
+            } else if (destino) {
+              const recibido = todoRecibido(destino);
+              const nueva = {
+                id: `nuevo:${extra.tempId || uid()}`, orden_id: destino.id, codigo: extra.codigo || "", descripcion: extra.descripcion,
+                cantidad: Number(extra.cantidad), cantidad_recibida: recibido ? Number(extra.cantidad) : 0,
+                precio_unitario: roundMoney(Number(extra.precio_unitario)), iva_porcentaje: Number(extra.iva_porcentaje ?? 21), unidad: extra.unidad || "UN",
+              };
+              (destino.orden_compra_items ||= []).push(nueva);
+              if (extra.tempId) asignaciones[extra.tempId] = nueva.id;
+              cambiosOC.push({ tipo: "nuevo", oc: destino, line: nueva, antes: 0 });
+            }
+          }
+          if (cambiosOC.length) {
+            reconciliation = reconcilePurchaseLines(ocsVivas.flatMap((oc: any) => oc.orden_compra_items || []), items, previousItems, asignaciones);
+          }
+        }
         for (const oc of alignmentResult.freshOCs) {
-          const costChanges = reconciliation.costs.filter(change =>
+          const costChanges = reconciliation!.costs.filter(change =>
             change.line.orden_id === oc.id
+            && !String(change.line.id || "").startsWith("nuevo:")
             && (
               overrideOC
               || Math.abs(Number(change.line.precio_unitario) - change.cost) >= 0.005
@@ -935,14 +1101,8 @@ export default function CargarFacturaOC({
           });
           if (aviso.avisar) avisosReemplazo.push(`${aviso.bajoMinimo ? "⚠️ " : ""}${aviso.texto}`);
         }
-        generateExtrasOC = createExtrasOC && reconciliation.extras.length > 0;
-        // Si sobran artículos y no se marcó la opción, se pregunta (nunca se traba la carga).
-        if (!createExtrasOC && reconciliation.extras.length > 0 && selectedOCItems.length > 0) {
-          const lista = reconciliation.extras.slice(0, 12).map((it: any) => `• ${it.cantidad} × ${it.codigo ? `[${it.codigo}] ` : ""}${it.descripcion}`).join("\n");
-          const mas = reconciliation.extras.length > 12 ? `\n… y ${reconciliation.extras.length - 12} más` : "";
-          generateExtrasOC = window.confirm(`Hay ${reconciliation.extras.length} artículo(s) de la factura que no están en las OC elegidas:\n\n${lista}${mas}\n\n¿Querés crear una OC nueva con los artículos sobrantes?\n\nAceptar = crear la OC · Cancelar = cargar la factura igual, sin OC para esos artículos`);
-          if (generateExtrasOC) setCreateExtrasOC(true);
-        }
+        // Lo elegido como "Crear OC nueva" va a una OC aparte; lo de "solo en la factura" queda sin OC.
+        generateExtrasOC = reconciliation.extras.some((extra) => decisionDe(extra.tempId) === "nueva");
       }
 
       // Insert FC
@@ -998,7 +1158,7 @@ export default function CargarFacturaOC({
       } else if (generateExtrasOC && reconciliation?.extras.length) {
         // La factura, sus renglones, los vínculos y la OC de extras forman una
         // sola transacción. Si falla cualquier insert, PostgreSQL revierte todo.
-        const extraItems = reconciliation.extras.map(it => ({
+        const extraItems = reconciliation.extras.filter((it) => decisionDe(it.tempId) === "nueva").map(it => ({
           codigo: it.codigo || "",
           descripcion: it.descripcion,
           cantidad: it.cantidad,
@@ -1121,6 +1281,42 @@ export default function CargarFacturaOC({
         }
       }
 
+      // Lo que la factura trajo de más quedó en la misma OC: renglones nuevos y cantidades, con historial.
+      if (cambiosOC.length) {
+        const db = supabase as any;
+        const stamp = new Date().toLocaleString("es-AR");
+        const histOC = new Map<any, string[]>();
+        for (const c of cambiosOC) {
+          const hist = histOC.get(c.oc) || histOC.set(c.oc, []).get(c.oc)!;
+          if (c.tipo === "nuevo") {
+            const { data: ins, error: insError } = await db.from("orden_compra_items").insert({
+              orden_id: c.oc.id, codigo: c.line.codigo || "", descripcion: c.line.descripcion, cantidad: c.line.cantidad,
+              cantidad_recibida: c.line.cantidad_recibida, unidad: c.line.unidad || "UN", precio_unitario: c.line.precio_unitario,
+              iva_porcentaje: c.line.iva_porcentaje, orden: (c.oc.orden_compra_items || []).length,
+            }).select("id").single();
+            if (insError || !ins) throw new Error(`No se pudo agregar «${c.line.descripcion}» a ${c.oc.numero}: ${insError?.message || "sin respuesta"}`);
+            c.line.id = ins.id;
+            hist.push(`se agregó «${c.line.descripcion}» ${c.line.cantidad} × ${c.line.precio_unitario} ${moneda}`);
+            avisosReemplazo.push(`Se agregó «${c.line.descripcion}» a ${c.oc.numero}.${c.oc.presupuesto_origen_id ? " No está en el presupuesto: revisá si hay que cobrárselo al cliente." : ""}`);
+          } else {
+            const { error: qtyError } = await db.from("orden_compra_items").update({ cantidad: c.line.cantidad, cantidad_recibida: c.line.cantidad_recibida })
+              .eq("id", c.line.id).eq("orden_id", c.oc.id);
+            if (qtyError) throw new Error(`No se pudo actualizar la cantidad de «${c.line.descripcion}» en ${c.oc.numero}: ${qtyError.message}`);
+            hist.push(`«${c.line.descripcion}» cantidad ${c.antes} → ${c.line.cantidad}`);
+            avisosReemplazo.push(`${c.oc.numero}: «${c.line.descripcion}» pasó de ${c.antes} a ${c.line.cantidad}.${c.oc.presupuesto_origen_id ? ` El presupuesto sigue con ${c.antes}.` : ""}`);
+          }
+        }
+        for (const [oc, hist] of histOC) {
+          const lines = oc.orden_compra_items || [];
+          const net = roundMoney(lines.reduce((s: number, it: any) => s + Number(it.cantidad) * Number(it.precio_unitario), 0));
+          const vat = roundMoney(lines.reduce((s: number, it: any) => s + Number(it.cantidad) * Number(it.precio_unitario) * Number(it.iva_porcentaje ?? 21) / 100, 0));
+          oc.observaciones = `${oc.observaciones || ""}\n[${stamp}] FC ${numeroFactura.trim()}: ${hist.join("; ")}`;
+          const { error: ocHeadError } = await db.from("ordenes_compra")
+            .update({ subtotal: net, iva: vat, total: roundMoney(net + vat), observaciones: oc.observaciones }).eq("id", oc.id).eq("sociedad_id", sociedadId);
+          if (ocHeadError) throw ocHeadError;
+        }
+      }
+
       // Actualizar costos por identidad de artículo, conservando cantidades y recepciones.
       if (reconciliation && alignmentResult) {
         for (const oc of alignmentResult.freshOCs) {
@@ -1224,7 +1420,7 @@ export default function CargarFacturaOC({
       if (!isCreditNote && proveedorId) {
         try {
           const porParecido = itemComparisons
-            .filter((c) => (c as { parecido?: string }).parecido && c.matched && !manualItemMatches[c.item.tempId])
+            .filter((c) => (c.parecido || c.porPrecio) && c.matched && !manualItemMatches[c.item.tempId])
             .map((c) => [c.item.tempId, c.matched!.id] as [string, string]);
           const eqs = [...Object.entries(manualItemMatches), ...porParecido]
             .filter(([, target]) => target && target !== "__extra__")
@@ -1279,6 +1475,22 @@ export default function CargarFacturaOC({
   }
 
   // ── Render ──
+  const ocConArticulos = tipoFC === "mercaderia" && !isCreditNote && selectedOCIds.size > 0 && selectedOCItems.length > 0 && !ocItemsLoading;
+  const hayDiferencias = diferencias.mas.length + diferencias.faltan.length + diferencias.precio.length + diferencias.menos.length + diferencias.noVinieron.length > 0;
+  const opcionesSobrante = (tempId: string, opciones: [DecisionSobrante, string][]) => (
+    <div className="flex flex-wrap gap-1">
+      {opciones.map(([valor, texto]) => {
+        const activo = decisionDe(tempId) === valor;
+        return (
+          <button key={valor} type="button" onClick={() => setDecisiones((d) => ({ ...d, [tempId]: valor }))}
+            className={`rounded-md border px-2 py-0.5 text-[11px] font-medium ${activo ? "border-orange-500 bg-orange-600 text-white" : "border-zinc-300 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"}`}>
+            {activo ? "✓ " : ""}{texto}
+          </button>
+        );
+      })}
+    </div>
+  );
+
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center overflow-y-auto p-4 pt-8 pb-8">
       <div className={`bg-white dark:bg-zinc-900 w-full rounded-xl shadow-2xl ${fullscreen ? "min-h-[calc(100vh-2rem)] max-w-none" : "max-w-5xl"}`}>
@@ -1286,7 +1498,6 @@ export default function CargarFacturaOC({
         <div className="flex items-center justify-between px-5 py-2.5 border-b border-zinc-200 dark:border-zinc-700">
           <div>
             <h2 className="text-lg font-bold text-zinc-900 dark:text-zinc-100">Cargar factura o nota de pedido</h2>
-            <p className="text-xs text-zinc-500">Cargá el comprobante y vinculalo a las órdenes de compra correspondientes</p>
           </div>
           <div className="flex items-center gap-1">
             <button onClick={() => setFullscreen((value) => !value)} className="p-2 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800" title={fullscreen ? "Reducir" : "Ampliar"}>{fullscreen ? <Minimize2 size={19} /> : <Maximize2 size={19} />}</button>
@@ -1360,14 +1571,11 @@ export default function CargarFacturaOC({
             </div>
           )}
 
-          {/* ── 2. Datos de la factura ── */}
+          {/* ── 2. Datos de la factura (dos filas) ── */}
           <section>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600 mb-1.5">
-              2. Datos de la factura
-            </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-x-3 gap-y-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-12 gap-x-2 gap-y-1.5">
               {/* Proveedor */}
-              <div className="col-span-2 sm:col-span-3 lg:col-span-2 relative">
+              <div className="col-span-2 sm:col-span-4 lg:col-span-4 relative">
                 <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Proveedor</label>
                 {proveedorId ? (
                   <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/20 text-sm">
@@ -1403,7 +1611,7 @@ export default function CargarFacturaOC({
                     <button
                       type="button"
                       onClick={openNuevoProveedor}
-                      className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-orange-300 px-3 py-2 text-xs font-semibold text-orange-600 hover:bg-orange-50 dark:border-orange-800 dark:hover:bg-orange-950/30"
+                      className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-dashed border-orange-300 px-2.5 py-1 text-xs font-semibold text-orange-600 hover:bg-orange-50 dark:border-orange-800 dark:hover:bg-orange-950/30"
                     >
                       <Plus size={14} />
                       {proveedorSearch.trim() ? `Crear “${proveedorSearch.trim()}” como proveedor` : "Crear proveedor nuevo"}
@@ -1413,7 +1621,7 @@ export default function CargarFacturaOC({
               </div>
 
               {/* Tipo de comprobante */}
-              <div>
+              <div className="lg:col-span-2">
                 <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Tipo</label>
                 <select value={tipoComprobante} onChange={e => setTipoComprobante(e.target.value)}
                   className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
@@ -1435,7 +1643,7 @@ export default function CargarFacturaOC({
               </div>
 
               {/* N° Factura */}
-              <div>
+              <div className="lg:col-span-2">
                 <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">N° Factura</label>
                 <input type="text" value={numeroFactura} onChange={e => setNumeroFactura(e.target.value)}
                   placeholder="0001-00012345"
@@ -1444,22 +1652,84 @@ export default function CargarFacturaOC({
               </div>
 
               {/* Fecha */}
-              <div>
+              <div className="lg:col-span-2">
                 <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Fecha</label>
                 <input type="date" value={fecha} onChange={e => setFecha(e.target.value)}
                   className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
               </div>
 
               {/* Vencimiento */}
-              <div>
+              <div className="lg:col-span-2">
                 <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Vencimiento</label>
                 <input type="date" value={fechaVencimiento} onChange={e => { setFechaVencimiento(e.target.value); setVencimientoManual(Boolean(e.target.value)); }}
                   className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
               </div>
 
-              {/* Pago que pide el proveedor */}
+              {/* CAE */}
+              <div className="lg:col-span-2">
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">CAE</label>
+                <input type="text" value={cae} onChange={e => setCae(e.target.value)}
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
+              </div>
+
+              {/* Moneda */}
+              <div className="lg:col-span-2">
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Moneda</label>
+                <select value={moneda} onChange={e => setMoneda(e.target.value as "ARS" | "USD")}
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
+                  <option value="ARS">ARS</option>
+                  <option value="USD">USD</option>
+                </select>
+              </div>
+
+              {/* Subtotal */}
+              <div className="lg:col-span-2">
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Subtotal (neto)</label>
+                <input type="number" step="0.01" min="0" value={subtotal || ""} onChange={e => setSubtotal(Number(e.target.value) || 0)}
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
+              </div>
+
+              {/* IVA % */}
+              <div className="lg:col-span-2">
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">IVA % · {formatCurrency(iva, moneda)}</label>
+                <select value={ivaPorcentaje} onChange={e => {
+                  const value = Number(e.target.value);
+                  setIvaPorcentaje(value);
+                  setItems((prev) => prev.map((item) => ({ ...item, iva_porcentaje: value })));
+                }}
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
+                  <option value={0}>0% (Exento)</option>
+                  <option value={10.5}>10.5%</option>
+                  <option value={21}>21%</option>
+                  <option value={27}>27%</option>
+                </select>
+              </div>
+
+              {/* Percepciones */}
+              <div className="lg:col-span-2">
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Percepciones</label>
+                <input type="number" step="0.01" min="0" value={percepciones || ""} onChange={e => setPercepciones(Number(e.target.value) || 0)}
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
+              </div>
+            
+              <div className="lg:col-span-2">
+                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Total {ivaControl.controlado && ivaControl.cuadra && <span className="normal-case text-emerald-600">✓ igual al PDF</span>}</label>
+                <div className="px-2.5 py-1.5 rounded-lg bg-orange-50 dark:bg-orange-950/30 text-sm font-mono font-bold text-orange-600">{formatCurrency(total, moneda)}</div>
+              </div>
+            </div>
+
+            {/* Control del IVA: neto + IVA + percepciones tiene que dar el total del PDF (aviso, no frena) */}
+            {ivaControl.controlado && !ivaControl.cuadra && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                <AlertTriangle size={14} className="shrink-0" />
+                <span className="flex-1 min-w-0">No cuadra con el PDF: el total impreso es <b>{formatCurrency(ivaControl.totalLeido, moneda)}</b> y neto + IVA + percepciones da <b>{formatCurrency(ivaControl.calculado, moneda)}</b> (diferencia {formatCurrency(ivaControl.diferencia, moneda)}).{!ivaControl.propone21 && " Revisá el IVA de cada artículo o las percepciones."}</span>
+                {ivaControl.propone21 && <button type="button" onClick={usarIva21} className="rounded-md bg-amber-600 px-2.5 py-1 font-semibold text-white hover:bg-amber-700">Usar IVA 21 % en todo (da justo)</button>}
+              </div>
+            )}
+
+            {/* Pago que pide el proveedor */}
               {!isCreditNote && proveedorId && (
-                <div className={`col-span-full rounded-lg border px-3 py-1 text-xs ${planPago.condicion_pago ? "border-zinc-200 dark:border-zinc-700" : "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"}`}>
+                <div className={`mt-1.5 rounded-lg border px-3 py-1 text-xs ${planPago.condicion_pago ? "border-zinc-200 dark:border-zinc-700" : "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30"}`}>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-[10px] uppercase text-zinc-400">Pago que pide el proveedor</span>
                     {planPago.condicion_pago
@@ -1480,60 +1750,6 @@ export default function CargarFacturaOC({
                   )}
                 </div>
               )}
-
-              {/* CAE */}
-              <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">CAE</label>
-                <input type="text" value={cae} onChange={e => setCae(e.target.value)}
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
-              </div>
-
-              {/* Moneda */}
-              <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Moneda</label>
-                <select value={moneda} onChange={e => setMoneda(e.target.value as "ARS" | "USD")}
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
-                  <option value="ARS">ARS</option>
-                  <option value="USD">USD</option>
-                </select>
-              </div>
-
-              {/* Subtotal */}
-              <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Subtotal (neto)</label>
-                <input type="number" step="0.01" min="0" value={subtotal || ""} onChange={e => setSubtotal(Number(e.target.value) || 0)}
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
-              </div>
-
-              {/* IVA % */}
-              <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">IVA %</label>
-                <select value={ivaPorcentaje} onChange={e => {
-                  const value = Number(e.target.value);
-                  setIvaPorcentaje(value);
-                  setItems((prev) => prev.map((item) => ({ ...item, iva_porcentaje: value })));
-                }}
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm">
-                  <option value={0}>0% (Exento)</option>
-                  <option value={10.5}>10.5%</option>
-                  <option value={21}>21%</option>
-                  <option value={27}>27%</option>
-                </select>
-              </div>
-
-              {/* Percepciones */}
-              <div>
-                <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Percepciones</label>
-                <input type="number" step="0.01" min="0" value={percepciones || ""} onChange={e => setPercepciones(Number(e.target.value) || 0)}
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm font-mono" />
-              </div>
-            </div>
-
-            {/* Totals summary */}
-            <div className="mt-1.5 flex items-center justify-end gap-6 text-sm">
-              <span className="text-zinc-500">IVA: <span className="font-mono font-medium">{formatCurrency(iva, moneda)}</span></span>
-              <span className="font-bold text-zinc-900 dark:text-zinc-100">Total: <span className="font-mono text-orange-600">{formatCurrency(total, moneda)}</span></span>
-            </div>
 
             {isCreditNote && (
               <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50/70 p-4 dark:border-blue-900 dark:bg-blue-950/20">
@@ -1587,10 +1803,23 @@ export default function CargarFacturaOC({
               </div>
             )}
 
-            {/* Items editables */}
-            {items.length > 0 && (
+          </section>
+
+          {/* ── Costo real (solo_iva) ── */}
+          {tipoFC === "solo_iva" && (
+            <section>
+              <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Costo real del crédito fiscal (opcional)</label>
+              <input type="number" step="0.01" value={costoReal || ""} onChange={e => setCostoReal(Number(e.target.value))}
+                placeholder="Monto real pagado por el crédito fiscal"
+                className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
+              <p className="text-xs text-zinc-400 mt-1">Si se ingresa, se crea un gasto manual asociado.</p>
+            </section>
+          )}
+
+          {(tipoFC !== "mercaderia" || isCreditNote) && items.length > 0 && <section>
+            {(
               <div className="mt-2">
-                <div className="mb-1 flex items-center justify-between"><p className="text-[10px] uppercase text-zinc-400">Items detectados y editables ({items.length})</p><button type="button" onClick={() => setItems((prev) => [...prev, { tempId: uid(), codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, iva_porcentaje: ivaPorcentaje, unidad: "UN" }])} className="inline-flex items-center gap-1 text-xs font-medium text-orange-600"><Plus size={13} /> Agregar item</button></div>
+                <div className="mb-1 flex items-center justify-between"><p className="text-[10px] uppercase text-zinc-400">Artículos de la factura ({items.length})</p><button type="button" onClick={() => setItems((prev) => [...prev, { tempId: uid(), codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, iva_porcentaje: ivaPorcentaje, unidad: "UN" }])} className="inline-flex items-center gap-1 text-xs font-medium text-orange-600"><Plus size={13} /> Agregar item</button></div>
                 <div className="max-h-64 overflow-auto">
                   <table className="w-full min-w-[900px] text-xs">
                     <thead>
@@ -1623,83 +1852,77 @@ export default function CargarFacturaOC({
                 </div>
               </div>
             )}
-          </section>
+          </section>}
 
-          {/* ── Costo real (solo_iva) ── */}
-          {tipoFC === "solo_iva" && (
-            <section>
-              <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Costo real del crédito fiscal (opcional)</label>
-              <input type="number" step="0.01" value={costoReal || ""} onChange={e => setCostoReal(Number(e.target.value))}
-                placeholder="Monto real pagado por el crédito fiscal"
-                className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
-              <p className="text-xs text-zinc-400 mt-1">Si se ingresa, se crea un gasto manual asociado.</p>
-            </section>
-          )}
+          {/* ── 3. Orden de compra: se elige sola y se muestran solo las diferencias ── */}
+          {tipoFC === "mercaderia" && !isCreditNote && <section className="space-y-1.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600">3. Orden de compra</h3>
+              {selectedOCs.length > 0 && !cambiarOC && (
+                <>
+                  {selectedOCs.map((oc) => (
+                    <span key={oc.id} className="inline-flex items-center gap-1.5 rounded-full border border-orange-300 bg-orange-50 px-2 py-0.5 text-xs dark:border-orange-800 dark:bg-orange-950/30">
+                      <span className="font-mono font-semibold">{oc.numero}</span>
+                      <span className="text-zinc-500">{formatCurrency(oc.total, oc.moneda as "ARS" | "USD")}</span>
+                      <button type="button" onClick={() => toggleOC(oc.id)} title="Quitar esta OC" className="text-zinc-400 hover:text-red-500"><X size={12} /></button>
+                    </span>
+                  ))}
+                  {ocAuto && <span className="text-[11px] text-emerald-600">elegida sola (nombres y precios)</span>}
+                  <button type="button" onClick={() => setCambiarOC(true)} className="text-xs text-orange-600 hover:underline">cambiar / sumar otra</button>
+                </>
+              )}
+              {(selectedOCs.length === 0 || cambiarOC) && (
+                <>
+                  {proveedorId && (
+                    <label className="flex items-center gap-1.5 cursor-pointer text-xs text-zinc-500">
+                      <input type="checkbox" checked={showAllOCs} onChange={(e) => setShowAllOCs(e.target.checked)} className="accent-orange-600 h-3 w-3" />
+                      Ver todas
+                    </label>
+                  )}
+                  <div className="relative ml-auto w-60 max-w-full"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" /><input value={ocSearch} onChange={(e) => setOcSearch(e.target.value)} placeholder="Buscar OC..." className="w-full rounded-lg border border-zinc-200 bg-transparent py-1 pl-8 pr-2 text-xs dark:border-zinc-700" /></div>
+                  {cambiarOC && <button type="button" onClick={() => setCambiarOC(false)} className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs dark:border-zinc-700">Listo</button>}
+                </>
+              )}
+            </div>
 
-          {/* ── 3. Vincular OCs ── */}
-          {tipoFC === "mercaderia" && <section>
-            <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-3">
-                <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600">3. Vincular órdenes de compra</h3>
-                {proveedorId && (
-                  <label className="flex items-center gap-1.5 cursor-pointer text-xs text-zinc-500">
-                    <input type="checkbox" checked={showAllOCs} onChange={(e) => setShowAllOCs(e.target.checked)} className="accent-orange-600 h-3 w-3" />
-                    Ver todas
+            {(selectedOCs.length === 0 || cambiarOC) && (
+              <>
+                {proveedorId && selectedOCIds.size === 0 && (
+                  <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-orange-200 bg-orange-50/50 px-2.5 py-1 text-xs dark:border-orange-900 dark:bg-orange-950/20">
+                    <input type="checkbox" checked={crearOCNueva} onChange={(e) => setCrearOCNueva(e.target.checked)} className="accent-orange-600" />
+                    <span><strong>Crear una OC nueva con los artículos de esta factura</strong> <span className="text-zinc-500">— queda recibida y atada a la factura{ocsVisibles.length > 0 ? " (o elegí una OC de abajo)" : ""}</span></span>
                   </label>
                 )}
-              </div>
-              <div className="relative w-72 max-w-full"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400" /><input value={ocSearch} onChange={(e) => setOcSearch(e.target.value)} placeholder="Buscar OC, proveedor o estado..." className="w-full rounded-lg border border-zinc-200 bg-transparent py-1.5 pl-8 pr-2 text-xs dark:border-zinc-700" /></div>
-            </div>
-            {!isCreditNote && tipoFC === "mercaderia" && proveedorId && selectedOCIds.size === 0 && (
-              <label className="mb-1.5 flex cursor-pointer items-center gap-2 rounded-lg border border-orange-200 bg-orange-50/50 px-2.5 py-1.5 text-xs dark:border-orange-900 dark:bg-orange-950/20">
-                <input type="checkbox" checked={crearOCNueva} onChange={(e) => setCrearOCNueva(e.target.checked)} className="accent-orange-600" />
-                <span><strong>Crear una OC nueva con los artículos de esta factura</strong> <span className="text-zinc-500">— queda recibida y atada a la factura{ocsDelProveedor > 0 ? " (o elegí una OC de abajo)" : ""}</span></span>
-              </label>
-            )}
-            {ocsFiltered.length === 0 ? (
-              <div className="space-y-2">
-                <p className="text-sm text-zinc-400 italic">
-                  {proveedorId
-                    ? "No hay ordenes de compra activas para este proveedor"
-                    : "Seleccioná un proveedor para filtrar las OCs"}
-                </p>
-                {proveedorId && !showAllOCs && ordenes.length > 0 && (
-                  <button type="button" onClick={() => setShowAllOCs(true)}
-                    className="text-xs font-medium text-orange-600 hover:text-orange-700 underline">
-                    Ver todas las OCs ({ordenes.length})
-                  </button>
+                {ocsVisibles.length === 0 ? (
+                  <p className="text-xs text-zinc-400 italic">
+                    {proveedorId ? "No hay OC pendientes de facturar de este proveedor." : "Elegí un proveedor para ver sus OC."}
+                    {proveedorId && !showAllOCs && ordenes.length > 0 && (
+                      <button type="button" onClick={() => setShowAllOCs(true)} className="ml-2 not-italic font-medium text-orange-600 underline">Ver todas las OC ({ordenes.length})</button>
+                    )}
+                  </p>
+                ) : (
+                  <div className="space-y-0.5 max-h-40 overflow-y-auto">
+                    {ocsVisibles.map((oc) => {
+                      const sel = selectedOCIds.has(oc.id);
+                      const facturado = ocInfo.porOC[oc.id]?.facturado || 0;
+                      return (
+                        <label key={oc.id} className={`flex items-center gap-3 px-2.5 py-1 rounded-lg cursor-pointer text-xs ${sel ? "bg-orange-50 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-700" : "bg-zinc-50 dark:bg-zinc-800/50 border border-transparent hover:bg-zinc-100 dark:hover:bg-zinc-700/50"}`}>
+                          <input type="checkbox" checked={sel} onChange={() => toggleOC(oc.id)} className="accent-orange-600 h-3.5 w-3.5" />
+                          <span className="font-mono font-medium">{oc.numero}</span>
+                          <span className="flex-1 min-w-0 truncate text-zinc-500">{oc.proveedor_nombre} · {oc.estado}{oc.fecha ? ` · ${oc.fecha.split("-").reverse().join("/")}` : ""}</span>
+                          {facturado > 1 && <span className="text-zinc-400">facturado {formatCurrency(facturado, oc.moneda as "ARS" | "USD")}</span>}
+                          <span className="font-mono font-medium">{formatCurrency(oc.total, oc.moneda as "ARS" | "USD")}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
                 )}
-              </div>
-            ) : (
-              <div className="space-y-1 max-h-48 overflow-y-auto">
-                {ocsFiltered.map(oc => {
-                  const sel = selectedOCIds.has(oc.id);
-                  return (
-                    <label key={oc.id}
-                      className={`flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
-                        sel ? "bg-orange-50 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-700" : "bg-zinc-50 dark:bg-zinc-800/50 border border-transparent hover:bg-zinc-100 dark:hover:bg-zinc-700/50"
-                      }`}>
-                      <input type="checkbox" checked={sel} onChange={() => toggleOC(oc.id)}
-                        className="accent-orange-600 h-4 w-4" />
-                      <div className="flex-1 min-w-0">
-                        <span className="font-mono font-medium text-sm">{oc.numero}</span>
-                        <span className="ml-2 text-xs text-zinc-500">{oc.proveedor_nombre}</span>
-                      </div>
-                      <span className="text-xs text-zinc-500">{oc.estado}</span>
-                      <span className="font-mono text-sm font-medium">{formatCurrency(oc.total, oc.moneda as "ARS" | "USD")}</span>
-                    </label>
-                  );
-                })}
-              </div>
+              </>
             )}
-            {selectedOCIds.size > 0 && (
-              <div className="mt-3 space-y-2">
-                <p className="text-xs text-orange-600 font-medium">
-                  {selectedOCIds.size} OC{selectedOCIds.size > 1 ? "s" : ""} seleccionada{selectedOCIds.size > 1 ? "s" : ""}
-                </p>
-                {alignmentLoading ? (
-                  <div className="flex items-center gap-2 rounded-lg bg-zinc-50 p-3 text-xs text-zinc-500 dark:bg-zinc-800"><Loader2 size={14} className="animate-spin" />Verificando importes ya facturados...</div>
-                ) : alignmentBlocked ? (
+
+            {selectedOCIds.size > 0 && (alignmentLoading ? (
+              <div className="flex items-center gap-2 rounded-lg bg-zinc-50 p-2 text-xs text-zinc-500 dark:bg-zinc-800"><Loader2 size={14} className="animate-spin" />Verificando importes ya facturados...</div>
+            ) : alignmentBlocked ? (
                   <div className="space-y-2">
                     <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
                       <AlertTriangle size={15} className="mt-0.5 shrink-0" />
@@ -1718,39 +1941,63 @@ export default function CargarFacturaOC({
                     <AlertTriangle size={15} className="mt-0.5 shrink-0" />
                     <span>Confirmaste adaptar la OC de {[...ocCurrencies].join("/")} a {moneda}. Al guardar se actualizarán su moneda, costos y totales con los valores de esta factura.</span>
                   </div>
-                ) : Math.abs(alignmentDifference) <= 0.01 ? (
-                  <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs font-medium text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"><Check size={15} />Importe conciliado: comprobante y OC coinciden.</div>
-                ) : (
-                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
-                    {Object.keys(reemplazos).length > 0 ? "Hay renglones marcados como «Compré otra cosa»: se reemplazan en la misma OC y en el PR cambia solo el costo." : alignmentDifference < 0 ? "El comprobante supera el importe actual de las OC. Se actualizarán los costos de artículos coincidentes; las cantidades adicionales crearán una OC independiente sin PR." : `Factura parcial: saldo estimado ${formatCurrency(alignmentDifference, moneda)}. Los costos finales se concilian al confirmar.`}
-                  </div>
-                )}
-              </div>
-            )}
+            ) : null)}
 
             {selectedOCIds.size > 0 && items.length > 0 && (
-              <div className="mt-2 rounded-xl border border-zinc-200 bg-zinc-50/70 p-2.5 dark:border-zinc-700 dark:bg-zinc-800/40">
-                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-xs font-semibold text-zinc-800 dark:text-zinc-100">Comparación de artículos: factura vs. OC</p>
-                    <p className="text-[11px] text-zinc-500">Las coincidencias seguras se aplican solas. Podés corregir cualquier vínculo manualmente.</p>
+              ocItemsLoading ? (
+                <div className="flex items-center gap-2 py-2 text-xs text-zinc-500"><Loader2 size={14} className="animate-spin" />Comparando artículos...</div>
+              ) : ocItemsError ? (
+                <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{ocItemsError}</div>
+              ) : selectedOCItems.length === 0 ? (
+                <div className="rounded-lg border border-sky-200 bg-sky-50 p-2 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-300">La OC elegida no tiene artículos cargados (por ejemplo, viene del sistema anterior). La factura se vincula por importe.</div>
+              ) : (
+                <div className="space-y-1">
+                  <div className={`flex flex-wrap items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs ${hayDiferencias ? "border-emerald-200 bg-emerald-50/60 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-300" : "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300"}`}>
+                    <Check size={14} className="shrink-0" />
+                    <span className="flex-1 min-w-0">
+                      {hayDiferencias
+                        ? <><b>{diferencias.coinciden} de {items.length}</b> artículos coinciden con {selectedOCs.map((oc) => oc.numero).join(", ")}</>
+                        : <b>La factura coincide con {selectedOCs.map((oc) => oc.numero).join(", ")}</b>}
+                      {diferencias.otroNombre > 0 && <span className="opacity-80"> · {diferencias.otroNombre} con otro nombre (emparejados por precio o parecido)</span>}
+                    </span>
+                    {aiMatching && <span className="inline-flex items-center gap-1 text-violet-700 dark:text-violet-300"><Loader2 size={11} className="animate-spin" /> La IA está comparando…</span>}
+                    <button type="button" onClick={() => setVerDetalle((v) => !v)} className="font-medium text-orange-600 hover:underline">{verDetalle ? "ocultar detalle" : "ver detalle"}</button>
                   </div>
-                  {!ocItemsLoading && !ocItemsError && (
-                    <div className="flex flex-wrap items-center gap-2 text-[10px] font-medium">
-                      {selectedOCItems.length > 0 && unresolvedItemCount > 0 && <button type="button" onClick={() => { aiRunKey.current = "manual"; void sugerirConIA(); }} disabled={aiMatching} className="inline-flex items-center gap-1 rounded-full border border-violet-300 px-2 py-1 text-violet-700 hover:bg-violet-50 disabled:opacity-50 dark:border-violet-800 dark:text-violet-300">{aiMatching ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />} {aiMatching ? "La IA está comparando…" : "Sugerir con IA"}</button>}
-                      <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">{itemComparisons.length - unresolvedItemCount} coinciden</span>
-                      {unresolvedItemCount > 0 && <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">{unresolvedItemCount} para revisar</span>}
+                  {diferencias.mas.map((d) => (
+                    <div key={`mas-${d.oc.id}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
+                      <AlertTriangle size={13} className="shrink-0" />
+                      <span className="flex-1 min-w-0 truncate"><b>{d.oc.descripcion}</b>: factura {d.cantidad} · OC {d.oc.cantidad}</span>
+                      {opcionesSobrante(d.tempId, [["oc", `Actualizar OC a ${d.cantidad}`], ["nueva", "Crear OC nueva"], ["nada", "Solo en la factura"]])}
                     </div>
-                  )}
-                </div>
-
-                {ocItemsLoading ? (
-                  <div className="flex items-center gap-2 py-3 text-xs text-zinc-500"><Loader2 size={14} className="animate-spin" />Comparando artículos...</div>
-                ) : ocItemsError ? (
-                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{ocItemsError}</div>
-                ) : selectedOCItems.length === 0 ? (
-                  <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-300">La OC elegida no tiene artículos cargados (por ejemplo, viene del sistema anterior). La factura se vincula por importe y no hace falta asignar artículos.</div>
-                ) : (
+                  ))}
+                  {diferencias.faltan.map((it) => (
+                    <div key={`falta-${it.tempId}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
+                      <AlertTriangle size={13} className="shrink-0" />
+                      <span className="flex-1 min-w-0 truncate"><b>{it.descripcion || "Sin descripción"}</b> · {it.cantidad} × {formatCurrency(costoUnitario(it), moneda)} — no está en la OC</span>
+                      {opcionesSobrante(it.tempId, [["oc", `Agregar a ${selectedOCs[0]?.numero || "la OC"}`], ["nueva", "Crear OC nueva"], ["nada", "Solo en la factura"]])}
+                    </div>
+                  ))}
+                  {diferencias.precio.map((d) => (
+                    <div key={`precio-${d.oc.id}`} className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs text-sky-900 dark:border-sky-900 dark:bg-sky-950/20 dark:text-sky-200 truncate">
+                      <b>{d.oc.descripcion}</b>: precio OC {formatCurrency(Number(d.oc.precio_unitario), moneda)} → factura {formatCurrency(d.costo, moneda)} · se actualiza el costo
+                    </div>
+                  ))}
+                  {diferencias.menos.map((d) => (
+                    <div key={`menos-${d.oc.id}`} className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs text-zinc-600 dark:border-zinc-700 dark:text-zinc-300 truncate">
+                      <b>{d.oc.descripcion}</b>: vienen {d.cantidad} de {d.oc.cantidad} · el resto queda pendiente en la OC
+                    </div>
+                  ))}
+                  {diferencias.noVinieron.map((o) => (
+                    <div key={`no-${o.id}`} className="rounded-lg border border-zinc-200 px-2.5 py-1 text-xs text-zinc-500 dark:border-zinc-700 truncate">
+                      <b>{o.descripcion}</b> ({o.cantidad}) no vino en esta factura · queda pendiente en {o.ocNumero}
+                    </div>
+                  ))}
+                  {verDetalle && (
+                    <div className="rounded-xl border border-zinc-200 bg-zinc-50/70 p-2 dark:border-zinc-700 dark:bg-zinc-800/40">
+                      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                        <p className="text-[11px] text-zinc-500">Cada artículo de la factura y su renglón de la OC. Si alguno quedó mal, elegí el correcto.</p>
+                        {unresolvedItemCount > 0 && <button type="button" onClick={() => { aiRunKey.current = "manual"; void sugerirConIA(); }} disabled={aiMatching} className="inline-flex items-center gap-1 rounded-full border border-violet-300 px-2 py-0.5 text-[10px] font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50 dark:border-violet-800 dark:text-violet-300">{aiMatching ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />} Sugerir con IA</button>}
+                      </div>
                   <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
                     {aiMatchMsg && <p className="text-[11px] font-medium text-violet-700 dark:text-violet-300">{aiMatchMsg}</p>}
                     {itemComparisons.map((comparison) => {
@@ -1760,7 +2007,7 @@ export default function CargarFacturaOC({
                       const statusText = comparison.manual
                         ? (assignedId === "__extra__" ? "Marcado fuera de OC" : "Asignación manual")
                         : comparison.status === "matched"
-                          ? (comparison.aprendido ? "Coincidencia aprendida de cargas anteriores" : "Coincidencia automática")
+                          ? (comparison.aprendido ? "Coincidencia aprendida de cargas anteriores" : comparison.porPrecio ? "Emparejado por precio (el proveedor lo llama distinto)" : "Coincidencia automática")
                           : comparison.status === "ambiguous"
                             ? "Hay varias coincidencias posibles"
                             : "No encontrado en las OC";
@@ -1779,7 +2026,7 @@ export default function CargarFacturaOC({
                             className="w-full rounded-lg border border-zinc-300 bg-white px-2.5 py-2 text-xs dark:border-zinc-600 dark:bg-zinc-800"
                           >
                             <option value="">{isMatched ? "Usar coincidencia automática" : "Sin asignar — no está en la OC"}</option>
-                            <option value="__extra__">Confirmar que no está en las OC</option>
+                            <option value="__extra__">No está en la OC</option>
                             {selectedOCItems.map((ocItem) => (
                               <option key={ocItem.id} value={ocItem.id}>{ocItem.ocNumero} · {ocItem.codigo ? `[${ocItem.codigo}] ` : ""}{ocItem.descripcion} · {ocItem.cantidad} {ocItem.unidad || "UN"}</option>
                             ))}
@@ -1816,25 +2063,55 @@ export default function CargarFacturaOC({
                       );
                     })}
                   </div>
-                )}
-
-                {!ocItemsLoading && !ocItemsError && selectedOCItems.length > 0 && unresolvedItemCount > 0 && (
-                  <label className="mt-2 flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs dark:border-zinc-700 dark:bg-zinc-900" title="Si no la marcás, la factura se carga igual y los artículos quedan informados como no vinculados.">
-                    <input type="checkbox" checked={createExtrasOC} onChange={(event) => setCreateExtrasOC(event.target.checked)} className="accent-orange-600" />
-                    <span><strong>Crear una OC adicional con las cantidades no asignadas</strong> <span className="font-normal text-zinc-500">(opcional)</span></span>
-                  </label>
-                )}
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+            {/* Artículos de la factura: se pliegan cuando hay OC (ver detalle) */}
+            {items.length > 0 && (verDetalle || !ocConArticulos) && (
+              <div className="mt-2">
+                <div className="mb-1 flex items-center justify-between"><p className="text-[10px] uppercase text-zinc-400">Artículos de la factura ({items.length})</p><button type="button" onClick={() => setItems((prev) => [...prev, { tempId: uid(), codigo: "", descripcion: "", cantidad: 1, precio_unitario: 0, descuento_porcentaje: 0, iva_porcentaje: ivaPorcentaje, unidad: "UN" }])} className="inline-flex items-center gap-1 text-xs font-medium text-orange-600"><Plus size={13} /> Agregar item</button></div>
+                <div className="max-h-64 overflow-auto">
+                  <table className="w-full min-w-[900px] text-xs">
+                    <thead>
+                      <tr className="bg-zinc-50 dark:bg-zinc-800 text-zinc-500">
+                        <th className="px-1 py-1 text-left w-32">Código</th>
+                        <th className="px-1 py-1 text-left">Descripción</th>
+                        <th className="px-1 py-1 text-right w-20">Cant.</th>
+                        <th className="px-1 py-1 text-right w-28">P. Unit.</th>
+                        <th className="px-1 py-1 text-right w-20">Desc. %</th>
+                        <th className="px-1 py-1 text-right w-[70px]">IVA</th>
+                        <th className="px-2 py-1 text-right w-28">Neto</th>
+                        <th className="w-8"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((it, index) => (
+                        <tr key={it.tempId} className="border-b border-zinc-100 dark:border-zinc-800">
+                          <td className="px-1 py-1"><input value={it.codigo || ""} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, codigo: e.target.value } : item))} placeholder="Sin código" className="w-32 rounded border border-zinc-200 bg-transparent px-2 py-1 font-mono dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><input value={it.descripcion} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, descripcion: e.target.value } : item))} className="w-full rounded border border-zinc-200 bg-transparent px-2 py-1 dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><input type="number" min="0" step="0.01" value={it.cantidad} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, cantidad: Number(e.target.value) || 0 } : item))} className="w-20 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><input type="number" min="0" step="0.01" value={it.precio_unitario} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, precio_unitario: Number(e.target.value) || 0 } : item))} className="w-28 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><input type="number" min="0" max="100" step="0.01" value={it.descuento_porcentaje || ""} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, descuento_porcentaje: Math.max(0, Math.min(100, Number(e.target.value) || 0)) } : item))} placeholder="0" className="w-20 rounded border border-zinc-200 bg-transparent px-2 py-1 text-right font-mono dark:border-zinc-700" /></td>
+                          <td className="px-1 py-1"><select value={it.iva_porcentaje} onChange={(e) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, iva_porcentaje: Number(e.target.value) } : item))} className="rounded border border-zinc-200 bg-transparent px-1 py-1 dark:border-zinc-700"><option value={0}>0%</option><option value={10.5}>10,5%</option><option value={21}>21%</option><option value={27}>27%</option></select></td>
+                          <td className="px-2 py-1 text-right font-mono font-medium">{formatCurrency(itemNeto(it), moneda)}</td>
+                          <td><button type="button" onClick={() => setItems((prev) => prev.filter((_, i) => i !== index))} className="rounded p-1 text-zinc-400 hover:text-red-500"><Trash2 size={14} /></button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </section>}
 
-          {/* ── Notas ── */}
-          <section>
-            <label className="block text-[10px] uppercase text-zinc-400 mb-0.5">Notas / observaciones</label>
+          {/* ── Notas y pago con tarjeta, en una fila ── */}
+          <section className="grid gap-2 md:grid-cols-2">
             <textarea value={notas} onChange={e => setNotas(e.target.value)} rows={1}
-              placeholder="Opcional"
+              placeholder="Notas / observaciones (opcional)"
               className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
-            <label className="mt-2 flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs dark:border-zinc-700"><input type="checkbox" checked={pagadaSinOP} onChange={(e) => setPagadaSinOP(e.target.checked)} className="accent-orange-600" /><span><strong>Ya pagada con tarjeta / marketplace</strong> <span className="font-normal text-zinc-500">— queda pagada sin orden de pago ni gasto duplicado</span></span></label>
+            <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs dark:border-zinc-700"><input type="checkbox" checked={pagadaSinOP} onChange={(e) => setPagadaSinOP(e.target.checked)} className="accent-orange-600" /><span><strong>Ya pagada con tarjeta / marketplace</strong> <span className="font-normal text-zinc-500">— sin orden de pago</span></span></label>
           </section>
 
           {/* Error */}
@@ -1848,16 +2125,16 @@ export default function CargarFacturaOC({
         {/* Footer */}
         <div className="flex items-center justify-between px-5 py-2.5 border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 rounded-b-xl">
           <p className="text-xs text-zinc-400">
-            La factura quedara pendiente de aprobacion por administracion
+            Queda pendiente de aprobación por administración
           </p>
           <div className="flex gap-3">
             <button onClick={onClose}
               className="px-4 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700">
               Cancelar
             </button>
-            <button onClick={handleSave} disabled={saving || alignmentLoading || alignmentBlocked || !!duplicateWarning}
+            <button onClick={handleSave} disabled={saving || alignmentLoading || alignmentBlocked}
               className="px-6 py-2 rounded-lg bg-orange-600 text-white text-sm font-semibold hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed">
-              {saving ? "Guardando..." : "Enviar para aprobacion"}
+              {saving ? "Guardando..." : "Guardar y enviar para aprobación"}
             </button>
           </div>
         </div>

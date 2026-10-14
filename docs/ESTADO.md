@@ -730,6 +730,23 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
            - Un botón: "Guardar y enviar para aprobación".
         c) Espacios: datos de la factura en una o dos filas; arriba solo las OC pendientes de ese proveedor ("Ver todas" para el resto);
            la lista de ítems detectados se pliega cuando coincide con la OC.
+      **V1.1.437 (13/10, PUBLICADA) — punto 5: "Cargar factura" simple (Factura vs. OC, solo diferencias):**
+        - OC elegida sola entre las pendientes del proveedor (sin facturar del todo): 1) número de OC impreso (referencias_oc), 2) nombres parecidos,
+          3) precios, 4) cantidades, 5) total. Chip "OC-xxx · elegida sola · cambiar / sumar otra"; la lista de OC solo se ve al cambiar ("Ver todas" para el resto).
+        - Renglones: código/nombre/memoria como antes + emparejar por PRECIO lo que el proveedor llama distinto (se aprende al guardar).
+        - Solo se muestran las diferencias: más cantidad → [Actualizar OC a N] [Crear OC nueva] [Solo en la factura]; renglón que no está (envío) →
+          [Agregar a OC-xxx] [Crear OC nueva] [Solo en la factura] (por defecto: a la misma OC). Precio distinto, menos cantidad y lo que no vino: info.
+          "ver detalle" abre los vínculos (corregir, Compré otra cosa, IA) y la tabla de artículos (plegada cuando hay OC). Se sacó el confirm de "OC adicional".
+        - Al guardar, lo de "a la misma OC" agrega el renglón / sube la cantidad en la OC (recibido si la OC ya estaba recibida completa), recalcula totales,
+          deja historial en observaciones y avisa si la OC viene de un PR (el PR no se toca).
+        - Control del IVA: neto + IVA + percepciones vs. total impreso; si no da, aviso amarillo y botón "Usar IVA 21 % en todo" si con eso da justo. Total "✓ igual al PDF".
+          Prompt de la IA: los títulos "Iva 0%"/"IVA 10.5%" vacíos del pie no son la tasa. Cada renglón conserva su IVA de la factura.
+        - Datos en 2 filas, notas + "pagada con tarjeta" en una fila, botón único "Guardar y enviar para aprobación"; factura repetida ya no traba el botón (avisa y pregunta).
+        - Lógica en `lib/factura-vs-oc.ts` (pruebas `scripts/test-factura-vs-oc.ts` y `scripts/test-factura-vs-oc-guardado.ts`).
+        - Probado en local SIN guardar con Nexo FC A 0003-00005284: eligió OC-2026-1229 sola, mesa y caja emparejadas, diferencias caja 2 vs 1 y envío; 21 % → $ 685.828 igual al PDF.
+        - Punto 1 de la tanda probado en producción sin guardar: "Repetir presupuesto anterior" (PR-2026-1246 Corteva: 28 art., 22 con precio de hoy, 6 costo anterior) y Enter en el último renglón: OK.
+      **PENDIENTE (aviso de Augusto 13/10):** Proveedores → "Con deuda" muestra 11 proveedores con $ 2.742.069,43 que NO se les debe (Bomberomania, Casella,
+        Electronic, Mastroianni, Fernandez, Fravega, Garcia, Horni, Mercado Libre, Segutecnica, Terra Vita). Revisar de dónde sale el saldo (facturas pagadas sin OP / sin marcar).
       **V1.1.436 (13/10, PUBLICADA) — punto 4: las 8 mejoras de la ventana de presupuestos:**
         - Ventana más ancha (Modal size "2xl"); datos de arriba en una fila (grilla de 11, campos h-8); avisos del dólar al final en una línea.
         - Tabla sin scroll lateral: Código + Descripción en una celda (la descripción ocupa lo que sobra); IVA oculto salvo que algún renglón ≠ 21 % (botón "IVA 21 % · cambiar").
