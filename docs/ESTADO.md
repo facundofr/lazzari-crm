@@ -1,6 +1,6 @@
 # Estado del proyecto — CRM Lazzari
 
-Actualizado: 14/10/2026 · Publicadas esta noche, en dos deploys seguidos y verificadas desde afuera (login 200, encabezados de seguridad activos): **V1.1.442** (commit 98c866e) y **V1.1.443** (commit 99b3a77). Detalle de V1.1.428 a V1.1.441: `git log` (este archivo quedó atrasado en esa parte). Falta chequearlas con sesión (el sidebar tiene que decir V1.1.443).
+Actualizado: 14/10/2026 · Publicadas esta noche, en dos deploys seguidos y verificadas desde afuera (login 200, encabezados de seguridad activos): **V1.1.442** (commit 98c866e) y **V1.1.443** (commit 99b3a77). Detalle de V1.1.428 a V1.1.441: `git log` (este archivo quedó atrasado en esa parte). **Chequeadas con sesión en producción (14/10):** sidebar dice V1.1.443; Configuración → Integraciones muestra Email "Conectado" (Resend, plan gratis), Banco "Por archivo" y ARCA WSFE "Producción — PV 10"; filtro de moneda en Facturación OK (USD muestra solo la factura en dólares, Pesos 0, Todas vuelve); PDF de PR-2026-1252 se genera bien (PDF válido de 146 KB, se interceptó la descarga, no se guardó nada).
 
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
@@ -70,7 +70,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
 - **Después de publicar:** Augusto rechaza los cheques 00000074 y 00000176 de Barraza desde Finanzas > Cheques.
   Cuando venga rechazado el 00000131: rechazarlo y correr `crm/app/supabase/operaciones/20261011_nc_barraza_0001_00000025.sql`
   (NC A 0001-00000025, CAE 86416795481784, $26.954.340,91, anula FA 15-10, 15-19 y 15-30).
-- Chequeos: tipos 0 errores, hooks OK, tests fecha-cobro, cobros/cheques y saldo-clientes OK. No probado en pantalla (necesita sesión).
+- Chequeos: tipos 0 errores, hooks OK, tests fecha-cobro, cobros/cheques y saldo-clientes OK. Probado en producción con sesión 14/10: filtro y PDF OK.
 
 ## 3b. Publicado el 11/10/2026 (V1.1.415), migraciones 20261011160000 y 20261011170000 ya corridas
 
@@ -1097,7 +1097,7 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
 6. **(HECHO en V1.1.440, según el commit)** **Lista de costos dentro de Proveedores** (idea 9): fotos (`recursos/fotos_costos.zip`), rubro, marca y reglas por proveedor.
 7. **Comisiones** (idea 1) y **Torneo** (idea 7): faltan respuestas de Augusto.
 8. **Archivo BBVA Net Cash:** falta el formato del banco (el botón ya está, desactivado).
-9a. **(HECHO y PUBLICADO 14/10/2026, V1.1.442, commit 98c866e, sin migración)** **Descuento visible en el PDF del presupuesto:** cada renglón con descuento muestra "Precio de lista $X · Descuento Y%" (en Factura B, la lista con IVA) y al pie "Incluye descuento general del Z%". Sin descuento, el PDF queda igual que antes (PR viejos sin `precio_lista` tampoco cambian). Archivos: `lib/pdf-templates.ts`, `lib/types.ts`, `presupuestos/page.tsx` (las dos llamadas al PDF). Prueba: `scripts/test-pdf-descuento.ts`. **Filtro por moneda en facturas de venta:** desplegable "Todas las monedas / Pesos / Dólares" en Facturación (`facturacion-content.tsx`), cuenta en "X de Y". tsc 0 errores, hooks OK. No probado en pantalla (necesita sesión).
+9a. **(HECHO y PUBLICADO 14/10/2026, V1.1.442, commit 98c866e, sin migración)** **Descuento visible en el PDF del presupuesto:** cada renglón con descuento muestra "Precio de lista $X · Descuento Y%" (en Factura B, la lista con IVA) y al pie "Incluye descuento general del Z%". Sin descuento, el PDF queda igual que antes (PR viejos sin `precio_lista` tampoco cambian). Archivos: `lib/pdf-templates.ts`, `lib/types.ts`, `presupuestos/page.tsx` (las dos llamadas al PDF). Prueba: `scripts/test-pdf-descuento.ts`. **Filtro por moneda en facturas de venta:** desplegable "Todas las monedas / Pesos / Dólares" en Facturación (`facturacion-content.tsx`), cuenta en "X de Y". tsc 0 errores, hooks OK. Probado en producción con sesión 14/10: filtro y PDF OK.
 9. Otros: propuestas de `PROPUESTA-REPORTES-DASHBOARD.md`, centro de alertas unificado, descuento visible en el PDF del presupuesto, filtro por moneda en facturas de venta, revisar migraciones viejas de Manu.
 10. **Seguridad:** rotar la clave de Anthropic y activar MFA en Supabase y Vercel.
 
