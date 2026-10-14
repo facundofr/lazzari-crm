@@ -1645,7 +1645,7 @@ export default function RemitosPage() {
 
               {/* Items */}
               <div>
-                <h3 className="text-sm font-semibold mb-3 dark:text-white">Items ({detailItems.length})</h3>
+                <h3 className="text-sm font-semibold mb-1.5 dark:text-white">Items ({detailItems.length})</h3>
                 {detailLoading ? (
                   <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-orange-500" /></div>
                 ) : detailItems.length === 0 ? (
@@ -1655,19 +1655,19 @@ export default function RemitosPage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
-                          <th className="text-left px-3 py-2 w-10">#</th>
-                          <th className="text-left px-3 py-2">Descripción</th>
-                          <th className="text-right px-3 py-2 w-24">Cantidad</th>
-                          <th className="text-left px-3 py-2 w-20">Unidad</th>
+                          <th className="text-left px-2.5 py-1.5 w-10">#</th>
+                          <th className="text-left px-2.5 py-1.5">Descripción</th>
+                          <th className="text-right px-2.5 py-1.5 w-24">Cantidad</th>
+                          <th className="text-left px-2.5 py-1.5 w-20">Unidad</th>
                         </tr>
                       </thead>
                       <tbody>
                         {detailItems.map((item, i) => (
                           <tr key={item.id} className="border-t border-zinc-100 dark:border-zinc-800">
-                            <td className="px-3 py-2 text-zinc-400">{i + 1}</td>
-                            <td className="px-3 py-2 dark:text-white">{item.descripcion}</td>
-                            <td className="px-3 py-2 text-right font-medium dark:text-white">{item.cantidad}</td>
-                            <td className="px-3 py-2 text-zinc-500">{item.unidad || "u"}</td>
+                            <td className="px-2.5 py-1.5 text-zinc-400">{i + 1}</td>
+                            <td className="px-2.5 py-1.5 dark:text-white">{item.descripcion}</td>
+                            <td className="px-2.5 py-1.5 text-right font-medium dark:text-white">{item.cantidad}</td>
+                            <td className="px-2.5 py-1.5 text-zinc-500">{item.unidad || "u"}</td>
                           </tr>
                         ))}
                       </tbody>

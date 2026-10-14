@@ -285,7 +285,7 @@ export default function ConsultaFacturasPage() {
               {fila("IVA", formatCurrency(Number(venta.iva), venta.moneda as Moneda))}
               {fila(<b>Total</b>, <b>{formatCurrency(Number(venta.total), venta.moneda as Moneda)}</b>)}
             </div>
-            <h3 className="mb-1 mt-4 text-xs font-semibold uppercase text-zinc-500">Renglones</h3>
+            <h3 className="mb-1 mt-3 text-xs font-semibold uppercase text-zinc-500">Renglones</h3>
             <div className="space-y-1">
               {itemsVenta.map((it, i) => (
                 <div key={i} className="flex justify-between gap-3 rounded border border-zinc-100 px-2 py-1 text-sm dark:border-zinc-800">
@@ -326,7 +326,7 @@ export default function ConsultaFacturasPage() {
               {Number(compra.percepciones || 0) > 0 && fila("Percepciones", formatCurrency(Number(compra.percepciones), compra.moneda as Moneda))}
               {fila(<b>Total</b>, <b>{formatCurrency(Number(compra.total), compra.moneda as Moneda)}</b>)}
             </div>
-            <h3 className="mb-1 mt-4 text-xs font-semibold uppercase text-zinc-500">Renglones</h3>
+            <h3 className="mb-1 mt-3 text-xs font-semibold uppercase text-zinc-500">Renglones</h3>
             <div className="space-y-1">
               {itemsCompra.map((it, i) => (
                 <div key={i} className="flex justify-between gap-3 rounded border border-zinc-100 px-2 py-1 text-sm dark:border-zinc-800">

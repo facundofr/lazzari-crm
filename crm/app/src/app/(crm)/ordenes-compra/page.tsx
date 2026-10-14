@@ -3715,14 +3715,14 @@ export default function OrdenesCompraPage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-zinc-50 dark:bg-zinc-800 text-left text-xs text-zinc-500 uppercase">
-                          <th className="px-3 py-2">Codigo</th>
-                          <th className="px-3 py-2">Descripcion</th>
-                          <th className="px-3 py-2 text-right">Cant.</th>
-                          <th className="px-3 py-2 text-right">P. Unit.</th>
-                          <th className="px-3 py-2 text-right">Subtotal</th>
-                          {!detailOC.proveedores && !isOwnStockPurchaseOrder(detailOC) && <th className="px-3 py-2">Proveedor</th>}
-                          <th className="px-3 py-2 text-center">Recibido</th>
-                          {editMode && <th className="px-3 py-2 w-8"></th>}
+                          <th className="px-2.5 py-1.5">Codigo</th>
+                          <th className="px-2.5 py-1.5">Descripcion</th>
+                          <th className="px-2.5 py-1.5 text-right">Cant.</th>
+                          <th className="px-2.5 py-1.5 text-right">P. Unit.</th>
+                          <th className="px-2.5 py-1.5 text-right">Subtotal</th>
+                          {!detailOC.proveedores && !isOwnStockPurchaseOrder(detailOC) && <th className="px-2.5 py-1.5">Proveedor</th>}
+                          <th className="px-2.5 py-1.5 text-center">Recibido</th>
+                          {editMode && <th className="px-2.5 py-1.5 w-8"></th>}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -3732,21 +3732,21 @@ export default function OrdenesCompraPage() {
                             : 0;
                           return (
                             <tr key={item.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-                              <td className="px-3 py-2 font-mono text-xs">
+                              <td className="px-2.5 py-1.5 font-mono text-xs">
                                 {editMode ? (
                                   <input type="text" value={item.codigo}
                                     onChange={(e) => setEditItems((prev) => prev.map((it, i) => i === idx ? { ...it, codigo: e.target.value } : it))}
                                     placeholder="Codigo" className="w-20 rounded border border-blue-300 dark:border-blue-600 bg-white dark:bg-zinc-800 px-1 py-0.5 text-xs font-mono" />
                                 ) : item.codigo}
                               </td>
-                              <td className="px-3 py-2 max-w-[200px] truncate" title={item.descripcion}>
+                              <td className="px-2.5 py-1.5 max-w-[200px] truncate" title={item.descripcion}>
                                 {editMode ? (
                                   <input type="text" value={item.descripcion}
                                     onChange={(e) => setEditItems((prev) => prev.map((it, i) => i === idx ? { ...it, descripcion: e.target.value } : it))}
                                     placeholder="Descripcion" className="w-full rounded border border-blue-300 dark:border-blue-600 bg-white dark:bg-zinc-800 px-1 py-0.5 text-sm" />
                                 ) : item.descripcion}
                               </td>
-                              <td className="px-3 py-2 text-right">
+                              <td className="px-2.5 py-1.5 text-right">
                                 {editMode ? (
                                   <input type="number" step="any" min={0} value={item.cantidad}
                                     onChange={(e) => setEditItems((prev) => prev.map((it, i) => i === idx ? { ...it, cantidad: Number(e.target.value) || 0 } : it))}
@@ -3755,7 +3755,7 @@ export default function OrdenesCompraPage() {
                                   <>{item.cantidad}{item.unidad ? ` ${item.unidad}` : ""}</>
                                 )}
                               </td>
-                              <td className="px-3 py-2 text-right font-mono">
+                              <td className="px-2.5 py-1.5 text-right font-mono">
                                 {editMode ? (
                                   <input type="number" step="any" min={0} value={item.precio_unitario}
                                     onChange={(e) => setEditItems((prev) => prev.map((it, i) => i === idx ? { ...it, precio_unitario: Number(e.target.value) || 0 } : it))}
