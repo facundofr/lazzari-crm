@@ -26,7 +26,7 @@ function Barra({ pct }: { pct: number }) {
   );
 }
 
-export default function CoberturaFijos({ sociedadId }: { sociedadId: string | null | undefined }) {
+export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: string | null | undefined; onMargen?: (margenSobreVentaPct: number | null) => void }) {
   const [prs, setPrs] = useState<PRDelMes[]>([]);
   const [fijos, setFijos] = useState<(FijoEntrada & { descripcion?: string })[]>([]);
   const [objetivo, setObjetivo] = useState<number | null>(null);
@@ -88,6 +88,12 @@ export default function CoberturaFijos({ sociedadId }: { sociedadId: string | nu
 
   const dolarNum = Number(String(dolar).replace(",", ".")) || 0;
   const c = useMemo(() => calcularCobertura({ prs, fijos, dolarFijos: dolarNum, diaDelMes, diasDelMes }), [prs, fijos, dolarNum, diaDelMes, diasDelMes]);
+
+  // Avisa al Dashboard el margen real del mes (ganancia sobre venta neta) para su tarjeta "Margen del mes".
+  useEffect(() => {
+    if (!onMargen || cargando) return;
+    onMargen(c.margenSobreVenta === null ? null : Math.round(c.margenSobreVenta * 1000) / 10);
+  }, [onMargen, cargando, c.margenSobreVenta]);
 
   function guardarDolar(v: string) {
     setDolar(v);

@@ -94,6 +94,8 @@ function getGreeting(): string {
 export default function DashboardPage() {
   const { profile, sociedadActiva } = useUser();
   const [loading, setLoading] = useState(true);
+  // Margen real del mes (ganancia sobre venta neta), lo informa el recuadro de gastos fijos; null = no disponible (se usa el viejo).
+  const [margenMes, setMargenMes] = useState<number | null>(null);
   const [kpi, setKpi] = useState({ ventasMes: 0, ventasMesAnterior: 0, presupuestosActivos: 0, presupuestosPendientes: 0, tasaConversion: 0, tasaConversionAnterior: 0, cobranzasMes: 0, cobranzasPendientes: 0, clientesActivos: 0, stockBajo: 0, facturadoMes: 0, margenPromedio: 0, alertasSinLeer: 0 });
   const [facturadoMonedas, setFacturadoMonedas] = useState({ ARS: 0, USD: 0, anteriorARS: 0 });
   const [presupuestosPorEstado, setPresupuestosPorEstado] = useState<{ estado: string; cantidad: number; color: string }[]>([]);
@@ -477,15 +479,15 @@ export default function DashboardPage() {
             iconColor="text-orange-500"
           />
           <StatCard
-            title="Margen promedio"
-            value={`${kpi.margenPromedio}%`}
+            title={margenMes !== null ? "Margen del mes" : "Margen promedio"}
+            value={margenMes !== null ? `${margenMes.toLocaleString("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : `${kpi.margenPromedio}%`}
             icon={TrendingUp}
             iconColor="text-violet-600"
           />
         </div>
 
         {/* ¿Cubro los gastos fijos? + ventas del mes: el mismo recuadro que Finanzas > Hoy (cuenta por ganancia, no por facturado) */}
-        {verRecuadroFijos && <CoberturaFijos sociedadId={sociedadActiva?.id} />}
+        {verRecuadroFijos && <CoberturaFijos sociedadId={sociedadActiva?.id} onMargen={setMargenMes} />}
 
         {/* Pagos de gastos fijos pendientes + Objetivos */}
         {((verRecuadroFijos && hayAvisosFijos) || objetivosTarjeta.length > 0) && (

@@ -3377,8 +3377,15 @@ export default function PresupuestosPage() {
                   <p className="text-sm font-medium">{selected.moneda}{selected.moneda === "USD" && (selected as any).cotizacionModalidad ? ` ${(selected as any).cotizacionModalidad === "billetes" ? "(Billete)" : "(Divisa)"}` : ""}{(selected as any).tipoCambio ? ` — TC: ${Number((selected as any).tipoCambio).toLocaleString("es-AR")}` : ""}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-zinc-500">Markup general</p>
-                  <p className="text-sm font-medium">{selected.markupGeneral}%</p>
+                  {(() => {
+                    // Margen real de hoy (costos y precios actuales de los renglones + envío interno): se recalcula cada vez que se abre el PR.
+                    const m = margenPR({ moneda: selected.moneda, tipoCambio: selected.tipoCambio, tipoCambioDivisas: selected.tipoCambioDivisas, modalidadEmision: (selected as any).modalidadEmision, costoEnvioInterno: (selected as any).costoEnvioInterno, items: selected.items || [] });
+                    const color = m.margenPct === null ? "text-zinc-400" : m.margenPct < MARGEN_MINIMO_PR ? "text-red-600" : m.margenPct < MARGEN_MINIMO_PR + 5 ? "text-amber-600" : "text-emerald-600";
+                    return <>
+                      <p className="text-xs text-zinc-500" title={`Venta − ${m.gastosPct} % de gastos e impuestos − costo actual. Se recalcula solo con los costos y precios de hoy. Solo interno.`}>Margen real (ganancia)</p>
+                      <p className={`text-sm font-medium ${color}`}>{m.margenPct === null ? "—" : `${m.margenPct.toLocaleString("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}% · ${formatCurrency(m.ganancia, selected.moneda)}`}</p>
+                    </>;
+                  })()}
                 </div>
                 <OcClienteBloque
                   pr={{ id: selected.id, ocCliente: (selected as any).ocCliente || "", ocClienteFecha: (selected as any).ocClienteFecha || "", archivoUrl: (selected as any).archivoUrl || "", archivoNombre: (selected as any).archivoNombre || "", notasInternas: String(selected.notasInternas || "") }}
