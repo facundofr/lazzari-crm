@@ -976,25 +976,22 @@ export default function PresupuestosPage() {
   }, [fetchPresupuestos]);
 
   // Auto-select PR from URL ?selected=UUID. El buscador de arriba avisa con "lz-abrir-pr" (si ya estás en esta pantalla la URL cambia pero la página no se vuelve a cargar).
-  const [abrirPedido, setAbrirPedido] = useState(0);
+  const [abrirPedido, setAbrirPedido] = useState<{ id: string } | null>(null);
   useEffect(() => {
-    const onAbrir = () => setAbrirPedido(n => n + 1);
+    const onAbrir = (e: Event) => { const id = (e as CustomEvent<string>).detail; if (id) setAbrirPedido({ id }); };
     window.addEventListener("lz-abrir-pr", onAbrir);
     return () => window.removeEventListener("lz-abrir-pr", onAbrir);
   }, []);
   useEffect(() => {
     if (loading || presupuestos.length === 0) return;
-    // La URL nueva llega un instante después del aviso del buscador.
-    const t = window.setTimeout(() => {
-      const params = new URLSearchParams(window.location.search);
-      const selId = params.get("selected");
-      if (!selId) return;
-      const found = presupuestos.find(p => p.id === selId);
-      if (found) setSelected(found);
-      // Clean URL param
-      window.history.replaceState({}, "", window.location.pathname);
-    }, 150);
-    return () => window.clearTimeout(t);
+    const selId = abrirPedido?.id || new URLSearchParams(window.location.search).get("selected");
+    if (!selId) return;
+    const found = presupuestos.find(p => p.id === selId);
+    if (found) setSelected(found);
+    setAbrirPedido(null);
+    // Clean URL param (la URL del buscador puede llegar un instante después)
+    window.history.replaceState({}, "", window.location.pathname);
+    window.setTimeout(() => { if (window.location.search.includes("selected=")) window.history.replaceState({}, "", window.location.pathname); }, 800);
   }, [loading, presupuestos.length, abrirPedido]);
 
   // Fetch items separately when selected PR has no items (fallback query omitted them)
