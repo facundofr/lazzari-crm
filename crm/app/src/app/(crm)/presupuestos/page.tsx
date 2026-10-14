@@ -3209,7 +3209,7 @@ export default function PresupuestosPage() {
             : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-2xl"
           }>
             {/* Panel header */}
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-200 bg-white/95 backdrop-blur-sm px-4 sm:px-6 py-4 dark:border-zinc-700 dark:bg-zinc-900/95">
+            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-zinc-200 bg-white/95 backdrop-blur-sm px-4 sm:px-5 py-2.5 dark:border-zinc-700 dark:bg-zinc-900/95">
               <div>
                 <div className="flex items-center gap-3">
                   <h2 className="text-lg font-bold text-zinc-900 dark:text-white">PR {selected.numero}</h2>
@@ -3298,9 +3298,9 @@ export default function PresupuestosPage() {
               </div>
             </div>
 
-            <div className="p-4 sm:p-6 space-y-6">
+            <div className="p-3 sm:p-4 space-y-3">
               {/* Info grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2">
                 <div>
                   <p className="text-xs text-zinc-500">Fecha</p>
                   <p className="text-sm font-medium">{formatDate(selected.fecha)}</p>
@@ -3408,15 +3408,15 @@ export default function PresupuestosPage() {
               </div>
 
               {/* Items table */}
-              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-3">Items ({selected.items.length})</h3>
+              <div className="border-t border-zinc-200 pt-3 dark:border-zinc-700">
+                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">Items ({selected.items.length})</h3>
                 {(() => {
                   const belowCostCount = selected.items.filter((item) => {
                     const costoConv = convertCosto(item.precioCosto, (item as any).costoMoneda || "ARS", selected.moneda, selected.tipoCambio || 0, (selected as any).tipoCambioDivisas || 0);
                     return item.precioVenta < costoConv;
                   }).length;
                   return belowCostCount > 0 ? (
-                    <div className="flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400 mb-3">
+                    <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400 mb-2">
                       <AlertTriangle className="h-4 w-4 shrink-0" />
                       <span>Atencion: {belowCostCount} item(s) con precio de venta menor al costo</span>
                     </div>
@@ -3426,13 +3426,13 @@ export default function PresupuestosPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-500">Codigo</th>
-                        <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-500">Descripcion</th>
-                        <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Cant.</th>
-                        <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">P. Costo</th>
-                        <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">Markup</th>
-                        <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">P. Venta</th>
-                        <th className="px-3 py-2 text-right text-xs font-semibold text-zinc-500">Total</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold text-zinc-500">Codigo</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold text-zinc-500">Descripcion</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500">Cant.</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">P. Costo</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">Markup</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500">P. Venta</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500">Total</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -3441,23 +3441,23 @@ export default function PresupuestosPage() {
                         const belowCost = item.precioVenta < costoConv;
                         return (
                         <tr key={item.id} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
-                          <td className="px-3 py-2 font-mono text-xs">{item.codigo}</td>
-                          <td className="px-3 py-2">{item.descripcion}</td>
-                          <td className="px-3 py-2 text-right">{item.cantidad} {item.unidad}</td>
-                          <td className="px-3 py-2 text-right font-mono hidden sm:table-cell">
+                          <td className="px-3 py-1.5 font-mono text-xs">{item.codigo}</td>
+                          <td className="px-3 py-1.5">{item.descripcion}</td>
+                          <td className="px-3 py-1.5 text-right">{item.cantidad} {item.unidad}</td>
+                          <td className="px-3 py-1.5 text-right font-mono hidden sm:table-cell">
                             <div>{formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")}</div>
                             {item.costoMoneda !== selected.moneda && costoConv > 0 && (
                               <div className="text-[10px] text-zinc-400">≈ {formatCurrency(costoConv, selected.moneda as "ARS" | "USD")}</div>
                             )}
                           </td>
-                          <td className="px-3 py-2 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>
-                          <td className={`px-3 py-2 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
+                          <td className="px-3 py-1.5 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>
+                          <td className={`px-3 py-1.5 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
                             <span className="inline-flex items-center gap-1">
                               {belowCost && <AlertTriangle className="h-3 w-3 shrink-0" />}
                               {formatCurrency(item.precioVenta, selected.moneda as "ARS" | "USD")}
                             </span>
                           </td>
-                          <td className="px-3 py-2 text-right font-mono font-semibold">{formatCurrency(item.total, selected.moneda as "ARS" | "USD")}</td>
+                          <td className="px-3 py-1.5 text-right font-mono font-semibold">{formatCurrency(item.total, selected.moneda as "ARS" | "USD")}</td>
                         </tr>
                         );
                       })}
@@ -3468,7 +3468,7 @@ export default function PresupuestosPage() {
 
               {/* Totals */}
               <div className="flex justify-end">
-                <div className="w-64 space-y-2 rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800/50">
+                <div className="w-64 space-y-1 rounded-lg bg-zinc-50 px-4 py-2.5 dark:bg-zinc-800/50">
                   <div className="flex justify-between text-sm">
                     <span className="text-zinc-500">Subtotal</span>
                     <span className="font-mono">{formatCurrency(selected.subtotal, selected.moneda)}</span>
@@ -3477,7 +3477,7 @@ export default function PresupuestosPage() {
                     <span className="text-zinc-500">IVA</span>
                     <span className="font-mono">{formatCurrency(selected.iva, selected.moneda)}</span>
                   </div>
-                  <div className="flex justify-between text-base font-bold border-t border-zinc-200 pt-2 dark:border-zinc-700">
+                  <div className="flex justify-between text-base font-bold border-t border-zinc-200 pt-1.5 dark:border-zinc-700">
                     <span>Total</span>
                     <span className="font-mono text-orange-600 dark:text-orange-400">{formatCurrency(selected.total, selected.moneda)}</span>
                   </div>
@@ -3489,18 +3489,18 @@ export default function PresupuestosPage() {
 
               {/* Notas internas (primero) */}
               {selected.notasInternas && (
-                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                  <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-400 mb-2 flex items-center gap-1.5">
+                <div className="border-t border-zinc-200 pt-3 dark:border-zinc-700">
+                  <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-400 mb-1 flex items-center gap-1.5">
                     <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
                     Notas internas
                   </h3>
-                  <p className="text-sm text-amber-700/80 dark:text-amber-400/80 whitespace-pre-wrap bg-amber-50 dark:bg-amber-950/20 rounded-lg p-3">{selected.notasInternas}</p>
+                  <p className="text-sm text-amber-700/80 dark:text-amber-400/80 whitespace-pre-wrap bg-amber-50 dark:bg-amber-950/20 rounded-lg px-3 py-2">{selected.notasInternas}</p>
                 </div>
               )}
               {/* Observaciones (cliente) */}
               {selected.observaciones && (
-                <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
-                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">Observaciones (cliente)</h3>
+                <div className="border-t border-zinc-200 pt-3 dark:border-zinc-700">
+                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1">Observaciones (cliente)</h3>
                   <p className="text-sm text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap">{selected.observaciones}</p>
                 </div>
               )}
@@ -3508,7 +3508,7 @@ export default function PresupuestosPage() {
 
               {/* Motivo rechazo */}
               {selected.motivoRechazo && (
-                <div className="rounded-lg bg-red-50 p-4 dark:bg-red-950/30">
+                <div className="rounded-lg bg-red-50 px-4 py-2.5 dark:bg-red-950/30">
                   <div className="flex items-center gap-2 mb-1">
                     <XCircle className="h-4 w-4 text-red-500" />
                     <span className="text-sm font-semibold text-red-700 dark:text-red-400">Motivo de rechazo</span>
@@ -3518,7 +3518,7 @@ export default function PresupuestosPage() {
               )}
 
               {/* Action buttons */}
-              <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700 flex flex-wrap items-center gap-3">
+              <div className="border-t border-zinc-200 pt-3 dark:border-zinc-700 flex flex-wrap items-center gap-3">
                 <label className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Cambiar estado:</label>
                 <select
                   value=""

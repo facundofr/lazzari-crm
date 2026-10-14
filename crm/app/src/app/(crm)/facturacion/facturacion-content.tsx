@@ -1653,12 +1653,12 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
             ? "fixed inset-4 z-50 overflow-y-auto bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl animate-slide-in-right"
             : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-lg"
           }>
-            <div className="sticky top-0 z-10 flex items-center justify-between bg-white px-6 py-4 border-b border-zinc-200 dark:bg-zinc-900 dark:border-zinc-700">
+            <div className="sticky top-0 z-10 flex items-center justify-between bg-white px-4 py-2.5 border-b border-zinc-200 dark:bg-zinc-900 dark:border-zinc-700">
               <div>
                 <h2 className="font-mono text-lg font-bold dark:text-white">
                   {formatComprobante(detailFactura.tipo, detailFactura.punto_venta, detailFactura.numero)}
                 </h2>
-                <div className="flex items-center gap-2 mt-1">
+                <div className="flex items-center gap-2 mt-0.5">
                   <Badge variant={estadoConfig[detailFactura.estado]?.variant || "info"}>
                     {estadoConfig[detailFactura.estado]?.label || detailFactura.estado}
                   </Badge>
@@ -1692,8 +1692,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               </div>
             </div>
 
-            <div className="px-6 py-5 space-y-6">
-              {["FCEA", "FCEB"].includes(detailFactura.tipo) && <div className="rounded-lg border border-blue-200 p-3 space-y-2 dark:border-blue-900">
+            <div className="px-4 py-3 space-y-3">
+              {["FCEA", "FCEB"].includes(detailFactura.tipo) && <div className="rounded-lg border border-blue-200 p-2.5 space-y-1.5 dark:border-blue-900">
                 <h4 className="text-sm font-semibold dark:text-zinc-200">Registro FCE de ARCA</h4>
                 <p className="text-xs text-zinc-500">Consulta de solo lectura. Este estado no equivale al estado de cobro del CRM.</p>
                 <button type="button" onClick={consultarRegistroFce} disabled={fceRegistry.key === `${sociedadActiva?.id}:${detailFactura.id}` && fceRegistry.loading} className="text-sm text-blue-600 underline disabled:opacity-50">Consultar / actualizar estado en ARCA</button>
@@ -1707,7 +1707,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               </div>}
               {/* Cliente */}
               <div>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Cliente</h4>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">Cliente</h4>
                 <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">{detailFactura.clientes?.razon_social}</p>
                 {detailFactura.clientes?.cuit && <p className="text-xs text-zinc-500 mt-0.5">CUIT: {detailFactura.clientes.cuit}</p>}
                 {detailFactura.clientes?.condicion_iva && <p className="text-xs text-zinc-400">{detailFactura.clientes.condicion_iva}</p>}
@@ -1727,7 +1727,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               {/* OC Cliente */}
               {detailFactura.oc_cliente && (
                 <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">OC Cliente</h4>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">OC Cliente</h4>
                   <p className="font-mono text-sm font-medium text-blue-600 dark:text-blue-400">{detailFactura.oc_cliente}</p>
                   <p className="mt-1 text-xs text-zinc-500">Fecha de la OC: {detailFactura.oc_cliente_fecha ? formatDate(detailFactura.oc_cliente_fecha) : "Sin informar"}</p>
                 </div>
@@ -1735,9 +1735,9 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
               {/* CAE */}
               <div>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">CAE</h4>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">CAE</h4>
                 {detailFactura.cae ? (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950/30">
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 dark:border-emerald-800 dark:bg-emerald-950/30">
                     <div className="flex items-center gap-2">
                       <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                       <span className="font-mono text-sm font-medium text-emerald-700 dark:text-emerald-400">{detailFactura.cae}</span>
@@ -1747,31 +1747,31 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                     )}
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/50">Sin CAE — factura no autorizada por ARCA</div>
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800/50">Sin CAE — factura no autorizada por ARCA</div>
                 )}
               </div>
 
               {/* Items */}
               {detailItems.length > 0 && (
                 <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Items</h4>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">Items</h4>
                   <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
                     <table className="w-full text-xs">
                       <thead>
                         <tr className="bg-zinc-50 dark:bg-zinc-800/50">
-                          <th className="text-left px-3 py-2 font-medium text-zinc-500">Descripcion</th>
-                          <th className="text-right px-3 py-2 font-medium text-zinc-500">Cant.</th>
-                          <th className="text-right px-3 py-2 font-medium text-zinc-500">P.Unit.</th>
-                          <th className="text-right px-3 py-2 font-medium text-zinc-500">Subtotal</th>
+                          <th className="text-left px-3 py-1.5 font-medium text-zinc-500">Descripcion</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-zinc-500">Cant.</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-zinc-500">P.Unit.</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-zinc-500">Subtotal</th>
                         </tr>
                       </thead>
                       <tbody>
                         {detailItems.map((it, idx) => (
                           <tr key={idx} className="border-t border-zinc-100 dark:border-zinc-800">
-                            <td className="px-3 py-2 text-zinc-700 dark:text-zinc-300">{it.descripcion}</td>
-                            <td className="px-3 py-2 text-right font-mono text-zinc-600 dark:text-zinc-400">{it.cantidad}</td>
-                            <td className="px-3 py-2 text-right font-mono text-zinc-600 dark:text-zinc-400">{formatCurrency(Number(it.precio_unitario), detailFactura.moneda as "USD" | "ARS")}</td>
-                            <td className="px-3 py-2 text-right font-mono font-medium text-zinc-700 dark:text-zinc-300">{formatCurrency(Number(it.subtotal), detailFactura.moneda as "USD" | "ARS")}</td>
+                            <td className="px-3 py-1.5 text-zinc-700 dark:text-zinc-300">{it.descripcion}</td>
+                            <td className="px-3 py-1.5 text-right font-mono text-zinc-600 dark:text-zinc-400">{it.cantidad}</td>
+                            <td className="px-3 py-1.5 text-right font-mono text-zinc-600 dark:text-zinc-400">{formatCurrency(Number(it.precio_unitario), detailFactura.moneda as "USD" | "ARS")}</td>
+                            <td className="px-3 py-1.5 text-right font-mono font-medium text-zinc-700 dark:text-zinc-300">{formatCurrency(Number(it.subtotal), detailFactura.moneda as "USD" | "ARS")}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1782,24 +1782,24 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
               {/* Importes */}
               <div>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Importes</h4>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">Importes</h4>
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
                   {detailFactura.tipo !== "X" && (<>
-                    <div className="flex items-center justify-between px-4 py-2.5 text-sm">
+                    <div className="flex items-center justify-between px-4 py-1.5 text-sm">
                       <span className="text-zinc-500">Neto gravado</span>
                       <span className="font-mono">{formatCurrency(Number(detailFactura.subtotal), detailFactura.moneda as "USD" | "ARS")}</span>
                     </div>
-                    <div className="flex items-center justify-between px-4 py-2.5 text-sm border-t border-zinc-100 dark:border-zinc-800">
+                    <div className="flex items-center justify-between px-4 py-1.5 text-sm border-t border-zinc-100 dark:border-zinc-800">
                       <span className="text-zinc-500">IVA</span>
                       <span className="font-mono">{formatCurrency(Number(detailFactura.iva), detailFactura.moneda as "USD" | "ARS")}</span>
                     </div>
                   </>)}
-                  <div className="flex items-center justify-between px-4 py-3 text-sm border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 font-semibold">
+                  <div className="flex items-center justify-between px-4 py-2 text-sm border-t border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 font-semibold">
                     <span className="text-zinc-700 dark:text-zinc-300">{detailFactura.tipo === "X" ? "Total (sin IVA)" : "Total"}</span>
                     <span className="font-mono text-base">{formatCurrency(Number(detailFactura.total), detailFactura.moneda as "USD" | "ARS")}</span>
                   </div>
                   {detailFactura.moneda === "USD" && detailFactura.tipo_cambio && (
-                    <div className="flex items-center justify-between px-4 py-2 text-xs border-t border-zinc-100 dark:border-zinc-800 text-zinc-400">
+                    <div className="flex items-center justify-between px-4 py-1.5 text-xs border-t border-zinc-100 dark:border-zinc-800 text-zinc-400">
                       <span>Operacion en USD — TC: {Number(detailFactura.tipo_cambio).toLocaleString("es-AR")}</span>
                       <span className="font-mono">USD {(Number(detailFactura.total) / Number(detailFactura.tipo_cambio)).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                     </div>
@@ -1810,10 +1810,10 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
               {/* Notas de crédito relacionadas */}
               {detailNCs.length > 0 && (
                 <div>
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">Notas de crédito</h4>
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1">Notas de crédito</h4>
                   <div className="space-y-1.5">
                     {detailNCs.map((nc) => (
-                      <div key={nc.id} className="flex items-center justify-between rounded-lg border border-amber-100 dark:border-amber-900/40 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs">
+                      <div key={nc.id} className="flex items-center justify-between rounded-lg border border-amber-100 dark:border-amber-900/40 bg-amber-50 dark:bg-amber-950/20 px-3 py-1.5 text-xs">
                         <div>
                           <span className="font-mono font-semibold text-amber-800 dark:text-amber-300">{formatComprobante(nc.tipo, nc.punto_venta, nc.numero)}</span>
                           <span className="text-zinc-400 ml-2">{formatDate(nc.fecha)}</span>
@@ -1824,7 +1824,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                     ))}
                   </div>
                   {Number(detailFactura.total_acreditado) > 0 && (
-                    <div className="mt-2 flex justify-between text-xs text-amber-700 dark:text-amber-400 font-medium px-1">
+                    <div className="mt-1.5 flex justify-between text-xs text-amber-700 dark:text-amber-400 font-medium px-1">
                       <span>Total acreditado</span>
                       <span className="font-mono">{formatCurrency(Number(detailFactura.total_acreditado), detailFactura.moneda as "USD" | "ARS")}</span>
                     </div>
@@ -1834,7 +1834,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
               {/* Acciones */}
               <div>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Acciones</h4>
+                <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Acciones</h4>
                 <div className="space-y-2">
                   <BotonDejarRevisar key={detailFactura.id} className="w-full justify-center py-2" datos={{ entidad_tipo: "factura_venta", entidad_id: detailFactura.id, titulo: `${detailFactura.tipo} ${detailFactura.punto_venta}-${detailFactura.numero}`, importe: detailFactura.total, moneda: detailFactura.moneda === "USD" ? "USD" : "ARS", cliente_id: detailFactura.cliente_id }} />
                   {detailFactura.estado !== "pagada" && detailFactura.estado !== "anulada" && (
