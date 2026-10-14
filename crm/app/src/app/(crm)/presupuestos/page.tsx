@@ -247,6 +247,7 @@ function mapToPresupuesto(row: SupabasePresupuesto): Presupuesto {
     cotizacionModalidad: row.cotizacion_modalidad ?? "divisas",
     observaciones: row.observaciones ?? "",
     notasInternas: row.notas_internas ?? "",
+    costoEnvioInterno: Number((row as any).costo_envio_interno) || 0,
     creadoPor: (row as any).created_by_profile?.full_name ?? row.created_by ?? "",
     creadoPorId: row.created_by ?? "",
     enviadoAt: row.enviado_at ?? undefined,
@@ -643,6 +644,7 @@ export default function PresupuestosPage() {
 
   const [clientes, setClientes] = useState<{id: string; razon_social: string; markup_predeterminado?: number | null; condicion_iva?: string | null}[]>([]);
   const [proveedoresOptions, setProveedoresOptions] = useState<{id: string; razon_social: string}[]>([]);
+  const [verEnvioInterno, setVerEnvioInterno] = useState(false);
   const [newPR, setNewPR] = useState({
     cliente_id: "",
     vendedor_id: "",
@@ -655,6 +657,7 @@ export default function PresupuestosPage() {
     markup_general: 30,
     observaciones: "",
     notas_internas: "",
+    costo_envio_interno: "" as string,
     vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
     tipo_comprobante: "" as string,
     modalidad_emision: "sin_definir" as "electronica" | "manual" | "sin_definir",
@@ -1504,6 +1507,7 @@ export default function PresupuestosPage() {
           p_items: buildItemRows(),
         });
         if (error) throw new Error(error.message);
+        await guardarEnvioInterno(editingPRId);
 
         // Sync existing OCs with updated PR items (resets estado to pendiente)
         const ocsSynced = await syncOCsFromPR(editingPRId, newPR.modalidad_emision === "manual");
@@ -1511,7 +1515,7 @@ export default function PresupuestosPage() {
         setShowNewPR(false);
         setEsSolicitud(false);
         setEditingPRId(null);
-        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
+        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", costo_envio_interno: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
         await fetchPresupuestos();
         toast.success(ocsSynced > 0 ? `Presupuesto actualizado — ${ocsSynced} OC actualizada(s) y marcada(s) como pendiente` : "Presupuesto actualizado");
       } else {
@@ -1552,10 +1556,11 @@ export default function PresupuestosPage() {
 
         if (error) throw new Error(error.message);
         if (!newRowId) throw new Error("Supabase no devolvio el presupuesto creado");
+        await guardarEnvioInterno(String(newRowId));
 
         setShowNewPR(false);
         setEsSolicitud(false);
-        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
+        setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", costo_envio_interno: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] });
 
         // Fetch the newly created PR with full joins before refreshing the list
         const { data: fullRow, error: reloadError } = await (supabase as any)
@@ -1678,11 +1683,24 @@ export default function PresupuestosPage() {
     if (!totals.todos) totals.todos = { ARS: 0, USD: 0 };
     totals.todos[pr.moneda === "USD" ? "USD" : "ARS"] += pr.total;
     if (pr.estado === "pendiente" && estado === "pendiente") {
-      gananciaPendiente[pr.moneda === "USD" ? "USD" : "ARS"] += margenPR({ moneda: pr.moneda, tipoCambio: pr.tipoCambio, tipoCambioDivisas: pr.tipoCambioDivisas, modalidadEmision: (pr as any).modalidadEmision, items: pr.items || [] }).ganancia;
+      gananciaPendiente[pr.moneda === "USD" ? "USD" : "ARS"] += margenPR({ moneda: pr.moneda, tipoCambio: pr.tipoCambio, tipoCambioDivisas: pr.tipoCambioDivisas, modalidadEmision: (pr as any).modalidadEmision, costoEnvioInterno: (pr as any).costoEnvioInterno, items: pr.items || [] }).ganancia;
     }
   });
   // El botón "Todos" cuenta solo lo que muestra (sin facturados).
   counts.todos = Math.max(0, counts.todos - (counts.facturado || 0));
+
+  // Flete interno: solo interno, resta de la ganancia, nunca va al cliente. Se guarda aparte del guardado atómico;
+  // si la columna todavía no existe (migración sin correr) avisa y no frena el guardado.
+  async function guardarEnvioInterno(prId: string) {
+    const monto = Math.max(0, Number(newPR.costo_envio_interno) || 0);
+    // Si no hay envío y antes tampoco había, no se toca la base (así nada falla antes de correr la migración).
+    const teniaAntes = Number((presupuestos.find((p) => p.id === prId) as any)?.costoEnvioInterno) > 0;
+    if (monto === 0 && !teniaAntes) return;
+    const { error } = await (supabase as any).from("presupuestos")
+      .update({ costo_envio_interno: monto })
+      .eq("id", prId).eq("sociedad_id", sociedadActiva?.id);
+    if (error) toast.warning("El presupuesto se guardó, pero no el envío interno (" + error.message + ")");
+  }
 
   // Sync existing OCs when PR items change
   async function syncOCsFromPR(prId: string, isManual: boolean): Promise<number> {
@@ -2266,6 +2284,7 @@ export default function PresupuestosPage() {
         markup_general: Number(fullPR.markup_general) || 30,
         observaciones: fullPR.observaciones || "",
         notas_internas: fullPR.notas_internas || "",
+        costo_envio_interno: Number((fullPR as any).costo_envio_interno) > 0 ? String(Number((fullPR as any).costo_envio_interno)) : "",
         vencimiento: fullPR.vencimiento || new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0],
         tipo_comprobante: (fullPR as any).tipo_comprobante || "",
         modalidad_emision: (fullPR as any).modalidad_emision || "sin_definir",
@@ -2987,7 +3006,7 @@ export default function PresupuestosPage() {
               {
                 key: "ganancia" as any, label: "Ganancia / Margen", className: "text-right", sortable: true,
                 sortValue: (row: Presupuesto) => {
-                  const m = margenPR({ moneda: row.moneda, tipoCambio: row.tipoCambio, tipoCambioDivisas: row.tipoCambioDivisas, modalidadEmision: (row as any).modalidadEmision, items: row.items || [] });
+                  const m = margenPR({ moneda: row.moneda, tipoCambio: row.tipoCambio, tipoCambioDivisas: row.tipoCambioDivisas, modalidadEmision: (row as any).modalidadEmision, costoEnvioInterno: (row as any).costoEnvioInterno, items: row.items || [] });
                   if (m.margenPct === null) return null;
                   // Para ordenar USD y pesos juntos, la ganancia en US$ se pasa a pesos con el dólar del PR.
                   const tc = row.moneda === "USD" ? (Number(row.tipoCambio) || Number(row.tipoCambioDivisas) || 1) : 1;
@@ -2995,7 +3014,7 @@ export default function PresupuestosPage() {
                 },
                 render: (row: Presupuesto) => {
                   if (row.estado === "solicitud") return <span className="text-zinc-400 text-xs">—</span>;
-                  const m = margenPR({ moneda: row.moneda, tipoCambio: row.tipoCambio, tipoCambioDivisas: row.tipoCambioDivisas, modalidadEmision: (row as any).modalidadEmision, items: row.items || [] });
+                  const m = margenPR({ moneda: row.moneda, tipoCambio: row.tipoCambio, tipoCambioDivisas: row.tipoCambioDivisas, modalidadEmision: (row as any).modalidadEmision, costoEnvioInterno: (row as any).costoEnvioInterno, items: row.items || [] });
                   if (m.margenPct === null) return <span className="text-zinc-400 text-xs" title="Este PR no tiene costos cargados">—</span>;
                   const color = m.margenPct < MARGEN_MINIMO_PR ? "text-red-600 dark:text-red-400" : m.margenPct < MARGEN_MINIMO_PR + 5 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400";
                   return (
@@ -3532,7 +3551,7 @@ export default function PresupuestosPage() {
       {/* ==================== NUEVO PR MODAL ==================== */}
       <Modal
         open={showNewPR}
-        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
+        onClose={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", costo_envio_interno: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
         title={editingPRId && esSolicitud ? "Convertir Solicitud en Presupuesto" : editingPRId ? "Editar Presupuesto" : esSolicitud ? "Nueva Solicitud" : "Nuevo Presupuesto"}
         description={editingPRId && esSolicitud ? "Completa la cotización. La solicitud se convertirá en PR sin crear un registro duplicado." : editingPRId ? "Modifica los datos del presupuesto existente" : esSolicitud ? "Registra un pedido de cliente para convertirlo luego en presupuesto" : "Completa los datos para crear un nuevo presupuesto"}
         size="2xl"
@@ -3555,7 +3574,7 @@ export default function PresupuestosPage() {
               );
             })()}
             <button
-              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
+              onClick={() => { setShowNewPR(false); setEsSolicitud(false); setEditingPRId(null); setNewPR({ cliente_id: "", vendedor_id: "", sucursal_id: "", contacto_id: "", moneda: "USD", tipo_cambio: 0, tipo_cambio_divisas: 0, cotizacion_modalidad: "divisas", markup_general: 30, observaciones: "", notas_internas: "", costo_envio_interno: "", vencimiento: new Date(Date.now() + 30 * 86400000).toISOString().split("T")[0], tipo_comprobante: "", modalidad_emision: "sin_definir", items: [{ ...emptyItem, markup_porcentaje: 30 }] }); setClientSearch(""); }}
               className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
             >
               Cancelar
@@ -4390,6 +4409,7 @@ export default function PresupuestosPage() {
                   conDescArt += it.cantidad * precioNeto(it, 0);
                   costo += it.cantidad * convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas);
                 }
+                costo += Math.max(0, Number(newPR.costo_envio_interno) || 0);
                 const descArt = lista - conDescArt;
                 const descGen = conDescArt - newPRSub;
                 // Margen neto: descontando ~7 % de gastos e impuestos sobre la venta.
@@ -4407,6 +4427,15 @@ export default function PresupuestosPage() {
                       <span className="text-xs text-zinc-500">%</span>
                     </span>
                   </div>
+                  {(Number(newPR.costo_envio_interno) > 0 || verEnvioInterno) ? (
+                    <div className="flex items-center justify-between gap-2 text-xs" title="Flete que cobra el proveedor y NO se le cobra al cliente. Resta de la ganancia; nunca aparece en el PDF ni en el total. Solo interno.">
+                      <span className="text-zinc-500">Envío interno 🔒</span>
+                      <NumInput value={Number(newPR.costo_envio_interno) || 0} onChange={(n) => setNewPR((p) => ({ ...p, costo_envio_interno: n > 0 ? String(n) : "" }))}
+                        className="w-24 rounded border border-zinc-200 px-1 py-0.5 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none" />
+                    </div>
+                  ) : (
+                    <button type="button" onClick={() => setVerEnvioInterno(true)} className="text-left text-xs text-zinc-400 hover:text-orange-600" title="Flete que cobra el proveedor y no se le cobra al cliente (solo interno)">+ Envío interno 🔒</button>
+                  )}
                   <div className={`flex justify-between text-xs ${colorNeto}`} title={`Margen real menos ${GASTOS_PORCENTAJE}% de gastos e impuestos sobre la venta. Solo interno.`}>
                     <span>Margen neto (−{GASTOS_PORCENTAJE}% gastos)</span><span className="font-mono font-semibold">{margenNeto === null ? "—" : `${margenNeto.toFixed(1)}%`}</span>
                   </div>

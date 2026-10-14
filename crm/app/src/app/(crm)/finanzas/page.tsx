@@ -34,6 +34,7 @@ import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factur
 import { useCargaMasiva, EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import PlanPagos from "@/components/plan-pagos";
 import CuentasFinancieras from "@/components/cuentas-financieras";
+import CoberturaFijos from "@/components/cobertura-fijos";
 import ExtractoBbva from "@/components/extracto-bbva";
 import ChequesTercero from "@/components/cheques-tercero";
 import FinanzasRevisar from "@/components/finanzas-revisar";
@@ -1093,7 +1094,7 @@ export default function FinanzasPage() {
         if (sociedadActiva?.id) qLc = qLc.eq("sociedad_id", sociedadActiva.id);
         let qGf = (supabase as any).from("gastos_fijos").select("*").order("categoria");
         if (sociedadActiva?.id) qGf = qGf.eq("sociedad_id", sociedadActiva.id);
-        let qObj = (supabase as any).from("objetivos").select("*, profiles:usuario_id(full_name)").order("periodo_inicio", { ascending: false });
+        let qObj = (supabase as any).from("objetivos").select("*").order("periodo_inicio", { ascending: false });
         if (sociedadActiva?.id) qObj = qObj.eq("sociedad_id", sociedadActiva.id);
 
         // Saldos de caja del mes actual
@@ -1177,11 +1178,17 @@ export default function FinanzasPage() {
         }
 
         if (objRes.data) {
+          const idsUsuarios = Array.from(new Set((objRes.data ?? []).map((o: any) => o.usuario_id).filter(Boolean)));
+          const nombresUsuarios: Record<string, string> = {};
+          if (idsUsuarios.length) {
+            const { data: perfiles } = await (supabase as any).from("profiles").select("id, full_name").in("id", idsUsuarios);
+            for (const p of (perfiles ?? []) as any[]) nombresUsuarios[p.id] = p.full_name;
+          }
           setObjetivos(objRes.data.map((o: any) => ({
             id: o.id, nombre: o.nombre, tipo: o.tipo,
             montoTarget: Number(o.monto_target), moneda: o.moneda,
             periodoInicio: o.periodo_inicio, periodoFin: o.periodo_fin,
-            usuarioId: o.usuario_id, usuarioNombre: o.profiles?.full_name ?? null,
+            usuarioId: o.usuario_id, usuarioNombre: nombresUsuarios[o.usuario_id] ?? null,
             activo: o.activo, notas: o.notas ?? "", createdAt: o.created_at,
           })));
         }
@@ -4049,6 +4056,9 @@ export default function FinanzasPage() {
             </div>
           )}
         </div>
+
+        {/* ── Cobertura de gastos fijos + ventas del mes (arriba de todo en Hoy) ── */}
+        {tab === "cuentas" && <div className="mb-4"><CoberturaFijos sociedadId={sociedadActiva?.id} /></div>}
 
         {/* ── Cuentas ── */}
         {tab === "cuentas" && (

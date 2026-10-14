@@ -29,6 +29,7 @@ import {
   Zap,
   Scissors,
   FileSearch,
+  ListChecks,
 } from "lucide-react";
 import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -43,6 +44,7 @@ import { APP_VERSION_LABEL } from "@/lib/app-version";
 const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string }[] }[] = [
   { grupo: "Inicio", items: [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
+    { name: "Pendientes", href: "/pendientes", icon: ListChecks, module: "dashboard" },
     { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
   ] },
   { grupo: "Vender", items: [

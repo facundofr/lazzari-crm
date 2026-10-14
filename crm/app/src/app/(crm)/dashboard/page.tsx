@@ -12,11 +12,8 @@ import {
   Loader2, Users, Target,
 } from "lucide-react";
 import { formatCurrency, formatDateTime, todayAR } from "@/lib/utils";
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell,
-} from "recharts";
 import Link from "next/link";
+import CoberturaFijos from "@/components/cobertura-fijos";
 import { useUser } from "@/lib/auth-context";
 import {
   dashboardKPIs as mockKPIs,
@@ -210,7 +207,7 @@ export default function DashboardPage() {
           (() => {
             let qObjetivos = (supabase as any)
               .from("objetivos")
-              .select("*, profiles:usuario_id(full_name)")
+              .select("*")
               .eq("activo", true)
               .eq("sociedad_id", sociedadActiva!.id);
             return qObjetivos;
@@ -334,11 +331,17 @@ export default function DashboardPage() {
 
         // --- Objetivos ---
         if (!objetivosResult.error) {
+          const idsUsuarios = Array.from(new Set((objetivosResult.data ?? []).map((o: any) => o.usuario_id).filter(Boolean)));
+          const nombresUsuarios: Record<string, string> = {};
+          if (idsUsuarios.length) {
+            const { data: perfiles } = await (supabase as any).from("profiles").select("id, full_name").in("id", idsUsuarios);
+            for (const p of (perfiles ?? []) as any[]) nombresUsuarios[p.id] = p.full_name;
+          }
           setObjetivos((objetivosResult.data ?? []).map((o: any) => ({
             id: o.id, nombre: o.nombre, tipo: o.tipo,
             montoTarget: Number(o.monto_target), moneda: o.moneda,
             periodoInicio: o.periodo_inicio, periodoFin: o.periodo_fin,
-            usuarioId: o.usuario_id, usuarioNombre: o.profiles?.full_name ?? null,
+            usuarioId: o.usuario_id, usuarioNombre: nombresUsuarios[o.usuario_id] ?? null,
             activo: o.activo, notas: o.notas ?? "", createdAt: o.created_at,
           })));
         }
@@ -395,8 +398,6 @@ export default function DashboardPage() {
   // Gastos fijos calculation (solo ARS por simplicidad)
   const totalGastosFijos = gastosFijos.filter((g) => g.activo && g.moneda === "ARS").reduce((s, g) => s + g.monto, 0);
   const facturadoMes = kpi.facturadoMes;
-  const coberturaPct = totalGastosFijos > 0 ? Math.min(Math.round((facturadoMes / totalGastosFijos) * 100), 999) : 0;
-  const faltaCubrir = Math.max(totalGastosFijos - facturadoMes, 0);
 
   // Objetivos relevantes: admin ve todos, vendedor ve los suyos o globales
   const today = todayAR();
@@ -404,6 +405,17 @@ export default function DashboardPage() {
     o.activo && o.periodoInicio <= today && o.periodoFin >= today &&
     (isAdmin || !o.usuarioId || o.usuarioId === profile?.id)
   );
+  // Avisos de gastos fijos (falta pagar / falta la factura): la tarjeta solo se muestra si hay alguno.
+  const hayAvisosFijos = gastosFijos.some((g) => {
+    if (!g.proveedorId && g.diaVencimiento) {
+      const pm = pagoDelMes(g.id, pagosGastos, todayAR(), g.diaVencimiento);
+      return pm.falta && pm.diasAlVencimiento != null && pm.diasAlVencimiento <= 5;
+    }
+    return !!g.proveedorId && facturaDelMes(g.proveedorId, facturasGastos, todayAR()).falta;
+  });
+  // El objetivo general del mes ya se ve en el recuadro "¿Cubro los gastos fijos?" (admin y administrativo): acá quedan los individuales.
+  const verRecuadroFijos = isAdmin || userRole === "administrativo";
+  const objetivosTarjeta = objetivosActivos.filter((o) => !(verRecuadroFijos && !o.usuarioId));
   const visibleAlerts = showAllAlerts ? alerts : alerts.slice(0, DASHBOARD_ALERT_LIMIT);
   const hiddenAlertsCount = Math.max(alerts.length - DASHBOARD_ALERT_LIMIT, 0);
 
@@ -472,14 +484,17 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* Cobertura de gastos + Objetivos */}
-        {(totalGastosFijos > 0 || objetivosActivos.length > 0) && (
+        {/* ¿Cubro los gastos fijos? + ventas del mes: el mismo recuadro que Finanzas > Hoy (cuenta por ganancia, no por facturado) */}
+        {verRecuadroFijos && <CoberturaFijos sociedadId={sociedadActiva?.id} />}
+
+        {/* Pagos de gastos fijos pendientes + Objetivos */}
+        {((verRecuadroFijos && hayAvisosFijos) || objetivosTarjeta.length > 0) && (
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {/* Cobertura de gastos - admin y administrativo */}
-            {(isAdmin || userRole === "administrativo") && totalGastosFijos > 0 && (
+            {verRecuadroFijos && hayAvisosFijos && (
               <Card>
                 <CardHeader>
-                  <CardTitle>Cobertura de gastos fijos</CardTitle>
+                  <CardTitle>Gastos fijos por pagar</CardTitle>
                   <Link href="/finanzas" className="flex items-center gap-1 text-xs font-medium text-orange-500 hover:text-orange-600">
                     Gestionar <ArrowRight className="h-3 w-3" />
                   </Link>
@@ -497,49 +512,12 @@ export default function DashboardPage() {
                       ⚠️ {g.descripcion}: falta la factura de {facturaDelMes(g.proveedorId, facturasGastos, todayAR()).mesNombre}
                     </Link>
                   ))}
-                  <div className="flex items-end justify-between">
-                    <div>
-                      <p className="text-2xl font-bold text-zinc-900 dark:text-white">{coberturaPct}%</p>
-                      <p className="text-xs text-zinc-500">
-                        {formatCurrency(facturadoMes)} de {formatCurrency(totalGastosFijos)}
-                      </p>
-                    </div>
-                    {faltaCubrir > 0 ? (
-                      <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
-                        Faltan {formatCurrency(faltaCubrir)}
-                      </p>
-                    ) : (
-                      <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                        Gastos cubiertos
-                      </p>
-                    )}
-                  </div>
-                  <div className="h-3 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
-                    <div
-                      className={`h-3 rounded-full transition-all duration-500 ${
-                        coberturaPct >= 100 ? "bg-emerald-500" : coberturaPct >= 60 ? "bg-amber-500" : "bg-red-500"
-                      }`}
-                      style={{ width: `${Math.min(coberturaPct, 100)}%` }}
-                    />
-                  </div>
-                  {isAdmin && (
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      <div className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
-                        <p className="text-[10px] uppercase tracking-wider text-zinc-500">Ventas del mes</p>
-                        <p className="text-sm font-semibold font-mono">{formatCurrency(facturadoMes)}</p>
-                      </div>
-                      <div className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
-                        <p className="text-[10px] uppercase tracking-wider text-zinc-500">Gastos fijos</p>
-                        <p className="text-sm font-semibold font-mono">{formatCurrency(totalGastosFijos)}</p>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </Card>
             )}
 
             {/* Objetivos */}
-            {objetivosActivos.length > 0 && (
+            {objetivosTarjeta.length > 0 && (
               <Card>
                 <CardHeader>
                   <div className="flex items-center gap-2">
@@ -548,7 +526,7 @@ export default function DashboardPage() {
                   </div>
                 </CardHeader>
                 <div className="px-6 pb-5 space-y-4">
-                  {objetivosActivos.map((obj) => {
+                  {objetivosTarjeta.map((obj) => {
                     // Para vendedores: calcular progreso como % del facturado vs target
                     const facturadoObjetivo = obj.moneda === "USD" ? facturadoMonedas.USD : facturadoMes;
                     const progreso = obj.montoTarget > 0 ? Math.min(Math.round((facturadoObjetivo / obj.montoTarget) * 100), 999) : 0;
@@ -585,62 +563,11 @@ export default function DashboardPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          {/* Facturación mensual - Recharts BarChart */}
-          <Card className="lg:col-span-2">
-            <CardHeader>
-              <CardTitle>Facturacion mensual</CardTitle>
-              <span className="text-xs text-zinc-400">Últimos 6 meses · ARS neto de NC</span>
-            </CardHeader>
-            <div className="h-44 px-2">
-              <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-                <BarChart data={ventasPorMes} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
-                  <XAxis dataKey="mes" tick={{ fontSize: 12, fill: "#a1a1aa" }} />
-                  <YAxis tick={{ fontSize: 11, fill: "#a1a1aa" }} tickFormatter={(v) => `$${(v / 1000000).toFixed(1)}M`} />
-                  <Tooltip formatter={(value) => [formatCurrency(Number(value)), "Facturado"]} />
-                  <Bar dataKey="monto" fill="#f97316" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-
-          {/* PR por estado - Recharts PieChart */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Presupuestos por estado</CardTitle>
-            </CardHeader>
-            <div className="h-40">
-              <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-                <PieChart>
-                  <Pie
-                    data={presupuestosPorEstado}
-                    dataKey="cantidad"
-                    nameKey="estado"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={36}
-                    outerRadius={62}
-                    paddingAngle={2}
-                  >
-                    {presupuestosPorEstado.map((entry, idx) => (
-                      <Cell key={idx} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex flex-wrap gap-2 px-6 pb-4">
-              {presupuestosPorEstado.map((item) => (
-                <div key={item.estado} className="flex items-center gap-1.5 text-xs">
-                  <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                  <span className="text-zinc-500">{item.estado} ({item.cantidad})</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
+        {/* Los gráficos históricos (facturación mensual y presupuestos por estado) viven solo en Reportes: acá no se repiten. */}
+        <Link href="/reportes" className="flex items-center justify-between rounded-xl border border-zinc-200 bg-white px-4 py-2.5 text-sm text-zinc-600 hover:border-orange-300 hover:text-orange-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+          <span>Evolución mensual, presupuestos por estado y comparativas</span>
+          <span className="flex items-center gap-1 text-xs font-medium text-orange-500">Ver en Reportes <ArrowRight className="h-3 w-3" /></span>
+        </Link>
 
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
           {/* Ultimos presupuestos */}

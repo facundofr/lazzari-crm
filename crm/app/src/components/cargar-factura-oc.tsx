@@ -10,12 +10,16 @@ import { supabase } from "@/lib/supabase/client";
 import { parseVariant, tallesCompatibles, mismoCodigo, puntajeParecido, PUNTAJE_PARECIDO } from "@/lib/purchase-matching";
 import { aprenderNombreFantasiaDeFactura } from "@/lib/nombre-fantasia";
 import { useToast } from "@/components/ui/toast";
+import { leerFacturaLocal, type LecturaLocal } from "@/lib/leer-factura-local";
 import { duplicadosComprobanteCompra } from "@/lib/saldo-factura-compra";
 import { ProveedorFormModal, type ProveedorForm } from "@/components/proveedor-form-modal";
 import { CondicionPagoEditor } from "@/components/condicion-pago-editor";
 import { textoCondicionPago, vencimientoFactura, type PlanPago } from "@/lib/condicion-pago";
 import { equivalenciaSugerida, costoPorUnidadPR, avisoCambioCostoPR } from "@/lib/reemplazo-oc";
 import { controlIva, emparejarPorPrecio, elegirOC } from "@/lib/factura-vs-oc";
+import { esRenglonEnvio } from "@/lib/envio-detectar";
+import { repartirEnvio, repartoPorPR } from "@/lib/envio-reparto";
+import { convertirCostoPR } from "@/lib/dolar-presupuesto";
 import { TIPOS_FACTURA_COMPRA, CATEGORIAS_GASTO, tipoSugerido, type TipoFacturaCompra } from "@/lib/factura-tipo";
 
 // ── Types ────────────────────────────────────────────────
@@ -177,6 +181,9 @@ export default function CargarFacturaOC({
   const [parsing, setParsing] = useState(false);
   const [parsed, setParsed] = useState(false);
   const [parseError, setParseError] = useState("");
+  // Lectura sin IA (QR de ARCA o texto del PDF): de dónde salieron los datos y qué revisar. null = leído con IA o nada leído.
+  const [lecturaLocal, setLecturaLocal] = useState<Pick<LecturaLocal, "origen" | "avisos"> | null>(null);
+  const [parsingIA, setParsingIA] = useState(false);
 
   // ── Save ──
   const [saving, setSaving] = useState(false);
@@ -594,6 +601,43 @@ export default function CargarFacturaOC({
     return { mas, menos, precio, faltan, noVinieron, coinciden, otroNombre };
   }, [itemComparisons, selectedOCItems]);
 
+  // ── Envío que COBRA EL PROVEEDOR en su factura: se reparte entre los PR de las OC como costo INTERNO (nunca va al cliente) ──
+  // No incluye el transporte que trabaja para Lazzari (eso corre por Transportes).
+  const [envioPRActivo, setEnvioPRActivo] = useState(true);
+  const [envioMontos, setEnvioMontos] = useState<Record<string, string>>({});
+  const [ocsPR, setOcsPR] = useState<{ id: string; numero: string; peso: number; prId: string | null }[]>([]);
+  const [prNumeros, setPrNumeros] = useState<Record<string, string>>({});
+  const envioItems = useMemo(() => (isCreditNote ? [] : diferencias.faltan.filter((it) => esRenglonEnvio(it.descripcion || "", it.codigo))), [diferencias, isCreditNote]);
+  const envioNeto = roundMoney(envioItems.reduce((acc, it) => acc + itemNeto(it), 0));
+  const selectedOCIdsKey = Array.from(selectedOCIds).sort().join(",");
+  useEffect(() => {
+    if (!selectedOCIdsKey || envioNeto <= 0) { setOcsPR([]); return; }
+    let vivo = true;
+    (async () => {
+      const db = supabase as any;
+      const { data } = await db.from("ordenes_compra").select("id, numero, subtotal, total, presupuesto_origen_id")
+        .in("id", selectedOCIdsKey.split(",")).eq("sociedad_id", sociedadId);
+      const filas = (data || []) as any[];
+      const prIds = Array.from(new Set(filas.map((o) => o.presupuesto_origen_id).filter(Boolean)));
+      const nums: Record<string, string> = {};
+      if (prIds.length) {
+        const { data: prs } = await db.from("presupuestos").select("id, numero").in("id", prIds).eq("sociedad_id", sociedadId);
+        for (const p of (prs || []) as any[]) nums[p.id] = p.numero;
+      }
+      if (!vivo) return;
+      setPrNumeros(nums);
+      setOcsPR(filas.map((o) => ({ id: o.id, numero: o.numero, peso: Number(o.subtotal) || Number(o.total) || 0, prId: o.presupuesto_origen_id || null })));
+    })();
+    return () => { vivo = false; };
+  }, [selectedOCIdsKey, envioNeto, sociedadId]);
+  useEffect(() => { setEnvioMontos({}); }, [envioNeto, selectedOCIdsKey]);
+  const envioReparto = useMemo(() => {
+    const porOC = repartirEnvio(envioNeto, ocsPR.map((o) => ({ id: o.id, peso: o.peso })));
+    return repartoPorPR(porOC, Object.fromEntries(ocsPR.map((o) => [o.id, o.prId])));
+  }, [envioNeto, ocsPR]);
+  const envioPrIds = useMemo(() => Array.from(new Set(ocsPR.map((o) => o.prId).filter(Boolean) as string[])), [ocsPR]);
+  const envioMontoPR = (prId: string) => Number(String(envioMontos[prId] ?? envioReparto.porPR[prId] ?? 0).replace(",", ".")) || 0;
+
   // neto + IVA + percepciones = total del PDF (aviso; propone 21 % si con eso da).
   const ivaControl = useMemo(() => controlIva({
     renglones: items.length
@@ -806,11 +850,37 @@ export default function CargarFacturaOC({
   }
 
   // ── Parse PDF ──
+  // Primero sin IA: QR de ARCA y, si no hay, el texto del PDF con reglas fijas. La IA queda en el botón "Leer con IA".
   async function handleParseFile(f: File) {
     setFile(f);
     setParsing(true);
+    setParsingIA(false);
     setParseError("");
     setParsed(false);
+    setLecturaLocal(null);
+    try {
+      const lectura = await leerFacturaLocal(f);
+      if (!lectura) {
+        setParseError("No se encontró el QR de ARCA ni los datos en el texto (puede ser una foto o un PDF escaneado). Cargala a mano o usá \"Leer con IA\".");
+        return;
+      }
+      await applyImportedData(lectura.data);
+      setLecturaLocal({ origen: lectura.origen, avisos: lectura.avisos });
+      setParsed(true);
+    } catch (err: any) {
+      setParseError(`No se pudo leer el archivo sin IA (${err?.message || "error"}). Cargala a mano o usá "Leer con IA".`);
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  async function handleParseFileIA(f: File) {
+    setFile(f);
+    setParsing(true);
+    setParsingIA(true);
+    setParseError("");
+    setParsed(false);
+    setLecturaLocal(null);
 
     try {
       const formData = new FormData();
@@ -913,6 +983,9 @@ export default function CargarFacturaOC({
             setProveedorSearch(match.razon_social);
           } else if (d.proveedor.razon_social) {
             setProveedorSearch(d.proveedor.razon_social);
+          } else {
+            // Lectura sin IA (QR / texto): solo viene el CUIT; se deja en el buscador para ver que no está cargado.
+            setProveedorSearch(String(d.proveedor.cuit));
           }
         }
       }
@@ -1550,6 +1623,33 @@ export default function CargarFacturaOC({
         }
       }
 
+      // Envío del proveedor → costo INTERNO de cada PR (reparto elegido en pantalla). La factura ya está guardada:
+      // si algo falla acá, avisa y no frena nada.
+      if (!isCreditNote && fcData?.id && envioPRActivo && envioNeto > 0 && envioPrIds.length) {
+        try {
+          const db = supabase as any;
+          const stampEnvio = new Date().toLocaleString("es-AR");
+          for (const prId of envioPrIds) {
+            const monto = roundMoney(Math.max(0, envioMontoPR(prId)));
+            if (monto <= 0) continue;
+            const { data: prRow, error: prErr } = await db.from("presupuestos")
+              .select("id, numero, moneda, tipo_cambio, tipo_cambio_divisas, costo_envio_interno, notas_internas")
+              .eq("id", prId).eq("sociedad_id", sociedadId).maybeSingle();
+            if (prErr || !prRow) { avisosReemplazo.push(`No se pudo sumar el envío (${formatCurrency(monto, moneda)}) al presupuesto ${prNumeros[prId] || ""}: ${prErr?.message || "no se encontró"}. Sumalo a mano en el PR.`); continue; }
+            const enMonedaPR = roundMoney(convertirCostoPR(monto, moneda, prRow.moneda, Number(prRow.tipo_cambio) || 0, Number(prRow.tipo_cambio_divisas) || 0));
+            const nota = `${prRow.notas_internas ? prRow.notas_internas + "\n" : ""}[${stampEnvio}] FC ${tipoComprobante} ${numeroFactura.trim()}: envío ${formatCurrency(monto, moneda)}${prRow.moneda !== moneda ? ` (= ${formatCurrency(enMonedaPR, prRow.moneda)})` : ""}`;
+            const { error: upErr } = await db.from("presupuestos")
+              .update({ costo_envio_interno: roundMoney(Number(prRow.costo_envio_interno || 0) + enMonedaPR), notas_internas: nota })
+              .eq("id", prId).eq("sociedad_id", sociedadId);
+            if (upErr) avisosReemplazo.push(`No se pudo sumar el envío (${formatCurrency(monto, moneda)}) a ${prRow.numero}: ${upErr.message}. Sumalo a mano en el PR.`);
+            else avisosReemplazo.push(`Envío interno de ${formatCurrency(enMonedaPR, prRow.moneda)} sumado a ${prRow.numero} (no se le cobra al cliente; baja la ganancia).`);
+          }
+          if (envioReparto.sinPR > 0.004) avisosReemplazo.push(`${formatCurrency(envioReparto.sinPR, moneda)} de envío corresponden a OC sin presupuesto: quedó solo en la factura.`);
+        } catch (e: any) {
+          avisosReemplazo.push(`La factura se guardó, pero no se pudo sumar el envío a los presupuestos (${e?.message || "error"}). Sumalo a mano.`);
+        }
+      }
+
       const avisosTxt = avisosReemplazo.length ? `\n\nAvisos (no frenan nada):\n• ${avisosReemplazo.join("\n• ")}` : "";
       alert((isCreditNote ? (facturaOrigenId ? "Nota de crédito registrada y aplicada a la factura elegida" : "Nota de crédito registrada: queda como crédito disponible del proveedor") : pagadaSinOP ? `Factura cargada como pagada${tarjetas.find((t) => t.id === pagoTarjeta) ? ` con ${tarjetas.find((t) => t.id === pagoTarjeta)!.nombre}` : ""} (sin orden de pago)` : "Factura cargada y enviada para aprobación") + avisosTxt);
       onSuccess();
@@ -1600,10 +1700,10 @@ export default function CargarFacturaOC({
             {!parsed && !parsing && (
               <label className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-zinc-300 dark:border-zinc-600 rounded-xl cursor-pointer hover:border-orange-400 hover:bg-orange-50/50 dark:hover:bg-orange-900/10 transition-colors">
                 <div className="flex items-center gap-2 text-orange-600">
-                  <Sparkles size={20} />
-                  <span className="font-semibold">Importar con IA desde PDF o imagen</span>
+                  <Search size={20} />
+                  <span className="font-semibold">Leer factura desde PDF o imagen (sin IA)</span>
                 </div>
-                <p className="text-xs text-zinc-400">PDF, PNG, JPG o WEBP — la IA extrae los datos automaticamente</p>
+                <p className="text-xs text-zinc-400">Lee el QR de ARCA o el texto del PDF, gratis y sin mandar el archivo. Si no alcanza, después podés usar &quot;Leer con IA&quot;.</p>
                 <input
                   type="file"
                   accept=".pdf,image/png,image/jpeg,image/webp"
@@ -1619,22 +1719,42 @@ export default function CargarFacturaOC({
             {parsing && (
               <div className="flex items-center gap-3 p-6 bg-orange-50 dark:bg-orange-900/20 rounded-xl">
                 <Loader2 className="h-5 w-5 animate-spin text-orange-600" />
-                <span className="text-sm font-medium text-orange-700 dark:text-orange-300">Procesando con IA...</span>
+                <span className="text-sm font-medium text-orange-700 dark:text-orange-300">{parsingIA ? "Procesando con IA..." : "Leyendo QR de ARCA y texto del PDF..."}</span>
               </div>
             )}
             {parseError && (
-              <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-lg text-red-700 dark:text-red-400 text-sm">
-                {parseError}
+              <div className="flex flex-wrap items-center gap-2 p-3 bg-red-50 dark:bg-red-900/20 rounded-lg text-red-700 dark:text-red-400 text-sm">
+                <span className="flex-1 min-w-[200px]">{parseError}</span>
+                {file && !parsingIA && (
+                  <button onClick={() => handleParseFileIA(file)}
+                    className="inline-flex items-center gap-1 rounded-md border border-orange-400 px-2 py-0.5 text-xs font-medium text-orange-700 hover:bg-orange-50 dark:text-orange-300">
+                    <Sparkles size={12} /> Leer con IA
+                  </button>
+                )}
                 <button onClick={() => { setParseError(""); setFile(null); }}
-                  className="ml-3 underline text-xs">Reintentar</button>
+                  className="underline text-xs">{parsingIA ? "Reintentar" : "Cargar a mano / otro archivo"}</button>
               </div>
             )}
             {parsed && (
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 dark:bg-green-900/20 rounded-lg text-green-700 dark:text-green-400 text-sm">
-                <Check size={16} />
-                Factura procesada: <span className="font-mono font-bold">{file?.name}</span>
-                <button onClick={() => { setParsed(false); setFile(null); setParseError(""); }}
-                  className="ml-auto text-xs underline">Cambiar archivo</button>
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 bg-green-50 dark:bg-green-900/20 rounded-lg text-green-700 dark:text-green-400 text-sm">
+                  <Check size={16} />
+                  {lecturaLocal ? (lecturaLocal.origen === "qr" ? "Leído del QR de ARCA:" : "Leído del texto del PDF (revisá):") : "Factura procesada con IA:"}
+                  <span className="font-mono font-bold truncate max-w-[260px]">{file?.name}</span>
+                  <span className="ml-auto flex items-center gap-2">
+                    {lecturaLocal && file && (
+                      <button onClick={() => handleParseFileIA(file)} title="Lee también los artículos (usa IA)"
+                        className="inline-flex items-center gap-1 rounded-md border border-orange-400 px-2 py-0.5 text-xs font-medium text-orange-700 hover:bg-orange-50 dark:text-orange-300">
+                        <Sparkles size={12} /> Leer con IA
+                      </button>
+                    )}
+                    <button onClick={() => { setParsed(false); setFile(null); setParseError(""); setLecturaLocal(null); }}
+                      className="text-xs underline">Cambiar archivo</button>
+                  </span>
+                </div>
+                {lecturaLocal && lecturaLocal.avisos.length > 0 && (
+                  <p className="px-3 text-xs text-amber-700 dark:text-amber-400">⚠️ {lecturaLocal.avisos.join(" · ")}</p>
+                )}
               </div>
             )}
           </section>
@@ -2072,6 +2192,31 @@ export default function CargarFacturaOC({
                       {opcionesSobrante(it.tempId, [["oc", `Agregar a ${selectedOCs[0]?.numero || "la OC"}`], ["nueva", "Crear OC nueva"], ["nada", "Solo en la factura"]])}
                     </div>
                   ))}
+                  {envioItems.length > 0 && (
+                    <div className="space-y-1 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs text-violet-900 dark:border-violet-900 dark:bg-violet-950/20 dark:text-violet-200">
+                      <label className="flex items-center gap-2 font-medium">
+                        <input type="checkbox" checked={envioPRActivo} onChange={(e) => setEnvioPRActivo(e.target.checked)} />
+                        <span>Envío del proveedor: {formatCurrency(envioNeto, moneda)} (sin IVA) — sumarlo como costo interno de los presupuestos 🔒</span>
+                      </label>
+                      <p className="opacity-80">Resta de la ganancia del PR. No se le cobra al cliente ni sale en el PDF. El envío igual queda en la factura y en la OC como siempre.</p>
+                      {envioPRActivo && (envioPrIds.length === 0 ? (
+                        <p className="opacity-80">Estas OC no vienen de un presupuesto: el envío queda solo en la factura.</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {envioPrIds.map((prId) => (
+                            <div key={prId} className="flex items-center justify-between gap-2">
+                              <span>{prNumeros[prId] || "Presupuesto"} <span className="opacity-60">({ocsPR.filter((o) => o.prId === prId).map((o) => o.numero).join(", ")})</span></span>
+                              <input type="number" step="0.01" min="0" value={envioMontos[prId] ?? String(envioReparto.porPR[prId] ?? 0)}
+                                onChange={(e) => setEnvioMontos((m) => ({ ...m, [prId]: e.target.value }))}
+                                className="w-28 rounded border border-violet-200 px-1 py-0.5 text-right font-mono dark:border-violet-800 dark:bg-zinc-900" />
+                            </div>
+                          ))}
+                          {envioReparto.sinPR > 0.004 && <p className="opacity-80">{formatCurrency(envioReparto.sinPR, moneda)} van a OC sin presupuesto: quedan solo en la factura.</p>}
+                          {Math.abs(envioPrIds.reduce((a, id) => a + envioMontoPR(id), 0) + envioReparto.sinPR - envioNeto) > 0.01 && <p className="text-amber-700 dark:text-amber-300">⚠️ Los montos no suman el envío ({formatCurrency(envioNeto, moneda)}). Es un aviso, podés guardar igual.</p>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {diferencias.precio.map((d) => (
                     <div key={`precio-${d.oc.id}`} className="rounded-lg border border-sky-200 bg-sky-50 px-2.5 py-1 text-xs text-sky-900 dark:border-sky-900 dark:bg-sky-950/20 dark:text-sky-200 truncate">
                       <b>{d.oc.descripcion}</b>: precio OC {formatCurrency(Number(d.oc.precio_unitario), moneda)} → factura {formatCurrency(d.costo, moneda)} · se actualiza el costo

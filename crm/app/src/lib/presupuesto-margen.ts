@@ -14,6 +14,8 @@ export interface PRMargenEntrada {
   tipoCambio?: number | null;
   tipoCambioDivisas?: number | null;
   modalidadEmision?: string | null;
+  /** Flete interno (en la moneda del PR): suma al costo, nunca se le cobra al cliente. */
+  costoEnvioInterno?: number | null;
   items: { cantidad: number; precioVenta: number; precioCosto: number; costoMoneda?: string | null }[];
 }
 
@@ -42,6 +44,7 @@ export function margenPR(pr: PRMargenEntrada): PRMargen {
       Number(pr.tipoCambio) || 0, Number(pr.tipoCambioDivisas) || 0,
     );
   }
+  costo += Math.max(0, Number(pr.costoEnvioInterno) || 0);
   const ventaNeta = venta * (1 - gastosPct / 100);
   const ganancia = Math.round((ventaNeta - costo) * 100) / 100;
   const margenPct = costo > 0 && venta > 0 ? Math.round((ganancia * 1000) / costo) / 10 : null;

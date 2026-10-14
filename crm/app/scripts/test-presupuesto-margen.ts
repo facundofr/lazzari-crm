@@ -24,6 +24,14 @@ const usd = margenPR({ moneda: "ARS", tipoCambio: 1500, tipoCambioDivisas: 1480,
 assert.equal(usd.costo, 150000);
 assert.equal(usd.ganancia, 36000);
 
+// Flete interno: venta 1.000, costo 800 + envío 50 → neta 930 → ganancia 80, margen 80/850 = 9,4 %; no cambia la venta
+const conEnvio = margenPR({ moneda: "ARS", modalidadEmision: "electronica", costoEnvioInterno: 50, items: [{ cantidad: 2, precioVenta: 500, precioCosto: 400 }] });
+assert.equal(conEnvio.venta, 1000);
+assert.equal(conEnvio.costo, 850);
+assert.equal(conEnvio.ganancia, 80);
+assert.equal(conEnvio.margenPct, 9.4);
+assert.equal(margenPR({ moneda: "ARS", modalidadEmision: "electronica", costoEnvioInterno: -5, items: [{ cantidad: 2, precioVenta: 500, precioCosto: 400 }] }).costo, 800);
+
 // Sin costos cargados: no se inventa un margen
 const sinCosto = margenPR({ moneda: "ARS", modalidadEmision: "electronica", items: [{ cantidad: 1, precioVenta: 500, precioCosto: 0 }] });
 assert.equal(sinCosto.margenPct, null);
