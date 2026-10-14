@@ -202,6 +202,10 @@ export default function CargarFacturaOC({
   // La IA devuelve el subtotal impreso. Se conserva una pasada para que el
   // efecto que recalcula desde renglones no lo pise inmediatamente (especialmente FC B).
   const parsedSubtotalRef = useRef<number | null>(null);
+  // Lectura sin IA (no trae artículos): se precargan una vez por archivo los de la OC elegida y se avisa si no dan el neto leído.
+  const ocPrecargadaRef = useRef(false);
+  const [netoLeidoSinIA, setNetoLeidoSinIA] = useState<number | null>(null);
+  const [itemsTraidosDeOC, setItemsTraidosDeOC] = useState("");
 
   // ── Computed ──
   const iva = useMemo(() => {
@@ -748,6 +752,27 @@ export default function CargarFacturaOC({
     void sugerirConIA();
   }, [ocItemsLoading, selectedOCItems, selectedOCKey, items]);
 
+  // Factura leída sin IA y OC con artículos: se traen los renglones de la OC ya emparejados (se corrige solo lo que cambió).
+  useEffect(() => {
+    if (!lecturaLocal || ocPrecargadaRef.current || items.length > 0 || ocItemsLoading || !selectedOCItems.length) return;
+    if (tipoFC !== "mercaderia" || isCreditNote) return;
+    ocPrecargadaRef.current = true;
+    const sinIva = ivaPorcentaje === 0;
+    const nuevos: FCItem[] = selectedOCItems.map((o) => ({
+      tempId: `oc-${o.id}`,
+      codigo: o.codigo || "",
+      descripcion: o.descripcion,
+      cantidad: Number(o.cantidad) || 0,
+      precio_unitario: Number(o.precio_unitario) || 0,
+      descuento_porcentaje: 0,
+      iva_porcentaje: sinIva ? 0 : (o.iva_porcentaje != null ? Number(o.iva_porcentaje) : 21),
+      unidad: o.unidad || "UN",
+    }));
+    setManualItemMatches((prev) => ({ ...prev, ...Object.fromEntries(selectedOCItems.map((o) => [`oc-${o.id}`, o.id])) }));
+    setItemsTraidosDeOC([...new Set(selectedOCItems.map((o) => o.ocNumero))].join(", "));
+    setItems(nuevos);
+  }, [lecturaLocal, items.length, ocItemsLoading, selectedOCItems, tipoFC, isCreditNote, ivaPorcentaje]);
+
   async function fetchLinkedInvoicesForOCs(ids: string[]) {
     const [{ data: junctionLinks, error: junctionError }, { data: legacyInvoices, error: legacyError }] = await Promise.all([
       (supabase as any)
@@ -858,6 +883,9 @@ export default function CargarFacturaOC({
     setParseError("");
     setParsed(false);
     setLecturaLocal(null);
+    ocPrecargadaRef.current = false;
+    setItemsTraidosDeOC("");
+    setNetoLeidoSinIA(null);
     try {
       const lectura = await leerFacturaLocal(f);
       if (!lectura) {
@@ -865,6 +893,7 @@ export default function CargarFacturaOC({
         return;
       }
       await applyImportedData(lectura.data);
+      setNetoLeidoSinIA(Number(lectura.data?.subtotal) > 0 ? Number(lectura.data.subtotal) : null);
       setLecturaLocal({ origen: lectura.origen, avisos: lectura.avisos });
       setParsed(true);
     } catch (err: any) {
@@ -881,6 +910,7 @@ export default function CargarFacturaOC({
     setParseError("");
     setParsed(false);
     setLecturaLocal(null);
+    setItemsTraidosDeOC("");
 
     try {
       const formData = new FormData();
@@ -1755,6 +1785,16 @@ export default function CargarFacturaOC({
                 {lecturaLocal && lecturaLocal.avisos.length > 0 && (
                   <p className="px-3 text-xs text-amber-700 dark:text-amber-400">⚠️ {lecturaLocal.avisos.join(" · ")}</p>
                 )}
+                {lecturaLocal && itemsTraidosDeOC && items.length > 0 && (() => {
+                  const sumaItems = roundMoney(items.reduce((acc, it) => acc + itemNeto(it), 0));
+                  const difNeto = netoLeidoSinIA != null ? roundMoney(netoLeidoSinIA - sumaItems) : 0;
+                  return (
+                    <p className="px-3 text-xs text-sky-700 dark:text-sky-300">
+                      📋 Ítems traídos de {itemsTraidosDeOC}: corregí solo lo que cambió.
+                      {netoLeidoSinIA != null && Math.abs(difNeto) > 0.5 && <span className="text-amber-700 dark:text-amber-400"> ⚠️ Los ítems suman {formatCurrency(sumaItems, moneda)} y el neto leído de la factura es {formatCurrency(netoLeidoSinIA, moneda)} (diferencia {formatCurrency(difNeto, moneda)}).</span>}
+                    </p>
+                  );
+                })()}
               </div>
             )}
           </section>
@@ -1934,7 +1974,10 @@ export default function CargarFacturaOC({
             {ivaControl.controlado && !ivaControl.cuadra && (
               <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
                 <AlertTriangle size={14} className="shrink-0" />
-                <span className="flex-1 min-w-0">No cuadra con el PDF: el total impreso es <b>{formatCurrency(ivaControl.totalLeido, moneda)}</b> y neto + IVA + percepciones da <b>{formatCurrency(ivaControl.calculado, moneda)}</b> (diferencia {formatCurrency(ivaControl.diferencia, moneda)}).{!ivaControl.propone21 && " Revisá el IVA de cada artículo o las percepciones."}</span>
+                <span className="flex-1 min-w-0">No cuadra con el PDF: el total impreso es <b>{formatCurrency(ivaControl.totalLeido, moneda)}</b> y neto + IVA + percepciones da <b>{formatCurrency(ivaControl.calculado, moneda)}</b> (diferencia {formatCurrency(ivaControl.diferencia, moneda)}).{ivaControl.renglones21.length > 0
+                  ? <> La diferencia es justo el IVA 21 % de <b>{items.filter((it) => ivaControl.renglones21.includes(it.tempId)).map((it) => `${it.descripcion || "sin descripción"} (IVA ${Number(it.iva_porcentaje || 0)} %)`).join(", ")}</b>.</>
+                  : !ivaControl.propone21 && " Revisá el IVA de cada artículo o las percepciones."}</span>
+                {ivaControl.renglones21.length > 0 && <button type="button" onClick={() => setItems((prev) => prev.map((it) => (ivaControl.renglones21.includes(it.tempId) ? { ...it, iva_porcentaje: 21 } : it)))} className="rounded-md bg-amber-600 px-2.5 py-1 font-semibold text-white hover:bg-amber-700">Poner 21 % {ivaControl.renglones21.length === 1 ? "a ese renglón" : "a esos renglones"} (da justo)</button>}
                 {ivaControl.propone21 && <button type="button" onClick={usarIva21} className="rounded-md bg-amber-600 px-2.5 py-1 font-semibold text-white hover:bg-amber-700">Usar IVA 21 % en todo (da justo)</button>}
               </div>
             )}
@@ -2185,7 +2228,7 @@ export default function CargarFacturaOC({
                       {opcionesSobrante(d.tempId, [["oc", `Actualizar OC a ${d.cantidad}`], ["nueva", "Crear OC nueva"], ["nada", "Solo en la factura"]])}
                     </div>
                   ))}
-                  {diferencias.faltan.map((it) => (
+                  {diferencias.faltan.filter((it) => !envioItems.some((e) => e.tempId === it.tempId)).map((it) => (
                     <div key={`falta-${it.tempId}`} className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
                       <AlertTriangle size={13} className="shrink-0" />
                       <span className="flex-1 min-w-0 truncate"><b>{it.descripcion || "Sin descripción"}</b> · {it.cantidad} × {formatCurrency(costoUnitario(it), moneda)} — no está en la OC</span>
@@ -2198,7 +2241,13 @@ export default function CargarFacturaOC({
                         <input type="checkbox" checked={envioPRActivo} onChange={(e) => setEnvioPRActivo(e.target.checked)} />
                         <span>Envío del proveedor: {formatCurrency(envioNeto, moneda)} (sin IVA) — sumarlo como costo interno de los presupuestos 🔒</span>
                       </label>
-                      <p className="opacity-80">Resta de la ganancia del PR. No se le cobra al cliente ni sale en el PDF. El envío igual queda en la factura y en la OC como siempre.</p>
+                      <p className="opacity-80">Resta de la ganancia del PR. No se le cobra al cliente ni sale en el PDF. El envío se paga una sola vez: va en la factura (deuda al proveedor) y acá elegís dónde queda en la OC.</p>
+                      {envioItems.map((it) => (
+                        <div key={`envio-oc-${it.tempId}`} className="flex flex-wrap items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate opacity-80">{it.descripcion || "Envío"} · en la OC:</span>
+                          {opcionesSobrante(it.tempId, [["oc", `Agregar a ${selectedOCs[0]?.numero || "la OC"}`], ["nueva", "OC nueva"], ["nada", "Solo en la factura"]])}
+                        </div>
+                      ))}
                       {envioPRActivo && (envioPrIds.length === 0 ? (
                         <p className="opacity-80">Estas OC no vienen de un presupuesto: el envío queda solo en la factura.</p>
                       ) : (

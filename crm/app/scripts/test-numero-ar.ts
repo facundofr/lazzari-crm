@@ -1,0 +1,22 @@
+import { parseNumeroAR, formatCantidad, numeroAEditable, avisosRenglon, textoNumeroValido } from "../src/lib/numero-ar";
+const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } console.log("ok", m); };
+
+ok(parseNumeroAR("1.000") === 1000, '"1.000" = mil');
+ok(parseNumeroAR("12.500") === 12500, '"12.500" = 12500');
+ok(parseNumeroAR("1.250.000") === 1250000, '"1.250.000" = 1250000');
+ok(parseNumeroAR("1,5") === 1.5, '"1,5" = 1,5');
+ok(parseNumeroAR("1.000,50") === 1000.5, '"1.000,50" = 1000,5');
+ok(parseNumeroAR("29.9") === 29.9, '"29.9" sigue siendo 29,9 (punto con 1 decimal)');
+ok(parseNumeroAR("0.25") === 0.25, '"0.25" = 0,25');
+ok(parseNumeroAR("10") === 10, '"10" = 10');
+ok(Number.isNaN(parseNumeroAR("")) && Number.isNaN(parseNumeroAR("abc")) && Number.isNaN(parseNumeroAR("1,2,3")), "vacío/texto/dos comas → NaN");
+ok(textoNumeroValido("1.") && textoNumeroValido("1,") && !textoNumeroValido("1a"), "estados intermedios al escribir");
+ok(formatCantidad(1000) === "1.000" && formatCantidad(29.9) === "29,9" && formatCantidad(2) === "2", "mostrar con punto de miles y coma");
+ok(numeroAEditable(1000) === "1000" && numeroAEditable(29.9) === "29,9" && numeroAEditable(0) === "", "casillero editable sin miles");
+ok(parseNumeroAR(numeroAEditable(1234.5)) === 1234.5, "ida y vuelta");
+ok(avisosRenglon({ cantidad: 1.5, unidad: "UN", precio: 10 }).length === 1, "decimales en UN → aviso");
+ok(avisosRenglon({ cantidad: 1.5, unidad: "M", precio: 10 }).length === 1, "decimales en cualquier unidad → aviso (cantidades siempre enteras)");
+ok(avisosRenglon({ cantidad: 1000, unidad: "UN", precio: 10 }).length === 0, "1000 entero → sin aviso");
+ok(avisosRenglon({ cantidad: 3, unidad: "UN", precio: 0, descripcion: "Guante" })[0] === "precio en 0", "precio 0 → aviso");
+ok(avisosRenglon({ cantidad: 3, unidad: "UN", precio: 0, descripcion: "" }).length === 0, "renglón vacío → sin aviso");
+console.log("TODO OK");

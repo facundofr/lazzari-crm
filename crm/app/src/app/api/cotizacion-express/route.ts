@@ -5,8 +5,11 @@ import { NextRequest } from "next/server";
 /**
  * Cotización express.
  *  - modo "extraer": de un mensaje, imagen, PDF o texto de Excel saca la lista de artículos pedidos.
+ *    Si falta un dato que cambia el artículo (talle, modelo, marca, cantidad) devuelve "preguntas" (nunca inventa).
  *  - modo "elegir": para cada pedido recibe candidatos de la lista de costos (buscados desde el navegador,
  *    que tiene la sesión del usuario) y la IA elige el que corresponde, con un nivel de confianza.
+ *  - modo "ajustar": recibe las líneas ya armadas + lo que pide el vendedor ("agregame 20 guantes nitrilo T9",
+ *    "cambiá los anteojos a Segufer", "sacá X") y devuelve agregar / cambiar / quitar / preguntas.
  * Nunca guarda nada: solo devuelve sugerencias para que el vendedor revise.
  */
 const MODEL = "claude-haiku-4-5-20251001";
@@ -33,7 +36,23 @@ Te pasan el pedido de un cliente (mensaje, captura, PDF o planilla). Extraé TOD
 - "talle": solo si el pedido lo indica (ej "8", "XL", "42"), si no "".
 - "codigo": solo si el pedido trae un código del artículo.
 - "descripcion": tal cual la pide el cliente, corrigiendo solo abreviaturas obvias (ANT. = anteojo, G. = guante).
-Respondé SOLO JSON: {"lineas":[{"descripcion":"","cantidad":1,"talle":"","codigo":""}],"notas":""}`;
+- NUNCA inventes datos. Si falta un dato que CAMBIA el artículo y no se puede cotizar bien sin él (talle de calzado o ropa
+  cuando el cliente no lo dice, modelo o marca cuando el pedido es ambiguo, cantidad cuando no se entiende), agregá una
+  pregunta corta en "preguntas" con la línea a la que se refiere. No preguntes lo que ya está claro ni lo que ya respondió el vendedor.
+  Igual devolvé la línea con lo que sí sabés (cantidad 1 si no figura).
+Respondé SOLO JSON: {"lineas":[{"descripcion":"","cantidad":1,"talle":"","codigo":""}],"preguntas":[{"linea":"","pregunta":""}],"notas":""}`;
+
+const SYS_AJUSTAR = `Sos asistente de ventas de Lazzari (EPP, ropa de trabajo, seguridad industrial, Argentina).
+Te paso las líneas de una cotización ya armada (id, pedido, cantidad, talle, artículo elegido) y lo que pide el vendedor.
+Devolvé SOLO los cambios que pide, sin tocar el resto:
+- "agregar": líneas nuevas {"descripcion","cantidad","talle","codigo","proveedor_preferido"} (descripción como la diría el cliente).
+- "cambiar": {"id", y solo los campos que cambian: "cantidad", "talle", "descripcion" (si pide otro artículo/modelo/marca), "proveedor_preferido"}.
+  "cambiá los anteojos a Segufer" = cambiar las líneas de anteojos con proveedor_preferido "Segufer".
+- "quitar": ids de las líneas a sacar.
+- NUNCA inventes. Si no queda claro a qué línea se refiere o falta un dato que cambia el artículo (talle, modelo, marca, cantidad),
+  no adivines: poné la pregunta en "preguntas" y no hagas ese cambio.
+- "resumen": una frase corta de lo que hiciste.
+Respondé SOLO JSON: {"agregar":[],"cambiar":[],"quitar":[],"preguntas":[{"linea":"","pregunta":""}],"resumen":""}`;
 
 const SYS_ELEGIR = `Sos asistente de ventas de Lazzari (EPP, ropa de trabajo, seguridad industrial, Argentina).
 Para cada pedido del cliente tenés candidatos de nuestra lista de costos (índice, proveedor, código, descripción, marca, moneda, costo).
@@ -42,6 +61,7 @@ Elegí el candidato que sea EL MISMO artículo. Reglas:
 - Atributos que cambian el artículo: reflectivo, con/sin válvula, carbón activado, claro/oscuro, para químicos/polvo, material (vaqueta, nitrilo, PU), dieléctrico, ignífugo.
 - El talle NO cambia el artículo si el candidato no indica talle; si los candidatos vienen por talle, elegí el talle pedido.
 - Si vienen PREFERENCIAS DEL VENDEDOR (proveedores, marcas, indicaciones), respetalas primero.
+- Si un pedido trae "proveedor preferido", elegí el candidato de ese proveedor cuando sea el mismo artículo o uno equivalente aceptable; si no lo tiene, decilo en "nota".
 - Si no hay preferencia que decida, y el MISMO artículo lo tienen varios proveedores, elegí el de menor "comparable" (costo ya pasado a la moneda del presupuesto). Nunca compares costos en monedas distintas. En "nota" poné el proveedor alternativo y su comparable (ej "también Segufer US$ 9,08").
 - "confianza": "alta" (mismo artículo seguro), "media" (muy probable, falta confirmar un detalle), "baja" (parecido, alternativa), "ninguna" (ningún candidato sirve → indice null).
 - "nota": corta, solo si hay algo que el vendedor deba revisar (ej "no se encontró con reflectivo", "alternativa de otra marca").
@@ -55,14 +75,25 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
 
     if (body.modo === "extraer") {
-      const { mensaje, imagen, pdf } = body;
+      const { mensaje, imagen, pdf, respuestas } = body;
       if (!String(mensaje || "").trim() && !imagen && !pdf) return Response.json({ error: "Pegá un mensaje, una imagen o un archivo" }, { status: 400 });
       const content: any[] = [];
       if (imagen) content.push({ type: "image", source: { type: "base64", media_type: imagen.media_type || "image/jpeg", data: imagen.data } });
       if (pdf) content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf.data } });
       content.push({ type: "text", text: String(mensaje || "").trim() ? `Pedido del cliente:\n\n${String(mensaje).slice(0, 60000)}` : "Extraé los artículos del archivo adjunto." });
+      if (String(respuestas || "").trim()) content.push({ type: "text", text: `Respuestas del vendedor a tus preguntas (usalas y no vuelvas a preguntar lo ya respondido; si dejó algo sin responder, no lo inventes):\n${String(respuestas).slice(0, 4000)}` });
       const out = await ask(client, SYS_EXTRAER, content);
-      return Response.json({ lineas: Array.isArray(out.lineas) ? out.lineas : [], notas: out.notas || "" });
+      return Response.json({ lineas: Array.isArray(out.lineas) ? out.lineas : [], preguntas: Array.isArray(out.preguntas) ? out.preguntas.filter((p: any) => p && p.pregunta) : [], notas: out.notas || "" });
+    }
+
+    if (body.modo === "ajustar") {
+      const instruccion = String(body.instruccion || "").trim();
+      const lineas: any[] = Array.isArray(body.lineas) ? body.lineas : [];
+      if (!instruccion) return Response.json({ error: "Escribí qué querés cambiar" }, { status: 400 });
+      const texto = lineas.map((l) => `id=${l.id} | pedido: ${l.descripcion} | cant ${l.cantidad}${l.talle ? ` | talle ${l.talle}` : ""}${l.articulo ? ` | elegido: ${l.articulo}` : " | sin artículo"}${l.incluida === false ? " | (destildada)" : ""}`).join("\n");
+      const out = await ask(client, SYS_AJUSTAR, [{ type: "text", text: `LÍNEAS ACTUALES:\n${texto || "(ninguna)"}\n\nLO QUE PIDE EL VENDEDOR:\n${instruccion.slice(0, 4000)}` }]);
+      const arr = (x: unknown) => (Array.isArray(x) ? x : []);
+      return Response.json({ agregar: arr(out.agregar), cambiar: arr(out.cambiar), quitar: arr(out.quitar).map(String), preguntas: arr(out.preguntas).filter((p: any) => p && p.pregunta), resumen: out.resumen || "" });
     }
 
     if (body.modo === "elegir") {
@@ -72,7 +103,7 @@ export async function POST(request: NextRequest) {
       for (let i = 0; i < conCandidatos.length; i += 25) tandas.push(conCandidatos.slice(i, i + 25));
       const resultados = await Promise.all(tandas.map(async t => {
         const texto = t.map(p => [
-          `### id=${p.id} | PEDIDO: ${p.descripcion}${p.talle ? ` | talle ${p.talle}` : ""}${p.codigo ? ` | código ${p.codigo}` : ""}`,
+          `### id=${p.id} | PEDIDO: ${p.descripcion}${p.talle ? ` | talle ${p.talle}` : ""}${p.codigo ? ` | código ${p.codigo}` : ""}${p.proveedor_preferido ? ` | proveedor preferido ${p.proveedor_preferido}` : ""}`,
           ...p.candidatos.map((c: any, i: number) => `${i}. [${c.proveedor}] ${c.codigo || ""} | ${c.descripcion}${c.marca ? ` | marca ${c.marca}` : ""} | costo ${c.moneda} ${c.costo}${c.costo_comparable != null ? ` | comparable ${body.moneda_comparable || ""} ${c.costo_comparable}` : ""}`),
         ].join("\n")).join("\n\n");
         const pr = body.preferencias || {};

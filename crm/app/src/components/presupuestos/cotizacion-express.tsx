@@ -16,7 +16,9 @@ import { buscarCandidatos, normalizar, SIN_PREFS, type Prefs, type CatalogoCandi
 const db = supabase as any;
 
 type Confianza = "alta" | "media" | "baja" | "ninguna" | "manual";
-type Linea = { id: string; descripcion: string; cantidad: number; talle: string; codigo: string; candidatos: Cand[]; elegido: number | null; confianza: Confianza; nota: string; incluir: boolean; buscar: string; buscando?: boolean };
+type Linea = { id: string; descripcion: string; cantidad: number; talle: string; codigo: string; candidatos: Cand[]; elegido: number | null; confianza: Confianza; nota: string; incluir: boolean; buscar: string; buscando?: boolean; provPref?: string };
+type Pedido = { descripcion: string; cantidad: number; talle: string; codigo: string };
+type Pregunta = { linea?: string; pregunta: string };
 
 interface Props {
   open: boolean;
@@ -28,6 +30,8 @@ interface Props {
   onPedirTc?: () => void | Promise<boolean>;
   proveedoresCRM?: Array<{ id: string; razon_social: string }>;
   sociedadId?: string;
+  /** Texto que ya escribió el vendedor (ej. la Solicitud): se precarga en el mensaje. */
+  textoInicial?: string;
 }
 
 function separarTalle(desc: string): { descripcion: string; talle: string } {
@@ -83,12 +87,22 @@ const COLOR: Record<Confianza, string> = {
 };
 const ETIQUETA: Record<Confianza, string> = { alta: "Seguro", media: "Revisar", baja: "Alternativa", ninguna: "No está", manual: "Elegido" };
 
-export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivisas, onAgregar, onPedirTc, proveedoresCRM, sociedadId }: Props) {
+export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivisas, onAgregar, onPedirTc, proveedoresCRM, sociedadId, textoInicial }: Props) {
   const [mensaje, setMensaje] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
   const [imagen, setImagen] = useState<{ data: string; media_type: string; name: string } | null>(null);
   const [lineas, setLineas] = useState<Linea[]>([]);
-  const [fase, setFase] = useState<"entrada" | "revision">("entrada");
+  const [fase, setFase] = useState<"entrada" | "preguntas" | "revision">("entrada");
+  // Preguntas de la IA (le falta un dato que cambia el artículo): al leer el pedido y al ajustar.
+  const [preguntas, setPreguntas] = useState<Pregunta[]>([]);
+  const [respuestas, setRespuestas] = useState<string[]>([]);
+  const [pedidosPend, setPedidosPend] = useState<Pedido[]>([]);
+  const [respuestasPrevias, setRespuestasPrevias] = useState("");
+  const [instruccion, setInstruccion] = useState("");
+  const [ultimaInstruccion, setUltimaInstruccion] = useState("");
+  const [preguntasAj, setPreguntasAj] = useState<Pregunta[]>([]);
+  const [respuestasAj, setRespuestasAj] = useState<string[]>([]);
+  const [resumenAj, setResumenAj] = useState("");
   const [progreso, setProgreso] = useState("");
   const [error, setError] = useState("");
   const [notas, setNotas] = useState("");
@@ -99,6 +113,8 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
   const [provIds, setProvIds] = useState<Array<{ id: string; razon_social: string; nombre_fantasia?: string | null }>>([]);
   const [vinculos, setVinculos] = useState<Record<string, string>>({});
   const tcPedido = useRef(false);
+
+  useEffect(() => { if (open && textoInicial?.trim()) setMensaje(textoInicial); }, [open, textoInicial]);
 
   useEffect(() => {
     if (!open) { tcPedido.current = false; return; }
@@ -153,7 +169,10 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
   };
   useEffect(() => { if (sinTc && onPedirTc && !tcPedido.current) { tcPedido.current = true; void pedirTc(); } }, [sinTc, onPedirTc]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  function reset() { setMensaje(""); setArchivo(null); setImagen(null); setLineas([]); setFase("entrada"); setProgreso(""); setError(""); setNotas(""); }
+  function reset() {
+    setMensaje(""); setArchivo(null); setImagen(null); setLineas([]); setFase("entrada"); setProgreso(""); setError(""); setNotas("");
+    setPreguntas([]); setRespuestas([]); setPedidosPend([]); setRespuestasPrevias(""); setInstruccion(""); setUltimaInstruccion(""); setPreguntasAj([]); setRespuestasAj([]); setResumenAj("");
+  }
   function cerrar() { reset(); onClose(); }
 
   async function tomarImagen(file: File) {
@@ -161,10 +180,53 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
     setImagen({ data: await leerBase64(file), media_type: file.type || "image/png", name: file.name || "captura.png" });
   }
 
-  async function armar() {
+  const textoRespuestas = (ps: Pregunta[], rs: string[]) => ps.map((p, i) => `${p.linea ? `[${p.linea}] ` : ""}${p.pregunta} → ${String(rs[i] || "").trim() || "(sin respuesta)"}`).join("\n");
+
+  /** Busca candidatos en la lista de costos y la IA elige el de cada línea (modifica y devuelve las mismas líneas). */
+  async function buscarYElegir(base: Linea[]): Promise<Linea[]> {
+    const prefsDe = (l: Linea): Prefs => {
+      if (!l.provPref) return prefs;
+      const pp = normalizar(l.provPref);
+      const enLista = catProvs.find((p) => normalizar(p) === pp) || catProvs.find((p) => normalizar(p).includes(pp) || pp.includes(normalizar(p)));
+      return enLista ? { ...prefs, provs: [...new Set([...prefs.provs, enLista])] } : prefs;
+    };
+    // 1) candidatos de la lista de costos (de a 6 en paralelo)
+    for (let i = 0; i < base.length; i += 6) {
+      setProgreso(`Buscando en la lista de costos… ${Math.min(i + 6, base.length)} de ${base.length}`);
+      await Promise.all(base.slice(i, i + 6).map(async l => { l.candidatos = await buscarCandidatos(`${l.descripcion}`, l.codigo, 15, prefsDe(l)); }));
+    }
+
+    // 2) la IA elige el candidato correcto en cada línea
+    setProgreso("La IA está eligiendo el artículo de cada línea…");
+    const res = await fetch("/api/cotizacion-express", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modo: "elegir", pedidos: base.map(l => ({ id: l.id, descripcion: l.descripcion, talle: l.talle, codigo: l.codigo, proveedor_preferido: l.provPref || "", candidatos: l.candidatos.map(c => { const cp = convertirAMonedaPR(c.costo, c.moneda, prMoneda, tc, tcDivisas); return { proveedor: c.proveedor, codigo: c.codigo_interno || c.codigo, descripcion: c.descripcion, marca: c.marca, moneda: c.moneda, costo: c.costo, costo_comparable: cp === null ? null : Math.round(cp * 100) / 100 }; }) })), moneda_comparable: prMoneda === "ARS" ? "ARS" : "USD", preferencias: { proveedores: prefs.provs, solo_proveedores: prefs.soloProvs, marcas: prefs.marcas, solo_marcas: prefs.soloMarcas, indicaciones: indicaciones.trim() } }),
+    });
+    const d = await res.json().catch(() => ({}));
+    const porId = new Map<string, any>((d.elecciones || []).map((e: any) => [String(e.id), e]));
+    for (const l of base) {
+      const e = porId.get(l.id);
+      const idx = e && e.indice !== null && e.indice !== undefined && l.candidatos[Number(e.indice)] ? Number(e.indice) : null;
+      if (e) { l.elegido = idx; l.confianza = idx === null ? "ninguna" : (["alta", "media", "baja"].includes(e.confianza) ? e.confianza : "media"); l.nota = e.nota || ""; }
+      else if (l.candidatos.length) { l.elegido = 0; l.confianza = "baja"; l.nota = "Sugerido por similitud (sin IA)"; }
+      else { l.elegido = null; l.confianza = "ninguna"; }
+    }
+    return base;
+  }
+
+  async function armarDesdePedidos(pedidos: Pedido[]) {
+    pedidos = pedidos.filter(p => p.descripcion);
+    if (!pedidos.length) throw new Error("No encontré artículos. Probá pegando el texto o subiendo otro archivo.");
+    const base: Linea[] = pedidos.map((p, i) => ({ id: String(i), ...p, candidatos: [], elegido: null, confianza: "ninguna", nota: "", incluir: true, buscar: "" }));
+    await buscarYElegir(base);
+    setLineas(base); setFase("revision"); setProgreso("");
+  }
+
+  /** respuestasNuevas: lo que contestó el vendedor a las preguntas de la IA (vuelve a leer el pedido con eso). */
+  async function armar(respuestasNuevas = "") {
     setError(""); setNotas("");
     try {
-      let pedidos: Array<{ descripcion: string; cantidad: number; talle: string; codigo: string }> = [];
+      let pedidos: Pedido[] = [];
       const esExcel = archivo && /\.(xlsx|xls|xlsm|csv|ods)$/i.test(archivo.name);
       const esPdf = archivo && /\.pdf$/i.test(archivo.name);
       let textoExtra = "";
@@ -175,6 +237,7 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
       }
       if (!pedidos.length && (mensaje.trim() || imagen || esPdf || textoExtra)) {
         setProgreso("La IA está leyendo el pedido…");
+        const todasRespuestas = [respuestasPrevias, respuestasNuevas].filter(Boolean).join("\n");
         const res = await fetch("/api/cotizacion-express", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -182,43 +245,88 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
             mensaje: [mensaje, textoExtra].filter(Boolean).join("\n\n"),
             imagen: imagen ? { data: imagen.data, media_type: imagen.media_type } : undefined,
             pdf: esPdf ? { data: await leerBase64(archivo!) } : undefined,
+            respuestas: todasRespuestas || undefined,
           }),
         });
         const d = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(d.error || "La IA no pudo leer el pedido");
         if (d.notas) setNotas(d.notas);
+        setRespuestasPrevias(todasRespuestas);
         pedidos = (d.lineas || []).map((l: any) => {
           const st = separarTalle(l.descripcion || "");
           return { descripcion: st.descripcion, talle: String(l.talle || st.talle || "").toUpperCase(), codigo: String(l.codigo || ""), cantidad: Number(l.cantidad) > 0 ? Number(l.cantidad) : 1 };
         });
+        const ps: Pregunta[] = Array.isArray(d.preguntas) ? d.preguntas.filter((p: any) => p?.pregunta) : [];
+        if (ps.length) {
+          // Le falta un dato que cambia el artículo: se pregunta antes de buscar (nunca inventa). Se puede seguir sin responder.
+          setPedidosPend(pedidos); setPreguntas(ps); setRespuestas(ps.map(() => "")); setFase("preguntas"); setProgreso("");
+          return;
+        }
       }
-      pedidos = pedidos.filter(p => p.descripcion);
-      if (!pedidos.length) throw new Error("No encontré artículos. Probá pegando el texto o subiendo otro archivo.");
-
-      // 1) candidatos de la lista de costos (de a 6 en paralelo)
-      const base: Linea[] = pedidos.map((p, i) => ({ id: String(i), ...p, candidatos: [], elegido: null, confianza: "ninguna", nota: "", incluir: true, buscar: "" }));
-      for (let i = 0; i < base.length; i += 6) {
-        setProgreso(`Buscando en la lista de costos… ${Math.min(i + 6, base.length)} de ${base.length}`);
-        await Promise.all(base.slice(i, i + 6).map(async l => { l.candidatos = await buscarCandidatos(`${l.descripcion}`, l.codigo, 15, prefs); }));
-      }
-
-      // 2) la IA elige el candidato correcto en cada línea
-      setProgreso("La IA está eligiendo el artículo de cada línea…");
-      const res = await fetch("/api/cotizacion-express", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modo: "elegir", pedidos: base.map(l => ({ id: l.id, descripcion: l.descripcion, talle: l.talle, codigo: l.codigo, candidatos: l.candidatos.map(c => { const cp = convertirAMonedaPR(c.costo, c.moneda, prMoneda, tc, tcDivisas); return { proveedor: c.proveedor, codigo: c.codigo_interno || c.codigo, descripcion: c.descripcion, marca: c.marca, moneda: c.moneda, costo: c.costo, costo_comparable: cp === null ? null : Math.round(cp * 100) / 100 }; }) })), moneda_comparable: prMoneda === "ARS" ? "ARS" : "USD", preferencias: { proveedores: prefs.provs, solo_proveedores: prefs.soloProvs, marcas: prefs.marcas, solo_marcas: prefs.soloMarcas, indicaciones: indicaciones.trim() } }),
-      });
-      const d = await res.json().catch(() => ({}));
-      const porId = new Map<string, any>((d.elecciones || []).map((e: any) => [String(e.id), e]));
-      for (const l of base) {
-        const e = porId.get(l.id);
-        const idx = e && e.indice !== null && e.indice !== undefined && l.candidatos[Number(e.indice)] ? Number(e.indice) : null;
-        if (e) { l.elegido = idx; l.confianza = idx === null ? "ninguna" : (["alta", "media", "baja"].includes(e.confianza) ? e.confianza : "media"); l.nota = e.nota || ""; }
-        else if (l.candidatos.length) { l.elegido = 0; l.confianza = "baja"; l.nota = "Sugerido por similitud (sin IA)"; }
-      }
-      setLineas(base); setFase("revision"); setProgreso("");
+      await armarDesdePedidos(pedidos);
     } catch (e) {
       setProgreso(""); setError(e instanceof Error ? e.message : "Error inesperado");
+    }
+  }
+
+  async function seguirSinResponder() {
+    setError("");
+    try { await armarDesdePedidos(pedidosPend); } catch (e) { setProgreso(""); setError(e instanceof Error ? e.message : "Error inesperado"); }
+  }
+
+  /** "Decile a la IA qué cambiar": agrega, cambia (cantidad, talle, artículo, proveedor) o quita líneas. Se puede repetir. */
+  async function ajustar(respuestasTxt = "") {
+    const base = respuestasTxt ? ultimaInstruccion : instruccion.trim();
+    if (!base) return;
+    const instr = respuestasTxt ? `${base}\nRespuestas a tus preguntas:\n${respuestasTxt}` : base;
+    setError(""); setResumenAj(""); setProgreso("La IA está ajustando la cotización…");
+    try {
+      const res = await fetch("/api/cotizacion-express", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          modo: "ajustar", instruccion: instr,
+          lineas: lineas.map(l => { const c = l.elegido !== null ? l.candidatos[l.elegido] : null; return { id: l.id, descripcion: l.descripcion, cantidad: l.cantidad, talle: l.talle, incluida: l.incluir, articulo: c ? `${c.proveedor} · ${c.descripcion}${c.marca ? ` · ${c.marca}` : ""}` : "" }; }),
+        }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "La IA no pudo ajustar la cotización");
+      const quitar = new Set<string>((d.quitar || []).map(String));
+      let nuevas = lineas.filter(l => !quitar.has(l.id));
+      const aBuscar: Linea[] = [];
+      for (const c of d.cambiar || []) {
+        const l = nuevas.find(x => x.id === String(c.id));
+        if (!l) continue;
+        const n: Linea = { ...l };
+        let rebuscar = false;
+        if (Number(c.cantidad) > 0) n.cantidad = Number(c.cantidad);
+        if (c.talle != null && String(c.talle).toUpperCase() !== l.talle) { n.talle = String(c.talle).toUpperCase(); rebuscar = true; }
+        if (c.descripcion && String(c.descripcion) !== l.descripcion) { n.descripcion = String(c.descripcion); rebuscar = true; }
+        if (c.proveedor_preferido) { n.provPref = String(c.proveedor_preferido); rebuscar = true; }
+        if (rebuscar) { n.candidatos = []; aBuscar.push(n); }
+        nuevas = nuevas.map(x => (x.id === n.id ? n : x));
+      }
+      let max = Math.max(-1, ...lineas.map(l => Number(l.id)).filter(Number.isFinite));
+      for (const a of d.agregar || []) {
+        if (!a?.descripcion) continue;
+        const st = separarTalle(String(a.descripcion));
+        const n: Linea = { id: String(++max), descripcion: st.descripcion, talle: String(a.talle || st.talle || "").toUpperCase(), codigo: String(a.codigo || ""), cantidad: Number(a.cantidad) > 0 ? Number(a.cantidad) : 1, candidatos: [], elegido: null, confianza: "ninguna", nota: "", incluir: true, buscar: "", provPref: a.proveedor_preferido ? String(a.proveedor_preferido) : "" };
+        nuevas.push(n); aBuscar.push(n);
+      }
+      if (aBuscar.length) {
+        const hechas = await buscarYElegir(aBuscar);
+        const porId = new Map(hechas.map(h => [h.id, h]));
+        nuevas = nuevas.map(l => porId.get(l.id) || l);
+      }
+      setLineas(nuevas);
+      const ps: Pregunta[] = Array.isArray(d.preguntas) ? d.preguntas.filter((p: any) => p?.pregunta) : [];
+      setPreguntasAj(ps); setRespuestasAj(ps.map(() => ""));
+      setUltimaInstruccion(base);
+      setResumenAj(d.resumen || `${d.agregar?.length || 0} agregadas · ${d.cambiar?.length || 0} cambiadas · ${quitar.size} quitadas`);
+      if (!respuestasTxt) setInstruccion("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error inesperado");
+    } finally {
+      setProgreso("");
     }
   }
 
@@ -339,6 +447,24 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
           {progreso && <p className="flex items-center gap-2 text-sm text-orange-600"><Loader2 className="h-4 w-4 animate-spin" /> {progreso}</p>}
         </div>}
 
+        {fase === "preguntas" && <div className="space-y-3 overflow-y-auto p-5">
+          <div className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
+            <p className="mb-2 font-semibold">La IA necesita estos datos para no inventar ({pedidosPend.length} artículos leídos):</p>
+            <div className="space-y-2">
+              {preguntas.map((p, i) => (
+                <label key={i} className="block text-xs">
+                  <span className="font-medium">{p.linea ? <span className="opacity-70">{p.linea}: </span> : null}{p.pregunta}</span>
+                  <input value={respuestas[i] || ""} onChange={e => setRespuestas(rs => rs.map((r, j) => (j === i ? e.target.value : r)))}
+                    onKeyDown={e => { if (e.key === "Enter" && !progreso) void armar(textoRespuestas(preguntas, respuestas)); }}
+                    placeholder="Tu respuesta (podés dejarla vacía)" className="mt-0.5 w-full rounded border border-sky-200 bg-white px-2 py-1 text-xs text-zinc-800 dark:border-sky-800 dark:bg-zinc-800 dark:text-white" />
+                </label>
+              ))}
+            </div>
+          </div>
+          {error && <p className="flex items-center gap-1 text-sm text-red-600"><AlertTriangle className="h-4 w-4" /> {error}</p>}
+          {progreso && <p className="flex items-center gap-2 text-sm text-orange-600"><Loader2 className="h-4 w-4 animate-spin" /> {progreso}</p>}
+        </div>}
+
         {fase === "revision" && <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-xs">
             <span className="text-zinc-500">{lineas.length} líneas:</span>
@@ -346,6 +472,35 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
             {sinTc && !tcFallo && <span className="text-amber-600">Trayendo tipo de cambio BNA…</span>}
             {sinTc && tcFallo && <span className="text-red-600">No se pudo traer el BNA. Cargá el tipo de cambio en el presupuesto o <button onClick={() => { tcPedido.current = true; void pedirTc(); }} className="underline">reintentá</button>.</span>}
             {notas && <span className="text-zinc-500">· {notas}</span>}
+          </div>
+          <div className="px-5 pb-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Sparkles className="h-4 w-4 shrink-0 text-orange-500" />
+              <input value={instruccion} onChange={e => setInstruccion(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !progreso) void ajustar(); }}
+                placeholder="Decile a la IA qué cambiar: agregame 20 guantes nitrilo T9 · cambiá los anteojos a Segufer · sacá los cascos"
+                className="min-w-[260px] flex-1 rounded border border-orange-200 px-2 py-1 text-xs dark:border-orange-800 dark:bg-zinc-800 dark:text-white" />
+              <button onClick={() => void ajustar()} disabled={!!progreso || !instruccion.trim()} className="flex items-center gap-1 rounded bg-orange-500 px-3 py-1 text-xs font-medium text-white disabled:opacity-50">
+                {progreso ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Aplicar
+              </button>
+            </div>
+            {progreso && <p className="mt-1 flex items-center gap-1 text-xs text-orange-600"><Loader2 className="h-3 w-3 animate-spin" /> {progreso}</p>}
+            {error && <p className="mt-1 text-xs text-red-600">⚠️ {error}</p>}
+            {resumenAj && !progreso && <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-400">✓ {resumenAj}. Revisá y seguí editando a mano si hace falta.</p>}
+            {preguntasAj.length > 0 && (
+              <div className="mt-1.5 space-y-1 rounded border border-sky-200 bg-sky-50 p-2 text-xs text-sky-900 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
+                <p className="font-semibold">La IA pregunta antes de cambiar (no inventa):</p>
+                {preguntasAj.map((p, i) => (
+                  <label key={i} className="flex flex-wrap items-center gap-2">
+                    <span className="min-w-0 flex-1">{p.linea ? <span className="opacity-70">{p.linea}: </span> : null}{p.pregunta}</span>
+                    <input value={respuestasAj[i] || ""} onChange={e => setRespuestasAj(rs => rs.map((r, j) => (j === i ? e.target.value : r)))} className="w-48 rounded border border-sky-200 bg-white px-1.5 py-0.5 text-zinc-800 dark:border-sky-800 dark:bg-zinc-800 dark:text-white" />
+                  </label>
+                ))}
+                <div className="flex gap-2">
+                  <button onClick={() => void ajustar(textoRespuestas(preguntasAj, respuestasAj))} disabled={!!progreso} className="rounded bg-sky-600 px-2.5 py-0.5 font-medium text-white disabled:opacity-50">Responder y aplicar</button>
+                  <button onClick={() => setPreguntasAj([])} className="rounded border border-sky-300 px-2.5 py-0.5">Dejar así</button>
+                </div>
+              </div>
+            )}
           </div>
           <div className="min-h-0 flex-1 overflow-auto px-5">
             <table className="w-full text-xs">
@@ -426,10 +581,14 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
             {fase === "revision" && <>Total venta (lista, sin IVA): <b className="text-zinc-800 dark:text-white">{fmt(totalVenta, prMoneda)}</b> · Las líneas “Sin artículo” entran con precio 0 para completar a mano.</>}
           </div>
           <div className="flex gap-2">
-            {fase === "revision" && <button onClick={() => { setFase("entrada"); setLineas([]); }} className="rounded-lg border px-3 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">Volver</button>}
+            {fase !== "entrada" && <button onClick={() => { setFase("entrada"); setLineas([]); setPreguntas([]); setPreguntasAj([]); setResumenAj(""); }} disabled={!!progreso} className="rounded-lg border px-3 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">Volver</button>}
             <button onClick={cerrar} disabled={!!progreso} className="rounded-lg border px-3 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">Cancelar</button>
-            {fase === "entrada"
-              ? <button onClick={armar} disabled={!!progreso || (!mensaje.trim() && !archivo && !imagen)} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{progreso ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Armar cotización</button>
+            {fase === "preguntas" && <>
+              <button onClick={() => void seguirSinResponder()} disabled={!!progreso} className="rounded-lg border px-3 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">Seguir sin responder</button>
+              <button onClick={() => void armar(textoRespuestas(preguntas, respuestas))} disabled={!!progreso} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{progreso ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Seguir con mis respuestas</button>
+            </>}
+            {fase === "preguntas" ? null : fase === "entrada"
+              ? <button onClick={() => void armar()} disabled={!!progreso || (!mensaje.trim() && !archivo && !imagen)} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{progreso ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Armar cotización</button>
               : <button onClick={agregar} disabled={!incluidas.length || sinTc} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><Check className="h-4 w-4" /> Agregar {incluidas.length} al presupuesto</button>}
           </div>
         </div>

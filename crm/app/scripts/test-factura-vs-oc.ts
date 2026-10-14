@@ -19,6 +19,11 @@ ok(!controlIva({ renglones: bien, neto: 566800, percepciones: 0, totalLeido: 0 }
 ok(controlIva({ renglones: bien, neto: 566800, percepciones: 0, totalLeido: 685828.6 }).cuadra, "tolerancia de $1");
 const c3 = controlIva({ renglones: mal, neto: 566800, percepciones: 0, totalLeido: 700000 });
 ok(!c3.cuadra && !c3.propone21, "si con 21 % tampoco da, avisa sin proponer");
+// Mismo caso, con mesa y caja bien y el envío en 0 %: diferencia $18.900 → señala solo el envío.
+const envio0 = bien.map((r) => (r.key === "envio" ? { ...r, iva: 0 } : r));
+const c4 = controlIva({ renglones: envio0, neto: 566800, percepciones: 0, totalLeido: 685828 });
+ok(c4.diferencia === 18900 && c4.renglones21.length === 1 && c4.renglones21[0] === "envio", "diferencia 18.900: señala el envío");
+ok(c2.renglones21.length === 0 && c3.renglones21.length === 0, "si cuadra o no da con ningún renglón, no señala");
 
 // Emparejar por precio: la OC llama distinto a la mesa y la caja; el envío no está.
 const oc = [{ id: "m", cantidad: 1, precio: 378800 }, { id: "c", cantidad: 1, precio: 49000 }];

@@ -17,12 +17,21 @@ export function controlIva(p: { renglones: RenglonFactura[]; neto: number; perce
     ? r2(p.renglones.reduce((s, r) => s + r.cantidad * r.precio * r.iva / 100, 0))
     : 0;
   const calculado = r2(p.neto + iva + p.percepciones);
-  if (totalLeido <= 0) return { controlado: false, cuadra: true, calculado, totalLeido, diferencia: 0, propone21: false };
+  if (totalLeido <= 0) return { controlado: false, cuadra: true, calculado, totalLeido, diferencia: 0, propone21: false, renglones21: [] as string[] };
   const diferencia = r2(totalLeido - calculado);
   const cuadra = Math.abs(diferencia) <= tol;
   const con21 = r2(p.neto * 1.21 + p.percepciones);
   const propone21 = !cuadra && Math.abs(totalLeido - con21) <= tol;
-  return { controlado: true, cuadra, calculado, totalLeido, diferencia, propone21 };
+  // Renglones con IVA menor a 21 % que, pasados a 21 %, dan justo (ej.: el envío leído con IVA 0 %).
+  let renglones21: string[] = [];
+  if (!cuadra && diferencia > 0) {
+    const cands = p.renglones.filter((r) => r.iva < 21 && r.cantidad * r.precio > 0);
+    const falta = (rs: RenglonFactura[]) => r2(rs.reduce((s, r) => s + r.cantidad * r.precio * (21 - r.iva) / 100, 0));
+    const uno = cands.filter((r) => Math.abs(falta([r]) - diferencia) <= tol);
+    if (uno.length === 1) renglones21 = [uno[0].key];
+    else if (cands.length > 1 && cands.length < p.renglones.length && Math.abs(falta(cands) - diferencia) <= tol) renglones21 = cands.map((r) => r.key);
+  }
+  return { controlado: true, cuadra, calculado, totalLeido, diferencia, propone21, renglones21 };
 }
 
 /** Mismo precio unitario (tolerancia $1 o 0,5 %). */

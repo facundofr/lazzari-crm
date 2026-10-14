@@ -36,13 +36,34 @@ import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalize
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 import { margenPR, MARGEN_MINIMO_PR } from "@/lib/presupuesto-margen";
+import { parseNumeroAR, textoNumeroValido, numeroAEditable, formatCantidad, avisosRenglon } from "@/lib/numero-ar";
 import { convertirCostoPR, leerDolaresGuardados, fechaDolarPresupuesto, dolarAtrasado, etiquetaDolar, esCostoUsd, esCostoDivisa, tcParaCosto, type DolaresGuardados } from "@/lib/dolar-presupuesto";
 
-/** Number input that allows typing decimals (e.g. "10.") without losing the dot */
-function NumInput({ value, onChange, className, ...props }: { value: number | string; onChange: (n: number) => void; className?: string } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "type">) {
-  const [raw, setRaw] = useState<string>(String(value ?? ""));
+/** Number input that allows typing decimals (e.g. "10.") without losing the dot.
+ *  `miles`: se escribe a la argentina ("1.000" = mil, coma decimal); lo usa Cantidad. */
+function NumInput({ value, onChange, className, miles, ...props }: { value: number | string; onChange: (n: number) => void; className?: string; miles?: boolean } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "onChange" | "value" | "type">) {
+  const mostrar = (v: number | string) => (miles ? numeroAEditable(Number(v) || 0) : (v === 0 ? "" : String(v ?? "")));
+  const [raw, setRaw] = useState<string>(miles ? mostrar(value) : String(value ?? ""));
   const focused = useRef(false);
-  useEffect(() => { if (!focused.current) setRaw(value === 0 ? "" : String(value ?? "")); }, [value]);
+  useEffect(() => { if (!focused.current) setRaw(mostrar(value)); }, [value]);
+  if (miles) return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={raw}
+      onFocus={() => { focused.current = true; }}
+      onBlur={() => { focused.current = false; const n = parseNumeroAR(raw) || 0; setRaw(numeroAEditable(n)); onChange(n); }}
+      onChange={(e) => {
+        const v = e.target.value;
+        if (!textoNumeroValido(v)) return;
+        setRaw(v);
+        const n = parseNumeroAR(v);
+        if (!isNaN(n) && !/[.,]$/.test(v)) onChange(n);
+      }}
+      className={className}
+      {...props}
+    />
+  );
   return (
     <input
       type="text"
@@ -426,6 +447,9 @@ export default function PresupuestosPage() {
   }
   const { toast } = useToast();
   const canDeletePresupuestos = profile?.role === "super_admin" || profile?.role === "admin";
+  // Vendedores: eliminan solo SUS presupuestos (los que crearon) y sin aprobar. Siempre es ocultar (eliminado = true), nunca borrar.
+  const puedeEliminarPR = (pr: { estado: string; creadoPorId?: string } | null | undefined) => !!pr && (canDeletePresupuestos
+    || (profile?.role === "vendedor" && !!profile?.id && (pr as any).creadoPorId === profile.id && !["aprobado", "facturar", "facturado"].includes(pr.estado)));
   const allEstados: PRStatus[] = ["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido", "facturado"];
   const [selectedEstados, setSelectedEstados] = useState<Set<string>>(new Set(["todos"]));
   const [vistaSeguimiento, setVistaSeguimiento] = useState(false);
@@ -457,6 +481,15 @@ export default function PresupuestosPage() {
   // Detail panel
   const [selected, setSelected] = useState<Presupuesto | null>(null);
   const [panelFullscreen, setPanelFullscreen] = useState(false);
+  // Preferencias del detalle que se recuerdan en esta compu: pantalla completa y ocultar costos (para mostrarle la pantalla al cliente).
+  const [ocultarCostos, setOcultarCostos] = useState(false);
+  useEffect(() => { try { setOcultarCostos(localStorage.getItem("lz-pr-ocultar-costos") === "1"); } catch { /* sin localStorage */ } }, []);
+  useEffect(() => {
+    if (!selected?.id) return;
+    try { if (localStorage.getItem("lz-pr-fullscreen") === "1") setPanelFullscreen(true); } catch { /* sin localStorage */ }
+  }, [selected?.id]);
+  const toggleFullscreen = () => { const v = !panelFullscreen; setPanelFullscreen(v); try { localStorage.setItem("lz-pr-fullscreen", v ? "1" : "0"); } catch { /* sin localStorage */ } };
+  const toggleOcultarCostos = () => { const v = !ocultarCostos; setOcultarCostos(v); try { localStorage.setItem("lz-pr-ocultar-costos", v ? "1" : "0"); } catch { /* sin localStorage */ } };
 
   // Vendedor & operador filter
   const [vendedorFilter, setVendedorFilter] = useState<string>("");
@@ -519,6 +552,10 @@ export default function PresupuestosPage() {
   // AI presupuesto
   const [showAIPanel, setShowAIPanel] = useState(false);
   const [showExpress, setShowExpress] = useState(false);
+  // Solicitud: además de escribir lo que pide el cliente, se pueden elegir productos como en un PR (o armarlos con IA).
+  const [solicitudItems, setSolicitudItems] = useState(false);
+  const [expressTexto, setExpressTexto] = useState("");
+  useEffect(() => { if (!showNewPR) { setSolicitudItems(false); setExpressTexto(""); } }, [showNewPR]);
   const [aiMessage, setAiMessage] = useState("");
   const [aiImage, setAiImage] = useState<{ data: string; media_type: string; name: string } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -2170,16 +2207,24 @@ export default function PresupuestosPage() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("¿Seguro que querés eliminar este presupuesto?")) return;
+    const pr = presupuestos.find((p) => p.id === id) || (selected?.id === id ? selected : null);
+    // Se pide el motivo (se puede dejar vacío); Cancelar no elimina nada.
+    const motivo = window.prompt(`¿Eliminar ${pr?.numero || "este presupuesto"}? Escribí el motivo (podés dejarlo vacío) y apretá Aceptar.`, "");
+    if (motivo === null) return;
     try {
-      // Check for linked OCs
-      let ocQuery = supabase.from("ordenes_compra").select("id, numero").eq("presupuesto_origen_id", id).not("estado", "eq", "cancelada");
-      if (sociedadActiva?.id) ocQuery = ocQuery.eq("sociedad_id" as any, sociedadActiva.id);
-      const { data: linkedOCs } = await ocQuery;
-      const hasOCs = linkedOCs && linkedOCs.length > 0;
-      const cancelOCsToo = hasOCs && confirm(`Este presupuesto tiene ${linkedOCs.length} OC vinculada(s) (${linkedOCs.map((oc: any) => oc.numero).join(", ")}). ¿Querés cancelarlas también?`);
+      // OC vinculadas: solo admin decide cancelarlas (el vendedor no toca OC).
+      let cancelOCsToo = false;
+      if (canDeletePresupuestos) {
+        let ocQuery = supabase.from("ordenes_compra").select("id, numero").eq("presupuesto_origen_id", id).not("estado", "eq", "cancelada");
+        if (sociedadActiva?.id) ocQuery = ocQuery.eq("sociedad_id" as any, sociedadActiva.id);
+        const { data: linkedOCs } = await ocQuery;
+        const hasOCs = linkedOCs && linkedOCs.length > 0;
+        cancelOCsToo = !!hasOCs && confirm(`Este presupuesto tiene ${linkedOCs!.length} OC vinculada(s) (${linkedOCs!.map((oc: any) => oc.numero).join(", ")}). ¿Querés cancelarlas también?`);
+      }
 
-      let prDelete = supabase.from("presupuestos").update({ eliminado: true } as any).eq("id", id);
+      const nota = `[${formatDate(todayAR())}] Eliminado por ${profile?.full_name || "usuario"}${motivo.trim() ? `: ${motivo.trim()}` : ""}`;
+      const notasInternas = [String(pr?.notasInternas || "").trim(), nota].filter(Boolean).join("\n");
+      let prDelete = supabase.from("presupuestos").update({ eliminado: true, notas_internas: notasInternas } as any).eq("id", id);
       if (sociedadActiva?.id) prDelete = prDelete.eq("sociedad_id" as any, sociedadActiva.id);
       const { error } = await prDelete;
       if (error) throw new Error(error.message);
@@ -2192,7 +2237,7 @@ export default function PresupuestosPage() {
 
       setSelected(null);
       setPanelFullscreen(false);
-      setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: true } as any : p));
+      setPresupuestos(prev => prev.map(p => p.id === id ? { ...p, eliminado: true, notasInternas } as any : p));
       toast.success(cancelOCsToo ? "Presupuesto eliminado (OCs canceladas)" : "Presupuesto eliminado");
     } catch (err: unknown) {
       console.error("Error deleting:", err);
@@ -2645,6 +2690,23 @@ export default function PresupuestosPage() {
         action={{ label: "Nuevo PR", onClick: () => setShowNewPR(true) }}
       />
       <div className="p-3 sm:p-4 space-y-2.5">
+        {/* Vencidos de los últimos 30 días: ventas para recuperar */}
+        {!showPapelera && (() => {
+          const desde = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+          const venc = presupuestos.filter((pr) => pr.estado === "vencido" && !(pr as any).eliminado && String(pr.vencimiento || pr.fecha || "").slice(0, 10) >= desde);
+          if (venc.length === 0) return null;
+          const ars = venc.filter((pr) => pr.moneda !== "USD").reduce((a, pr) => a + (Number(pr.subtotal) || 0), 0);
+          const usd = venc.filter((pr) => pr.moneda === "USD").reduce((a, pr) => a + (Number(pr.subtotal) || 0), 0);
+          return (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              <span className="flex-1 min-w-0">
+                <b>{venc.length} {venc.length === 1 ? "vencido" : "vencidos"}</b> (últimos 30 días) · {usd > 0 && <b className="font-mono">{formatCurrency(usd, "USD")}</b>}{usd > 0 && ars > 0 && " + "}{ars > 0 && <b className="font-mono">{formatCurrency(ars, "ARS")}</b>} sin IVA — ventas para recuperar
+              </span>
+              <button type="button" onClick={() => { setVistaSeguimiento(false); setSelectedEstados(new Set(["vencido"])); }} className="rounded-md bg-red-600 px-2.5 py-0.5 font-semibold text-white hover:bg-red-700">Ver →</button>
+            </div>
+          );
+        })()}
         {/* Status multi-select toggles + seguimiento */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex gap-1.5 flex-wrap flex-1">
@@ -2666,9 +2728,10 @@ export default function PresupuestosPage() {
               </span>
             </button>
             {/* Botones por estado */}
-            {(["solicitud", "pendiente", "aprobado", "facturar", "rechazado", "postergado", "vencido", "facturado"] as PRStatus[]).map((status) => {
+            {(["solicitud", "pendiente", "vencido", "aprobado", "facturar", "rechazado", "postergado", "facturado"] as PRStatus[]).map((status) => {
               const active = !isAllSelected && selectedEstados.has(status);
-              const activeColor = status === "solicitud" ? "bg-blue-600 text-white shadow-sm" : status === "facturar" ? "bg-blue-500 text-white shadow-sm" : status === "facturado" ? "bg-purple-600 text-white shadow-sm" : "bg-orange-500 text-white shadow-sm";
+              const activeColor = status === "solicitud" ? "bg-blue-600 text-white shadow-sm" : status === "facturar" ? "bg-blue-500 text-white shadow-sm" : status === "facturado" ? "bg-purple-600 text-white shadow-sm" : status === "vencido" ? "bg-red-600 text-white shadow-sm" : "bg-orange-500 text-white shadow-sm";
+              const vencidoRojo = status === "vencido" && (counts.vencido || 0) > 0;
               return (
                 <button
                   key={status}
@@ -2676,7 +2739,9 @@ export default function PresupuestosPage() {
                   className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] font-medium transition-colors whitespace-nowrap ${
                     active && !vistaSeguimiento
                       ? activeColor
-                      : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
+                      : vencidoRojo
+                        ? "bg-red-50 text-red-700 border border-red-300 hover:bg-red-100 dark:bg-red-950/30 dark:border-red-800 dark:text-red-300"
+                        : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
                   }`}
                 >
                   {active && <Check className="h-3.5 w-3.5" />}
@@ -2814,125 +2879,95 @@ export default function PresupuestosPage() {
           trackingPRs.forEach((pr) => { countByUrgencia[pr.urgencia]++; });
 
           return (
-            <div className="space-y-4">
-              {/* Resumen de urgencia */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="space-y-2">
+              {/* Resumen de urgencia: chips chicos */}
+              <div className="flex flex-wrap items-center gap-1.5">
                 {(["rojo", "naranja", "amarillo", "verde"] as const).map((urg) => (
-                  <div key={urg} className={`rounded-lg border-l-4 ${urgenciaColors[urg].border} ${urgenciaColors[urg].bg} p-3`}>
-                    <div className="flex items-center gap-2">
-                      <div className={`h-2.5 w-2.5 rounded-full ${urgenciaColors[urg].dot}`} />
-                      <span className="text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase">{urgenciaLabels[urg]}</span>
-                    </div>
-                    <p className="text-2xl font-bold mt-1 text-zinc-800 dark:text-zinc-100">{countByUrgencia[urg]}</p>
-                  </div>
+                  <span key={urg} className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${urgenciaColors[urg].badge}`}>
+                    <span className={`h-2 w-2 rounded-full ${urgenciaColors[urg].dot}`} />
+                    {urgenciaLabels[urg]} <b>{countByUrgencia[urg]}</b>
+                  </span>
                 ))}
               </div>
 
               {trackingPRs.length === 0 ? (
-                <Card className="p-8 text-center">
-                  <CheckCircle2 className="h-12 w-12 text-emerald-400 mx-auto mb-3" />
-                  <p className="text-lg font-semibold text-zinc-700 dark:text-zinc-200">Sin presupuestos pendientes de seguimiento</p>
-                  <p className="text-sm text-zinc-500 mt-1">Todos los presupuestos han sido respondidos</p>
+                <Card className="p-5 text-center">
+                  <CheckCircle2 className="h-8 w-8 text-emerald-400 mx-auto mb-2" />
+                  <p className="text-sm font-semibold text-zinc-700 dark:text-zinc-200">Sin presupuestos pendientes de seguimiento</p>
                 </Card>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {trackingPRs.map((pr) => {
-                    const colors = urgenciaColors[pr.urgencia];
-                    const telefono = (pr as any).clienteTelefono;
-                    return (
-                      <Card
-                        key={pr.id}
-                        className={`border-l-4 ${colors.border} hover:shadow-md transition-shadow cursor-pointer`}
-                        onClick={() => setSelected(pr)}
-                      >
-                        <div className="p-4 space-y-3">
-                          {/* Header: numero + dias */}
-                          <div className="flex items-start justify-between">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono text-sm font-bold text-zinc-800 dark:text-zinc-100">{pr.numero}</span>
-                                {(() => {
-                                  const cfg = statusConfig[pr.estado] || { label: pr.estado, variant: "outline" as const };
-                                  return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
-                                })()}
+                <Card className="p-0 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-zinc-200 bg-zinc-50 text-left text-[11px] font-semibold text-zinc-500 dark:border-zinc-700 dark:bg-zinc-800">
+                        <th className="px-2 py-1.5">Días</th>
+                        <th className="px-2 py-1.5">N°</th>
+                        <th className="px-2 py-1.5">Estado</th>
+                        <th className="px-2 py-1.5">Cliente</th>
+                        <th className="px-2 py-1.5 hidden md:table-cell">Vendedor</th>
+                        <th className="px-2 py-1.5 hidden sm:table-cell">Enviado</th>
+                        <th className="px-2 py-1.5 text-right">Subtotal s/IVA</th>
+                        <th className="px-2 py-1.5 hidden lg:table-cell">Motivo</th>
+                        <th className="px-2 py-1.5"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                      {trackingPRs.map((pr) => {
+                        const colors = urgenciaColors[pr.urgencia];
+                        const telefono = (pr as any).clienteTelefono;
+                        const cfg = statusConfig[pr.estado] || { label: pr.estado, variant: "outline" as const };
+                        return (
+                          <tr key={pr.id} onClick={() => setSelected(pr)} className="cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                            <td className="px-2 py-1 whitespace-nowrap">
+                              <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-semibold ${colors.badge}`} title={`${pr.diasSinRespuesta} ${pr.diasSinRespuesta === 1 ? "día" : "días"} sin respuesta`}>
+                                <span className={`h-2 w-2 rounded-full ${colors.dot}`} />{pr.diasSinRespuesta}d
+                              </span>
+                            </td>
+                            <td className="px-2 py-1 font-mono font-semibold whitespace-nowrap text-zinc-800 dark:text-zinc-100">{pr.numero}</td>
+                            <td className="px-2 py-1"><Badge variant={cfg.variant}>{cfg.label}</Badge></td>
+                            <td className="px-2 py-1 max-w-[220px] truncate font-medium text-zinc-700 dark:text-zinc-300" title={pr.clienteNombre}>{pr.clienteNombre}</td>
+                            <td className="px-2 py-1 hidden md:table-cell text-zinc-500 whitespace-nowrap">{(pr as any).vendedorNombre || "—"}</td>
+                            <td className="px-2 py-1 hidden sm:table-cell text-zinc-500 whitespace-nowrap">{formatDate(pr.fechaRef)}</td>
+                            <td className="px-2 py-1 text-right font-mono font-semibold whitespace-nowrap text-zinc-700 dark:text-zinc-200" title={`Total: ${formatCurrency(pr.total, pr.moneda)}`}>{formatCurrency(pr.subtotal, pr.moneda)}</td>
+                            <td className="px-2 py-1 hidden lg:table-cell max-w-[200px] truncate text-purple-700 dark:text-purple-300" title={pr.motivoRechazo || ""}>{pr.estado === "postergado" ? pr.motivoRechazo || "" : ""}</td>
+                            <td className="px-2 py-1" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-1">
+                                <select
+                                  value=""
+                                  onChange={(e) => {
+                                    const newEstado = e.target.value as PRStatus;
+                                    if (!newEstado) return;
+                                    if (newEstado === "rechazado") {
+                                      setRechazoModal(pr.id);
+                                      setMotivoRechazo("");
+                                    } else {
+                                      handleEstadoChange(pr.id, newEstado);
+                                    }
+                                  }}
+                                  className="h-6 rounded-md border border-zinc-200 bg-white px-1 text-[11px] text-zinc-600 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                                >
+                                  <option value="">Estado…</option>
+                                  {ESTADOS_MANUALES
+                                    .filter((s) => s !== pr.estado || s === "rechazado")
+                                    .map((s) => {
+                                      const c = statusConfig[s] || { label: s };
+                                      return <option key={s} value={s}>{c.label}</option>;
+                                    })}
+                                </select>
+                                {telefono && (
+                                  <a href={`tel:${telefono}`} title={`Llamar: ${telefono}`}
+                                    className="flex items-center gap-1 rounded-md bg-blue-50 px-1.5 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-100 dark:bg-blue-950/30 dark:text-blue-300 dark:hover:bg-blue-900/40">
+                                    <Phone className="h-3 w-3" />Llamar
+                                  </a>
+                                )}
                               </div>
-                              <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300 mt-1">{pr.clienteNombre}</p>
-                            </div>
-                            <div className={`flex flex-col items-center rounded-lg px-3 py-1.5 ${colors.badge}`}>
-                              <span className="text-xl font-bold leading-none">{pr.diasSinRespuesta}</span>
-                              <span className="text-[10px] font-medium uppercase mt-0.5">{pr.diasSinRespuesta === 1 ? "día" : "días"}</span>
-                            </div>
-                          </div>
-
-                          {/* Info */}
-                          <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div>
-                              <span className="text-zinc-400">Enviado</span>
-                              <p className="font-medium text-zinc-600 dark:text-zinc-300">{formatDate(pr.fechaRef)}</p>
-                            </div>
-                            <div>
-                              <span className="text-zinc-400">Sin respuesta</span>
-                              <p className={`font-medium ${pr.diasSinRespuesta >= 7 ? "text-red-600 dark:text-red-400 font-semibold" : pr.diasSinRespuesta >= 5 ? "text-orange-600 dark:text-orange-400 font-semibold" : "text-zinc-600 dark:text-zinc-300"}`}>
-                                {pr.diasSinRespuesta} {pr.diasSinRespuesta === 1 ? "día" : "días"}
-                              </p>
-                            </div>
-                            <div>
-                              <span className="text-zinc-400">Subtotal s/IVA</span>
-                              <p className="font-mono font-semibold text-zinc-700 dark:text-zinc-200">{formatCurrency(pr.subtotal, pr.moneda)}</p>
-                              <p className="text-[10px] text-zinc-400">Total: {formatCurrency(pr.total, pr.moneda)}</p>
-                            </div>
-                            <div>
-                              <span className="text-zinc-400">Vendedor</span>
-                              <p className="font-medium text-zinc-600 dark:text-zinc-300">{(pr as any).vendedorNombre || "—"}</p>
-                            </div>
-                          </div>
-
-                          {/* Motivo postergacion */}
-                          {pr.estado === "postergado" && pr.motivoRechazo && (
-                            <div className="rounded-md bg-purple-50 dark:bg-purple-950/30 p-2 text-xs text-purple-700 dark:text-purple-300">
-                              <span className="font-semibold">Motivo:</span> {pr.motivoRechazo}
-                            </div>
-                          )}
-
-                          {/* Acciones rapidas */}
-                          <div className="flex items-center gap-2 pt-1 border-t border-zinc-100 dark:border-zinc-800" onClick={(e) => e.stopPropagation()}>
-                            <select
-                              value=""
-                              onChange={(e) => {
-                                const newEstado = e.target.value as PRStatus;
-                                if (!newEstado) return;
-                                if (newEstado === "rechazado") {
-                                  setRechazoModal(pr.id);
-                                  setMotivoRechazo("");
-                                } else {
-                                  handleEstadoChange(pr.id, newEstado);
-                                }
-                              }}
-                              className="h-7 rounded-md border border-zinc-200 bg-white px-2 text-xs text-zinc-600 focus:border-orange-300 focus:outline-none dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-                            >
-                              <option value="">Cambiar estado...</option>
-                              {ESTADOS_MANUALES
-                                .filter((s) => s !== pr.estado || s === "rechazado")
-                                .map((s) => {
-                                  const cfg = statusConfig[s] || { label: s };
-                                  return <option key={s} value={s}>{cfg.label}</option>;
-                                })}
-                            </select>
-                            {telefono && (
-                              <a
-                                href={`tel:${telefono}`}
-                                className="flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:text-blue-300 dark:hover:bg-blue-900/40 transition-colors ml-auto"
-                              >
-                                <Phone className="h-3.5 w-3.5" />
-                                Llamar
-                              </a>
-                            )}
-                          </div>
-                        </div>
-                      </Card>
-                    );
-                  })}
-                </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </Card>
               )}
             </div>
           );
@@ -3152,7 +3187,7 @@ export default function PresupuestosPage() {
                               return <option key={s} value={s}>{cfg.label}</option>;
                             })}
                         </select>
-                        {canDeletePresupuestos && (
+                        {puedeEliminarPR(row) && (
                           <button
                             onClick={() => handleDelete(row.id)}
                             className="rounded p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40"
@@ -3266,12 +3301,12 @@ export default function PresupuestosPage() {
                 <button onClick={() => handleDuplicate(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Duplicar">
                   <Copy className="h-4 w-4" />
                 </button>
-                {canDeletePresupuestos && (
+                {puedeEliminarPR(selected) && (
                   <button onClick={() => handleDelete(selected.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
                     <Trash2 className="h-4 w-4" />
                   </button>
                 )}
-                <button onClick={() => setPanelFullscreen(!panelFullscreen)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
+                <button onClick={toggleFullscreen} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={panelFullscreen ? "Reducir" : "Ampliar"}>
                   <Maximize2 className="h-4 w-4" />
                 </button>
                 <button onClick={() => { setSelected(null); setPanelFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800">
@@ -3358,7 +3393,7 @@ export default function PresupuestosPage() {
                   <p className="text-xs text-zinc-500">Moneda</p>
                   <p className="text-sm font-medium">{selected.moneda}{selected.moneda === "USD" && (selected as any).cotizacionModalidad ? ` ${(selected as any).cotizacionModalidad === "billetes" ? "(Billete)" : "(Divisa)"}` : ""}{(selected as any).tipoCambio ? ` — TC: ${Number((selected as any).tipoCambio).toLocaleString("es-AR")}` : ""}</p>
                 </div>
-                <div>
+                {!ocultarCostos && <div>
                   {(() => {
                     // Margen real de hoy (costos y precios actuales de los renglones + envío interno): se recalcula cada vez que se abre el PR.
                     const m = margenPR({ moneda: selected.moneda, tipoCambio: selected.tipoCambio, tipoCambioDivisas: selected.tipoCambioDivisas, modalidadEmision: (selected as any).modalidadEmision, costoEnvioInterno: (selected as any).costoEnvioInterno, items: selected.items || [] });
@@ -3368,7 +3403,7 @@ export default function PresupuestosPage() {
                       <p className={`text-sm font-medium ${color}`}>{m.margenPct === null ? "—" : `${m.margenPct.toLocaleString("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}% · ${formatCurrency(m.ganancia, selected.moneda)}`}</p>
                     </>;
                   })()}
-                </div>
+                </div>}
                 <OcClienteBloque
                   pr={{ id: selected.id, ocCliente: (selected as any).ocCliente || "", ocClienteFecha: (selected as any).ocClienteFecha || "", archivoUrl: (selected as any).archivoUrl || "", archivoNombre: (selected as any).archivoNombre || "", notasInternas: String(selected.notasInternas || "") }}
                   sociedadId={sociedadActiva?.id}
@@ -3398,7 +3433,28 @@ export default function PresupuestosPage() {
 
               {/* Items table */}
               <div className="border-t border-zinc-200 pt-3 dark:border-zinc-700">
-                <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-1.5">Items ({selected.items.length})</h3>
+                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Items ({selected.items.length})</h3>
+                  <button type="button" onClick={toggleOcultarCostos} className="rounded-md border border-zinc-200 px-2 py-0.5 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800" title="Oculta costo, markup y margen (por ejemplo, para mostrarle la pantalla al cliente). Se recuerda en esta compu.">
+                    {ocultarCostos ? "Mostrar costos" : "Ocultar costos"}
+                  </button>
+                </div>
+                {(() => {
+                  // Franja de resumen: ítems · total · ganancia · margen · sin costo.
+                  const m = margenPR({ moneda: selected.moneda, tipoCambio: selected.tipoCambio, tipoCambioDivisas: selected.tipoCambioDivisas, modalidadEmision: (selected as any).modalidadEmision, costoEnvioInterno: (selected as any).costoEnvioInterno, items: selected.items || [] });
+                  const sinCosto = selected.items.filter((it) => !(Number(it.precioCosto) > 0)).length;
+                  const conAviso = selected.items.filter((it) => avisosRenglon({ cantidad: it.cantidad, unidad: it.unidad, precio: it.precioVenta, descripcion: it.descripcion }).length > 0).length;
+                  const color = m.margenPct === null ? "text-zinc-400" : m.margenPct < MARGEN_MINIMO_PR ? "text-red-600" : m.margenPct < MARGEN_MINIMO_PR + 5 ? "text-amber-600" : "text-emerald-600";
+                  return (
+                    <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-zinc-50 px-3 py-1.5 text-xs text-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-300">
+                      <span><b>{selected.items.length}</b> ítems</span>
+                      <span>Total <b className="font-mono">{formatCurrency(selected.total, selected.moneda)}</b></span>
+                      {!ocultarCostos && m.margenPct !== null && <span className={color}>Ganancia <b className="font-mono">{formatCurrency(m.ganancia, selected.moneda)}</b> · margen <b>{m.margenPct.toLocaleString("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</b></span>}
+                      {!ocultarCostos && sinCosto > 0 && <span className="text-amber-600">⚠️ {sinCosto} sin costo</span>}
+                      {conAviso > 0 && <span className="text-amber-600">⚠️ {conAviso} con aviso (precio 0 o cantidad con decimales)</span>}
+                    </div>
+                  );
+                })()}
                 {(() => {
                   const belowCostCount = selected.items.filter((item) => {
                     const costoConv = convertCosto(item.precioCosto, (item as any).costoMoneda || "ARS", selected.moneda, selected.tipoCambio || 0, (selected as any).tipoCambioDivisas || 0);
@@ -3411,15 +3467,34 @@ export default function PresupuestosPage() {
                     </div>
                   ) : null;
                 })()}
-                <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
+                {/* Celular: cada renglón como tarjeta */}
+                <div className="space-y-1.5 sm:hidden">
+                  {selected.items.map((item) => {
+                    const costoConv = convertCosto(item.precioCosto, (item as any).costoMoneda || "ARS", selected.moneda, selected.tipoCambio || 0, (selected as any).tipoCambioDivisas || 0);
+                    const belowCost = item.precioVenta < costoConv;
+                    const av = avisosRenglon({ cantidad: item.cantidad, unidad: item.unidad, precio: item.precioVenta, descripcion: item.descripcion });
+                    return (
+                      <div key={`card-${item.id}`} className={`rounded-lg border px-2.5 py-1.5 text-xs ${belowCost ? "border-red-200 bg-red-50/60 dark:border-red-900 dark:bg-red-950/20" : "border-zinc-200 dark:border-zinc-700"}`}>
+                        <p className="font-medium text-zinc-800 dark:text-zinc-100">{item.descripcion}</p>
+                        <div className="mt-0.5 flex flex-wrap items-center justify-between gap-x-2 text-zinc-500">
+                          <span>{item.codigo ? <span className="font-mono">{item.codigo} · </span> : null}{formatCantidad(item.cantidad)} {item.unidad} × <span className="font-mono">{formatCurrency(item.precioVenta, selected.moneda as "ARS" | "USD")}</span></span>
+                          <b className="font-mono text-zinc-800 dark:text-zinc-100">{formatCurrency(item.total, selected.moneda as "ARS" | "USD")}</b>
+                        </div>
+                        {!ocultarCostos && <p className="text-[10px] text-zinc-400">Costo {formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")} · markup {item.markupPorcentaje}%</p>}
+                        {av.length > 0 && <p className="text-[10px] text-amber-600">⚠️ {av.join(" · ")}</p>}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="hidden overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700 sm:block">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800">
                         <th className="px-3 py-1.5 text-left text-xs font-semibold text-zinc-500">Codigo</th>
                         <th className="px-3 py-1.5 text-left text-xs font-semibold text-zinc-500">Descripcion</th>
                         <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500">Cant.</th>
-                        <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">P. Costo</th>
-                        <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">Markup</th>
+                        {!ocultarCostos && <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">P. Costo</th>}
+                        {!ocultarCostos && <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500 hidden sm:table-cell">Markup</th>}
                         <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500">P. Venta</th>
                         <th className="px-3 py-1.5 text-right text-xs font-semibold text-zinc-500">Total</th>
                       </tr>
@@ -3428,18 +3503,19 @@ export default function PresupuestosPage() {
                       {selected.items.map((item) => {
                         const costoConv = convertCosto(item.precioCosto, (item as any).costoMoneda || "ARS", selected.moneda, selected.tipoCambio || 0, (selected as any).tipoCambioDivisas || 0);
                         const belowCost = item.precioVenta < costoConv;
+                        const av = avisosRenglon({ cantidad: item.cantidad, unidad: item.unidad, precio: item.precioVenta, descripcion: item.descripcion });
                         return (
                         <tr key={item.id} className={belowCost ? "bg-red-50/60 dark:bg-red-950/20" : ""}>
                           <td className="px-3 py-1.5 font-mono text-xs">{item.codigo}</td>
-                          <td className="px-3 py-1.5">{item.descripcion}</td>
-                          <td className="px-3 py-1.5 text-right">{item.cantidad} {item.unidad}</td>
-                          <td className="px-3 py-1.5 text-right font-mono hidden sm:table-cell">
+                          <td className="px-3 py-1.5">{item.descripcion}{av.length > 0 && <div className="text-[10px] text-amber-600" title="Es un aviso, no frena nada">⚠️ {av.join(" · ")}</div>}</td>
+                          <td className="px-3 py-1.5 text-right whitespace-nowrap">{formatCantidad(item.cantidad)} {item.unidad}</td>
+                          {!ocultarCostos && <td className="px-3 py-1.5 text-right font-mono hidden sm:table-cell">
                             <div>{formatCurrency(item.precioCosto, (item.costoMoneda?.startsWith("USD") ? "USD" : "ARS") as "ARS" | "USD")}</div>
                             {item.costoMoneda !== selected.moneda && costoConv > 0 && (
                               <div className="text-[10px] text-zinc-400">≈ {formatCurrency(costoConv, selected.moneda as "ARS" | "USD")}</div>
                             )}
-                          </td>
-                          <td className="px-3 py-1.5 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>
+                          </td>}
+                          {!ocultarCostos && <td className="px-3 py-1.5 text-right hidden sm:table-cell">{item.markupPorcentaje}%</td>}
                           <td className={`px-3 py-1.5 text-right font-mono ${belowCost ? "text-red-600 dark:text-red-400" : ""}`}>
                             <span className="inline-flex items-center gap-1">
                               {belowCost && <AlertTriangle className="h-3 w-3 shrink-0" />}
@@ -3673,9 +3749,22 @@ export default function PresupuestosPage() {
                 value={newPR.notas_internas}
                 onChange={(e) => setNewPR((p) => ({ ...p, notas_internas: e.target.value }))}
                 rows={4}
-                placeholder="Ej: Necesita válvulas para planta de gas, urgente para la semana que viene. Me va a mandar la lista por WhatsApp."
+                placeholder="Ej: 20 pares de botines con puntera talle 42, 50 guantes de nitrilo T9 y 10 cascos blancos. Urgente para la semana que viene."
                 className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-800 placeholder:text-zinc-400 focus:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-none"
               />
+              <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => { setExpressTexto(newPR.notas_internas); setSolicitudItems(true); setShowExpress(true); }}
+                  className="flex items-center gap-1 rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-400"
+                  title="La IA lee lo que escribiste, busca cada artículo en la lista de costos y te deja revisar antes de agregar">
+                  <Sparkles className="h-3 w-3" /> Armar con IA
+                </button>
+                {!solicitudItems && (
+                  <button type="button" onClick={() => setSolicitudItems(true)} className="flex items-center gap-1 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                    <Plus className="h-3 w-3" /> Elegir productos (como en un PR)
+                  </button>
+                )}
+                <span className="text-[11px] text-zinc-400">Las dos formas sirven: el texto queda en notas internas y los productos, como renglones.</span>
+              </div>
             </div>
           </div>
         ) : (
@@ -3954,8 +4043,8 @@ export default function PresupuestosPage() {
         </div>
         )}
 
-        {/* Items — solo en modo presupuesto completo */}
-        {(!esSolicitud || editingPRId) && <div className="mb-4">
+        {/* Items — en modo presupuesto, o en la solicitud si eligió cargar productos */}
+        {(!esSolicitud || editingPRId || solicitudItems) && <div className="mb-4">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-3">
               <label className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">Items</label>
@@ -4010,7 +4099,7 @@ export default function PresupuestosPage() {
               )}
             </div>
             <button
-              onClick={() => setShowExpress(true)}
+              onClick={() => { setExpressTexto(""); setShowExpress(true); }}
               className="flex items-center gap-1 rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-400 dark:hover:bg-orange-950/50 transition-colors"
             >
               <Sparkles className="h-3 w-3" /> Cotización express (IA)
@@ -4020,6 +4109,7 @@ export default function PresupuestosPage() {
           <CotizacionExpress
             open={showExpress}
             onClose={() => setShowExpress(false)}
+            textoInicial={expressTexto}
             prMoneda={newPR.moneda}
             tc={newPR.tipo_cambio}
             tcDivisas={newPR.tipo_cambio_divisas}
@@ -4278,7 +4368,8 @@ export default function PresupuestosPage() {
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="relative">
-                          <NumInput value={item.cantidad} onChange={(n) => updateNewPRItem(idx, "cantidad", n)} data-pr-cant=""
+                          <NumInput miles value={item.cantidad} onChange={(n) => updateNewPRItem(idx, "cantidad", n)} data-pr-cant=""
+                            title="Se escribe a la argentina: 1.000 = mil"
                             className="w-full rounded border border-zinc-200 px-1.5 py-1 text-xs text-right dark:border-zinc-700 dark:bg-zinc-800 dark:text-white focus:border-orange-400 focus:outline-none focus:ring-1 focus:ring-orange-100" />
                           {priceTiersMap[idx] && priceTiersMap[idx].length > 0 && (
                             <span title={`Precios escalonados:\n${priceTiersMap[idx].map(t => `${t.variante}: ${t.moneda === "USD" ? "US$" : "$"}${t.precio_neto}`).join("\n")}`}
@@ -4287,6 +4378,10 @@ export default function PresupuestosPage() {
                             </span>
                           )}
                         </div>
+                        {(() => {
+                          const av = avisosRenglon({ cantidad: item.cantidad, unidad: item.unidad, precio: item.precio_venta, descripcion: item.descripcion });
+                          return av.length > 0 ? <div className="mt-0.5 text-right text-[10px] leading-tight text-amber-600" title={`${av.join(" · ")} (es un aviso, se puede guardar igual)`}>⚠️ {av.join(" · ")}</div> : null;
+                        })()}
                       </td>
                       <td className="px-2 py-1.5">
                         <div className="flex items-center gap-1">
