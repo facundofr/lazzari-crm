@@ -35,6 +35,7 @@ import EnviarOCProveedor from "@/components/enviar-oc-proveedor";
 import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalizePurchaseCurrency } from "@/lib/own-stock-purchase-orders";
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
+import { margenPR, MARGEN_MINIMO_PR } from "@/lib/presupuesto-margen";
 import { convertirCostoPR, leerDolaresGuardados, fechaDolarPresupuesto, dolarAtrasado, etiquetaDolar, esCostoUsd, esCostoDivisa, tcParaCosto, type DolaresGuardados } from "@/lib/dolar-presupuesto";
 
 /** Number input that allows typing decimals (e.g. "10.") without losing the dot */
@@ -1632,6 +1633,9 @@ export default function PresupuestosPage() {
       const matchesEstado = selectedEstados.has(pr.estado);
       const matchesFacturado = selectedEstados.has("facturado") && prEsFacturado;
       if (!matchesEstado && !matchesFacturado) return false;
+    } else if (!search.trim() && (facturadoIds.has(pr.id) || pr.estado === "facturado")) {
+      // "Todos" no muestra los facturados (ocupan lugar): están en el botón "Facturado" y aparecen al buscar.
+      return false;
     }
     if (search) {
       const s = search.toLowerCase();
@@ -1657,15 +1661,28 @@ export default function PresupuestosPage() {
   const activePRs = presupuestos.filter(pr => !(pr as any).eliminado);
   const counts: Record<string, number> = { todos: activePRs.length, facturado: 0 };
   const totals: Record<string, { ARS: number; USD: number }> = {};
+  // Ganancia estimada de lo pendiente (para ver cuánto hay en juego y meterle pilas para cerrarlo).
+  const gananciaPendiente = { ARS: 0, USD: 0 };
+  // Los montos de los recuadros (Pendiente, Aprobado, Facturado) son solo del MES CORRIENTE, por fecha del PR.
+  const mesActual = todayAR().slice(0, 7);
+  const mesNombre = new Date(`${mesActual}-15T12:00:00`).toLocaleDateString("es-AR", { month: "long" });
+  const countsMes: Record<string, number> = {};
   activePRs.forEach((pr) => {
     const estado = (facturadoIds.has(pr.id) || pr.estado === "facturado") ? "facturado" : pr.estado;
     if (pr.estado !== "facturado") counts[pr.estado] = (counts[pr.estado] || 0) + 1;
     if (estado === "facturado") counts.facturado = (counts.facturado || 0) + 1;
+    if (String(pr.fecha || "").slice(0, 7) !== mesActual) return;
+    countsMes[estado] = (countsMes[estado] || 0) + 1;
     if (!totals[estado]) totals[estado] = { ARS: 0, USD: 0 };
     totals[estado][pr.moneda === "USD" ? "USD" : "ARS"] += pr.total;
     if (!totals.todos) totals.todos = { ARS: 0, USD: 0 };
     totals.todos[pr.moneda === "USD" ? "USD" : "ARS"] += pr.total;
+    if (pr.estado === "pendiente" && estado === "pendiente") {
+      gananciaPendiente[pr.moneda === "USD" ? "USD" : "ARS"] += margenPR({ moneda: pr.moneda, tipoCambio: pr.tipoCambio, tipoCambioDivisas: pr.tipoCambioDivisas, modalidadEmision: (pr as any).modalidadEmision, items: pr.items || [] }).ganancia;
+    }
   });
+  // El botón "Todos" cuenta solo lo que muestra (sin facturados).
+  counts.todos = Math.max(0, counts.todos - (counts.facturado || 0));
 
   // Sync existing OCs when PR items change
   async function syncOCsFromPR(prId: string, isManual: boolean): Promise<number> {
@@ -2665,20 +2682,26 @@ export default function PresupuestosPage() {
 
         {/* Totals by estado */}
         {!showPapelera && !vistaSeguimiento && (
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400" title="Los montos de estos recuadros son solo de los presupuestos del mes corriente">Montos de {mesNombre}</span>
             {(isAllSelected
               ? ["pendiente", "aprobado", "facturar", "facturado"] as const
               : [...selectedEstados].filter(s => s !== "todos") as string[]
             ).map((estado) => {
-              const t = totals[estado];
+              const t = totals[estado] || { ARS: 0, USD: 0 }; // sin movimientos este mes: se muestra en cero
               if (!t) return null;
               const cfg = statusConfig[estado as PRStatus] || { label: estado, variant: "outline" as const };
               return (
                 <div key={estado} className="flex items-baseline gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">{cfg.label} ({counts[estado] || 0})</span>
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">{cfg.label} ({countsMes[estado] || 0})</span>
                   {t.USD > 0 && <span className="font-mono text-[13px] font-bold text-zinc-900 dark:text-white">{formatCurrency(t.USD, "USD")}</span>}
                   {t.ARS > 0 && <span className={`font-mono ${t.USD > 0 ? "text-xs text-zinc-500 dark:text-zinc-400" : "text-[13px] font-bold dark:text-zinc-100"}`}>{t.USD > 0 ? "+ " : ""}{formatCurrency(t.ARS, "ARS")}</span>}
                   {t.USD === 0 && t.ARS === 0 && <span className="font-mono text-[13px] text-zinc-300 dark:text-zinc-600">—</span>}
+                  {estado === "pendiente" && (gananciaPendiente.USD !== 0 || gananciaPendiente.ARS !== 0) && (
+                    <span className="font-mono text-xs font-semibold text-emerald-600 dark:text-emerald-400" title="Ganancia estimada de los pendientes, descontando 7 % de gastos (2 % si es manual). Solo interno.">
+                      · Ganancia {gananciaPendiente.USD !== 0 ? formatCurrency(gananciaPendiente.USD, "USD") : ""}{gananciaPendiente.USD !== 0 && gananciaPendiente.ARS !== 0 ? " + " : ""}{gananciaPendiente.ARS !== 0 ? formatCurrency(gananciaPendiente.ARS, "ARS") : ""}
+                    </span>
+                  )}
                 </div>
               );
             })}
@@ -2958,6 +2981,28 @@ export default function PresupuestosPage() {
                     <span className="font-mono text-xs font-semibold block text-right whitespace-nowrap">
                       {formatCurrency(row.total, row.moneda)}
                     </span>
+                  );
+                },
+              },
+              {
+                key: "ganancia" as any, label: "Ganancia / Margen", className: "text-right", sortable: true,
+                sortValue: (row: Presupuesto) => {
+                  const m = margenPR({ moneda: row.moneda, tipoCambio: row.tipoCambio, tipoCambioDivisas: row.tipoCambioDivisas, modalidadEmision: (row as any).modalidadEmision, items: row.items || [] });
+                  if (m.margenPct === null) return null;
+                  // Para ordenar USD y pesos juntos, la ganancia en US$ se pasa a pesos con el dólar del PR.
+                  const tc = row.moneda === "USD" ? (Number(row.tipoCambio) || Number(row.tipoCambioDivisas) || 1) : 1;
+                  return m.ganancia * tc;
+                },
+                render: (row: Presupuesto) => {
+                  if (row.estado === "solicitud") return <span className="text-zinc-400 text-xs">—</span>;
+                  const m = margenPR({ moneda: row.moneda, tipoCambio: row.tipoCambio, tipoCambioDivisas: row.tipoCambioDivisas, modalidadEmision: (row as any).modalidadEmision, items: row.items || [] });
+                  if (m.margenPct === null) return <span className="text-zinc-400 text-xs" title="Este PR no tiene costos cargados">—</span>;
+                  const color = m.margenPct < MARGEN_MINIMO_PR ? "text-red-600 dark:text-red-400" : m.margenPct < MARGEN_MINIMO_PR + 5 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400";
+                  return (
+                    <div className="text-right whitespace-nowrap" title={`Venta ${formatCurrency(m.venta, row.moneda)} − ${m.gastosPct} % de gastos e impuestos − costo ${formatCurrency(m.costo, row.moneda)}. Solo interno.`}>
+                      <span className={`font-mono text-xs font-semibold ${color}`}>{m.margenPct.toLocaleString("es-AR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</span>
+                      <span className="ml-1.5 font-mono text-[11px] text-zinc-500 dark:text-zinc-400">{formatCurrency(m.ganancia, row.moneda)}</span>
+                    </div>
                   );
                 },
               },

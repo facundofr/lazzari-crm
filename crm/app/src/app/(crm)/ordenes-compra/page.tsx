@@ -2212,6 +2212,14 @@ export default function OrdenesCompraPage() {
       {/* Barra de acciones: un botón principal y lo ocasional en "Más" */}
       {canManageCompras && <div className="px-3 sm:px-4 pt-1.5 flex justify-end gap-2">
         <button
+          onClick={() => { setCargarFCPreselectedId(undefined); setCargarFCOpen(true); }}
+          title="Cargar una factura a mano, de a una, sin usar la IA"
+          className="flex h-8 items-center gap-1.5 px-3 text-sm font-medium rounded-lg border border-orange-500 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors"
+        >
+          <Plus className="h-4 w-4" />
+          Carga manual
+        </button>
+        <button
           onClick={abrirCargaMasiva}
           title="Una o varias facturas (y sus NC), de uno o varios proveedores: la IA las lee, las cruza con las OC y podés dejarla en segundo plano"
           className="flex h-8 items-center gap-1.5 px-3 text-sm font-semibold rounded-lg bg-orange-600 text-white hover:bg-orange-700 transition-colors"
@@ -2231,7 +2239,6 @@ export default function OrdenesCompraPage() {
             <div className="absolute right-0 z-40 mt-1 w-64 overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
               {[
                 { icon: Sparkles, label: "Ordenar OC abiertas", hint: "Traducir renglones y cerrar saldos que no llegan", onClick: () => setLimpiezaOpen(true) },
-                { icon: Upload, label: "Cargar una factura a mano", hint: "De a una, sin la carga masiva", onClick: () => { setCargarFCPreselectedId(undefined); setCargarFCOpen(true); } },
                 { icon: Sparkles, label: "Conciliar un proveedor (IA)", hint: "Facturas de un solo proveedor contra sus OC", onClick: () => setConciliarOpen(true) },
                 { icon: AlertTriangle, label: "Ítems sin proveedor", hint: "", onClick: openSinProveedorModal },
                 { icon: Merge, label: "Consolidar pedidos", hint: "", onClick: openConsolidateModal },
