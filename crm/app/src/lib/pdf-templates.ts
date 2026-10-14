@@ -5,6 +5,7 @@
  * Usage: each function returns an HTML string. Open in a new window and call print().
  */
 import { observacionesParaCliente } from "./observaciones-cliente";
+import { mayusculasNecesarias } from "./texto-mayusculas";
 
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { readFceMetadata, importeEnLetras } from "@/lib/fce-invoice";
@@ -93,17 +94,17 @@ function baseStyles(color: string) {
     .company-sub { font-size: 11px; color: #444; margin-top: 3px; font-weight: 600; }
     .company-detail { font-size: 9px; color: #444; margin-top: 1px; }
     .header-right { text-align: right; }
-    .doc-title { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; color: #333; font-weight: 700; }
+    .doc-title { font-size: 10px; letter-spacing: 0.2px; color: #333; font-weight: 700; }
     .doc-number { font-size: 15px; font-weight: 700; font-family: 'Courier New', Courier, monospace; color: #222; margin: 3px 0; }
-    .doc-badge { display: inline-block; padding: 2px 14px; border-radius: 10px; font-size: 9px; font-weight: 700; background: #f0f0f0; color: #333; text-transform: uppercase; letter-spacing: 0.5px; }
+    .doc-badge { display: inline-block; padding: 2px 14px; border-radius: 10px; font-size: 9px; font-weight: 700; background: #f0f0f0; color: #333; letter-spacing: 0.2px; }
     .doc-date { font-size: 10px; color: #333; margin-top: 5px; }
 
     /* Info boxes */
     .info-grid { display: flex; gap: 16px; margin-bottom: 18px; }
     .info-box { flex: 1; border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px 14px; }
-    .info-box-title { font-size: 8px; text-transform: uppercase; letter-spacing: 1.5px; color: ${color}; font-weight: 700; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #f0f0f0; }
+    .info-box-title { font-size: 8px; letter-spacing: 0.2px; color: ${color}; font-weight: 700; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid #f0f0f0; }
     .info-row { margin-bottom: 4px; }
-    .info-label { font-size: 8px; text-transform: uppercase; letter-spacing: 0.5px; color: #555; font-weight: 600; }
+    .info-label { font-size: 8px; letter-spacing: 0.2px; color: #555; font-weight: 600; }
     .info-value { font-size: 11px; font-weight: 500; color: #333; }
     .info-value-lg { font-size: 13px; font-weight: 700; color: #222; }
 
@@ -115,27 +116,27 @@ function baseStyles(color: string) {
     .doc-header-logo { height: 43px; display: block; margin-bottom: 3px; }
     .doc-marker-cell { width: 76px; text-align: center !important; vertical-align: top; }
     .doc-marker { display: inline-flex; min-width: 46px; min-height: 46px; padding: 5px 8px; border: 2px solid ${color}; color: ${color}; align-items: center; justify-content: center; font-size: 28px; line-height: 1; font-weight: 900; }
-    .doc-marker-code { margin-top: 3px; color: #333; font-size: 7px; font-weight: 700; text-transform: uppercase; }
+    .doc-marker-code { margin-top: 3px; color: #333; font-size: 7px; font-weight: 700; }
     .doc-marker-overlay { position: absolute; left: 50%; top: 12px; z-index: 2; transform: translateX(-50%); text-align: center; }
-    .legal-banner { margin: 6px 0 12px; padding: 4px 8px; border: 1px solid #dedede; color: #333; text-align: center; font-size: 8px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; }
+    .legal-banner { margin: 6px 0 12px; padding: 4px 8px; border: 1px solid #dedede; color: #333; text-align: center; font-size: 8px; font-weight: 800; letter-spacing: 0.2px; }
     .compact-strip { width: 100%; margin-bottom: 14px; border-top: 1px solid #dedede; border-bottom: 1px solid #dedede; border-collapse: collapse; table-layout: fixed; }
     .compact-strip td { padding: 8px 10px; vertical-align: top; border: 0; background: transparent !important; }
     .compact-strip td + td { border-left: 1px solid #e5e5e5; }
-    .compact-title { margin-bottom: 5px; color: ${color}; font-size: 8px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; }
+    .compact-title { margin-bottom: 5px; color: ${color}; font-size: 8px; font-weight: 800; letter-spacing: 0.2px; }
     .compact-primary { margin-bottom: 3px; color: #222; font-size: 12px; font-weight: 700; }
     .compact-line { margin-top: 2px; color: #444; font-size: 9px; line-height: 1.35; }
     .compact-line-aligned { display: grid; grid-template-columns: 76px minmax(0, 1fr); column-gap: 4px; align-items: baseline; }
     .compact-line-aligned .compact-label { margin-right: 0; }
-    .compact-label { color: #444; font-size: 7px; font-weight: 800; letter-spacing: .45px; text-transform: uppercase; margin-right: 4px; }
+    .compact-label { color: #444; font-size: 7px; font-weight: 800; letter-spacing: 0.2px; margin-right: 4px; }
 
     /* Items table */
-    .items-title { font-size: 8px; text-transform: uppercase; letter-spacing: 1.5px; color: ${color}; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #f0f0f0; }
+    .items-title { font-size: 8px; letter-spacing: 0.2px; color: ${color}; font-weight: 700; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #f0f0f0; }
     table { width: 100%; border-collapse: collapse; }
     td, th { overflow-wrap: break-word; word-break: break-word; }
-    thead th { background: #f7f7f7; padding: 8px 10px; text-align: left; font-size: 8px; text-transform: uppercase; letter-spacing: 0.8px; color: #333; font-weight: 700; border-bottom: 2px solid #e0e0e0; }
+    thead th { background: #f7f7f7; padding: 6px 8px; text-align: left; font-size: 8px; letter-spacing: 0.2px; color: #333; font-weight: 700; border-bottom: 2px solid #e0e0e0; }
     thead th.right { text-align: right; }
     thead th.center { text-align: center; }
-    tbody td { padding: 7px 10px; font-size: 11px; border-bottom: 1px solid #f0f0f0; color: #111; }
+    tbody td { padding: 5px 8px; font-size: 11px; border-bottom: 1px solid #f0f0f0; color: #111; }
     tbody tr:nth-child(even) td { background: #fafafa; }
     tbody tr:last-child td { border-bottom: 2px solid #e0e0e0; }
     .mono { font-family: 'Courier New', Courier, monospace; font-size: 10px; font-weight: 600; }
@@ -147,7 +148,7 @@ function baseStyles(color: string) {
     .pr-items { table-layout: fixed; }
     .pr-items th, .pr-items td { padding-left: 6px; padding-right: 6px; }
     .pr-items thead th { padding-top: 6px; padding-bottom: 6px; }
-    .pr-items tbody td { padding-top: 5px; padding-bottom: 5px; }
+    .pr-items tbody td { padding-top: 4px; padding-bottom: 4px; }
     .pr-items .pr-nowrap { white-space: nowrap; word-break: normal; overflow-wrap: normal; }
     .pr-items .pr-code { font-size: 10.5px; font-weight: 700; }
     .pr-document .footer { margin-top: 12px; padding-top: 5px; }
@@ -163,7 +164,7 @@ function baseStyles(color: string) {
 
     /* Observations */
     .obs-block { background: #f9f9f9; border: 1px solid #e8e8e8; border-radius: 6px; padding: 12px 14px; margin-top: 18px; }
-    .obs-title { font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #444; font-weight: 700; margin-bottom: 5px; }
+    .obs-title { font-size: 8px; letter-spacing: 0.2px; color: #444; font-weight: 700; margin-bottom: 5px; }
     .obs-text { font-size: 11px; color: #222; line-height: 1.5; white-space: pre-wrap; }
 
     /* Footer */
@@ -268,7 +269,7 @@ function facturaStyles(color: string) {
 
     /* CAE section */
     .cae-section { margin-top: 20px; padding: 14px 16px; border: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
-    .cae-label { font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #444; font-weight: 700; }
+    .cae-label { font-size: 8px; letter-spacing: 0.2px; color: #444; font-weight: 700; }
     .cae-value { font-size: 11px; font-weight: 700; font-family: 'Courier New', Courier, monospace; margin-top: 2px; color: #222; }
     .cae-vto { font-size: 9px; color: #333; margin-top: 3px; }
     .qr-box { text-align: center; }
@@ -343,7 +344,10 @@ export function generatePresupuestoPDF(
   const pages: PaginatedItem[][] = [];
   let currentPage: PaginatedItem[] = [];
   let usedRows = 0;
-  const pageCapacity = 12;
+  // Renglones visuales por hoja (cada hoja lleva el encabezado completo). La última reserva lugar para totales y observaciones.
+  const pageCapacity = 34;
+  // Líneas que ocupa un ítem (unos 44 caracteres por línea de descripción) más el espacio propio del renglón.
+  const filasItem = (it: PRItem) => Math.max(1, Math.min(6, Math.ceil(String(it.descripcion || "").length / 44))) + 0.4 + (descuentoRenglon(it) ? 1 : 0);
   // Descuento efectivo del renglón (artículo + general) contra el precio de lista; null si no hay.
   const descuentoRenglon = (it: PRItem): { lista: number; pct: number } | null => {
     const lista = Number(it.precioLista) || 0;
@@ -355,7 +359,7 @@ export function generatePresupuestoPDF(
   // Los renglones automáticos de costo/margen son internos: nunca se imprimen para el cliente.
   const obsCliente = observacionesParaCliente(pr.observaciones);
   pr.items.forEach((item, originalIndex) => {
-    const visualRows = Math.max(1, Math.min(3, Math.ceil(String(item.descripcion || "").length / 68))) + (descuentoRenglon(item) ? 1 : 0);
+    const visualRows = filasItem(item);
     if (currentPage.length > 0 && usedRows + visualRows > pageCapacity) {
       pages.push(currentPage);
       currentPage = [];
@@ -365,6 +369,20 @@ export function generatePresupuestoPDF(
     usedRows += visualRows;
   });
   if (currentPage.length > 0 || pages.length === 0) pages.push(currentPage);
+  // Si los totales no entran en la última hoja, se pasan los últimos ítems a una hoja nueva.
+    const reservaTotales = 5 + (obsCliente ? Math.min(8, 2 + Math.ceil(obsCliente.length / 110) + obsCliente.split(/\r?\n/).length) : 0);
+  const ultima = pages[pages.length - 1];
+  const filasUltima = ultima.reduce((sum, p) => sum + filasItem(p.item), 0);
+  if (ultima.length > 1 && filasUltima + reservaTotales > pageCapacity) {
+    const nueva: PaginatedItem[] = [];
+    let filas = filasUltima;
+    while (ultima.length > 1 && filas + reservaTotales > pageCapacity) {
+      const movido = ultima.pop()!;
+      filas -= filasItem(movido.item);
+      nueva.unshift(movido);
+    }
+    pages.push(nueva);
+  }
 
   const clientStrip = `
 <table class="compact-strip">
@@ -396,11 +414,11 @@ export function generatePresupuestoPDF(
   <tr><td></td><td style="width:260px">
     ${isManual ? `
       <table style="width:100%;border-collapse:collapse">
-        <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(manualTotal, mon)}</td></tr>
+        <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(manualTotal, mon)}</td></tr>
       </table>` : isB ? `
       <table style="width:100%;border-collapse:collapse">
         <tr><td style="font-size:11px;color:#333;padding:5px 0">Subtotal (IVA incluido)</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(pr.total, mon)}</td></tr>
-        <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
+        <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
       </table>
       <div style="margin-top:10px;padding-top:8px;border-top:1px solid #bbb">
         <div style="font-size:9px;font-weight:700;color:#555;line-height:1.35">Régimen de Transparencia Fiscal al Consumidor (Ley 27.743)</div>
@@ -409,7 +427,7 @@ export function generatePresupuestoPDF(
       <table style="width:100%;border-collapse:collapse">
         <tr><td style="font-size:11px;color:#333;padding:5px 0">Subtotal</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(pr.subtotal, mon)}</td></tr>
         <tr><td style="font-size:11px;color:#333;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(pr.iva, mon)}</td></tr>
-        <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
+        <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(pr.total, mon)}</td></tr>
       </table>`}
     ${hayDescuento ? `<div style="margin-top:6px;font-size:9px;color:#666;text-align:right">${Number(pr.descuentoGeneralPorcentaje) > 0 ? `Incluye descuento general del ${Number(pr.descuentoGeneralPorcentaje).toLocaleString("es-AR")}%. ` : ""}Los precios ya tienen el descuento aplicado.</div>` : ""}
   </td></tr>
@@ -423,7 +441,7 @@ export function generatePresupuestoPDF(
       return `<tr>
         <td class="center pr-nowrap">${originalIndex + 1}</td>
         <td class="mono pr-code pr-nowrap">${textoSeguro(it.codigo)}</td>
-        <td>${textoSeguro(it.descripcion)}${(() => {
+        <td>${textoSeguro(mayusculasNecesarias(it.descripcion))}${(() => {
           const d = descuentoRenglon(it);
           if (!d) return "";
           const lista = isB ? d.lista * (1 + ivaPct / 100) : d.lista;
@@ -458,12 +476,12 @@ ${pageIndex > 0 ? `<div class="pr-continuation-label">Continuación del detalle 
 <table class="pr-items">
   <thead><tr>
     <th class="center pr-nowrap" style="width:34px">#</th>
-    <th class="pr-nowrap" style="width:96px">Código</th>
+    <th class="pr-nowrap" style="width:84px">Código</th>
     <th>Descripción</th>
-    <th class="right pr-nowrap" style="width:62px">Cant.</th>
+    <th class="right pr-nowrap" style="width:56px">Cant.</th>
     <th class="center pr-nowrap" style="width:42px">Unid.</th>
-    <th class="right pr-nowrap" style="width:104px">${isB ? "P. Unit. final" : "P. Unitario"}</th>
-    <th class="right pr-nowrap" style="width:112px">${isB ? "Total final" : isManual ? "Total" : "Subtotal"}</th>
+    <th class="right pr-nowrap" style="width:96px">${isB ? "P. Unit. final" : "P. Unitario"}</th>
+    <th class="right pr-nowrap" style="width:104px">${isB ? "Total final" : isManual ? "Total" : "Subtotal"}</th>
   </tr></thead>
   <tbody>${itemRows}</tbody>
 </table>
@@ -482,8 +500,8 @@ ${documentFooter(soc, `${pr.numero} · Página ${pageNumber} de ${pages.length}`
   .pr-page { min-height:265mm; display:flex; flex-direction:column; }
   .pr-page + .pr-page { page-break-before:always; }
   .pr-page-footer { margin-top:auto; }
-  .pr-continuation-label { margin:-4px 0 8px; padding:5px 8px; border-left:3px solid ${c}; background:#fafafa; color:#555; font-size:8px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; }
-  .pr-continues { margin-top:12px; padding:7px 10px; border:1px solid ${c}; color:${c}; text-align:right; font-size:9px; font-weight:800; text-transform:uppercase; letter-spacing:.7px; }
+  .pr-continuation-label { margin:-4px 0 8px; padding:5px 8px; border-left:3px solid ${c}; background:#fafafa; color:#555; font-size:8px; font-weight:700; letter-spacing: 0.2px; }
+  .pr-continues { margin-top:12px; padding:7px 10px; border:1px solid ${c}; color:${c}; text-align:right; font-size:9px; font-weight:800; letter-spacing: 0.2px; }
   @media print { .pr-page { min-height:265mm; } .pr-page:not(:last-child) { page-break-after:always; } }
 </style></head><body>${pageHtml}</body></html>`;
 }
@@ -555,13 +573,13 @@ export function generateFacturaPDF(
 
   const compNum = `${String(f.punto_venta).padStart(4, "0")}-${String(f.numero).padStart(8, "0")}`;
 
-  const tipoLabel = f.tipo === "X" ? "FACTURA (INTERNA)"
-    : f.tipo.startsWith("NCE") ? "NOTA DE CRÉDITO ELECTRÓNICA"
-    : f.tipo.startsWith("NC") ? "NOTA DE CRÉDITO"
-    : f.tipo.startsWith("NDE") ? "NOTA DE DÉBITO ELECTRÓNICA"
-    : f.tipo.startsWith("ND") ? "NOTA DE DÉBITO"
-    : f.tipo.startsWith("FCE") ? "FACTURA DE CRÉDITO ELECTRÓNICA MiPyME"
-    : "FACTURA";
+  const tipoLabel = f.tipo === "X" ? "Factura (interna)"
+    : f.tipo.startsWith("NCE") ? "Nota de crédito electrónica"
+    : f.tipo.startsWith("NC") ? "Nota de crédito"
+    : f.tipo.startsWith("NDE") ? "Nota de débito electrónica"
+    : f.tipo.startsWith("ND") ? "Nota de débito"
+    : f.tipo.startsWith("FCE") ? "Factura de crédito electrónica MiPyME"
+    : "Factura";
 
   const codMap: Record<string, number> = { FA: 1, FB: 6, FC: 11, X: 0, NCA: 3, NCB: 8, NDA: 2, NDB: 7, FCEA: 201, FCEB: 206, NCEA: 203, NCEB: 208 };
   const codTipo = String(codMap[f.tipo] || 0).padStart(3, "0");
@@ -582,7 +600,7 @@ export function generateFacturaPDF(
   const itemRows = f.items.length > 0 ? f.items.map((it, i) => `
     <tr>
       <td class="center">${i + 1}</td>
-      <td>${it.descripcion}</td>
+      <td>${mayusculasNecesarias(it.descripcion)}</td>
       <td class="right mono">${it.cantidad}</td>
       <td class="right mono">${formatCurrency(Number(it.precio_unitario), mon)}</td>
       ${hideItemIva ? "" : `<td class="right">${it.iva_porcentaje}%</td>`}
@@ -598,12 +616,12 @@ export function generateFacturaPDF(
   const totalsHtml = isManualX
     ? `<table style="width:100%;border-collapse:collapse">
         <tr><td style="${trStyle};color:#777">Comprobante interno sin IVA</td><td></td></tr>
-        <tr><td style="${trFinal}">TOTAL (${mon})</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
+        <tr><td style="${trFinal}">Total (${mon})</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
        </table>`
     : isB
     ? `<table style="width:100%;border-collapse:collapse">
         <tr><td style="${trStyle};color:#777">Precios finales con IVA incluido</td><td></td></tr>
-        <tr><td style="${trFinal}">TOTAL (${mon})</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
+        <tr><td style="${trFinal}">Total (${mon})</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
        </table>
        <div style="margin-top:10px;padding-top:8px;border-top:1px solid #bbb">
          <div style="font-size:9px;font-weight:700;color:#555;line-height:1.35">Régimen de Transparencia Fiscal al Consumidor (Ley 27.743)</div>
@@ -612,7 +630,7 @@ export function generateFacturaPDF(
     : `<table style="width:100%;border-collapse:collapse">
         <tr><td style="${trStyle}">Neto gravado</td><td style="${tdMonoR}">${formatCurrency(Number(f.subtotal), mon)}</td></tr>
         <tr><td style="${trStyle}">IVA 21%</td><td style="${tdMonoR}">${formatCurrency(Number(f.iva), mon)}</td></tr>
-        <tr><td style="${trFinal}">TOTAL</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
+        <tr><td style="${trFinal}">Total</td><td style="${trFinal};${tdFinalR}">${formatCurrency(Number(f.total), mon)}</td></tr>
        </table>`;
 
   return `<!DOCTYPE html>
@@ -679,7 +697,7 @@ ${f.cae ? `
 <table style="width:100%;margin-top:20px;padding:14px 16px;border:1px solid #ddd;border-collapse:collapse">
   <tr>
     <td style="vertical-align:top">
-      <div style="font-size:8px;text-transform:uppercase;letter-spacing:1px;color:#444;font-weight:700">CAE N°</div>
+      <div style="font-size:8px;letter-spacing: 0.2px;color:#444;font-weight:700">CAE N°</div>
       <div style="font-size:11px;font-weight:700;font-family:'Courier New',monospace;margin-top:2px;color:#222">${f.cae}</div>
       ${f.cae_vencimiento ? `<div style="font-size:9px;color:#444;margin-top:3px">Fecha de vto. de CAE: ${formatDate(f.cae_vencimiento)}</div>` : ""}
     </td>
@@ -808,7 +826,7 @@ export function generateRemitoPDF(
     ? r.items.map((it, i) => `
       <tr>
         <td class="center">${i + 1}</td>
-        <td>${it.descripcion}</td>
+        <td>${mayusculasNecesarias(it.descripcion)}</td>
         <td class="right bold">${it.cantidad}</td>
         <td class="center">${it.unidad || "u"}</td>
       </tr>`).join("")
@@ -850,7 +868,7 @@ export function generateRemitoPDF(
   // CAI section styles
   const caiStyles = hasCAI ? `
     .cai-section { margin-top: 20px; padding: 14px 16px; border: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; }
-    .cai-label { font-size: 8px; text-transform: uppercase; letter-spacing: 1px; color: #444; font-weight: 700; }
+    .cai-label { font-size: 8px; letter-spacing: 0.2px; color: #444; font-weight: 700; }
     .cai-value { font-size: 11px; font-weight: 700; font-family: 'Courier New', Courier, monospace; margin-top: 2px; color: #222; }
     .cai-vto { font-size: 9px; color: #333; margin-top: 3px; }
   ` : "";
@@ -988,7 +1006,7 @@ export function generateOrdenCompraPDF(
     <tr>
       <td class="center">${i + 1}</td>
       <td class="mono">${it.codigo || ""}</td>
-      <td>${it.descripcion}</td>
+      <td>${mayusculasNecesarias(it.descripcion)}</td>
       <td class="right">${it.cantidad}</td>
       <td class="center">${it.unidad || "u"}</td>
       <td class="right mono">${formatCurrency(Number(it.precio_unitario), mon)}</td>
@@ -1050,7 +1068,7 @@ ${documentHeader(soc, {
     <table style="width:100%;border-collapse:collapse">
       <tr><td style="font-size:11px;color:#333;padding:5px 0">Subtotal</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(Number(oc.subtotal), mon)}</td></tr>
       <tr><td style="font-size:11px;color:#333;padding:5px 0">IVA</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(Number(oc.iva), mon)}</td></tr>
-      <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(Number(oc.total), mon)}</td></tr>
+      <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(Number(oc.total), mon)}</td></tr>
     </table>
   </td></tr>
 </table>
@@ -1326,7 +1344,7 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
           ${totalCheques > 0 ? `<tr><td style="font-size:11px;color:#333;padding:5px 0">Total Cheques</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(totalCheques, mon)}</td></tr>` : ""}
           ${totalPagosDirectos > 0 ? `<tr><td style="font-size:11px;color:#333;padding:5px 0">Total pagos directos</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(totalPagosDirectos, mon)}</td></tr>` : ""}
           ${totalRetenciones > 0 ? `<tr><td style="font-size:11px;color:#333;padding:5px 0">Total Retenciones</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:600;color:#111">${formatCurrency(totalRetenciones, mon)}</td></tr>` : ""}
-          <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">TOTAL (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalGeneral, mon)}</td></tr>
+          <tr><td style="font-size:12px;font-weight:700;color:#222;padding:8px 0;border-top:2px solid #222">Total (${mon})</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:12px;font-weight:700;padding:8px 0;border-top:2px solid #222">${formatCurrency(totalGeneral, mon)}</td></tr>
           ${saldoFavorGenerado > 0.01 ? `<tr><td style="font-size:11px;font-weight:700;color:#047857;padding:7px 0">Crédito a nuestro favor</td><td style="text-align:right;font-family:'Courier New',monospace;font-size:11px;font-weight:700;color:#047857">${formatCurrency(saldoFavorGenerado, mon)}</td></tr>` : ""}
         </table>
       </td></tr>
@@ -1356,16 +1374,16 @@ export function generateOrdenPagoPDF(op: OPData, soc: SociedadPDF): string {
       <table style="width:100%;margin-bottom:18px;border-collapse:separate;border-spacing:16px 0">
         <tr>
           <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
-            <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">A - Agente de retenci\u00F3n</div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">Raz\u00F3n Social</div><div style="font-size:11px;font-weight:500;color:#333">${soc.razonSocial}</div></div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${soc.cuit}</div></div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${soc.domicilio}</div></div>
+            <div style="font-size:8px;letter-spacing: 0.2px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">A - Agente de retenci\u00F3n</div>
+            <div class="info-row"><div style="font-size:8px;letter-spacing: 0.2px;color:#444;font-weight:600">Raz\u00F3n Social</div><div style="font-size:11px;font-weight:500;color:#333">${soc.razonSocial}</div></div>
+            <div class="info-row"><div style="font-size:8px;letter-spacing: 0.2px;color:#444;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${soc.cuit}</div></div>
+            <div class="info-row"><div style="font-size:8px;letter-spacing: 0.2px;color:#444;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${soc.domicilio}</div></div>
           </td>
           <td style="width:50%;border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;vertical-align:top">
-            <div style="font-size:8px;text-transform:uppercase;letter-spacing:1.5px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">B - Sujeto retenido</div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">Raz\u00F3n Social</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.razon_social}</div></div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.cuit ? fmtCuit(op.proveedor.cuit) : "\u2014"}</div></div>
-            <div class="info-row"><div style="font-size:8px;text-transform:uppercase;letter-spacing:0.5px;color:#444;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.direccion || "\u2014"}</div></div>
+            <div style="font-size:8px;letter-spacing: 0.2px;color:${c};font-weight:700;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid #f0f0f0">B - Sujeto retenido</div>
+            <div class="info-row"><div style="font-size:8px;letter-spacing: 0.2px;color:#444;font-weight:600">Raz\u00F3n Social</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.razon_social}</div></div>
+            <div class="info-row"><div style="font-size:8px;letter-spacing: 0.2px;color:#444;font-weight:600">CUIT</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.cuit ? fmtCuit(op.proveedor.cuit) : "\u2014"}</div></div>
+            <div class="info-row"><div style="font-size:8px;letter-spacing: 0.2px;color:#444;font-weight:600">Domicilio</div><div style="font-size:11px;font-weight:500;color:#333">${op.proveedor.direccion || "\u2014"}</div></div>
           </td>
         </tr>
       </table>
