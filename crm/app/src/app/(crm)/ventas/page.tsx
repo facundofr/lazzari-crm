@@ -155,9 +155,9 @@ export default function VentasPage() {
     const ventaUrl = new URLSearchParams(window.location.search).get("venta");
     if (ventaUrl) { setSelectedVentaId(ventaUrl); setBandeja("todas"); return; }
     const guardada = leerLocal("ventas.bandeja");
-    if (guardada && BANDEJAS.some(b => b.key === guardada)) setBandeja(guardada as BandejaVenta);
+    if (guardada && BANDEJAS.some(b => b.key === guardada)) { setBandeja(guardada as BandejaVenta); if (guardada === "facturar") setSortOrder("asc"); }
   }, []);
-  function elegirBandeja(b: BandejaVenta) { setBandeja(b); guardarLocal("ventas.bandeja", b); }
+  function elegirBandeja(b: BandejaVenta) { setBandeja(b); guardarLocal("ventas.bandeja", b); if (b === "facturar") setSortOrder("asc"); }
 
   const fetchData = useCallback(async () => {
     const request = ++ventasRequest.current;
@@ -285,7 +285,9 @@ export default function VentasPage() {
     return ventasFiltradas
       .filter(v => { const e = etapas.get(v.presupuesto.id); return e && enBandeja(e, bandeja); })
       .sort((a, b) => {
-        const da = a.presupuesto.fecha || "", db = b.presupuesto.fecha || "";
+        // Para facturar: manda la fecha de la OC del cliente (la más vieja se puede facturar con fecha anterior).
+        const clave = (v: Venta) => (bandeja === "facturar" ? v.presupuesto.oc_cliente_fecha : null) || v.presupuesto.fecha || "";
+        const da = clave(a), db = clave(b);
         return sortOrder === "desc" ? db.localeCompare(da) : da.localeCompare(db);
       });
   }, [ventasFiltradas, etapas, bandeja, sortOrder]);
@@ -471,7 +473,7 @@ export default function VentasPage() {
                             <p className="max-w-[16rem] truncate text-zinc-700 dark:text-zinc-300 leading-tight" title={p.clientes?.razon_social}>{p.clientes?.razon_social}</p>
                             <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                               {p.vendedor_profile?.full_name && <span className="text-[11px] text-zinc-400">{p.vendedor_profile.full_name}</span>}
-                              {p.oc_cliente && <span className="rounded bg-orange-100 px-1.5 text-[10px] font-semibold text-orange-700 dark:bg-orange-900/40 dark:text-orange-300" title={p.oc_cliente_fecha ? `OC del ${formatDate(p.oc_cliente_fecha)}` : undefined}>OC {p.oc_cliente}</span>}
+                              {p.oc_cliente && <span className="rounded bg-orange-100 px-1.5 text-[10px] font-semibold text-orange-700 dark:bg-orange-900/40 dark:text-orange-300" title={p.oc_cliente_fecha ? `OC del ${formatDate(p.oc_cliente_fecha)}` : undefined}>OC {p.oc_cliente}{p.oc_cliente_fecha ? ` · ${formatDate(p.oc_cliente_fecha)}` : ""}</span>}
                               {superaLimite(v) && <span className="inline-flex items-center gap-0.5 rounded bg-red-100 px-1.5 text-[10px] font-semibold text-red-700 dark:bg-red-950/40 dark:text-red-300"><AlertCircle className="h-3 w-3" /> Límite de crédito</span>}
                             </div>
                           </td>

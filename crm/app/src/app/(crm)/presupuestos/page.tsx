@@ -6,6 +6,7 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { Modal } from "@/components/ui/modal";
+import { OcClienteBloque } from "@/components/presupuestos/oc-cliente-bloque";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
@@ -3308,64 +3309,12 @@ export default function PresupuestosPage() {
                   <p className="text-xs text-zinc-500">Markup general</p>
                   <p className="text-sm font-medium">{selected.markupGeneral}%</p>
                 </div>
-                <div>
-                  <p className="text-xs text-zinc-500">OC del cliente</p>
-                  {(() => {
-                    const ocActual: string = (selected as any).ocCliente || "";
-                    const exOcs = String(selected.notasInternas || "").split("\n").filter(l => l.startsWith("EX OC:"));
-                    // Editable siempre, en cualquier estado. Si se reemplaza una OC, la anterior queda
-                    // registrada en las notas internas como "EX OC: ..." para no perder la trazabilidad.
-                    const editarOc = async () => {
-                      const ingresada = prompt(ocActual ? `OC actual: ${ocActual}\n\nNuevo número de OC del cliente (la actual queda registrada como EX OC):` : "Número de OC del cliente:", ocActual);
-                      if (ingresada === null) return;
-                      const nueva = ingresada.trim();
-                      if (nueva === ocActual) return;
-                      const cambios: Record<string, unknown> = { oc_cliente: nueva || null };
-                      let notas = String(selected.notasInternas || "");
-                      if (ocActual) {
-                        const quien = profile?.full_name ? ` por ${profile.full_name}` : "";
-                        notas = `${notas ? `${notas}\n` : ""}EX OC: ${ocActual} (reemplazada el ${formatDate(todayAR())}${quien})`;
-                        cambios.notas_internas = notas;
-                      }
-                      let ocClienteUpdate = supabase.from("presupuestos").update(cambios as any).eq("id", selected.id);
-                      if (sociedadActiva?.id) ocClienteUpdate = ocClienteUpdate.eq("sociedad_id" as any, sociedadActiva.id);
-                      const { data: updated, error } = await ocClienteUpdate.select("oc_cliente").maybeSingle();
-                      if (error || !updated) {
-                        toast.error(`No se pudo guardar la OC${error?.message ? `: ${error.message}` : ". Verificá tus permisos y la sociedad activa."}`);
-                        return;
-                      }
-                      setSelected({ ...selected, ocCliente: nueva, notasInternas: notas } as any);
-                      await fetchPresupuestos();
-                      toast.success(ocActual ? `OC actualizada. La anterior quedó como EX OC: ${ocActual}` : "OC del cliente guardada");
-                    };
-                    return (
-                      <div>
-                        {ocActual ? (
-                          <div className="flex items-center gap-2">
-                            <p className="text-sm font-medium font-mono text-blue-600 dark:text-blue-400">{ocActual}</p>
-                            <button onClick={editarOc} className="text-xs text-orange-500 hover:text-orange-600 underline underline-offset-2" title="Cambiar la OC del cliente">Editar</button>
-                          </div>
-                        ) : (
-                          <button onClick={editarOc} className="text-sm text-orange-500 hover:text-orange-600 underline underline-offset-2">+ Adjuntar OC</button>
-                        )}
-                        {exOcs.map((l, k) => <p key={k} className="mt-0.5 text-[11px] text-zinc-400 font-mono">{l}</p>)}
-                      </div>
-                    );
-                  })()}
-                  <div className="mt-2">
-                    <label className="text-[11px] text-zinc-400">Fecha de la OC</label>
-                    <input type="date" value={(selected as any).ocClienteFecha || ""}
-                      onChange={async (e) => {
-                        const value = e.target.value || null;
-                        let updateQuery = supabase.from("presupuestos").update({ oc_cliente_fecha: value } as any).eq("id", selected.id);
-                        if (sociedadActiva?.id) updateQuery = updateQuery.eq("sociedad_id" as any, sociedadActiva.id);
-                        const { data: updated, error } = await updateQuery.select("oc_cliente_fecha").maybeSingle();
-                        if (error || !updated) { toast.error(`No se pudo guardar la fecha de la OC${error?.message ? `: ${error.message}` : ". Verificá tus permisos y la sociedad activa."}`); return; }
-                        setSelected({ ...selected, ocClienteFecha: value } as any);
-                      }}
-                      className="mt-0.5 rounded-md border border-zinc-200 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
-                  </div>
-                </div>
+                <OcClienteBloque
+                  pr={{ id: selected.id, ocCliente: (selected as any).ocCliente || "", ocClienteFecha: (selected as any).ocClienteFecha || "", archivoUrl: (selected as any).archivoUrl || "", archivoNombre: (selected as any).archivoNombre || "", notasInternas: String(selected.notasInternas || "") }}
+                  sociedadId={sociedadActiva?.id}
+                  usuario={profile?.full_name || undefined}
+                  onGuardado={async (c) => { setSelected({ ...selected, ...c, ocCliente: c.ocCliente ?? (selected as any).ocCliente, ocClienteFecha: c.ocClienteFecha ?? (selected as any).ocClienteFecha, archivoUrl: c.archivoUrl ?? (selected as any).archivoUrl, archivoNombre: c.archivoNombre ?? (selected as any).archivoNombre, notasInternas: c.notasInternas ?? selected.notasInternas } as any); await fetchPresupuestos(); }}
+                />
                 {(selected.estado === "aprobado" || selected.estado === "facturar") && (
                   <div className="col-span-2">
                     <a
@@ -3385,59 +3334,6 @@ export default function PresupuestosPage() {
                     <p className="text-sm font-medium">{formatDate(selected.enviadoAt)}</p>
                   </div>
                 )}
-                <div>
-                  <p className="text-xs text-zinc-500 flex items-center gap-1"><Paperclip className="h-3 w-3" /> Archivo adjunto</p>
-                  {(selected as any).archivoUrl ? (
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <a href={(selected as any).archivoUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-sm text-blue-600 hover:underline dark:text-blue-400 truncate max-w-[180px]">
-                        <FileText className="h-3.5 w-3.5 shrink-0" />
-                        {(selected as any).archivoNombre || "Descargar"}
-                      </a>
-                      <button
-                        onClick={async () => {
-                          const path = `pr/${selected.id}/${(selected as any).archivoNombre}`;
-                          await supabase.storage.from("presupuestos").remove([path]);
-                          let clearFile = supabase.from("presupuestos").update({ archivo_url: null, archivo_nombre: null } as any).eq("id", selected.id);
-                          if (sociedadActiva?.id) clearFile = clearFile.eq("sociedad_id" as any, sociedadActiva.id);
-                          await clearFile;
-                          setSelected({ ...selected, archivoUrl: null, archivoNombre: null } as any);
-                          await fetchPresupuestos();
-                          toast.success("Archivo eliminado");
-                        }}
-                        className="text-red-400 hover:text-red-600"
-                        title="Eliminar archivo"
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <label className="flex items-center gap-1 cursor-pointer text-sm text-zinc-400 hover:text-orange-600 transition-colors mt-0.5">
-                      <Upload className="h-3.5 w-3.5" />
-                      <span>Subir archivo</span>
-                      <input type="file" className="hidden" onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        const path = `pr/${selected.id}/${file.name}`;
-                        const { error: upErr } = await supabase.storage.from("presupuestos").upload(path, file, { upsert: true });
-                        if (upErr) { toast.error("Error al subir archivo"); return; }
-                        const { data: urlData } = supabase.storage.from("presupuestos").getPublicUrl(path);
-                        let attachFile = supabase.from("presupuestos").update({ archivo_url: urlData.publicUrl, archivo_nombre: file.name } as any).eq("id", selected.id);
-                        if (sociedadActiva?.id) attachFile = attachFile.eq("sociedad_id" as any, sociedadActiva.id);
-                        const { data: updated, error: attachError } = await attachFile.select("archivo_url").maybeSingle();
-                        if (attachError || !updated) {
-                          await supabase.storage.from("presupuestos").remove([path]);
-                          toast.error(`El archivo se subió pero no se pudo vincular al PR${attachError?.message ? `: ${attachError.message}` : ". Verificá tus permisos y la sociedad activa."}`);
-                          e.target.value = "";
-                          return;
-                        }
-                        setSelected({ ...selected, archivoUrl: urlData.publicUrl, archivoNombre: file.name } as any);
-                        await fetchPresupuestos();
-                        toast.success("Archivo adjuntado");
-                        e.target.value = "";
-                      }} />
-                    </label>
-                  )}
-                </div>
               </div>
 
               {/* Items table */}

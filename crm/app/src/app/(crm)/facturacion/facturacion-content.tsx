@@ -2527,6 +2527,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
         documentType="factura"
         sociedadId={sociedadActiva?.id}
         suggestedEmails={emailModal.suggestedEmails}
+        guardarContacto={(() => { const cid = facturas.find(ff => ff.id === emailModal.facturaId)?.cliente_id; return cid ? { entityType: "cliente" as const, entityId: cid, cargo: "Administración" } : undefined; })()}
         generatePdf={async () => {
           const f = facturas.find(ff => ff.id === emailModal.facturaId);
           if (!f || !sociedadActiva) throw new Error("Factura no encontrada");

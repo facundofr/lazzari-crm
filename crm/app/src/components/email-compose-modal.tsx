@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { X, Send, Loader2, Paperclip, AlertTriangle, CheckCircle2, CheckCheck, Maximize2, Minimize2 } from "lucide-react";
+import { X, Send, Loader2, Paperclip, AlertTriangle, CheckCircle2, CheckCheck, Maximize2, Minimize2, UserPlus } from "lucide-react";
+import { supabase } from "@/lib/supabase/client";
 
 export type EmailDocumentType = "presupuesto" | "factura" | "remito" | "orden_compra" | "orden_pago";
 
@@ -31,7 +32,12 @@ interface EmailComposeModalProps {
   onMarkSent?: () => void | Promise<void>;
   /** Extra file attachments (e.g. comprobantes) to include in the email */
   extraAttachments?: { filename: string; url: string }[];
+  /** Si se pasa, un mail escrito a mano que no está entre los contactos se puede guardar con "Guardar este contacto". */
+  guardarContacto?: { entityType: "cliente" | "proveedor"; entityId: string; cargo?: string };
 }
+
+/** Cuántos contactos se muestran arriba; el resto queda detrás de "Ver todos". */
+const SUGERIDOS_VISIBLES = 3;
 
 const DOC_LABELS: Record<EmailDocumentType, string> = {
   presupuesto: "Presupuesto",
@@ -56,6 +62,7 @@ export function EmailComposeModal({
   suggestedEmails = [],
   onMarkSent,
   extraAttachments = [],
+  guardarContacto,
 }: EmailComposeModalProps) {
   const [to, setTo] = useState(defaultTo);
   const [subject, setSubject] = useState(defaultSubject);
@@ -64,6 +71,10 @@ export function EmailComposeModal({
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [prevOpen, setPrevOpen] = useState(false);
+  const [verTodos, setVerTodos] = useState(false);
+  const [verMensaje, setVerMensaje] = useState(false);
+  const [guardados, setGuardados] = useState<string[]>([]);
+  const [guardando, setGuardando] = useState("");
 
   // Reset state when modal opens (transition from closed → open)
   if (open && !prevOpen) {
@@ -72,10 +83,29 @@ export function EmailComposeModal({
     setBodyHtml(defaultBody);
     setResult(null);
     setSending(false);
+    setVerTodos(false); setVerMensaje(false); setGuardados([]);
   }
   if (open !== prevOpen) setPrevOpen(open);
 
   if (!open) return null;
+
+  // Mails escritos a mano que no están entre los contactos sugeridos ni se guardaron recién.
+  const nuevos = guardarContacto
+    ? to.split(/[,;]\s*/).map(e => e.trim()).filter(e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)
+        && !suggestedEmails.some(s => s.email.toLowerCase() === e.toLowerCase()) && !guardados.includes(e.toLowerCase()))
+    : [];
+
+  async function guardarEste(email: string) {
+    if (!guardarContacto) return;
+    setGuardando(email);
+    const { error } = await (supabase as any).from("contactos").insert({
+      nombre: guardarContacto.cargo || "Contacto", cargo: guardarContacto.cargo || null, email, principal: false,
+      entity_type: guardarContacto.entityType, entity_id: guardarContacto.entityId,
+    });
+    setGuardando("");
+    if (error) { setResult({ success: false, message: `No se pudo guardar el contacto: ${error.message}` }); return; }
+    setGuardados(g => [...g, email.toLowerCase()]);
+  }
 
   async function handleSend() {
     if (!to.trim()) { setResult({ success: false, message: "Ingresá al menos un email destinatario" }); return; }
@@ -140,9 +170,9 @@ export function EmailComposeModal({
   return (
     <>
       <div className="fixed inset-0 z-50 bg-black/40" onClick={onClose} />
-      <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900 transition-all ${fullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[85vh] w-full max-w-lg"}`}>
+      <div className={`fixed z-50 overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl dark:bg-zinc-900 transition-all ${fullscreen ? "inset-2 max-h-[calc(100vh-1rem)]" : "inset-4 m-auto h-fit max-h-[85vh] w-full max-w-lg"}`}>
         {/* Header */}
-        <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Send className="h-5 w-5 text-orange-500" />
             <h2 className="text-lg font-bold dark:text-white">Enviar {DOC_LABELS[documentType]}</h2>
@@ -168,7 +198,7 @@ export function EmailComposeModal({
         )}
 
         {/* Form */}
-        <div className="space-y-4">
+        <div className="space-y-3">
           {/* To */}
           <div>
             <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Para *</label>
@@ -181,7 +211,7 @@ export function EmailComposeModal({
             />
             {suggestedEmails.length > 0 && (
               <div className="flex flex-wrap gap-1.5 mt-1.5">
-                {suggestedEmails.map((s, i) => {
+                {suggestedEmails.filter((s, i) => verTodos || i < SUGERIDOS_VISIBLES || to.toLowerCase().includes(s.email.toLowerCase())).map((s, i) => {
                   const currentEmails = to.split(/[,;]\s*/).map(e => e.trim()).filter(Boolean);
                   const isAdded = currentEmails.includes(s.email);
                   return (
@@ -207,8 +237,20 @@ export function EmailComposeModal({
                     </button>
                   );
                 })}
+                {suggestedEmails.length > SUGERIDOS_VISIBLES && (
+                  <button type="button" onClick={() => setVerTodos(v => !v)} className="rounded-full px-2.5 py-1 text-xs font-medium text-orange-600 hover:underline">
+                    {verTodos ? "Ver menos" : `Ver todos (${suggestedEmails.length})`}
+                  </button>
+                )}
               </div>
             )}
+            {nuevos.map(e => (
+              <button key={e} type="button" onClick={() => guardarEste(e)} disabled={guardando === e}
+                className="mt-1.5 mr-1.5 inline-flex items-center gap-1 rounded-lg border border-zinc-300 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                title="Lo agrega a los contactos para la próxima vez">
+                {guardando === e ? <Loader2 className="h-3 w-3 animate-spin" /> : <UserPlus className="h-3 w-3" />} Guardar este contacto ({e})
+              </button>
+            ))}
           </div>
 
           {/* Subject */}
@@ -224,13 +266,17 @@ export function EmailComposeModal({
 
           {/* Body */}
           <div>
-            <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Mensaje</label>
-            <textarea
-              value={bodyHtml}
-              onChange={(e) => setBodyHtml(e.target.value)}
-              rows={6}
-              className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-y"
-            />
+            <button type="button" onClick={() => setVerMensaje(v => !v)} className="text-xs font-medium text-zinc-500 hover:text-orange-600 dark:text-zinc-400">
+              Mensaje {verMensaje ? "▾" : "▸"} <span className="font-normal text-zinc-400">{verMensaje ? "" : "(tocá para ver o cambiar)"}</span>
+            </button>
+            {verMensaje && (
+              <textarea
+                value={bodyHtml}
+                onChange={(e) => setBodyHtml(e.target.value)}
+                rows={5}
+                className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-y"
+              />
+            )}
           </div>
 
           {/* Attachments */}
@@ -253,7 +299,7 @@ export function EmailComposeModal({
           </div>
 
           {/* Send button */}
-          <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
+          <div className="sticky bottom-0 -mx-4 -mb-4 flex gap-2 border-t border-zinc-200 bg-white px-4 py-3 dark:border-zinc-700 dark:bg-zinc-900">
             <button
               onClick={handleSend}
               disabled={sending || (result?.success === true)}

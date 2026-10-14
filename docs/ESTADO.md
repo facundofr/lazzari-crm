@@ -756,7 +756,17 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
           pagada $ 620.329,99 sin retención (exento; no vuelve a SICORE) + los $ 5.870,42 del 08/10 como pago directo. Copia: `Claude outputs/antes_op4_op43_13_10_2026.json`.
         - `20261013210000_datos_pagos_visa_8_facturas.sql` CORRIDA: 8 pagos con Visa ·1582 por $ 1.241.528,69 (Bomberomania, Casella, Fernández, Frávega,
           García, Horni, Mercado Libre, Terra Vita). Vuelta atrás los anula (no borra).
-      **V1.1.440 (14/10, SIN PUBLICAR) — gasto fijo con proveedor + Tanda 4 de pantallas compactas:**
+      **PRÓXIMA TANDA (14/10, SIN PUBLICAR) — Configuración → Integraciones con datos reales:**
+        - Tarjeta Email: `/api/email/config` (nuevo, pide login, solo dice si está RESEND_API_KEY / EMAIL_FROM, nunca la clave) → "Conectado" o
+          "No configurado"; muestra facturas enviadas por mail este mes y rebotadas (`facturas.email_enviado_at` / `email_estado`).
+        - Tarjetas Banco CC y E-cheques: "Por archivo" con link a Finanzas → Extractos / Cheques (no hay API gratis de BBVA).
+        - tsc 0 errores, hooks OK. No probado en local (pide login) → probar en producción. Falta subir app-version al publicar.
+        - Seguridad revisada 14/10: el middleware (`lib/supabase/middleware.ts`) ya exige login en TODO `/api/` salvo `/api/cron/*` y
+          `/api/cotizacion-bna` (probado en producción: email/send y rutas IA dan 401 sin login). Registro público en Supabase deshabilitado.
+          7 tablas de `probar-anonimo.cjs` cerradas. Falta (con OK): probar TODAS las tablas sin login; headers anti-iframe/CSP en `next.config`
+          (hoy solo HSTS); web lazzari.com.ar (Netlify) solo tiene HSTS.
+        - Banco "en vivo": opciones conversadas con Augusto (preguntar al ejecutivo BBVA por API/host-to-host o envío automático de extractos).
+      **V1.1.440 (14/10, PUBLICADA — un solo commit 4c41788 con lo de este chat + Lista de costos del otro chat) — gasto fijo con proveedor + Tanda 4 de pantallas compactas:**
         - `20261013231000_gasto_fijo_proveedor.sql` CORRIDA (14/10, con OK, cuando terminó la transacción de las fotos): `gastos_fijos.proveedor_id`.
         - **Gasto fijo atado al proveedor:** en Finanzas → Pagar → Gastos fijos, "Proveedor que lo factura (opcional)". Si en el mes no hay factura
           de ese proveedor (sin NC ni anuladas) → "⚠️ Falta la factura de octubre"; si la hay → "✓ Factura de octubre: $ X". También en el Dashboard
@@ -878,6 +888,21 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
       **Próximo (pedido de Augusto 13/10):** Cotización express con un primer paso (cliente, moneda, dólar divisas y billetes del BNA editables);
         Pegaso es MARCA, la vende Mariana SA (verificar cómo figura en catalogo_costos y Proveedores). Hoy el PR trae un solo TC del BNA
         y usa el mismo para proveedores en divisa y en billete: traer los dos.
+      **HOJA DE RUTA (Augusto 14/10: "guiame vos, no te olvides de nada"). Se hace EN ESTE ORDEN, una tanda por vez, publicando al final de cada una.**
+        Al terminar cada tanda: tsc + hooks + prueba local sin guardar, actualizar este bloque (marcar ✅), publicar (permiso de Augusto) y darle el /clear + prompt de la siguiente.
+        - **Tanda A (chicas, uso diario):** ✅/⬜ por punto
+          ✅ A1 (14/10, GUARDADA con OK de Augusto). Mariana S.A. (5n): FC A 00012-00012760 ($ 1.103.989,48) + NC A 00010-00017374 ($ 55.199,47, aplicada a la FC; saldo a pagar $ 1.048.790,01) conciliadas con OC-2026-1221 (parcial: faltan 2 botines y 2 zapatos). Costo del botín $ 26.862 → $ 28.275,80 en la OC y en PR-2026-1215 (margen 35 % → 28,25 %). PDFs subidos. Script `scripts/db/cargar-mariana-sa.cjs` (sin flag prueba y deshace; `--aplicar` guarda). La OP la hace Augusto.
+          ✅ A2. (5h) (V1.1.441: la OC del cliente se ve con su fecha en cada fila y la bandeja Para facturar ordena por fecha de OC, la más vieja primero; sin consultar ARCA por fila) Fecha de la OC del cliente en Ventas > Para facturar, ordenar por la que se puede facturar con fecha anterior.
+          ✅ A3. (5k) (V1.1.441: `email-compose-modal.tsx` compacto: 3 contactos sugeridos + "Ver todos", mensaje plegable, botón Enviar siempre visible) Ventana "Enviar factura" compacta.
+          ✅ A4. (5g) (V1.1.441: "Guardar este contacto" en el mismo modal, para factura (cliente, cargo Administración) y OP (proveedor, cargo Pagos)) "Guardar este contacto" al enviar OP y factura (reusar `guardarContacto` de enviar-oc-proveedor).
+          ✅ A5. (5f) (V1.1.441: `components/presupuestos/oc-cliente-bloque.tsx` reemplaza OC + Fecha + Archivo adjunto; IA sugiere número y fecha desde el PDF en `api/leer-oc-cliente`; sin prompt del navegador) Un solo botón "OC" en el detalle del PR (número + archivo + fecha), sin prompt del navegador; IA sugiere el número desde el PDF.
+        - **Tanda B (masivos con revisión):** ⬜ B1. (5i + 5c) Facturar masivo con detalle y OK. ⬜ B2. (5j) Envío masivo de OP y facturas con detalle de destinatarios.
+        - **Tanda C (Finanzas):** ⬜ Cuentas y extractos etapa 1 (punto 0 de abajo, plan con OK, migración).
+        - **Tanda D (plata y riesgo):** ⬜ D1. (5l) Ganancia/margen en lista de PR, 7 % facturados / 2 % manuales, reordenar márgenes. ⬜ D2. (5e) Avisos BCRA crítico. ⬜ D3. (5n mejora) NC con % aplicada a la FC al conciliar.
+        - **Tanda E (diseño, con propuesta previa):** ⬜ E1. (5m) Seguimiento. ⬜ E2. (5m) Dashboard.
+        - **Respuestas de Augusto (14/10):** A1 = SÍ actualizar el costo del botín a $ 28.275,80 en la OC y en el PR (la carga igual se confirma antes de guardar).
+          D1: PR "manual" = documento manual, SIN ARCA (facturado por afuera del sistema electrónico) → 2 %; facturado con ARCA → 7 %.
+          D2: "crítico" = situación BCRA **2 o más**.
       **PENDIENTES PARA MAÑANA (13/10, orden propuesto):**
         0. Tanda 1: Augusto da OK → correr migración, subir versión, publicar y probar en producción (Informes proveedores, Uso de IA, Ventas).
         1. Tanda 2 (c): PR express "margen 25 %" sobre el costo, aviso si algún renglón < 15 %.
@@ -932,6 +957,39 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         5d. NUEVO — **Ranking por compradores y por empresas** (para preparar los regalos de fin de año): quién y qué empresa compró más, en pesos netos unificados. A definir: período (año en curso), cómo agrupar comprador/empresa.
         5e. NUEVO (Augusto 14/10, NO hacer todavía) — **Avisos BCRA de clientes en situación crítica:** avisar al vendedor cuando APRUEBA el presupuesto
            y cuando hace el REMITO; avisar a administración ANTES DE FACTURAR. Solo aviso, nunca bloquea (regla 1). A definir: desde qué situación BCRA es "crítica" (¿3 o más?).
+        5f. NUEVO (Augusto 14/10, NO hacer todavía) — **Detalle del presupuesto (panel lateral al tocar un PR): ordenar y compactar.**
+           Hoy "OC del cliente: + Adjuntar OC" (arriba, abre un prompt del navegador para el número) y "Archivo adjunto" (abajo) son lo mismo:
+           unificar en UN botón "OC" con el número y el archivo juntos (+ fecha de la OC). Idea: al subir el PDF, leer el número de OC del archivo
+           (nombre del archivo o contenido, con IA) y sugerirlo ✨. Reemplazar el prompt del navegador por un campo en pantalla.
+        5g. NUEVO (Augusto 14/10, NO hacer todavía) — **"Guardar este contacto" al enviar OP o factura:** si el proveedor/cliente no tiene mail o
+           WhatsApp cargado y se escribe en el momento de enviar, ofrecer "Guardar este contacto". YA EXISTE solo en "Enviar OC al proveedor"
+           (`components/enviar-oc-proveedor.tsx`, `guardarContacto`): reusar esa lógica en el envío de OP (proveedor) y de factura (cliente).
+        5h. NUEVO (Augusto 14/10, NO hacer todavía) — **Ventas > "Para facturar": mostrar la FECHA DE LA OC del cliente** en cada fila y relacionarla
+           con la fecha posible de facturación (la más vieja que permite ARCA), ordenando primero las que se pueden facturar con fecha anterior.
+           Va de la mano de 5c (facturar masivo inteligente: "no facturar antes de la OC" y "fecha más vieja permitida por ARCA").
+        5i. NUEVO (Augusto 14/10, NO hacer todavía) — **Facturar masivo con revisión** (amplía 5c): pantalla con el detalle de CADA factura a emitir
+           (cliente, PR, OC del cliente y su fecha, fecha de factura propuesta, moneda/TC, renglones, total) para que Augusto lo corrobore y dé el OK;
+           recién con su OK se emite. Nada se emite solo.
+        5j. NUEVO (Augusto 14/10, NO hacer todavía) — **Envío masivo de órdenes de pago y de facturas, con revisión:** lista con el detalle de cada envío
+           (a quién: nombre, mail/WhatsApp de destino; qué documento; importe) para corroborar y dar el OK antes de mandar. Combinar con 5g
+           ("Guardar este contacto" si falta el dato).
+        5k. NUEVO (Augusto 14/10, NO hacer todavía) — **Optimizar la ventana "Enviar Factura"** (Finanzas > Cobrar, sobre de cada factura):
+           hoy muestra ~14 contactos del cliente como botones uno abajo del otro (Corteva) y el Asunto/Mensaje/botón Enviar quedan muy abajo.
+           Propuesta: campo "Para" con varios destinatarios (chips) y autocompletar; arriba solo los 2-3 sugeridos (cliente/administración, creador del PR)
+           y "Ver todos" para el resto; asunto y mensaje más bajos (mensaje plegable); botón Enviar siempre visible. Misma ventana para el envío masivo (5j).
+        5l. NUEVO (Augusto 14/10, NO hacer todavía) — **Ganancia y margen en la lista de Presupuestos** + incentivar cerrar los de mayor ganancia
+           (ej. ordenar/destacar por ganancia). **Regla de Augusto:** el descuento del 7 % (gastos e impuestos) es para PR FACTURADOS; para presupuestos
+           MANUALES descontar el 2 % para ver el margen real. YA EXISTE en parte: la ventana del PR muestra "Margen neto" descontando
+           `GASTOS_PORCENTAJE` = 7 % a TODOS (`presupuestos/page.tsx` ~4447): hay que aplicar 7 % solo a facturados y 2 % a manuales
+           (confirmar qué es "manual": ¿PR sin factura emitida desde el CRM / facturado por afuera?). Además reordenar dónde se muestran los márgenes en la ventana del PR.
+        5m. NUEVO (Augusto 14/10, NO hacer todavía) — **Optimizar "Seguimiento"** (botón en Presupuestos) y **optimizar el Dashboard**
+           (pantallas compactas, que se vean todos los números, menos clics). Antes de tocar: mirar cómo están y proponer cambios a Augusto.
+        5n. NUEVO (Augusto 14/10) — **Mariana S.A. (Pegaso): FC A 0012-00012760 + NC A 0010-00017374 contra OC-2026-1221** (PDF en Descargas, 13/10). NADA cargado todavía.
+           FC: 28 botines Francés × $ 29.764 + 3 zapatos × $ 26.332 = neto $ 912.388 (total $ 1.103.989,48). NC: "descuentos concedidos" = 5 % exacto
+           del neto ($ 45.619,40 + IVA = $ 55.199,47), obs. "fac 12-12760". OC-2026-1221: 30 botines × $ 26.862 + 5 zapatos × $ 25.015,40 (neto $ 930.937).
+           Zapato: 26.332 × 0,95 = 25.015,40 = OC exacto. Botín: 29.764 × 0,95 = 28.275,80 (la OC tiene 26.862 = dos veces −5 %). Entrega parcial (faltan 2 botines y 2 zapatos).
+           Problema del CRM: la conciliación compara precio de FC contra OC renglón por renglón y no sabe aplicar una NC de descuento global (%) a la factura.
+           Mejora propuesta: si la NC es descuento % sobre una FC, comparar contra la OC con el precio neto de NC. Cargar hoy: por script con OK (como Segufer).
         6. Aviso BCRA en ficha de proveedor/OC; Finanzas: análisis a fondo (punto 0 de abajo, cobros con fecha futura, etc.).
       Aviso de modelos (Augusto lo pidió): Opus para diseñar j y el armado de presupuestos; Sonnet para programar; Haiku para cambios chicos.
 

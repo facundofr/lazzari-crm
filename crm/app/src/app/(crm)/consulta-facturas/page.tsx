@@ -348,6 +348,7 @@ export default function ConsultaFacturasPage() {
         sociedadId={sociedadActiva?.id}
         userEmail={profile?.email || undefined}
         suggestedEmails={mail.sugeridos}
+        guardarContacto={venta?.cliente_id ? { entityType: "cliente", entityId: venta.cliente_id, cargo: "Administración" } : undefined}
         defaultTo={mail.to}
         defaultSubject={mail.subject}
         defaultBody={mail.body}

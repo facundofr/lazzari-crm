@@ -7542,6 +7542,7 @@ export default function FinanzasPage() {
         defaultBody={emailModal.body}
         pdfFilename={emailModal.filename}
         suggestedEmails={emailModal.suggestedEmails}
+        guardarContacto={(() => { const pid = ordenesPago.find(o => o.id === emailModal.id)?.proveedor_id; return pid ? { entityType: "proveedor" as const, entityId: pid, cargo: "Pagos" } : undefined; })()}
         extraAttachments={emailModal.extraAttachments}
         onSuccess={async () => {
           const sentAt = new Date().toISOString();
