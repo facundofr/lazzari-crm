@@ -18,6 +18,7 @@ import { generateFacturaPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64, doc
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { emisorDeSociedad } from "@/lib/emisor-sociedad";
+import { cargarOPsDeFacturas, abrirOrdenPagoPDF, type OPResumen } from "@/lib/orden-pago-pdf";
 import { Download, FileText, Mail, Paperclip, Search, X } from "lucide-react";
 
 type Moneda = "ARS" | "USD";
@@ -103,6 +104,8 @@ export default function ConsultaFacturasPage() {
   const [compra, setCompra] = useState<FacturaCompra | null>(null);
   const [itemsVenta, setItemsVenta] = useState<ItemVenta[]>([]);
   const [itemsCompra, setItemsCompra] = useState<ItemCompra[]>([]);
+  const [opsCompra, setOpsCompra] = useState<OPResumen[] | null>(null);
+  const [bajandoOP, setBajandoOP] = useState<string | null>(null);
   const [mail, setMail] = useState<{ open: boolean; to: string; subject: string; body: string; filename: string; sugeridos: { email: string; label?: string }[] }>({ open: false, to: "", subject: "", body: "", filename: "", sugeridos: [] });
 
   const cargar = useCallback(async () => {
@@ -153,9 +156,22 @@ export default function ConsultaFacturasPage() {
   async function abrirCompra(f: FacturaCompra) {
     setCompra(f);
     setItemsCompra([]);
-    const { data } = await (supabase as any).from("facturas_compra_items")
-      .select("codigo, descripcion, cantidad, precio_unitario, descuento_porcentaje, iva_porcentaje, unidad").eq("factura_compra_id", f.id);
+    setOpsCompra(null);
+    const [{ data }, ops] = await Promise.all([
+      (supabase as any).from("facturas_compra_items")
+        .select("codigo, descripcion, cantidad, precio_unitario, descuento_porcentaje, iva_porcentaje, unidad").eq("factura_compra_id", f.id),
+      cargarOPsDeFacturas(supabase, [f.id]).catch(() => [] as OPResumen[]),
+    ]);
     setItemsCompra(data || []);
+    setOpsCompra(ops);
+  }
+
+  async function bajarOP(opId: string) {
+    if (!sociedadActiva) return;
+    setBajandoOP(opId);
+    try { await abrirOrdenPagoPDF(supabase, opId, sociedadActiva); }
+    catch (e) { toast.error(`No se pudo armar el PDF de la orden de pago: ${e instanceof Error ? e.message : String(e)}`); }
+    finally { setBajandoOP(null); }
   }
 
   async function htmlVenta(f: FacturaVenta): Promise<string | null> {
@@ -336,6 +352,20 @@ export default function ConsultaFacturasPage() {
               ))}
               {!itemsCompra.length && <p className="text-xs text-zinc-400">Sin renglones cargados (puede ser una factura cargada solo con totales).</p>}
             </div>
+            <h3 className="mb-1 mt-3 text-xs font-semibold uppercase text-zinc-500">Órdenes de pago</h3>
+            {opsCompra === null ? <p className="text-xs text-zinc-400">Buscando…</p> : opsCompra.length === 0 ? <p className="text-xs text-zinc-400">Sin orden de pago todavía.</p> : (
+              <div className="space-y-1">
+                {opsCompra.map((op) => (
+                  <div key={op.id} className="flex items-center justify-between gap-2 rounded border border-zinc-100 px-2 py-1 text-sm dark:border-zinc-800">
+                    <span className="text-zinc-800 dark:text-zinc-200">{op.numero} · {formatDate(op.fecha)} · {formatCurrency(op.neto, op.moneda)}</span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      {op.certificado_retencion_url && <a href={op.certificado_retencion_url} target="_blank" rel="noreferrer" className="rounded border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50 dark:border-zinc-600 dark:hover:bg-zinc-800">Certificado</a>}
+                      <button type="button" disabled={bajandoOP === op.id} onClick={() => bajarOP(op.id)} className="inline-flex items-center gap-1 rounded border border-zinc-300 px-2 py-0.5 text-xs hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:hover:bg-zinc-800"><Download className="h-3 w-3" /> {bajandoOP === op.id ? "Armando…" : "PDF"}</button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             {compra.notas && <p className="mt-3 whitespace-pre-wrap text-xs text-zinc-500">{compra.notas}</p>}
           </div>
         </div>

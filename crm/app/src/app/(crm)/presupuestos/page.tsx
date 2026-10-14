@@ -975,18 +975,27 @@ export default function PresupuestosPage() {
     fetchPresupuestos();
   }, [fetchPresupuestos]);
 
-  // Auto-select PR from URL ?selected=UUID
+  // Auto-select PR from URL ?selected=UUID. El buscador de arriba avisa con "lz-abrir-pr" (si ya estás en esta pantalla la URL cambia pero la página no se vuelve a cargar).
+  const [abrirPedido, setAbrirPedido] = useState(0);
+  useEffect(() => {
+    const onAbrir = () => setAbrirPedido(n => n + 1);
+    window.addEventListener("lz-abrir-pr", onAbrir);
+    return () => window.removeEventListener("lz-abrir-pr", onAbrir);
+  }, []);
   useEffect(() => {
     if (loading || presupuestos.length === 0) return;
-    const params = new URLSearchParams(window.location.search);
-    const selId = params.get("selected");
-    if (selId && !selected) {
+    // La URL nueva llega un instante después del aviso del buscador.
+    const t = window.setTimeout(() => {
+      const params = new URLSearchParams(window.location.search);
+      const selId = params.get("selected");
+      if (!selId) return;
       const found = presupuestos.find(p => p.id === selId);
       if (found) setSelected(found);
       // Clean URL param
       window.history.replaceState({}, "", window.location.pathname);
-    }
-  }, [loading, presupuestos.length]);
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, [loading, presupuestos.length, abrirPedido]);
 
   // Fetch items separately when selected PR has no items (fallback query omitted them)
   useEffect(() => {
@@ -3166,31 +3175,7 @@ export default function PresupuestosPage() {
           />
         </Card>
 
-        {/* Motivos de rechazo */}
-        {presupuestos.some((pr) => pr.motivoRechazo) && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Motivos de rechazo recientes</CardTitle>
-            </CardHeader>
-            <div className="space-y-3">
-              {presupuestos
-                .filter((pr) => pr.motivoRechazo)
-                .slice(0, 5)
-                .map((pr) => (
-                  <div key={pr.id} className="flex items-start gap-3 rounded-lg bg-red-50 p-3 dark:bg-red-950/30">
-                    <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-                    <div>
-                      <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
-                        {pr.numero} — {pr.clienteNombre}
-                      </p>
-                      <p className="mt-0.5 text-sm text-zinc-600 dark:text-zinc-400">{pr.motivoRechazo}</p>
-                      {pr.respondidoAt && <p className="mt-1 text-xs text-zinc-400">{formatDate(pr.respondidoAt)}</p>}
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </Card>
-        )}
+        {/* Motivos de rechazo: se sacó de esta pantalla (pedido de Augusto, 14/10); el motivo sigue en el detalle de cada PR. */}
           </>
         )}
       </div>

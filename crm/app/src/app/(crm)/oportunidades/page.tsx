@@ -2,7 +2,7 @@
 
 /**
  * Oportunidades: a quién llamar y qué ofrecerle, sacado del historial de todos los clientes.
- * Incluye el semáforo BCRA de la cartera y la actualización mensual de informes.
+ * El riesgo BCRA de la cartera está en Finanzas > Informes (Augusto pidió sacarlo de acá).
  * Todo es sugerencia: no cambia nada solo.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -14,15 +14,12 @@ import { supabase } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
 import { traerTodo } from "@/lib/paginar";
 import { TIPO_LABEL, calcularOportunidades, type ItemHist, type Oportunidad, type PRHist, type TipoOportunidad } from "@/lib/oportunidades";
-import { SEMAFORO_LABEL, mesActual, type Semaforo } from "@/lib/bcra";
-import { SEMAFORO_CLASES } from "@/components/clientes/bcra-card";
-import { Landmark, Lightbulb, Loader2, Search } from "lucide-react";
+import { Lightbulb, Loader2, Search } from "lucide-react";
 
 const db = supabase as any;
 const mon = (m: string | null | undefined) => (m === "USD" ? "USD" : "ARS") as "ARS" | "USD";
 
 interface Cliente { id: string; razon_social: string; cuit: string | null; vendedor_id: string | null }
-interface Informe { cliente_id: string; mes: string; semaforo: Semaforo; peor_situacion: number | null; deuda_total: number; cheques_sin_pagar: number; error: string | null }
 
 const TIPOS: TipoOportunidad[] = ["recompra", "dormido", "temporada", "reactivar", "complementario"];
 const TIPO_COLOR: Record<TipoOportunidad, string> = {
@@ -42,25 +39,9 @@ export default function OportunidadesPage() {
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [vendedores, setVendedores] = useState<Array<{ id: string; full_name: string }>>([]);
   const [ops, setOps] = useState<Oportunidad[]>([]);
-  const [informes, setInformes] = useState<Map<string, Informe>>(new Map());
   const [tipo, setTipo] = useState<TipoOportunidad | "todas">("todas");
   const [vendedor, setVendedor] = useState<string>("");
   const [buscar, setBuscar] = useState("");
-
-  const cargarInformes = useCallback(async () => {
-    if (!sociedadId) return;
-    const desde = mesActual(new Date(Date.now() - 400 * 86400_000));
-    const filas = await traerTodo<Informe & { id: string }>(() => db.from("cliente_bcra_informes")
-      .select("id, cliente_id, mes, semaforo, peor_situacion, deuda_total, cheques_sin_pagar, error")
-      .eq("sociedad_id", sociedadId).gte("mes", desde).order("mes", { ascending: false }).order("id"));
-    const m = new Map<string, Informe>();
-    for (const f of filas) {
-      const prev = m.get(f.cliente_id);
-      // El más nuevo que no sea error; si solo hay errores, el más nuevo.
-      if (!prev || (prev.semaforo === "gris" && f.semaforo !== "gris" && f.mes >= prev.mes)) m.set(f.cliente_id, f);
-    }
-    setInformes(m);
-  }, [sociedadId]);
 
   const cargar = useCallback(async () => {
     if (!sociedadId) { setLoading(false); return; }
@@ -85,13 +66,12 @@ export default function OportunidadesPage() {
       setClientes(cli);
       setOps(lista);
       setVendedores(vend.data || []);
-      await cargarInformes();
     } catch (e: any) {
       toast.error(`No se pudieron calcular las oportunidades: ${e.message}`);
     } finally {
       setLoading(false);
     }
-  }, [sociedadId, toast, cargarInformes]);
+  }, [sociedadId, toast]);
   useEffect(() => { void cargar(); }, [cargar]);
 
   // Si es vendedor, arranca filtrado por sus clientes.
@@ -123,7 +103,6 @@ export default function OportunidadesPage() {
       <main className="mx-auto max-w-7xl space-y-4 px-4 py-6 sm:px-6">
         <div className="flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-1.5 text-sm font-medium text-white"><Lightbulb className="h-4 w-4" /> Oportunidades ({ops.length})</span>
-          <Link href="/finanzas?tab=informes" className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm text-zinc-600 hover:text-orange-600 dark:bg-zinc-900 dark:text-zinc-300"><Landmark className="h-4 w-4" /> Riesgo BCRA (ahora en Finanzas)</Link>
           <div className="ml-auto flex flex-wrap gap-2">
             <select value={vendedor} onChange={e => setVendedor(e.target.value)} className={inputClass}>
               <option value="">Todos los vendedores</option>
@@ -144,14 +123,10 @@ export default function OportunidadesPage() {
             <div className="space-y-3">
               {grupos.slice(0, 200).map(([clienteId, lista]) => {
                 const c = clienteMap.get(clienteId)!;
-                const inf = informes.get(clienteId);
                 return (
                   <div key={clienteId} className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <Link href={`/clientes?id=${clienteId}`} className="font-semibold hover:text-orange-600 dark:text-white">{c.razon_social}</Link>
-                      {inf && inf.semaforo !== "gris" && inf.semaforo !== "verde" && (
-                        <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${SEMAFORO_CLASES[inf.semaforo].texto}`}><span className={`h-2 w-2 rounded-full ${SEMAFORO_CLASES[inf.semaforo].punto}`} /> BCRA: {SEMAFORO_LABEL[inf.semaforo]}</span>
-                      )}
                     </div>
                     <ul className="space-y-1.5">
                       {lista.map((o, i) => (

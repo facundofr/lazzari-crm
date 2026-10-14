@@ -459,7 +459,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
                       {searchResults.clientes.map((c) => (
                         <button
                           key={c.id}
-                          onClick={() => navigateTo("/clientes")}
+                          onClick={() => navigateTo(`/clientes?id=${c.id}`)}
                           className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800"
                         >
                           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-400">
@@ -487,7 +487,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
                       {searchResults.presupuestos.map((p) => (
                         <button
                           key={p.id}
-                          onClick={() => navigateTo("/presupuestos")}
+                          onClick={() => { navigateTo(`/presupuestos?selected=${p.id}`); window.dispatchEvent(new CustomEvent("lz-abrir-pr", { detail: p.id })); }}
                           className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800"
                         >
                           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-orange-50 text-orange-600 dark:bg-orange-950 dark:text-orange-400">
