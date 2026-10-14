@@ -1126,7 +1126,7 @@ export default function CargarFacturaOC({
           }
           if (!oc.presupuesto_origen_id) continue;
           const { data: pr, error: prError } = await (supabase as any).from("presupuestos")
-            .select("id, estado, observaciones, moneda, tipo_cambio, tipo_cambio_divisas, presupuesto_items(id, codigo, descripcion, cantidad, precio_costo, costo_moneda, markup_porcentaje, precio_venta)")
+            .select("id, estado, observaciones, notas_internas, moneda, tipo_cambio, tipo_cambio_divisas, presupuesto_items(id, codigo, descripcion, cantidad, precio_costo, costo_moneda, markup_porcentaje, precio_venta)")
             .eq("id", oc.presupuesto_origen_id).eq("sociedad_id", sociedadId).single();
           if (prError || !pr) throw new Error(`No se pudo comprobar el presupuesto de la OC ${oc.numero}. No se guardó la factura.`);
           for (const change of costChanges) {
@@ -1146,7 +1146,7 @@ export default function CargarFacturaOC({
           let pr = verifiedPresupuestos.get(r.oc.presupuesto_origen_id);
           if (!pr) {
             const { data } = await (supabase as any).from("presupuestos")
-              .select("id, numero, estado, observaciones, moneda, tipo_cambio, tipo_cambio_divisas, presupuesto_items(id, codigo, descripcion, cantidad, precio_costo, costo_moneda, markup_porcentaje, precio_venta)")
+              .select("id, numero, estado, observaciones, notas_internas, moneda, tipo_cambio, tipo_cambio_divisas, presupuesto_items(id, codigo, descripcion, cantidad, precio_costo, costo_moneda, markup_porcentaje, precio_venta)")
               .eq("id", r.oc.presupuesto_origen_id).eq("sociedad_id", sociedadId).maybeSingle();
             if (!data) { avisosReemplazo.push(`No se encontró el presupuesto de ${r.oc.numero}: actualizá el costo a mano.`); continue; }
             pr = data;
@@ -1349,8 +1349,9 @@ export default function CargarFacturaOC({
           if (ocHeadError) throw ocHeadError;
         }
         for (const [pr, hist] of histPR) {
-          pr.observaciones = `${pr.observaciones || ""}\n[${stamp}] ${hist.join("; ")}`;
-          const { error: prObsError } = await (supabase as any).from("presupuestos").update({ observaciones: pr.observaciones }).eq("id", pr.id).eq("sociedad_id", sociedadId);
+          // Costos y márgenes van a NOTAS INTERNAS: "Observaciones" sale impreso en el PDF del cliente.
+          pr.notas_internas = `${pr.notas_internas || ""}\n[${stamp}] ${hist.join("; ")}`;
+          const { error: prObsError } = await (supabase as any).from("presupuestos").update({ notas_internas: pr.notas_internas }).eq("id", pr.id).eq("sociedad_id", sociedadId);
           if (prObsError) throw prObsError;
         }
       }
@@ -1430,7 +1431,7 @@ export default function CargarFacturaOC({
               if (costError) throw costError;
             }
             const { error: historyError } = await (supabase as any).from("presupuestos")
-              .update({ observaciones: `${pr.observaciones || ""}${historyText}` }).eq("id", pr.id).eq("sociedad_id", sociedadId);
+              .update({ notas_internas: `${pr.notas_internas || ""}${historyText}` }).eq("id", pr.id).eq("sociedad_id", sociedadId);
             if (historyError) throw historyError;
           }
         }

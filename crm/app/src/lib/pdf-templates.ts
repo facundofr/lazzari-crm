@@ -4,6 +4,7 @@
  *
  * Usage: each function returns an HTML string. Open in a new window and call print().
  */
+import { observacionesParaCliente } from "./observaciones-cliente";
 
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { readFceMetadata, importeEnLetras } from "@/lib/fce-invoice";
@@ -351,6 +352,8 @@ export function generatePresupuestoPDF(
     return { lista, pct: Math.round((1 - neto / lista) * 1000) / 10 };
   };
   const hayDescuento = pr.items.some((it) => descuentoRenglon(it) !== null);
+  // Los renglones automáticos de costo/margen son internos: nunca se imprimen para el cliente.
+  const obsCliente = observacionesParaCliente(pr.observaciones);
   pr.items.forEach((item, originalIndex) => {
     const visualRows = Math.max(1, Math.min(3, Math.ceil(String(item.descripcion || "").length / 68))) + (descuentoRenglon(item) ? 1 : 0);
     if (currentPage.length > 0 && usedRows + visualRows > pageCapacity) {
@@ -465,7 +468,7 @@ ${pageIndex > 0 ? `<div class="pr-continuation-label">Continuación del detalle 
   <tbody>${itemRows}</tbody>
 </table>
 ${isLastPage ? totals : `<div class="pr-continues">Continúa en la página ${pageNumber + 1} de ${pages.length} →</div>`}
-${isLastPage && pr.observaciones ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${textoSeguro(pr.observaciones).replace(/\n/g, "<br/>")}</div></div>` : ""}
+${isLastPage && obsCliente ? `<div class="obs-block"><div class="obs-title">Observaciones</div><div class="obs-text">${textoSeguro(obsCliente).replace(/\n/g, "<br/>")}</div></div>` : ""}
 <div class="pr-page-footer">
 ${documentFooter(soc, `${pr.numero} · Página ${pageNumber} de ${pages.length}`)}
 <div class="footer-legal">${isLastPage ? "Este presupuesto tiene validez hasta la fecha de vencimiento indicada. Los precios pueden estar sujetos a modificaciones." : `Documento continúa en la página ${pageNumber + 1} de ${pages.length}.`}</div>

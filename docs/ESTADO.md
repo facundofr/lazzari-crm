@@ -2,6 +2,8 @@
 
 Actualizado: 14/10/2026 · Publicadas esta noche, en dos deploys seguidos y verificadas desde afuera (login 200, encabezados de seguridad activos): **V1.1.442** (commit 98c866e) y **V1.1.443** (commit 99b3a77). Detalle de V1.1.428 a V1.1.441: `git log` (este archivo quedó atrasado en esa parte). **Chequeadas con sesión en producción (14/10):** sidebar dice V1.1.443; Configuración → Integraciones muestra Email "Conectado" (Resend, plan gratis), Banco "Por archivo" y ARCA WSFE "Producción — PV 10"; filtro de moneda en Facturación OK (USD muestra solo la factura en dólares, Pesos 0, Todas vuelve); PDF de PR-2026-1252 se genera bien (PDF válido de 146 KB, se interceptó la descarga, no se guardó nada).
 
+**URGENTE 14/10/2026 (V1.1.444, arreglo de fuga): costos y márgenes en el PDF del cliente.** Al cargar una factura de proveedor con otro costo, el sistema anotaba "[fecha] FC ...: costo X → Y (margen A% → B%)" en `presupuestos.observaciones`, que se IMPRIME en el PDF del presupuesto y en el texto para el cliente. Hecho: 1) `lib/observaciones-cliente.ts` saca esos renglones automáticos del PDF (`generatePresupuestoPDF`) y del texto de WhatsApp/copiar (prueba `scripts/test-observaciones-cliente.ts`); 2) `cargar-factura-oc.tsx` ahora escribe esas leyendas del PR en `notas_internas`, no en `observaciones`. **PENDIENTE (con migración y OK de Augusto):** las funciones SQL de ajuste de OC (`20261012180000_oc_diferencias.sql` y conciliación de compras) siguen escribiendo en `observaciones`, y hay que mover lo ya escrito a `notas_internas`. Afectados al 14/10 (lectura `scripts/lectura/pr-obs-margenes.cjs`): PR-2026-1157, 1227, 1215, 1183, 1039, 1198, 1175. Hasta correr esa migración, el PDF ya está protegido por el filtro.
+
 Leer esto primero en cada chat nuevo. Detalle de las ideas futuras: `IDEAS-PROXIMAS.md`.
 Detalle de los errores financieros (A1…E): `DIAGNOSTICO-FINANCIERO.md`.
 Versiones anteriores de este archivo: historial de git (`ESTADO-PROYECTO.md`).
@@ -756,6 +758,10 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
           pagada $ 620.329,99 sin retención (exento; no vuelve a SICORE) + los $ 5.870,42 del 08/10 como pago directo. Copia: `Claude outputs/antes_op4_op43_13_10_2026.json`.
         - `20261013210000_datos_pagos_visa_8_facturas.sql` CORRIDA: 8 pagos con Visa ·1582 por $ 1.241.528,69 (Bomberomania, Casella, Fernández, Frávega,
           García, Horni, Mercado Libre, Terra Vita). Vuelta atrás los anula (no borra).
+      **TANDA V1.1.445 (14/10, SIN PUBLICAR; la V1.1.444 es el arreglo de la fuga de márgenes):**
+        - Compras: botón **"Carga manual"** visible al lado de "Cargar facturas (IA)" (antes estaba escondido en "Más"; se sacó de ahí). tsc 0, hooks OK, probado en local (abre la ventana, no se guardó nada).
+          Ojo: dentro de la carga manual, si se sube un PDF igual se lee con IA (`/api/parse-factura-compra`). Propuesta de lectura sin IA (QR de ARCA / texto del PDF) esperando OK.
+        - Propuesta esperando OK: columna `pendientes.respuesta` + casilla para responder y botón "Copiar respuestas", y cargar ahí las preguntas abiertas para Augusto.
       **TANDA V1.1.443 (14/10, publicada junto con la V1.1.442 de Claude, en dos deploys seguidos) — Configuración → Integraciones con datos reales:**
         - Tarjeta Email: `/api/email/config` (nuevo, pide login, solo dice si está RESEND_API_KEY / EMAIL_FROM, nunca la clave) → "Conectado" o
           "No configurado"; muestra facturas enviadas por mail este mes y rebotadas (`facturas.email_enviado_at` / `email_estado`).

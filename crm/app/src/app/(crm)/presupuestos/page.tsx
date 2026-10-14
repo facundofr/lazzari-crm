@@ -34,6 +34,7 @@ import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import EnviarOCProveedor from "@/components/enviar-oc-proveedor";
 import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalizePurchaseCurrency } from "@/lib/own-stock-purchase-orders";
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
+import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 import { convertirCostoPR, leerDolaresGuardados, fechaDolarPresupuesto, dolarAtrasado, etiquetaDolar, esCostoUsd, esCostoDivisa, tcParaCosto, type DolaresGuardados } from "@/lib/dolar-presupuesto";
 
 /** Number input that allows typing decimals (e.g. "10.") without losing the dot */
@@ -2489,7 +2490,7 @@ export default function PresupuestosPage() {
       isManual ? null : `Subtotal: ${formatCurrency(isB ? pr.total : pr.subtotal, mon)}`,
       isManual ? null : (isB ? `IVA contenido: ${formatCurrency(pr.iva, mon)}` : `IVA: ${formatCurrency(pr.iva, mon)}`),
       `*Total: ${formatCurrency(isManual ? manualTotal : pr.total, mon)}*`,
-      pr.observaciones ? `\nObs: ${pr.observaciones}` : null,
+      observacionesParaCliente(pr.observaciones) ? `\nObs: ${observacionesParaCliente(pr.observaciones)}` : null,
     ];
     return lines.filter((l) => l !== null).join("\n");
   }
