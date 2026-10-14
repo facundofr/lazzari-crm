@@ -16,6 +16,7 @@ import { CondicionPagoEditor } from "@/components/condicion-pago-editor";
 import { textoCondicionPago, vencimientoFactura, type PlanPago } from "@/lib/condicion-pago";
 import { equivalenciaSugerida, costoPorUnidadPR, avisoCambioCostoPR } from "@/lib/reemplazo-oc";
 import { controlIva, emparejarPorPrecio, elegirOC } from "@/lib/factura-vs-oc";
+import { TIPOS_FACTURA_COMPRA, CATEGORIAS_GASTO, tipoSugerido, type TipoFacturaCompra } from "@/lib/factura-tipo";
 
 // ── Types ────────────────────────────────────────────────
 export interface OCParaVincular {
@@ -83,7 +84,6 @@ interface Props {
   initialImport?: { data: any; file: File };
   /** Carga masiva: facturas a las que conviene aplicar esta NC (citadas por la NC o cargadas en la misma tanda). */
   ncSugerida?: { asociadas: string[]; deLaTanda: string[] };
-  showTipoToggle?: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -107,7 +107,7 @@ type Comparacion = {
 };
 // ── Component ────────────────────────────────────────────
 export default function CargarFacturaOC({
-  sociedadId, profileId, ordenes, preselectedOCId, initialImport, ncSugerida, showTipoToggle, onClose, onSuccess,
+  sociedadId, profileId, ordenes, preselectedOCId, initialImport, ncSugerida, onClose, onSuccess,
 }: Props) {
   const { toast } = useToast();
   const initialOC = preselectedOCId ? ordenes.find((oc) => oc.id === preselectedOCId) : undefined;
@@ -137,7 +137,12 @@ export default function CargarFacturaOC({
   const [percepciones, setPercepciones] = useState(0);
   const [notas, setNotas] = useState("");
   const [items, setItems] = useState<FCItem[]>([]);
-  const [tipoFC, setTipoFC] = useState<"mercaderia" | "solo_iva" | "transporte">("mercaderia");
+  const [tipoFC, setTipoFCState] = useState<TipoFacturaCompra>("mercaderia");
+  const [categoriaGasto, setCategoriaGasto] = useState("");
+  // Tipo sugerido (no traba): se deja de sugerir cuando el usuario lo toca.
+  const tipoTocado = useRef(false);
+  const [tipoMotivo, setTipoMotivo] = useState<"" | "proveedor" | "texto">("");
+  const setTipoFC = (t: TipoFacturaCompra) => { tipoTocado.current = true; setTipoMotivo(""); setTipoFCState(t); };
   const [costoReal, setCostoReal] = useState(0);
 
   // ── OC selection ──
@@ -231,6 +236,28 @@ export default function CargarFacturaOC({
     })();
     return () => { cancelado = true; };
   }, [ocIdsClave, tarjetas, proveedorSearch, isCreditNote]);
+
+  // Tipo sugerido: lo último que se cargó de este proveedor (transporte / servicio) o el texto de los renglones (honorarios, alquiler, luz…).
+  const descripcionesClave = items.map((it) => it.descripcion).join("|");
+  useEffect(() => {
+    if (tipoTocado.current || isCreditNote) return;
+    let cancelado = false;
+    (async () => {
+      let ultimo: any = null;
+      if (proveedorId && sociedadId) {
+        const { data } = await (supabase as any).from("facturas_compra").select("*")
+          .eq("proveedor_id", proveedorId).eq("sociedad_id", sociedadId).neq("estado", "anulada")
+          .order("created_at", { ascending: false }).limit(1);
+        ultimo = data?.[0] || null;
+      }
+      if (cancelado || tipoTocado.current) return;
+      const sug = tipoSugerido({ ultimoTipo: ultimo?.tipo, ultimaCategoria: ultimo?.categoria_gasto, descripciones: descripcionesClave ? descripcionesClave.split("|") : [] });
+      setTipoFCState(sug ? sug.tipo : "mercaderia");
+      setTipoMotivo(sug ? sug.motivo : "");
+      if (sug?.categoria) setCategoriaGasto(sug.categoria);
+    })();
+    return () => { cancelado = true; };
+  }, [proveedorId, sociedadId, descripcionesClave, isCreditNote]);
   const selectedCreditOrigin = creditOrigins.find((invoice) => invoice.id === facturaOrigenId);
 
   // Check for duplicate invoices in real-time
@@ -1162,6 +1189,7 @@ export default function CargarFacturaOC({
         estado: pagadaSinOP ? "pagada" : "pendiente_aprobacion",
         tipo: tipoFC,
         solo_iva: tipoFC !== "mercaderia",
+        ...(tipoFC === "servicio" && categoriaGasto ? { categoria_gasto: categoriaGasto } : {}),
         notas: notas || null,
         cae: cae || null,
         sociedad_id: sociedadId,
@@ -1223,11 +1251,16 @@ export default function CargarFacturaOC({
         }
         fcData = { id: atomicResult.factura_compra_id };
       } else {
-        const { data, error: fcErr } = await (supabase as any)
+        let { data, error: fcErr } = await (supabase as any)
           .from("facturas_compra")
           .insert(insertData)
           .select("id")
           .single();
+        // Si la base todavía no tiene la columna de categoría, se guarda sin ella.
+        if (fcErr && /categoria_gasto/.test(String(fcErr.message || ""))) {
+          const { categoria_gasto: _sinCategoria, ...sinCategoria } = insertData;
+          ({ data, error: fcErr } = await (supabase as any).from("facturas_compra").insert(sinCategoria).select("id").single());
+        }
         if (fcErr) throw new Error(fcErr.message);
         fcData = data;
 
@@ -1605,21 +1638,27 @@ export default function CargarFacturaOC({
             )}
           </section>
 
-          {/* ── Tipo toggle (solo si showTipoToggle) ── */}
-          {showTipoToggle && (
-            <div className="flex gap-3">
-              <button type="button" onClick={() => setTipoFC("mercaderia")}
-                className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 flex-1 transition-colors ${tipoFC === "mercaderia" ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
-                <span className={`text-sm font-semibold ${tipoFC === "mercaderia" ? "text-orange-700 dark:text-orange-300" : "text-zinc-600 dark:text-zinc-300"}`}>Compra</span>
-              </button>
-              <button type="button" onClick={() => setTipoFC("transporte")}
-                className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 flex-1 transition-colors ${tipoFC === "transporte" ? "border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
-                <span className={`text-sm font-semibold ${tipoFC === "transporte" ? "text-emerald-700 dark:text-emerald-300" : "text-zinc-600 dark:text-zinc-300"}`}>Transporte</span>
-              </button>
-              <button type="button" onClick={() => setTipoFC("solo_iva")}
-                className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 flex-1 transition-colors ${tipoFC === "solo_iva" ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30" : "border-zinc-200 dark:border-zinc-700 hover:border-zinc-300"}`}>
-                <span className={`text-sm font-semibold ${tipoFC === "solo_iva" ? "text-blue-700 dark:text-blue-300" : "text-zinc-600 dark:text-zinc-300"}`}>Solo IVA / contable</span>
-              </button>
+          {/* ── Tipo de factura (sugerido, se puede cambiar) ── */}
+          {!isCreditNote && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-[10px] uppercase text-zinc-400">Tipo</span>
+              {TIPOS_FACTURA_COMPRA.map((t) => (
+                <button key={t.value} type="button" onClick={() => setTipoFC(t.value)}
+                  className={`rounded-full border px-2.5 py-0.5 font-medium transition-colors ${tipoFC === t.value ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950/30 dark:text-orange-300" : "border-zinc-200 text-zinc-500 hover:border-zinc-300 dark:border-zinc-700"}`}>
+                  {t.label}
+                </button>
+              ))}
+              {tipoFC === "servicio" && (
+                <select value={categoriaGasto} onChange={(e) => setCategoriaGasto(e.target.value)}
+                  className="rounded-lg border border-zinc-300 bg-white px-2 py-0.5 text-xs dark:border-zinc-600 dark:bg-zinc-800">
+                  <option value="">Categoría del gasto…</option>
+                  {CATEGORIAS_GASTO.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+              )}
+              {tipoMotivo && tipoFC !== "mercaderia" && (
+                <span className="text-[11px] text-violet-600 dark:text-violet-400">✨ {tipoMotivo === "proveedor" ? "como las facturas anteriores de este proveedor" : "por el texto de la factura"}</span>
+              )}
+              {tipoFC === "servicio" && <span className="text-[11px] text-zinc-400">Sin OC · va a orden de pago o se marca pagada</span>}
             </div>
           )}
 

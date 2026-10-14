@@ -2594,14 +2594,14 @@ export default function PresupuestosPage() {
         subtitle={`${presupuestos.length} presupuestos totales`}
         action={{ label: "Nuevo PR", onClick: () => setShowNewPR(true) }}
       />
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-2.5">
         {/* Status multi-select toggles + seguimiento */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex gap-2 flex-wrap flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex gap-1.5 flex-wrap flex-1">
             {/* Botón "Todos" */}
             <button
               onClick={() => toggleEstado("todos")}
-              className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] font-medium transition-colors whitespace-nowrap ${
                 isAllSelected && !vistaSeguimiento
                   ? "bg-orange-500 text-white shadow-sm"
                   : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
@@ -2623,7 +2623,7 @@ export default function PresupuestosPage() {
                 <button
                   key={status}
                   onClick={() => toggleEstado(status)}
-                  className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[13px] font-medium transition-colors whitespace-nowrap ${
                     active && !vistaSeguimiento
                       ? activeColor
                       : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
@@ -2644,7 +2644,7 @@ export default function PresupuestosPage() {
           </div>
           <button
             onClick={() => setVistaSeguimiento(!vistaSeguimiento)}
-            className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+            className={`flex items-center gap-2 rounded-lg px-2.5 py-1 text-[13px] font-medium transition-colors whitespace-nowrap ${
               vistaSeguimiento
                 ? "bg-orange-500 text-white shadow-sm"
                 : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700 dark:text-zinc-300"
@@ -2657,7 +2657,7 @@ export default function PresupuestosPage() {
 
         {/* Totals by estado */}
         {!showPapelera && !vistaSeguimiento && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">
+          <div className="flex flex-wrap gap-1.5">
             {(isAllSelected
               ? ["pendiente", "aprobado", "facturar", "facturado"] as const
               : [...selectedEstados].filter(s => s !== "todos") as string[]
@@ -2666,13 +2666,11 @@ export default function PresupuestosPage() {
               if (!t) return null;
               const cfg = statusConfig[estado as PRStatus] || { label: estado, variant: "outline" as const };
               return (
-                <div key={estado} className="rounded-lg border border-zinc-200 bg-white px-3 py-2.5 dark:border-zinc-800 dark:bg-zinc-900">
-                  <p className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">{cfg.label} ({counts[estado] || 0})</p>
-                  <div className="mt-1 space-y-0.5">
-                    {t.USD > 0 && <p className="text-sm font-bold font-mono text-zinc-900 dark:text-white">{formatCurrency(t.USD, "USD")}</p>}
-                    {t.ARS > 0 && <p className={`${t.USD > 0 ? "text-xs text-zinc-500 dark:text-zinc-400" : "text-sm font-bold dark:text-zinc-100"} font-mono`}>{formatCurrency(t.ARS, "ARS")}</p>}
-                    {t.USD === 0 && t.ARS === 0 && <p className="text-sm font-mono text-zinc-300 dark:text-zinc-600">—</p>}
-                  </div>
+                <div key={estado} className="flex items-baseline gap-2 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-400">{cfg.label} ({counts[estado] || 0})</span>
+                  {t.USD > 0 && <span className="font-mono text-[13px] font-bold text-zinc-900 dark:text-white">{formatCurrency(t.USD, "USD")}</span>}
+                  {t.ARS > 0 && <span className={`font-mono ${t.USD > 0 ? "text-xs text-zinc-500 dark:text-zinc-400" : "text-[13px] font-bold dark:text-zinc-100"}`}>{t.USD > 0 ? "+ " : ""}{formatCurrency(t.ARS, "ARS")}</span>}
+                  {t.USD === 0 && t.ARS === 0 && <span className="font-mono text-[13px] text-zinc-300 dark:text-zinc-600">—</span>}
                 </div>
               );
             })}
@@ -2680,7 +2678,7 @@ export default function PresupuestosPage() {
         )}
 
         {/* Search + Vendedor + Operador + Fecha filters */}
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px] max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
@@ -2688,13 +2686,13 @@ export default function PresupuestosPage() {
               placeholder="Buscar por N° PR, cliente o items..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+              className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             />
           </div>
           <select
             value={vendedorFilter}
             onChange={(e) => setVendedorFilter(e.target.value)}
-            className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+            className="h-8 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
           >
             <option value="">Todos los vendedores</option>
             {vendedores.map((v) => (
@@ -2704,17 +2702,15 @@ export default function PresupuestosPage() {
           <select
             value={operadorFilter}
             onChange={(e) => setOperadorFilter(e.target.value)}
-            className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+            className="h-8 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
           >
             <option value="">Todos los operadores</option>
             {vendedores.map((v) => (
               <option key={v.id} value={v.id}>{v.full_name}</option>
             ))}
           </select>
+          <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} className="contents" />
         </div>
-
-        {/* Smart filters */}
-        <SmartFilters filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
 
         {/* ==================== VISTA SEGUIMIENTO ==================== */}
         {vistaSeguimiento ? (() => {
@@ -2906,7 +2902,7 @@ export default function PresupuestosPage() {
                 render: (row) => (
                   <div className="flex items-center gap-1.5">
                     {row.estado === "solicitud" ? <Inbox className="h-3.5 w-3.5 text-blue-400" /> : <FileText className="h-3.5 w-3.5 text-zinc-400" />}
-                    <span className="font-mono text-xs font-bold">{row.estado === "solicitud" ? row.numero.replace("PR-", "SOL-") : row.numero}</span>
+                    <span className="font-mono text-xs font-bold whitespace-nowrap">{row.estado === "solicitud" ? row.numero.replace("PR-", "SOL-") : row.numero}</span>
                   </div>
                 ),
               },
@@ -2924,16 +2920,16 @@ export default function PresupuestosPage() {
                   let text = descs.join(", ");
                   if (text.length > 50) text = text.slice(0, 47) + "...";
                   else if (row.items.length > 2) text += "...";
-                  return <span className="text-xs text-zinc-600 dark:text-zinc-400" title={row.items.map(it => it.descripcion).join(", ")}>{text}</span>;
+                  return <span className="block max-w-[260px] truncate text-xs text-zinc-600 dark:text-zinc-400" title={row.items.map(it => it.descripcion).join(", ")}>{text}</span>;
                 },
               },
               {
                 key: "clienteNombre", label: "Cliente", sortable: true,
-                render: (row) => <span className="font-medium text-xs">{row.clienteNombre}</span>,
+                render: (row) => <span className="block max-w-[200px] truncate font-medium text-xs" title={row.clienteNombre}>{row.clienteNombre}</span>,
               },
               {
                 key: "sucursalNombre", label: "Sucursal", sortable: true,
-                render: (row) => <span className="text-xs text-zinc-600 dark:text-zinc-300">{row.sucursalNombre || "—"}</span>,
+                render: (row) => <span className="block max-w-[130px] truncate text-xs text-zinc-600 dark:text-zinc-300" title={row.sucursalNombre || ""}>{row.sucursalNombre || "—"}</span>,
               },
               {
                 key: "subtotal", label: "Subtotal s/IVA", className: "text-right", sortable: true,

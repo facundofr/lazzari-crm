@@ -919,6 +919,8 @@ export default function ClientesPage() {
   }, [clientes, sociedadActiva?.id]);
 
   const fetchClientes = useCallback(async () => {
+    // Sin sociedad todavía (recién entra) no se busca: si no, trae los clientes de las dos y avisa un error de saldo que no es.
+    if (!sociedadActiva?.id) return;
     try {
       // contactos is polymorphic (no FK to clientes), so we fetch it separately
       // Todos los clientes (Supabase corta en 1000 filas) y, en paralelo, su saldo real
@@ -1676,7 +1678,7 @@ export default function ClientesPage() {
         subtitle={`${activos} clientes activos`}
         action={{ label: "Nuevo cliente", onClick: openCreate }}
       />
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-2.5">
         {/* Búsqueda, filtros y exportar en una sola línea (el panel de filtros abre abajo, a todo el ancho) */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 min-w-[200px] max-w-md">
@@ -1686,37 +1688,25 @@ export default function ClientesPage() {
               placeholder="Buscar por razon social, CUIT o email..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="h-9 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+              className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             />
           </div>
           <SmartFilters className="contents [&>button]:mb-0 [&>div]:order-last [&>div]:basis-full" filters={filterConfigs} values={filterValues} onChange={setFilterValues} />
-          <button onClick={exportCSV} className="ml-auto flex h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800">
+          <button onClick={exportCSV} className="ml-auto flex h-8 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800">
             <Download className="h-4 w-4" /> Exportar
           </button>
         </div>
         {saldosError && <p className="text-xs text-amber-600">{saldosError}</p>}
 
-        {/* Quick stats */}
-        <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:grid-cols-4">
-          <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Total clientes</p>
-            <p className="mt-1 text-xl sm:text-2xl font-bold">{clientes.length}</p>
-          </div>
-          <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Saldo total CC</p>
-            <p className="mt-1 text-xl sm:text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.saldoCuentaCorriente, 0), "ARS")}</p>
-            {clientes.some((c) => (c.saldoUSD || 0) !== 0) && (
-              <p className="text-xs font-semibold text-zinc-500">+ {formatCurrency(clientes.reduce((a, c) => a + (c.saldoUSD || 0), 0), "USD")}</p>
-            )}
-          </div>
-          <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Credito otorgado</p>
-            <p className="mt-1 text-xl sm:text-2xl font-bold">{formatCurrency(clientes.reduce((a, c) => a + c.limiteCredito, 0), "ARS")}</p>
-          </div>
-          <div className="rounded-lg border border-zinc-200 bg-white p-3 sm:p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-500">Provincias</p>
-            <p className="mt-1 text-xl sm:text-2xl font-bold">{new Set(clientes.map((c) => c.provincia)).size}</p>
-          </div>
+        {/* Números rápidos en una línea */}
+        <div className="flex flex-wrap gap-1.5 text-xs">
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Clientes</span> <b>{clientes.length}</b></span>
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900">
+            <span className="text-zinc-500">Saldo CC</span> <b className="font-mono">{formatCurrency(clientes.reduce((a, c) => a + c.saldoCuentaCorriente, 0), "ARS")}</b>
+            {clientes.some((c) => (c.saldoUSD || 0) !== 0) && <b className="font-mono text-zinc-500"> + {formatCurrency(clientes.reduce((a, c) => a + (c.saldoUSD || 0), 0), "USD")}</b>}
+          </span>
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Crédito otorgado</span> <b className="font-mono">{formatCurrency(clientes.reduce((a, c) => a + c.limiteCredito, 0), "ARS")}</b></span>
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Provincias</span> <b>{new Set(clientes.map((c) => c.provincia)).size}</b></span>
         </div>
 
         <Card className="p-0 overflow-hidden">
@@ -1727,8 +1717,8 @@ export default function ClientesPage() {
                   render: (row) => {
                     const pendCount = pendingCountMap[row.id] || 0;
                     return (
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-orange-50 text-orange-600 font-bold text-xs dark:bg-orange-900/30 dark:text-orange-400">
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-orange-50 text-orange-600 font-bold text-xs dark:bg-orange-900/30 dark:text-orange-400">
                         {getInitials(row.razonSocial)}
                       </div>
                       <div className="min-w-0">
@@ -1748,7 +1738,7 @@ export default function ClientesPage() {
                   },
                 },
                 { key: "localidad", label: "Ubicación", sortable: true, render: (row) => (
-                  <span className="text-xs text-zinc-500">{row.localidad}{row.provincia ? `, ${row.provincia}` : ""}</span>
+                  <span className="block max-w-[200px] truncate text-xs text-zinc-500" title={`${row.localidad}${row.provincia ? `, ${row.provincia}` : ""}`}>{row.localidad}{row.provincia ? `, ${row.provincia}` : ""}</span>
                 )},
                 { key: "sucursales", label: "Suc.", sortable: false, render: (row) => {
                   const n = row.sucursales?.length || 0;

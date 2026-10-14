@@ -41,6 +41,7 @@ import { parsedPaymentForSingleInvoice, paymentDocumentFields } from "@/lib/paym
 import { FxSettlementDialog } from "@/components/fx-settlement-dialog";
 import { canonicalCondicionIva, isKnownCondicionIva, isResponsableInscripto } from "@/lib/fiscal-condition";
 import { pctRetencion, reglaPorConcepto } from "@/lib/retencion-conceptos";
+import { etiquetaCategoriaGasto } from "@/lib/factura-tipo";
 import { roundPaymentMoney, sumPaymentMoney } from "@/lib/payment-money";
 import { calcularPagoParcial } from "@/lib/op-parcial";
 import { pesosDeUsd, brutoPesosDeUsd, cotizacionValida } from "@/lib/op-usd-pesos";
@@ -233,7 +234,8 @@ interface FacturaCompraRow {
   total: number;
   moneda: "ARS" | "USD";
   estado: "pendiente" | "pagada" | "anulada" | "recibida" | "pendiente_aprobacion";
-  tipo: "mercaderia" | "solo_iva" | "transporte";
+  tipo: "mercaderia" | "solo_iva" | "transporte" | "servicio";
+  categoria_gasto?: string | null;
   tipo_comprobante?: string;
   notas: string;
   costo_real?: number;
@@ -1393,7 +1395,8 @@ export default function FinanzasPage() {
               iva: Number(r.iva), percepciones: Number(r.percepciones ?? 0),
               total: Number(r.total), moneda: (r.moneda as "ARS" | "USD") ?? "ARS",
               estado: r.estado ?? "pendiente", notas: r.notas ?? "",
-              tipo: (r.tipo as "mercaderia" | "solo_iva" | "transporte") ?? (r.solo_iva ? "solo_iva" : "mercaderia"),
+              tipo: (r.tipo as "mercaderia" | "solo_iva" | "transporte" | "servicio") ?? (r.solo_iva ? "solo_iva" : "mercaderia"),
+              categoria_gasto: r.categoria_gasto ?? null,
               tipo_comprobante: r.tipo_comprobante ?? "FC A",
               created_at: r.created_at,
               costo_real: Number(r.costo_real ?? 0),
@@ -3955,41 +3958,38 @@ export default function FinanzasPage() {
   return (
     <>
       <Header title="Finanzas" subtitle="Cuentas corrientes, cobros, conciliacion y credito" action={{ label: "Nuevo movimiento", onClick: () => { setEditingMovId(null); setMovForm(emptyMovForm); setMovClienteSearch(""); setMovProvSearch(""); setFormError(""); setModalOpen(true); } }} />
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-3">
         {cargaLentaAviso}
         {errorCargaAviso}
 
-        {/* Grupos: Hoy / Cobrar / Pagar / Cheques / Deudas */}
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        {/* Grupos (Hoy / Cobrar / Pagar / Cheques…) y sus pestañas, en una sola fila */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex gap-1 overflow-x-auto rounded-lg border border-zinc-200 bg-white p-0.5 dark:border-zinc-700 dark:bg-zinc-900">
             {FINANZAS_GRUPOS.map((g) => {
               const Icono = iconoGrupo[g.id];
               const activo = grupo === g.id;
               return (
-                <button key={g.id} type="button" onClick={() => { if (!activo) { setTab(g.tabs[0].id, g.id); setCcDetailCliente(null); setCcDetailProveedor(null); fetchData(); } }}
+                <button key={g.id} type="button" title={g.descripcion} onClick={() => { if (!activo) { setTab(g.tabs[0].id, g.id); setCcDetailCliente(null); setCcDetailProveedor(null); fetchData(); } }}
                   aria-pressed={activo}
-                  className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${activo ? "border-orange-500 bg-orange-50 dark:bg-orange-950/30" : "border-zinc-200 bg-white hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900"}`}>
-                  <Icono className={`h-5 w-5 shrink-0 ${activo ? "text-orange-600" : "text-zinc-400"}`} />
-                  <span className="min-w-0">
-                    <span className={`block text-sm font-semibold ${activo ? "text-orange-700 dark:text-orange-300" : "text-zinc-800 dark:text-zinc-200"}`}>{g.label}</span>
-                    <span className="hidden truncate text-xs text-zinc-500 lg:block">{g.descripcion}</span>
-                  </span>
+                  className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-semibold transition-colors ${activo ? "bg-orange-500 text-white" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>
+                  <Icono className="h-4 w-4 shrink-0" />
+                  {g.label}
                 </button>
               );
             })}
           </div>
-          <div className="w-full overflow-x-auto pb-1">
-            <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-max">
+          {tabsDelGrupo.length > 1 && (
+            <div className="flex gap-0.5 overflow-x-auto rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
               {tabsDelGrupo.map((t) => (
                 <button key={t.id} onClick={() => { setTab(t.id, grupo); setCcDetailCliente(null); setCcDetailProveedor(null); fetchData(); }}
-                  className={`rounded-md px-3 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                  className={`rounded-md px-2.5 py-1 text-[13px] font-medium transition-colors whitespace-nowrap ${
                     tab === t.id ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
                   }`}>
                   {t.label}
                 </button>
               ))}
             </div>
-          </div>
+          )}
         </div>
 
         {/* ── Cuentas ── */}
@@ -4465,7 +4465,7 @@ export default function FinanzasPage() {
                       {row.ocs_vinculadas && row.ocs_vinculadas.length > 0 && !row.oc_numero && (
                         <p className="text-xs text-zinc-400">OC: {row.ocs_vinculadas.map(o => o.numero).join(", ")}</p>
                       )}
-                      {row.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : row.tipo === "transporte" ? <Badge variant="success">Transporte</Badge> : <Badge variant="info">Mercadería</Badge>}
+                      {row.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : row.tipo === "transporte" ? <Badge variant="success">Transporte</Badge> : row.tipo === "servicio" ? <Badge variant="warning">{etiquetaCategoriaGasto(row.categoria_gasto) || "Servicio / gasto"}</Badge> : <Badge variant="info">Mercadería</Badge>}
                       {row.tipo === "solo_iva" && (row.costo_real ?? 0) > 0 && (
                         <p className="text-xs text-blue-500 mt-0.5">Costo real: {formatCurrency(row.costo_real!, row.moneda)}</p>
                       )}
@@ -6562,7 +6562,6 @@ export default function FinanzasPage() {
         <CargarFacturaOC
           sociedadId={sociedadActiva?.id || ""}
           profileId={profile?.id || null}
-          showTipoToggle
           ordenes={ocOptions.filter(o => !["borrador", "cancelada"].includes(o.estado || "") && (o as any).estado_pago !== "pagada").map(o => ({
             id: o.id,
             numero: o.numero,
@@ -6701,7 +6700,7 @@ export default function FinanzasPage() {
                 </div>
                 <div>
                   <p className="text-xs font-medium text-zinc-500">Tipo</p>
-                  {selectedFC.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : selectedFC.tipo === "transporte" ? <Badge variant="success">Transporte</Badge> : <Badge variant="info">Mercadería</Badge>}
+                  {selectedFC.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : selectedFC.tipo === "transporte" ? <Badge variant="success">Transporte</Badge> : selectedFC.tipo === "servicio" ? <Badge variant="warning">{etiquetaCategoriaGasto(selectedFC.categoria_gasto) || "Servicio / gasto"}</Badge> : <Badge variant="info">Mercadería</Badge>}
                 </div>
                 {(selectedFC.oc_numero || (selectedFC.ocs_vinculadas && selectedFC.ocs_vinculadas.length > 0)) && (
                   <div>

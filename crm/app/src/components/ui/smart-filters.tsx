@@ -143,7 +143,7 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
       </button>
 
       {open && (
-        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-zinc-200 bg-white p-2.5 dark:border-zinc-700 dark:bg-zinc-900">
+        <div className="flex w-full flex-wrap items-end gap-2 rounded-lg border border-zinc-200 bg-white p-2.5 dark:border-zinc-700 dark:bg-zinc-900">
           {filters.map((filter) => (
             <div key={filter.key} className="min-w-[140px]">
               <label className="mb-0.5 block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">

@@ -756,7 +756,22 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
           pagada $ 620.329,99 sin retención (exento; no vuelve a SICORE) + los $ 5.870,42 del 08/10 como pago directo. Copia: `Claude outputs/antes_op4_op43_13_10_2026.json`.
         - `20261013210000_datos_pagos_visa_8_facturas.sql` CORRIDA: 8 pagos con Visa ·1582 por $ 1.241.528,69 (Bomberomania, Casella, Fernández, Frávega,
           García, Horni, Mercado Libre, Terra Vita). Vuelta atrás los anula (no borra).
-      **V1.1.438 (13/10, SIN PUBLICAR) — Tanda 1 (OK de Augusto "avanzá con todo"):**
+      **V1.1.439 (13/10, PUBLICADA) — Tanda 2 y 3:**
+        - **Factura de servicio / gasto (la del contador):** en la carga de facturas de compra, fila "Tipo": Compra / Transporte / Servicio / gasto / Solo IVA
+          (siempre visible, también desde Compras). Servicio no pide OC; elegís categoría (Honorarios, Alquiler, Luz/gas/internet, Mantenimiento, Software,
+          Publicidad, Seguros, Otros). Se sugiere solo (✨): repite el tipo de las facturas anteriores del proveedor, o por el texto (honorarios, alquiler…).
+          Va a OP como cualquier factura; monotributista / FC C: sin IVA y sin retención de Ganancias (ya lo hacía la OP). Finanzas muestra la categoría.
+          `lib/factura-tipo.ts` (prueba `scripts/test-factura-tipo.ts`). Probado en local sin guardar (Carlos Cáceres → Transporte sugerido).
+        - `20261013230000_factura_servicio_categoria.sql` CORRIDA (OK 13/10): `facturas_compra.categoria_gasto`.
+          `20261013231000_gasto_fijo_proveedor.sql` (`gastos_fijos.proveedor_id`) SIN CORRER: con OK de Augusto, pero la base estaba bloqueada por una
+          transacción larga de otro proceso (fotos del catálogo, `update catalogo_costos`) que tiene tomada `proveedores`. Correrla cuando termine.
+          Después: gasto fijo atado al proveedor → aviso "falta la factura del mes de X" (falta el monto de honorarios del contador).
+        - **Finanzas:** grupos y pestañas en una sola fila (antes 2 filas con tarjetas grandes).
+        - **Presupuestos (listado):** estados, totales y filtros en filas finas; columnas sin cortes en 3 líneas → entran 18 PR en pantalla (antes 5).
+        - **Clientes:** números en una línea, renglones más bajos. **Arreglado:** cargaba antes de saber la sociedad → mostraba los clientes de las dos
+          y "No se pudo calcular el saldo" con todos los saldos en $ 0.
+        - **Dashboard:** saludo en una línea, gráficos más bajos. Remitos y Transportes ya estaban compactos.
+      **V1.1.438 (13/10, PUBLICADA commit be10849) — Tanda 1 (OK de Augusto "avanzá con todo"):**
         - Error de la carga masiva "No se pudieron cargar las OC" (pedía OC "pendiente", estado que no existe → "borrador"; el cartel muestra el error real).
         - **Carga masiva global** (`components/carga-masiva-global.tsx` en el layout): se abre desde Compras y Finanzas, botón "Segundo plano" deja un aviso
           abajo a la derecha que sigue leyendo/cruzando aunque cambies de pantalla; al guardar avisa (evento `lz:facturas-compra`) y las pantallas se refrescan.
@@ -835,7 +850,9 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
       **PENDIENTES PARA MAÑANA (13/10, orden propuesto):**
         0. Tanda 1: Augusto da OK → correr migración, subir versión, publicar y probar en producción (Informes proveedores, Uso de IA, Ventas).
         1. Tanda 2 (c): PR express "margen 25 %" sobre el costo, aviso si algún renglón < 15 %.
-        2. j) Lista de costos dentro del CRM (Opus para diseñar la etapa 1). Augusto busca el "archivo madre" (¿catalogo_crm.csv u otro Excel de reglas?, falta ruta; fotos: ¿de dónde salen?).
+        2. j) **EN CURSO EN OTRO CHAT (13/10, no tocar desde acá): etapa 1 de la lista de costos** — migración 20261014090000_lista_costos_reglas.sql,
+           scripts/importar-reglas-costos.cjs (reglas, opcionales, márgenes y fotos desde Base_de_Costos_Lazzari_Oct2026.xlsx), pantallas en archivos nuevos.
+           Lista de costos dentro del CRM (Opus para diseñar la etapa 1). Augusto busca el "archivo madre" (¿catalogo_crm.csv u otro Excel de reglas?, falta ruta; fotos: ¿de dónde salen?).
            Etapas: 1) cargar el CSV a tablas y mostrarlo en Proveedores > Lista de costo (el CSV sigue mandando), 2) Buscar/Comparar, 3) Reglas y subir listas con IA y aprobación, 4) recién ahí cambiar la regla 7.
         3. IA-1 cobros sugeridos desde el extracto; IA-3 facturas de compra conciliadas solas; i) CUIT apócrifos (confirmar fuentes ARCA); IA-5 chat con IA con datos reales (solo lectura).
         4. Desarrollar con Augusto: b (personalización en el presupuesto), d (oportunidades), e (preguntas por cliente), f (propuestas entre todos).

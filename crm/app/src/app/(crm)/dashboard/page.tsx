@@ -392,28 +392,28 @@ export default function DashboardPage() {
   return (
     <>
       <Header title="Dashboard" subtitle="Resumen de operaciones" />
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-3">
         {/* Greeting */}
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-xl sm:text-2xl font-bold text-zinc-900 dark:text-white">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <h2 className="text-lg font-bold text-zinc-900 dark:text-white">
               {getGreeting()}, {firstName}
             </h2>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
               {new Date().toLocaleDateString("es-AR", { weekday: "long", day: "numeric", month: "long" })}
             </p>
           </div>
-          <div className="flex gap-2 mt-2 sm:mt-0">
+          <div className="flex gap-2">
             <Link
               href="/presupuestos"
-              className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-[13px] font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
             >
               <FileText className="h-4 w-4" />
               <span className="hidden sm:inline">Nuevo PR</span>
             </Link>
             <Link
               href="/clientes"
-              className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+              className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-[13px] font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
             >
               <Users className="h-4 w-4" />
               <span className="hidden sm:inline">Clientes</span>
@@ -422,7 +422,7 @@ export default function DashboardPage() {
         </div>
 
         {/* KPIs */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             title="Facturado este mes"
             value={`${formatCurrency(facturadoMonedas.ARS)} / ${formatCurrency(facturadoMonedas.USD, "USD")}`}
@@ -455,7 +455,7 @@ export default function DashboardPage() {
 
         {/* Cobertura de gastos + Objetivos */}
         {(totalGastosFijos > 0 || objetivosActivos.length > 0) && (
-          <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {/* Cobertura de gastos - admin y administrativo */}
             {(isAdmin || userRole === "administrativo") && totalGastosFijos > 0 && (
               <Card>
@@ -554,14 +554,14 @@ export default function DashboardPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
           {/* Facturación mensual - Recharts BarChart */}
           <Card className="lg:col-span-2">
             <CardHeader>
               <CardTitle>Facturacion mensual</CardTitle>
               <span className="text-xs text-zinc-400">Últimos 6 meses · ARS neto de NC</span>
             </CardHeader>
-            <div className="h-56 px-2">
+            <div className="h-44 px-2">
               <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                 <BarChart data={ventasPorMes} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e4e4e7" />
@@ -579,7 +579,7 @@ export default function DashboardPage() {
             <CardHeader>
               <CardTitle>Presupuestos por estado</CardTitle>
             </CardHeader>
-            <div className="h-48">
+            <div className="h-40">
               <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                 <PieChart>
                   <Pie
@@ -588,8 +588,8 @@ export default function DashboardPage() {
                     nameKey="estado"
                     cx="50%"
                     cy="50%"
-                    innerRadius={40}
-                    outerRadius={70}
+                    innerRadius={36}
+                    outerRadius={62}
                     paddingAngle={2}
                   >
                     {presupuestosPorEstado.map((entry, idx) => (
@@ -611,7 +611,7 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
           {/* Ultimos presupuestos */}
           <Card className="lg:col-span-2">
             <CardHeader>
@@ -682,7 +682,7 @@ export default function DashboardPage() {
           </Card>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           {/* Top clientes */}
           <Card>
             <CardHeader>

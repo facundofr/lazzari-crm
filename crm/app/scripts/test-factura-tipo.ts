@@ -1,0 +1,11 @@
+import { tipoSugerido, categoriaPorTexto } from "../src/lib/factura-tipo";
+const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } console.log("ok", m); };
+ok(tipoSugerido({ ultimoTipo: "servicio", ultimaCategoria: "honorarios", descripciones: ["algo"] })?.categoria === "honorarios", "repite lo último del proveedor");
+ok(tipoSugerido({ ultimoTipo: "transporte", descripciones: [] })?.tipo === "transporte", "transporte del proveedor");
+ok(tipoSugerido({ ultimoTipo: "mercaderia", descripciones: ["Honorarios profesionales septiembre"] })?.categoria === "honorarios", "contador por texto");
+ok(tipoSugerido({ descripciones: ["Alquiler octubre 2026"] })?.categoria === "alquiler", "alquiler");
+ok(tipoSugerido({ descripciones: ["Guante nitrilo", "Honorarios"] }) === null, "mezcla con mercadería no sugiere");
+ok(tipoSugerido({ descripciones: ["BOTIN PAMPERO T42"] }) === null, "mercadería queda Compra");
+ok(tipoSugerido({ descripciones: [] }) === null, "sin renglones nada");
+ok(categoriaPorTexto("Servicio de internet fibra óptica") === "servicios_publicos", "internet");
+ok(categoriaPorTexto("Liquidación de sueldos 09/2026") === "honorarios", "liquidación de sueldos");
