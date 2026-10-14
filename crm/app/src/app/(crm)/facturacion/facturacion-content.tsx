@@ -29,7 +29,8 @@ import { supabase } from "@/lib/supabase/client";
 import { precioUnitarioParaFactura } from "@/lib/precio-factura";
 import { precioNetoItemPresupuesto } from "@/lib/factura-condicion";
 import { traerTodo } from "@/lib/paginar";
-import { esNotaCredito, elegirFacturaDeOrdenPago, totalVentasNeto } from "@/lib/ventas-documentos";
+import { esNotaCredito, elegirFacturaDeOrdenPago } from "@/lib/ventas-documentos";
+import { facturadoMesNeto } from "@/lib/facturado-mes";
 import { traerDatosSaldoClientes, calcularSaldosClientes, cobradoPorFactura as cobradoPorFacturaVenta, saldoClienteEn, type SaldoCliente } from "@/lib/saldo-clientes";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { mockFacturas } from "@/lib/mock-data";
@@ -280,6 +281,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const [ncStep, setNcStep] = useState<"form" | "saving" | "success" | "error">("form");
   const [ncResult, setNcResult] = useState<string>("");
   const [ncSuccessWarning, setNcSuccessWarning] = useState("");
+  // Después de una NC total que deja el PR en "facturar": ¿se vuelve a facturar? Es una pregunta, nunca frena nada.
+  const [ncPrPregunta, setNcPrPregunta] = useState<{ prId: string; prNumero: string; notas: string; ocs: { numero: string; estado: string }[]; resuelto: "" | "si" | "no" | "error" } | null>(null);
   const ncRequestKeyRef = useRef("");
   const [detailNCs, setDetailNCs] = useState<FacturaRow[]>([]);
   const [detailSolicitante, setDetailSolicitante] = useState<string | null>(null);
@@ -314,6 +317,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
     let cobrado = 0;
     try { cobrado = await fetchCobrosPrevios(factura.id); } catch { /* El servidor vuelve a calcular bajo lock. */ }
     setNcFactura(factura);
+    setNcPrPregunta(null);
     setNcOriginalItems(originalItems);
     setNcItems(originalItems);
     setNcMode("total");
@@ -419,6 +423,19 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
 
       setNcStep("success");
       await fetchData();
+      try {
+        if (ncFactura.presupuesto_id) {
+          const db = supabase as any;
+          const [{ data: fAct }, { data: pAct }] = await Promise.all([
+            db.from("facturas").select("estado").eq("id", ncFactura.id).single(),
+            db.from("presupuestos").select("numero, estado, notas_internas").eq("id", ncFactura.presupuesto_id).single(),
+          ]);
+          if (fAct?.estado === "anulada" && pAct?.estado === "facturar") {
+            const { data: ocsPR } = await db.from("ordenes_compra").select("numero, estado").eq("presupuesto_origen_id", ncFactura.presupuesto_id).neq("estado", "cancelada");
+            setNcPrPregunta({ prId: ncFactura.presupuesto_id, prNumero: pAct.numero, notas: pAct.notas_internas || "", ocs: (ocsPR || []) as { numero: string; estado: string }[], resuelto: "" });
+          }
+        }
+      } catch { /* la pregunta es opcional: la NC ya está emitida */ }
     } catch (err: unknown) {
       setNcError(err instanceof Error ? err.message : "Error al crear NC");
       setNcStep("error");
@@ -1313,7 +1330,8 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
   const ncTipos = ["NCA", "NCB", "NCEA", "NCEB"];
   // B7: una NC cuya factura quedó anulada no se resta otra vez (la factura ya no suma).
   const estadoFacturaPorId = new Map(facturas.map(f => [f.id, f.estado] as [string, string]));
-  const facturadoMesMoneda = (moneda:string)=>totalVentasNeto(facturasEsteMes.filter(f=>f.moneda===moneda), id => estadoFacturaPorId.get(id));
+  // Facturado del mes: la misma cuenta que el Dashboard (facturas − NC, sin IVA, pesos y dólares por separado).
+  const facturadoNeto = facturadoMesNeto(facturas as any[], todayAR().slice(0, 7));
   const saldoFactura = (f:FacturaRow)=>["pagada","anulada"].includes(f.estado)?0:Math.max(0,Number(f.total)-Number(f.total_acreditado||0)-(cobradoPorFactura?.[f.id]||0));
   const pendientesMoneda = (moneda:string)=>facturas.filter(f => f.moneda===moneda && ["pendiente", "parcial", "vencida", "cheque_rechazado"].includes(f.estado) && !ncTipos.includes(f.tipo)).reduce((a, f) => a + saldoFactura(f), 0);
   const facturasVencidas = facturas.filter(f => f.estado === "vencida").length;
@@ -1400,7 +1418,7 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
       <div className={`${embedded ? "pt-3" : "p-3 sm:p-5"} space-y-4`}>
         {/* KPIs */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard title="Facturado este mes" value={`${formatCurrency(facturadoMesMoneda("ARS"),"ARS")} / ${formatCurrency(facturadoMesMoneda("USD"),"USD")}`} icon={DollarSign} iconColor="text-emerald-600" />
+          <StatCard title="Facturado este mes (sin IVA)" value={`${formatCurrency(facturadoNeto.ARS.neto,"ARS")} / ${formatCurrency(facturadoNeto.USD.neto,"USD")}`} detail={`Facturas ${formatCurrency(facturadoNeto.ARS.facturas,"ARS")} − NC ${formatCurrency(facturadoNeto.ARS.nc,"ARS")}`} icon={DollarSign} iconColor="text-emerald-600" />
           <StatCard title="Pendientes de cobro" value={cobradoPorFactura?`${formatCurrency(pendientesMoneda("ARS"),"ARS")} / ${formatCurrency(pendientesMoneda("USD"),"USD")}`:"Saldo sin verificar"} icon={Clock} iconColor="text-amber-500" />
           <StatCard title="Comprobantes vencidos" value={String(facturasVencidas)} icon={AlertTriangle} iconColor="text-red-500" />
           <StatCard title="CAE vigentes" value={String(caeVigentes)} icon={FileCheck} iconColor="text-blue-600" />
@@ -2510,6 +2528,33 @@ export function FacturacionContent({ embedded = false, autoSelectId }: { embedde
                 <p className="text-sm font-mono text-emerald-700 dark:text-emerald-400">{ncResult}</p>
                 <p className="text-xs text-zinc-400">Total acreditado: {formatCurrency(ncTotals.total, ncFactura?.moneda as "USD" | "ARS")}</p>
                 {ncSuccessWarning && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">{ncSuccessWarning}</p>}
+                {ncPrPregunta && (
+                  <div className="w-full rounded-xl border border-orange-200 bg-orange-50 p-3 text-sm dark:border-orange-900 dark:bg-orange-950/20">
+                    <p className="font-semibold text-zinc-800 dark:text-zinc-100">¿Se vuelve a facturar el {ncPrPregunta.prNumero}?</p>
+                    <p className="mt-0.5 text-xs text-zinc-500">La factura quedó anulada y el PR volvió a &quot;Facturar&quot;. Si no se refactura, sigue contando como venta.</p>
+                    {ncPrPregunta.resuelto === "" && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button onClick={() => setNcPrPregunta((p) => p ? { ...p, resuelto: "si" } : p)} className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-white dark:border-zinc-700 dark:text-zinc-200">Sí, se refactura (queda en Ventas)</button>
+                        <button onClick={async () => {
+                          const p = ncPrPregunta;
+                          try {
+                            const nota = `[${new Date().toLocaleDateString("es-AR")}] NC total ${ncResult.split(" — ")[0]}: no se vuelve a facturar. PR cerrado como rechazado.`;
+                            const { error } = await (supabase as any).from("presupuestos").update({ estado: "rechazado", motivo_rechazo: "NC total, no se vuelve a facturar", respondido_at: new Date().toISOString(), notas_internas: p.notas ? `${p.notas}
+${nota}` : nota }).eq("id", p.prId).eq("sociedad_id", sociedadActiva?.id);
+                            if (error) throw error;
+                            setNcPrPregunta({ ...p, resuelto: "no" });
+                          } catch { setNcPrPregunta((q) => q ? { ...q, resuelto: "error" } : q); }
+                        }} className="rounded-lg bg-orange-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-600">No, cerrar el PR (rechazado)</button>
+                      </div>
+                    )}
+                    {ncPrPregunta.resuelto === "si" && <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">Listo: el PR queda en Ventas para re-facturar (corregí el precio antes si hace falta).</p>}
+                    {ncPrPregunta.resuelto === "no" && <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">Listo: el PR quedó como rechazado, con una nota interna, y ya no cuenta como venta.</p>}
+                    {ncPrPregunta.resuelto === "error" && <p className="mt-2 text-xs text-red-600">No se pudo cerrar el PR. Podés pasarlo a Rechazado a mano desde Presupuestos.</p>}
+                    {ncPrPregunta.ocs.length > 0 && ncPrPregunta.resuelto !== "si" && (
+                      <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Ojo con las OC al proveedor: {ncPrPregunta.ocs.map((o) => `${o.numero} (${o.estado})`).join(", ")}. No se tocan solas: si no se recibió, cancelala; si ya se recibió, hay que ver la devolución o el stock.</p>
+                    )}
+                  </div>
+                )}
                 <button onClick={() => setNcOpen(false)} className="mt-2 px-6 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600">Cerrar</button>
               </div>
             )}

@@ -30,6 +30,7 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
   const [prs, setPrs] = useState<PRDelMes[]>([]);
   const [fijos, setFijos] = useState<(FijoEntrada & { descripcion?: string })[]>([]);
   const [objetivo, setObjetivo] = useState<number | null>(null);
+  const [prsPorFacturar, setPrsPorFacturar] = useState<PRDelMes[]>([]);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
   const [dolar, setDolar] = useState("");
@@ -49,7 +50,7 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
       setCargando(true); setError("");
       try {
         const db = supabase as any;
-        const [prRes, fijosRes, objRes] = await Promise.all([
+        const [prRes, fijosRes, objRes, porFacturarRes] = await Promise.all([
           db.from("presupuestos")
             .select("id, estado, moneda, tipo_cambio, tipo_cambio_divisas, modalidad_emision, costo_envio_interno, presupuesto_items(cantidad, precio_venta, precio_costo, costo_moneda)")
             .eq("sociedad_id", sociedadId).eq("eliminado", false).in("estado", ESTADOS_VENDIDOS)
@@ -58,17 +59,30 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
           db.from("objetivos").select("monto_target, moneda, periodo_inicio, periodo_fin, activo, usuario_id").eq("activo", true)
             .lte("periodo_inicio", hoy).gte("periodo_fin", hoy)
             .or(`sociedad_id.is.null,sociedad_id.eq.${sociedadId}`),
+          // Falta facturar: todo PR aprobado o en "facturar", de cualquier fecha (no solo del mes).
+          db.from("presupuestos")
+            .select("id, estado, moneda, tipo_cambio, tipo_cambio_divisas, modalidad_emision, costo_envio_interno, presupuesto_items(cantidad, precio_venta, precio_costo, costo_moneda)")
+            .eq("sociedad_id", sociedadId).eq("eliminado", false).in("estado", ["aprobado", "facturar"]),
         ]);
         if (!vivo) return;
         if (prRes.error) throw prRes.error;
         setPrs(((prRes.data || []) as any[]).map((p) => ({
           id: p.id,
+          estado: p.estado,
           moneda: p.moneda,
           tipoCambio: p.tipo_cambio,
           tipoCambioDivisas: p.tipo_cambio_divisas,
           modalidadEmision: p.modalidad_emision,
           // Si la migración del envío interno todavía no está, la columna no viene y cuenta 0.
           costoEnvioInterno: Number(p.costo_envio_interno) || 0,
+          items: (p.presupuesto_items || []).map((it: any) => ({
+            cantidad: Number(it.cantidad) || 0, precioVenta: Number(it.precio_venta) || 0,
+            precioCosto: Number(it.precio_costo) || 0, costoMoneda: it.costo_moneda,
+          })),
+        })));
+        setPrsPorFacturar(porFacturarRes?.error ? [] : ((porFacturarRes?.data || []) as any[]).map((p) => ({
+          id: p.id, estado: p.estado, moneda: p.moneda, tipoCambio: p.tipo_cambio, tipoCambioDivisas: p.tipo_cambio_divisas,
+          modalidadEmision: p.modalidad_emision, costoEnvioInterno: Number(p.costo_envio_interno) || 0,
           items: (p.presupuesto_items || []).map((it: any) => ({
             cantidad: Number(it.cantidad) || 0, precioVenta: Number(it.precio_venta) || 0,
             precioCosto: Number(it.precio_costo) || 0, costoMoneda: it.costo_moneda,
@@ -102,6 +116,9 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
 
   if (!sociedadId) return null;
   const ventaTotal = c.ventaNeta + c.ventaSinCosto;
+  // Falta facturar: lo vendido que todavía no tiene factura (PR aprobados o en "facturar").
+  const cFalta = calcularCobertura({ prs: prsPorFacturar, fijos: [], dolarFijos: 0, diaDelMes, diasDelMes });
+  const faltaFacturar = cFalta.ventaNeta + cFalta.ventaSinCosto;
   const hayFijos = c.fijosARS + c.fijosUSD > 0;
   const pctObjetivo = objetivo && objetivo > 0 ? Math.round((ventaTotal / objetivo) * 100) : null;
   const mesNombre = new Date(`${mes}-15T12:00:00`).toLocaleDateString("es-AR", { month: "long" });
@@ -125,6 +142,7 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
           <div className="space-y-1.5">
             <p className="text-xs font-medium text-zinc-500">Vendido en el mes (neto, sin IVA)</p>
             <p className="font-mono text-xl font-bold text-zinc-900 dark:text-white">{formatCurrency(ventaTotal)}</p>
+            <p className="text-[11px] text-zinc-500">Falta facturar {formatCurrency(faltaFacturar)} <span className="text-zinc-400">(vendido y aún sin factura, de cualquier mes)</span></p>
             {pctObjetivo !== null ? (
               <>
                 <Barra pct={pctObjetivo} />
@@ -133,7 +151,7 @@ export default function CoberturaFijos({ sociedadId, onMargen }: { sociedadId: s
             ) : (
               <Link href="/finanzas?tab=objetivos" className="inline-flex items-center gap-1 text-[11px] text-orange-600 hover:underline"><Target className="h-3 w-3" /> Cargá tu objetivo del mes</Link>
             )}
-            <p className="text-[10px] text-zinc-400">Presupuestos aprobados y facturados del mes, US$ al tipo de cambio de cada uno.</p>
+            <p className="text-[10px] text-zinc-400">Vendido = presupuestos aprobados, a facturar y facturados con fecha del mes. Lo facturado (facturas menos NC) está en la tarjeta de arriba. Todo sin IVA, US$ al tipo de cambio de cada uno.</p>
           </div>
 
           {/* 2) Cobertura */}

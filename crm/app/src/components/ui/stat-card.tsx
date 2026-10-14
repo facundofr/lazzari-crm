@@ -8,6 +8,8 @@ interface StatCardProps {
   value: string;
   change?: number;
   changeLabel?: string;
+  /** Línea chica bajo el número (de dónde sale la cuenta). */
+  detail?: string;
   icon: LucideIcon;
   iconColor?: string;
 }
@@ -22,7 +24,7 @@ const iconBgMap: Record<string, string> = {
   "text-zinc-500": "bg-zinc-100 dark:bg-zinc-800",
 };
 
-export function StatCard({ title, value, change, changeLabel, icon: Icon, iconColor = "text-zinc-500" }: StatCardProps) {
+export function StatCard({ title, value, change, changeLabel, detail, icon: Icon, iconColor = "text-zinc-500" }: StatCardProps) {
   const TrendIcon = change === undefined ? null : change > 0 ? TrendingUp : change < 0 ? TrendingDown : Minus;
   const trendColor = change === undefined ? "" : change > 0 ? "text-emerald-600" : change < 0 ? "text-red-600" : "text-zinc-400";
   const iconBg = iconBgMap[iconColor] || "bg-zinc-100 dark:bg-zinc-800";
@@ -36,6 +38,7 @@ export function StatCard({ title, value, change, changeLabel, icon: Icon, iconCo
         </div>
       </div>
       <p className="mt-0.5 text-lg font-bold text-zinc-900 dark:text-white">{value}</p>
+      {detail && <p className="text-[11px] leading-tight text-zinc-400">{detail}</p>}
       {change !== undefined && TrendIcon && (
         <div className="mt-1 flex items-center gap-1.5">
           <TrendIcon className={cn("h-3.5 w-3.5", trendColor)} />

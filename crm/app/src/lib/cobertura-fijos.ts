@@ -6,6 +6,8 @@ import { margenPR, type PRMargenEntrada } from "./presupuesto-margen";
 
 export interface PRDelMes extends PRMargenEntrada {
   id: string;
+  /** Estado del PR (para separar lo que falta facturar). */
+  estado?: string;
 }
 
 export interface FijoEntrada {

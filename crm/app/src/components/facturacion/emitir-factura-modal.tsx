@@ -30,6 +30,7 @@ import {
   AlertTriangle, CheckCircle2, Download, FileCheck, Loader2, Maximize2, Minimize2, Minus, Plus, Search, ShieldCheck, X, XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 
 export interface EmitItem {
   descripcion: string;
@@ -144,7 +145,8 @@ export function EmitirFacturaModal({
       fecha_vencimiento: calcFechaVencimiento(condicion, hoy, pr?.cliente?.dias_cuenta_corriente),
       fce_cbu: "",
       fce_transmision: "",
-      observaciones: "",
+      // Las observaciones del PR (PO, SES, etc.) vienen precargadas y se pueden editar; los renglones automáticos de costo/margen nunca pasan.
+      observaciones: pr ? observacionesParaCliente(pr.observaciones) : "",
       items: items.length > 0 ? items : [{ descripcion: "", cantidad: 1, precio_unitario: 0, iva_porcentaje: 21 }],
     };
   });

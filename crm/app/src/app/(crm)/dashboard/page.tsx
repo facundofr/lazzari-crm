@@ -12,6 +12,7 @@ import {
   Loader2, Users, Target,
 } from "lucide-react";
 import { formatCurrency, formatDateTime, todayAR } from "@/lib/utils";
+import { facturadoMesNeto, type FacturadoMes } from "@/lib/facturado-mes";
 import Link from "next/link";
 import CoberturaFijos from "@/components/cobertura-fijos";
 import { useUser } from "@/lib/auth-context";
@@ -98,6 +99,7 @@ export default function DashboardPage() {
   const [margenMes, setMargenMes] = useState<number | null>(null);
   const [kpi, setKpi] = useState({ ventasMes: 0, ventasMesAnterior: 0, presupuestosActivos: 0, presupuestosPendientes: 0, tasaConversion: 0, tasaConversionAnterior: 0, cobranzasMes: 0, cobranzasPendientes: 0, clientesActivos: 0, stockBajo: 0, facturadoMes: 0, margenPromedio: 0, alertasSinLeer: 0 });
   const [facturadoMonedas, setFacturadoMonedas] = useState({ ARS: 0, USD: 0, anteriorARS: 0 });
+  const [facturadoNeto, setFacturadoNeto] = useState<{ actual: FacturadoMes; anteriorARS: number; diaHoy: number } | null>(null);
   const [presupuestosPorEstado, setPresupuestosPorEstado] = useState<{ estado: string; cantidad: number; color: string }[]>([]);
   const [ventasPorMes, setVentasPorMes] = useState<{ mes: string; monto: number }[]>([]);
   const [presupuestos, setPresupuestos] = useState<typeof mockPresupuestos>([]);
@@ -139,7 +141,7 @@ export default function DashboardPage() {
         // Facturas de los últimos 12 meses (gráfico mensual, facturado del mes y top clientes)
         const qFacturas = comoResultado(traerTodo<any>(() => (supabase as any)
           .from("facturas")
-          .select("id, fecha, total, moneda, tipo, tipo_cambio, estado, factura_origen_id, cliente_id, clientes(razon_social)")
+          .select("id, fecha, total, subtotal, moneda, tipo, tipo_cambio, estado, factura_origen_id, cliente_id, clientes(razon_social)")
           .gte("fecha", desde12)
           .neq("estado", "anulada")
           .eq("sociedad_id", sid)
@@ -268,6 +270,14 @@ export default function DashboardPage() {
             anteriorARS: porMes[previousMonth]?.ARS || 0,
           };
           setFacturadoMonedas(totals);
+          // Facturado del mes SIN IVA (facturas − NC), igual que Finanzas; se compara contra el mismo tramo del mes anterior.
+          const idsAnul = (anuladasResult.data ?? []).map((r) => r.id);
+          const diaHoy = Number(todayAR().slice(8, 10)) || 1;
+          setFacturadoNeto({
+            actual: facturadoMesNeto(vigentes as any[], currentMonth, { idsAnulados: idsAnul }),
+            anteriorARS: facturadoMesNeto(vigentes as any[], previousMonth, { hastaDia: diaHoy, idsAnulados: idsAnul }).ARS.neto,
+            diaHoy,
+          });
           setKpi((current) => ({ ...current, facturadoMes: totals.ARS }));
 
           const porCliente: Record<string, ClienteTop> = {};
@@ -390,7 +400,7 @@ export default function DashboardPage() {
     );
   }
 
-  const facturadoChange = calcChange(facturadoMonedas.ARS, facturadoMonedas.anteriorARS);
+  const facturadoChange = facturadoNeto ? calcChange(facturadoNeto.actual.ARS.neto, facturadoNeto.anteriorARS) : undefined;
   const conversionChange = calcChange(kpi.tasaConversion, kpi.tasaConversionAnterior);
 
   const firstName = profile?.full_name?.split(" ")[0] || "Usuario";
@@ -457,10 +467,11 @@ export default function DashboardPage() {
         {/* KPIs */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
-            title="Facturado este mes"
-            value={`${formatCurrency(facturadoMonedas.ARS)} / ${formatCurrency(facturadoMonedas.USD, "USD")}`}
+            title="Facturado este mes (sin IVA)"
+            value={facturadoNeto ? `${formatCurrency(facturadoNeto.actual.ARS.neto)} / ${formatCurrency(facturadoNeto.actual.USD.neto, "USD")}` : "…"}
+            detail={facturadoNeto ? `Facturas ${formatCurrency(facturadoNeto.actual.ARS.facturas)} − NC ${formatCurrency(facturadoNeto.actual.ARS.nc)}` : undefined}
             change={facturadoChange}
-            changeLabel="vs. mes anterior"
+            changeLabel={facturadoNeto ? `vs. del 1 al ${facturadoNeto.diaHoy} del mes anterior` : undefined}
             icon={DollarSign}
             iconColor="text-emerald-600"
           />
@@ -530,7 +541,7 @@ export default function DashboardPage() {
                 <div className="px-6 pb-5 space-y-4">
                   {objetivosTarjeta.map((obj) => {
                     // Para vendedores: calcular progreso como % del facturado vs target
-                    const facturadoObjetivo = obj.moneda === "USD" ? facturadoMonedas.USD : facturadoMes;
+                    const facturadoObjetivo = obj.moneda === "USD" ? (facturadoNeto?.actual.USD.neto ?? 0) : (facturadoNeto?.actual.ARS.neto ?? 0);
                     const progreso = obj.montoTarget > 0 ? Math.min(Math.round((facturadoObjetivo / obj.montoTarget) * 100), 999) : 0;
                     return (
                       <div key={obj.id} className="space-y-1.5">
