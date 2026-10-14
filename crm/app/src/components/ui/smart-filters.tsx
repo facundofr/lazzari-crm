@@ -65,7 +65,7 @@ function SearchSelect({
           placeholder={placeholder}
           onFocus={() => { setIsOpen(true); setQuery(""); }}
           onChange={(e) => { setQuery(e.target.value); setIsOpen(true); }}
-          className="h-9 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-7 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+          className="h-8 w-full rounded-md border border-zinc-200 bg-white pl-8 pr-7 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
         />
         {value && (
           <button
@@ -123,11 +123,11 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
   }
 
   return (
-    <div className={cn("space-y-3", className)}>
+    <div className={cn("space-y-2", className)}>
       <button
         onClick={() => setOpen(!open)}
         className={cn(
-          "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors",
+          "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm font-medium transition-colors",
           activeCount > 0
             ? "border-orange-300 bg-orange-50 text-orange-700 dark:border-orange-700 dark:bg-orange-950/30 dark:text-orange-400"
             : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
@@ -143,10 +143,10 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
       </button>
 
       {open && (
-        <div className="flex flex-wrap items-end gap-3 rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-700 dark:bg-zinc-900">
+        <div className="flex flex-wrap items-end gap-2 rounded-lg border border-zinc-200 bg-white p-2.5 dark:border-zinc-700 dark:bg-zinc-900">
           {filters.map((filter) => (
-            <div key={filter.key} className="min-w-[160px]">
-              <label className="mb-1 block text-xs font-medium text-zinc-500 dark:text-zinc-400">
+            <div key={filter.key} className="min-w-[140px]">
+              <label className="mb-0.5 block text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
                 {filter.label}
               </label>
 
@@ -154,7 +154,7 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
                 <select
                   value={(values[filter.key] as string) || ""}
                   onChange={(e) => updateValue(filter.key, e.target.value)}
-                  className="h-9 w-full rounded-md border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                  className="h-8 w-full rounded-md border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                 >
                   <option value="">{filter.placeholder || "Todos"}</option>
                   {filter.options?.map((opt) => (
@@ -185,7 +185,7 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
                           from: e.target.value,
                         })
                       }
-                      className="h-9 w-[130px] rounded-md border border-zinc-200 bg-white pl-7 pr-2 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="h-8 w-[130px] rounded-md border border-zinc-200 bg-white pl-7 pr-2 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     />
                   </div>
                   <span className="text-xs text-zinc-400">a</span>
@@ -198,7 +198,7 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
                         to: e.target.value,
                       })
                     }
-                    className="h-9 w-[130px] rounded-md border border-zinc-200 bg-white px-2 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    className="h-8 w-[130px] rounded-md border border-zinc-200 bg-white px-2 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                   />
                 </div>
               )}
@@ -215,7 +215,7 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
                         min: e.target.value ? Number(e.target.value) : undefined,
                       })
                     }
-                    className="h-9 w-[80px] rounded-md border border-zinc-200 bg-white px-2 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    className="h-8 w-[80px] rounded-md border border-zinc-200 bg-white px-2 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                   />
                   <span className="text-xs text-zinc-400">a</span>
                   <input
@@ -228,7 +228,7 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
                         max: e.target.value ? Number(e.target.value) : undefined,
                       })
                     }
-                    className="h-9 w-[80px] rounded-md border border-zinc-200 bg-white px-2 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    className="h-8 w-[80px] rounded-md border border-zinc-200 bg-white px-2 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                   />
                 </div>
               )}
@@ -238,7 +238,7 @@ export function SmartFilters({ filters, values, onChange, className }: SmartFilt
           {activeCount > 0 && (
             <button
               onClick={clearAll}
-              className="flex h-9 items-center gap-1 rounded-md px-3 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+              className="flex h-8 items-center gap-1 rounded-md px-3 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
             >
               <X className="h-3 w-3" />
               Limpiar

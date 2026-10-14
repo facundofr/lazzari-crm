@@ -38,26 +38,34 @@ import { useUser } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
 import { APP_VERSION_LABEL } from "@/lib/app-version";
 
-const navigation = [
-  // ── Comercial ──
-  { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
-  { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
-  { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
-  { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras" },
-  { name: "Oportunidades", href: "/oportunidades", icon: Lightbulb, module: "clientes" },
-  { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
-  { name: "Facturas", href: "/consulta-facturas", icon: FileSearch, module: "consulta_facturas" },
-  // ── Compras & logistica ──
-  { name: "Compras", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
-  { name: "Personalización", href: "/personalizacion", icon: Scissors, module: "ordenes_compra" },
-  { name: "Remitos", href: "/remitos", icon: Receipt, module: "remitos" },
-  { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
-  // ── Admin ──
-  { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },
-  { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes" },
-  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
-  { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
-  { name: "Papelera", href: "/papelera", icon: Trash2, module: "presupuestos" },
+// Menú agrupado por lo que hace cada sector. Cada uno ve solo los módulos que su rol permite
+// (los vendedores/compradores no ven Plata). Los grupos sin nada visible no se muestran.
+const navigation: { grupo: string; items: { name: string; href: string; icon: typeof Users; module: string }[] }[] = [
+  { grupo: "Inicio", items: [
+    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
+    { name: "Calendario", href: "/calendario", icon: Calendar, module: "calendario" },
+  ] },
+  { grupo: "Vender", items: [
+    { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
+    { name: "Oportunidades", href: "/oportunidades", icon: Lightbulb, module: "clientes" },
+    { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
+    { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras" },
+    { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
+    { name: "Facturas", href: "/consulta-facturas", icon: FileSearch, module: "consulta_facturas" },
+  ] },
+  { grupo: "Comprar", items: [
+    { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
+    { name: "Compras", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
+    { name: "Personalización", href: "/personalizacion", icon: Scissors, module: "ordenes_compra" },
+  ] },
+  { grupo: "Entregar", items: [
+    { name: "Remitos", href: "/remitos", icon: Receipt, module: "remitos" },
+    { name: "Transportes", href: "/transportes", icon: Truck, module: "remitos" },
+  ] },
+  { grupo: "Plata", items: [
+    { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },
+    { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes" },
+  ] },
 ];
 
 function hasModuleAccess(role: Role, module: string): boolean {
@@ -161,48 +169,72 @@ export function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4">
-        <ul className="space-y-1">
-          {navigation
-            .filter((item) => hasModuleAccess(role, item.module))
-            .map((item) => {
-              const isActive = pathname.startsWith(item.href);
-              const showLabel = !collapsed || mobileSidebarOpen;
-              return (
-                <li key={item.name}>
-                  <Link
-                    href={item.href}
-                    onClick={handleNavClick}
-                    className={cn(
-                      "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                      !isActive && "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white"
-                    )}
-                    style={isActive ? { backgroundColor: accentColor + "15", color: accentColor } : undefined}
-                    title={!showLabel ? item.name : undefined}
-                  >
-                    <item.icon className="h-5 w-5 shrink-0" style={isActive ? { color: accentColor } : undefined} />
-                    {showLabel && <span>{item.name}</span>}
-                  </Link>
-                </li>
-              );
-            })}
-        </ul>
+      <nav className="flex-1 overflow-y-auto px-3 py-2">
+        {navigation.map((g) => {
+          const visibles = g.items.filter((item) => hasModuleAccess(role, item.module));
+          if (!visibles.length) return null;
+          const showLabel = !collapsed || mobileSidebarOpen;
+          return (
+            <div key={g.grupo} className="mb-2">
+              {showLabel
+                ? <p className="px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">{g.grupo}</p>
+                : <div className="mx-3 mb-1 border-t border-zinc-200 dark:border-zinc-800" />}
+              <ul className="space-y-0.5">
+                {visibles.map((item) => {
+                  const isActive = pathname.startsWith(item.href);
+                  return (
+                    <li key={item.name}>
+                      <Link
+                        href={item.href}
+                        onClick={handleNavClick}
+                        className={cn(
+                          "flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                          !isActive && "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white"
+                        )}
+                        style={isActive ? { backgroundColor: accentColor + "15", color: accentColor } : undefined}
+                        title={!showLabel ? item.name : undefined}
+                      >
+                        <item.icon className="h-4 w-4 shrink-0" style={isActive ? { color: accentColor } : undefined} />
+                        {showLabel && <span>{item.name}</span>}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          );
+        })}
       </nav>
 
       {/* Bottom */}
-      <div className="border-t border-zinc-200 px-3 py-3 dark:border-zinc-800">
+      <div className="border-t border-zinc-200 px-3 py-2 dark:border-zinc-800">
+        {hasModuleAccess(role, "presupuestos") && (
+          <Link
+            href="/papelera"
+            onClick={handleNavClick}
+            className={cn(
+              "flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+              !pathname.startsWith("/papelera") && "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            )}
+            style={pathname.startsWith("/papelera") ? { backgroundColor: accentColor + "15", color: accentColor } : undefined}
+            title={collapsed && !mobileSidebarOpen ? "Papelera" : undefined}
+          >
+            <Trash2 className="h-4 w-4" />
+            {(!collapsed || mobileSidebarOpen) && <span>Papelera</span>}
+          </Link>
+        )}
         {hasModuleAccess(role, "configuracion") && (
           <Link
             href="/configuracion"
             onClick={handleNavClick}
             className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+              "flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
               !pathname.startsWith("/configuracion") && "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800"
             )}
             style={pathname.startsWith("/configuracion") ? { backgroundColor: accentColor + "15", color: accentColor } : undefined}
             title={collapsed && !mobileSidebarOpen ? "Configuración" : undefined}
           >
-            <Settings className="h-5 w-5" />
+            <Settings className="h-4 w-4" />
             {(!collapsed || mobileSidebarOpen) && <span>Configuración</span>}
           </Link>
         )}
@@ -211,12 +243,12 @@ export function Sidebar() {
         <button
           onClick={toggleTheme}
           className={cn(
-            "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white w-full",
+            "flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white w-full",
             collapsed && !mobileSidebarOpen && "justify-center"
           )}
           title={theme === "dark" ? "Modo claro" : "Modo oscuro"}
         >
-          {theme === "dark" ? <Sun className="h-5 w-5 shrink-0" /> : <Moon className="h-5 w-5 shrink-0" />}
+          {theme === "dark" ? <Sun className="h-4 w-4 shrink-0" /> : <Moon className="h-4 w-4 shrink-0" />}
           {(!collapsed || mobileSidebarOpen) && <span>{theme === "dark" ? "Modo claro" : "Modo oscuro"}</span>}
         </button>
 
@@ -234,7 +266,7 @@ export function Sidebar() {
         </div>
 
         {/* User */}
-        <div className={cn("mt-2 flex items-center gap-3 rounded-lg px-3 py-2.5", collapsed && !mobileSidebarOpen && "justify-center")}>
+        <div className={cn("mt-1 flex items-center gap-3 rounded-lg px-3 py-1.5", collapsed && !mobileSidebarOpen && "justify-center")}>
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-xs font-bold text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
             {initials}
           </div>

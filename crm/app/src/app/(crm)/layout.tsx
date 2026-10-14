@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { AIWidget } from "@/components/layout/ai-widget";
 import { UserProvider, useUser } from "@/lib/auth-context";
 import { ToastProvider } from "@/components/ui/toast";
+import { CargaMasivaProvider } from "@/components/carga-masiva-global";
 import { cn } from "@/lib/utils";
 
 function CRMContent({ children }: { children: React.ReactNode }) {
@@ -49,7 +50,9 @@ export default function CRMLayout({ children }: { children: React.ReactNode }) {
   return (
     <UserProvider>
       <ToastProvider>
-        <CRMContent>{children}</CRMContent>
+        <CargaMasivaProvider>
+          <CRMContent>{children}</CRMContent>
+        </CargaMasivaProvider>
       </ToastProvider>
     </UserProvider>
   );

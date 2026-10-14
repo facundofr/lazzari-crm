@@ -17,8 +17,9 @@ import {
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
   PackageCheck, MessageSquare, Edit3, Plus, Minus,
   Maximize2, Upload, Trash2, RefreshCw,
-  Search, CreditCard, Sparkles,
+  Search, CreditCard, Sparkles, MoreHorizontal,
 } from "lucide-react";
+import { useCargaMasiva, EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import ConciliacionCompras from "@/components/conciliacion-compras";
 import LimpiezaOC from "@/components/limpieza-oc";
@@ -276,6 +277,8 @@ export default function OrdenesCompraPage() {
   const [cargarFCPreselectedId, setCargarFCPreselectedId] = useState<string | undefined>();
   const [conciliarOpen, setConciliarOpen] = useState(false);
   const [limpiezaOpen, setLimpiezaOpen] = useState(false);
+  const [masOpen, setMasOpen] = useState(false);
+  const { abrirCargaMasiva } = useCargaMasiva();
 
   // Email modal
   const [enviarOCId, setEnviarOCId] = useState<string | null>(null);
@@ -569,6 +572,13 @@ export default function OrdenesCompraPage() {
       setLoading(false);
     }
   }, [sociedadActiva]);
+
+  // La carga masiva (en segundo plano) avisa cuando guarda facturas: se refresca la lista.
+  useEffect(() => {
+    const refrescar = () => { void fetchData(); };
+    window.addEventListener(EVENTO_FACTURAS_COMPRA, refrescar);
+    return () => window.removeEventListener(EVENTO_FACTURAS_COMPRA, refrescar);
+  }, [fetchData]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -2200,44 +2210,41 @@ export default function OrdenesCompraPage() {
         action={canManageCompras ? { label: "Nueva OC", onClick: openCreateModal } : undefined}
       />
 
-      {/* Secondary action bar */}
-      {canManageCompras && <div className="px-4 sm:px-8 pt-2 flex justify-end gap-3">
+      {/* Barra de acciones: un botón principal y lo ocasional en "Más" */}
+      {canManageCompras && <div className="px-4 sm:px-8 pt-2 flex justify-end gap-2">
         <button
-          onClick={() => setLimpiezaOpen(true)}
-          title="Traducir los renglones escritos a mano al artículo de la lista del proveedor, y cerrar saldos que no van a llegar"
-          className="flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg border border-orange-500 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/30 transition-colors"
-        >
-          <Sparkles className="h-4 w-4" />
-          Ordenar OC abiertas
-        </button>
-        <button
-          onClick={() => setConciliarOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-semibold rounded-lg bg-orange-600 text-white hover:bg-orange-700 transition-colors"
-        >
-          <Sparkles className="h-4 w-4" />
-          Conciliar facturas (IA)
-        </button>
-        <button
-          onClick={() => { setCargarFCPreselectedId(undefined); setCargarFCOpen(true); }}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+          onClick={abrirCargaMasiva}
+          title="Una o varias facturas (y sus NC), de uno o varios proveedores: la IA las lee, las cruza con las OC y podés dejarla en segundo plano"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg bg-orange-600 text-white hover:bg-orange-700 transition-colors"
         >
           <Upload className="h-4 w-4" />
-          Cargar factura
+          Cargar facturas (IA)
         </button>
-        <button
-          onClick={openSinProveedorModal}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-amber-300 dark:border-amber-700 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
-        >
-          <AlertTriangle className="h-4 w-4" />
-          Items sin proveedor
-        </button>
-        <button
-          onClick={openConsolidateModal}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-orange-300 dark:border-orange-700 text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors"
-        >
-          <Merge className="h-4 w-4" />
-          Consolidar pedidos
-        </button>
+        <div className="relative">
+          <button
+            onClick={() => setMasOpen((v) => !v)}
+            className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800 transition-colors"
+          >
+            <MoreHorizontal className="h-4 w-4" /> Más <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+          {masOpen && <>
+            <div className="fixed inset-0 z-30" onClick={() => setMasOpen(false)} />
+            <div className="absolute right-0 z-40 mt-1 w-64 overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+              {[
+                { icon: Sparkles, label: "Ordenar OC abiertas", hint: "Traducir renglones y cerrar saldos que no llegan", onClick: () => setLimpiezaOpen(true) },
+                { icon: Upload, label: "Cargar una factura a mano", hint: "De a una, sin la carga masiva", onClick: () => { setCargarFCPreselectedId(undefined); setCargarFCOpen(true); } },
+                { icon: Sparkles, label: "Conciliar un proveedor (IA)", hint: "Facturas de un solo proveedor contra sus OC", onClick: () => setConciliarOpen(true) },
+                { icon: AlertTriangle, label: "Ítems sin proveedor", hint: "", onClick: openSinProveedorModal },
+                { icon: Merge, label: "Consolidar pedidos", hint: "", onClick: openConsolidateModal },
+              ].map((it) => (
+                <button key={it.label} onClick={() => { setMasOpen(false); it.onClick(); }} className="flex w-full items-start gap-2 px-3 py-1.5 text-left hover:bg-zinc-50 dark:hover:bg-zinc-800">
+                  <it.icon className="mt-0.5 h-4 w-4 shrink-0 text-orange-500" />
+                  <span className="dark:text-zinc-200">{it.label}{it.hint && <span className="block text-[11px] text-zinc-500">{it.hint}</span>}</span>
+                </button>
+              ))}
+            </div>
+          </>}
+        </div>
       </div>}
 
       <div className="p-3 sm:p-5 space-y-4">

@@ -747,6 +747,41 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         - Punto 1 de la tanda probado en producción sin guardar: "Repetir presupuesto anterior" (PR-2026-1246 Corteva: 28 art., 22 con precio de hoy, 6 costo anterior) y Enter en el último renglón: OK.
       **PENDIENTE (aviso de Augusto 13/10):** Proveedores → "Con deuda" muestra 11 proveedores con $ 2.742.069,43 que NO se les debe (Bomberomania, Casella,
         Electronic, Mastroianni, Fernandez, Fravega, Garcia, Horni, Mercado Libre, Segutecnica, Terra Vita). Revisar de dónde sale el saldo (facturas pagadas sin OP / sin marcar).
+        **Diagnóstico 13/10 (solo lectura):** 1 factura por proveedor, suma exacta $ 2.742.069,43. 8 están en estado "pagada" (tilde "Ya pagada con tarjeta /
+        marketplace") sin ningún pago cargado y `lib/saldo-proveedores.ts` no mira el estado. BH Industrial (OP-000004) y Electronic (OP-000043): OP anuladas,
+        el pago sigue activo pero suelto (sin factura). Segutécnica 0014-00073272 ($ 554.710,63, 29/09, estado "pendiente", CC 60 días) sin pago: preguntar a Augusto.
+        Propuesta de arreglo esperando OK.
+        **13/10 RESUELTO (en la base, con OK):** "Con deuda" queda solo Segutécnica ($ 554.710,63, deuda real, no pagada).
+        - `20261013200000_datos_reactivar_op4_op43.sql` CORRIDA: OP-000004 (Mastroianni) pagada por transferencia BBVA 02/10; OP-000043 (Electronic)
+          pagada $ 620.329,99 sin retención (exento; no vuelve a SICORE) + los $ 5.870,42 del 08/10 como pago directo. Copia: `Claude outputs/antes_op4_op43_13_10_2026.json`.
+        - `20261013210000_datos_pagos_visa_8_facturas.sql` CORRIDA: 8 pagos con Visa ·1582 por $ 1.241.528,69 (Bomberomania, Casella, Fernández, Frávega,
+          García, Horni, Mercado Libre, Terra Vita). Vuelta atrás los anula (no borra).
+      **V1.1.438 (13/10, SIN PUBLICAR) — Tanda 1 (OK de Augusto "avanzá con todo"):**
+        - Error de la carga masiva "No se pudieron cargar las OC" (pedía OC "pendiente", estado que no existe → "borrador"; el cartel muestra el error real).
+        - **Carga masiva global** (`components/carga-masiva-global.tsx` en el layout): se abre desde Compras y Finanzas, botón "Segundo plano" deja un aviso
+          abajo a la derecha que sigue leyendo/cruzando aunque cambies de pantalla; al guardar avisa (evento `lz:facturas-compra`) y las pantallas se refrescan.
+          Trae sola proveedores y OC. Cerrar con facturas sin cargar pregunta antes.
+        - **FC + NC juntas:** se cargan primero las FC y después las NC; la IA lee "comprobantes_asociados" de la NC; la NC trae sugerida la factura citada
+          o la del mismo proveedor guardada en la tanda (✨ aviso, se puede cambiar). `lib/nc-sugerencia.ts` (prueba `scripts/test-nc-sugerencia.ts`).
+        - **Compras:** barra con 1 botón "Cargar facturas (IA)" + "Más ▾" (Ordenar OC abiertas, Cargar una factura a mano, Conciliar un proveedor, Ítems sin proveedor, Consolidar).
+        - **Pagada con tarjeta:** el tilde pasó a "¿Cómo se paga?" (Va a OP / Ya pagada con Visa / Master / otro medio). OC marcada con tarjeta o Mercado Libre
+          sugiere Visa. Al guardar registra el pago en la cuenta de la tarjeta (saldo proveedor 0, suma deuda de tarjeta). En la conciliación con OC también:
+          si todas las OC de la factura estaban pagadas con tarjeta, queda pagada con Visa. `lib/pago-tarjeta.ts` (prueba `scripts/test-pago-tarjeta.ts`).
+          Red de seguridad: factura "pagada" sin pago no cuenta como deuda (`lib/saldo-proveedores.ts`). Proveedores ahora suma los mismos créditos que Finanzas.
+          `20261013220000_pago_tarjeta_factura_compra.sql` CORRIDA (OK 13/10): `tarjetas_de_sociedad` y `registrar_pago_tarjeta_factura_compra`.
+          Los vendedores ven/usan solo tarjetas con uso "trabajo" (la Visa, Mercado Libre de los chicos); la Mastercard (uso "mixto") es personal de
+          Augusto, solo la ven admin/administrativo ("más adelante veré qué función le doy"). Probada simulando a Jerónimo y en local.
+          Doble check contra el resumen de la tarjeta: cuando se haga la carga de resúmenes (etapa 3 de Finanzas).
+        - **Menú agrupado:** Inicio / Vender / Comprar / Entregar / Plata; Papelera abajo con Configuración; renglones más finos. Cada rol ve lo suyo (vendedor no ve Plata).
+        - **Capa 1 (todas las pantallas):** tablas (DataTable) con renglones y encabezados más finos, ventanas (Modal) con menos margen y 75 % de alto,
+          filtros más bajos, números de arriba (StatCard) y encabezado más chicos. Proveedores: pestañas, buscador y tabla más compactos.
+        - Campanita: ya no consulta con sociedad "undefined" (error 400 en consola).
+        - Probado en local sin guardar: menú, Compras (botón + Más), segundo plano siguiendo a Finanzas, "¿Cómo se paga?" con las 2 tarjetas, Con deuda = 1.
+        - SIGUIENTE: Tanda 2 = Finanzas compacta + facturas de servicio/contador (tipo "Servicio / gasto", gasto fijo atado al proveedor que espera la factura del mes).
+          Tanda 3 = Presupuestos (listado), Clientes, Remitos, Transportes, Dashboard. Tanda 4 = resto.
+      **IDEA (Augusto 13/10): cargar FC + NC del mismo proveedor juntas.** Hoy: Finanzas → "Cargar facturas (IA)" acepta las dos a la vez, pero se revisan
+        de a una; la NC va a la carga simple y solo se puede aplicar a una factura YA guardada (si no, queda como crédito disponible para la OP).
+        Propuesta: en la carga masiva, si en la misma tanda hay FC y NC del mismo proveedor, guardar primero la FC y proponer sola "Aplicar la NC a la FC …" (aviso, no traba).
       **V1.1.436 (13/10, PUBLICADA) — punto 4: las 8 mejoras de la ventana de presupuestos:**
         - Ventana más ancha (Modal size "2xl"); datos de arriba en una fila (grilla de 11, campos h-8); avisos del dólar al final en una línea.
         - Tabla sin scroll lateral: Código + Descripción en una celda (la descripción ocupa lo que sobra); IVA oculto salvo que algún renglón ≠ 21 % (botón "IVA 21 % · cambiar").

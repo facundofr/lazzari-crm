@@ -29,7 +29,7 @@ import { EmailComposeModal } from "@/components/email-compose-modal";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import * as XLSX from "xlsx";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
-import CargaMasivaFacturasCompra from "@/components/carga-masiva-facturas-compra";
+import { useCargaMasiva, EVENTO_FACTURAS_COMPRA } from "@/components/carga-masiva-global";
 import PlanPagos from "@/components/plan-pagos";
 import CuentasFinancieras from "@/components/cuentas-financieras";
 import ExtractoBbva from "@/components/extracto-bbva";
@@ -828,7 +828,14 @@ export default function FinanzasPage() {
   // Facturas compra state
   const [facturasCompra, setFacturasCompra] = useState<FacturaCompraRow[]>([]);
   const [fcModalOpen, setFcModalOpen] = useState(false);
-  const [fcMassModalOpen, setFcMassModalOpen] = useState(false);
+  // Carga masiva de facturas: vive en el armazón del CRM (sigue en segundo plano); al guardar avisa para refrescar.
+  const { abrirCargaMasiva } = useCargaMasiva();
+  const fetchDataRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const refrescar = () => fetchDataRef.current();
+    window.addEventListener(EVENTO_FACTURAS_COMPRA, refrescar);
+    return () => window.removeEventListener(EVENTO_FACTURAS_COMPRA, refrescar);
+  }, []);
   const [planPagosOpen, setPlanPagosOpen] = useState(false);
   const [fcForm, setFcForm] = useState(emptyFCForm);
   const [fcSaving, setFcSaving] = useState(false);
@@ -1484,6 +1491,7 @@ export default function FinanzasPage() {
         setLoading(false);
       }
   }, [sociedadActiva]);
+  fetchDataRef.current = () => { void fetchData(); };
 
   useEffect(() => {
     let active = true;
@@ -4373,7 +4381,7 @@ export default function FinanzasPage() {
                 <button onClick={openFCModal} title="Cargar una factura a mano, sin leerla con IA" className="flex items-center gap-1.5 rounded-lg border border-orange-500 px-3 py-2 text-sm font-medium text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/20 transition-colors">
                   <Plus className="h-4 w-4" /> Carga manual
                 </button>
-                <button onClick={() => setFcMassModalOpen(true)} title="Una o varias facturas, de uno o varios proveedores: la IA las lee y, si hay OC con renglones, las concilia línea por línea" className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
+                <button onClick={abrirCargaMasiva} title="Una o varias facturas, de uno o varios proveedores: la IA las lee y, si hay OC con renglones, las concilia línea por línea" className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-3 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
                   <Upload className="h-4 w-4" /> Cargar facturas (IA)
                 </button>
               </div>
@@ -6574,16 +6582,6 @@ export default function FinanzasPage() {
         <PlanPagos sociedadId={sociedadActiva.id} onClose={() => { setPlanPagosOpen(false); fetchData(); }} />
       )}
 
-      {fcMassModalOpen && (
-        <CargaMasivaFacturasCompra
-          sociedadId={sociedadActiva?.id || ""}
-          profileId={profile?.id || null}
-          proveedores={proveedoresOptions.map(p => ({ id: p.id, razon_social: p.razon_social, cuit: p.cuit }))}
-          ordenes={ocOptions.filter(o => o.proveedor_id && !["cancelada"].includes(o.estado || "")).map(o => ({ id: o.id, numero: o.numero, proveedor_id: o.proveedor_id, proveedor_nombre: o.proveedores?.razon_social || "Sin proveedor", moneda: o.moneda }))}
-          onClose={() => setFcMassModalOpen(false)}
-          onSuccess={() => { setFcMassModalOpen(false); fetchData(); }}
-        />
-      )}
 
       {/* ── FC Detail Panel ── */}
       {selectedFC && (

@@ -28,16 +28,16 @@ export function StatCard({ title, value, change, changeLabel, icon: Icon, iconCo
   const iconBg = iconBgMap[iconColor] || "bg-zinc-100 dark:bg-zinc-800";
 
   return (
-    <div className="group rounded-xl border border-zinc-200 bg-white px-4 py-3 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="group rounded-xl border border-zinc-200 bg-white px-3 py-2 shadow-sm transition-shadow hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-zinc-500 dark:text-zinc-400">{title}</p>
-        <div className={cn("rounded-lg p-2 transition-transform group-hover:scale-110", iconBg, iconColor)}>
+        <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">{title}</p>
+        <div className={cn("rounded-lg p-1.5 transition-transform group-hover:scale-110", iconBg, iconColor)}>
           <Icon className="h-4 w-4" />
         </div>
       </div>
-      <p className="mt-1 text-xl font-bold text-zinc-900 dark:text-white">{value}</p>
+      <p className="mt-0.5 text-lg font-bold text-zinc-900 dark:text-white">{value}</p>
       {change !== undefined && TrendIcon && (
-        <div className="mt-2 flex items-center gap-1.5">
+        <div className="mt-1 flex items-center gap-1.5">
           <TrendIcon className={cn("h-3.5 w-3.5", trendColor)} />
           <span className={cn("text-xs font-medium", trendColor)}>
             {change > 0 ? "+" : ""}{change}%

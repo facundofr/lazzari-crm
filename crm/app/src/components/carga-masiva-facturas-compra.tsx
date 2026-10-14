@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, FileUp, Loader2, X, AlertTriangle, UserPlus, PlayCircle } from "lucide-react";
+import { CheckCircle2, FileUp, Loader2, X, AlertTriangle, UserPlus, PlayCircle, Minimize2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import CargarFacturaOC, { type OCParaVincular } from "@/components/cargar-factura-oc";
 import ConciliacionCompras, { lineasParaCruce } from "@/components/conciliacion-compras";
 import { cargarLineasOc, sugerirEquivalencias, contarSemaforo, type AnalisisIA } from "@/lib/conciliacion-compras-analisis";
 import { matchPurchaseLines, citaOc } from "@/lib/purchase-matching";
 import { formatCurrency } from "@/lib/utils";
+import { traerTodo } from "@/lib/paginar";
 import { canonicalPurchaseInvoiceNumber } from "@/lib/purchase-invoice-reconciliation";
 import { ProveedorFormModal, type ProveedorForm } from "@/components/proveedor-form-modal";
 
@@ -31,11 +32,44 @@ function tipoLabel(file: File, data: any): string {
   return letra ? `FC ${letra}` : "FC";
 }
 
-export default function CargaMasivaFacturasCompra({ sociedadId, profileId, proveedores, ordenes, onClose, onSuccess }: { sociedadId: string; profileId: string | null; proveedores: Provider[]; ordenes: OC[]; onClose: () => void; onSuccess: () => void }) {
+/**
+ * Carga masiva de facturas de compra. Si no recibe proveedores/OC los trae sola.
+ * Con `oculta` sigue leyendo y cruzando en segundo plano y solo muestra un aviso abajo a la derecha.
+ */
+export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, profileId, proveedores, ordenes: ordenesProp, oculta, onMinimizar, onAbrir, onGuardada, onClose, onSuccess }: {
+  sociedadId: string; sociedadNombre?: string; profileId: string | null; proveedores?: Provider[]; ordenes?: OC[];
+  oculta?: boolean; onMinimizar?: () => void; onAbrir?: () => void; onGuardada?: () => void;
+  onClose: () => void; onSuccess: () => void;
+}) {
   const [rows, setRows] = useState<QueueRow[]>([]);
-  const [provs, setProvs] = useState<Provider[]>(proveedores);
+  const [provs, setProvs] = useState<Provider[]>(proveedores || []);
+  const [ordenes, setOrdenes] = useState<OC[]>(ordenesProp || []);
   const [saving, setSaving] = useState(false);
-  const [review, setReview] = useState<{ row: QueueRow; orders: OCParaVincular[] } | null>(null);
+  const [review, setReview] = useState<{ row: QueueRow; orders: OCParaVincular[]; ncSugerida?: { asociadas: string[]; deLaTanda: string[] } } | null>(null);
+
+  // Abierta desde cualquier pantalla: trae proveedores y OC de la sociedad.
+  useEffect(() => {
+    if ((proveedores && ordenesProp) || !sociedadId) return;
+    let cancelado = false;
+    (async () => {
+      const db = supabase as any;
+      const [ps, os] = await Promise.all([
+        proveedores ? Promise.resolve(proveedores) : traerTodo<Provider>(() => db.from("proveedores").select("id, razon_social, cuit").eq("sociedad_id", sociedadId).order("id")),
+        ordenesProp ? Promise.resolve(ordenesProp) : traerTodo<any>(() => db.from("ordenes_compra").select("id, numero, proveedor_id, moneda, estado, proveedores(razon_social)")
+          .eq("sociedad_id", sociedadId).neq("estado", "cancelada").not("proveedor_id", "is", null).order("id")),
+      ]).catch(() => [[], []] as [Provider[], any[]]);
+      if (cancelado) return;
+      setProvs(prev => [...ps, ...prev.filter(p => !ps.some(x => x.id === p.id))]);
+      setOrdenes(os.map((o: any) => ({ id: o.id, numero: o.numero, proveedor_id: o.proveedor_id, proveedor_nombre: o.proveedor_nombre || o.proveedores?.razon_social || "Sin proveedor", moneda: o.moneda })));
+      // Las que se leyeron antes de tener la lista de proveedores, se asignan ahora.
+      setRows(prev => prev.map(r => r.state === "ready" && !r.provider && r.data ? (() => {
+        const provider = ps.find(p => onlyDigits(p.cuit) === onlyDigits(r.data?.proveedor?.cuit) && onlyDigits(p.cuit));
+        return provider ? { ...r, provider, message: undefined } : r;
+      })() : r));
+    })();
+    return () => { cancelado = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sociedadId]);
   const [enSecuencia, setEnSecuencia] = useState(false);
   const [nuevoProv, setNuevoProv] = useState<NuevoProv | null>(null);
   const parsingRef = useRef(false);
@@ -136,12 +170,16 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
         setConciliar({ proveedorId: row.provider.id, rows: grupo.length ? grupo : [row] });
         return;
       }
+      const ncSugerida = esNotaODebito(row) && row.provider ? {
+        asociadas: Array.isArray(row.data?.comprobantes_asociados) ? row.data.comprobantes_asociados.map(String) : [],
+        deLaTanda: rowsRef.current.filter(r => r.state === "saved" && r.provider?.id === row.provider!.id && !esNotaODebito(r)).map(r => String(r.data?.numero_factura || "")),
+      } : undefined;
       const { data, error } = await (supabase as any).from("ordenes_compra")
         .select("id, numero, proveedor_id, total, moneda, estado, fecha, proveedores(razon_social)")
-        .eq("sociedad_id", sociedadId).in("estado", ["pendiente", "enviada", "confirmada", "recibida_parcial", "recibida"]);
+        .eq("sociedad_id", sociedadId).in("estado", ["borrador", "enviada", "confirmada", "recibida_parcial", "recibida"]);
       if (error) throw error;
-      setReview({ row, orders: (data || []).map((o: any) => ({ ...o, proveedor_nombre: o.proveedores?.razon_social || "Sin proveedor" })) });
-    } catch (e) { alert(e instanceof Error ? e.message : "No se pudieron cargar las OC"); setEnSecuencia(false); }
+      setReview({ row, ncSugerida, orders: (data || []).map((o: any) => ({ ...o, proveedor_nombre: o.proveedores?.razon_social || "Sin proveedor" })) });
+    } catch (e) { alert(e instanceof Error ? e.message : `No se pudieron cargar las OC${(e as any)?.message ? `: ${(e as any).message}` : ""}`); setEnSecuencia(false); }
     finally { setSaving(false); }
   }
 
@@ -197,8 +235,10 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
     setConciliar({ proveedorId: id, rows: filasDe(id), auto: true });
   }
 
+  // Primero las facturas y después las NC/ND: así la NC se puede aplicar a la factura que se acaba de guardar.
   function siguienteParaRevisar(excluir?: string) {
-    return rowsRef.current.find(r => r.id !== excluir && r.state === "ready" && r.provider && !r.duplicada);
+    const listas = rowsRef.current.filter(r => r.id !== excluir && r.state === "ready" && r.provider && !r.duplicada);
+    return listas.find(r => !esNotaODebito(r)) || listas[0];
   }
 
   function revisarTodas() {
@@ -236,10 +276,29 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
   }
 
   const busy = saving || rows.some(r => r.state === "parsing");
-  const close = () => rows.some(r => r.state === "saved") ? onSuccess() : onClose();
+  const close = () => {
+    const sinCargar = rows.filter(r => r.state === "pending" || r.state === "parsing" || (r.state === "ready" && !r.duplicada)).length;
+    if (sinCargar && !confirm(`Quedan ${sinCargar} factura(s) sin cargar. Si cerrás se pierden (con "Segundo plano" siguen acá). ¿Cerrar igual?`)) return;
+    if (rows.some(r => r.state === "saved")) onSuccess(); else onClose();
+  };
   const listas = rows.filter(r => r.state === "ready" && r.provider && !r.duplicada).length;
   const guardadas = rows.filter(r => r.state === "saved").length;
   const leyendo = rows.filter(r => r.state === "pending" || r.state === "parsing").length;
+
+  if (oculta) {
+    const revisar = Object.values(cruce).filter(c => c.estado === "listo" && ((c.amarillo || 0) + (c.rojo || 0)) > 0).length;
+    const termino = rows.length > 0 && leyendo === 0 && !Object.values(cruce).some(c => c.estado === "analizando");
+    return <button onClick={onAbrir} title="Abrir la carga de facturas"
+      className={`fixed bottom-4 right-4 z-[60] flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium shadow-lg ${termino ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200" : "border-orange-300 bg-white text-zinc-700 dark:border-orange-800 dark:bg-zinc-900 dark:text-zinc-200"}`}>
+      {termino ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Loader2 className="h-3.5 w-3.5 animate-spin text-orange-500" />}
+      Facturas{sociedadNombre ? ` · ${sociedadNombre}` : ""}:
+      {leyendo > 0 && <span className="text-orange-600">leyendo {leyendo}</span>}
+      <span className="text-emerald-700 dark:text-emerald-400">{listas} listas</span>
+      {revisar > 0 && <span className="text-amber-600">{revisar} prov. para revisar</span>}
+      {guardadas > 0 && <span className="text-sky-600">{guardadas} guardadas</span>}
+      <span className="rounded-full bg-orange-500 px-2 py-0.5 text-white">Abrir</span>
+    </button>;
+  }
 
   if (conciliar) return <ConciliacionCompras sociedadId={sociedadId} profileId={profileId}
     inicial={{ proveedorId: conciliar.proveedorId, facturas: conciliar.rows.map(r => ({ file: r.file, data: r.data || {} })), analisis: cruce[conciliar.proveedorId]?.analisis }}
@@ -249,24 +308,28 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
       const nums = new Set((guardadas || []).map(n => canonicalPurchaseInvoiceNumber(n)));
       const ids = new Set(conciliar.rows.filter(r => !guardadas || nums.has(canonicalPurchaseInvoiceNumber(r.data?.numero_factura || ""))).map(r => r.id));
       setRows(prev => prev.map(r => ids.has(r.id) ? { ...r, state: "saved" } : r));
+      rowsRef.current = rowsRef.current.map(r => ids.has(r.id) ? { ...r, state: "saved" as const } : r);
+      onGuardada?.();
       delete dupCache.current[conciliar.proveedorId];
       delete renglonesCache.current[conciliar.proveedorId];
       const eraAuto = conciliar.auto, provHecho = conciliar.proveedorId;
       setConciliar(null);
-      if (eraAuto) { rowsRef.current = rowsRef.current.map(r => ids.has(r.id) ? { ...r, state: "saved" as const } : r); confirmarLasQueCierran(provHecho); return; }
+      if (eraAuto) { confirmarLasQueCierran(provHecho); return; }
       if (enSecuencia) {
-        const next = rowsRef.current.find(r => !ids.has(r.id) && r.state === "ready" && r.provider && !r.duplicada);
+        const next = siguienteParaRevisar();
         if (next) void openReview(next); else setEnSecuencia(false);
       }
     }} />;
 
   if (review) return <CargarFacturaOC key={review.row.id} sociedadId={sociedadId} profileId={profileId}
-    ordenes={review.orders} initialImport={{ data: review.row.data || {}, file: review.row.file }}
+    ordenes={review.orders} initialImport={{ data: review.row.data || {}, file: review.row.file }} ncSugerida={review.ncSugerida}
     preselectedOCId={review.orders.some(o => o.id === review.row.oc?.id) ? review.row.oc?.id : undefined}
     onClose={() => { setReview(null); setEnSecuencia(false); }}
     onSuccess={() => {
       const doneId = review.row.id;
       setRows(prev => prev.map(r => r.id === doneId ? { ...r, state: "saved" } : r));
+      rowsRef.current = rowsRef.current.map(r => r.id === doneId ? { ...r, state: "saved" as const } : r);
+      onGuardada?.();
       if (review.row.provider) delete dupCache.current[review.row.provider.id];
       setReview(null);
       if (enSecuencia) {
@@ -277,16 +340,19 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
 
 
   return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4">
-    <div className="w-full max-w-5xl rounded-xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
-      <div className="mb-4 flex items-center justify-between">
+    <div className="w-full max-w-5xl rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900">
+      <div className="mb-3 flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold dark:text-white">Carga masiva de facturas de proveedores</h2>
-          <p className="text-xs text-zinc-500">Subí todas juntas, de uno o de varios proveedores (facturas, NC y ND). La IA las lee solas. Si un proveedor no existe, lo creás desde acá con los datos de la factura y ARCA.</p>
+          <p className="text-xs text-zinc-500">Subí todas juntas, de uno o varios proveedores (FC, NC y ND). La IA las lee y las cruza con las OC; las NC se aplican a la factura de la tanda. Podés dejarla en segundo plano.</p>
         </div>
-        <button disabled={busy} onClick={close}><X className="h-5 w-5 text-zinc-400" /></button>
+        <div className="flex items-center gap-1">
+          {onMinimizar && <button onClick={onMinimizar} title="Seguir en segundo plano: podés usar el sistema mientras la IA lee y cruza" className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><Minimize2 className="h-5 w-5 text-zinc-400" /></button>}
+          <button disabled={busy && !onMinimizar} onClick={close} className="rounded p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-5 w-5 text-zinc-400" /></button>
+        </div>
       </div>
 
-      <label className="mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-dashed border-zinc-300 p-5 text-sm text-zinc-500 hover:border-orange-400">
+      <label className="mb-3 flex cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-dashed border-zinc-300 p-3 text-sm text-zinc-500 hover:border-orange-400">
         <FileUp className="h-5 w-5" /> Elegir o arrastrar varios PDF o imágenes
         <input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/webp" className="hidden" onChange={e => { addFiles(e.target.files); e.target.value = ""; }} />
       </label>
@@ -373,10 +439,11 @@ export default function CargaMasivaFacturasCompra({ sociedadId, profileId, prove
         }}
       />
 
-      <div className="mt-5 flex items-center justify-between gap-2">
+      <div className="mt-3 flex items-center justify-between gap-2">
         <p className="text-[11px] text-zinc-500">Al terminar de leer, se cruzan solas contra las OC. Las que cierran se confirman con un botón; las demás se abren mostrando solo lo que no cierra.</p>
         <div className="flex gap-2">
-          <button disabled={busy} onClick={close} className="rounded-lg border px-4 py-2 text-sm">Cerrar</button>
+          {onMinimizar && <button onClick={onMinimizar} className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm"><Minimize2 className="h-4 w-4" /> Segundo plano</button>}
+          <button disabled={busy && !onMinimizar} onClick={close} className="rounded-lg border px-4 py-2 text-sm">Cerrar</button>
           <button disabled={saving || listas === 0} onClick={revisarTodas} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><PlayCircle className="h-4 w-4" /> Cargar las {listas} listas</button>
         </div>
       </div>

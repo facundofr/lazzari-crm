@@ -3,6 +3,8 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { X, Loader2, Sparkles, Check, Search, Plus, Trash2, Maximize2, Minimize2, AlertTriangle } from "lucide-react";
 import { formatCurrency, todayAR } from "@/lib/utils";
+import { sugerirFacturaParaNC } from "@/lib/nc-sugerencia";
+import { traerTarjetas, tarjetaSugerida, movimientoPagoTarjeta, registrarPagoTarjeta } from "@/lib/pago-tarjeta";
 import { reconcilePurchaseLines, inspectPurchaseLineMatch, purchaseLineKey, canonicalPurchaseInvoiceNumber, assertCompleteInvoiceOrderSelection, canMarkPurchaseOrdersPaid, markupForFixedSalePrice, type PurchaseLine } from "@/lib/purchase-invoice-reconciliation";
 import { supabase } from "@/lib/supabase/client";
 import { parseVariant, tallesCompatibles, mismoCodigo, puntajeParecido, PUNTAJE_PARECIDO } from "@/lib/purchase-matching";
@@ -79,6 +81,8 @@ interface Props {
   ordenes: OCParaVincular[];
   preselectedOCId?: string;
   initialImport?: { data: any; file: File };
+  /** Carga masiva: facturas a las que conviene aplicar esta NC (citadas por la NC o cargadas en la misma tanda). */
+  ncSugerida?: { asociadas: string[]; deLaTanda: string[] };
   showTipoToggle?: boolean;
   onClose: () => void;
   onSuccess: () => void;
@@ -103,7 +107,7 @@ type Comparacion = {
 };
 // ── Component ────────────────────────────────────────────
 export default function CargarFacturaOC({
-  sociedadId, profileId, ordenes, preselectedOCId, initialImport, showTipoToggle, onClose, onSuccess,
+  sociedadId, profileId, ordenes, preselectedOCId, initialImport, ncSugerida, showTipoToggle, onClose, onSuccess,
 }: Props) {
   const { toast } = useToast();
   const initialOC = preselectedOCId ? ordenes.find((oc) => oc.id === preselectedOCId) : undefined;
@@ -157,7 +161,11 @@ export default function CargarFacturaOC({
   // Factura sin OC: crear una OC nueva con sus artículos (queda recibida y atada a la factura).
   const [crearOCNueva, setCrearOCNueva] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const [pagadaSinOP, setPagadaSinOP] = useState(false);
+  // Cómo se pagó: "" = va a orden de pago; id de una tarjeta = pagada con esa tarjeta (se registra el pago en su cuenta);
+  // "otro" = ya pagada por otro medio, sin OP. La OC pagada con tarjeta o Mercado Libre sugieren la Visa (se puede cambiar).
+  const [pagoTarjeta, setPagoTarjeta] = useState("");
+  const pagoTarjetaTocado = useRef(false);
+  const [tarjetas, setTarjetas] = useState<{ id: string; nombre: string }[]>([]);
 
   // ── File & parsing ──
   const [file, setFile] = useState<File | null>(null);
@@ -191,8 +199,38 @@ export default function CargarFacturaOC({
     ), 0) * 100) / 100;
   }, [items, subtotal, ivaPorcentaje]);
   const total = useMemo(() => Math.round((subtotal + iva + percepciones) * 100) / 100, [subtotal, iva, percepciones]);
+  const totalRef = useRef(total);
+  totalRef.current = total;
+  // NC de la carga masiva: la factura sugerida se elige una sola vez (después manda lo que elija el usuario).
+  const ncSugeridaUsada = useRef(false);
+  const [origenSugerido, setOrigenSugerido] = useState<{ id: string; motivo: "asociada" | "tanda" } | null>(null);
   const totalSinPercepciones = useMemo(() => Math.round((subtotal + iva) * 100) / 100, [subtotal, iva]);
   const isCreditNote = /^NC(?:\s|$)/i.test(tipoComprobante.trim());
+  const pagadaSinOP = pagoTarjeta !== "" && !isCreditNote;
+
+  // Tarjetas de la sociedad (cuentas financieras tipo tarjeta de crédito).
+  useEffect(() => {
+    if (!sociedadId) return;
+    let cancelado = false;
+    void traerTarjetas(supabase, sociedadId).then((ts) => { if (!cancelado) setTarjetas(ts); }).catch(() => {});
+    return () => { cancelado = true; };
+  }, [sociedadId]);
+
+  // Sugerencia (no traba): OC ya pagada con tarjeta o compra en Mercado Libre → "Ya pagada con Visa".
+  const ocIdsClave = Array.from(selectedOCIds).sort().join(",");
+  useEffect(() => {
+    if (pagoTarjetaTocado.current || !tarjetas.length || isCreditNote) return;
+    let cancelado = false;
+    (async () => {
+      let ocConTarjeta = false;
+      if (ocIdsClave) {
+        const { data } = await (supabase as any).from("ordenes_compra").select("id, estado_pago, medio_pago").in("id", ocIdsClave.split(","));
+        ocConTarjeta = (data || []).some((o: any) => o.medio_pago === "tarjeta");
+      }
+      if (!cancelado && !pagoTarjetaTocado.current) setPagoTarjeta(tarjetaSugerida(tarjetas, { proveedorNombre: proveedorSearch, ocConTarjeta })?.id || "");
+    })();
+    return () => { cancelado = true; };
+  }, [ocIdsClave, tarjetas, proveedorSearch, isCreditNote]);
   const selectedCreditOrigin = creditOrigins.find((invoice) => invoice.id === facturaOrigenId);
 
   // Check for duplicate invoices in real-time
@@ -267,7 +305,10 @@ export default function CargarFacturaOC({
         })).filter((invoice: CreditOriginOption) => invoice.saldo_acreditable > 0.005);
         if (!cancelled) {
           setCreditOrigins(options);
-          setFacturaOrigenId((current) => options.some((invoice: CreditOriginOption) => invoice.id === current) ? current : "");
+          const sugerida = ncSugerida && !ncSugeridaUsada.current
+            ? sugerirFacturaParaNC(options, ncSugerida.asociadas, ncSugerida.deLaTanda, Number(totalRef.current || 0)) : null;
+          if (sugerida) { ncSugeridaUsada.current = true; setOrigenSugerido(sugerida); }
+          setFacturaOrigenId((current) => sugerida ? sugerida.id : options.some((invoice: CreditOriginOption) => invoice.id === current) ? current : "");
         }
       } catch (loadError) {
         if (!cancelled) {
@@ -1416,6 +1457,17 @@ export default function CargarFacturaOC({
         }
       }
 
+      // Pagada con tarjeta: el pago queda registrado en la cuenta de la tarjeta (baja la deuda con el proveedor,
+      // suma a la deuda de la tarjeta y después se cruza con el resumen). Si falla, la factura igual queda guardada.
+      const tarjetaElegida = tarjetas.find((t) => t.id === pagoTarjeta);
+      if (!isCreditNote && tarjetaElegida && fcData?.id) {
+        const { error: pagoError } = await registrarPagoTarjeta(supabase, fcData.id, tarjetaElegida, movimientoPagoTarjeta({
+          sociedadId, proveedorId, facturaId: fcData.id, tarjeta: tarjetaElegida, total, moneda, fecha,
+          comprobante: `${tipoComprobante} ${numeroFactura.trim()}`, proveedorNombre: proveedorSearch.trim(), userId: profileId,
+        }));
+        if (pagoError) avisosReemplazo.push(`La factura quedó pagada pero no se pudo registrar el pago en ${tarjetaElegida.nombre}: ${pagoError}. Avisá para cargarlo.`);
+      }
+
       // Memoria del proveedor: lo que vinculaste a mano queda aprendido para la próxima factura.
       if (!isCreditNote && proveedorId) {
         try {
@@ -1464,8 +1516,8 @@ export default function CargarFacturaOC({
         }
       }
 
-      const avisosTxt = avisosReemplazo.length ? `\n\nAvisos de costo (no frenan nada):\n• ${avisosReemplazo.join("\n• ")}` : "";
-      alert((isCreditNote ? (facturaOrigenId ? "Nota de crédito registrada y aplicada a la factura elegida" : "Nota de crédito registrada: queda como crédito disponible del proveedor") : pagadaSinOP ? "Factura cargada como pagada (sin orden de pago)" : "Factura cargada y enviada para aprobación") + avisosTxt);
+      const avisosTxt = avisosReemplazo.length ? `\n\nAvisos (no frenan nada):\n• ${avisosReemplazo.join("\n• ")}` : "";
+      alert((isCreditNote ? (facturaOrigenId ? "Nota de crédito registrada y aplicada a la factura elegida" : "Nota de crédito registrada: queda como crédito disponible del proveedor") : pagadaSinOP ? `Factura cargada como pagada${tarjetas.find((t) => t.id === pagoTarjeta) ? ` con ${tarjetas.find((t) => t.id === pagoTarjeta)!.nombre}` : ""} (sin orden de pago)` : "Factura cargada y enviada para aprobación") + avisosTxt);
       onSuccess();
     } catch (err: any) {
       setError(savedFacturaId ? `La factura ${numeroFactura} quedó registrada, pero falta completar una operación: ${err.message || "Error"}. Abrila desde Facturas de compra para revisarla; no vuelvas a cargarla.` : err.message || "Error al guardar");
@@ -1779,6 +1831,9 @@ export default function CargarFacturaOC({
                         </option>
                       ))}
                     </select>
+                    {origenSugerido && facturaOrigenId === origenSugerido.id && (
+                      <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-400">✨ Sugerida: {origenSugerido.motivo === "asociada" ? "es la factura que cita la NC" : "es la factura de este proveedor que cargaste en la misma tanda"}. Podés cambiarla o dejar la NC como crédito.</p>
+                    )}
                     {!creditOriginsLoading && !creditOriginsError && creditOrigins.length === 0 && (
                       <p className="mt-1 text-xs text-zinc-500">No hay facturas con saldo acreditable para este proveedor y moneda.</p>
                     )}
@@ -2111,7 +2166,15 @@ export default function CargarFacturaOC({
             <textarea value={notas} onChange={e => setNotas(e.target.value)} rows={1}
               placeholder="Notas / observaciones (opcional)"
               className="w-full px-2.5 py-1.5 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 text-sm" />
-            <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 px-2.5 py-1.5 text-xs dark:border-zinc-700"><input type="checkbox" checked={pagadaSinOP} onChange={(e) => setPagadaSinOP(e.target.checked)} className="accent-orange-600" /><span><strong>Ya pagada con tarjeta / marketplace</strong> <span className="font-normal text-zinc-500">— sin orden de pago</span></span></label>
+            {!isCreditNote && <label className="flex items-center gap-2 rounded-lg border border-zinc-200 px-2.5 py-1 text-xs dark:border-zinc-700">
+              <strong className="whitespace-nowrap">¿Cómo se paga?</strong>
+              <select value={pagoTarjeta} onChange={(e) => { pagoTarjetaTocado.current = true; setPagoTarjeta(e.target.value); }}
+                className={`min-w-0 flex-1 rounded border px-1.5 py-1 text-xs dark:bg-zinc-800 ${pagadaSinOP ? "border-orange-300 bg-orange-50 font-medium text-orange-800 dark:border-orange-800 dark:text-orange-300" : "border-zinc-200 bg-white dark:border-zinc-700"}`}>
+                <option value="">Va a orden de pago</option>
+                {tarjetas.map((t) => <option key={t.id} value={t.id}>Ya pagada con {t.nombre}</option>)}
+                <option value="otro">Ya pagada por otro medio (sin OP)</option>
+              </select>
+            </label>}
           </section>
 
           {/* Error */}

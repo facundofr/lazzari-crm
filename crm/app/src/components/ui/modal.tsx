@@ -59,10 +59,10 @@ export function Modal({ open, onClose, title, description, children, footer, siz
         isFullscreen ? "mx-4 my-4 max-w-none h-[calc(100vh-2rem)]" : cn("mx-4", sizeClasses[size])
       )}>
         {/* Header */}
-        <div className="flex items-start justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
+        <div className="flex items-start justify-between px-5 py-3 border-b border-zinc-200 dark:border-zinc-700">
           <div>
-            <h2 className="text-lg font-bold text-zinc-900 dark:text-white">{title}</h2>
-            {description && <p className="mt-0.5 text-sm text-zinc-500">{description}</p>}
+            <h2 className="text-base font-bold text-zinc-900 dark:text-white">{title}</h2>
+            {description && <p className="mt-0.5 text-xs text-zinc-500">{description}</p>}
           </div>
           <div className="flex items-center gap-1">
             {allowFullscreen && (
@@ -84,13 +84,13 @@ export function Modal({ open, onClose, title, description, children, footer, siz
         </div>
 
         {/* Content */}
-        <div className={cn("overflow-y-auto px-6 py-5", isFullscreen ? "h-[calc(100%-8rem)]" : "max-h-[65vh]")}>
+        <div className={cn("overflow-y-auto px-5 py-4", isFullscreen ? "h-[calc(100%-6.5rem)]" : "max-h-[75vh]")}>
           {children}
         </div>
 
         {/* Footer */}
         {footer && (
-          <div className="flex justify-end gap-3 px-6 py-4 border-t border-zinc-200 dark:border-zinc-700">
+          <div className="flex justify-end gap-2 px-5 py-2.5 border-t border-zinc-200 dark:border-zinc-700">
             {footer}
           </div>
         )}

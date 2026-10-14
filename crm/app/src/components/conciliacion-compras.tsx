@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { X, Loader2, Sparkles, Check, AlertTriangle, Upload, Trash2, RotateCcw, Pencil, Maximize2, Minimize2 } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { aprenderNombreFantasiaDeFactura } from "@/lib/nombre-fantasia";
+import { traerTarjetas, tarjetaSugerida, movimientoPagoTarjeta, registrarPagoTarjeta, type Tarjeta } from "@/lib/pago-tarjeta";
 import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { parseDecimalInput } from "@/lib/decimal-input";
@@ -449,6 +450,8 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
     setGuardando(true);
     const guardadas: string[] = [];
     const ocsCreadas: string[] = [];
+    const pagadasTarjeta: string[] = [];
+    let tarjetasCache: Tarjeta[] | undefined;
     let prActualizados = 0;
     const sinPr: string[] = [];
     try {
@@ -536,6 +539,23 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
         }
         const facturaId = data?.factura_compra_id as string;
         guardadas.push(f.numero);
+        // OC marcadas "pagada con tarjeta" (Mercado Libre, etc.): la factura queda pagada con esa tarjeta, sin OP.
+        if (!borrador && facturaId) {
+          try {
+            const ocIds = [...new Set(asign.map(a => ocById.get(a.ocLineId)?.ocId).filter(Boolean))] as string[];
+            const { data: ocsPago } = ocIds.length ? await db.from("ordenes_compra").select("id, medio_pago").in("id", ocIds) : { data: [] };
+            const ocConTarjeta = !!ocsPago?.length && ocsPago.every((o: any) => o.medio_pago === "tarjeta");
+            tarjetasCache ??= await traerTarjetas(db, sociedadId);
+            const tarjeta = ocConTarjeta ? tarjetaSugerida(tarjetasCache, { ocConTarjeta }) : null;
+            if (tarjeta) {
+              const { error: ePago } = await registrarPagoTarjeta(db, facturaId, tarjeta, movimientoPagoTarjeta({
+                sociedadId, proveedorId, facturaId, tarjeta, total: f.total, moneda: f.moneda, fecha: f.fecha || todayAR(),
+                comprobante: `${f.tipo} ${f.numero.trim()}`, proveedorNombre: proveedores.find(p => p.id === proveedorId)?.razon_social, userId: profileId,
+              }));
+              pagadasTarjeta.push(ePago ? `${f.numero}: no se pudo registrar el pago con ${tarjeta.nombre} (${ePago}), quedó para OP` : `${f.numero} con ${tarjeta.nombre}`);
+            }
+          } catch { /* si falla, la factura queda para OP como siempre */ }
+        }
         if (ocExtra) ocsCreadas.push(`${ocExtra.numero} (FC ${f.numero})`);
         prActualizados += Number(data?.presupuestos_items_actualizados) || 0;
         for (const x of (data?.sin_presupuesto || []) as string[]) sinPr.push(x);
@@ -557,6 +577,7 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
         ? `Conciliación parcial guardada (${guardadas.join(", ")}). No se envía a pagos; la podés retomar desde «Conciliar facturas».`
         : `Listo: ${guardadas.join(", ")} conciliada(s) y enviada(s) a aprobación.`
           + (ocsCreadas.length ? `\n\nOC complementaria creada y atada a la factura: ${ocsCreadas.join("; ")}.` : "")
+          + (pagadasTarjeta.length ? `\n\nPagadas con tarjeta (la OC estaba pagada con tarjeta, sin OP): ${pagadasTarjeta.join("; ")}.` : "")
           + (aceptarCostos ? `\n\nCostos actualizados en presupuestos: ${prActualizados} artículo(s) (se mantuvo el precio de venta y se recalculó el margen).` : "")
           + (sinPr.length ? `\n\nNo se encontró en el presupuesto de origen (revisalo a mano): ${sinPr.join("; ")}` : ""));
       if (silencioso) toast.success(mensaje.split("\n")[0] + (ocsCreadas.length ? ` · OC complementaria ${ocsCreadas.join("; ")}` : ""));

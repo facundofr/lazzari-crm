@@ -20,6 +20,7 @@ Te voy a pasar un PDF o imagen de una factura de compra o nota de pedido de prov
   "tipo_comprobante": "A, B, C, etc. si se identifica",
   "moneda": "ARS" o "USD",
   "referencias_oc": ["1199"],
+  "comprobantes_asociados": ["0001-00012345"],
   "items": [
     {
       "codigo": "código, SKU o referencia impresa del artículo, o null si no aparece",
@@ -66,6 +67,7 @@ Reglas:
 - Percepciones: devolvé el total en "percepciones" y además desglosá en "percepcion_iibb" (número o null), "percepcion_iva" (número o null), "percepcion_ganancias" (número o null). Si no podés identificar el tipo, poné todo en "percepciones" y dejá los campos individuales en null.
 - La moneda por defecto es "ARS" salvo que se indique lo contrario.
 - "referencias_oc": números de NUESTRA orden de compra que el emisor imprime en la factura (ej.: "Su OC N° 1199", "O.C. 2026-1199", "Orden de compra: 1199", "Su pedido 1199", "Ref. cliente OC-1199"). Devolvé solo el número tal como aparece, sin el texto. Si no aparece ninguna, devolvé []. NO pongas el número de remito, de pedido interno del proveedor ni el número de la factura.
+- "comprobantes_asociados": solo en notas de crédito o débito: números de las facturas que anula o ajusta (ej.: "Comprobante asociado: FC A 0001-00012345", "Ref. Fact. 0001-12345"). Mismo formato que numero_factura. Si no es NC/ND o no aparece, devolvé [].
 - Si el documento es una NOTA DE PEDIDO, COTIZACIÓN, PRESUPUESTO o PROFORMA (no es factura fiscal), devolvé tipo_comprobante como "Nota de Pedido".
 - Devolvé SOLO el JSON, sin texto adicional ni markdown.`;
 

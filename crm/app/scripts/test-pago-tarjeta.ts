@@ -1,0 +1,11 @@
+import { tarjetaSugerida, movimientoPagoTarjeta } from "../src/lib/pago-tarjeta";
+const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } console.log("ok", m); };
+const t = [{ id: "m", nombre: "BBVA Mastercard Black ·4775" }, { id: "v", nombre: "BBVA Visa Signature ·1582" }];
+ok(tarjetaSugerida(t, { proveedorNombre: "MERCADO LIBRE" })?.id === "v", "Mercado Libre → Visa");
+ok(tarjetaSugerida(t, { proveedorNombre: "Fravega", ocConTarjeta: true })?.id === "v", "OC con tarjeta → Visa");
+ok(tarjetaSugerida(t, { proveedorNombre: "Segutécnica" }) === null, "lo demás va a OP");
+ok(tarjetaSugerida([t[0]], { ocConTarjeta: true })?.id === "m", "sin Visa, la que haya");
+ok(tarjetaSugerida([], { ocConTarjeta: true }) === null, "sin tarjetas nada");
+const m = movimientoPagoTarjeta({ sociedadId: "s", proveedorId: "p", facturaId: "f", tarjeta: t[1], total: 214798.004, moneda: "ARS", fecha: "2026-09-15", comprobante: "FC A 0001-00000398", proveedorNombre: "FRAVEGA" });
+ok(m.monto === 214798 && m.cuenta_id === "v" && m.tipo === "pago" && m.factura_compra_id === "f", "movimiento con tarjeta y factura");
+ok(m.descripcion === "Pago con BBVA Visa Signature ·1582 — FC A 0001-00000398 — FRAVEGA", "descripción");

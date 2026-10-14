@@ -6,8 +6,9 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { traerTodo } from "@/lib/paginar";
+import { sentidoAjuste } from "@/lib/tipos-movimiento";
 import {
-  calcularSaldosProveedores, ultimaCompraPorProveedor, linkWhatsApp, textoLocalidad,
+  calcularSaldosProveedores, ultimaCompraPorProveedor, linkWhatsApp, textoLocalidad, traerCreditosProveedores, type CreditoProveedor,
   type FacturaCompraSaldo, type MovimientoPagoFC, type MovimientoNC, type OrdenCompraFecha, type SaldoProveedor,
 } from "@/lib/saldo-proveedores";
 import { mockProveedores, mockListasPrecios } from "@/lib/mock-data";
@@ -327,8 +328,11 @@ export default function ProveedoresPage() {
           movNC.push(...await traerTodo<MovimientoNC>(() => db.from("movimientos")
             .select("id, nota_credito_compra_id, monto, anulado").in("nota_credito_compra_id", tramo).order("id")));
         }
+        // Mismos créditos a favor que la cuenta corriente de Finanzas (anticipos, saldos a favor de OP, ajustes).
+        let creditos: CreditoProveedor[] = [];
+        try { creditos = await traerCreditosProveedores(db, sociedadId, traerTodo, sentidoAjuste); } catch { creditos = []; }
         if (cancelado) return;
-        setSaldos(calcularSaldosProveedores(facturas, pagos, movNC));
+        setSaldos(calcularSaldosProveedores(facturas, pagos, movNC, creditos));
         setUltimaCompra(ultimaCompraPorProveedor(facturas, ordenes));
       } catch (err) {
         console.error("Error calculando saldos de proveedores:", err);
@@ -714,12 +718,12 @@ export default function ProveedoresPage() {
         subtitle={`${proveedores.length} proveedores — ${listas.length} listas de precios`}
         action={{ label: tab === "proveedores" ? "Nuevo proveedor" : "Cargar lista con IA", onClick: tab === "proveedores" ? openCreate : openAiUpload }}
       />
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-3">
         {/* Tabs */}
         <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-fit">
           {(["proveedores", "listas"] as const).map((t) => (
             <button key={t} onClick={() => { setTab(t); setSearch(""); }}
-              className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${tab === t ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700"}`}>
+              className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${tab === t ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700"}`}>
               {t === "proveedores" ? "Proveedores" : "Listas de precios"}
             </button>
           ))}
@@ -733,7 +737,7 @@ export default function ProveedoresPage() {
               <div className="relative min-w-[220px] flex-1 max-w-md">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
                 <input type="text" placeholder="Buscar por nombre, fantasía, CUIT o localidad..." value={search} onChange={(e) => setSearch(e.target.value)}
-                  className="h-9 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900" />
+                  className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900" />
               </div>
               <div className="flex flex-wrap gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800" role="group" aria-label="Filtros rápidos">
                 {FILTROS_RAPIDOS.map((f) => {
@@ -747,12 +751,12 @@ export default function ProveedoresPage() {
                   );
                 })}
               </div>
-              <button onClick={exportCSV} className="ml-auto flex h-9 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"><Download className="h-4 w-4" /> Exportar</button>
+              <button onClick={exportCSV} className="ml-auto flex h-8 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"><Download className="h-4 w-4" /> Exportar</button>
             </div>
             {saldosError && <p className="text-xs text-amber-600">{saldosError}</p>}
 
             <Card className="p-0 overflow-hidden">
-              <div className="max-h-[calc(100vh-14rem)] overflow-auto">
+              <div className="max-h-[calc(100vh-11rem)] overflow-auto">
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 z-10 bg-zinc-50 dark:bg-zinc-900">
                     <tr className="border-b border-zinc-200 text-left text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:border-zinc-700 dark:text-zinc-400">

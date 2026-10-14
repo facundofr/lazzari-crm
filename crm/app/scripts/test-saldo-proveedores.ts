@@ -72,6 +72,13 @@ traerCreditosProveedores(fakeDb, "soc", traerFake, sentidoAjuste).then((cargados
   console.log("OK carga de créditos de proveedores");
 }).catch((e) => { console.error(e); process.exit(1); });
 
+// Factura "pagada" (tilde de tarjeta viejo) sin pago cargado: no es deuda.
+{
+  const sp = calcularSaldosProveedores([{ id: "p1", proveedor_id: "Z", total: 1000, estado: "pagada", tipo_comprobante: "FC A" }, { id: "p2", proveedor_id: "Z", total: 300, estado: "pendiente", tipo_comprobante: "FC A" }], [], []);
+  assert.equal(sp.Z.ARS, 300);
+  console.log("OK pagada sin pago no es deuda");
+}
+
 const u = ultimaCompraPorProveedor(facturas, [{ proveedor_id: "B", fecha: "2026-05-05T10:00:00", estado: "enviada" }, { proveedor_id: "A", fecha: "2026-12-01", estado: "anulada" }]);
 assert.equal(u.A, "2026-02-01");
 assert.equal(u.B, "2026-05-05");

@@ -192,6 +192,8 @@ export function calcularSaldosProveedores(
       if (disponible > 0.005) saldos[f.proveedor_id][moneda] -= disponible;
       continue;
     }
+    // "Pagada" sin pago cargado (ej.: compras con tarjeta viejas, antes de registrar el pago en la tarjeta): no es deuda.
+    if (f.estado === "pagada") continue;
     const pagoOP = pagosOP(f);
     // Una NC nueva deja dos rastros del mismo crédito (total_acreditado y un movimiento): se toma el mayor.
     const credito = Math.max(n(f.total_acreditado), creditoNC[f.id] || 0);

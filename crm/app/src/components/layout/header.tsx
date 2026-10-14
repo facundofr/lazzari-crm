@@ -249,6 +249,8 @@ export function Header({ title, subtitle, action }: HeaderProps) {
 
   // ── Alerts ──────────────────────────────────────────────────────
   const fetchAlerts = useCallback(async () => {
+    // Sin usuario o sociedad todavía cargados, la consulta iría con "undefined" y la base la rechaza.
+    if (!profile?.id || !sociedadActiva?.id) return;
     try {
       // Fetch alerts and user notification preferences in parallel
       const [alertsRes, prefsRes] = await Promise.all([
@@ -339,7 +341,7 @@ export function Header({ title, subtitle, action }: HeaderProps) {
   }
 
   return (
-    <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-3 sm:px-5 dark:border-zinc-800 dark:bg-zinc-950">
+    <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-2 sm:px-5 dark:border-zinc-800 dark:bg-zinc-950">
       <div className="flex items-center gap-3">
         {/* Hamburger menu - mobile only */}
         <button
@@ -349,9 +351,9 @@ export function Header({ title, subtitle, action }: HeaderProps) {
           <Menu className="h-5 w-5" />
         </button>
         <div>
-          <h1 className="text-lg sm:text-xl font-bold text-zinc-900 dark:text-white">{title}</h1>
+          <h1 className="text-lg font-bold text-zinc-900 dark:text-white">{title}</h1>
         {subtitle && (
-          <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">{subtitle}</p>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">{subtitle}</p>
         )}
         </div>
       </div>
