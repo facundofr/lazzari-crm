@@ -765,6 +765,12 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         - Compras: botón **"Carga manual"** visible al lado de "Cargar facturas (IA)" (antes estaba escondido en "Más"; se sacó de ahí). tsc 0, hooks OK, probado en local (abre la ventana, no se guardó nada).
           Ojo: dentro de la carga manual, si se sube un PDF igual se lee con IA (`/api/parse-factura-compra`). Propuesta de lectura sin IA (QR de ARCA / texto del PDF) esperando OK.
         - Propuesta esperando OK: columna `pendientes.respuesta` + casilla para responder y botón "Copiar respuestas", y cargar ahí las preguntas abiertas para Augusto.
+        - Datos bancarios y contacto de administración en "Pago que pide el proveedor" (carga de factura): lo hace Augusto en el otro chat (prompt pasado).
+        - **Chequeo en producción con sesión (14/10, commit 7223289), todo OK, sin guardar nada:** 1) sidebar "V1.1.445"; 2) Compras: "Carga manual" al lado
+          de "Cargar facturas (IA)", abre "Cargar factura o nota de pedido" (se cerró sin guardar); 3) Presupuestos: columna "Ganancia / Margen", cartel
+          "Montos de octubre" y "Todos" con 50 renglones sin ningún facturado; 4) PDF de PR-2026-1157 (uno de los afectados) generado: PDF válido de 223 KB,
+          descarga interceptada (el texto del PDF viene codificado, no se pudo leer adentro); en la base 0 presupuestos con líneas de costo en `observaciones`
+          y 6 en `notas_internas` (la migración 20261014140000 las movió).
       **TANDA V1.1.443 (14/10, publicada junto con la V1.1.442 de Claude, en dos deploys seguidos) — Configuración → Integraciones con datos reales:**
         - Tarjeta Email: `/api/email/config` (nuevo, pide login, solo dice si está RESEND_API_KEY / EMAIL_FROM, nunca la clave) → "Conectado" o
           "No configurado"; muestra facturas enviadas por mail este mes y rebotadas (`facturas.email_enviado_at` / `email_estado`).
