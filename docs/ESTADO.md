@@ -756,6 +756,37 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
           pagada $ 620.329,99 sin retención (exento; no vuelve a SICORE) + los $ 5.870,42 del 08/10 como pago directo. Copia: `Claude outputs/antes_op4_op43_13_10_2026.json`.
         - `20261013210000_datos_pagos_visa_8_facturas.sql` CORRIDA: 8 pagos con Visa ·1582 por $ 1.241.528,69 (Bomberomania, Casella, Fernández, Frávega,
           García, Horni, Mercado Libre, Terra Vita). Vuelta atrás los anula (no borra).
+      **V1.1.440 (14/10, SIN PUBLICAR) — gasto fijo con proveedor + Tanda 4 de pantallas compactas:**
+        - `20261013231000_gasto_fijo_proveedor.sql` CORRIDA (14/10, con OK, cuando terminó la transacción de las fotos): `gastos_fijos.proveedor_id`.
+        - **Gasto fijo atado al proveedor:** en Finanzas → Pagar → Gastos fijos, "Proveedor que lo factura (opcional)". Si en el mes no hay factura
+          de ese proveedor (sin NC ni anuladas) → "⚠️ Falta la factura de octubre"; si la hay → "✓ Factura de octubre: $ X". También en el Dashboard
+          (cuadro Cobertura de gastos fijos, link a la pestaña). Solo aviso. `lib/gasto-fijo-factura.ts` (prueba `scripts/test-gasto-fijo-factura.ts`).
+          Renglones de gastos fijos más finos. Probado en local sin guardar (selector muestra AGUSTIN MUSSO).
+          **FALTA de Augusto:** monto de honorarios del contador (Agustín Musso, proveedor en las 2 sociedades) y si lo paga solo Lazzari o también Grupo LA.
+          Con eso se carga el gasto fijo (con su OK).
+        - **Tanda 4 compacta:** Stock, Calendario, Compras (arriba y listado), Reportes (chips, gráficos más bajos), Muestras, Personalización,
+          Configuración (formularios en 2-4 columnas; también arca-status-card, uso-ia-config, fechas-cheque-config), Papelera, Consulta facturas,
+          y en Finanzas el detalle de factura de compra (grilla, importes en recuadro, botón copiar total nuevo) y el detalle de cobro (movimiento).
+          Recibos no tiene detalle propio (solo PDF). Probado en local: Stock, Compras, Reportes, Calendario, Muestras, Personalización, Configuración, detalle FC.
+        - `20261014100000_datos_gastos_fijos_lazzari.sql` CORRIDA (OK 14/10): contador Musso $ 178.200 (con proveedor), alquiler US$ 800,
+          sueldos Mariana/Jero/Seba $ 1.500.000. La FC C 00001-00000556 de Musso (07/10, $ 178.200, honorarios septiembre) NO está cargada todavía.
+        - **Mejoras 1, 2 y 3 HECHAS (OK 14/10):** `20261014110000_gastos_fijos_pagos_pendientes.sql` CORRIDA: gastos_manuales.gasto_fijo_id,
+          gastos_fijos.dia_vencimiento y gastos_fijos.calculo ('sicore'). 1) En "Gastos", "Es el pago del gasto fijo" con sugerencia ✨ por texto
+          (`sugerirGastoFijo`); Gastos fijos sin proveedor muestran "⚠️ Falta pagar octubre (vence el D)" o "✓ Pagado"; Dashboard avisa desde 5 días antes
+          (solo los que tienen día de vencimiento). 2) Botón "Leer VEP / impuesto (IA)" en la ventana de Gastos (`/api/parse-vep`, `lib/vep.ts`,
+          prueba `scripts/test-vep.ts`): completa descripción, monto, fecha, categoría Impuestos y el gasto fijo; adjunta el VEP; no guarda solo.
+          3) Gasto fijo con "Monto automático SICORE" = retenciones de Ganancias de las OP del mes anterior (`montoSicore`).
+          Pendientes: se reusó la tabla `pendientes` y el componente `components/presupuestos/pendientes-widget.tsx` (no estaba montado) → botón
+          "Pendientes" en el Dashboard (admin/administrativo). `20261014120000_datos_pendientes_augusto.sql` CORRIDA: 9 pendientes de Augusto.
+          Probado en local la pestaña Gastos fijos; Dashboard se prueba en producción.
+          Augusto paga AUTÓNOMOS (no monotributo). "Sicreb" = SICORE. Impuestos con VEP → pestaña Gastos (categoría Impuestos), no facturas.
+          Servicios con factura (luz, internet, alarma, celulares, seguros, Google Drive, Netegia [baja pedida], Claude Team, Supabase) → factura tipo Servicio/gasto.
+          Falta de Augusto: montos de mutual (Jero, Mariana, Seba, Augusto), monotributo (Jero, Mariana, Seba), autónomos, seguros local/auto, celulares,
+          internet, luz, alarma, Google Drive, Netegia, Claude, Supabase; IVA/CM/Seg. e Higiene aprox.; OK para 6) mant. BBVA 091-339549/3 $ 34.000/mes
+          (28.099,17 + IVA, día 2); qué es cada "DEBITO DIRECTO" del BBVA (7/10 $ 263.928,17 y $ 9.689,44; septiembre 8 débitos); extractos BNA y Galicia.
+          Grupo LA (contador y gastos): pendiente.
+          Idea: el asistente IA del CRM tiene insert_record genérico → mejor que abra "Cargar facturas (IA)" en vez de insertar directo.
+        - Incidente: un ayudante dejó vacío finanzas/page.tsx; se recuperó desde git y se reaplicaron los cambios (nada publicado ni perdido).
       **V1.1.439 (13/10, PUBLICADA) — Tanda 2 y 3:**
         - **Factura de servicio / gasto (la del contador):** en la carga de facturas de compra, fila "Tipo": Compra / Transporte / Servicio / gasto / Solo IVA
           (siempre visible, también desde Compras). Servicio no pide OC; elegís categoría (Honorarios, Alquiler, Luz/gas/internet, Mantenimiento, Software,
@@ -850,9 +881,43 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
       **PENDIENTES PARA MAÑANA (13/10, orden propuesto):**
         0. Tanda 1: Augusto da OK → correr migración, subir versión, publicar y probar en producción (Informes proveedores, Uso de IA, Ventas).
         1. Tanda 2 (c): PR express "margen 25 %" sobre el costo, aviso si algún renglón < 15 %.
-        2. j) **EN CURSO EN OTRO CHAT (13/10, no tocar desde acá): etapa 1 de la lista de costos** — migración 20261014090000_lista_costos_reglas.sql,
-           scripts/importar-reglas-costos.cjs (reglas, opcionales, márgenes y fotos desde Base_de_Costos_Lazzari_Oct2026.xlsx), pantallas en archivos nuevos.
-           Lista de costos dentro del CRM (Opus para diseñar la etapa 1). Augusto busca el "archivo madre" (¿catalogo_crm.csv u otro Excel de reglas?, falta ruta; fotos: ¿de dónde salen?).
+        2. j) **Lista de costos, etapa 1 — DATOS CARGADOS y PANTALLAS HECHAS (14/10), SIN PUBLICAR, sin migración nueva, sin subir versión.**
+           - **Pantallas (14/10, todo solo para ver, nada frena):**
+             - Proveedores > pestaña **"Lista de costos"** (`components/lista-costos/lista-costos-tab.tsx`, también `/proveedores?tab=costos`): buscador sin tildes,
+               filtros Proveedores/Marcas/Rubros (con semáforo), botón **Fotos sí/no** (recordado por usuario en esa compu, localStorage), foto chica → grande,
+               costo, margen % (rojo si < 15 %), venta, orden por columna, "Ver más". Botón **"Márgenes y redondeo"**: 8 rubros, regla de redondeo con ejemplos y semáforo de cada lista.
+             - Ficha del proveedor > **"Reglas comerciales"** (`reglas-proveedor-ficha.tsx`): vigencia con semáforo, descuentos en el costo, cómo se calcula,
+               condiciones y opcionales "No incluidos en el costo". Une por `catalogo_proveedores`; si no hay vínculo, por nombre de fantasía/razón social.
+             - Al cotizar (lista de costos del presupuesto, `catalogo-picker.tsx`): en cada fila punto de semáforo + ℹ️; en los seleccionados además
+               "Pedir actualización", "Verificar" y chips de opcionales (ej. "+40 % excepcional").
+             - **Semáforo (Augusto 14/10): 🟢 hasta 30 días, 🟡 30 a 60, 🔴 más de 60 o sin fecha.** Con fecha de vencimiento: 🟡 la última semana, 🔴 vencida.
+               Lee la primera fecha del texto de vigencia ("Octubre 2026" = 1/10). Lógica en `lib/lista-costos.ts` (prueba `scripts/test-lista-costos.ts`).
+             - `traerListaCompleta` ahora trae también `foto_path`. tsc 0, hooks OK. Probado en local sin guardar (Pegaso con fotos, ℹ️, márgenes, ficha Star-Tex, PR nuevo con Conoflex sin agregar).
+             - Hoy en rojo: Conoflex, Fravida, Delta Plus, FADI, Segutécnica, Mediglove, Prisina (pedirles listas nuevas).
+           - Migración 20261014090000_lista_costos_reglas.sql **ya corrida**. Crea:
+             - `proveedor_reglas`: 17 proveedores, de la hoja "Reglas".
+             - `proveedor_descuentos_opcionales`: 8 descuentos.
+             - `margenes_venta`: 8 rubros.
+             - `lista_costos_config`: redondeo.
+             - `catalogo_cargas`: historial.
+             - `catalogo_costos.foto_path` y el bucket público `productos`.
+           - El descuento por pago anticipado es UN solo dato: `proveedor_descuentos_opcionales` (tipo `pago_anticipado`) y `proveedores.descuento_pronto_pago` se sincronizan por trigger en las dos sociedades.
+           - Carga: `node scripts/importar-reglas-costos.cjs` (sin flags = solo resumen; `--aplicar --fotos --fotos-dir <carpeta>`). Lee el Excel sin modificarlo. Saltea filas con código roto.
+           - Decisiones de Augusto (13/10):
+             - "contado" = pago anticipado (transferencia). Descuentos sobre lista, en cascada, nunca duplicados.
+             - Pago anticipado: DPS 5, Star-Tex 5 (pedidos > $1.750.000 + IVA), Aire Libre 3, SPI 5, Fravida 5.
+             - Pegaso (Mariana S.A., vinculada): costo = lista −20 % fijo; 5 % opcional por cantidad (>6 por talle, negociable). ⚠️ La lista todavía descuenta el 5 %: Augusto lo corrige en el chat de listas.
+             - Fravida: 30 % EN LUGAR del 20 % si la compra del mes supera $10 M.
+             - Conoflex: 40 % excepcional en lugar del 35 %, con autorización.
+           - Fotos: 3.891 subidas, sin errores; 3.608 artículos con foto (incluye inactivos).
+             - Sin foto a propósito: 9 variantes con código distinto (Fravida /HB, Delta Plus M1200VC/M1300VC, Conoflex "4001-1R /4000 NE", BH ENERGY 680). Augusto: NO asignarlas a la variante parecida.
+             - Sin foto: 10 de Delta Plus (archivo faltante en el zip).
+           - **Después:**
+             - OC: aviso + tilde "Pedir descuento por pago anticipado" y una línea en la OC al proveedor.
+             - Al cargar la factura: control de si vino el descuento.
+             - Al pagar (Plan de pagos / OP): aviso "pedí el X %".
+             - Avisos: compras en la OC y administración al pagar.
+           Lista de costos dentro del CRM (Opus para diseñar la etapa 1).
            Etapas: 1) cargar el CSV a tablas y mostrarlo en Proveedores > Lista de costo (el CSV sigue mandando), 2) Buscar/Comparar, 3) Reglas y subir listas con IA y aprobación, 4) recién ahí cambiar la regla 7.
         3. IA-1 cobros sugeridos desde el extracto; IA-3 facturas de compra conciliadas solas; i) CUIT apócrifos (confirmar fuentes ARCA); IA-5 chat con IA con datos reales (solo lectura).
         4. Desarrollar con Augusto: b (personalización en el presupuesto), d (oportunidades), e (preguntas por cliente), f (propuestas entre todos).
@@ -865,6 +930,8 @@ El `git stash` "correcciones financieras a medias" es una copia **vieja** de est
         5c. NUEVO — Ventas: **botón de facturar masivo, inteligente** (hoy no hay): que calcule la mejor manera de facturar varias ventas juntas respetando las reglas ya definidas
            (tipo de dólar del cliente, no facturar antes de la OC del cliente, fecha más vieja permitida por ARCA, clientes que piden OC, etc.). Se desarrolla con Augusto; solo sugiere, nada se emite solo.
         5d. NUEVO — **Ranking por compradores y por empresas** (para preparar los regalos de fin de año): quién y qué empresa compró más, en pesos netos unificados. A definir: período (año en curso), cómo agrupar comprador/empresa.
+        5e. NUEVO (Augusto 14/10, NO hacer todavía) — **Avisos BCRA de clientes en situación crítica:** avisar al vendedor cuando APRUEBA el presupuesto
+           y cuando hace el REMITO; avisar a administración ANTES DE FACTURAR. Solo aviso, nunca bloquea (regla 1). A definir: desde qué situación BCRA es "crítica" (¿3 o más?).
         6. Aviso BCRA en ficha de proveedor/OC; Finanzas: análisis a fondo (punto 0 de abajo, cobros con fecha futura, etc.).
       Aviso de modelos (Augusto lo pidió): Opus para diseñar j y el armado de presupuestos; Sonnet para programar; Haiku para cambios chicos.
 

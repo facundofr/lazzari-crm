@@ -40,8 +40,8 @@ export function ArcaStatusCard() {
           <CardTitle>Conexión ARCA — {sociedadActiva?.nombre ?? ""}</CardTitle>
         </div>
       </CardHeader>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700 space-y-3">
+      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
+        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-700 space-y-2">
           <div className="flex items-center gap-2">
             <div className="rounded-lg bg-blue-50 p-2 dark:bg-blue-950">
               <Server className="h-4 w-4 text-blue-600 dark:text-blue-400" />
@@ -64,7 +64,7 @@ export function ArcaStatusCard() {
             <p className="text-xs text-red-500 mt-1 leading-tight">{arcaStatus.error}</p>
           )}
         </div>
-        <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700 space-y-3">
+        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-700 space-y-2">
           <div className="flex items-center gap-2">
             <div className="rounded-lg bg-amber-50 p-2 dark:bg-amber-950">
               <KeyRound className="h-4 w-4 text-amber-600 dark:text-amber-400" />
@@ -81,9 +81,9 @@ export function ArcaStatusCard() {
             </span>
           </div>
         </div>
-        <div className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-700">
-          <p className="text-xs font-medium text-zinc-500 mb-2">CUIT emisor</p>
-          <p className="text-xl font-bold font-mono dark:text-white">{emisor.cuit}</p>
+        <div className="rounded-xl border border-zinc-200 p-3 dark:border-zinc-700">
+          <p className="text-xs font-medium text-zinc-500 mb-1">CUIT emisor</p>
+          <p className="text-lg font-bold font-mono dark:text-white">{emisor.cuit}</p>
           <p className="text-xs text-zinc-400 mt-1">{emisor.razonSocial}</p>
         </div>
       </div>

@@ -5,14 +5,13 @@ import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
-import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { generateOrdenCompraPDF, getSociedadPDF, openPDFWindow, htmlToPdfBase64 } from "@/lib/pdf-templates";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase/client";
 import type { OCStatus } from "@/lib/types";
 import {
-  ShoppingCart, Clock, CheckCircle2, Truck, Loader2,
+  ShoppingCart, CheckCircle2, Truck, Loader2,
   X, Send, XCircle, Copy, Package, Mail, Phone, MapPin,
   FileText, ClipboardCopy, Check, Download, Merge, ChevronDown, ChevronRight, AlertTriangle,
   PackageCheck, MessageSquare, Edit3, Plus, Minus,
@@ -2211,11 +2210,11 @@ export default function OrdenesCompraPage() {
       />
 
       {/* Barra de acciones: un botón principal y lo ocasional en "Más" */}
-      {canManageCompras && <div className="px-4 sm:px-8 pt-2 flex justify-end gap-2">
+      {canManageCompras && <div className="px-3 sm:px-4 pt-1.5 flex justify-end gap-2">
         <button
           onClick={abrirCargaMasiva}
           title="Una o varias facturas (y sus NC), de uno o varios proveedores: la IA las lee, las cruza con las OC y podés dejarla en segundo plano"
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-semibold rounded-lg bg-orange-600 text-white hover:bg-orange-700 transition-colors"
+          className="flex h-8 items-center gap-1.5 px-3 text-sm font-semibold rounded-lg bg-orange-600 text-white hover:bg-orange-700 transition-colors"
         >
           <Upload className="h-4 w-4" />
           Cargar facturas (IA)
@@ -2223,7 +2222,7 @@ export default function OrdenesCompraPage() {
         <div className="relative">
           <button
             onClick={() => setMasOpen((v) => !v)}
-            className="flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800 transition-colors"
+            className="flex h-8 items-center gap-1 px-3 text-sm font-medium rounded-lg border border-zinc-300 text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-800 transition-colors"
           >
             <MoreHorizontal className="h-4 w-4" /> Más <ChevronDown className="h-3.5 w-3.5" />
           </button>
@@ -2247,9 +2246,9 @@ export default function OrdenesCompraPage() {
         </div>
       </div>}
 
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-2.5">
         {facturaLinksError && (
-          <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+          <div role="alert" className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>{facturaLinksError}</span>
             <button onClick={fetchData} className="ml-auto shrink-0 font-semibold underline">Reintentar</button>
@@ -2257,7 +2256,7 @@ export default function OrdenesCompraPage() {
         )}
         {/* Success message */}
         {consolidateSuccessMsg && (
-          <div className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
+          <div className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 px-3 py-1.5 text-sm text-emerald-700 dark:text-emerald-300">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4" />
               {consolidateSuccessMsg}
@@ -2276,7 +2275,7 @@ export default function OrdenesCompraPage() {
           );
           if (late.length === 0) return null;
           return (
-            <div className="flex items-center gap-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+            <div className="flex items-center gap-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-1.5 text-sm text-amber-700 dark:text-amber-300">
               <AlertTriangle className="h-4 w-4 shrink-0" />
               <span><strong>{late.length}</strong> OC con fecha de entrega vencida: {late.slice(0, 3).map(oc => oc.numero).join(", ")}{late.length > 3 ? ` y ${late.length - 3} más` : ""}</span>
             </div>
@@ -2291,7 +2290,7 @@ export default function OrdenesCompraPage() {
           const viejas = avisos.filter((a) => a?.tipo === "sin_recibir").length;
           if (pagadas === 0 && viejas === 0) return null;
           return (
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-1.5 text-sm text-amber-700 dark:text-amber-300">
               <AlertTriangle className="h-4 w-4 shrink-0" />
               {pagadas > 0 && (
                 <button type="button" className="underline-offset-2 hover:underline" onClick={() => setFilter("a_reclamar")}>
@@ -2307,18 +2306,19 @@ export default function OrdenesCompraPage() {
           );
         })()}
 
-        {/* Stats */}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard title="Total OC este mes" value={String(ocEsteMes.length)} icon={ShoppingCart} iconColor="text-blue-600" />
-          <StatCard title="Monto pendiente" value={`${formatCurrency(totalPendienteARS, "ARS")}${totalPendienteUSD > 0 ? ` + ${formatCurrency(totalPendienteUSD, "USD")}` : ""}`} icon={Clock} iconColor="text-amber-500" />
-          <StatCard title="Pend. recepcion" value={String(pendientesRecepcion)} icon={Truck} iconColor="text-violet-600" />
-          <button type="button" className="text-left" onClick={() => setFilter("a_reclamar")} title="Pagadas y todavía sin recibir: ver la lista">
-            <StatCard title="A reclamar" value={String(ordenes.filter((oc) => ocAReclamar(reclamoInput(oc))).length)} icon={AlertTriangle} iconColor="text-amber-600" />
+        {/* Números rápidos en una línea */}
+        <div className="flex flex-wrap gap-1.5 text-xs">
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Total OC este mes</span> <b className="font-mono">{ocEsteMes.length}</b></span>
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Monto pendiente</span> <b className="font-mono">{formatCurrency(totalPendienteARS, "ARS")}</b>{totalPendienteUSD > 0 && <b className="font-mono"> + {formatCurrency(totalPendienteUSD, "USD")}</b>}</span>
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Pend. recepcion</span> <b className="font-mono">{pendientesRecepcion}</b></span>
+          <button type="button" onClick={() => setFilter("a_reclamar")} title="Pagadas y todavía sin recibir: ver la lista"
+            className={`rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800 ${filter === "a_reclamar" ? "ring-1 ring-orange-400" : ""}`}>
+            <span className="text-zinc-500">A reclamar</span> <b className="font-mono text-amber-600">{ordenes.filter((oc) => ocAReclamar(reclamoInput(oc))).length}</b>
           </button>
         </div>
 
         {/* Filter tabs */}
-        <div className="flex gap-2 overflow-x-auto pb-1">
+        <div className="flex gap-1.5 overflow-x-auto pb-0.5">
           {(["abiertas", "todas", "a_reclamar", "con_diferencia", "por_recibir", "por_facturar", "por_pagar", "completas", "borrador", "cancelada"] as const).map((status) => {
             const activa = (oc: OCRow) => oc.estado !== "cancelada" && oc.estado !== "borrador";
             const count = status === "todas" ? ordenes.length : ordenes.filter((oc) =>
@@ -2335,7 +2335,7 @@ export default function OrdenesCompraPage() {
               <button
                 key={status}
                 onClick={() => setFilter(status)}
-                className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap ${
+                className={`flex h-8 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors whitespace-nowrap ${
                   filter === status
                     ? "bg-orange-500 text-white shadow-sm"
                     : "bg-white text-zinc-600 border border-zinc-200 hover:bg-zinc-50 dark:bg-zinc-900 dark:border-zinc-700"
@@ -2350,7 +2350,7 @@ export default function OrdenesCompraPage() {
           })}
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-[240px] max-w-lg flex-1">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
@@ -2358,13 +2358,13 @@ export default function OrdenesCompraPage() {
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Buscar por N° OC, proveedor, PR o items..."
-              className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+              className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             />
           </div>
           <select
             value={operadorFilter}
             onChange={(event) => setOperadorFilter(event.target.value)}
-            className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+            className="h-8 rounded-lg border border-zinc-200 bg-white px-3 text-sm text-zinc-700 focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
           >
             <option value="">Todos los operadores</option>
             {operadores.map((operador) => <option key={operador.id} value={operador.id}>{operador.nombre}</option>)}

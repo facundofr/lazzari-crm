@@ -45,7 +45,7 @@ interface Draft { codigo: string; descripcion: string; talle: string; color: str
 const draftVacio = (): Draft => ({ codigo: "", descripcion: "", talle: "", color: "", cantidad: 1, precio: "", catalogo_id: null });
 
 const pendienteDe = (i: Item) => Math.max(0, i.cantidad - i.cantidad_devuelta - (i.cantidad_vendida || 0) - (i.cantidad_baja || 0));
-const inputClass = "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white";
+const inputClass = "w-full rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white";
 const diasDesde = (fecha: string) => Math.floor((Date.now() - new Date(`${fecha}T12:00:00`).getTime()) / 86400000);
 const esUSD = (moneda: string) => String(moneda || "").toUpperCase().startsWith("USD");
 
@@ -262,50 +262,51 @@ export default function MuestrasPage() {
     await fetchData();
   }
 
-  const card = "rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900";
+  // Números rápidos en una línea
+  const chip = "rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900";
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
       <Header title="Muestras" subtitle="Prendas que dejamos a clientes para que las vean" action={{ label: "Registrar entrega", onClick: abrirNuevo }} />
-      <main className="mx-auto max-w-7xl space-y-4 px-4 py-6 sm:px-6">
-        <div className="grid gap-3 sm:grid-cols-4">
-          <div className={card}><p className="text-xs text-zinc-500">Envíos abiertos</p><p className="text-2xl font-bold dark:text-white">{abiertos.length}</p></div>
-          <div className={card}><p className="text-xs text-zinc-500">Prendas en la calle</p><p className="text-2xl font-bold dark:text-white">{prendasAfuera}</p></div>
-          <div className={card}><p className="text-xs text-zinc-500">Valor en la calle</p><p className="text-lg font-bold dark:text-white">{formatCurrency(valorAfuera.ARS)}{valorAfuera.USD ? <span className="block text-sm">{formatCurrency(valorAfuera.USD, "USD")}</span> : null}</p></div>
-          <button onClick={() => setFiltro("viejos")} className={`rounded-xl border p-4 text-left ${viejos.length ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30" : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"}`}>
-            <p className="text-xs text-zinc-500">Más de {DIAS_ALERTA} días en el cliente</p>
-            <p className={`text-2xl font-bold ${viejos.length ? "text-amber-700 dark:text-amber-400" : "dark:text-white"}`}>{viejos.length}</p>
+      <main className="mx-auto max-w-7xl space-y-2.5 p-3 sm:p-4">
+        <div className="flex flex-wrap gap-1.5 text-xs">
+          <span className={chip}><span className="text-zinc-500">Envíos abiertos</span> <b className="font-mono dark:text-white">{abiertos.length}</b></span>
+          <span className={chip}><span className="text-zinc-500">Prendas en la calle</span> <b className="font-mono dark:text-white">{prendasAfuera}</b></span>
+          <span className={chip}><span className="text-zinc-500">Valor en la calle</span> <b className="font-mono dark:text-white">{formatCurrency(valorAfuera.ARS)}</b>{valorAfuera.USD ? <b className="ml-1.5 font-mono dark:text-white">{formatCurrency(valorAfuera.USD, "USD")}</b> : null}</span>
+          <button onClick={() => setFiltro("viejos")} className={`rounded-lg border px-2.5 py-1 text-left ${viejos.length ? "border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30" : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"} ${filtro === "viejos" ? "ring-1 ring-orange-400" : ""}`}>
+            <span className="text-zinc-500">Más de {DIAS_ALERTA} días en el cliente</span>{" "}
+            <b className={`font-mono ${viejos.length ? "text-amber-700 dark:text-amber-400" : "dark:text-white"}`}>{viejos.length}</b>
           </button>
         </div>
         {vendidas > 0 && (
-          <p className="rounded-lg bg-orange-50 px-3 py-2 text-xs text-orange-800 dark:bg-orange-950/30 dark:text-orange-300">
+          <p className="rounded-lg bg-orange-50 px-3 py-1.5 text-xs text-orange-800 dark:bg-orange-950/30 dark:text-orange-300">
             <ShoppingBag className="mr-1 inline h-3.5 w-3.5" /> Los clientes se quedaron {vendidas} muestra(s): acordate de presupuestarlas o facturarlas.
           </p>
         )}
 
         <div className="flex flex-wrap items-center gap-2">
           {([["abiertos", "Abiertos"], ["viejos", `+${DIAS_ALERTA} días`], ["en_cliente", "En el cliente"], ["parcial", "Devolución parcial"], ["cerrado", "Cerrados"], ["devuelto", "Devueltos"], ["todos", "Todos"]] as const).map(([k, l]) => (
-            <button key={k} onClick={() => setFiltro(k)} className={`rounded-lg border px-3 py-1.5 text-sm font-medium ${filtro === k ? "border-orange-500 bg-orange-500 text-white" : "border-zinc-200 bg-white text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}>{l}</button>
+            <button key={k} onClick={() => setFiltro(k)} className={`rounded-lg border px-3 py-1 text-sm font-medium ${filtro === k ? "border-orange-500 bg-orange-500 text-white" : "border-zinc-200 bg-white text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}>{l}</button>
           ))}
           <div className="relative ml-auto w-full sm:w-72">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente, número o prenda…" className={`${inputClass} pl-9`} />
+            <Search className="absolute left-3 top-2 h-4 w-4 text-zinc-400" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar cliente, número o prenda…" className={`${inputClass} h-8 py-1 pl-9`} />
           </div>
         </div>
 
-        <div className="flex flex-col gap-4 lg:flex-row">
+        <div className="flex flex-col gap-3 lg:flex-row">
           <div className={`overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 ${sel ? "lg:w-3/5" : "w-full"}`}>
             {loading ? <div className="flex justify-center py-16"><Loader2 className="animate-spin text-orange-500" /></div> : (
               <table className="w-full text-sm">
                 <thead className="bg-zinc-50 text-left text-xs text-zinc-500 dark:bg-zinc-800/50">
-                  <tr><th className="px-3 py-2">Fecha</th><th className="px-3">Número</th><th className="px-3">Cliente</th><th className="px-3 text-right">En el cliente</th><th className="px-3 text-right">Valor</th><th className="px-3">Estado</th><th></th></tr>
+                  <tr><th className="px-3 py-1.5">Fecha</th><th className="px-3">Número</th><th className="px-3">Cliente</th><th className="px-3 text-right">En el cliente</th><th className="px-3 text-right">Valor</th><th className="px-3">Estado</th><th></th></tr>
                 </thead>
                 <tbody>
                   {filtrados.map(e => {
                     const pend = pendienteEnvio(e.id), tot = itemsDe(e.id).reduce((s, i) => s + i.cantidad, 0), viejo = esViejo(e), est = ESTADO[e.estado] || ESTADO.en_cliente;
                     return (
                       <tr key={e.id} onClick={() => setSelectedId(e.id)} className={`cursor-pointer border-t border-zinc-100 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-800/40 ${selectedId === e.id ? "bg-orange-50 dark:bg-orange-950/20" : ""}`}>
-                        <td className="whitespace-nowrap px-3 py-2 text-zinc-500">
+                        <td className="whitespace-nowrap px-3 py-1.5 text-zinc-500">
                           {formatDate(e.fecha)}
                           {viejo && <span className="ml-1 text-[10px] font-semibold text-amber-600" title={`${diasDesde(e.fecha)} días en el cliente`}><AlertTriangle className="inline h-3 w-3" /> {diasDesde(e.fecha)}d</span>}
                         </td>
@@ -326,7 +327,7 @@ export default function MuestrasPage() {
 
           {sel && (
             <div className="h-fit rounded-xl border border-zinc-200 bg-white lg:sticky lg:top-5 lg:w-2/5 dark:border-zinc-800 dark:bg-zinc-900">
-              <div className="flex items-start justify-between border-b border-zinc-200 p-4 dark:border-zinc-800">
+              <div className="flex items-start justify-between border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
                 <div>
                   <p className="font-mono text-xs text-zinc-500">{sel.numero}</p>
                   <h3 className="font-semibold dark:text-white">{clienteMap.get(sel.cliente_id) || "—"}</h3>
@@ -340,11 +341,11 @@ export default function MuestrasPage() {
                 </div>
                 <button onClick={() => setSelectedId(null)}><X className="h-5 w-5 text-zinc-400" /></button>
               </div>
-              <div className="space-y-3 p-4">
+              <div className="space-y-2 p-3">
                 {itemsDe(sel.id).map(i => {
                   const pend = pendienteDe(i);
                   return (
-                    <div key={i.id} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-700">
+                    <div key={i.id} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-700">
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <p className="text-sm font-medium dark:text-white">
@@ -363,7 +364,7 @@ export default function MuestrasPage() {
                         {pend > 0 ? <Badge variant="warning">{pend} en el cliente</Badge> : <Badge variant="success">Resuelto</Badge>}
                       </div>
                       {pend > 0 && (
-                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                           <input type="number" min={1} max={pend} value={cantidades[i.id] || pend} onChange={e => setCantidades(prev => ({ ...prev, [i.id]: Number(e.target.value) }))}
                             title="Cantidad" className="w-16 rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                           <input type="date" value={fechas[i.id] || todayAR()} max={todayAR()} onChange={e => setFechas(prev => ({ ...prev, [i.id]: e.target.value }))}
@@ -389,11 +390,11 @@ export default function MuestrasPage() {
       {modal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3">
           <div className="flex max-h-[92vh] w-full max-w-4xl flex-col rounded-xl bg-white shadow-2xl dark:bg-zinc-900">
-            <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
-              <h2 className="text-lg font-bold dark:text-white">Registrar entrega de muestras</h2>
+            <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-2 dark:border-zinc-700">
+              <h2 className="text-base font-bold dark:text-white">Registrar entrega de muestras</h2>
               <button onClick={() => setModal(false)}><X className="h-5 w-5 text-zinc-400" /></button>
             </div>
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+            <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4">
               <div className="grid gap-3 md:grid-cols-4">
                 <div className="md:col-span-2">
                   <label className="text-xs text-zinc-500">Cliente {form.cliente_id && <b className="text-zinc-800 dark:text-zinc-100">· {clienteMap.get(form.cliente_id)}</b>}</label>
@@ -433,9 +434,9 @@ export default function MuestrasPage() {
               <button onClick={() => setDrafts(prev => [...prev, draftVacio()])} className="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs dark:border-zinc-700 dark:text-zinc-200"><Plus className="h-3.5 w-3.5" /> Otra prenda</button>
               <div><label className="text-xs text-zinc-500">Observaciones</label><textarea value={form.observaciones} onChange={e => setForm(f => ({ ...f, observaciones: e.target.value }))} rows={2} className={inputClass} /></div>
             </div>
-            <div className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
-              <button onClick={() => setModal(false)} className="rounded-lg border px-3 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">Cancelar</button>
-              <button onClick={crearEnvio} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+            <div className="flex justify-end gap-2 border-t border-zinc-200 px-4 py-2 dark:border-zinc-700">
+              <button onClick={() => setModal(false)} className="h-8 rounded-lg border px-3 py-1 text-sm dark:border-zinc-700 dark:text-zinc-200">Cancelar</button>
+              <button onClick={crearEnvio} disabled={saving} className="flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white disabled:opacity-50">
                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Registrar
               </button>
             </div>

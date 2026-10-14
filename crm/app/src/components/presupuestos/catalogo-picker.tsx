@@ -10,17 +10,19 @@ import { createPortal } from "react-dom";
 import { X, Search, Loader2, Check, Plus, Minus } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
 import { normalizarTexto, palabrasBusqueda, coincideTodas } from "@/lib/buscar-texto";
+import { useReglasCostos } from "@/components/lista-costos/reglas-datos";
+import { AvisosProveedor } from "@/components/lista-costos/regla-info";
 
 const db = supabase as any;
 
 // La lista completa (~17 mil artículos) se trae UNA vez por sesión y después se busca, filtra y ordena en pantalla:
 // abre con todo, la búsqueda ignora tildes/mayúsculas y el orden por costo ordena toda la lista, no solo 300.
-export type FilaLista = CatalogoRow & { rubro?: string | null; _txt: string };
+export type FilaLista = CatalogoRow & { rubro?: string | null; foto_path?: string | null; _txt: string };
 let listaCache: Promise<FilaLista[]> | null = null;
 export function traerListaCompleta(): Promise<FilaLista[]> {
   if (listaCache) return listaCache;
   listaCache = (async () => {
-    const cols = "id, proveedor, codigo, codigo_interno, descripcion, moneda, costo, precio_venta, marca, rubro";
+    const cols = "id, proveedor, codigo, codigo_interno, descripcion, moneda, costo, precio_venta, marca, rubro, foto_path";
     const { count, error: ec } = await db.from("catalogo_costos").select("id", { count: "exact", head: true }).eq("activo", true);
     if (ec) throw ec;
     const paginas = Math.ceil((count || 0) / 1000);
@@ -195,6 +197,8 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
   // Vínculos guardados: nombre de la lista (fantasía) → proveedor del CRM (razón social)
   const [vinculos, setVinculos] = useState<Record<string, string>>({});
   const inputRef = useRef<HTMLInputElement>(null);
+  // Reglas por proveedor (semáforo, ℹ️, opcionales y avisos): solo informan, no frenan.
+  const reglas = useReglasCostos(open);
 
   // Proveedores del catálogo (para el filtro) y proveedores del CRM (para vincular el id)
   useEffect(() => {
@@ -393,7 +397,7 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
                       </td>
                       <td className="px-2 py-1.5 font-mono text-xs whitespace-nowrap">{r.codigo_interno || r.codigo}</td>
                       <td className="px-2 py-1.5">{r.descripcion}</td>
-                      <td className="px-2 py-1.5 text-xs whitespace-nowrap"><span className={`font-medium ${c.texto}`}>{r.proveedor}</span>{r.marca ? <span className="block text-zinc-500">{r.marca}</span> : null}</td>
+                      <td className="px-2 py-1.5 text-xs whitespace-nowrap"><span className="flex items-center gap-1"><span className={`font-medium ${c.texto}`}>{r.proveedor}</span><AvisosProveedor proveedor={r.proveedor} datos={reglas} compacto /></span>{r.marca ? <span className="block text-zinc-500">{r.marca}</span> : null}</td>
                       <td className="px-2 py-1.5 text-right whitespace-nowrap text-zinc-500">{fmt(r.costo, r.moneda)}{r.moneda === "USD divisa" ? " div." : ""}</td>
                       <td className="px-2 py-1.5 text-right whitespace-nowrap font-semibold">{fmt(r.precio_venta, r.moneda)}</td>
                     </tr>
@@ -417,7 +421,8 @@ export default function CatalogoPicker({ open, onClose, prMoneda, tc, tcDivisas,
               <div key={row.id} className="flex flex-wrap items-center gap-2 text-sm">
                 <button onClick={() => toggle(row)} className="text-zinc-400 hover:text-red-600"><X className="h-4 w-4" /></button>
                 <span className="font-mono text-xs w-28 truncate">{row.codigo_interno || row.codigo}</span>
-                <span className="flex-1 min-w-[200px] truncate">{row.descripcion}
+                <span className="flex-1 min-w-[200px]">{row.descripcion}
+                  <span className="ml-1.5 text-[11px] text-zinc-500">{row.proveedor}</span> <AvisosProveedor proveedor={row.proveedor} datos={reglas} />
                   {!proveedorId(row.proveedor) && (
                     <span className="flex flex-wrap items-center gap-1 text-[11px] text-amber-700">
                       ⚠ No sé qué proveedor del CRM es «{row.proveedor}». Vincularlo con:

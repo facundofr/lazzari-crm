@@ -78,20 +78,20 @@ export function FechasChequeConfig() {
   }
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+    <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-1 flex items-center gap-2">
         <CalendarDays className="h-4 w-4 text-orange-500" />
         <h3 className="text-sm font-semibold">Fechas de cheque por mes</h3>
         {cargando && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />}
       </div>
-      <p className="mb-4 text-xs text-zinc-500">Los días en que se centralizan los cheques que emitimos. La orden de pago y el plan de pagos proponen los cheques en estas fechas (siempre que el proveedor lo permita). Es una sugerencia: se puede cambiar en cada pago.</p>
-      <div className="space-y-2">
+      <p className="mb-2 text-xs text-zinc-500">Los días en que se centralizan los cheques que emitimos. La orden de pago y el plan de pagos proponen los cheques en estas fechas (siempre que el proveedor lo permita). Es una sugerencia: se puede cambiar en cada pago.</p>
+      <div className="space-y-1.5">
         {meses.map((mes) => {
           const lista = numeros(mes);
           const cambiado = lista.join(",") !== (guardados[mes] || "");
           return (
-            <div key={mes} className="flex flex-wrap items-start gap-3 rounded-lg border border-zinc-100 px-3 py-2 dark:border-zinc-800">
-              <div className="w-32 pt-1.5 text-sm font-medium">{MESES[Number(mes.slice(5, 7)) - 1]} {mes.slice(0, 4)}</div>
+            <div key={mes} className="flex flex-wrap items-start gap-3 rounded-lg border border-zinc-100 px-3 py-1.5 dark:border-zinc-800">
+              <div className="w-32 pt-1 text-sm font-medium">{MESES[Number(mes.slice(5, 7)) - 1]} {mes.slice(0, 4)}</div>
               <div className="flex flex-wrap gap-3">
                 {valores(mes).map((v, i) => {
                   const n = Number(v);
@@ -101,7 +101,7 @@ export function FechasChequeConfig() {
                     <div key={i} className="w-24">
                       <input value={v} inputMode="numeric" aria-label={`Día ${i + 1} de ${MESES[Number(mes.slice(5, 7)) - 1]}`} placeholder="Día"
                         onChange={(e) => setDias((d) => ({ ...d, [mes]: valores(mes).map((x, j) => (j === i ? e.target.value.replace(/\D/g, "").slice(0, 2) : x)) }))}
-                        className="h-9 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
+                        className="h-8 w-full rounded-lg border border-zinc-200 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800" />
                       {fecha && <p className={`mt-0.5 text-[10px] ${esDiaHabil(fecha) ? "text-zinc-400" : "text-amber-600"}`}>
                         {DIAS_SEMANA[dia]}{!esDiaHabil(fecha) && ` · se debita ${diaHabilDesde(fecha).slice(8, 10)}/${diaHabilDesde(fecha).slice(5, 7)}`}
                       </p>}
@@ -109,10 +109,10 @@ export function FechasChequeConfig() {
                   );
                 })}
                 {valores(mes).length < 6 && (
-                  <button type="button" onClick={() => setDias((d) => ({ ...d, [mes]: [...valores(mes), ""] }))} className="h-9 px-1 text-xs text-orange-600 hover:underline">+ día</button>
+                  <button type="button" onClick={() => setDias((d) => ({ ...d, [mes]: [...valores(mes), ""] }))} className="h-8 px-1 text-xs text-orange-600 hover:underline">+ día</button>
                 )}
               </div>
-              <div className="ml-auto flex items-center gap-2 pt-1">
+              <div className="ml-auto flex items-center gap-2 pt-0.5">
                 {!guardados[mes] && !cambiado && <span className="text-[11px] text-amber-600">Sin fechas: se propone el vencimiento</span>}
                 {cambiado && (
                   <button type="button" onClick={() => guardar(mes)} disabled={guardando === mes}

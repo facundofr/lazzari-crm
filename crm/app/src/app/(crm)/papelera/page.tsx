@@ -119,37 +119,37 @@ export default function PapeleraPage() {
   return (
     <>
       <Header title="Papelera" subtitle="Registros eliminados de forma reversible" />
-      <div className="p-4 md:p-6">
+      <div className="p-3 sm:p-4">
         <Card className="overflow-hidden">
-          <div className="flex items-center gap-3 border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
+          <div className="flex items-center gap-3 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
             <Trash2 className="h-5 w-5 text-zinc-500" />
             <div><h2 className="font-semibold dark:text-white">Todos los módulos</h2><p className="text-xs text-zinc-500">Las facturas, OP y remitos anulados se conservan como historial y no se pueden borrar ni reactivar desde aquí.</p></div>
           </div>
-          <div className="grid gap-3 border-b border-zinc-200 p-4 dark:border-zinc-800 md:grid-cols-[minmax(0,1fr)_240px_auto] md:items-center">
+          <div className="grid gap-2 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800 md:grid-cols-[minmax(0,1fr)_240px_auto] md:items-center">
             <label className="relative block">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Buscar por número, cliente, proveedor o PR/OC relacionada..."
-                className="w-full rounded-lg border border-zinc-300 bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white dark:focus:ring-orange-950"
+                className="w-full rounded-lg border border-zinc-300 bg-white h-8 py-1 pl-9 pr-3 text-sm outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white dark:focus:ring-orange-950"
               />
             </label>
             <select
               value={kindFilter}
               onChange={(event) => setKindFilter(event.target.value as "" | TrashKind)}
-              className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+              className="rounded-lg border border-zinc-300 bg-white h-8 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             >
               {kindOptions.map((option) => <option key={option.value || "all"} value={option.value}>{option.label}</option>)}
             </select>
             <span className="text-sm text-zinc-500">{filteredRows.length} de {rows.length}</span>
           </div>
-          {loading ? <p className="p-6 text-sm text-zinc-500">Cargando...</p> : rows.length === 0 ? <p className="p-6 text-sm text-zinc-500">La papelera está vacía.</p> : (
+          {loading ? <p className="p-4 text-sm text-zinc-500">Cargando...</p> : rows.length === 0 ? <p className="p-4 text-sm text-zinc-500">La papelera está vacía.</p> : (
             <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-              {filteredRows.length === 0 && <p className="p-6 text-sm text-zinc-500">No hay registros que coincidan con la búsqueda.</p>}
-              {filteredRows.map((row) => <div key={`${row.kind}-${row.id}`} className="flex items-center justify-between gap-4 px-5 py-4">
-                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><Badge variant={row.recoverable ? "outline" : "danger"}>{row.kind}</Badge><Badge variant="outline">{row.state === "eliminado" ? "Eliminado" : row.state}</Badge></div><p className="mt-1 font-medium dark:text-white">{row.number}</p><div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500"><span>{row.date ? formatDate(row.date) : "Fecha no disponible"}</span>{row.entity && <span className="truncate">{row.entity}</span>}{row.related && <span>Relacionado: {row.related}</span>}{row.amount !== null && <span className="font-mono">{new Intl.NumberFormat("es-AR", { style: "currency", currency: row.currency === "USD" ? "USD" : "ARS" }).format(row.amount)}</span>}</div></div>
-                {row.recoverable ? <button onClick={() => restore(row)} className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"><RotateCcw className="h-4 w-4" /> Restaurar</button> : <span className="inline-flex items-center gap-1 text-xs text-zinc-500"><ShieldCheck className="h-4 w-4" /> Conservado</span>}
+              {filteredRows.length === 0 && <p className="p-4 text-sm text-zinc-500">No hay registros que coincidan con la búsqueda.</p>}
+              {filteredRows.map((row) => <div key={`${row.kind}-${row.id}`} className="flex items-center justify-between gap-3 px-3 py-1.5">
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><Badge variant={row.recoverable ? "outline" : "danger"}>{row.kind}</Badge><Badge variant="outline">{row.state === "eliminado" ? "Eliminado" : row.state}</Badge></div><p className="mt-0.5 font-medium dark:text-white">{row.number}</p><div className="mt-0.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-500"><span>{row.date ? formatDate(row.date) : "Fecha no disponible"}</span>{row.entity && <span className="truncate">{row.entity}</span>}{row.related && <span>Relacionado: {row.related}</span>}{row.amount !== null && <span className="font-mono">{new Intl.NumberFormat("es-AR", { style: "currency", currency: row.currency === "USD" ? "USD" : "ARS" }).format(row.amount)}</span>}</div></div>
+                {row.recoverable ? <button onClick={() => restore(row)} className="inline-flex items-center gap-2 rounded-lg border border-zinc-300 h-8 px-3 py-1 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"><RotateCcw className="h-4 w-4" /> Restaurar</button> : <span className="inline-flex items-center gap-1 text-xs text-zinc-500"><ShieldCheck className="h-4 w-4" /> Conservado</span>}
               </div>)}
             </div>
           )}

@@ -13,7 +13,7 @@ import {
   inicioDeMesHace, montoFirmado, normalizarMoneda, periodoDeFecha, signoComprobante, sumarMeses,
   totalesLibroIVA, totalesMensuales, type Moneda, type TotalesLibro, type TotalesLibroIVA,
 } from "@/lib/reportes-comprobantes";
-import { TrendingUp, Users, FileText, Download, DollarSign, XCircle, Loader2, Percent, Package, BookOpen } from "lucide-react";
+import { TrendingUp, Download, DollarSign, XCircle, Loader2, Percent, Package, BookOpen } from "lucide-react";
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend,
@@ -149,29 +149,29 @@ function TotalesLibroIVACard({ totales, conPercepciones }: { totales: TotalesLib
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-zinc-200 dark:border-zinc-700 text-xs uppercase text-zinc-500">
-              <th className="px-3 py-2 text-left">Moneda</th>
-              <th className="px-3 py-2 text-right">Comprobantes</th>
-              <th className="px-3 py-2 text-right">Neto gravado</th>
-              <th className="px-3 py-2 text-right">IVA</th>
-              {conPercepciones && <th className="px-3 py-2 text-right">Percepciones</th>}
-              <th className="px-3 py-2 text-right">Total</th>
+              <th className="px-3 py-1.5 text-left">Moneda</th>
+              <th className="px-3 py-1.5 text-right">Comprobantes</th>
+              <th className="px-3 py-1.5 text-right">Neto gravado</th>
+              <th className="px-3 py-1.5 text-right">IVA</th>
+              {conPercepciones && <th className="px-3 py-1.5 text-right">Percepciones</th>}
+              <th className="px-3 py-1.5 text-right">Total</th>
             </tr>
           </thead>
           <tbody>
             {filas.map((f) => (
               <tr key={f.titulo} className="border-b border-zinc-100 dark:border-zinc-800">
-                <td className="px-3 py-2 font-medium">{f.titulo}</td>
-                <td className="px-3 py-2 text-right">{f.t.cantidad}</td>
-                <td className="px-3 py-2 text-right font-mono">{formatCurrency(f.t.neto_gravado, f.moneda)}</td>
-                <td className="px-3 py-2 text-right font-mono font-semibold text-blue-600">{formatCurrency(f.t.iva, f.moneda)}</td>
-                {conPercepciones && <td className="px-3 py-2 text-right font-mono text-violet-600">{formatCurrency(f.t.percepciones, f.moneda)}</td>}
-                <td className="px-3 py-2 text-right font-mono font-semibold">{formatCurrency(f.t.total, f.moneda)}</td>
+                <td className="px-3 py-1 font-medium">{f.titulo}</td>
+                <td className="px-3 py-1 text-right">{f.t.cantidad}</td>
+                <td className="px-3 py-1 text-right font-mono">{formatCurrency(f.t.neto_gravado, f.moneda)}</td>
+                <td className="px-3 py-1 text-right font-mono font-semibold text-blue-600">{formatCurrency(f.t.iva, f.moneda)}</td>
+                {conPercepciones && <td className="px-3 py-1 text-right font-mono text-violet-600">{formatCurrency(f.t.percepciones, f.moneda)}</td>}
+                <td className="px-3 py-1 text-right font-mono font-semibold">{formatCurrency(f.t.total, f.moneda)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <p className="mt-3 text-xs text-zinc-500">
+      <p className="mt-2 text-xs text-zinc-500">
         Las notas de crédito restan. Los pesos y los dólares no se suman entre sí.
         {totales.USDenARS.cantidad > 0 && " La fila de referencia pasa a pesos los comprobantes en dólares con la cotización guardada en cada uno."}
         {totales.usdSinCotizacion > 0 && ` ${totales.usdSinCotizacion} comprobante(s) en dólares no tienen cotización guardada y no se pasan a pesos.`}
@@ -800,11 +800,11 @@ export default function ReportesPage() {
       <Header title="Reportes" subtitle="Analisis comercial y operativo" />
 
       {/* Tab navigation */}
-      <div className="overflow-x-auto px-4 pt-6 sm:px-8">
+      <div className="overflow-x-auto px-3 pt-3 sm:px-4">
         <div className="flex w-max gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800">
           <button
             onClick={() => setActiveTab("comercial")}
-            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+            className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
               activeTab === "comercial"
                 ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
                 : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -817,7 +817,7 @@ export default function ReportesPage() {
           </button>
           <button
             onClick={() => setActiveTab("compras_ventas")}
-            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+            className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
               activeTab === "compras_ventas"
                 ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
                 : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -845,7 +845,7 @@ export default function ReportesPage() {
           )}
           <button
             onClick={() => setActiveTab("articulos")}
-            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+            className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
               activeTab === "articulos"
                 ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
                 : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -858,7 +858,7 @@ export default function ReportesPage() {
           </button>
           <button
             onClick={() => setActiveTab("libro_iva")}
-            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+            className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
               activeTab === "libro_iva"
                 ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white"
                 : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
@@ -874,7 +874,7 @@ export default function ReportesPage() {
 
       {/* Currency selector */}
       {activeTab !== "compras_ventas" && activeTab !== "libro_iva" && (
-      <div className="px-8 pt-4 flex flex-wrap items-center gap-3">
+      <div className="px-3 pt-2.5 sm:px-4 flex flex-wrap items-center gap-2">
         <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Moneda:</span>
         <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-600 overflow-hidden">
           {([
@@ -885,7 +885,7 @@ export default function ReportesPage() {
             <button
               key={opt.key}
               onClick={() => setMonedaReporte(opt.key)}
-              className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+              className={`px-3 py-1 text-sm font-medium transition-colors ${
                 monedaReporte === opt.key
                   ? "bg-orange-500 text-white"
                   : "bg-white text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
@@ -914,16 +914,16 @@ export default function ReportesPage() {
 
       {/* Tab: Analisis comercial */}
       {activeTab === "comercial" && (
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-2.5">
         {/* Charts row */}
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           {/* Ventas mensuales */}
           <Card>
             <CardHeader>
               <CardTitle>Facturacion mensual</CardTitle>
               <span className="text-xs text-zinc-400">Últimos 6 meses · neto de NC{monedaReporte === "original" ? " · pesos y dólares por separado" : ""}</span>
             </CardHeader>
-            <div className="h-64">
+            <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
                 {monedaReporte === "original" ? (
                   <BarChart data={ventasMensuales}>
@@ -953,10 +953,10 @@ export default function ReportesPage() {
               <CardTitle>Presupuestos por estado</CardTitle>
               <span className="text-xs text-zinc-400">Últimos 12 meses</span>
             </CardHeader>
-            <div className="h-64">
+            <div className="h-48">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={prEstadoData} cx="50%" cy="50%" outerRadius={80} dataKey="value" label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}>
+                  <Pie data={prEstadoData} cx="50%" cy="50%" outerRadius={62} dataKey="value" label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}>
                     {prEstadoData.map((_, i) => (
                       <Cell key={i} fill={COLORS[i % COLORS.length]} />
                     ))}
@@ -969,7 +969,7 @@ export default function ReportesPage() {
           </Card>
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           {/* Metricas clave */}
           <Card>
             <CardHeader>
@@ -978,14 +978,14 @@ export default function ReportesPage() {
                 <Download className="h-3.5 w-3.5" /> Exportar
               </button>
             </CardHeader>
-            <div className="space-y-4">
+            <div className="space-y-1">
               {[
                 { label: "Tasa de conversion (PR 12 meses)", value: `${tasaConversion}%`, prev: "—", up: tasaConversion > 0 },
                 { label: "Ticket promedio por factura (12 meses)", value: fc(ticketPromedio), prev: "—", up: false },
                 { label: "Presupuestos (12 meses)", value: String(totalPR), prev: "—", up: false },
                 { label: "Facturado del mes (neto de NC)", value: fmtDual(mesFacturado.ARS, mesFacturado.USD), prev: fmtDual(mesFacturadoAnterior.ARS, mesFacturadoAnterior.USD), up: mesFacturado.ARS > mesFacturadoAnterior.ARS },
               ].map((m) => (
-                <div key={m.label} className="flex items-center justify-between py-2 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
+                <div key={m.label} className="flex items-center justify-between py-1.5 border-b border-zinc-100 dark:border-zinc-800 last:border-0">
                   <span className="text-sm text-zinc-600 dark:text-zinc-400">{m.label}</span>
                   <div className="flex items-center gap-3">
                     <span className="text-xs text-zinc-400">{m.prev}</span>
@@ -1003,13 +1003,13 @@ export default function ReportesPage() {
               <CardTitle>Analisis de motivos de rechazo</CardTitle>
               <Badge variant="danger">{rechazados.length} rechazados</Badge>
             </CardHeader>
-            <div className="space-y-4">
+            <div className="space-y-2">
               {Object.entries(motivoCounts).map(([motivo, count]) => {
                 const pct = Math.round((count / totalRechazos) * 100);
                 const color = motivo === "Precio" ? "bg-red-500" : motivo === "Plazo de entrega" ? "bg-amber-500" : "bg-zinc-400";
                 return (
-                  <div key={motivo} className="rounded-lg bg-zinc-50 p-4 dark:bg-zinc-800">
-                    <div className="flex items-center justify-between mb-3">
+                  <div key={motivo} className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800">
+                    <div className="flex items-center justify-between mb-1.5">
                       <span className="text-sm font-medium">{motivo}</span>
                       <span className="text-sm font-bold">{pct}%</span>
                     </div>
@@ -1020,7 +1020,7 @@ export default function ReportesPage() {
                 );
               })}
               {rechazados.slice(0, 5).map((pr) => (
-                <div key={pr.id} className="flex gap-3 rounded-lg border border-red-100 p-3 dark:border-red-900">
+                <div key={pr.id} className="flex gap-2 rounded-lg border border-red-100 px-3 py-1.5 dark:border-red-900">
                   <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
                   <div>
                     <p className="text-sm font-medium">{pr.numero} — {pr.clienteNombre}</p>
@@ -1042,11 +1042,11 @@ export default function ReportesPage() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-zinc-200 dark:border-zinc-700">
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-500">#</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-500">Cliente</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">Facturado</th>
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">% del total</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-500">Barra</th>
+                  <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">#</th>
+                  <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Cliente</th>
+                  <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Facturado</th>
+                  <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">% del total</th>
+                  <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Barra</th>
                 </tr>
               </thead>
               <tbody>
@@ -1056,11 +1056,11 @@ export default function ReportesPage() {
                   const maxFact = topClientesData[0]?.equivalente || 1;
                   return (
                     <tr key={c.nombre} className="border-b border-zinc-100 dark:border-zinc-800">
-                      <td className="px-4 py-3 text-sm font-bold text-zinc-400">{i + 1}</td>
-                      <td className="px-4 py-3 text-sm font-medium text-zinc-800 dark:text-zinc-200">{c.nombre}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right">{fmtDual(c.ARS, c.USD)}</td>
-                      <td className="px-4 py-3 text-sm text-right text-zinc-500">{pct}%</td>
-                      <td className="px-4 py-3 w-40">
+                      <td className="px-3 py-1.5 text-sm font-bold text-zinc-400">{i + 1}</td>
+                      <td className="px-3 py-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">{c.nombre}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-right">{fmtDual(c.ARS, c.USD)}</td>
+                      <td className="px-3 py-1.5 text-sm text-right text-zinc-500">{pct}%</td>
+                      <td className="px-3 py-1.5 w-40">
                         <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800">
                           <div className="h-2 rounded-full bg-orange-500" style={{ width: `${Math.max(0, (c.equivalente / maxFact) * 100)}%` }} />
                         </div>
@@ -1077,15 +1077,15 @@ export default function ReportesPage() {
 
       {/* Tab: Compras vs ventas */}
       {activeTab === "compras_ventas" && (
-        <div className="space-y-4 p-3 sm:p-5">
+        <div className="space-y-2.5 p-3 sm:p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-zinc-900 dark:text-white">Compras, ventas y margen comercial</h2>
+              <h2 className="text-base font-semibold text-zinc-900 dark:text-white">Compras, ventas y margen comercial</h2>
               <p className="text-sm text-zinc-500">Facturación real por mes y costo vs venta tomado de PR aprobados o facturados.</p>
             </div>
             <div className="flex overflow-hidden rounded-lg border border-zinc-300 dark:border-zinc-600">
               {(["ARS", "USD"] as const).map((moneda) => (
-                <button key={moneda} onClick={() => setComparativaMoneda(moneda)} className={`px-4 py-2 text-sm font-medium ${comparativaMoneda === moneda ? "bg-orange-500 text-white" : "bg-white text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>{moneda}</button>
+                <button key={moneda} onClick={() => setComparativaMoneda(moneda)} className={`px-3 py-1 text-sm font-medium ${comparativaMoneda === moneda ? "bg-orange-500 text-white" : "bg-white text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>{moneda}</button>
               ))}
             </div>
           </div>
@@ -1094,17 +1094,18 @@ export default function ReportesPage() {
             <div className="flex items-center justify-center p-16"><Loader2 className="h-8 w-8 animate-spin text-orange-500" /></div>
           ) : (
             <>
-              <div className="grid gap-4 sm:grid-cols-4">
-                <Card><p className="text-xs text-zinc-500">Ventas del último mes</p><p className="mt-2 font-mono text-xl font-bold text-emerald-600">{formatCurrency(Number(comparativaActual?.ventas || 0), comparativaMoneda)}</p></Card>
-                <Card><p className="text-xs text-zinc-500">Compras del último mes</p><p className="mt-2 font-mono text-xl font-bold text-red-600">{formatCurrency(Number(comparativaActual?.compras || 0), comparativaMoneda)}</p></Card>
-                <Card><p className="text-xs text-zinc-500">Venta PR del último mes</p><p className="mt-2 font-mono text-xl font-bold">{formatCurrency(Number(comparativaActual?.venta_pr || 0), comparativaMoneda)}</p></Card>
-                <Card><p className="text-xs text-zinc-500">Margen PR del último mes</p><p className={`mt-2 font-mono text-xl font-bold ${margenPRActual >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(margenPRActual, comparativaMoneda)}</p></Card>
+              {/* Números rápidos en una línea */}
+              <div className="flex flex-wrap gap-1.5 text-xs">
+                <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Ventas del último mes</span> <b className="font-mono text-emerald-600">{formatCurrency(Number(comparativaActual?.ventas || 0), comparativaMoneda)}</b></span>
+                <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Compras del último mes</span> <b className="font-mono text-red-600">{formatCurrency(Number(comparativaActual?.compras || 0), comparativaMoneda)}</b></span>
+                <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Venta PR del último mes</span> <b className="font-mono">{formatCurrency(Number(comparativaActual?.venta_pr || 0), comparativaMoneda)}</b></span>
+                <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Margen PR del último mes</span> <b className={`font-mono ${margenPRActual >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(margenPRActual, comparativaMoneda)}</b></span>
               </div>
 
-              <div className="grid gap-6 lg:grid-cols-2">
+              <div className="grid gap-3 lg:grid-cols-2">
                 <Card>
                   <CardHeader><CardTitle>Compras totales vs ventas totales</CardTitle></CardHeader>
-                  <div className="h-72">
+                  <div className="h-52">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={comparativaVisible}>
                         <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
@@ -1119,7 +1120,7 @@ export default function ReportesPage() {
                 </Card>
                 <Card>
                   <CardHeader><CardTitle>Costo de lo vendido vs venta (PR)</CardTitle></CardHeader>
-                  <div className="h-72">
+                  <div className="h-52">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={comparativaVisible}>
                         <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
@@ -1137,8 +1138,8 @@ export default function ReportesPage() {
               <Card className="overflow-hidden p-0">
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
-                    <thead><tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800"><th className="px-4 py-3 text-left">Mes</th><th className="px-4 py-3 text-right">Ventas</th><th className="px-4 py-3 text-right">Compras</th><th className="px-4 py-3 text-right">Venta PR</th><th className="px-4 py-3 text-right">Costo PR</th><th className="px-4 py-3 text-right">Margen PR</th></tr></thead>
-                    <tbody>{comparativaVisible.map((row) => { const margen = row.venta_pr - row.costo_pr; return <tr key={`${row.periodo}-${row.moneda}`} className="border-b border-zinc-100 dark:border-zinc-800"><td className="px-4 py-3 font-medium">{row.mes}</td><td className="px-4 py-3 text-right font-mono text-emerald-600">{formatCurrency(row.ventas, row.moneda)}</td><td className="px-4 py-3 text-right font-mono text-red-600">{formatCurrency(row.compras, row.moneda)}</td><td className="px-4 py-3 text-right font-mono">{formatCurrency(row.venta_pr, row.moneda)}</td><td className="px-4 py-3 text-right font-mono">{formatCurrency(row.costo_pr, row.moneda)}</td><td className={`px-4 py-3 text-right font-mono font-semibold ${margen >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(margen, row.moneda)}</td></tr>; })}</tbody>
+                    <thead><tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800"><th className="px-3 py-1.5 text-left">Mes</th><th className="px-3 py-1.5 text-right">Ventas</th><th className="px-3 py-1.5 text-right">Compras</th><th className="px-3 py-1.5 text-right">Venta PR</th><th className="px-3 py-1.5 text-right">Costo PR</th><th className="px-3 py-1.5 text-right">Margen PR</th></tr></thead>
+                    <tbody>{comparativaVisible.map((row) => { const margen = row.venta_pr - row.costo_pr; return <tr key={`${row.periodo}-${row.moneda}`} className="border-b border-zinc-100 dark:border-zinc-800"><td className="px-3 py-1.5 font-medium">{row.mes}</td><td className="px-3 py-1.5 text-right font-mono text-emerald-600">{formatCurrency(row.ventas, row.moneda)}</td><td className="px-3 py-1.5 text-right font-mono text-red-600">{formatCurrency(row.compras, row.moneda)}</td><td className="px-3 py-1.5 text-right font-mono">{formatCurrency(row.venta_pr, row.moneda)}</td><td className="px-3 py-1.5 text-right font-mono">{formatCurrency(row.costo_pr, row.moneda)}</td><td className={`px-3 py-1.5 text-right font-mono font-semibold ${margen >= 0 ? "text-emerald-600" : "text-red-600"}`}>{formatCurrency(margen, row.moneda)}</td></tr>; })}</tbody>
                   </table>
                 </div>
               </Card>
@@ -1149,7 +1150,7 @@ export default function ReportesPage() {
 
       {/* Tab: Ranking por Articulo */}
       {activeTab === "articulos" && (
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-2.5">
         {articulosLoading ? (
           <div className="flex items-center justify-center p-16">
             <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
@@ -1157,7 +1158,7 @@ export default function ReportesPage() {
         ) : (
           <>
             {/* Controls row */}
-            <div className="flex flex-wrap items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3">
               {/* Source selector */}
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-zinc-600 dark:text-zinc-400">Fuente:</span>
@@ -1170,7 +1171,7 @@ export default function ReportesPage() {
                     <button
                       key={opt.key}
                       onClick={() => setArticulosFuente(opt.key)}
-                      className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                      className={`px-3 py-1 text-sm font-medium transition-colors ${
                         articulosFuente === opt.key
                           ? "bg-orange-500 text-white"
                           : "bg-white text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
@@ -1192,7 +1193,7 @@ export default function ReportesPage() {
                     <button
                       key={opt.key}
                       onClick={() => setArticulosSortBy(opt.key)}
-                      className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                      className={`px-3 py-1 text-sm font-medium transition-colors ${
                         articulosSortBy === opt.key
                           ? "bg-orange-500 text-white"
                           : "bg-white text-zinc-700 hover:bg-zinc-50 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
@@ -1205,42 +1206,12 @@ export default function ReportesPage() {
               </div>
             </div>
 
-            {/* KPI cards */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Card>
-                <div className="rounded-lg p-2.5 w-fit text-orange-600 bg-orange-50">
-                  <Package className="h-5 w-5" />
-                </div>
-                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{articulosData.length}</h3>
-                <p className="mt-1 text-sm text-zinc-500">Articulos distintos</p>
-              </Card>
-              <Card>
-                <div className="rounded-lg p-2.5 w-fit text-blue-600 bg-blue-50">
-                  <FileText className="h-5 w-5" />
-                </div>
-                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">
-                  {articulosData.reduce((s, a) => s + a.apariciones, 0)}
-                </h3>
-                <p className="mt-1 text-sm text-zinc-500">Total documentos</p>
-              </Card>
-              <Card>
-                <div className="rounded-lg p-2.5 w-fit text-emerald-600 bg-emerald-50">
-                  <TrendingUp className="h-5 w-5" />
-                </div>
-                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">
-                  {articulosData.reduce((s, a) => s + a.cantidadTotal, 0).toLocaleString("es-AR")}
-                </h3>
-                <p className="mt-1 text-sm text-zinc-500">Unidades vendidas</p>
-              </Card>
-              <Card>
-                <div className="rounded-lg p-2.5 w-fit text-violet-600 bg-violet-50">
-                  <DollarSign className="h-5 w-5" />
-                </div>
-                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">
-                  {fc(articulosData.reduce((s, a) => s + a.montoTotal, 0))}
-                </h3>
-                <p className="mt-1 text-sm text-zinc-500">Monto total</p>
-              </Card>
+            {/* Números rápidos en una línea */}
+            <div className="flex flex-wrap gap-1.5 text-xs">
+              <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Articulos distintos</span> <b className="font-mono">{articulosData.length}</b></span>
+              <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Total documentos</span> <b className="font-mono">{articulosData.reduce((s, a) => s + a.apariciones, 0)}</b></span>
+              <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Unidades vendidas</span> <b className="font-mono">{articulosData.reduce((s, a) => s + a.cantidadTotal, 0).toLocaleString("es-AR")}</b></span>
+              <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Monto total</span> <b className="font-mono">{fc(articulosData.reduce((s, a) => s + a.montoTotal, 0))}</b></span>
             </div>
 
             {/* Top 10 chart */}
@@ -1249,7 +1220,7 @@ export default function ReportesPage() {
                 <CardHeader>
                   <CardTitle>Top 10 articulos por {articulosSortBy === "cantidad" ? "cantidad" : "monto"}</CardTitle>
                 </CardHeader>
-                <div className="h-80">
+                <div className="h-60">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={articulosChartData} layout="vertical" margin={{ left: 10, right: 30 }}>
                       <XAxis
@@ -1291,9 +1262,9 @@ export default function ReportesPage() {
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-zinc-200 dark:border-zinc-700">
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-500">#</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-500">Articulo</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">
+                      <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">#</th>
+                      <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Articulo</th>
+                      <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">
                         <button
                           onClick={() => setArticulosSortBy("cantidad")}
                           className={`inline-flex items-center gap-1 ${articulosSortBy === "cantidad" ? "text-orange-600 dark:text-orange-400" : ""}`}
@@ -1301,7 +1272,7 @@ export default function ReportesPage() {
                           Cantidad {articulosSortBy === "cantidad" && <TrendingUp className="h-3 w-3 rotate-180" />}
                         </button>
                       </th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">
+                      <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">
                         <button
                           onClick={() => setArticulosSortBy("monto")}
                           className={`inline-flex items-center gap-1 ${articulosSortBy === "monto" ? "text-orange-600 dark:text-orange-400" : ""}`}
@@ -1309,8 +1280,8 @@ export default function ReportesPage() {
                           Monto total {articulosSortBy === "monto" && <TrendingUp className="h-3 w-3 rotate-180" />}
                         </button>
                       </th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold uppercase text-zinc-500">Apariciones</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-500">Barra</th>
+                      <th className="px-3 py-1.5 text-center text-xs font-semibold uppercase text-zinc-500">Apariciones</th>
+                      <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Barra</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1329,16 +1300,16 @@ export default function ReportesPage() {
                         const barPct = (currentVal / maxVal) * 100;
                         return (
                           <tr key={a.descripcion} className="border-b border-zinc-100 dark:border-zinc-800">
-                            <td className="px-4 py-3 text-sm font-bold text-zinc-400">{i + 1}</td>
-                            <td className="px-4 py-3 text-sm font-medium text-zinc-800 dark:text-zinc-200 max-w-xs truncate" title={a.descripcion}>
+                            <td className="px-3 py-1.5 text-sm font-bold text-zinc-400">{i + 1}</td>
+                            <td className="px-3 py-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200 max-w-xs truncate" title={a.descripcion}>
                               {a.descripcion}
                             </td>
-                            <td className="px-4 py-3 text-sm font-mono text-right">{a.cantidadTotal.toLocaleString("es-AR")}</td>
-                            <td className="px-4 py-3 text-sm font-mono text-right">{fc(a.montoTotal)}</td>
-                            <td className="px-4 py-3 text-sm text-center">
+                            <td className="px-3 py-1.5 text-sm font-mono text-right">{a.cantidadTotal.toLocaleString("es-AR")}</td>
+                            <td className="px-3 py-1.5 text-sm font-mono text-right">{fc(a.montoTotal)}</td>
+                            <td className="px-3 py-1.5 text-sm text-center">
                               <Badge variant="outline">{a.apariciones}</Badge>
                             </td>
-                            <td className="px-4 py-3 w-40">
+                            <td className="px-3 py-1.5 w-40">
                               <div className="h-2 rounded-full bg-zinc-100 dark:bg-zinc-800">
                                 <div className="h-2 rounded-full bg-orange-500" style={{ width: `${barPct}%` }} />
                               </div>
@@ -1358,47 +1329,23 @@ export default function ReportesPage() {
 
       {/* Tab: Comisiones */}
       {activeTab === "comisiones" && (
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-2.5">
         {comisionesLoading ? (
           <div className="flex items-center justify-center p-16">
             <Loader2 className="h-8 w-8 animate-spin text-orange-500" />
           </div>
         ) : (
           <>
-            {/* KPI cards */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Card>
-                <div className="rounded-lg p-2.5 w-fit text-orange-600 bg-orange-50">
-                  <Users className="h-5 w-5" />
-                </div>
-                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{comisionesData.length}</h3>
-                <p className="mt-1 text-sm text-zinc-500">Vendedores</p>
-              </Card>
-              <Card>
-                <div className="rounded-lg p-2.5 w-fit text-emerald-600 bg-emerald-50">
-                  <FileText className="h-5 w-5" />
-                </div>
-                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{comisionesData.reduce((s, v) => s + v.presupuestosAprobados, 0)}</h3>
-                <p className="mt-1 text-sm text-zinc-500">Presupuestos aprobados</p>
-              </Card>
-              <Card>
-                <div className="rounded-lg p-2.5 w-fit text-blue-600 bg-blue-50">
-                  <DollarSign className="h-5 w-5" />
-                </div>
-                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{fc(comisionesData.reduce((s, v) => s + v.ventaNeta, 0))}</h3>
-                <p className="mt-1 text-sm text-zinc-500">Total venta neta</p>
-              </Card>
-              <Card>
-                <div className="rounded-lg p-2.5 w-fit text-violet-600 bg-violet-50">
-                  <Percent className="h-5 w-5" />
-                </div>
-                <h3 className="mt-3 font-semibold text-zinc-900 dark:text-white">{fc(totalComisionesGeneral)}</h3>
-                <p className="mt-1 text-sm text-zinc-500">Total comisiones</p>
-              </Card>
+            {/* Números rápidos en una línea */}
+            <div className="flex flex-wrap gap-1.5 text-xs">
+              <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Vendedores</span> <b className="font-mono">{comisionesData.length}</b></span>
+              <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Presupuestos aprobados</span> <b className="font-mono">{comisionesData.reduce((s, v) => s + v.presupuestosAprobados, 0)}</b></span>
+              <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Total venta neta</span> <b className="font-mono">{fc(comisionesData.reduce((s, v) => s + v.ventaNeta, 0))}</b></span>
+              <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Total comisiones</span> <b className="font-mono">{fc(totalComisionesGeneral)}</b></span>
             </div>
 
             {/* Commission rates info */}
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-1.5">
               <Badge variant="info">Comision por venta neta: {COMISION_VENTA_PCT}%</Badge>
               <Badge variant="success">Comision por margen: {COMISION_MARGEN_PCT}%</Badge>
             </div>
@@ -1415,44 +1362,44 @@ export default function ReportesPage() {
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-zinc-200 dark:border-zinc-700">
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase text-zinc-500">Vendedor</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold uppercase text-zinc-500">PR Aprobados</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">Venta neta</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">Costo</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">Margen</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">Com. venta ({COMISION_VENTA_PCT}%)</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">Com. margen ({COMISION_MARGEN_PCT}%)</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase text-zinc-500">Total comision</th>
+                      <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Vendedor</th>
+                      <th className="px-3 py-1.5 text-center text-xs font-semibold uppercase text-zinc-500">PR Aprobados</th>
+                      <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Venta neta</th>
+                      <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Costo</th>
+                      <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Margen</th>
+                      <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Com. venta ({COMISION_VENTA_PCT}%)</th>
+                      <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Com. margen ({COMISION_MARGEN_PCT}%)</th>
+                      <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Total comision</th>
                     </tr>
                   </thead>
                   <tbody>
                     {comisionesData.map((v) => (
                       <tr key={v.id} className="border-b border-zinc-100 dark:border-zinc-800">
-                        <td className="px-4 py-3 text-sm font-medium text-zinc-800 dark:text-zinc-200">{v.nombre}</td>
-                        <td className="px-4 py-3 text-sm text-center">
+                        <td className="px-3 py-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">{v.nombre}</td>
+                        <td className="px-3 py-1.5 text-sm text-center">
                           <Badge variant={v.presupuestosAprobados > 0 ? "success" : "outline"}>{v.presupuestosAprobados}</Badge>
                         </td>
-                        <td className="px-4 py-3 text-sm font-mono text-right">{fc(v.ventaNeta)}</td>
-                        <td className="px-4 py-3 text-sm font-mono text-right text-zinc-500">{fc(v.costoTotal)}</td>
-                        <td className="px-4 py-3 text-sm font-mono text-right">
+                        <td className="px-3 py-1.5 text-sm font-mono text-right">{fc(v.ventaNeta)}</td>
+                        <td className="px-3 py-1.5 text-sm font-mono text-right text-zinc-500">{fc(v.costoTotal)}</td>
+                        <td className="px-3 py-1.5 text-sm font-mono text-right">
                           <span className={v.margen > 0 ? "text-emerald-600" : "text-red-500"}>{fc(v.margen)}</span>
                         </td>
-                        <td className="px-4 py-3 text-sm font-mono text-right text-blue-600 dark:text-blue-400">{fc(v.comisionVenta)}</td>
-                        <td className="px-4 py-3 text-sm font-mono text-right text-emerald-600 dark:text-emerald-400">{fc(v.comisionMargen)}</td>
-                        <td className="px-4 py-3 text-sm font-mono text-right font-bold text-orange-600 dark:text-orange-400">{fc(v.totalComision)}</td>
+                        <td className="px-3 py-1.5 text-sm font-mono text-right text-blue-600 dark:text-blue-400">{fc(v.comisionVenta)}</td>
+                        <td className="px-3 py-1.5 text-sm font-mono text-right text-emerald-600 dark:text-emerald-400">{fc(v.comisionMargen)}</td>
+                        <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-orange-600 dark:text-orange-400">{fc(v.totalComision)}</td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
                     <tr className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50">
-                      <td className="px-4 py-3 text-sm font-bold text-zinc-900 dark:text-white">Total</td>
-                      <td className="px-4 py-3 text-sm text-center font-bold">{comisionesData.reduce((s, v) => s + v.presupuestosAprobados, 0)}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold">{fc(comisionesData.reduce((s, v) => s + v.ventaNeta, 0))}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-zinc-500">{fc(comisionesData.reduce((s, v) => s + v.costoTotal, 0))}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-emerald-600">{fc(comisionesData.reduce((s, v) => s + v.margen, 0))}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-blue-600">{fc(comisionesData.reduce((s, v) => s + v.comisionVenta, 0))}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-emerald-600">{fc(comisionesData.reduce((s, v) => s + v.comisionMargen, 0))}</td>
-                      <td className="px-4 py-3 text-sm font-mono text-right font-bold text-orange-600 dark:text-orange-400">{fc(totalComisionesGeneral)}</td>
+                      <td className="px-3 py-1.5 text-sm font-bold text-zinc-900 dark:text-white">Total</td>
+                      <td className="px-3 py-1.5 text-sm text-center font-bold">{comisionesData.reduce((s, v) => s + v.presupuestosAprobados, 0)}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-right font-bold">{fc(comisionesData.reduce((s, v) => s + v.ventaNeta, 0))}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-zinc-500">{fc(comisionesData.reduce((s, v) => s + v.costoTotal, 0))}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-emerald-600">{fc(comisionesData.reduce((s, v) => s + v.margen, 0))}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-blue-600">{fc(comisionesData.reduce((s, v) => s + v.comisionVenta, 0))}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-emerald-600">{fc(comisionesData.reduce((s, v) => s + v.comisionMargen, 0))}</td>
+                      <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-orange-600 dark:text-orange-400">{fc(totalComisionesGeneral)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1460,12 +1407,12 @@ export default function ReportesPage() {
             </Card>
 
             {/* Bar chart: commission comparison */}
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               <Card>
                 <CardHeader>
                   <CardTitle>Comparativa de comisiones por vendedor</CardTitle>
                 </CardHeader>
-                <div className="h-72">
+                <div className="h-52">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={comisionesChartData.map((d) => ({ ...d, "Comision por venta": convertMonto(d["Comision por venta"], "ARS"), "Comision por margen": convertMonto(d["Comision por margen"], "ARS") }))} barGap={4}>
                       <XAxis dataKey="nombre" tick={{ fontSize: 12 }} />
@@ -1480,19 +1427,19 @@ export default function ReportesPage() {
               </Card>
 
               {/* Breakdown detail cards */}
-              <div className="space-y-4">
+              <div className="space-y-2">
                 {comisionesData.map((v) => {
                   const margenPct = v.ventaNeta > 0 ? ((v.margen / v.ventaNeta) * 100).toFixed(1) : "0";
                   return (
                     <Card key={v.id}>
-                      <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center justify-between mb-2">
                         <div>
                           <h4 className="text-sm font-semibold text-zinc-900 dark:text-white">{v.nombre}</h4>
                           <p className="text-xs text-zinc-500">{v.presupuestosAprobados} presupuesto{v.presupuestosAprobados !== 1 ? "s" : ""} aprobado{v.presupuestosAprobados !== 1 ? "s" : ""}</p>
                         </div>
                         <span className="text-lg font-bold text-orange-600 dark:text-orange-400">{fc(v.totalComision)}</span>
                       </div>
-                      <div className="space-y-2">
+                      <div className="space-y-1">
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-zinc-500">Venta neta</span>
                           <span className="font-mono font-medium">{fc(v.ventaNeta)}</span>
@@ -1523,19 +1470,19 @@ export default function ReportesPage() {
 
       {/* Tab: Libro IVA */}
       {activeTab === "libro_iva" && (
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-2.5">
         {/* Controls */}
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="flex rounded-lg border border-zinc-300 dark:border-zinc-600 overflow-hidden">
             <button
               onClick={() => setLibroIVASubtab("ventas")}
-              className={`px-4 py-2 text-sm font-medium transition-colors ${libroIVASubtab === "ventas" ? "bg-orange-500 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-300"}`}
+              className={`px-3 py-1 text-sm font-medium transition-colors ${libroIVASubtab === "ventas" ? "bg-orange-500 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-300"}`}
             >
               IVA Ventas
             </button>
             <button
               onClick={() => setLibroIVASubtab("compras")}
-              className={`px-4 py-2 text-sm font-medium transition-colors ${libroIVASubtab === "compras" ? "bg-orange-500 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-300"}`}
+              className={`px-3 py-1 text-sm font-medium transition-colors ${libroIVASubtab === "compras" ? "bg-orange-500 text-white" : "bg-white text-zinc-600 hover:bg-zinc-50 dark:bg-zinc-900 dark:text-zinc-300"}`}
             >
               IVA Compras
             </button>
@@ -1544,7 +1491,7 @@ export default function ReportesPage() {
             type="month"
             value={libroIVAMes}
             onChange={(e) => setLibroIVAMes(e.target.value)}
-            className="h-10 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+            className="h-8 rounded-lg border border-zinc-200 bg-white px-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
           />
           <button
             onClick={() => {
@@ -1572,44 +1519,44 @@ export default function ReportesPage() {
             <TotalesLibroIVACard totales={totalesIVAVentas} conPercepciones={false} />
 
             {libroIVAVentas.length === 0 ? (
-              <Card><p className="text-center text-sm text-zinc-400 py-8">No hay facturas de venta en el período seleccionado</p></Card>
+              <Card><p className="text-center text-sm text-zinc-400 py-4">No hay facturas de venta en el período seleccionado</p></Card>
             ) : (
               <Card>
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-zinc-200 dark:border-zinc-700">
-                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Fecha</th>
-                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Tipo</th>
-                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Comprobante</th>
-                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">CUIT</th>
-                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón Social</th>
-                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">Neto</th>
-                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">IVA</th>
-                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">Total</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Fecha</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Tipo</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Comprobante</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">CUIT</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón Social</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Neto</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">IVA</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Total</th>
                       </tr>
                     </thead>
                     <tbody>
                       {libroIVAVentas.map((r, i) => (
                         <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
-                          <td className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400">{new Date(r.fecha + "T00:00:00").toLocaleDateString("es-AR")}</td>
-                          <td className="px-3 py-2"><Badge variant={r.signo < 0 ? "danger" : "outline"}>{r.tipo}</Badge>{r.anulada && <span className="ml-1 text-[10px] text-zinc-400">anulada por NC</span>}</td>
-                          <td className="px-3 py-2 text-sm font-mono">{String(r.punto_venta).padStart(5, "0")}-{String(r.numero).padStart(8, "0")}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-zinc-500">{r.cuit}</td>
-                          <td className="px-3 py-2 text-sm text-zinc-700 dark:text-zinc-300 max-w-[200px] truncate">{r.razon_social}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right">{formatCurrency(r.neto_gravado, r.moneda)}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right text-blue-600">{formatCurrency(r.iva, r.moneda)}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right font-semibold">{formatCurrency(r.total, r.moneda)}</td>
+                          <td className="px-3 py-1 text-sm text-zinc-600 dark:text-zinc-400">{new Date(r.fecha + "T00:00:00").toLocaleDateString("es-AR")}</td>
+                          <td className="px-3 py-1"><Badge variant={r.signo < 0 ? "danger" : "outline"}>{r.tipo}</Badge>{r.anulada && <span className="ml-1 text-[10px] text-zinc-400">anulada por NC</span>}</td>
+                          <td className="px-3 py-1 text-sm font-mono">{String(r.punto_venta).padStart(5, "0")}-{String(r.numero).padStart(8, "0")}</td>
+                          <td className="px-3 py-1 text-sm font-mono text-zinc-500">{r.cuit}</td>
+                          <td className="px-3 py-1 text-sm text-zinc-700 dark:text-zinc-300 max-w-[200px] truncate">{r.razon_social}</td>
+                          <td className="px-3 py-1 text-sm font-mono text-right">{formatCurrency(r.neto_gravado, r.moneda)}</td>
+                          <td className="px-3 py-1 text-sm font-mono text-right text-blue-600">{formatCurrency(r.iva, r.moneda)}</td>
+                          <td className="px-3 py-1 text-sm font-mono text-right font-semibold">{formatCurrency(r.total, r.moneda)}</td>
                         </tr>
                       ))}
                     </tbody>
                     <tfoot>
                       {(["ARS", "USD"] as const).filter((m) => m === "ARS" || totalesIVAVentas.USD.cantidad > 0).map((m) => (
                         <tr key={m} className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50">
-                          <td colSpan={5} className="px-3 py-2.5 text-sm font-bold">Totales {m} ({totalesIVAVentas[m].cantidad} comprobantes)</td>
-                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold">{formatCurrency(totalesIVAVentas[m].neto_gravado, m)}</td>
-                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-blue-600">{formatCurrency(totalesIVAVentas[m].iva, m)}</td>
-                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-orange-600">{formatCurrency(totalesIVAVentas[m].total, m)}</td>
+                          <td colSpan={5} className="px-3 py-1.5 text-sm font-bold">Totales {m} ({totalesIVAVentas[m].cantidad} comprobantes)</td>
+                          <td className="px-3 py-1.5 text-sm font-mono text-right font-bold">{formatCurrency(totalesIVAVentas[m].neto_gravado, m)}</td>
+                          <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-blue-600">{formatCurrency(totalesIVAVentas[m].iva, m)}</td>
+                          <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-orange-600">{formatCurrency(totalesIVAVentas[m].total, m)}</td>
                         </tr>
                       ))}
                     </tfoot>
@@ -1623,47 +1570,47 @@ export default function ReportesPage() {
             <TotalesLibroIVACard totales={totalesIVACompras} conPercepciones />
 
             {libroIVACompras.length === 0 ? (
-              <Card><p className="text-center text-sm text-zinc-400 py-8">No hay facturas de compra en el período seleccionado</p></Card>
+              <Card><p className="text-center text-sm text-zinc-400 py-4">No hay facturas de compra en el período seleccionado</p></Card>
             ) : (
               <Card>
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-zinc-200 dark:border-zinc-700">
-                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Fecha</th>
-                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Tipo</th>
-                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">N° Factura</th>
-                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">CUIT</th>
-                        <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón Social</th>
-                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">Neto</th>
-                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">IVA</th>
-                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">Percep.</th>
-                        <th className="px-3 py-2.5 text-right text-xs font-semibold uppercase text-zinc-500">Total</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Fecha</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Tipo</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">N° Factura</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">CUIT</th>
+                        <th className="px-3 py-1.5 text-left text-xs font-semibold uppercase text-zinc-500">Razón Social</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Neto</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">IVA</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Percep.</th>
+                        <th className="px-3 py-1.5 text-right text-xs font-semibold uppercase text-zinc-500">Total</th>
                       </tr>
                     </thead>
                     <tbody>
                       {libroIVACompras.map((r, i) => (
                         <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800">
-                          <td className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400">{new Date(r.fecha + "T00:00:00").toLocaleDateString("es-AR")}</td>
-                          <td className="px-3 py-2"><Badge variant={r.signo < 0 ? "danger" : "outline"}>{r.tipo || "—"}</Badge></td>
-                          <td className="px-3 py-2 text-sm font-mono">{r.numero_factura}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-zinc-500">{r.cuit}</td>
-                          <td className="px-3 py-2 text-sm text-zinc-700 dark:text-zinc-300 max-w-[200px] truncate">{r.razon_social}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right">{formatCurrency(r.neto_gravado, r.moneda)}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right text-emerald-600">{formatCurrency(r.iva, r.moneda)}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right text-violet-600">{formatCurrency(r.percepciones, r.moneda)}</td>
-                          <td className="px-3 py-2 text-sm font-mono text-right font-semibold">{formatCurrency(r.total, r.moneda)}</td>
+                          <td className="px-3 py-1 text-sm text-zinc-600 dark:text-zinc-400">{new Date(r.fecha + "T00:00:00").toLocaleDateString("es-AR")}</td>
+                          <td className="px-3 py-1"><Badge variant={r.signo < 0 ? "danger" : "outline"}>{r.tipo || "—"}</Badge></td>
+                          <td className="px-3 py-1 text-sm font-mono">{r.numero_factura}</td>
+                          <td className="px-3 py-1 text-sm font-mono text-zinc-500">{r.cuit}</td>
+                          <td className="px-3 py-1 text-sm text-zinc-700 dark:text-zinc-300 max-w-[200px] truncate">{r.razon_social}</td>
+                          <td className="px-3 py-1 text-sm font-mono text-right">{formatCurrency(r.neto_gravado, r.moneda)}</td>
+                          <td className="px-3 py-1 text-sm font-mono text-right text-emerald-600">{formatCurrency(r.iva, r.moneda)}</td>
+                          <td className="px-3 py-1 text-sm font-mono text-right text-violet-600">{formatCurrency(r.percepciones, r.moneda)}</td>
+                          <td className="px-3 py-1 text-sm font-mono text-right font-semibold">{formatCurrency(r.total, r.moneda)}</td>
                         </tr>
                       ))}
                     </tbody>
                     <tfoot>
                       {(["ARS", "USD"] as const).filter((m) => m === "ARS" || totalesIVACompras.USD.cantidad > 0).map((m) => (
                         <tr key={m} className="border-t-2 border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800/50">
-                          <td colSpan={5} className="px-3 py-2.5 text-sm font-bold">Totales {m} ({totalesIVACompras[m].cantidad} comprobantes)</td>
-                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold">{formatCurrency(totalesIVACompras[m].neto_gravado, m)}</td>
-                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-emerald-600">{formatCurrency(totalesIVACompras[m].iva, m)}</td>
-                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-violet-600">{formatCurrency(totalesIVACompras[m].percepciones, m)}</td>
-                          <td className="px-3 py-2.5 text-sm font-mono text-right font-bold text-orange-600">{formatCurrency(totalesIVACompras[m].total, m)}</td>
+                          <td colSpan={5} className="px-3 py-1.5 text-sm font-bold">Totales {m} ({totalesIVACompras[m].cantidad} comprobantes)</td>
+                          <td className="px-3 py-1.5 text-sm font-mono text-right font-bold">{formatCurrency(totalesIVACompras[m].neto_gravado, m)}</td>
+                          <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-emerald-600">{formatCurrency(totalesIVACompras[m].iva, m)}</td>
+                          <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-violet-600">{formatCurrency(totalesIVACompras[m].percepciones, m)}</td>
+                          <td className="px-3 py-1.5 text-sm font-mono text-right font-bold text-orange-600">{formatCurrency(totalesIVACompras[m].total, m)}</td>
                         </tr>
                       ))}
                     </tfoot>

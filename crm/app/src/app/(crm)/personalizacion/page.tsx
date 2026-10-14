@@ -138,10 +138,10 @@ export default function PersonalizacionPage() {
   return (
     <div>
       <Header title="Personalización" subtitle="Bordados y estampados: lo que llevamos a cada taller, sus costos y la liquidación del mes" action={{ label: "Nuevo trabajo", onClick: nuevoTrabajo }} />
-      <main className="mx-auto max-w-7xl space-y-4 px-4 py-6 sm:px-6">
+      <main className="mx-auto max-w-7xl space-y-2.5 p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2">
           {([["trabajos", "Trabajos"], ["talleres", "Talleres y precios"], ["logos", "Logos por cliente"], ["liquidaciones", "Liquidaciones"]] as const).map(([k, l]) => (
-            <button key={k} onClick={() => setTab(k)} className={`rounded-lg px-4 py-2 text-sm font-medium ${tab === k ? "bg-orange-500 text-white" : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}>{l}</button>
+            <button key={k} onClick={() => setTab(k)} className={`rounded-lg px-3 py-1 text-sm font-medium ${tab === k ? "bg-orange-500 text-white" : "border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"}`}>{l}</button>
           ))}
           <span className="ml-auto text-xs text-zinc-500">{enTaller.length} trabajo(s) en talleres · {prendasEnTaller} prenda(s) afuera</span>
         </div>
@@ -150,7 +150,7 @@ export default function PersonalizacionPage() {
           <>
             {tab === "trabajos" && (
               <div className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-                <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200 p-3 dark:border-zinc-800">
+                <div className="flex flex-wrap items-center gap-2 border-b border-zinc-200 px-3 py-1.5 dark:border-zinc-800">
                   {(["activos", "en_taller", "listo", "retirado", "todos"] as const).map(e => (
                     <button key={e} onClick={() => setFiltroEstado(e)} className={`rounded-full px-3 py-1 text-xs font-medium ${filtroEstado === e ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"}`}>
                       {e === "activos" ? "Activos" : e === "todos" ? "Todos" : ESTADOS[e].label}
@@ -164,14 +164,14 @@ export default function PersonalizacionPage() {
                 </div>
                 <table className="w-full text-sm">
                   <thead className="bg-zinc-50 text-left text-xs text-zinc-500 dark:bg-zinc-800/50">
-                    <tr><th className="px-3 py-2">Número</th><th className="px-3">Fecha</th><th className="px-3">Taller</th><th className="px-3">Cliente</th><th className="px-3 text-right">Prendas</th><th className="px-3 text-right">Costo</th><th className="px-3">Estado</th><th className="px-3">Liquidación</th><th></th></tr>
+                    <tr><th className="px-3 py-1.5">Número</th><th className="px-3">Fecha</th><th className="px-3">Taller</th><th className="px-3">Cliente</th><th className="px-3 text-right">Prendas</th><th className="px-3 text-right">Costo</th><th className="px-3">Estado</th><th className="px-3">Liquidación</th><th></th></tr>
                   </thead>
                   <tbody>
                     {trabajosFiltrados.map(t => {
                       const cant = t.items.reduce((s, i) => s + i.cantidad, 0);
                       return (
                         <tr key={t.id} onClick={() => setEditando(JSON.parse(JSON.stringify(t)))} className="cursor-pointer border-t border-zinc-100 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-800/40">
-                          <td className="px-3 py-2 font-mono text-xs">{t.numero}</td>
+                          <td className="px-3 py-1.5 font-mono text-xs">{t.numero}</td>
                           <td className="px-3 text-zinc-500">{formatDate(t.fecha)}</td>
                           <td className="px-3">{tallerMap.get(t.proveedor_id)?.razon_social || "—"}</td>
                           <td className="px-3">{clienteMap.get(t.cliente_id || "")?.razon_social || "—"}</td>
@@ -353,12 +353,12 @@ function TrabajoModal({ sociedadId, trabajo, talleres, clientes, precios, logos,
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-3">
       <div className="flex max-h-[94vh] w-full max-w-6xl flex-col rounded-xl bg-white shadow-2xl dark:bg-zinc-900">
-        <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
-          <h2 className="flex items-center gap-2 text-lg font-bold dark:text-white"><Scissors className="h-5 w-5 text-orange-500" /> {esNuevo ? "Nuevo trabajo de personalización" : `Trabajo ${t.numero}`}</h2>
+        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-2 dark:border-zinc-700">
+          <h2 className="flex items-center gap-2 text-base font-bold dark:text-white"><Scissors className="h-5 w-5 text-orange-500" /> {esNuevo ? "Nuevo trabajo de personalización" : `Trabajo ${t.numero}`}</h2>
           <button onClick={onClose}><X className="h-5 w-5 text-zinc-400" /></button>
         </div>
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
-          {liquidado && <p className="rounded-lg bg-zinc-100 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">Este trabajo ya está liquidado: podés actualizar estados y cantidades, pero el costo quedó cerrado en la liquidación.</p>}
+        <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-4">
+          {liquidado && <p className="rounded-lg bg-zinc-100 px-3 py-1.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">Este trabajo ya está liquidado: podés actualizar estados y cantidades, pero el costo quedó cerrado en la liquidación.</p>}
           <div className="grid gap-3 md:grid-cols-4">
             <div>
               <label className="text-xs text-zinc-500">Taller</label>
@@ -406,7 +406,7 @@ function TrabajoModal({ sociedadId, trabajo, talleres, clientes, precios, logos,
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-zinc-100 text-left text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
-                <tr><th className="px-2 py-2">Prenda</th><th className="px-1">Talle</th><th className="px-1">Color</th><th className="px-1 text-right">Cant.</th><th className="px-1">Técnica</th><th className="px-1">Ubicación</th><th className="px-1">Logo</th><th className="px-1 text-right">Costo unit.</th><th className="px-1 text-right">Listas</th><th className="px-1 text-right">Fallas</th><th className="px-1 text-right">Subtotal</th><th></th></tr>
+                <tr><th className="px-2 py-1.5">Prenda</th><th className="px-1">Talle</th><th className="px-1">Color</th><th className="px-1 text-right">Cant.</th><th className="px-1">Técnica</th><th className="px-1">Ubicación</th><th className="px-1">Logo</th><th className="px-1 text-right">Costo unit.</th><th className="px-1 text-right">Listas</th><th className="px-1 text-right">Fallas</th><th className="px-1 text-right">Subtotal</th><th></th></tr>
               </thead>
               <tbody>
                 {t.items.map((it, i) => {
@@ -433,7 +433,7 @@ function TrabajoModal({ sociedadId, trabajo, talleres, clientes, precios, logos,
                       </td>
                       <td className="px-1 py-1"><input type="number" min={0} value={it.cantidad_lista} onChange={e => setItem(i, { cantidad_lista: Number(e.target.value) || 0 })} className={`${inp} w-14 text-right`} /></td>
                       <td className="px-1 py-1"><input type="number" min={0} value={it.cantidad_falla} onChange={e => setItem(i, { cantidad_falla: Number(e.target.value) || 0 })} className={`${inp} w-14 text-right`} /></td>
-                      <td className="px-1 py-2 text-right font-medium">{fc(it.cantidad * it.costo_unitario, t.moneda)}</td>
+                      <td className="px-1 py-1.5 text-right font-medium">{fc(it.cantidad * it.costo_unitario, t.moneda)}</td>
                       <td className="px-1 py-1"><button onClick={() => set({ items: t.items.filter((_, j) => j !== i) })} className="text-zinc-400 hover:text-red-500"><Trash2 className="h-3.5 w-3.5" /></button></td>
                     </tr>
                   );
@@ -442,16 +442,16 @@ function TrabajoModal({ sociedadId, trabajo, talleres, clientes, precios, logos,
             </table>
             <datalist id="ubicaciones-pers">{UBICACIONES.map(u => <option key={u} value={u} />)}</datalist>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-4 text-sm">
+          <div className="flex flex-wrap items-center justify-end gap-3 text-sm">
             {margen && <span className="text-xs text-zinc-500">Margen del presupuesto: {margen.sin.toFixed(1)} % → <b className={margen.con < 15 ? "text-red-600" : "text-emerald-700"}>{margen.con.toFixed(1)} % con la personalización</b></span>}
             <span>Total: <b>{fc(totalItems(t.items), t.moneda)}</b></span>
           </div>
         </div>
-        <div className="flex items-center justify-between border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
+        <div className="flex items-center justify-between border-t border-zinc-200 px-4 py-2 dark:border-zinc-700">
           <div>{!esNuevo && !liquidado && <button onClick={eliminar} className="inline-flex items-center gap-1 text-xs text-red-600"><Trash2 className="h-3.5 w-3.5" /> Eliminar</button>}</div>
           <div className="flex gap-2">
-            <button onClick={onClose} className="rounded-lg border px-3 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">Cancelar</button>
-            <button onClick={guardar} disabled={guardando} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Guardar</button>
+            <button onClick={onClose} className="h-8 rounded-lg border px-3 py-1 text-sm dark:border-zinc-700 dark:text-zinc-200">Cancelar</button>
+            <button onClick={guardar} disabled={guardando} className="flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white disabled:opacity-50">{guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Guardar</button>
           </div>
         </div>
       </div>
@@ -491,7 +491,7 @@ function TalleresTab({ sociedadId, talleres, todos, precios, trabajos, onNuevo, 
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-[320px_1fr]">
+    <div className="grid gap-3 md:grid-cols-[320px_1fr]">
       <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="mb-2 flex items-center justify-between">
           <h3 className="text-sm font-semibold dark:text-white">Talleres</h3>
@@ -501,7 +501,7 @@ function TalleresTab({ sociedadId, talleres, todos, precios, trabajos, onNuevo, 
           {talleres.map(tl => {
             const activos = trabajos.filter(t => t.proveedor_id === tl.id && ["en_taller", "listo_parcial"].includes(t.estado)).length;
             return (
-              <button key={tl.id} onClick={() => setSel(tl.id)} className={`w-full rounded-lg px-3 py-2 text-left text-sm ${sel === tl.id ? "bg-orange-50 ring-1 ring-orange-300 dark:bg-orange-950/30" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"} dark:text-zinc-200`}>
+              <button key={tl.id} onClick={() => setSel(tl.id)} className={`w-full rounded-lg px-3 py-1.5 text-left text-sm ${sel === tl.id ? "bg-orange-50 ring-1 ring-orange-300 dark:bg-orange-950/30" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"} dark:text-zinc-200`}>
                 <span className="font-medium">{tl.razon_social}</span>
                 <span className="block text-[11px] text-zinc-500">{tl.tipo_personalizacion === "bordado" ? "Bordador" : tl.tipo_personalizacion === "estampado" ? "Estampador" : "Bordado y estampado"}{tl.cuit ? ` · CUIT ${tl.cuit}` : " · sin CUIT"}{activos ? ` · ${activos} trabajo(s) en curso` : ""}</span>
               </button>
@@ -531,7 +531,7 @@ function TalleresTab({ sociedadId, talleres, todos, precios, trabajos, onNuevo, 
                   </tr>
                 ))}
                 <tr className="border-t border-zinc-200 dark:border-zinc-700">
-                  <td className="py-2 pr-2"><select value={nuevo.tecnica} onChange={e => setNuevo({ ...nuevo, tecnica: e.target.value })} className={inp}>{TECNICAS.map(x => <option key={x}>{x}</option>)}</select></td>
+                  <td className="py-1.5 pr-2"><select value={nuevo.tecnica} onChange={e => setNuevo({ ...nuevo, tecnica: e.target.value })} className={inp}>{TECNICAS.map(x => <option key={x}>{x}</option>)}</select></td>
                   <td className="pr-2"><input value={nuevo.detalle} onChange={e => setNuevo({ ...nuevo, detalle: e.target.value })} placeholder="Ej: pecho hasta 10 cm" className={inp} /></td>
                   <td className="pr-2"><div className="flex gap-1"><input value={nuevo.precio} onChange={e => setNuevo({ ...nuevo, precio: e.target.value })} inputMode="decimal" placeholder="0" className={`${inp} text-right`} /><select value={nuevo.moneda} onChange={e => setNuevo({ ...nuevo, moneda: e.target.value })} className={`${inp} w-16`}><option value="ARS">$</option><option value="USD">US$</option></select></div></td>
                   <td><button onClick={agregarPrecio} className="rounded-lg bg-orange-500 px-2 py-1.5 text-xs font-medium text-white"><Plus className="h-3.5 w-3.5" /></button></td>
@@ -566,7 +566,7 @@ function NuevoTallerModal({ sociedadId, todos, onClose, onCreado, toast }: { soc
   }
   return (
     <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl dark:bg-zinc-900">
+      <div className="w-full max-w-md rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900">
         <div className="mb-3 flex items-center justify-between"><h3 className="font-semibold dark:text-white">Nuevo taller</h3><button onClick={onClose}><X className="h-5 w-5 text-zinc-400" /></button></div>
         <div className="space-y-2">
           <div><label className="text-xs text-zinc-500">Nombre (como lo conocen)</label><input value={f.razon_social} onChange={e => setF({ ...f, razon_social: e.target.value })} className={inp} /></div>
@@ -578,9 +578,9 @@ function NuevoTallerModal({ sociedadId, todos, onClose, onCreado, toast }: { soc
           <div><label className="text-xs text-zinc-500">Teléfono</label><input value={f.telefono} onChange={e => setF({ ...f, telefono: e.target.value })} className={inp} /></div>
           <p className="text-[11px] text-zinc-500">Queda también en Proveedores (marcado como taller). Los datos bancarios se completan ahí.</p>
         </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg border px-3 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">Cancelar</button>
-          <button onClick={crear} disabled={guardando} className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{guardando ? "Guardando…" : "Crear taller"}</button>
+        <div className="mt-3 flex justify-end gap-2">
+          <button onClick={onClose} className="h-8 rounded-lg border px-3 py-1 text-sm dark:border-zinc-700 dark:text-zinc-200">Cancelar</button>
+          <button onClick={crear} disabled={guardando} className="h-8 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white disabled:opacity-50">{guardando ? "Guardando…" : "Crear taller"}</button>
         </div>
       </div>
     </div>
@@ -630,8 +630,8 @@ function LogosTab({ sociedadId, clientes, talleres, logos, onCambio, toast }: { 
   }
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+    <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
         <div className="w-80"><Autocompletar opciones={clientes.map(c => ({ valor: c.id, texto: `${c.razon_social}${conLogos.includes(c.id) ? " · tiene logos" : ""}`, detalle: c.cuit || undefined }))} placeholder={clientes.find(c => c.id === clienteId)?.razon_social || "Escribí el cliente…"} onElegir={setClienteId} className={`${inp} ${clienteId ? "placeholder:text-zinc-800 dark:placeholder:text-zinc-200" : ""}`} /></div>
         <span className="text-xs text-zinc-500">Cada logo guarda técnica, ubicación, taller y último costo: al cargar un trabajo se completa solo.</span>
       </div>
@@ -650,7 +650,7 @@ function LogosTab({ sociedadId, clientes, talleres, logos, onCambio, toast }: { 
                 </tr>
               ))}
               <tr className="border-t border-zinc-200 dark:border-zinc-700">
-                <td className="py-2 pr-1"><input value={f.nombre} onChange={e => setF({ ...f, nombre: e.target.value })} placeholder="Ej: Logo frente" className={inp} /></td>
+                <td className="py-1.5 pr-1"><input value={f.nombre} onChange={e => setF({ ...f, nombre: e.target.value })} placeholder="Ej: Logo frente" className={inp} /></td>
                 <td className="pr-1"><select value={f.tecnica} onChange={e => setF({ ...f, tecnica: e.target.value })} className={inp}>{TECNICAS.map(x => <option key={x}>{x}</option>)}</select></td>
                 <td className="pr-1"><input list="ubicaciones-logos" value={f.ubicacion} onChange={e => setF({ ...f, ubicacion: e.target.value })} className={inp} /><datalist id="ubicaciones-logos">{UBICACIONES.map(u => <option key={u} value={u} />)}</datalist></td>
                 <td className="pr-1"><select value={f.proveedor_id} onChange={e => setF({ ...f, proveedor_id: e.target.value })} className={inp}><option value="">—</option>{talleres.map(t => <option key={t.id} value={t.id}>{t.razon_social}</option>)}</select></td>
@@ -751,9 +751,9 @@ function LiquidacionesTab({ sociedadId, talleres, trabajos, liquidaciones, clien
   }
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex flex-wrap items-end gap-3">
+    <div className="space-y-2.5">
+      <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="flex flex-wrap items-end gap-2">
           <div><label className="block text-xs text-zinc-500">Taller</label><select value={tallerId} onChange={e => setTallerId(e.target.value)} className={inp}><option value="">Elegí…</option>{talleres.map(t => <option key={t.id} value={t.id}>{t.razon_social}</option>)}</select></div>
           <div><label className="block text-xs text-zinc-500">Desde</label><input type="date" value={desde} onChange={e => setDesde(e.target.value)} className={inp} /></div>
           <div><label className="block text-xs text-zinc-500">Hasta</label><input type="date" value={hasta} onChange={e => setHasta(e.target.value)} className={inp} /></div>
@@ -764,7 +764,7 @@ function LiquidacionesTab({ sociedadId, talleres, trabajos, liquidaciones, clien
           {tipo === "factura" && <div><label className="block text-xs text-zinc-500">Factura del taller</label><select value={facturaId} onChange={e => setFacturaId(e.target.value)} className={inp}><option value="">Elegí…</option>{facturas.map(f => <option key={f.id} value={f.id}>{f.numero_factura} · {formatDate(f.fecha)} · {formatCurrency(f.total)}</option>)}</select></div>}
         </div>
         {tallerId && (
-          <div className="mt-4">
+          <div className="mt-2.5">
             <table className="w-full text-sm">
               <thead className="text-left text-xs text-zinc-500"><tr><th className="py-1">Trabajo</th><th>Fecha</th><th>Cliente</th><th className="text-right">Prendas</th><th className="text-right">Fallas</th><th className="text-right">Importe</th></tr></thead>
               <tbody>
@@ -780,10 +780,10 @@ function LiquidacionesTab({ sociedadId, talleres, trabajos, liquidaciones, clien
               </tbody>
             </table>
             {pendientes.length > 0 && (
-              <div className="mt-3 flex flex-wrap items-center justify-end gap-4 text-sm">
+              <div className="mt-2 flex flex-wrap items-center justify-end gap-3 text-sm">
                 {fallas > 0 && <span className="text-xs text-zinc-500">Descuento por fallas: −{fc(fallas, moneda)}</span>}
                 <span>Total a pagar: <b>{fc(totalNeto, moneda)}</b></span>
-                <button onClick={liquidar} disabled={guardando || !puedeLiquidar} title={puedeLiquidar ? "" : "Solo administración"} className="inline-flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">
+                <button onClick={liquidar} disabled={guardando || !puedeLiquidar} title={puedeLiquidar ? "" : "Solo administración"} className="inline-flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white disabled:opacity-50">
                   {guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />} {tipo === "interna" ? "Generar liquidación interna" : "Liquidar con su factura"}
                 </button>
               </div>
@@ -793,7 +793,7 @@ function LiquidacionesTab({ sociedadId, talleres, trabajos, liquidaciones, clien
         )}
       </div>
 
-      <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="rounded-xl border border-zinc-200 bg-white p-3 dark:border-zinc-800 dark:bg-zinc-900">
         <h3 className="mb-2 text-sm font-semibold dark:text-white">Liquidaciones emitidas</h3>
         <table className="w-full text-sm">
           <thead className="text-left text-xs text-zinc-500"><tr><th className="py-1">Número</th><th>Fecha</th><th>Taller</th><th>Período</th><th>Tipo</th><th className="text-right">Total</th><th></th></tr></thead>

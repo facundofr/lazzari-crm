@@ -35,6 +35,8 @@ import {
   periodoDeFecha, sumarMeses, totalesMensuales,
 } from "@/lib/reportes-comprobantes";
 import type { Presupuesto, ActivityLog, Alert, GastoFijo, Objetivo } from "@/lib/types";
+import { facturaDelMes, pagoDelMes, type FacturaParaGasto, type PagoParaGasto } from "@/lib/gasto-fijo-factura";
+import { PendientesWidget } from "@/components/presupuestos/pendientes-widget";
 
 const statusConfig: Record<string, { label: string; variant: "success" | "warning" | "danger" | "purple" | "outline" | "info" }> = {
   solicitud: { label: "Solicitud", variant: "info" },
@@ -105,6 +107,8 @@ export default function DashboardPage() {
   const [topClientes, setTopClientes] = useState<ClienteTop[]>([]);
   const [activity, setActivity] = useState<typeof mockActivity>([]);
   const [gastosFijos, setGastosFijos] = useState<GastoFijo[]>([]);
+  const [facturasGastos, setFacturasGastos] = useState<FacturaParaGasto[]>([]);
+  const [pagosGastos, setPagosGastos] = useState<PagoParaGasto[]>([]);
   const [objetivos, setObjetivos] = useState<Objetivo[]>([]);
 
   useEffect(() => {
@@ -310,8 +314,22 @@ export default function DashboardPage() {
           setGastosFijos((gastosFijosResult.data ?? []).map((g: any) => ({
             id: g.id, descripcion: g.descripcion, categoria: g.categoria,
             monto: Number(g.monto), moneda: g.moneda, activo: g.activo,
-            notas: g.notas ?? "", createdAt: g.created_at,
+            notas: g.notas ?? "", createdAt: g.created_at, proveedorId: g.proveedor_id ?? null,
+            diaVencimiento: g.dia_vencimiento ?? null, calculo: g.calculo ?? null,
           })));
+          // Pagos del mes cargados en Gastos para los gastos fijos (aviso "falta pagar")
+          const { data: pagosMes } = await (supabase as any).from("gastos_manuales")
+            .select("id, gasto_fijo_id, fecha, monto").eq("sociedad_id", sociedadActiva!.id)
+            .not("gasto_fijo_id", "is", null).gte("fecha", `${todayAR().slice(0, 7)}-01`);
+          setPagosGastos(((pagosMes ?? []) as any[]).map((r) => ({ ...r, monto: Number(r.monto) })));
+          // Facturas del mes de los proveedores de gastos fijos (aviso "falta la factura del mes")
+          const provIds = Array.from(new Set((gastosFijosResult.data ?? []).map((g: any) => g.proveedor_id).filter(Boolean))) as string[];
+          if (provIds.length > 0) {
+            const { data: fcMes } = await (supabase as any).from("facturas_compra")
+              .select("id, proveedor_id, fecha, total, estado, tipo_comprobante")
+              .eq("sociedad_id", sociedadActiva!.id).in("proveedor_id", provIds).gte("fecha", `${todayAR().slice(0, 7)}-01`);
+            setFacturasGastos(((fcMes ?? []) as any[]).map((f) => ({ ...f, total: Number(f.total) })));
+          } else setFacturasGastos([]);
         }
 
         // --- Objetivos ---
@@ -404,6 +422,7 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex gap-2">
+            {(isAdmin || userRole === "administrativo") && <PendientesWidget />}
             <Link
               href="/presupuestos"
               className="flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-[13px] font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
@@ -466,6 +485,18 @@ export default function DashboardPage() {
                   </Link>
                 </CardHeader>
                 <div className="px-6 pb-5 space-y-4">
+                  {/* Gastos con vencimiento: avisa desde 5 días antes si todavía no se cargó el pago en Gastos */}
+                  {gastosFijos.filter((g) => !g.proveedorId && g.diaVencimiento).map((g) => ({ g, pm: pagoDelMes(g.id, pagosGastos, todayAR(), g.diaVencimiento) }))
+                    .filter(({ pm }) => pm.falta && pm.diasAlVencimiento != null && pm.diasAlVencimiento <= 5).map(({ g, pm }) => (
+                    <Link key={g.id} href="/finanzas?tab=gastos_fijos" className={`block rounded px-2 py-1 text-xs font-medium ${pm.diasAlVencimiento! <= 0 ? "bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-300" : "bg-amber-50 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-300"}`}>
+                      ⚠️ {g.descripcion}: falta pagar {pm.mesNombre} ({pm.diasAlVencimiento! < 0 ? `venció el ${g.diaVencimiento}` : pm.diasAlVencimiento === 0 ? "vence hoy" : `vence el ${g.diaVencimiento}`})
+                    </Link>
+                  ))}
+                  {gastosFijos.filter((g) => g.proveedorId && facturaDelMes(g.proveedorId, facturasGastos, todayAR()).falta).map((g) => (
+                    <Link key={g.id} href="/finanzas?tab=gastos_fijos" className="block rounded bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-300">
+                      ⚠️ {g.descripcion}: falta la factura de {facturaDelMes(g.proveedorId, facturasGastos, todayAR()).mesNombre}
+                    </Link>
+                  ))}
                   <div className="flex items-end justify-between">
                     <div>
                       <p className="text-2xl font-bold text-zinc-900 dark:text-white">{coberturaPct}%</p>

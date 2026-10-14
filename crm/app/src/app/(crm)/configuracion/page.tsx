@@ -648,11 +648,11 @@ export default function ConfiguracionPage() {
   return (
     <>
       <Header title="Configuracion" subtitle="Administracion del sistema" />
-      <div className="p-3 sm:p-5 space-y-4">
+      <div className="p-3 sm:p-4 space-y-2.5">
         <div className="flex gap-1 overflow-x-auto border-b border-zinc-200 dark:border-zinc-800">
           {tabs.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-medium transition-colors ${
+              className={`flex shrink-0 items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors ${
                 tab === t.id ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
               }`}>
               <t.icon className="h-4 w-4" />
@@ -665,18 +665,18 @@ export default function ConfiguracionPage() {
         {tab === "uso_ia" && <UsoIAConfig />}
 
         {tab === "usuarios" && (
-          <div className="space-y-6">
+          <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-semibold text-zinc-900 dark:text-white">Usuarios del sistema</h3>
                 <p className="text-sm text-zinc-500">{dbUsers.length} usuarios registrados</p>
               </div>
               {canManageUsers ? (
-                <button onClick={() => setShowInviteModal(true)} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600">
+                <button onClick={() => setShowInviteModal(true)} className="flex h-8 items-center gap-1.5 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white hover:bg-orange-600">
                   <Plus className="h-4 w-4" /> Invitar usuario
                 </button>
               ) : (
-                <button disabled className="rounded-lg bg-zinc-300 px-4 py-2 text-sm font-medium text-zinc-500 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400" title="Solo admins">
+                <button disabled className="h-8 rounded-lg bg-zinc-300 px-4 py-1 text-sm font-medium text-zinc-500 cursor-not-allowed dark:bg-zinc-700 dark:text-zinc-400" title="Solo admins">
                   Invitar usuario
                 </button>
               )}
@@ -700,7 +700,7 @@ export default function ConfiguracionPage() {
                       </div>
                     ) : (
                       <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-zinc-200 text-xs font-bold text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
+                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-zinc-200 text-xs font-bold text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300">
                           {row.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
                         </div>
                         <div>
@@ -761,17 +761,17 @@ export default function ConfiguracionPage() {
         )}
 
         {tab === "roles" && (
-          <div className="space-y-6">
+          <div className="space-y-3">
             <Card>
               <CardHeader><CardTitle>Roles y niveles de acceso</CardTitle></CardHeader>
-              <p className="text-sm text-zinc-500 mb-6">Cada usuario tiene un rol asignado que determina que modulos puede ver y que acciones puede realizar.</p>
-              <div className="space-y-4">
+              <p className="text-sm text-zinc-500 mb-3">Cada usuario tiene un rol asignado que determina que modulos puede ver y que acciones puede realizar.</p>
+              <div className="space-y-2">
                 {(Object.entries(ROLE_LABELS) as [Role, string][]).map(([role, label]) => {
                   const permissions = ROLE_PERMISSIONS[role];
                   const isWildcard = permissions.some((p) => p.module === "*");
                   return (
-                    <div key={role} className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
-                      <div className="flex items-center justify-between mb-3">
+                    <div key={role} className="rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-700">
+                      <div className="flex items-center justify-between mb-1.5">
                         <div className="flex items-center gap-3">
                           <Badge variant={roleBadgeVariant[role]}>{label}</Badge>
                           <span className="text-xs text-zinc-400">{dbUsers.filter((u) => u.role === role).length} usuario(s)</span>
@@ -780,9 +780,9 @@ export default function ConfiguracionPage() {
                       {isWildcard ? (
                         <p className="text-sm text-zinc-500">Acceso completo a todos los modulos y acciones.</p>
                       ) : (
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-wrap gap-1.5">
                           {permissions.map((p) => (
-                            <div key={p.module} className="rounded-md bg-zinc-50 px-2.5 py-1.5 text-xs dark:bg-zinc-800">
+                            <div key={p.module} className="rounded-md bg-zinc-50 px-2 py-1 text-xs dark:bg-zinc-800">
                               <span className="font-medium text-zinc-700 dark:text-zinc-300">{p.module}</span>
                               <span className="text-zinc-400 ml-1">({p.actions.join(", ")})</span>
                             </div>
@@ -801,22 +801,22 @@ export default function ConfiguracionPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-zinc-200 dark:border-zinc-700">
-                      <th className="px-3 py-2 text-left text-xs font-semibold text-zinc-500">Modulo</th>
+                      <th className="px-3 py-1.5 text-left text-xs font-semibold text-zinc-500">Modulo</th>
                       {(Object.entries(ROLE_LABELS) as [Role, string][]).map(([role, label]) => (
-                        <th key={role} className="px-3 py-2 text-center text-xs font-semibold text-zinc-500">{label}</th>
+                        <th key={role} className="px-3 py-1.5 text-center text-xs font-semibold text-zinc-500">{label}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {["dashboard", "clientes", "presupuestos", "facturacion", "remitos", "stock", "finanzas", "reportes", "configuracion"].map((mod) => (
                       <tr key={mod} className="border-b border-zinc-100 dark:border-zinc-800">
-                        <td className="px-3 py-2 font-medium capitalize text-zinc-700 dark:text-zinc-300">{mod}</td>
+                        <td className="px-3 py-1 font-medium capitalize text-zinc-700 dark:text-zinc-300">{mod}</td>
                         {(Object.keys(ROLE_LABELS) as Role[]).map((role) => {
                           const perms = ROLE_PERMISSIONS[role];
                           const hasAccess = perms.some((p) => p.module === "*" || p.module === mod);
                           const actions = perms.find((p) => p.module === "*" || p.module === mod)?.actions || [];
                           return (
-                            <td key={role} className="px-3 py-2 text-center">
+                            <td key={role} className="px-3 py-1 text-center">
                               {hasAccess ? (
                                 <span className="text-xs text-emerald-600 font-medium">
                                   {perms.some((p) => p.module === "*") ? "FULL" : actions.length > 3 ? "CRUD" : actions.map((a) => a[0].toUpperCase()).join("")}
@@ -839,7 +839,7 @@ export default function ConfiguracionPage() {
         {tab === "empresa" && (
           <Card>
             <CardHeader><CardTitle>Datos de la empresa</CardTitle></CardHeader>
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
               {[
                 { key: "razon_social", label: "Razon social" },
                 { key: "cuit", label: "CUIT" },
@@ -854,18 +854,18 @@ export default function ConfiguracionPage() {
                     type="text"
                     value={empresa[field.key as keyof typeof empresa]}
                     onChange={(e) => handleEmpresaChange(field.key, e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                    className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                   />
                 </div>
               ))}
             </div>
-            <div className="mt-6 flex items-center justify-end gap-3">
+            <div className="mt-3 flex items-center justify-end gap-3">
               {saved && (
                 <span className="flex items-center gap-1 text-sm text-emerald-600">
                   <CheckCircle2 className="h-4 w-4" /> Guardado
                 </span>
               )}
-              <button onClick={handleSaveEmpresa} disabled={saving} className="flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-2.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+              <button onClick={handleSaveEmpresa} disabled={saving} className="flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />}
                 Guardar cambios
               </button>
@@ -874,9 +874,9 @@ export default function ConfiguracionPage() {
         )}
 
         {tab === "integraciones" && (
-          <div className="space-y-4">
+          <div className="space-y-2.5">
           <ArcaStatusCard />
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             {[
               { name: "AFIP — Remitos electronicos", desc: "COT para remitos con codigo de autorizacion", icon: Key, connected: false, note: "Requiere certificado digital" },
               { name: "Banco — Cuenta corriente", desc: "Sincronizacion de movimientos bancarios", icon: Database, connected: false, note: "API bancaria pendiente" },
@@ -884,8 +884,8 @@ export default function ConfiguracionPage() {
               { name: "Email — Envio de PR", desc: "SMTP para envio de presupuestos al cliente", icon: Plug, connected: false, note: "Configurar servidor SMTP" },
               { name: "IA — Asistente", desc: "Claude AI para asistencia en remitos y documentos", icon: Palette, connected: true, note: "" },
             ].map((integration) => (
-              <Card key={integration.name} className="flex items-start gap-4">
-                <div className={`rounded-lg p-2.5 ${integration.connected ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"}`}>
+              <Card key={integration.name} className="flex items-start gap-3 p-3">
+                <div className={`rounded-lg p-2 ${integration.connected ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30" : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"}`}>
                   <integration.icon className="h-5 w-5" />
                 </div>
                 <div className="flex-1">
@@ -898,9 +898,9 @@ export default function ConfiguracionPage() {
                   <p className="mt-1 text-sm text-zinc-500">{integration.desc}</p>
                   {integration.note && <p className="mt-1 text-xs text-zinc-400">{integration.note}</p>}
                   {integration.connected ? (
-                    <span className="mt-3 inline-block text-xs font-medium text-emerald-500">Activo</span>
+                    <span className="mt-1.5 inline-block text-xs font-medium text-emerald-500">Activo</span>
                   ) : (
-                    <span className="mt-3 inline-block text-xs text-zinc-400">Próximamente</span>
+                    <span className="mt-1.5 inline-block text-xs text-zinc-400">Próximamente</span>
                   )}
                 </div>
               </Card>
@@ -912,8 +912,8 @@ export default function ConfiguracionPage() {
         {tab === "notificaciones" && (
           <Card>
             <CardHeader><CardTitle>Preferencias de notificaciones</CardTitle></CardHeader>
-            <p className="text-sm text-zinc-500 mb-4">Elegí qué alertas querés recibir. Los cambios se guardan automáticamente.</p>
-            <div className="space-y-4">
+            <p className="text-sm text-zinc-500 mb-2">Elegí qué alertas querés recibir. Los cambios se guardan automáticamente.</p>
+            <div className="grid gap-2 sm:grid-cols-2">
               {([
                 { key: "pr_vencer" as const, label: "PR próximo a vencer", desc: "Alerta cuando un presupuesto está cerca de su fecha de vencimiento" },
                 { key: "stock_bajo" as const, label: "Stock bajo", desc: "Alerta cuando un artículo baja del stock mínimo" },
@@ -922,7 +922,7 @@ export default function ConfiguracionPage() {
                 { key: "seguimiento" as const, label: "Seguimiento comercial", desc: "Sugerencias de re-cotización tras rechazos" },
                 { key: "resumen_diario" as const, label: "Resumen diario por email", desc: "Resumen de actividad del día enviado por email" },
               ]).map((pref) => (
-                <div key={pref.key} className="flex items-center justify-between rounded-lg border border-zinc-200 p-4 dark:border-zinc-700">
+                <div key={pref.key} className="flex items-center justify-between gap-2 rounded-lg border border-zinc-200 px-3 py-2 dark:border-zinc-700">
                   <div>
                     <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200">{pref.label}</p>
                     <p className="text-xs text-zinc-500">{pref.desc}</p>
@@ -947,7 +947,7 @@ export default function ConfiguracionPage() {
         )}
 
         {tab === "comisiones" && (
-          <div className="space-y-6">
+          <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-semibold text-zinc-900 dark:text-white">Reglas de Comisiones</h3>
@@ -958,7 +958,7 @@ export default function ConfiguracionPage() {
               </div>
               <button
                 onClick={() => { resetComisionForm(); setShowComisionForm(true); }}
-                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
+                className="flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white hover:bg-orange-600 transition-colors"
               >
                 <Plus className="h-4 w-4" />
                 Nueva regla
@@ -976,7 +976,7 @@ export default function ConfiguracionPage() {
                     </button>
                   </div>
                 </CardHeader>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
                   <div className="sm:col-span-2">
                     <label className="text-xs font-medium text-zinc-500">Nombre de la regla</label>
                     <input
@@ -984,7 +984,7 @@ export default function ConfiguracionPage() {
                       value={comisionForm.nombre}
                       onChange={(e) => setComisionForm((f) => ({ ...f, nombre: e.target.value }))}
                       placeholder="Ej: Comisión venta 3%"
-                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     />
                   </div>
                   <div>
@@ -992,7 +992,7 @@ export default function ConfiguracionPage() {
                     <select
                       value={comisionForm.tipo}
                       onChange={(e) => setComisionForm((f) => ({ ...f, tipo: e.target.value as ComisionTipo }))}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     >
                       {(Object.entries(COMISION_TIPO_LABELS) as [ComisionTipo, string][]).map(([val, label]) => (
                         <option key={val} value={val}>{label}</option>
@@ -1011,7 +1011,7 @@ export default function ConfiguracionPage() {
                         value={comisionForm.valor}
                         onChange={(e) => setComisionForm((f) => ({ ...f, valor: e.target.value }))}
                         placeholder={comisionForm.tipo === "monto_fijo" ? "1500.00" : "3"}
-                        className="w-full rounded-lg border border-zinc-200 px-3 py-2.5 pr-8 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                        className="h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 pr-8 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                       />
                       <span className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-zinc-400">
                         {comisionForm.tipo === "monto_fijo" ? "$" : "%"}
@@ -1023,7 +1023,7 @@ export default function ConfiguracionPage() {
                     <select
                       value={comisionForm.aplica_a}
                       onChange={(e) => setComisionForm((f) => ({ ...f, aplica_a: e.target.value as ComisionAplicaA }))}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     >
                       <option value="todos">Todos los vendedores</option>
                       <option value="vendedor_especifico">Vendedor específico</option>
@@ -1035,7 +1035,7 @@ export default function ConfiguracionPage() {
                       <select
                         value={comisionForm.vendedor_id}
                         onChange={(e) => setComisionForm((f) => ({ ...f, vendedor_id: e.target.value }))}
-                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                        className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                       >
                         <option value="">Seleccionar vendedor...</option>
                         {vendedores.map((v) => (
@@ -1054,17 +1054,17 @@ export default function ConfiguracionPage() {
                     <span className="text-sm text-zinc-700 dark:text-zinc-300">{comisionForm.activo ? "Activa" : "Inactiva"}</span>
                   </div>
                 </div>
-                <div className="mt-6 flex items-center justify-end gap-3">
+                <div className="mt-3 flex items-center justify-end gap-3">
                   <button
                     onClick={resetComisionForm}
-                    className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
+                    className="h-8 rounded-lg border border-zinc-200 px-4 py-1 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800 transition-colors"
                   >
                     Cancelar
                   </button>
                   <button
                     onClick={handleSaveComision}
                     disabled={comisionSaving || !comisionForm.nombre || !comisionForm.valor}
-                    className="flex items-center gap-2 rounded-lg bg-orange-500 px-6 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                    className="flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
                   >
                     {comisionSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                     {editingComision ? "Actualizar" : "Guardar"}
@@ -1075,11 +1075,11 @@ export default function ConfiguracionPage() {
 
             {/* List */}
             {comisionesLoading ? (
-              <div className="flex items-center justify-center py-12">
+              <div className="flex items-center justify-center py-6">
                 <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
               </div>
             ) : comisionReglas.length === 0 ? (
-              <Card className="flex flex-col items-center justify-center py-12 text-center">
+              <Card className="flex flex-col items-center justify-center py-6 text-center">
                 <div className="rounded-full bg-zinc-100 p-3 dark:bg-zinc-800">
                   <Percent className="h-6 w-6 text-zinc-400" />
                 </div>
@@ -1087,16 +1087,16 @@ export default function ConfiguracionPage() {
                 <p className="text-sm text-zinc-500">Creá una regla para empezar a calcular comisiones.</p>
               </Card>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {comisionReglas.map((regla) => {
                   const vendedorName = regla.vendedor_id
                     ? vendedores.find((v) => v.id === regla.vendedor_id)?.full_name || "Vendedor"
                     : null;
                   return (
-                    <Card key={regla.id} className={`transition-opacity ${!regla.activo ? "opacity-60" : ""}`}>
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-4 min-w-0">
-                          <div className="rounded-lg bg-orange-50 p-2.5 text-orange-600 dark:bg-orange-900/30">
+                    <Card key={regla.id} className={`px-3 py-2 transition-opacity ${!regla.activo ? "opacity-60" : ""}`}>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="rounded-lg bg-orange-50 p-2 text-orange-600 dark:bg-orange-900/30">
                             <Percent className="h-5 w-5" />
                           </div>
                           <div className="min-w-0">
@@ -1105,7 +1105,7 @@ export default function ConfiguracionPage() {
                               <Badge variant={COMISION_TIPO_BADGE[regla.tipo]}>{COMISION_TIPO_LABELS[regla.tipo]}</Badge>
                               {!regla.activo && <Badge variant="outline">Inactiva</Badge>}
                             </div>
-                            <div className="mt-1 flex items-center gap-3 text-sm text-zinc-500">
+                            <div className="mt-0.5 flex items-center gap-3 text-sm text-zinc-500">
                               <span className="font-semibold text-zinc-700 dark:text-zinc-300">
                                 {regla.tipo === "monto_fijo" ? `$ ${regla.valor}` : `${regla.valor}%`}
                               </span>
@@ -1151,7 +1151,7 @@ export default function ConfiguracionPage() {
         )}
 
         {tab === "retenciones" && (
-          <div className="space-y-6 max-w-2xl">
+          <div className="space-y-3 max-w-5xl">
             <div>
               <h3 className="font-semibold text-zinc-900 dark:text-white">Configuración de Retenciones</h3>
               <p className="text-sm text-zinc-500 mt-1">
@@ -1160,6 +1160,8 @@ export default function ConfiguracionPage() {
               </p>
             </div>
 
+            {/* IVA y Ganancias lado a lado */}
+            <div className="grid gap-3 lg:grid-cols-2">
             {/* IVA */}
             <Card>
               <CardHeader>
@@ -1183,14 +1185,14 @@ export default function ConfiguracionPage() {
                 </div>
               </CardHeader>
               {retencionCfg.aplica_iva && (
-                <div className="grid grid-cols-2 gap-4 pt-2">
+                <div className="grid grid-cols-2 gap-2.5">
                   <div>
                     <label className="text-xs font-medium text-zinc-500">Mínimo no imponible (ARS)</label>
                     <input
                       type="number"
                       value={retencionCfg.minimo_iva}
                       onChange={(e) => setRetencionCfg(prev => ({ ...prev, minimo_iva: Number(e.target.value) }))}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     />
                     <p className="text-xs text-zinc-400 mt-1">Si el pago es mayor a este monto, se aplica retención</p>
                   </div>
@@ -1201,7 +1203,7 @@ export default function ConfiguracionPage() {
                       step="0.5"
                       value={retencionCfg.tasa_iva_ri}
                       onChange={(e) => setRetencionCfg(prev => ({ ...prev, tasa_iva_ri: Number(e.target.value) }))}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     />
                   </div>
                 </div>
@@ -1231,14 +1233,14 @@ export default function ConfiguracionPage() {
                 </div>
               </CardHeader>
               {retencionCfg.aplica_ganancias && (
-                <div className="grid grid-cols-2 gap-4 pt-2">
+                <div className="grid grid-cols-2 gap-2.5">
                   <div>
                     <label className="text-xs font-medium text-zinc-500">Mínimo no imponible (ARS)</label>
                     <input
                       type="number"
                       value={retencionCfg.minimo_ganancias}
                       onChange={(e) => setRetencionCfg(prev => ({ ...prev, minimo_ganancias: Number(e.target.value) }))}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     />
                   </div>
                   <div>
@@ -1248,7 +1250,7 @@ export default function ConfiguracionPage() {
                       step="0.5"
                       value={retencionCfg.tasa_ganancias_ri}
                       onChange={(e) => setRetencionCfg(prev => ({ ...prev, tasa_ganancias_ri: Number(e.target.value) }))}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     />
                   </div>
                   <div>
@@ -1258,7 +1260,7 @@ export default function ConfiguracionPage() {
                       step="0.5"
                       value={retencionCfg.tasa_ganancias_no_inscripto}
                       onChange={(e) => setRetencionCfg(prev => ({ ...prev, tasa_ganancias_no_inscripto: Number(e.target.value) }))}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     />
                   </div>
                   <div>
@@ -1267,19 +1269,20 @@ export default function ConfiguracionPage() {
                       type="number"
                       value={retencionCfg.minimo_retencion_ganancias}
                       onChange={(e) => setRetencionCfg(prev => ({ ...prev, minimo_retencion_ganancias: Number(e.target.value) }))}
-                      className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                      className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                     />
                     <p className="text-xs text-zinc-400 mt-1">Si la retención calculada es menor a este monto, no se retiene</p>
                   </div>
                 </div>
               )}
             </Card>
+            </div>
 
             <div className="flex items-center gap-3">
               <button
                 onClick={handleSaveRetencionCfg}
                 disabled={retencionCfgSaving}
-                className="flex items-center gap-2 rounded-lg bg-orange-500 px-5 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                className="flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
               >
                 {retencionCfgSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                 Guardar configuración
@@ -1291,7 +1294,7 @@ export default function ConfiguracionPage() {
               )}
             </div>
 
-            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 p-4 text-sm text-zinc-500 space-y-1">
+            <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2 text-sm text-zinc-500 space-y-1">
               <p className="font-medium text-zinc-700 dark:text-zinc-300">¿Cómo funciona?</p>
               <p>Al crear una Orden de Pago y seleccionar el proveedor, el sistema consulta automáticamente el padrón de AFIP para determinar su condición (RI, Monotributo, etc.) y pre-completa las retenciones según esta configuración.</p>
               <p className="mt-1">El usuario puede editar los valores antes de confirmar.</p>
@@ -1300,7 +1303,7 @@ export default function ConfiguracionPage() {
         )}
 
         {tab === "plantillas" && (
-          <div className="space-y-6">
+          <div className="space-y-3">
             <div>
               <h3 className="font-semibold text-zinc-900 dark:text-white">Plantillas de Email</h3>
               <p className="text-sm text-zinc-500">
@@ -1309,6 +1312,7 @@ export default function ConfiguracionPage() {
               </p>
             </div>
 
+            <div className="grid gap-3 lg:grid-cols-2">
             {(["presupuesto", "factura", "remito", "orden_compra", "orden_pago", "cuenta_corriente"] as TemplateTipo[]).map((tipo) => {
               const template = templates[tipo];
               const label = tipo === "presupuesto" ? "Presupuesto" : tipo === "factura" ? "Factura" : tipo === "remito" ? "Remito" : tipo === "orden_compra" ? "Orden de Compra" : tipo === "orden_pago" ? "Orden de Pago" : "Cuenta corriente";
@@ -1319,29 +1323,29 @@ export default function ConfiguracionPage() {
                 <Card key={tipo}>
                   <CardHeader>
                     <div className="flex items-center gap-3">
-                      <div className="rounded-lg bg-orange-50 p-2 text-orange-600 dark:bg-orange-900/30">
-                        <Mail className="h-5 w-5" />
+                      <div className="rounded-lg bg-orange-50 p-1.5 text-orange-600 dark:bg-orange-900/30">
+                        <Mail className="h-4 w-4" />
                       </div>
                       <CardTitle>{label}</CardTitle>
                     </div>
                   </CardHeader>
-                  <div className="space-y-4">
+                  <div className="space-y-2">
                     <div>
                       <label className="text-xs font-medium text-zinc-500">Asunto</label>
                       <input
                         type="text"
                         value={template.asunto}
                         onChange={(e) => handleTemplateChange(tipo, "asunto", e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                        className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
                       />
                     </div>
                     <div>
                       <label className="text-xs font-medium text-zinc-500">Cuerpo</label>
                       <textarea
-                        rows={6}
+                        rows={4}
                         value={template.cuerpo}
                         onChange={(e) => handleTemplateChange(tipo, "cuerpo", e.target.value)}
-                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-y"
+                        className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-1.5 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white resize-y"
                       />
                     </div>
                     <div className="flex flex-wrap gap-1.5">
@@ -1367,7 +1371,7 @@ export default function ConfiguracionPage() {
                         <button
                           onClick={() => handleSaveTemplate(tipo)}
                           disabled={isSaving}
-                          className="flex items-center gap-2 rounded-lg bg-orange-500 px-5 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
+                          className="flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50 transition-colors"
                         >
                           {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                           Guardar
@@ -1378,6 +1382,7 @@ export default function ConfiguracionPage() {
                 </Card>
               );
             })}
+            </div>
           </div>
         )}
       </div>
@@ -1386,29 +1391,29 @@ export default function ConfiguracionPage() {
       {showInviteModal && canManageUsers && (
         <>
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setShowInviteModal(false)} />
-          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold dark:text-white">Invitar usuario</h2>
+          <div className="fixed inset-4 z-50 m-auto h-fit max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-4 shadow-2xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-base font-bold dark:text-white">Invitar usuario</h2>
               <button onClick={() => setShowInviteModal(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
             </div>
-            <div className="space-y-4">
+            <div className="space-y-2.5">
               <div>
                 <label className="text-xs font-medium text-zinc-500">Nombre completo *</label>
                 <input value={inviteForm.nombre} onChange={(e) => setInviteForm({ ...inviteForm, nombre: e.target.value })}
                   placeholder="Ej: Juan Pérez"
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
               </div>
               <div>
                 <label className="text-xs font-medium text-zinc-500">Email *</label>
                 <input type="email" value={inviteForm.email} onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
                   onBlur={() => setInviteForm((current) => ({ ...current, email: normalizeEmail(current.email) }))}
                   placeholder="usuario@empresa.com"
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
+                  className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
               </div>
               <div>
                 <label className="text-xs font-medium text-zinc-500">Rol</label>
                 <select value={inviteForm.role} onChange={(e) => setInviteForm({ ...inviteForm, role: e.target.value as Role })}
-                  className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                   {(Object.entries(ROLE_LABELS) as [Role, string][]).map(([r, l]) => <option key={r} value={r}>{l}</option>)}
                 </select>
               </div>
@@ -1429,10 +1434,10 @@ export default function ConfiguracionPage() {
                 </div>
               )}
             </div>
-            <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
-              <button onClick={() => setShowInviteModal(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
+            <div className="flex justify-end gap-3 mt-4 pt-3 border-t border-zinc-200 dark:border-zinc-700">
+              <button onClick={() => setShowInviteModal(false)} className="h-8 rounded-lg border border-zinc-200 px-4 py-1 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300">Cancelar</button>
               <button onClick={handleInviteUser} disabled={inviteSaving || !inviteForm.email.trim() || !inviteForm.nombre.trim()}
-                className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+                className="flex h-8 items-center gap-2 rounded-lg bg-orange-500 px-4 py-1 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {inviteSaving && <Loader2 className="h-4 w-4 animate-spin" />} Invitar
               </button>
             </div>

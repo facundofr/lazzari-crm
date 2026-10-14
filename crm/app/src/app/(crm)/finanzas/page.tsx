@@ -13,6 +13,8 @@ import { canMatchBankMovement } from "@/lib/extracto-match";
 import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/cobro-masivo-liquidacion";
 import { traerTodo } from "@/lib/paginar";
 import { Autocompletar } from "@/components/ui/autocompletar";
+import { facturaDelMes, pagoDelMes, sugerirGastoFijo, montoSicore } from "@/lib/gasto-fijo-factura";
+import { descripcionVep, type DatosVep } from "@/lib/vep";
 import { FINANZAS_GRUPOS, esFinanzasTab, grupoDeTab, operacionVencimientos, pestanaInicial, type FinanzasGrupo, type FinanzasTab } from "@/lib/finanzas-grupos";
 import { clasificarMovimiento, esCobroDeCliente, sentidoAjuste, resumirCaja, TIPOS_RETENCION } from "@/lib/tipos-movimiento";
 import { filtrarCheques, MOTIVOS_RECHAZO_CHEQUE } from "@/lib/cheques-filtro";
@@ -210,6 +212,7 @@ interface GastoManualRow {
   categoria: string;
   tipo_gasto: string;
   tipo_recurrencia?: "fijo" | "eventual";
+  gasto_fijo_id?: string | null;
   medio_pago: string;
   comprobante_url?: string;
   monto: number;
@@ -393,6 +396,7 @@ const emptyGastoManualForm = {
   categoria: "Varios" as string,
   tipo_gasto: "general" as string,
   tipo_recurrencia: "eventual" as "fijo" | "eventual",
+  gasto_fijo_id: "" as string,
   medio_pago: "efectivo" as string,
   monto: 0,
   moneda: "ARS" as "ARS" | "USD",
@@ -750,7 +754,7 @@ export default function FinanzasPage() {
   // Gastos fijos modal
   const [gastoModalOpen, setGastoModalOpen] = useState(false);
   const [editingGasto, setEditingGasto] = useState<GastoFijo | null>(null);
-  const [gastoForm, setGastoForm] = useState({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS" as "USD" | "ARS", notas: "" });
+  const [gastoForm, setGastoForm] = useState({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS" as "USD" | "ARS", notas: "", proveedorId: "", diaVencimiento: "", calculo: "" });
   const [gastoSaving, setGastoSaving] = useState(false);
 
   // OP state
@@ -820,6 +824,8 @@ export default function FinanzasPage() {
   const [gmError, setGmError] = useState("");
   const [gmProvSearch, setGmProvSearch] = useState("");
   const [gmFile, setGmFile] = useState<File | null>(null);
+  const [gmVepLeyendo, setGmVepLeyendo] = useState(false);
+  const [gmVepInfo, setGmVepInfo] = useState("");
   const [gmUploading, setGmUploading] = useState(false);
 
   // Custom gasto categories from configuracion
@@ -1165,7 +1171,8 @@ export default function FinanzasPage() {
           setGastosFijos(gfRes.data.map((g: any) => ({
             id: g.id, descripcion: g.descripcion, categoria: g.categoria,
             monto: Number(g.monto), moneda: g.moneda, activo: g.activo,
-            notas: g.notas ?? "", createdAt: g.created_at,
+            notas: g.notas ?? "", createdAt: g.created_at, proveedorId: g.proveedor_id ?? null,
+            diaVencimiento: g.dia_vencimiento ?? null, calculo: g.calculo ?? null,
           })));
         }
 
@@ -1352,6 +1359,7 @@ export default function FinanzasPage() {
               id: r.id, fecha: r.fecha, descripcion: r.descripcion,
               proveedor_id: r.proveedor_id, proveedor_nombre: r.proveedores?.razon_social ?? undefined,
               categoria: r.categoria ?? "Varios", tipo_gasto: r.tipo_gasto ?? "general", tipo_recurrencia: r.tipo_recurrencia ?? "eventual",
+              gasto_fijo_id: r.gasto_fijo_id ?? null,
               medio_pago: r.medio_pago ?? "efectivo",
               comprobante_url: r.comprobante_url ?? undefined,
               monto: Number(r.monto),
@@ -1653,32 +1661,43 @@ export default function FinanzasPage() {
     }
   }
 
+  // SICORE automático: retenciones de Ganancias de las OP del mes anterior (lib/gasto-fijo-factura.ts)
+  const sicoreAuto = montoSicore(ordenesPago.map((o) => ({ fecha: o.fecha, estado: o.estado, retencion: o.retencion_ganancias_monto })), todayAR());
+  const montoGastoFijo = (g: GastoFijo) => (g.calculo === "sicore" ? sicoreAuto.monto : g.monto);
+
   function openGastoModal(gasto?: GastoFijo) {
     if (gasto) {
       setEditingGasto(gasto);
-      setGastoForm({ descripcion: gasto.descripcion, categoria: gasto.categoria, monto: gasto.monto, moneda: gasto.moneda, notas: gasto.notas });
+      setGastoForm({ descripcion: gasto.descripcion, categoria: gasto.categoria, monto: gasto.monto, moneda: gasto.moneda, notas: gasto.notas, proveedorId: gasto.proveedorId ?? "", diaVencimiento: gasto.diaVencimiento ? String(gasto.diaVencimiento) : "", calculo: gasto.calculo ?? "" });
     } else {
       setEditingGasto(null);
-      setGastoForm({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS", notas: "" });
+      setGastoForm({ descripcion: "", categoria: "general", monto: 0, moneda: "ARS", notas: "", proveedorId: "", diaVencimiento: "", calculo: "" });
     }
     setGastoModalOpen(true);
   }
 
   async function handleSaveGasto() {
     if (!sociedadActiva?.id) { alert("No se pudo determinar la sociedad activa"); return; }
-    if (!gastoForm.descripcion.trim() || gastoForm.monto <= 0) return;
+    if (!gastoForm.descripcion.trim() || (gastoForm.monto <= 0 && gastoForm.calculo !== "sicore")) return;
     setGastoSaving(true);
+    // proveedor_id solo viaja si hay uno (o si se lo saca a uno que lo tenía)
+    const dia = Number(gastoForm.diaVencimiento);
+    const prov = {
+      proveedor_id: gastoForm.proveedorId || null,
+      dia_vencimiento: dia >= 1 && dia <= 31 ? Math.round(dia) : null,
+      calculo: gastoForm.calculo || null,
+    };
     try {
       if (editingGasto) {
         const { error } = await supabase.from("gastos_fijos").update({
           descripcion: gastoForm.descripcion, categoria: gastoForm.categoria,
-          monto: gastoForm.monto, moneda: gastoForm.moneda, notas: gastoForm.notas,
+          monto: gastoForm.monto, moneda: gastoForm.moneda, notas: gastoForm.notas, ...prov,
         } as any).eq("id", editingGasto.id).eq("sociedad_id" as any, sociedadActiva?.id);
         if (error) throw error;
       } else {
         const { error } = await supabase.from("gastos_fijos").insert({
           descripcion: gastoForm.descripcion, categoria: gastoForm.categoria,
-          monto: gastoForm.monto, moneda: gastoForm.moneda, notas: gastoForm.notas,
+          monto: gastoForm.monto, moneda: gastoForm.moneda, notas: gastoForm.notas, ...prov,
           sociedad_id: sociedadActiva.id,
         } as any);
         if (error) throw error;
@@ -2688,6 +2707,7 @@ export default function FinanzasPage() {
     setGmError("");
     setGmProvSearch("");
     setGmFile(null);
+    setGmVepInfo("");
     setGmModalOpen(true);
   }
 
@@ -2699,6 +2719,7 @@ export default function FinanzasPage() {
       categoria: gm.categoria,
       tipo_gasto: gm.tipo_gasto,
       tipo_recurrencia: gm.tipo_recurrencia || "eventual",
+      gasto_fijo_id: gm.gasto_fijo_id || "",
       medio_pago: gm.medio_pago,
       monto: gm.monto,
       moneda: gm.moneda as "ARS" | "USD",
@@ -2708,7 +2729,43 @@ export default function FinanzasPage() {
     setGmError("");
     setGmProvSearch(gm.proveedor_nombre || "");
     setGmFile(null);
+    setGmVepInfo("");
     setGmModalOpen(true);
+  }
+
+  /** Lee un VEP / comprobante de impuestos con IA y completa la ventana (no guarda: Augusto revisa). */
+  async function leerVepGM(file: File) {
+    setGmVepLeyendo(true);
+    setGmError("");
+    setGmVepInfo("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/parse-vep", { method: "POST", body: fd });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error || "No se pudo leer el VEP");
+      const d = json.data as DatosVep;
+      const descripcion = descripcionVep(d);
+      const gastoFijoId = sugerirGastoFijo(`${d.concepto} ${d.detalle}`, gastosFijos);
+      setGmForm((f) => ({
+        ...f,
+        descripcion,
+        monto: d.monto > 0 ? d.monto : f.monto,
+        moneda: "ARS",
+        fecha: d.fecha_pago || d.vencimiento || f.fecha,
+        categoria: "Impuestos",
+        tipo_gasto: "impuestos",
+        tipo_recurrencia: gastoFijoId ? "fijo" : f.tipo_recurrencia,
+        gasto_fijo_id: gastoFijoId || f.gasto_fijo_id,
+        notas: [f.notas, d.vencimiento ? `Vence ${d.vencimiento.split("-").reverse().join("/")}` : "", d.organismo || ""].filter(Boolean).join(" · "),
+      }));
+      setGmFile(file);
+      setGmVepInfo(`✨ Leído por la IA: ${d.concepto}${d.periodo ? ` ${d.periodo.slice(5)}/${d.periodo.slice(0, 4)}` : ""} · revisá los datos antes de guardar.`);
+    } catch (e) {
+      setGmError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGmVepLeyendo(false);
+    }
   }
 
   async function handleCreateGM() {
@@ -2742,6 +2799,7 @@ export default function FinanzasPage() {
         notas: gmForm.notas || "",
         medio_pago: gmForm.medio_pago || "efectivo",
         proveedor_id: gmForm.proveedor_id || null,
+        gasto_fijo_id: gmForm.gasto_fijo_id || null,
       };
       if (comprobanteUrl) payload.comprobante_url = comprobanteUrl;
 
@@ -4190,10 +4248,10 @@ export default function FinanzasPage() {
           <>
             <div className="fixed inset-0 z-50 bg-black/30" onClick={() => { setSelectedMov(null); setDetailFullscreen(false); }} />
             <div className={detailFullscreen ? "fixed inset-4 z-50 overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-zinc-900" : "fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700"}>
-              <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
+              <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700">
                 <div className="flex items-center gap-2">
-                  <Wallet className="h-5 w-5 text-orange-500" />
-                  <h2 className="text-lg font-bold dark:text-white">Detalle movimiento</h2>
+                  <Wallet className="h-4 w-4 text-orange-500" />
+                  <h2 className="text-base font-bold dark:text-white">Detalle movimiento</h2>
                   {(() => { const tc = tipoConfig[selectedMov.tipo] || { label: selectedMov.tipo, variant: "outline" as const }; return <Badge variant={tc.variant}>{tc.label}</Badge>; })()}
                 </div>
                 <div className="flex items-center gap-1">
@@ -4201,29 +4259,29 @@ export default function FinanzasPage() {
                   <button onClick={() => { setSelectedMov(null); setDetailFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
                 </div>
               </div>
-              <div className="p-6 space-y-5">
-                {/* Info principal */}
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p className="text-xs text-zinc-400 uppercase">Monto</p>
-                    <p className={`font-mono text-lg font-bold ${selectedMov.anulado ? "text-zinc-400 line-through" : ""}`}>{formatCurrency(selectedMov.anulado ? Number(selectedMov.monto_original || 0) : selectedMov.monto, (selectedMov.moneda || "ARS") as "ARS" | "USD")}</p>
+              <div className="p-4 space-y-3">
+                {/* Info principal: entidad arriba, monto/fecha/estado en grilla de 4 */}
+                <div className="grid grid-cols-4 gap-x-3 gap-y-1.5 text-sm">
+                  <div className="col-span-4">
+                    <p className="text-[11px] text-zinc-500">Entidad</p>
+                    <p className="font-semibold truncate dark:text-white">{selectedMov.clientes?.razon_social || selectedMov.proveedores?.razon_social || "—"}</p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-[11px] text-zinc-500">Monto</p>
+                    <p className={`font-mono text-base font-bold ${selectedMov.anulado ? "text-zinc-400 line-through" : ""}`}>{formatCurrency(selectedMov.anulado ? Number(selectedMov.monto_original || 0) : selectedMov.monto, (selectedMov.moneda || "ARS") as "ARS" | "USD")}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-zinc-400 uppercase">Fecha</p>
-                    <p className="font-medium">{formatDate(selectedMov.fecha)}</p>
+                    <p className="text-[11px] text-zinc-500">Fecha</p>
+                    <p className="font-medium dark:text-white">{formatDate(selectedMov.fecha)}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-zinc-400 uppercase">Estado</p>
+                    <p className="text-[11px] text-zinc-500">Estado</p>
                     <Badge variant={selectedMov.anulado ? "danger" : selectedMov.conciliado ? "success" : "warning"}>
                       {selectedMov.anulado ? "Anulado" : selectedMov.conciliado ? "Conciliado" : "Pendiente"}
                     </Badge>
                     {!selectedMov.anulado && selectedMov.conciliado && selectedMov.conciliado_at && (
-                      <p className="mt-1 text-xs text-zinc-400">el {formatDateTime(selectedMov.conciliado_at)}</p>
+                      <p className="text-[11px] text-zinc-400">el {formatDateTime(selectedMov.conciliado_at)}</p>
                     )}
-                  </div>
-                  <div>
-                    <p className="text-xs text-zinc-400 uppercase">Entidad</p>
-                    <p className="font-medium">{selectedMov.clientes?.razon_social || selectedMov.proveedores?.razon_social || "—"}</p>
                   </div>
                 </div>
 
@@ -4237,15 +4295,15 @@ export default function FinanzasPage() {
 
                 {/* Descripcion completa */}
                 <div>
-                  <p className="text-xs text-zinc-400 uppercase mb-1">Descripcion</p>
-                  <p className="text-sm bg-zinc-50 dark:bg-zinc-800 rounded-lg p-3 whitespace-pre-wrap">{selectedMov.descripcion}</p>
+                  <p className="text-[11px] text-zinc-500 mb-0.5">Descripción</p>
+                  <p className="text-sm bg-zinc-50 dark:bg-zinc-800 rounded-lg px-3 py-2 whitespace-pre-wrap">{selectedMov.descripcion}</p>
                 </div>
 
                 {/* Factura vinculada */}
                 {relatedFactura && (
                   <div>
-                    <p className="text-xs text-zinc-400 uppercase mb-1">Factura vinculada</p>
-                    <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-sm">
+                    <p className="text-[11px] text-zinc-500 mb-0.5">Factura vinculada</p>
+                    <div className="flex flex-wrap items-center gap-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg px-3 py-1.5 text-sm">
                       <FileText className="h-4 w-4 text-blue-500" />
                       <span className="font-mono font-medium">
                         {relatedFactura.tipo} {String(relatedFactura.punto_venta).padStart(4, "0")}-{String(relatedFactura.numero).padStart(8, "0")}
@@ -4261,15 +4319,15 @@ export default function FinanzasPage() {
                 {/* Movimientos relacionados (cobro masivo) */}
                 {relatedMovs.length > 1 && (
                   <div>
-                    <p className="text-xs text-zinc-400 uppercase mb-2">
+                    <p className="text-[11px] text-zinc-500 mb-0.5">
                       Movimientos del cobro ({relatedMovs.length} lineas)
                     </p>
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       {relatedMovs.map(rm => {
                         const tc = tipoConfig[rm.tipo] || { label: rm.tipo, variant: "outline" as const };
                         const isCurrent = rm.id === selectedMov.id;
                         return (
-                          <div key={rm.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm ${isCurrent ? "bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800" : "bg-zinc-50 dark:bg-zinc-800/50"}`}>
+                          <div key={rm.id} className={`flex items-center gap-2 px-2 py-1 rounded-lg text-sm ${isCurrent ? "bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800" : "bg-zinc-50 dark:bg-zinc-800/50"}`}>
                             <Badge variant={tc.variant}>{tc.label}</Badge>
                             <span className="flex-1 text-xs text-zinc-500 truncate">{rm.descripcion?.split(" — ")[1] || ""}</span>
                             <span className="font-mono font-medium">{formatCurrency(rm.monto, (rm.moneda || "ARS") as "ARS" | "USD")}</span>
@@ -4287,13 +4345,13 @@ export default function FinanzasPage() {
                 <div className="flex gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
                   {!selectedMov.anulado && !selectedMov.conciliado && (
                     <button onClick={async () => { if (await handleConciliar(selectedMov.id)) setSelectedMov({ ...selectedMov, conciliado: true }); }}
-                      className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
+                      className="flex h-8 items-center gap-1.5 rounded-lg bg-green-600 px-3 text-sm font-medium text-white hover:bg-green-700">
                       <CheckCircle2 className="h-4 w-4" /> Conciliar
                     </button>
                   )}
                   {!selectedMov.anulado && selectedMov.conciliado && (
                     <button onClick={() => handleDesconciliar(selectedMov.id)}
-                      className="flex items-center gap-1.5 rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20">
+                      className="flex h-8 items-center gap-1.5 rounded-lg border border-amber-300 px-3 text-sm font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20">
                       <X className="h-4 w-4" /> Desconciliar
                     </button>
                   )}
@@ -4301,19 +4359,19 @@ export default function FinanzasPage() {
                     <>
                       {!selectedMov.liquidacion_fx_id && !selectedMov.factura_compra_id && (
                         <button onClick={() => { const mov = selectedMov; setSelectedMov(null); openEditMov(mov); }}
-                          className="flex items-center gap-1.5 rounded-lg border border-blue-300 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20">
+                          className="flex h-8 items-center gap-1.5 rounded-lg border border-blue-300 px-3 text-sm font-medium text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20">
                           <Pencil className="h-4 w-4" /> Editar
                         </button>
                       )}
                       {!selectedMov.factura_compra_id && <button onClick={() => handleAnularMov(selectedMov.id)}
-                        className="flex items-center gap-1.5 rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20">
+                        className="flex h-8 items-center gap-1.5 rounded-lg border border-amber-300 px-3 text-sm font-medium text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20">
                         <Ban className="h-4 w-4" /> {selectedMov.liquidacion_fx_id ? "Anular liquidación FX" : "Anular"}
                       </button>}
                     </>
                   )}
                   {puedeAdministrar && !selectedMov.liquidacion_fx_id && !selectedMov.factura_compra_id && (
                     <button onClick={() => handleDeleteMov(selectedMov.id)} title="Borra el registro (solo administradores). Para corregir conviene Anular."
-                      className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+                      className="flex h-8 items-center gap-1.5 rounded-lg border border-red-300 px-3 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
                       <Trash2 className="h-4 w-4" /> Eliminar
                     </button>
                   )}
@@ -5716,7 +5774,7 @@ export default function FinanzasPage() {
               <div>
                 <p className="text-sm text-zinc-500">
                   Total mensual: <span className="font-bold font-mono text-zinc-900 dark:text-white">
-                    {formatCurrency(gastosFijos.filter((g) => g.activo && g.moneda === "ARS").reduce((s, g) => s + g.monto, 0))}
+                    {formatCurrency(gastosFijos.filter((g) => g.activo && g.moneda === "ARS").reduce((s, g) => s + montoGastoFijo(g), 0))}
                   </span>
                   {gastosFijos.some((g) => g.activo && g.moneda === "USD") && (
                     <> + <span className="font-bold font-mono text-zinc-900 dark:text-white">
@@ -5729,33 +5787,53 @@ export default function FinanzasPage() {
                 <Plus className="h-4 w-4" /> Nuevo gasto
               </button>
             </div>
-            <div className="space-y-2">
-              {gastosFijos.map((g) => (
-                <div key={g.id} className={`flex items-center gap-4 rounded-lg border p-4 ${g.activo ? "border-zinc-200 dark:border-zinc-700" : "border-zinc-100 dark:border-zinc-800 opacity-50"}`}>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-zinc-900 dark:text-white">{g.descripcion}</span>
-                      <Badge variant="outline">{g.categoria}</Badge>
-                      {!g.activo && <Badge variant="danger">Inactivo</Badge>}
-                    </div>
-                    {g.notas && <p className="text-xs text-zinc-500 mt-0.5">{g.notas}</p>}
+            <div className="space-y-1">
+              {gastosFijos.map((g) => {
+                const prov = g.proveedorId ? proveedoresOptions.find((p) => p.id === g.proveedorId) : undefined;
+                const fm = g.activo && g.proveedorId ? facturaDelMes(g.proveedorId, facturasCompra, todayAR()) : null;
+                // Sin proveedor (impuestos, sueldos, débitos): espera el pago del mes en la pestaña Gastos
+                const pm = g.activo && !g.proveedorId ? pagoDelMes(g.id, gastosManuales, todayAR(), g.diaVencimiento) : null;
+                const venceTxt = pm?.diasAlVencimiento == null ? "" : pm.diasAlVencimiento < 0 ? ` (venció el ${g.diaVencimiento})` : pm.diasAlVencimiento === 0 ? " (vence hoy)" : ` (vence el ${g.diaVencimiento})`;
+                return (
+                <div key={g.id} className={`flex items-center gap-3 rounded-lg border px-3 py-1.5 ${g.activo ? "border-zinc-200 dark:border-zinc-700" : "border-zinc-100 dark:border-zinc-800 opacity-50"}`}>
+                  <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                    <span className="text-sm font-semibold text-zinc-900 dark:text-white">{g.descripcion}</span>
+                    <Badge variant="outline">{g.categoria}</Badge>
+                    {prov && <span className="text-xs text-zinc-500">· {prov.razon_social}</span>}
+                    {!g.activo && <Badge variant="danger">Inactivo</Badge>}
+                    {fm?.falta && (
+                      <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">⚠️ Falta la factura de {fm.mesNombre}</span>
+                    )}
+                    {fm?.factura && (
+                      <span className="text-xs text-emerald-600 dark:text-emerald-400">✓ Factura de {fm.mesNombre}: {formatCurrency(fm.factura.total)}</span>
+                    )}
+                    {pm?.falta && (
+                      <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${pm.diasAlVencimiento != null && pm.diasAlVencimiento <= 3 ? "bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300" : "bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"}`}>⚠️ Falta pagar {pm.mesNombre}{venceTxt}</span>
+                    )}
+                    {pm && !pm.falta && (
+                      <span className="text-xs text-emerald-600 dark:text-emerald-400">✓ Pagado {pm.mesNombre}: {formatCurrency(pm.pagado, g.moneda)}</span>
+                    )}
+                    {g.activo && !pm && g.diaVencimiento && <span className="text-xs text-zinc-500">· vence el {g.diaVencimiento}</span>}
+                    {g.notas && <span className="text-xs text-zinc-500 truncate">· {g.notas}</span>}
                   </div>
-                  <span className="font-mono font-bold text-lg text-zinc-900 dark:text-white">
-                    {formatCurrency(g.monto, g.moneda)}
+                  <span className="font-mono font-bold text-sm text-zinc-900 dark:text-white" title={g.calculo === "sicore" ? `Automático: retenciones de Ganancias de ${sicoreAuto.mes}` : undefined}>
+                    {g.calculo === "sicore" && <span className="mr-1 text-[10px] font-normal text-zinc-400">auto</span>}
+                    {formatCurrency(montoGastoFijo(g), g.moneda)}
                   </span>
-                  <div className="flex items-center gap-1">
-                    <button onClick={() => openGastoModal(g)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Editar">
+                  <div className="flex items-center">
+                    <button onClick={() => openGastoModal(g)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title="Editar">
                       <Pencil className="h-4 w-4" />
                     </button>
-                    <button onClick={() => handleToggleGasto(g.id, g.activo)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={g.activo ? "Desactivar" : "Activar"}>
+                    <button onClick={() => handleToggleGasto(g.id, g.activo)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800" title={g.activo ? "Desactivar" : "Activar"}>
                       {g.activo ? <X className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
                     </button>
-                    <button onClick={() => handleDeleteGasto(g.id)} className="rounded-lg p-2 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
+                    <button onClick={() => handleDeleteGasto(g.id)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/40" title="Eliminar">
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
               {gastosFijos.length === 0 && (
                 <Card className="text-center py-12">
                   <Wallet className="mx-auto h-10 w-10 text-zinc-300 dark:text-zinc-600" />
@@ -5903,7 +5981,7 @@ export default function FinanzasPage() {
           <div className="fixed inset-0 z-50 bg-black/40" onClick={() => setGastoModalOpen(false)} />
           <div className="fixed inset-4 z-50 m-auto h-fit max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl dark:bg-zinc-900">
             <div className="flex items-center justify-between mb-6">
-              <h2 className="text-lg font-bold dark:text-white">{editingGasto ? "Editar gasto fijo" : "Nuevo gasto fijo"}</h2>
+              <h2 className="text-base font-bold dark:text-white">{editingGasto ? "Editar gasto fijo" : "Nuevo gasto fijo"}</h2>
               <button onClick={() => setGastoModalOpen(false)} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
             </div>
             <div className="space-y-4">
@@ -5933,13 +6011,34 @@ export default function FinanzasPage() {
                 </div>
               </div>
               <div>
+                <label className="text-xs font-medium text-zinc-500">Proveedor que lo factura (opcional)</label>
+                <select value={gastoForm.proveedorId} onChange={(e) => setGastoForm({ ...gastoForm, proveedorId: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                  <option value="">— Sin proveedor —</option>
+                  {proveedoresOptions.map((p) => <option key={p.id} value={p.id}>{p.razon_social}</option>)}
+                </select>
+                <p className="mt-0.5 text-[11px] text-zinc-400">Si lo elegís, avisa cuando falte la factura del mes. Si no, espera el pago del mes en "Gastos".</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500">Vence el día</label>
+                  <input type="number" min={1} max={31} value={gastoForm.diaVencimiento} onChange={(e) => setGastoForm({ ...gastoForm, diaVencimiento: e.target.value })} className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-3 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: 20" />
+                </div>
+                <label className="mt-5 flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300" title="Toma solo las retenciones de Ganancias de las OP del mes anterior">
+                  <input type="checkbox" checked={gastoForm.calculo === "sicore"} onChange={(e) => setGastoForm({ ...gastoForm, calculo: e.target.checked ? "sicore" : "" })} />
+                  Monto automático SICORE
+                </label>
+              </div>
+              {gastoForm.calculo === "sicore" && (
+                <p className="-mt-2 text-[11px] text-zinc-500">Retenciones de Ganancias de {sicoreAuto.mes}: <b className="font-mono">{formatCurrency(sicoreAuto.monto)}</b></p>
+              )}
+              <div>
                 <label className="text-xs font-medium text-zinc-500">Notas</label>
                 <input value={gastoForm.notas} onChange={(e) => setGastoForm({ ...gastoForm, notas: e.target.value })} className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Notas opcionales..." />
               </div>
             </div>
             <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-700">
               <button onClick={() => setGastoModalOpen(false)} className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">Cancelar</button>
-              <button onClick={handleSaveGasto} disabled={gastoSaving || !gastoForm.descripcion.trim() || gastoForm.monto <= 0} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
+              <button onClick={handleSaveGasto} disabled={gastoSaving || !gastoForm.descripcion.trim() || (gastoForm.monto <= 0 && gastoForm.calculo !== "sicore")} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
                 {gastoSaving && <Loader2 className="h-4 w-4 animate-spin" />}
                 {editingGasto ? "Guardar cambios" : "Crear gasto"}
               </button>
@@ -6587,10 +6686,10 @@ export default function FinanzasPage() {
         <>
           <div className="fixed inset-0 z-50 bg-black/30" onClick={() => { setSelectedFC(null); setEditingFC(false); setDetailFullscreen(false); }} />
           <div className={detailFullscreen ? "fixed inset-4 z-50 overflow-y-auto rounded-2xl bg-white shadow-2xl dark:bg-zinc-900" : "fixed top-0 right-0 z-50 h-full w-full max-w-lg overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 border-l border-zinc-200 dark:border-zinc-700"}>
-            <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 p-6 border-b border-zinc-200 dark:border-zinc-700">
+            <div className="sticky top-0 z-10 flex items-center justify-between bg-white dark:bg-zinc-900 px-4 py-2.5 border-b border-zinc-200 dark:border-zinc-700">
               <div className="flex items-center gap-2">
-                <Receipt className="h-5 w-5 text-orange-500" />
-                <h2 className="text-lg font-bold dark:text-white">FC Compra</h2>
+                <Receipt className="h-4 w-4 text-orange-500" />
+                <h2 className="text-base font-bold dark:text-white">FC Compra</h2>
                 {!editingFC && <span className="font-mono text-sm text-zinc-500">{selectedFC.numero_factura}</span>}
                 <Badge variant={selectedFC.estado === "pagada" ? "success" : selectedFC.estado === "anulada" ? "danger" : selectedFC.estado === "recibida" ? "info" : "warning"}>
                   {selectedFC.estado === "pagada" ? "Pagada" : selectedFC.estado === "anulada" ? "Anulada" : selectedFC.estado === "recibida" ? "Recibida" : "Pendiente"}
@@ -6607,11 +6706,11 @@ export default function FinanzasPage() {
                 <button onClick={() => { setSelectedFC(null); setEditingFC(false); setDetailFullscreen(false); }} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"><X className="h-4 w-4" /></button>
               </div>
             </div>
-            <div className="p-6 space-y-6">
+            <div className="p-4 space-y-3">
               {editingFC ? (
                 <>
                   {/* Edit mode */}
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     <div>
                       <label className="text-xs font-medium text-zinc-500">N.° Factura</label>
                       <input value={editFCForm.numero_factura} onChange={e => setEditFCForm({ ...editFCForm, numero_factura: e.target.value })}
@@ -6684,44 +6783,41 @@ export default function FinanzasPage() {
                 </>
               ) : (
                 <>
-              {/* Info general */}
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <p className="text-xs font-medium text-zinc-500">Proveedor</p>
-                  <p className="font-semibold dark:text-white">{selectedFC.proveedor_nombre}</p>
+              {/* Info general: proveedor arriba y datos en grilla de 4 columnas */}
+              <div className="grid grid-cols-4 gap-x-3 gap-y-1.5 text-sm">
+                <div className="col-span-4">
+                  <p className="text-[11px] text-zinc-500">Proveedor</p>
+                  <p className="font-semibold dark:text-white truncate">{selectedFC.proveedor_nombre}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-zinc-500">Fecha</p>
+                  <p className="text-[11px] text-zinc-500">Fecha</p>
                   <p className="font-medium dark:text-white">{formatDate(selectedFC.fecha)}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-zinc-500">Vencimiento</p>
+                  <p className="text-[11px] text-zinc-500">Vencimiento</p>
                   <p className="font-medium dark:text-white">{selectedFC.fecha_vencimiento ? formatDate(selectedFC.fecha_vencimiento) : "—"}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-medium text-zinc-500">Tipo</p>
+                  <p className="text-[11px] text-zinc-500">Moneda</p>
+                  <p className="font-medium dark:text-white">{selectedFC.moneda}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-zinc-500">Tipo</p>
                   {selectedFC.tipo === "solo_iva" ? <Badge variant="purple">Solo IVA</Badge> : selectedFC.tipo === "transporte" ? <Badge variant="success">Transporte</Badge> : selectedFC.tipo === "servicio" ? <Badge variant="warning">{etiquetaCategoriaGasto(selectedFC.categoria_gasto) || "Servicio / gasto"}</Badge> : <Badge variant="info">Mercadería</Badge>}
                 </div>
                 {(selectedFC.oc_numero || (selectedFC.ocs_vinculadas && selectedFC.ocs_vinculadas.length > 0)) && (
-                  <div>
-                    <p className="text-xs font-medium text-zinc-500">OC vinculada{selectedFC.ocs_vinculadas && selectedFC.ocs_vinculadas.length > 1 ? "s" : ""}</p>
+                  <div className="col-span-4">
+                    <p className="text-[11px] text-zinc-500">OC vinculada{selectedFC.ocs_vinculadas && selectedFC.ocs_vinculadas.length > 1 ? "s" : ""}</p>
                     <p className="font-mono text-sm dark:text-white">
                       {selectedFC.oc_numero || (selectedFC.ocs_vinculadas || []).map(o => o.numero).join(", ")}
                     </p>
                   </div>
                 )}
-                <div>
-                  <p className="text-xs font-medium text-zinc-500">Moneda</p>
-                  <p className="font-medium dark:text-white">{selectedFC.moneda}</p>
-                </div>
               </div>
 
-              {/* Desglose de importes */}
-              <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
-                  <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Desglose de importes</p>
-                </div>
-                <div className="p-4 space-y-2">
+              {/* Importes en un recuadro, filas finas */}
+              <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 px-3 py-2">
+                <div className="space-y-0.5">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-zinc-500">Subtotal</span>
                     <span className="font-mono dark:text-white">{formatCurrency(selectedFC.subtotal, selectedFC.moneda)}</span>
@@ -6758,9 +6854,12 @@ export default function FinanzasPage() {
                       <span className="font-mono text-blue-600">{formatCurrency(selectedFC.costo_real!, selectedFC.moneda)}</span>
                     </div>
                   )}
-                  <div className="flex items-center justify-between text-sm border-t border-zinc-200 dark:border-zinc-700 pt-2">
+                  <div className="flex items-center justify-between text-sm border-t border-zinc-200 dark:border-zinc-700 pt-1">
                     <span className="font-semibold text-zinc-700 dark:text-white">Total</span>
-                    <span className="font-mono font-bold text-red-600">{formatCurrency(selectedFC.total, selectedFC.moneda)}</span>
+                    <span className="flex items-center gap-1">
+                      <span className="font-mono font-bold text-red-600">{formatCurrency(selectedFC.total, selectedFC.moneda)}</span>
+                      <CopiarBtn texto={(Math.round(selectedFC.total * 100) / 100).toFixed(2)} title="Copiar total" />
+                    </span>
                   </div>
                 </div>
               </div>
@@ -6768,12 +6867,12 @@ export default function FinanzasPage() {
               {/* Items */}
               {selectedFCItems.length > 0 && (
                 <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                  <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
-                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Items ({selectedFCItems.length})</p>
+                  <div className="bg-zinc-50 dark:bg-zinc-800/50 px-2 py-1">
+                    <p className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wide">Items ({selectedFCItems.length})</p>
                   </div>
                   <div className="divide-y divide-zinc-100 dark:divide-zinc-700">
                     {selectedFCItems.map((it, idx) => (
-                      <div key={idx} className="px-4 py-2 text-sm flex items-center justify-between">
+                      <div key={idx} className="px-2 py-1 text-sm flex items-center justify-between">
                         <div className="flex-1 min-w-0">
                           <p className="font-medium dark:text-white truncate">{it.descripcion}</p>
                           <p className="text-xs text-zinc-400">{it.cantidad} {it.unidad} x {formatCurrency(it.precio_unitario, selectedFC.moneda)}{Number(it.descuento_porcentaje || 0) > 0 ? ` — Desc. ${Number(it.descuento_porcentaje).toLocaleString("es-AR")}%` : ""} — IVA {it.iva_porcentaje ?? 21}%</p>
@@ -6787,7 +6886,7 @@ export default function FinanzasPage() {
 
               {/* OP vinculada */}
               {selectedFC.factura_origen_id && (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 p-4 dark:border-emerald-900 dark:bg-emerald-950/20">
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 dark:border-emerald-900 dark:bg-emerald-950/20">
                   <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Nota de crédito aplicada</p>
                   <p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">Crédito: {formatCurrency(selectedFC.credito_aplicado || 0, selectedFC.moneda)}</p>
                   <p className="mt-1 font-mono text-[10px] text-emerald-600">Factura origen: {selectedFC.factura_origen_id}</p>
@@ -6796,11 +6895,9 @@ export default function FinanzasPage() {
 
               {/* OP vinculada */}
               {selectedFC.op_vinculada && (
-                <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                  <div className="bg-zinc-50 dark:bg-zinc-800/50 px-4 py-2">
-                    <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">Orden de pago vinculada</p>
-                  </div>
-                  <div className="p-4 flex items-center justify-between">
+                <div className="flex items-center justify-between rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="text-[11px] text-zinc-500">Orden de pago vinculada</span>
                     <div>
                       <span className="font-mono font-medium dark:text-white">{selectedFC.op_vinculada.numero}</span>
                       <span className="ml-2">
@@ -6809,28 +6906,20 @@ export default function FinanzasPage() {
                         </Badge>
                       </span>
                     </div>
-                    <button onClick={() => { const op = ordenesPago.find(o => o.id === selectedFC.op_vinculada!.id); if (op) { setSelectedFC(null); setSelectedOP(op); } else { alert("No se encontró la OP. Intente recargar la página."); } }}
-                      className="rounded p-1.5 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Ver OP">
-                      <Eye className="h-4 w-4" />
-                    </button>
                   </div>
+                  <button onClick={() => { const op = ordenesPago.find(o => o.id === selectedFC.op_vinculada!.id); if (op) { setSelectedFC(null); setSelectedOP(op); } else { alert("No se encontró la OP. Intente recargar la página."); } }}
+                    className="rounded p-1 text-zinc-400 hover:bg-blue-100 hover:text-blue-600" title="Ver OP">
+                    <Eye className="h-4 w-4" />
+                  </button>
                 </div>
               )}
 
-              {/* CAE */}
+              {/* CAE y notas en filas finas */}
               {selectedFC.cae && (
-                <div>
-                  <p className="text-xs font-medium text-zinc-500">CAE</p>
-                  <p className="text-sm font-mono text-zinc-600 dark:text-zinc-400 mt-1">{selectedFC.cae}</p>
-                </div>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400"><span className="text-zinc-400">CAE:</span> <span className="font-mono">{selectedFC.cae}</span></p>
               )}
-
-              {/* Notas */}
               {selectedFC.notas && (
-                <div>
-                  <p className="text-xs font-medium text-zinc-500">Notas</p>
-                  <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">{selectedFC.notas}</p>
-                </div>
+                <p className="text-xs text-zinc-600 dark:text-zinc-400"><span className="text-zinc-400">Notas:</span> {selectedFC.notas}</p>
               )}
 
               {/* Archivo adjunto */}
@@ -6844,7 +6933,7 @@ export default function FinanzasPage() {
               <div className="flex flex-wrap gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-700">
                 {!selectedFC.factura_origen_id && (selectedFC.estado === "pendiente" || selectedFC.estado === "recibida") && !selectedFC.op_vinculada && (
                   <button onClick={() => handlePagarFC(selectedFC.id)}
-                    className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
+                    className="flex h-8 items-center gap-1.5 rounded-lg bg-green-600 px-3 text-sm font-medium text-white hover:bg-green-700">
                     <DollarSign className="h-4 w-4" /> Crear OP
                   </button>
                 )}
@@ -6857,19 +6946,19 @@ export default function FinanzasPage() {
                     setSelectedFC({ ...selectedFC, estado: "pendiente" });
                     setFacturasCompra(prev => prev.map(f => f.id === selectedFC.id ? { ...f, estado: "pendiente" } : f));
                   }}
-                    className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700">
+                    className="flex h-8 items-center gap-1.5 rounded-lg bg-green-600 px-3 text-sm font-medium text-white hover:bg-green-700">
                     <CheckCircle2 className="h-4 w-4" /> Aprobar
                   </button>
                 )}
                 {selectedFC.estado === "pendiente" && (
                   <button onClick={() => { handleRecibirFC(selectedFC.id); setSelectedFC(null); }}
-                    className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                    className="flex h-8 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-sm font-medium text-white hover:bg-blue-700">
                     <Package className="h-4 w-4" /> Recibir
                   </button>
                 )}
                 {(selectedFC.estado === "pendiente" || selectedFC.estado === "recibida" || selectedFC.estado === "pendiente_aprobacion") && (
                   <button onClick={async () => { if (await handleAnularFC(selectedFC.id)) setSelectedFC(null); }}
-                    className="flex items-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
+                    className="flex h-8 items-center gap-1.5 rounded-lg border border-red-300 px-3 text-sm font-medium text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">
                     <Ban className="h-4 w-4" /> Anular
                   </button>
                 )}
@@ -7096,11 +7185,39 @@ export default function FinanzasPage() {
             </div>
             {gmError && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400">{gmError}</div>}
             <div className="space-y-4">
+              {/* VEP / comprobante de impuestos: la IA completa la ventana */}
+              <div className="flex flex-wrap items-center gap-2">
+                <label className={`flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-orange-200 bg-orange-50 px-3 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-300 ${gmVepLeyendo ? "pointer-events-none opacity-60" : ""}`}>
+                  {gmVepLeyendo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  {gmVepLeyendo ? "Leyendo…" : "Leer VEP / impuesto (IA)"}
+                  <input type="file" accept="application/pdf,image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) leerVepGM(f); e.target.value = ""; }} />
+                </label>
+                {gmVepInfo && <span className="text-[11px] text-emerald-600 dark:text-emerald-400">{gmVepInfo}</span>}
+              </div>
               <div>
                 <label className="text-xs font-medium text-zinc-500">Descripción *</label>
                 <input value={gmForm.descripcion} onChange={(e) => setGmForm({ ...gmForm, descripcion: e.target.value })}
                   className="mt-1 w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" placeholder="Ej: Flete a Campana" />
               </div>
+              {/* ¿Es el pago de un gasto fijo? (así deja de avisar "falta pagar") */}
+              {gastosFijos.some((g) => g.activo) && (() => {
+                const sugerido = !gmForm.gasto_fijo_id ? sugerirGastoFijo(gmForm.descripcion, gastosFijos) : null;
+                return (
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500">Es el pago del gasto fijo (opcional)</label>
+                    <select value={gmForm.gasto_fijo_id} onChange={(e) => setGmForm({ ...gmForm, gasto_fijo_id: e.target.value, tipo_recurrencia: e.target.value ? "fijo" : gmForm.tipo_recurrencia })}
+                      className="mt-1 h-8 w-full rounded-lg border border-zinc-200 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
+                      <option value="">— No —</option>
+                      {gastosFijos.filter((g) => g.activo || g.id === gmForm.gasto_fijo_id).map((g) => <option key={g.id} value={g.id}>{g.descripcion}</option>)}
+                    </select>
+                    {sugerido && (
+                      <button type="button" onClick={() => setGmForm({ ...gmForm, gasto_fijo_id: sugerido, tipo_recurrencia: "fijo" })} className="mt-1 text-[11px] font-medium text-orange-600 hover:underline">
+                        ✨ ¿Es el pago de "{gastosFijos.find((g) => g.id === sugerido)?.descripcion}"? Usar
+                      </button>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div>
                 <label className="text-xs font-medium text-zinc-500">Fecha</label>

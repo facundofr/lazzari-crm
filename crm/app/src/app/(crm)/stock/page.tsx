@@ -4,7 +4,6 @@ import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { DataTable } from "@/components/ui/data-table";
-import { StatCard } from "@/components/ui/stat-card";
 import { SmartFilters, FilterConfig, FilterValues } from "@/components/ui/smart-filters";
 import { formatCurrency } from "@/lib/utils";
 import { supabase } from "@/lib/supabase/client";
@@ -462,24 +461,25 @@ export default function StockPage() {
         subtitle="Control de inventario y articulos"
         action={{ label: "Nuevo articulo", onClick: openCreate }}
       />
-      <div className="p-3 sm:p-5 space-y-4">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard title="Total articulos" value={String(productos.length)} icon={Package} iconColor="text-blue-600" />
-          <StatCard title="Valor de stock" value={valorStockLabel} icon={Package} iconColor="text-emerald-600" />
-          <StatCard title="Stock bajo" value={String(stockBajo.length)} icon={AlertTriangle} iconColor="text-red-500" />
-          <StatCard title="Categorias" value={String(categorias.length)} icon={Package} iconColor="text-violet-600" />
+      <div className="p-3 sm:p-4 space-y-2.5">
+        {/* Números rápidos en una línea */}
+        <div className="flex flex-wrap gap-1.5 text-xs">
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Total articulos</span> <b className="font-mono">{productos.length}</b></span>
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Valor de stock</span> <b className="font-mono">{valorStockLabel}</b></span>
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Stock bajo</span> <b className={`font-mono ${stockBajo.length > 0 ? "text-red-600" : ""}`}>{stockBajo.length}</b></span>
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Categorias</span> <b className="font-mono">{categorias.length}</b></span>
         </div>
 
         {stockBajo.length > 0 && (
-          <div className="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-950/30">
-            <div className="flex items-center gap-2 mb-3">
+          <div className="rounded-xl border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-950/30">
+            <div className="flex items-center gap-2 mb-2">
               <AlertTriangle className="h-4 w-4 text-red-500" />
               <span className="text-sm font-semibold text-red-700 dark:text-red-400">
                 {stockBajo.length} articulo(s) por debajo del stock minimo
               </span>
             </div>
             {stockBajo.slice(0, 5).map((p) => (
-              <div key={p.id} className="flex items-center justify-between rounded-lg bg-white/60 p-2 text-sm dark:bg-zinc-900/60 mb-1">
+              <div key={p.id} className="flex items-center justify-between rounded-lg bg-white/60 px-2 py-1 text-sm dark:bg-zinc-900/60 mb-1">
                 <span className="font-medium text-zinc-700 dark:text-zinc-300">{p.codigo} -- {p.nombre}</span>
                 <span className="text-red-600 font-mono">{p.stock}/{p.stock_minimo} {p.unidad}</span>
               </div>
@@ -487,7 +487,7 @@ export default function StockPage() {
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <input
@@ -495,7 +495,7 @@ export default function StockPage() {
               placeholder="Buscar por codigo, nombre, marca o proveedor..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="h-10 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+              className="h-8 w-full rounded-lg border border-zinc-200 bg-white pl-9 pr-4 text-sm focus:border-orange-300 focus:outline-none focus:ring-2 focus:ring-orange-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
             />
           </div>
           <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
@@ -510,7 +510,7 @@ export default function StockPage() {
           onChange={setSmartFilterValues}
         />
 
-        <div className="flex gap-6">
+        <div className="flex gap-3">
           <div className={`flex-1 min-w-0 transition-all ${selectedProduct ? "max-w-[calc(100%-400px)]" : ""}`}>
             <Card className="p-0 overflow-hidden">
               <DataTable<ProductRow>
@@ -568,13 +568,13 @@ export default function StockPage() {
           {selectedProduct && (
             <div className="w-[400px] flex-shrink-0">
               <Card className="sticky top-4 p-0 overflow-hidden">
-                <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-700 p-4">
+                <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-700 px-3 py-2">
                   <h3 className="text-sm font-bold text-zinc-900 dark:text-white">Detalle del articulo</h3>
                   <button onClick={() => setSelectedProduct(null)} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800">
                     <X className="h-4 w-4" />
                   </button>
                 </div>
-                <div className="p-4 space-y-4">
+                <div className="p-3 space-y-3">
                   {/* Header info */}
                   <div>
                     <span className="font-mono text-xs text-zinc-400">{selectedProduct.codigo}</span>
@@ -599,24 +599,24 @@ export default function StockPage() {
 
                   {/* Details grid */}
                   <div className="grid grid-cols-2 gap-3 text-sm">
-                    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
+                    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-2">
                       <span className="text-xs text-zinc-500 block">Precio costo</span>
                       <span className="font-mono font-bold text-zinc-900 dark:text-white">
                         {formatCurrency(Number(selectedProduct.precio_costo), selectedProduct.moneda_costo as "ARS" | "USD")}
                       </span>
                     </div>
-                    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
+                    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-2">
                       <span className="text-xs text-zinc-500 block">IVA</span>
                       <span className="font-mono font-bold text-zinc-900 dark:text-white">{selectedProduct.iva}%</span>
                     </div>
-                    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
+                    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-2">
                       <span className="text-xs text-zinc-500 block">Stock actual</span>
                       <span className={`font-mono font-bold ${selectedProduct.stock < selectedProduct.stock_minimo ? "text-red-600" : "text-zinc-900 dark:text-white"}`}>
                         {selectedProduct.stock}
                       </span>
                       <span className="text-zinc-400 text-xs ml-1">{selectedProduct.unidad}</span>
                     </div>
-                    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-3">
+                    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-800/50 p-2">
                       <span className="text-xs text-zinc-500 block">Stock minimo</span>
                       <span className="font-mono font-bold text-zinc-900 dark:text-white">{selectedProduct.stock_minimo}</span>
                       <span className="text-zinc-400 text-xs ml-1">{selectedProduct.unidad}</span>

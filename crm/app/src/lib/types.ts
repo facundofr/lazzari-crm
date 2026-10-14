@@ -551,6 +551,12 @@ export interface GastoFijo {
   activo: boolean;
   notas: string;
   createdAt: string;
+  /** Proveedor que factura este gasto (ej. el contador): avisa si falta la factura del mes. */
+  proveedorId?: string | null;
+  /** Día del mes en que vence (para el aviso de pago). */
+  diaVencimiento?: number | null;
+  /** Monto automático: "sicore" = retenciones de Ganancias del mes anterior. */
+  calculo?: "sicore" | null;
 }
 
 // ── Objetivos ───────────────────────────────────────────────────

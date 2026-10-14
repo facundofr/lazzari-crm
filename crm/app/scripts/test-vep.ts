@@ -1,0 +1,13 @@
+import { normalizarVep, montoVep, descripcionVep } from "../src/lib/vep";
+const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } console.log("ok", m); };
+ok(montoVep("1.234.567,89") === 1234567.89, "monto con puntos y coma");
+ok(montoVep("1,234,567.89") === 1234567.89, "monto en formato inglés");
+ok(montoVep("$ 950,5") === 950.5, "monto con coma decimal");
+ok(montoVep(1616059.2) === 1616059.2, "monto número");
+ok(montoVep(null) === 0, "sin monto = 0");
+const d = normalizarVep({ concepto: "IVA", detalle: "IVA - DDJJ - período 09/2026", periodo: "2026-09", monto: "1.616.059,20", vencimiento: "2026-10-20", numero: "123456", cuit: "20-37930912-8", fecha_pago: "20/10/2026" });
+ok(d.monto === 1616059.2 && d.periodo === "2026-09" && d.vencimiento === "2026-10-20", "normaliza VEP de IVA");
+ok(d.cuit === "20379309128", "CUIT solo números");
+ok(d.fecha_pago === null, "fecha en otro formato se descarta");
+ok(descripcionVep(d) === "IVA - DDJJ - período 09/2026 (VEP 123456)", "descripción con número de VEP");
+ok(normalizarVep({}).concepto === "Impuesto" && normalizarVep({}).periodo === null, "vacío no rompe");

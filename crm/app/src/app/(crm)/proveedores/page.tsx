@@ -30,6 +30,8 @@ import { WhatsAppInput } from "@/components/ui/whatsapp-input";
 import { textoCondicionPago, type PlanPago } from "@/lib/condicion-pago";
 import { ProveedorFormModal, CONCEPTOS_RG830, TAG_COLORS, type ProveedorForm } from "@/components/proveedor-form-modal";
 import { EliminarConMotivoModal } from "@/components/eliminar-con-motivo";
+import { ListaCostosTab } from "@/components/lista-costos/lista-costos-tab";
+import { ReglasProveedorFicha } from "@/components/lista-costos/reglas-proveedor-ficha";
 
 function ClasificacionTag({ tag }: { tag: string }) {
   const color = TAG_COLORS[tag] ?? "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300";
@@ -163,7 +165,7 @@ export default function ProveedoresPage() {
   // Todos (menos solo lectura) ven, crean, editan y eliminan proveedores; eliminar pide motivo y queda guardado.
   const canManageProveedores = role === "super_admin" || role === "admin" || role === "administrativo" || role === "vendedor";
   const canDeleteProveedores = canManageProveedores;
-  const [tab, setTab] = useState<"proveedores" | "listas">("proveedores");
+  const [tab, setTab] = useState<"proveedores" | "costos" | "listas">("proveedores");
   const [search, setSearch] = useState("");
   const [filtroRapido, setFiltroRapido] = useState<FiltroRapido>("todos");
   const [orden, setOrden] = useState<{ col: "proveedor" | "saldo" | "ultima"; dir: "asc" | "desc" }>({ col: "proveedor", dir: "asc" });
@@ -191,6 +193,7 @@ export default function ProveedoresPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const crearNombre = params.get("crear");
+    if (params.get("tab") === "costos") setTab("costos");
     if (params.has("crear")) {
       setEditingId(null);
       setModalInicial({ razon_social: crearNombre || "", es_transportista: params.get("tipo") === "transportista" });
@@ -716,18 +719,21 @@ export default function ProveedoresPage() {
       <Header
         title="Proveedores"
         subtitle={`${proveedores.length} proveedores — ${listas.length} listas de precios`}
-        action={{ label: tab === "proveedores" ? "Nuevo proveedor" : "Cargar lista con IA", onClick: tab === "proveedores" ? openCreate : openAiUpload }}
+        action={tab === "costos" ? undefined : { label: tab === "proveedores" ? "Nuevo proveedor" : "Cargar lista con IA", onClick: tab === "proveedores" ? openCreate : openAiUpload }}
       />
       <div className="p-3 sm:p-4 space-y-3">
         {/* Tabs */}
         <div className="flex gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800 w-fit">
-          {(["proveedores", "listas"] as const).map((t) => (
+          {(["proveedores", "costos", "listas"] as const).map((t) => (
             <button key={t} onClick={() => { setTab(t); setSearch(""); }}
               className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${tab === t ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700"}`}>
-              {t === "proveedores" ? "Proveedores" : "Listas de precios"}
+              {t === "proveedores" ? "Proveedores" : t === "costos" ? "Lista de costos" : "Listas de precios"}
             </button>
           ))}
         </div>
+
+        {/* -- TAB: Lista de costos (catalogo_costos, con fotos y reglas) -- */}
+        {tab === "costos" && <ListaCostosTab />}
 
         {/* -- TAB: Proveedores -- */}
         {tab === "proveedores" && (
@@ -1047,6 +1053,7 @@ export default function ProveedoresPage() {
                   </div>
                 </div>
               )}
+              <ReglasProveedorFicha proveedorId={selectedProv.id} nombres={[(selectedProv as any).nombreFantasia, selectedProv.razonSocial].filter(Boolean) as string[]} />
               <div className="border-t border-zinc-200 pt-4 dark:border-zinc-700">
                 <div className="flex items-center justify-between mb-3"><div><h3 className="text-sm font-semibold">Vendedores</h3><p className="text-[11px] text-zinc-400">A ellos se les mandan las OC. Administración va arriba, en los datos del proveedor.</p></div><button type="button" onClick={() => startProveedorContacto()} className="rounded-lg bg-orange-500 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-orange-600">Agregar vendedor</button></div>
                 {editingProveedorContacto && <div className="mb-3 rounded-lg border border-orange-200 bg-orange-50/50 p-3 space-y-2 dark:border-orange-900/40 dark:bg-orange-900/10">

@@ -3,7 +3,6 @@
 import { Header } from "@/components/layout/header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { StatCard } from "@/components/ui/stat-card";
 import { supabase } from "@/lib/supabase/client";
 import {
   Calendar as CalendarIcon,
@@ -12,8 +11,6 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
-  Clock,
-  MapPin,
   Eye,
   Lock,
   Users,
@@ -533,35 +530,20 @@ export default function CalendarioPage() {
         subtitle="Agenda de eventos y seguimientos"
         action={{ label: "Nuevo evento", onClick: () => openCreateModal() }}
       />
-      <div className="p-3 sm:p-5 space-y-4">
-        {/* ── Stats ───────────────────────────────────────────────── */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <StatCard
-            title="Eventos este mes"
-            value={String(stats.total)}
-            icon={CalendarIcon}
-            iconColor="text-blue-600"
-          />
-          <StatCard
-            title="Visitas pendientes"
-            value={String(stats.visitasPendientes)}
-            icon={MapPin}
-            iconColor="text-orange-500"
-          />
-          <StatCard
-            title="Seguimientos pendientes"
-            value={String(stats.seguimientosPendientes)}
-            icon={Clock}
-            iconColor="text-violet-600"
-          />
+      <div className="p-3 sm:p-4 space-y-2.5">
+        {/* Números rápidos en una línea */}
+        <div className="flex flex-wrap gap-1.5 text-xs">
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Eventos este mes</span> <b className="font-mono">{stats.total}</b></span>
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Visitas pendientes</span> <b className="font-mono">{stats.visitasPendientes}</b></span>
+          <span className="rounded-lg border border-zinc-200 bg-white px-2.5 py-1 dark:border-zinc-800 dark:bg-zinc-900"><span className="text-zinc-500">Seguimientos pendientes</span> <b className="font-mono">{stats.seguimientosPendientes}</b></span>
         </div>
 
         {/* ── Filters ─────────────────────────────────────────────── */}
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <select
             value={filterTipo}
             onChange={(e) => setFilterTipo(e.target.value)}
-            className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+            className="h-8 rounded-lg border border-zinc-300 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
           >
             <option value="">Todos los tipos</option>
             {Object.entries(tipoConfig).map(([key, cfg]) => (
@@ -571,7 +553,7 @@ export default function CalendarioPage() {
           <select
             value={filterUserId}
             onChange={(e) => setFilterUserId(e.target.value)}
-            className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+            className="h-8 rounded-lg border border-zinc-300 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
           >
             <option value="">Todos los usuarios</option>
             {users.map((u) => (
@@ -581,7 +563,7 @@ export default function CalendarioPage() {
           <select
             value={filterVisibilidad}
             onChange={(e) => setFilterVisibilidad(e.target.value)}
-            className="rounded-lg border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
+            className="h-8 rounded-lg border border-zinc-300 px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white"
           >
             <option value="">Públicos y privados</option>
             <option value="publico">Públicos</option>
@@ -592,11 +574,11 @@ export default function CalendarioPage() {
         {/* ── Calendar ────────────────────────────────────────────── */}
         <Card className="p-0 overflow-hidden">
           {/* Month header */}
-          <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-zinc-200 dark:border-zinc-700">
+          <div className="flex items-center justify-between px-3 sm:px-4 py-1.5 border-b border-zinc-200 dark:border-zinc-700">
             <div className="flex items-center gap-3">
               <button
                 onClick={goToPrevMonth}
-                className="rounded-lg p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                className="rounded-lg p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
               >
                 <ChevronLeft className="h-5 w-5 text-zinc-600 dark:text-zinc-400" />
               </button>
@@ -605,7 +587,7 @@ export default function CalendarioPage() {
               </h2>
               <button
                 onClick={goToNextMonth}
-                className="rounded-lg p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                className="rounded-lg p-1 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
               >
                 <ChevronRight className="h-5 w-5 text-zinc-600 dark:text-zinc-400" />
               </button>
@@ -623,7 +605,7 @@ export default function CalendarioPage() {
             {DAY_NAMES.map((name) => (
               <div
                 key={name}
-                className="px-1 sm:px-2 py-2 text-center text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase"
+                className="px-1 sm:px-2 py-1 text-center text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase"
               >
                 {name}
               </div>
@@ -642,7 +624,7 @@ export default function CalendarioPage() {
                   key={idx}
                   onClick={() => { setSelectedDate(cell.dateKey); openCreateModal(cell.dateKey); }}
                   className={`
-                    relative min-h-[80px] sm:min-h-[100px] p-1 sm:p-2 border-b border-r border-zinc-100 dark:border-zinc-800 text-left transition-colors
+                    relative min-h-[68px] sm:min-h-[88px] p-1 sm:p-1.5 border-b border-r border-zinc-100 dark:border-zinc-800 text-left transition-colors
                     ${!cell.isCurrentMonth ? "bg-zinc-50 dark:bg-zinc-950/50" : "bg-white dark:bg-zinc-900"}
                     ${isSelected ? "ring-2 ring-inset ring-orange-500" : ""}
                     hover:bg-zinc-50 dark:hover:bg-zinc-800/50
@@ -696,8 +678,8 @@ export default function CalendarioPage() {
 
         {/* ── Upcoming & Overdue ──────────────────────────────────── */}
         {upcomingAndOverdue.length > 0 && (
-          <Card className="p-4 sm:p-6">
-            <h3 className="text-base font-semibold text-zinc-900 dark:text-white mb-3 flex items-center gap-2">
+          <Card className="p-3">
+            <h3 className="text-base font-semibold text-zinc-900 dark:text-white mb-2 flex items-center gap-2">
               <CalendarIcon className="h-4 w-4 text-orange-500" />
               Próximos 14 días y vencidos
               <span className="ml-1 rounded-full bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-xs text-zinc-500">{upcomingAndOverdue.length}</span>
@@ -713,7 +695,7 @@ export default function CalendarioPage() {
                   <div
                     key={ev.id}
                     onClick={() => setDetailEvento(ev)}
-                    className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 cursor-pointer transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50 ${
+                    className={`flex items-center gap-3 rounded-lg border px-3 py-1.5 cursor-pointer transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50 ${
                       ev.isOverdue
                         ? "border-red-200 dark:border-red-900/40 bg-red-50/50 dark:bg-red-950/10"
                         : "border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900"
@@ -749,8 +731,8 @@ export default function CalendarioPage() {
 
         {/* ── Selected Date Events List ───────────────────────────── */}
         {selectedDate && (
-          <Card className="p-4 sm:p-6">
-            <div className="flex items-center justify-between mb-4">
+          <Card className="p-3">
+            <div className="flex items-center justify-between mb-2">
               <h3 className="text-base font-semibold text-zinc-900 dark:text-white">
                 {formatDate(selectedDate + "T12:00:00")} — {selectedDateEvents.length} evento{selectedDateEvents.length !== 1 ? "s" : ""}
               </h3>
@@ -773,7 +755,7 @@ export default function CalendarioPage() {
             {selectedDateEvents.length === 0 ? (
               <p className="text-sm text-zinc-400 py-4 text-center">No hay eventos para este dia.</p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 {selectedDateEvents.map((ev) => {
                   const cfg = tipoConfig[ev.tipo] || tipoConfig.otro;
                   return (
@@ -781,7 +763,7 @@ export default function CalendarioPage() {
                       key={ev.id}
                       onClick={() => setDetailEvento(ev)}
                       className={`
-                        flex items-center gap-3 rounded-lg border border-zinc-200 dark:border-zinc-700 p-3 cursor-pointer
+                        flex items-center gap-3 rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 cursor-pointer
                         hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors
                         ${ev.completado ? "opacity-60" : ""}
                       `}

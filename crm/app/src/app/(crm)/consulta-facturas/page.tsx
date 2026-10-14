@@ -231,21 +231,21 @@ export default function ConsultaFacturasPage() {
   return (
     <>
       <Header title="Facturas" subtitle="Consulta de facturas de venta y de compra (solo lectura)" />
-      <div className="space-y-4 p-3 sm:p-5">
+      <div className="space-y-2.5 p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex rounded-lg border border-zinc-200 p-0.5 dark:border-zinc-700">
             {(["venta", "compra"] as const).map((t) => (
               <button key={t} type="button" onClick={() => setTab(t)}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium ${tab === t ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>
+                className={`rounded-md px-3 py-1 text-sm font-medium ${tab === t ? "bg-zinc-900 text-white dark:bg-white dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>
                 {t === "venta" ? `De venta (${ventas.length})` : `De compra (${compras.length})`}
               </button>
             ))}
           </div>
           <div className="relative min-w-[220px] flex-1">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-zinc-400" />
+            <Search className="absolute left-2.5 top-2 h-4 w-4 text-zinc-400" />
             <input value={buscar} onChange={(e) => setBuscar(e.target.value)}
               placeholder={tab === "venta" ? "Buscar por cliente, CUIT, número, PR u OC del cliente" : "Buscar por proveedor, CUIT, número u OC"}
-              className="w-full rounded-lg border border-zinc-200 py-2 pl-8 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
+              className="h-8 w-full rounded-lg border border-zinc-200 py-1 pl-8 pr-3 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
           </div>
         </div>
 
