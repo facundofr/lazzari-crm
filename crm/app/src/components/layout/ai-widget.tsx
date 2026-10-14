@@ -1,217 +1,282 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { Sparkles, X, Send, Minimize2, Loader2 } from "lucide-react";
+// Ayuda del CRM (botón flotante). Primero la guía, gratis y sin IA: lo de la pantalla donde estás + buscador.
+// Si no alcanza, "Preguntarle a la IA" (solo consulta, con los permisos del usuario y tope mensual: /api/ai).
+
+import { useState, useRef, useEffect, useMemo, type ReactNode } from "react";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { LifeBuoy, X, Send, Loader2, Search, ArrowRight, Sparkles, ChevronDown, ChevronUp, ArrowLeft } from "lucide-react";
 import { useUser } from "@/lib/auth-context";
+import { supabase } from "@/lib/supabase/client";
+import { buscarEnGuia, seccionesDePantalla, seccionesParaRol, rolPuedeVer, type SeccionGuia } from "@/lib/ayuda-busqueda";
+import { FINANZAS_GRUPOS } from "@/lib/finanzas-grupos";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
 }
 
-const QUICK_ACTIONS = [
-  { label: "Resumen del dia", prompt: "Dame un resumen de la actividad de hoy: presupuestos nuevos, facturas, movimientos." },
-  { label: "Stock bajo", prompt: "Mostrá los productos con stock por debajo del mínimo." },
-  { label: "Clientes sin actividad", prompt: "¿Qué clientes activos no tienen presupuestos ni facturas en los últimos 90 días?" },
-  { label: "Top facturado", prompt: "¿Cuáles son los 5 clientes que más facturamos este año?" },
-];
+/** Negrita (**texto**) y renglones, sin librerías. */
+function TextoGuia({ texto }: { texto: string }) {
+  return (
+    <div className="space-y-1 text-xs leading-relaxed text-zinc-700 dark:text-zinc-300">
+      {texto.replace(/ (\d\)) /g, "\n$1 ").replace(/ (\*\*Ojo:\*\*|Ojo:)/g, "\n$1").split("\n").filter((l) => l.trim()).map((l, i) => (
+        <p key={i}>{l.split(/(\*\*[^*]+\*\*)/g).map((p, j): ReactNode => (/^\*\*[^*]+\*\*$/.test(p) ? <strong key={j}>{p.slice(2, -2)}</strong> : p))}</p>
+      ))}
+    </div>
+  );
+}
+
+function TarjetaSeccion({ s, extracto, abierta: abiertaInicial = false, onIr }: { s: SeccionGuia; extracto?: string; abierta?: boolean; onIr: () => void }) {
+  const [abierta, setAbierta] = useState(abiertaInicial);
+  return (
+    <div className="rounded-lg border border-zinc-200 p-2.5 dark:border-zinc-700">
+      <div className="flex items-start gap-2">
+        <button onClick={() => setAbierta((a) => !a)} className="min-w-0 flex-1 text-left">
+          <p className="text-[10px] uppercase tracking-wide text-zinc-400">{s.grupo}</p>
+          <p className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">{s.titulo}</p>
+          {!abierta && extracto && <p className="mt-0.5 line-clamp-2 text-xs text-zinc-500">{extracto}</p>}
+        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {s.ruta && (
+            <Link href={s.ruta} onClick={onIr} title="Ir a la pantalla"
+              className="flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-xs font-medium text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950/30">
+              Ir <ArrowRight className="h-3 w-3" />
+            </Link>
+          )}
+          <button onClick={() => setAbierta((a) => !a)} className="rounded p-0.5 text-zinc-400 hover:text-zinc-600" title={abierta ? "Cerrar" : "Ver todo"}>
+            {abierta ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          </button>
+        </div>
+      </div>
+      {abierta && <div className="mt-2"><TextoGuia texto={s.texto} /></div>}
+    </div>
+  );
+}
+
+/** Nombre visible de la pestaña de Finanzas abierta (de ?tab= o de la última usada). */
+function pestanaFinanzas(): string | null {
+  if (typeof window === "undefined") return null;
+  let tab = new URLSearchParams(window.location.search).get("tab");
+  if (!tab) {
+    try { tab = (JSON.parse(window.localStorage.getItem("finanzas.ultimaPestana") || "null") || {}).tab || null; } catch { tab = null; }
+  }
+  for (const g of FINANZAS_GRUPOS) for (const t of g.tabs) if (t.id === tab) return t.label;
+  return null;
+}
 
 export function AIWidget() {
-  const { profile, role } = useUser();
+  const { profile, role, sociedadActiva } = useUser();
+  const pathname = usePathname() || "/";
   const [open, setOpen] = useState(false);
+  const [busqueda, setBusqueda] = useState("");
+  const [modoIA, setModoIA] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [gasto, setGasto] = useState<{ gastoMes: number; topeMes: number } | null>(null);
+  const [dato, setDato] = useState<{ titulo: string; lineas: string[] } | null>(null);
+  const [cargandoDato, setCargandoDato] = useState(false);
+  const [pestana, setPestana] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const misSecciones = useMemo(() => seccionesParaRol(role), [role]);
+  const deEstaPantalla = useMemo(() => seccionesDePantalla(pathname, misSecciones, pestana), [pathname, misSecciones, pestana]);
+  const resultados = useMemo(() => (busqueda.trim() ? buscarEnGuia(busqueda, misSecciones, 5) : []), [busqueda, misSecciones]);
+
+  useEffect(() => {
+    if (open) setPestana(pathname.startsWith("/finanzas") ? pestanaFinanzas() : null);
+  }, [open, pathname]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  async function sendMessage(content: string) {
+  async function preguntarIA(content: string) {
     if (!content.trim() || loading) return;
-
     const userMessage: Message = { role: "user", content: content.trim() };
     const newMessages = [...messages, userMessage];
+    setModoIA(true);
     setMessages(newMessages);
     setInput("");
     setLoading(true);
     setError("");
-
     try {
+      const pantalla = [deEstaPantalla[0]?.titulo, pathname].filter(Boolean).join(" — ");
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: newMessages,
-          userRole: role,
-          userName: profile?.full_name || profile?.email || "Usuario",
-        }),
+        body: JSON.stringify({ messages: newMessages, pantalla, sociedadId: sociedadActiva?.id }),
       });
-
       const data = await res.json();
-
       if (!res.ok) {
-        setError(data.error || "Error al comunicarse con la IA");
+        setError(data.error || "No se pudo consultar a la IA");
         return;
       }
-
+      if (typeof data.gastoMes === "number") setGasto({ gastoMes: data.gastoMes, topeMes: data.topeMes });
       setMessages([...newMessages, { role: "assistant", content: data.response }]);
     } catch {
-      setError("Error de conexión. Verificá que la API esté configurada.");
+      setError("Error de conexión.");
     } finally {
       setLoading(false);
     }
   }
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    sendMessage(input);
+  // Atajos de datos SIN IA: consultas fijas con la sesión del usuario (ve solo lo que puede ver).
+  async function resumenDelDia() {
+    if (!sociedadActiva?.id) return;
+    setCargandoDato(true);
+    const hoy = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+    const db = supabase as any;
+    const contar = async (tabla: string, campo: string) => {
+      const { count } = await db.from(tabla).select("id", { count: "exact", head: true }).eq("sociedad_id", sociedadActiva.id).gte(campo, hoy);
+      return count || 0;
+    };
+    const lineas: string[] = [];
+    if (rolPuedeVer(role, "presupuestos")) lineas.push(`Presupuestos nuevos hoy: ${await contar("presupuestos", "created_at")}`);
+    if (rolPuedeVer(role, "consulta_facturas")) lineas.push(`Facturas de venta de hoy: ${await contar("facturas", "fecha")}`);
+    if (rolPuedeVer(role, "ordenes_compra")) lineas.push(`OC nuevas hoy: ${await contar("ordenes_compra", "created_at")}`);
+    if (rolPuedeVer(role, "finanzas")) lineas.push(`Movimientos de plata de hoy: ${await contar("movimientos", "fecha")}`);
+    setDato({ titulo: `Resumen de hoy (${sociedadActiva.nombre})`, lineas });
+    setCargandoDato(false);
   }
 
-  function clearChat() {
-    setMessages([]);
-    setError("");
+  async function stockBajo() {
+    if (!sociedadActiva?.id) return;
+    setCargandoDato(true);
+    const { data } = await (supabase as any).from("productos").select("codigo, nombre, stock, stock_minimo")
+      .eq("sociedad_id", sociedadActiva.id).eq("activo", true).gt("stock_minimo", 0).limit(1000);
+    const bajos = ((data as { codigo: string; nombre: string; stock: number; stock_minimo: number }[]) || [])
+      .filter((p) => Number(p.stock) < Number(p.stock_minimo))
+      .sort((a, b) => (Number(a.stock) - Number(a.stock_minimo)) - (Number(b.stock) - Number(b.stock_minimo)));
+    setDato({
+      titulo: `Stock bajo el mínimo (${bajos.length})`,
+      lineas: bajos.length ? bajos.slice(0, 12).map((p) => `${p.codigo} · ${p.nombre}: ${p.stock} (mín. ${p.stock_minimo})`) : ["Nada por debajo del mínimo."],
+    });
+    setCargandoDato(false);
   }
+
+  const cerrarYReset = () => setOpen(false);
 
   if (!open) {
     return (
       <button
         onClick={() => setOpen(true)}
         className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-violet-600 to-violet-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all"
-        title="Asistente IA"
+        title="Ayuda"
       >
-        <Sparkles className="h-6 w-6" />
+        <LifeBuoy className="h-6 w-6" />
       </button>
     );
   }
 
+  const atajo = "whitespace-nowrap rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-300";
+
   return (
-    <div className="fixed bottom-6 right-6 z-50 w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900 flex flex-col max-h-[600px]">
+    <div className="fixed bottom-6 right-6 z-50 w-[420px] max-w-[calc(100vw-2rem)] rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-700 dark:bg-zinc-900 flex flex-col max-h-[640px]">
       {/* Header */}
-      <div className="flex items-center justify-between rounded-t-2xl bg-gradient-to-r from-violet-600 to-violet-500 px-4 py-3 shrink-0">
+      <div className="flex items-center justify-between rounded-t-2xl bg-gradient-to-r from-violet-600 to-violet-500 px-4 py-2.5 shrink-0">
         <div className="flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-white" />
-          <span className="font-semibold text-white">Asistente Lazzari</span>
-          <span className="rounded-full bg-white/20 px-2 py-0.5 text-[10px] font-medium text-white">DB</span>
+          {modoIA ? (
+            <button onClick={() => setModoIA(false)} className="rounded p-0.5 text-white/80 hover:bg-white/20" title="Volver a la Ayuda"><ArrowLeft className="h-4 w-4" /></button>
+          ) : <LifeBuoy className="h-5 w-5 text-white" />}
+          <span className="font-semibold text-white">{modoIA ? "Preguntarle a la IA" : "Ayuda"}</span>
         </div>
-        <div className="flex items-center gap-1">
-          {messages.length > 0 && (
-            <button onClick={clearChat} className="rounded-md px-2 py-1 text-[10px] text-white/70 hover:bg-white/20 hover:text-white">
-              Limpiar
-            </button>
+        <button onClick={cerrarYReset} className="rounded-md p-1 text-white/70 hover:bg-white/20 hover:text-white"><X className="h-4 w-4" /></button>
+      </div>
+
+      {!modoIA ? (
+        <div className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
+          {/* Buscador de la guía (gratis) */}
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-zinc-400" />
+            <input autoFocus value={busqueda} onChange={(e) => setBusqueda(e.target.value)}
+              placeholder="¿Qué necesitás hacer? (ej. cargar una NC)"
+              className="w-full rounded-lg border border-zinc-200 bg-zinc-50 py-2 pl-8 pr-3 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100" />
+          </div>
+
+          {busqueda.trim() ? (
+            <div className="space-y-2">
+              {resultados.length === 0 && <p className="text-xs text-zinc-500">No encontré eso en la guía. Probá con otras palabras o preguntale a la IA.</p>}
+              {resultados.map((r) => <TarjetaSeccion key={r.seccion.id} s={r.seccion} extracto={r.extracto} onIr={cerrarYReset} />)}
+            </div>
+          ) : (
+            <>
+              {deEstaPantalla.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">En esta pantalla</p>
+                  {deEstaPantalla.slice(0, 3).map((s, i) => <TarjetaSeccion key={s.id} s={s} abierta={i === 0 && deEstaPantalla.length <= 2} onIr={cerrarYReset} />)}
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Atajos</p>
+                <div className="flex flex-wrap gap-1.5">
+                  <button onClick={resumenDelDia} className={atajo}>Resumen de hoy</button>
+                  {rolPuedeVer(role, "stock") && <button onClick={stockBajo} className={atajo}>Stock bajo</button>}
+                  <Link href="/pendientes" onClick={cerrarYReset} className={atajo}>Mis pendientes</Link>
+                  {rolPuedeVer(role, "clientes") && <Link href="/oportunidades" onClick={cerrarYReset} className={atajo}>Clientes dormidos</Link>}
+                  {rolPuedeVer(role, "reportes") && <Link href="/reportes" onClick={cerrarYReset} className={atajo}>Top facturado</Link>}
+                </div>
+                {cargandoDato && <Loader2 className="h-4 w-4 animate-spin text-violet-500" />}
+                {dato && !cargandoDato && (
+                  <div className="rounded-lg bg-zinc-50 p-2.5 dark:bg-zinc-800">
+                    <p className="text-xs font-semibold text-zinc-700 dark:text-zinc-200">{dato.titulo}</p>
+                    <ul className="mt-1 space-y-0.5 text-xs text-zinc-600 dark:text-zinc-400">{dato.lineas.map((l, i) => <li key={i}>• {l}</li>)}</ul>
+                  </div>
+                )}
+              </div>
+            </>
           )}
-          <button onClick={() => setOpen(false)} className="rounded-md p-1 text-white/70 hover:bg-white/20 hover:text-white">
-            <Minimize2 className="h-4 w-4" />
-          </button>
-          <button onClick={() => setOpen(false)} className="rounded-md p-1 text-white/70 hover:bg-white/20 hover:text-white">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
-        {messages.length === 0 && (
-          <div className="flex gap-2">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-600">
-              <Sparkles className="h-3.5 w-3.5" />
-            </div>
-            <div className="rounded-lg bg-zinc-100 p-3 dark:bg-zinc-800 max-w-[320px]">
-              <p className="text-sm text-zinc-700 dark:text-zinc-300">
-                Hola{profile?.full_name ? ` ${profile.full_name.split(" ")[0]}` : ""}! Tengo acceso a la base de datos del CRM. Puedo:
-              </p>
-              <ul className="mt-2 space-y-1 text-xs text-zinc-500 dark:text-zinc-400">
-                <li>- Consultar clientes, presupuestos, facturas, stock</li>
-                <li>- Crear y modificar registros</li>
-                <li>- Analizar datos y generar reportes</li>
-                <li>- Buscar información cruzada</li>
-              </ul>
-              <p className="mt-2 text-[10px] text-zinc-400">
-                Rol: {role} — los permisos de escritura dependen de tu rol.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {messages.map((msg, i) => (
-          <div key={i} className={`flex gap-2 ${msg.role === "user" ? "justify-end" : ""}`}>
-            {msg.role === "assistant" && (
-              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-600">
-                <Sparkles className="h-3.5 w-3.5" />
-              </div>
-            )}
-            <div
-              className={`rounded-lg p-3 max-w-[320px] text-sm whitespace-pre-wrap ${
-                msg.role === "user"
-                  ? "bg-violet-600 text-white"
-                  : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-              }`}
-            >
-              {msg.content}
-            </div>
-          </div>
-        ))}
-
-        {loading && (
-          <div className="flex gap-2">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-600">
-              <Sparkles className="h-3.5 w-3.5" />
-            </div>
-            <div className="rounded-lg bg-zinc-100 p-3 dark:bg-zinc-800">
-              <div className="flex items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
-                <span className="text-xs text-zinc-500">Consultando datos...</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-600 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400">
-            {error}
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Quick actions */}
-      {messages.length === 0 && (
-        <div className="flex gap-2 overflow-x-auto px-4 pb-2 shrink-0">
-          {QUICK_ACTIONS.map((action) => (
-            <button
-              key={action.label}
-              onClick={() => sendMessage(action.prompt)}
-              className="whitespace-nowrap rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-400"
-            >
-              {action.label}
+          {/* IA: solo si la guía no alcanza */}
+          <div className="border-t border-zinc-100 pt-2 dark:border-zinc-800">
+            <button onClick={() => (busqueda.trim() ? preguntarIA(busqueda) : setModoIA(true))}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-violet-300 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30">
+              <Sparkles className="h-3.5 w-3.5" /> ¿No alcanza? Preguntarle a la IA{busqueda.trim() ? " esto" : ""}
             </button>
-          ))}
+            <p className="mt-1 text-center text-[10px] text-zinc-400">La IA solo consulta (no carga nada) y ve lo mismo que vos. Tiene un tope de gasto por mes.</p>
+          </div>
         </div>
+      ) : (
+        <>
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+            {messages.length === 0 && (
+              <p className="text-sm text-zinc-600 dark:text-zinc-300">
+                Hola{profile?.full_name ? ` ${profile.full_name.split(" ")[0]}` : ""}. Preguntame cómo se hace algo o pedime un dato (ej. &quot;¿cuánto nos debe Del Sol?&quot;). Solo consulto: no cargo ni cambio nada.
+              </p>
+            )}
+            {messages.map((msg, i) => (
+              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : ""}`}>
+                <div className={`rounded-lg p-3 max-w-[340px] text-sm whitespace-pre-wrap ${msg.role === "user" ? "bg-violet-600 text-white" : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+                  {msg.role === "assistant" ? <TextoGuia texto={msg.content} /> : msg.content}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div className="flex items-center gap-2 text-xs text-zinc-500"><Loader2 className="h-4 w-4 animate-spin text-violet-500" /> Pensando…</div>
+            )}
+            {error && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-600 dark:border-red-800 dark:bg-red-950/30 dark:text-red-400">{error}</div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+          <div className="border-t border-zinc-200 p-3 dark:border-zinc-700 shrink-0">
+            <form onSubmit={(e) => { e.preventDefault(); preguntarIA(input); }} className="flex items-center gap-2">
+              <input type="text" placeholder="Preguntá algo..." value={input} onChange={(e) => setInput(e.target.value)} disabled={loading}
+                className="flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100 dark:border-zinc-700 dark:bg-zinc-800 disabled:opacity-50" />
+              <button type="submit" disabled={loading || !input.trim()} className="rounded-lg bg-violet-600 p-2 text-white hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                <Send className="h-4 w-4" />
+              </button>
+            </form>
+            <div className="mt-1 flex justify-between text-[10px] text-zinc-400">
+              {messages.length > 0 ? <button onClick={() => { setMessages([]); setError(""); }} className="hover:underline">Limpiar</button> : <span />}
+              {gasto && <span>IA este mes: US$ {gasto.gastoMes.toFixed(2)} de {gasto.topeMes}</span>}
+            </div>
+          </div>
+        </>
       )}
-
-      {/* Input */}
-      <div className="border-t border-zinc-200 p-3 dark:border-zinc-700 shrink-0">
-        <form onSubmit={handleSubmit} className="flex items-center gap-2">
-          <input
-            type="text"
-            placeholder="Preguntá o pedí algo..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            disabled={loading}
-            className="flex-1 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:border-violet-300 focus:outline-none focus:ring-2 focus:ring-violet-100 dark:border-zinc-700 dark:bg-zinc-800 disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={loading || !input.trim()}
-            className="rounded-lg bg-violet-600 p-2 text-white hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Send className="h-4 w-4" />
-          </button>
-        </form>
-      </div>
     </div>
   );
 }

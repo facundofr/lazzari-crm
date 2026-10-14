@@ -309,6 +309,8 @@ export default function CuentasFinancieras({ onIrACheques, resumen }: {
             Próximo rescate: <b>{diaCorto(proximoRescate.rescatarEl)}</b>, {formatCurrency(proximoRescate.monto)} para los débitos del {proximoRescate.fechas.map(diaCorto).join(", ")}.
           </p>
         )}
+        <details className="mt-2">
+        <summary className="cursor-pointer text-xs font-medium text-violet-700 hover:underline dark:text-violet-300">Ver semana por semana</summary>
         <div className="mt-2 overflow-x-auto">
           <table className="w-full text-xs">
             <tbody>
@@ -338,6 +340,7 @@ export default function CuentasFinancieras({ onIrACheques, resumen }: {
             </tbody>
           </table>
         </div>
+        </details>
         {sinARS.cantidad > 0 && (
           <p className="mt-1.5 text-xs text-zinc-500">Ojo: hasta que se cargue el extracto del día, el saldo de los bancos es el del sistema y la sugerencia puede no coincidir con el banco.</p>
         )}
@@ -350,7 +353,7 @@ export default function CuentasFinancieras({ onIrACheques, resumen }: {
             <b>{sinARS.cantidad + sinUSD.cantidad} cobros y pagos desde el corte todavía no tienen cuenta</b>
             {sinARS.cantidad > 0 && <> (entradas {formatCurrency(sinARS.ingresos)}, salidas {formatCurrency(sinARS.egresos)}</>}
             {sinUSD.cantidad > 0 && <>{sinARS.cantidad > 0 ? "; " : " ("}U$S: entradas {formatCurrency(sinUSD.ingresos, "USD")}, salidas {formatCurrency(sinUSD.egresos, "USD")}</>}
-            ). No suman a ningún saldo: se asignan solos al cruzar con el extracto del banco. Los nuevos ya toman la cuenta sugerida.
+            ). Se asignan solos al subir el extracto del banco.
           </div>
         </div>
       )}
@@ -421,6 +424,8 @@ export default function CuentasFinancieras({ onIrACheques, resumen }: {
                 {s.faltaSaldoInicial && <Badge variant="danger">Falta el saldo al corte</Badge>}
               </div>
 
+              <details className="mt-2">
+              <summary className="cursor-pointer text-xs font-medium text-orange-600 hover:underline">Ver detalle</summary>
               {usaSaldoInicial(c.tipo) && (
                 <div className="mt-3 space-y-0.5 border-t border-zinc-100 pt-2 text-xs text-zinc-500 dark:border-zinc-800">
                   <p>Saldo al {formatDate(c.fecha_corte)}: <span className="font-mono">{c.saldo_inicial === null ? "—" : formatCurrency(Number(c.saldo_inicial), c.moneda)}</span></p>
@@ -446,6 +451,7 @@ export default function CuentasFinancieras({ onIrACheques, resumen }: {
               )}
 
               {c.observaciones && <p className="mt-2 text-xs italic text-zinc-400">{c.observaciones}</p>}
+              </details>
 
               {usaSaldoInicial(c.tipo) && s.cantidadMovimientos > 0 && (
                 <button onClick={() => setAbierta(abierta === c.id ? null : c.id)} className="mt-2 text-xs font-medium text-orange-600 hover:underline">

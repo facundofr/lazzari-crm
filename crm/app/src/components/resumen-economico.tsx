@@ -152,21 +152,35 @@ export default function ResumenEconomico({ sociedadId, montos, notas, onIr }: Re
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-        {columna("tengo")}
-        {columna("debo")}
-        <div className={`flex flex-col justify-center rounded-xl border-2 p-4 ${positivo ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30" : "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"}`}>
+      {/* A primera vista: tengo, debo y posición neta. El detalle por renglón queda plegado. */}
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="rounded-xl border border-emerald-200 bg-white p-3 dark:border-emerald-900 dark:bg-zinc-900">
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">Lo que tengo</p>
+          <p className="font-mono text-base font-bold text-zinc-800 dark:text-zinc-100">{monto(r.tengo)}</p>
+        </div>
+        <div className="rounded-xl border border-orange-200 bg-white p-3 dark:border-orange-900 dark:bg-zinc-900">
+          <p className="text-xs font-semibold uppercase tracking-wide text-orange-600">Lo que debo</p>
+          <p className="font-mono text-base font-bold text-zinc-800 dark:text-zinc-100">{monto(r.debo)}</p>
+        </div>
+        <div className={`rounded-xl border-2 p-3 ${positivo ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30" : "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"}`}>
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Posición neta (tengo − debo)</p>
-          <p className={`mt-1 font-mono text-2xl font-bold ${r.neto.ARS >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(r.neto.ARS)}</p>
+          <p className={`font-mono text-xl font-bold ${r.neto.ARS >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(r.neto.ARS)}</p>
           {Math.abs(r.neto.USD) >= 0.01 && (
-            <p className={`font-mono text-lg font-bold ${r.neto.USD >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(r.neto.USD, "USD")}</p>
+            <p className={`font-mono text-sm font-bold ${r.neto.USD >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(r.neto.USD, "USD")}</p>
           )}
           {r.netoEnPesos != null && Math.abs(r.neto.USD) >= 0.01 && (
-            <p className="mt-1 text-xs text-zinc-500">Todo en pesos: <b className="font-mono">{formatCurrency(r.netoEnPesos)}</b> (dólar BNA {formatCurrency(dolar || 0)})</p>
+            <p className="mt-0.5 text-[11px] text-zinc-500">Todo en pesos: <b className="font-mono">{formatCurrency(r.netoEnPesos)}</b> (dólar BNA {formatCurrency(dolar || 0)})</p>
           )}
-          <p className="mt-2 text-[11px] text-zinc-400">Pantallazo con los saldos de hoy. El detalle fino va en Reportes.</p>
         </div>
       </div>
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs font-medium text-orange-600 hover:underline">Ver detalle: qué tengo y qué debo</summary>
+        <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {columna("tengo")}
+          {columna("debo")}
+        </div>
+        <p className="mt-2 text-[11px] text-zinc-400">Pantallazo con los saldos de hoy. El detalle fino va en Reportes.</p>
+      </details>
     </div>
   );
 }
