@@ -118,16 +118,16 @@ Categorías: pago_retencion = aviso de pago, orden de pago, transferencia, reten
 
 const SISTEMA_PROFUNDO = `Sos el asistente administrativo de Lazzari Soluciones Industriales (Argentina). Te paso un mail y sus adjuntos. Extraé los datos con mucho cuidado: los montos argentinos usan punto de miles y coma decimal ($1.234.567,89 = 1234567.89); devolvé números planos con punto decimal.
 Devolvé SOLO un JSON: {"resumen": "máx 300 caracteres", "accion_sugerida": "máx 160 caracteres",
- "pago": null | {"cliente_nombre": str|null, "cliente_cuit": str|null, "monto_neto": número|null (lo que se transfiere/deposita), "monto_total": número|null (suma de facturas pagadas antes de retenciones), "retenciones_total": número|null, "retenciones": [{"tipo": "iva|ganancias|iibb|suss|otra", "monto": número}], "fecha_pago": "YYYY-MM-DD"|null, "medio": str|null, "referencia": str|null, "facturas": [{"numero": "ej. 00016-00000018", "importe": número|null}]},
+ "pago": null | {"direccion": "recibido" (un cliente nos pagó) | "emitido" (nosotros le pagamos a un proveedor), "cliente_nombre": str|null (quien PAGA), "cliente_cuit": str|null (CUIT de quien PAGA), "monto_neto": número|null (lo que se transfiere/deposita), "monto_total": número|null (suma de facturas pagadas antes de retenciones), "retenciones_total": número|null, "retenciones": [{"tipo": "iva|ganancias|iibb|suss|otra", "monto": número}], "fecha_pago": "YYYY-MM-DD"|null, "medio": str|null, "referencia": str|null, "facturas": [{"numero": "ej. 00016-00000018", "importe": número|null}]},
  "reclamo": null | {"de": str, "tema": str, "importe": número|null},
  "factura": null | {"emisor": str, "cuit": str|null, "numero": str|null, "importe": número|null, "vencimiento": "YYYY-MM-DD"|null, "es_nota_credito": bool}}
-Completá solo lo que corresponda al mail; lo demás va null. Si un dato no está en el documento, null: no inventes.`;
+Nuestra empresa es Lazzari (también figura como "Lazzari Augusto", "Lazzari Soluciones Industriales" o "Grupo LA"; CUIT 20-37930912-8 y 30-71939604-2): NUNCA es el cliente que paga, es quien cobra. El cliente es la empresa que emite la orden de pago o la transferencia. En "facturas" poné TODOS los comprobantes que el aviso dice que paga, con su número completo (punto de venta y número) y su importe. Completá solo lo que corresponda al mail; lo demás va null. Si un dato no está en el documento, null: no inventes.`;
 
 // ── Datos del CRM para el cruce ──────────────────────────────────────────────
 async function cargarFacturasAbiertas(db: any): Promise<(FacturaAbierta & { sociedad_id: string })[]> {
   const { data: fs } = await db.from("facturas")
     .select("id, tipo, punto_venta, numero, cliente_id, total, total_acreditado, moneda, sociedad_id, estado, clientes(razon_social, cuit)")
-    .in("estado", ["emitida", "parcial", "vencida"]).limit(2000);
+    .in("estado", ["emitida", "parcial", "vencida", "pagada"]).gte("fecha", "2026-01-01").limit(3000);
   const ids = (fs || []).map((f: any) => f.id);
   const aplicado = new Map<string, number>();
   for (let i = 0; i < ids.length; i += 200) {
@@ -137,17 +137,17 @@ async function cargarFacturasAbiertas(db: any): Promise<(FacturaAbierta & { soci
   return (fs || []).map((f: any) => ({
     id: f.id, tipo: f.tipo, punto_venta: f.punto_venta, numero: f.numero, cliente_id: f.cliente_id,
     cliente_nombre: f.clientes?.razon_social ?? null, cliente_cuit: f.clientes?.cuit ?? null,
-    total: Number(f.total), moneda: f.moneda, sociedad_id: f.sociedad_id,
+    total: Number(f.total), moneda: f.moneda, sociedad_id: f.sociedad_id, estado: f.estado,
     saldo: Math.max(0, Number(f.total) - (aplicado.get(f.id) || 0) - Number(f.total_acreditado || 0)),
-  })).filter((f: any) => f.saldo > 0.005);
+  }));
 }
 
 async function cargarEntradasBanco(db: any): Promise<(EntradaBanco & { sociedad_id: string | null })[]> {
   const { data: cuentas } = await db.from("cuentas_financieras").select("id, sociedad_id");
   const soc = new Map<string, string>((cuentas || []).map((c: any) => [c.id, c.sociedad_id]));
-  const { data: mv } = await db.from("extracto_movimientos").select("id, fecha, monto, descripcion, cuenta_id")
-    .eq("estado", "pendiente").eq("tipo", "credito").gte("fecha", "2026-09-15").limit(1000);
-  return (mv || []).map((m: any) => ({ id: m.id, fecha: m.fecha, monto: Number(m.monto), descripcion: m.descripcion, sociedad_id: soc.get(m.cuenta_id) || null }));
+  const { data: mv } = await db.from("extracto_movimientos").select("id, fecha, monto, descripcion, cuenta_id, estado")
+    .in("estado", ["pendiente", "matcheado"]).eq("tipo", "credito").gte("fecha", "2026-09-15").limit(1000);
+  return (mv || []).map((m: any) => ({ id: m.id, fecha: m.fecha, monto: Number(m.monto), descripcion: m.descripcion, estado: m.estado, sociedad_id: soc.get(m.cuenta_id) || null }));
 }
 
 function sociedadDelTexto(texto: string): string | null {
@@ -247,14 +247,22 @@ export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Prom
         let sociedad = sociedadDelTexto(`${msg.asunto} ${msg.texto}`);
         if (datos?.pago) {
           const p = datos.pago;
-          const abiertasSoc = sociedad ? facturas.filter((f) => f.sociedad_id === sociedad) : facturas;
-          const cruce = cruzarPago(
-            { cliente_nombre: p.cliente_nombre, cliente_cuit: p.cliente_cuit, monto_neto: p.monto_neto, monto_total: p.monto_total, retenciones_total: p.retenciones_total, fecha_pago: p.fecha_pago, facturas: p.facturas },
-            abiertasSoc, entradas.filter((e) => !sociedad || e.sociedad_id === sociedad || !e.sociedad_id));
-          datos.cruce = cruce;
-          if (!sociedad && cruce.facturas.length) sociedad = facturas.find((f) => f.id === cruce.facturas[0].id)?.sociedad_id || null;
-          if (cruce.facturas.length) accion = `Cruzar con ${cruce.facturas.map((f) => f.etiqueta).join(", ")}${cruce.entrada_banco ? " y la entrada del banco del " + cruce.entrada_banco.fecha.slice(0, 10) : ""} (confianza ${cruce.confianza}).`.slice(0, 300);
-          else if (cruce.entrada_banco) accion = `Hay una entrada del banco por ese monto (${cruce.entrada_banco.fecha.slice(0, 10)}); falta ubicar la factura.`;
+          if (p.direccion === "emitido") {
+            // Pago nuestro a un proveedor: no se cruza con facturas de venta.
+            accion = `Pago nuestro${p.referencia ? " (" + p.referencia + ")" : ""} a ${p.cliente_nombre || "un proveedor"}: el proveedor confirma recepción. Sin cruce de cobro.`.slice(0, 300);
+          } else {
+            const abiertasSoc = sociedad ? facturas.filter((f) => f.sociedad_id === sociedad) : facturas;
+            const cruce = cruzarPago(
+              { cliente_nombre: p.cliente_nombre, cliente_cuit: p.cliente_cuit, monto_neto: p.monto_neto, monto_total: p.monto_total, retenciones_total: p.retenciones_total, fecha_pago: p.fecha_pago, facturas: p.facturas },
+              abiertasSoc, entradas.filter((e) => !sociedad || e.sociedad_id === sociedad || !e.sociedad_id));
+            datos.cruce = cruce;
+            if (!sociedad && cruce.facturas.length) sociedad = facturas.find((f) => f.id === cruce.facturas[0].id)?.sociedad_id || null;
+            const pendientesCobro = cruce.facturas.filter((f) => !f.cobrada);
+            if (pendientesCobro.length) accion = `Cargar el cobro de ${pendientesCobro.map((f) => f.etiqueta).join(", ")}${cruce.entrada_banco ? (cruce.entrada_banco.ya_cruzada ? "; la entrada del banco ya está cruzada" : " y cruzar con la entrada del banco del " + cruce.entrada_banco.fecha.slice(0, 10)) : "; todavía no se ve la entrada en el extracto"} (confianza ${cruce.confianza}).`.slice(0, 300);
+            else if (cruce.facturas.length) accion = `${cruce.facturas.map((f) => f.etiqueta).join(", ")} ya figura cobrada en el CRM: solo archivar el comprobante y la retención.`.slice(0, 300);
+            else if (cruce.entrada_banco) accion = `Hay una entrada del banco por ese monto (${cruce.entrada_banco.fecha.slice(0, 10)}); falta ubicar la factura.`;
+            else accion = `Pago de ${p.cliente_nombre || "un cliente"} por $ ${Number(p.monto_neto || p.monto_total || 0).toLocaleString("es-AR")}: no encontré la factura ni la entrada del banco; revisar a mano.`.slice(0, 300);
+          }
         }
         if (adjuntosInfo.some((a) => a.metodo === "revisar_a_mano")) accion = (accion + " ⚠️ Hay un adjunto para revisar a mano.").trim();
 

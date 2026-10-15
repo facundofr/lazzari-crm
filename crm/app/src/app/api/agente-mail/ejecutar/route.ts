@@ -10,7 +10,7 @@ import { correrAgenteMail } from "@/lib/agente-mail-server";
  */
 export const maxDuration = 60;
 
-export async function POST() {
+export async function POST(req: Request) {
   const supabase = (await createSupabaseServer()) as any;
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -22,6 +22,12 @@ export async function POST() {
     return NextResponse.json({ error: "Falta SUPABASE_SERVICE_ROLE_KEY" }, { status: 500 });
   }
   const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY) as any;
+  // "Volver a leer": borra solo las filas del propio agente que Augusto todavía no marcó como vistas, y las lee de nuevo.
+  const cuerpo = await req.json().catch(() => ({}));
+  if (cuerpo?.releer) {
+    const { error } = await db.from("agente_mail_procesados").delete().is("visto_at", null);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  }
   const r = await correrAgenteMail(db, "manual");
   return NextResponse.json(r, { status: r.ok ? 200 : 500 });
 }

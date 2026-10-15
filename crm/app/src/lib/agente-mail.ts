@@ -69,27 +69,33 @@ export function normalizarCategoria(x: unknown): CategoriaMail {
 export type FacturaAbierta = {
   id: string; tipo: string | null; punto_venta: number | null; numero: number | null;
   cliente_id: string | null; cliente_nombre: string | null; cliente_cuit: string | null;
-  total: number; saldo: number; moneda: string | null;
+  total: number; saldo: number; moneda: string | null; estado?: string | null;
 };
-export type EntradaBanco = { id: string; fecha: string; monto: number; descripcion: string | null };
+export type EntradaBanco = { id: string; fecha: string; monto: number; descripcion: string | null; estado?: string | null };
 export type PagoExtraido = {
   cliente_nombre?: string | null; cliente_cuit?: string | null;
   monto_neto?: number | null;       // lo que entra al banco
   monto_total?: number | null;      // facturas pagadas (antes de retenciones)
   retenciones_total?: number | null;
   fecha_pago?: string | null;
+  direccion?: "recibido" | "emitido" | null; // recibido = un cliente nos pagó; emitido = nosotros pagamos a un proveedor
   facturas?: { numero?: string | null; importe?: number | null }[];
 };
 export type CruceSugerido = {
-  facturas: { id: string; etiqueta: string; saldo: number; motivo: string }[];
-  entrada_banco: { id: string; fecha: string; monto: number } | null;
+  facturas: { id: string; etiqueta: string; saldo: number; motivo: string; cobrada: boolean }[];
+  entrada_banco: { id: string; fecha: string; monto: number; ya_cruzada: boolean } | null;
   confianza: "alta" | "media" | "baja";
   notas: string[];
 };
 
 /** "FA 00016-00000018", "16-18", "0016 0000018" → { pv: 16, num: 18 } (o null). */
 export function parseNumeroFactura(s: string | null | undefined): { pv: number; num: number } | null {
-  const grupos = (String(s || "").match(/\d+/g) || []).map(Number);
+  const crudos = String(s || "").match(/\d+/g) || [];
+  if (crudos.length === 1 && crudos[0].length >= 9) {
+    // Número pegado: los últimos 8 dígitos son el comprobante y lo anterior el punto de venta.
+    return { pv: Number(crudos[0].slice(0, -8)), num: Number(crudos[0].slice(-8)) };
+  }
+  const grupos = crudos.map(Number);
   if (grupos.length < 2) return null;
   const [pv, num] = grupos.slice(-2);
   return Number.isFinite(pv) && Number.isFinite(num) ? { pv, num } : null;
@@ -102,49 +108,76 @@ export function etiquetaFactura(f: Pick<FacturaAbierta, "tipo" | "punto_venta" |
 const cuitSolo = (s: string | null | undefined) => String(s || "").replace(/\D/g, "");
 const enCentavos = (n: number) => Math.round(n * 100);
 
+const UMBRAL_COBRADA = 1; // saldo menor a $1 = la factura ya figura cobrada
+
+const palabrasNombre = (n: string | null | undefined) =>
+  String(n || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, " ")
+    .split(/\s+/).filter((w) => w.length > 2 && !["sociedad", "anonima", "s.a", "srl", "sas", "argentina", "comercial", "industrial"].includes(w));
+
+/** Dos nombres de cliente se consideran el mismo si comparten la mitad (o más) de las palabras del más corto. */
+export function mismoCliente(a: string | null | undefined, b: string | null | undefined): boolean {
+  const A = palabrasNombre(a), B = palabrasNombre(b);
+  if (!A.length || !B.length) return false;
+  const comunes = A.filter((w) => B.includes(w)).length;
+  return comunes >= Math.max(1, Math.ceil(Math.min(A.length, B.length) / 2));
+}
+
+/**
+ * Cruza un aviso de pago de un cliente con las facturas del CRM y con el extracto.
+ * `facturas` trae todas las facturas vigentes (abiertas y cobradas): así se puede decir "esa factura ya figura cobrada".
+ */
 export function cruzarPago(pago: PagoExtraido, facturas: FacturaAbierta[], entradas: EntradaBanco[]): CruceSugerido {
   const notas: string[] = [];
-  const elegidas = new Map<string, { id: string; etiqueta: string; saldo: number; motivo: string }>();
+  const elegidas = new Map<string, { id: string; etiqueta: string; saldo: number; motivo: string; cobrada: boolean }>();
+  const agregar = (f: FacturaAbierta, motivo: string) =>
+    elegidas.set(f.id, { id: f.id, etiqueta: etiquetaFactura(f), saldo: f.saldo, motivo, cobrada: f.saldo < UMBRAL_COBRADA || f.estado === "pagada" });
+  const abiertas = facturas.filter((f) => f.saldo >= UMBRAL_COBRADA && f.estado !== "pagada");
 
-  // 1) Por número de factura mencionado en el aviso.
+  // 1) Por número de factura mencionado en el aviso (entre todas, abiertas o no).
   for (const m of pago.facturas || []) {
     const p = parseNumeroFactura(m.numero);
     if (!p) continue;
     const f = facturas.find((x) => x.punto_venta === p.pv && x.numero === p.num);
-    if (f) elegidas.set(f.id, { id: f.id, etiqueta: etiquetaFactura(f), saldo: f.saldo, motivo: "número de factura en el aviso" });
-    else notas.push(`El aviso nombra ${m.numero} pero no figura abierta en el CRM.`);
+    if (f) agregar(f, "número de factura en el aviso");
+    else notas.push(`El aviso nombra ${m.numero} pero no figura en el CRM.`);
   }
 
-  // 2) Si no hubo número, por CUIT del cliente y suma exacta de facturas abiertas con el total pagado.
-  if (!elegidas.size && pago.monto_total && cuitSolo(pago.cliente_cuit)) {
-    const delCliente = facturas.filter((f) => cuitSolo(f.cliente_cuit) === cuitSolo(pago.cliente_cuit));
+  // 2) Sin número: por CUIT (o nombre) del cliente y suma exacta de saldos abiertos con el total pagado.
+  if (!elegidas.size && pago.monto_total) {
+    const cuit = cuitSolo(pago.cliente_cuit);
+    const delCliente = abiertas.filter((f) => (cuit && cuitSolo(f.cliente_cuit) === cuit) || (!cuit && mismoCliente(f.cliente_nombre, pago.cliente_nombre)));
     const objetivo = enCentavos(pago.monto_total);
     const unica = delCliente.filter((f) => enCentavos(f.saldo) === objetivo);
-    if (unica.length === 1) elegidas.set(unica[0].id, { id: unica[0].id, etiqueta: etiquetaFactura(unica[0]), saldo: unica[0].saldo, motivo: "saldo = total pagado" });
-    else if (delCliente.length <= 12) {
+    if (unica.length === 1) agregar(unica[0], "saldo = total pagado");
+    else if (delCliente.length && delCliente.length <= 12) {
       const combo = combinacionExacta(delCliente, objetivo);
-      if (combo) for (const f of combo) elegidas.set(f.id, { id: f.id, etiqueta: etiquetaFactura(f), saldo: f.saldo, motivo: "la suma de saldos = total pagado" });
+      if (combo) for (const f of combo) agregar(f, "la suma de saldos = total pagado");
     }
   }
 
   // 3) Entrada del banco: monto neto exacto, dentro de ±10 días de la fecha del pago.
-  let entrada: EntradaBanco | null = null;
+  let entrada: CruceSugerido["entrada_banco"] = null;
   const neto = pago.monto_neto ?? (pago.monto_total != null && pago.retenciones_total != null ? pago.monto_total - pago.retenciones_total : null);
   if (neto && neto > 0) {
     const t0 = pago.fecha_pago ? Date.parse(pago.fecha_pago.slice(0, 10)) : NaN;
     const cand = entradas.filter((e) => enCentavos(e.monto) === enCentavos(neto)
       && (!Number.isFinite(t0) || Math.abs(Date.parse(e.fecha.slice(0, 10)) - t0) <= 10 * 86400000));
-    if (cand.length === 1) entrada = cand[0];
+    if (cand.length === 1) entrada = { id: cand[0].id, fecha: cand[0].fecha, monto: cand[0].monto, ya_cruzada: cand[0].estado === "matcheado" };
     else if (cand.length > 1) notas.push(`Hay ${cand.length} entradas del banco por ese monto: revisar a mano.`);
   }
 
-  const totalSaldo = [...elegidas.values()].reduce((a, f) => a + f.saldo, 0);
-  if (pago.monto_total && elegidas.size && enCentavos(totalSaldo) !== enCentavos(pago.monto_total)) {
-    notas.push(`Las facturas suman ${totalSaldo.toFixed(2)} y el aviso paga ${pago.monto_total.toFixed(2)}: revisar diferencia.`);
+  const lista = [...elegidas.values()];
+  const cobradas = lista.filter((f) => f.cobrada);
+  if (cobradas.length) notas.push(`${cobradas.map((f) => f.etiqueta).join(", ")} ya figura${cobradas.length > 1 ? "n" : ""} cobrada${cobradas.length > 1 ? "s" : ""} en el CRM.`);
+  const abiertasElegidas = lista.filter((f) => !f.cobrada);
+  if (pago.monto_total && abiertasElegidas.length && !cobradas.length) {
+    const totalSaldo = abiertasElegidas.reduce((a, f) => a + f.saldo, 0);
+    if (enCentavos(totalSaldo) !== enCentavos(pago.monto_total)) notas.push(`Las facturas abiertas suman ${totalSaldo.toFixed(2)} y el aviso paga ${pago.monto_total.toFixed(2)}: revisar diferencia.`);
   }
+  // Alta: factura abierta + entrada del banco sin cruzar. Una factura ya cobrada no necesita acción.
   const confianza: CruceSugerido["confianza"] =
-    elegidas.size && entrada ? "alta" : elegidas.size || entrada ? "media" : "baja";
-  return { facturas: [...elegidas.values()], entrada_banco: entrada, confianza, notas };
+    abiertasElegidas.length && entrada && !entrada.ya_cruzada ? "alta" : lista.length || entrada ? "media" : "baja";
+  return { facturas: lista, entrada_banco: entrada, confianza, notas };
 }
 
 function combinacionExacta(fs: FacturaAbierta[], objetivoCent: number): FacturaAbierta[] | null {

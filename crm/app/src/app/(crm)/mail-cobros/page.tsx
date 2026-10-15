@@ -92,10 +92,10 @@ export default function MailCobrosPage() {
 
   useEffect(() => { cargar(); }, [cargar]);
 
-  async function revisarAhora() {
+  async function revisarAhora(releer = false) {
     setEjecutando(true);
     try {
-      const r = await fetch("/api/agente-mail/ejecutar", { method: "POST" });
+      const r = await fetch("/api/agente-mail/ejecutar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ releer }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) toast.error(j.error || j.resumen || "No se pudo revisar el correo");
       else toast.success(j.resumen || "Listo");
@@ -146,7 +146,7 @@ export default function MailCobrosPage() {
               </>
             ) : <span className="text-gray-500">Todavía no se hizo ninguna revisión. Revisa sola lunes a viernes 8:30, 12:30 y 16:00.</span>}
           </div>
-          <button onClick={revisarAhora} disabled={ejecutando || faltaMigracion} className="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+          <button onClick={() => revisarAhora()} disabled={ejecutando || faltaMigracion} className="inline-flex items-center gap-1.5 rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">
             {ejecutando ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} Revisar ahora
           </button>
         </div>
@@ -155,6 +155,7 @@ export default function MailCobrosPage() {
           <div className="mb-2 flex flex-wrap items-center gap-3">
             <h2 className="text-sm font-semibold">Mails de administración <span className="font-normal text-gray-500">({sinVer} sin ver)</span></h2>
             <label className="flex items-center gap-1 text-xs text-gray-600"><input type="checkbox" checked={verVistos} onChange={(e) => setVerVistos(e.target.checked)} /> ver también los ya vistos</label>
+            {sinVer > 0 && <button disabled={ejecutando} onClick={() => { if (window.confirm("Se vuelven a leer los mails que todavía no marcaste como vistos (los vistos no se tocan). ¿Seguimos?")) revisarAhora(true); }} className="text-xs text-gray-600 hover:underline">Volver a leer los no vistos</button>}
             {sinVer > 0 && <button onClick={() => marcarVistos(mails.filter((m) => !m.visto_at).map((m) => m.id))} className="text-xs text-blue-600 hover:underline">Marcar todos como vistos</button>}
           </div>
           {cargando ? <Loader2 className="h-4 w-4 animate-spin text-gray-400" /> : grupos.length === 0 ? (
