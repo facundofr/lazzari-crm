@@ -30,7 +30,7 @@ const PRECIOS: Record<string, [number, number]> = {
   "claude-sonnet-4-5": [3, 15],
 };
 export const TOPE_DIARIO_USD = 1.5;
-export const MAX_PDF_VISION_POR_CORRIDA = 6;
+export const MAX_PDF_VISION_POR_CORRIDA = 10;
 export const MAX_MAILS_POR_CORRIDA = 25;
 export const DESDE_INICIAL = "2026/10/01"; // primera carga: todo octubre 2026, nunca septiembre
 

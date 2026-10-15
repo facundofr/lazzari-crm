@@ -11,7 +11,7 @@ import {
 const MODELO = "claude-haiku-4-5-20251001";
 const EN_PARALELO = 3;
 const PRESUPUESTO_MS = 30_000; // la ruta corta a los 60 s; un mail con PDF puede tardar 15 s
-const MAX_ADJUNTO_BYTES = 4_500_000;
+const MAX_ADJUNTO_BYTES = 10_000_000;
 const SOCIEDAD_LAZZARI = "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021";
 const SOCIEDAD_GRUPO_LA = "fee94607-747a-4e87-ba24-aff9032f7a56";
 const CUIT_SOCIEDAD: Record<string, string> = { "20379309128": SOCIEDAD_LAZZARI, "30719396042": SOCIEDAD_GRUPO_LA };
