@@ -38,6 +38,7 @@ import CuentasFinancieras from "@/components/cuentas-financieras";
 import CoberturaFijos from "@/components/cobertura-fijos";
 import ExtractoBbva from "@/components/extracto-bbva";
 import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
+import AsistenteFinanzas from "@/components/asistente-finanzas";
 import ChequesTercero from "@/components/cheques-tercero";
 import FinanzasRevisar from "@/components/finanzas-revisar";
 import { InformesFinanzas } from "@/components/finanzas/informes";
@@ -5528,6 +5529,9 @@ export default function FinanzasPage() {
         {tab === "informes" && <InformesFinanzas />}
 
         {tab === "para_confirmar" && <FinanzasParaConfirmar onIrATab={(t) => { if (esFinanzasTab(t)) setTab(t); }} />}
+
+        {/* Asistente de Finanzas: chat con la IA (botón flotante, solo administración). */}
+        <AsistenteFinanzas onIrATab={(t) => { if (esFinanzasTab(t)) setTab(t); }} />
 
         {/* ── Extractos bancarios ── */}
         {tab === "extractos" && (
