@@ -44,6 +44,15 @@ const transporteEstadoConfig: Record<string, { label: string; variant: "success"
   cancelado: { label: "Cancelado", variant: "danger" },
 };
 
+/** Tipo de remito: manual (interno, para los PR manuales sin ARCA), electrónico (ARCA) o muestra. */
+function tipoRemitoClave(r: { tipo_remito?: string | null }): "manual" | "arca" | "muestra" {
+  return r.tipo_remito === "electronico" ? "arca" : r.tipo_remito === "muestra" ? "muestra" : "manual";
+}
+function tipoRemitoTexto(r: { tipo_remito?: string | null }): string {
+  const k = tipoRemitoClave(r);
+  return k === "arca" ? "Electrónico (ARCA)" : k === "muestra" ? "Muestra" : "Manual";
+}
+
 function remitoRequiereARCA(remito: Pick<RemitoRow, "observaciones" | "cae" | "tipo_remito">) {
   // Los remitos de muestras y los internos son constancias manuales. Solo se
   // ofrece autorización electrónica cuando el usuario eligió expresamente ARCA.
@@ -211,7 +220,10 @@ export default function RemitosPage() {
     estado: "",
     cliente: "",
     vinculado: "",
+    tipo: "",
   });
+  // Buscador de texto: N° de remito (también el de CAI), cliente, PR de origen y OC del cliente.
+  const [busqueda, setBusqueda] = useState("");
 
   // Build unique client options from loaded remitos
   const clienteOptions = Array.from(new Set(remitos.map(r => r.clientes?.razon_social).filter(Boolean)))
@@ -220,6 +232,16 @@ export default function RemitosPage() {
 
   const smartFilterConfigs: FilterConfig[] = [
     { key: "fecha", label: "Fecha", type: "date-range" },
+    {
+      key: "tipo",
+      label: "Tipo",
+      type: "select",
+      options: [
+        { value: "manual", label: "Manual (PR sin ARCA)" },
+        { value: "arca", label: "Electrónico (ARCA)" },
+        { value: "muestra", label: "Muestra" },
+      ],
+    },
     {
       key: "estado",
       label: "Estado",
@@ -1191,6 +1213,8 @@ export default function RemitosPage() {
         action={{ label: "Nuevo remito", onClick: openCreateModal }}
       />
       <div className="p-3 sm:p-5 space-y-4">
+        <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar por N° de remito, cliente, PR u OC del cliente…"
+          className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900 dark:text-white" />
         <SmartFilters
           filters={smartFilterConfigs}
           values={smartFilterValues}
@@ -1201,7 +1225,7 @@ export default function RemitosPage() {
           <DataTable<RemitoRow>
             columns={[
               {
-                key: "numero", label: "N° Remito",
+                key: "numero", label: "N° Remito", sortable: true,
                 render: (row) => {
                   const hasCai = !!(row.cai_numero && row.punto_venta_cai && row.nro_comprobante_cai);
                   const displayNum = hasCai
@@ -1218,13 +1242,14 @@ export default function RemitosPage() {
               },
               { key: "clientes", label: "Cliente", sortable: true, sortKey: "clienteNombre", render: (row) => <span className="font-medium">{row.clientes?.razon_social}</span> },
               { key: "fecha", label: "Fecha", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha)}</span> },
-              { key: "remito_items", label: "Items", sortable: false, render: (row) => (
+              { key: "remito_items", label: "Items", sortable: true, sortValue: (row) => row.remito_items.length, render: (row) => (
                 <span className={`text-zinc-500 ${row.remito_items.length === 0 ? "text-red-400 font-medium" : ""}`}>
                   {row.remito_items.length === 0 ? "Sin items" : `${row.remito_items.length} productos`}
                 </span>
               ) },
-              { key: "oc_cliente", label: "OC Cliente", sortable: false, render: (row) => row.oc_cliente ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{row.oc_cliente}</span> : <span className="text-zinc-400">{"\u2014"}</span> },
-              { key: "presupuesto_id", label: "PR Origen", sortable: false, render: (row) => row.presupuesto_id ? <Badge variant="info">{row.presupuesto_numero || "Vinculado"}</Badge> : <span className="text-zinc-400">{"\u2014"}</span> },
+              { key: "tipo_remito", label: "Tipo", sortable: true, sortValue: (row) => tipoRemitoTexto(row), render: (row) => <Badge variant={row.tipo_remito === "electronico" ? "info" : row.tipo_remito === "muestra" ? "purple" : "default"}>{tipoRemitoTexto(row)}</Badge> },
+              { key: "oc_cliente", label: "OC Cliente", sortable: true, sortValue: (row) => row.oc_cliente || "", render: (row) => row.oc_cliente ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{row.oc_cliente}</span> : <span className="text-zinc-400">{"\u2014"}</span> },
+              { key: "presupuesto_id", label: "PR Origen", sortable: true, sortValue: (row) => row.presupuesto_numero || "", render: (row) => row.presupuesto_id ? <Badge variant="info">{row.presupuesto_numero || "Vinculado"}</Badge> : <span className="text-zinc-400">{"\u2014"}</span> },
               {
                 key: "estado", label: "Estado", sortable: true,
                 render: (row) => {
@@ -1266,6 +1291,14 @@ export default function RemitosPage() {
               const vinculadoFilter = smartFilterValues.vinculado as string;
               if (vinculadoFilter === "si" && !r.presupuesto_id) return false;
               if (vinculadoFilter === "no" && r.presupuesto_id) return false;
+              const tipoFilter = smartFilterValues.tipo as string;
+              if (tipoFilter && tipoRemitoClave(r) !== tipoFilter) return false;
+              const q = busqueda.trim().toLowerCase();
+              if (q) {
+                const cai = r.cai_numero ? `r ${String(r.punto_venta_cai || "").padStart(4, "0")}-${String(r.nro_comprobante_cai || "").padStart(8, "0")}` : "";
+                const texto = `${r.numero} ${cai} ${r.clientes?.razon_social || ""} ${r.presupuesto_numero || ""} ${r.oc_cliente || ""}`.toLowerCase();
+                if (!q.split(/\s+/).every((w) => texto.includes(w))) return false;
+              }
               return true;
             })}
             onRowClick={handleRowClick}

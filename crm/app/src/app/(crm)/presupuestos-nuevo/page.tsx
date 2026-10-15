@@ -68,7 +68,7 @@ export default function PresupuestosNuevoPage() {
   const { toast } = useToast();
 
   // ── entrada ──
-  const [pestana, setPestana] = useState<"armar" | "lista" | "seguimiento">("armar");
+  const [pestana, setPestana] = useState<"armar" | "lista" | "seguimiento">("lista");
   const [fase, setFase] = useState<Fase>("entrada");
   const [mensaje, setMensaje] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
@@ -490,7 +490,7 @@ export default function PresupuestosNuevoPage() {
 
   const pestanas = (
     <div className="flex gap-1 border-b border-zinc-200 bg-white px-4 dark:border-zinc-700 dark:bg-zinc-950 md:px-6">
-      {([["armar", "Armar presupuesto"], ["lista", "Presupuestos"], ["seguimiento", "Seguimiento"]] as const).map(([k, t]) => (
+      {([["lista", "Presupuestos"], ["seguimiento", "Seguimiento"], ["armar", "Armar presupuesto"]] as const).map(([k, t]) => (
         <button key={k} onClick={() => setPestana(k)} className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${pestana === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}>{t}</button>
       ))}
     </div>
