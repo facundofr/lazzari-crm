@@ -111,7 +111,7 @@ export default function ComprasNuevaPage() {
         .select("id, orden_id, codigo, descripcion, cantidad, cantidad_recibida, unidad, precio_unitario, subtotal, iva_porcentaje, orden, presupuesto_item_id").in("orden_id", t).order("orden"));
       const [pis, provs, conts, perfiles, clis, mapa, hist] = await Promise.all([
         enTandas<PRItem>(its.map((i) => i.presupuesto_item_id || ""), (t) => db.from("presupuesto_items").select("id, precio_venta, descuento_porcentaje, costo_moneda").in("id", t)),
-        traerTodo<Proveedor & { activo: boolean }>(() => db.from("proveedores").select("id, razon_social, nombre_fantasia, rubro, marcas, activo").order("razon_social")),
+        traerTodo<Proveedor & { activo: boolean }>(() => db.from("proveedores").select("id, razon_social, nombre_fantasia, rubro, marcas, activo").eq("sociedad_id", sociedadId).order("razon_social")),
         enTandas<any>(vivas.map((o) => o.proveedor_id || ""), (t) => db.from("contactos").select("entity_id, cargo, whatsapp, telefono, email, principal").eq("entity_type", "proveedor").in("entity_id", t).order("principal", { ascending: false })),
         db.from("profiles").select("id, full_name"),
         enTandas<{ id: string; razon_social: string }>(vivas.map((o) => o.presupuesto_origen?.cliente_id || ""), (t) => db.from("clientes").select("id, razon_social").in("id", t)),
@@ -162,7 +162,7 @@ export default function ComprasNuevaPage() {
     return m;
   }, [items]);
   const provPorId = useMemo(() => Object.fromEntries(proveedores.map((p) => [p.id, p])), [proveedores]);
-  const opcionesProv = useMemo(() => proveedores.map((p) => ({ valor: p.id, texto: nombreProv(p), detalle: p.nombre_fantasia && p.nombre_fantasia !== p.razon_social ? p.razon_social : (p.rubro || undefined) })), [proveedores]);
+  const opcionesProv = useMemo(() => proveedores.filter((p) => (p as any).activo !== false).map((p) => ({ valor: p.id, texto: nombreProv(p), detalle: p.nombre_fantasia && p.nombre_fantasia !== p.razon_social ? p.razon_social : (p.rubro || undefined) })), [proveedores]);
 
   // Una OC con algo recibido ya se pidió aunque nadie la haya marcado (OC viejas).
   const yaPedida = useCallback((o: OC) => o.pedido || (itemsDe[o.id] || []).some((i) => Number(i.cantidad_recibida) > 0), [itemsDe]);

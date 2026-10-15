@@ -339,7 +339,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
     }} />;
 
 
-  return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4">
+  return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (e.dataTransfer?.files?.length) addFiles(e.dataTransfer.files); }}>
     <div className="w-full max-w-6xl rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900">
       <div className="mb-3 flex items-center justify-between">
         <div>
@@ -364,7 +364,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
         {guardadas > 0 && <span className="text-sky-600">{guardadas} guardadas</span>}
       </div>}
 
-      <div className="max-h-[52vh] overflow-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
+      {rows.length > 0 && <div className="max-h-[52vh] overflow-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
         <table className="w-full table-fixed text-xs">
           <colgroup><col style={{ width: "15%" }} /><col style={{ width: "6%" }} /><col style={{ width: "11%" }} /><col style={{ width: "9%" }} /><col style={{ width: "21%" }} /><col style={{ width: "12%" }} /><col style={{ width: "14%" }} /><col style={{ width: "12%" }} /></colgroup>
           <thead className="sticky top-0 bg-zinc-100 text-left text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
@@ -407,10 +407,9 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
                 </td>
               </tr>;
             })}
-            {rows.length === 0 && <tr><td colSpan={8} className="p-6 text-center text-zinc-400">Todavía no subiste archivos.</td></tr>}
           </tbody>
         </table>
-      </div>
+      </div>}
 
       {Object.values(cruce).some(c => c.estado === "listo") && (() => {
         const cierran = Object.entries(cruce).filter(([id, c]) => c.estado === "listo" && !c.amarillo && !c.rojo && filasDe(id).length > 0);
@@ -445,7 +444,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
         <div className="flex gap-2">
           {onMinimizar && <button onClick={onMinimizar} className="flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm"><Minimize2 className="h-4 w-4" /> Segundo plano</button>}
           <button disabled={busy && !onMinimizar} onClick={close} className="rounded-lg border px-4 py-2 text-sm">Cerrar</button>
-          <button disabled={saving || listas === 0} onClick={revisarTodas} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><PlayCircle className="h-4 w-4" /> Cargar las {listas} listas</button>
+          <button disabled={saving || listas === 0} onClick={revisarTodas} className="flex items-center gap-1.5 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><PlayCircle className="h-4 w-4" /> {listas === 1 ? "Cargar 1 factura" : `Cargar las ${listas} facturas`}</button>
         </div>
       </div>
     </div>

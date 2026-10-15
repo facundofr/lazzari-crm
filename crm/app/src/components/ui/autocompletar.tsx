@@ -30,7 +30,9 @@ export function Autocompletar({ opciones, placeholder, onElegir, className = "",
     }
     const soloDigitos = n.replace(/\D/g, "");
     const coincide = (o: OpcionAutocompletar) => norm(o.texto).includes(n) || (!!o.detalle && (norm(o.detalle).includes(n) || (soloDigitos.length >= MIN_LETRAS && soloDigitos === n.replace(/[\s.-]/g, "") && o.detalle.replace(/\D/g, "").includes(soloDigitos))));
-    const todas = opciones.filter(coincide).sort((a, b) => Number(!norm(a.texto).startsWith(n)) - Number(!norm(b.texto).startsWith(n)));
+    // Primero lo que EMPIEZA con lo escrito, después lo que tiene una palabra que empieza así ("mer" → MERCADO LIBRE antes que AMERICAN COTTON), al final el resto.
+    const nivel = (o: OpcionAutocompletar) => { const t = norm(o.texto); return t.startsWith(n) ? 0 : t.split(/[^a-z0-9]+/).some(w => w.startsWith(n)) ? 1 : 2; };
+    const todas = opciones.filter(coincide).sort((a, b) => nivel(a) - nivel(b));
     return { filtradas: todas.slice(0, MAX_RESULTADOS), hayMas: Math.max(0, todas.length - MAX_RESULTADOS) };
   }, [q, opciones, sinEscribir]);
   const faltanLetras = !sinEscribir && norm(q.trim()).length < MIN_LETRAS;

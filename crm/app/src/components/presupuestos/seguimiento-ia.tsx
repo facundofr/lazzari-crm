@@ -58,6 +58,7 @@ export default function SeguimientoIA() {
   const [verViejos, setVerViejos] = useState(false);
   const [abierto, setAbierto] = useState<string | null>(null);
   const [detalle, setDetalle] = useState<string | null>(null);
+  const [vista, setVista] = useState<"lista" | "vendedor" | "cliente">("lista");
   const [vendedorF, setVendedorF] = useState("");
   const [operadorF, setOperadorF] = useState("");
   const [mensajes, setMensajes] = useState<Record<string, Mensaje>>({});
@@ -206,37 +207,24 @@ export default function SeguimientoIA() {
     toast.success(`${p.numero}: válido hasta ${formatDate(nuevo)}`);
   }
 
+  // Vistas "Por vendedor" y "Por cliente": una tarjeta por persona o cliente con su resumen; adentro, sus PR.
+  const grupos = useMemo(() => {
+    if (vista === "lista") return [];
+    const m = new Map<string, { nombre: string; filas: typeof items }>();
+    for (const x of items) {
+      const clave = vista === "vendedor" ? (x.p.vendedor_id || "sin") : (x.p.cliente_id || "sin");
+      const nombre = vista === "vendedor" ? (x.p.vendedor_profile?.full_name || "Sin vendedor") : (x.p.clientes?.razon_social || "Sin cliente");
+      const g = m.get(clave) || { nombre, filas: [] as typeof items };
+      g.filas.push(x); m.set(clave, g);
+    }
+    return [...m.values()].map(g => ({ ...g, hoy: g.filas.filter(f => f.c.grupo === "hoy").length, esp: g.filas.filter(f => f.c.grupo === "esperando").length, venc: g.filas.filter(f => f.c.grupo === "vencido").length, monto: g.filas.reduce((s, f) => s + f.montoPesos, 0) }))
+      .sort((a, b) => (b.hoy - a.hoy) || (b.monto - a.monto));
+  }, [items, vista]);
   const total = (g: GrupoSeg) => items.filter(x => x.c.grupo === g);
   const sumaPesos = (g: GrupoSeg) => total(g).reduce((s, x) => s + x.montoPesos, 0);
 
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 text-xs dark:border-zinc-700 dark:bg-zinc-900">
-        <CalendarClock className="h-4 w-4 text-orange-500" />
-        <span className="dark:text-zinc-200"><b className="text-orange-600">{total("hoy").length}</b> toca hoy · <b>{total("esperando").length}</b> esperando · <b className="text-red-600">{total("vencido").length}</b> vencidos</span>
-        <span className="ml-auto flex items-center gap-3">
-          <select value={vendedorF} onChange={e => setVendedorF(e.target.value)} className="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"><option value="">Todos los vendedores</option>{vendedoresOpc.map(([id, n]) => <option key={id} value={id}>{n}</option>)}</select>
-          <select value={operadorF} onChange={e => setOperadorF(e.target.value)} className="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"><option value="">Todos los operadores</option>{operadoresOpc.map(([id, n]) => <option key={id} value={id}>{n}</option>)}</select>
-          <label className="flex items-center gap-1 text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={verTodos} onChange={e => setVerTodos(e.target.checked)} /> Ver los de todos</label>
-          <button onClick={() => void cargar()} disabled={cargando} className="flex items-center gap-1 rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:text-zinc-200"><RefreshCw className={`h-3 w-3 ${cargando ? "animate-spin" : ""}`} /> Actualizar</button>
-        </span>
-      </div>
-      {!tablaOk && <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">⚠️ Falta correr la migración del seguimiento (<code>20261016110000_presupuesto_seguimiento</code>). Mientras tanto se ve la lista, pero no se puede anotar nada.</p>}
-      {error && <p className="flex items-center gap-1 text-sm text-red-600"><AlertTriangle className="h-4 w-4" /> {error}</p>}
-      {cargando && !prs.length && <p className="flex items-center gap-2 text-sm text-orange-600"><Loader2 className="h-4 w-4 animate-spin" /> Cargando…</p>}
-
-      {GRUPOS.map(g => {
-        const lista = total(g.k);
-        if (!lista.length && g.k !== "hoy") return null;
-        return (
-          <section key={g.k} className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
-            <div className="flex items-baseline gap-2 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800">
-              <h3 className={`text-sm font-semibold ${g.color}`}>{g.titulo} ({lista.length})</h3>
-              <span className="text-[11px] text-zinc-400">{g.ayuda}</span>
-              {lista.length > 0 && <span className="ml-auto text-[11px] text-zinc-500">≈ {formatCurrency(sumaPesos(g.k), "ARS")} sin IVA</span>}
-            </div>
-            {!lista.length && <p className="p-4 text-center text-xs text-zinc-400">{cargando ? "…" : "Nada para hoy. 👌"}</p>}
-            {lista.map(({ p, c, evs }) => {
+  const renderFila = ({ p, c, evs }: { p: PR; c: ClasificacionSeg; evs: EventoSeg[] }, gk: GrupoSeg) => {
+    const g = { k: gk };
               const nombre = p.clientes?.razon_social || "Cliente";
               const ultimo = evs[0];
               const puedeDeshacer = !!ultimo && ultimo.user_id === profile?.id && Date.now() - Date.parse(ultimo.created_at) < 86400000;
@@ -320,7 +308,53 @@ export default function SeguimientoIA() {
                   )}
                 </div>
               );
-            })}
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-200 bg-white p-3 text-xs dark:border-zinc-700 dark:bg-zinc-900">
+        <CalendarClock className="h-4 w-4 text-orange-500" />
+        <span className="dark:text-zinc-200"><b className="text-orange-600">{total("hoy").length}</b> toca hoy · <b>{total("esperando").length}</b> esperando · <b className="text-red-600">{total("vencido").length}</b> vencidos</span>
+        <span className="ml-auto flex items-center gap-3">
+          <span className="flex overflow-hidden rounded border border-zinc-300 dark:border-zinc-600">
+            {([["lista", "Lista"], ["vendedor", "Por vendedor"], ["cliente", "Por cliente"]] as const).map(([k, t]) => (
+              <button key={k} onClick={() => setVista(k)} className={`px-2 py-1 ${vista === k ? "bg-orange-500 text-white" : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>{t}</button>
+            ))}
+          </span>
+          <select value={vendedorF} onChange={e => setVendedorF(e.target.value)} className="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"><option value="">Todos los vendedores</option>{vendedoresOpc.map(([id, n]) => <option key={id} value={id}>{n}</option>)}</select>
+          <select value={operadorF} onChange={e => setOperadorF(e.target.value)} className="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"><option value="">Todos los operadores</option>{operadoresOpc.map(([id, n]) => <option key={id} value={id}>{n}</option>)}</select>
+          <label className="flex items-center gap-1 text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={verTodos} onChange={e => setVerTodos(e.target.checked)} /> Ver los de todos</label>
+          <button onClick={() => void cargar()} disabled={cargando} className="flex items-center gap-1 rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:text-zinc-200"><RefreshCw className={`h-3 w-3 ${cargando ? "animate-spin" : ""}`} /> Actualizar</button>
+        </span>
+      </div>
+      {!tablaOk && <p className="rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">⚠️ Falta correr la migración del seguimiento (<code>20261016110000_presupuesto_seguimiento</code>). Mientras tanto se ve la lista, pero no se puede anotar nada.</p>}
+      {error && <p className="flex items-center gap-1 text-sm text-red-600"><AlertTriangle className="h-4 w-4" /> {error}</p>}
+      {cargando && !prs.length && <p className="flex items-center gap-2 text-sm text-orange-600"><Loader2 className="h-4 w-4 animate-spin" /> Cargando…</p>}
+
+      {vista !== "lista" && grupos.map(g => (
+        <details key={g.nombre} open={grupos.length <= 3} className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
+          <summary className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm">
+            <span className="font-semibold dark:text-white">{g.nombre}</span>
+            <span className="text-xs text-orange-600">{g.hoy} hoy</span>
+            <span className="text-xs text-zinc-500">{g.esp} esperando</span>
+            <span className="text-xs text-red-600">{g.venc} vencidos</span>
+            <span className="ml-auto text-xs text-zinc-500">≈ {formatCurrency(g.monto, "ARS")} sin IVA</span>
+          </summary>
+          <div className="border-t border-zinc-100 dark:border-zinc-800">{g.filas.map(f => renderFila(f, f.c.grupo))}</div>
+        </details>
+      ))}
+      {vista === "lista" && GRUPOS.map(g => {
+        const lista = total(g.k);
+        if (!lista.length && g.k !== "hoy") return null;
+        return (
+          <section key={g.k} className="rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900">
+            <div className="flex items-baseline gap-2 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800">
+              <h3 className={`text-sm font-semibold ${g.color}`}>{g.titulo} ({lista.length})</h3>
+              <span className="text-[11px] text-zinc-400">{g.ayuda}</span>
+              {lista.length > 0 && <span className="ml-auto text-[11px] text-zinc-500">≈ {formatCurrency(sumaPesos(g.k), "ARS")} sin IVA</span>}
+            </div>
+            {!lista.length && <p className="p-4 text-center text-xs text-zinc-400">{cargando ? "…" : "Nada para hoy. 👌"}</p>}
+            {lista.map((x) => renderFila(x, g.k))}
           </section>
         );
       })}
