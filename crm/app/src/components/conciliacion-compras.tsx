@@ -138,6 +138,9 @@ function facturaDesdeDatos(file: File, d: any): FacturaCarga {
   };
 }
 
+/** Renglón de envío / flete: no es un artículo de OC; se deja fuera de OC sin hacer ruido. */
+const esEnvio = (d: string) => /(env[ií]o|flete|transporte|log[ií]stica|delivery|despacho)/i.test(d);
+
 export default function ConciliacionCompras({ sociedadId, profileId, onClose, onSuccess, inicial, autoConfirmar }: Props) {
   const { toast } = useToast();
   const [fullscreen, setFullscreen] = useState(true);
@@ -402,6 +405,35 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
     return m;
   }, [resultado]);
   const sinAsignarPorLinea = useMemo(() => new Map((resultado?.sinAsignar || []).map(s => [s.invoiceKey, s])), [resultado]);
+
+  // Decisiones con la opción recomendada ya elegida (se pueden cambiar en cada renglón):
+  //  · envío / flete sin OC → "Fuera de OC" (queda en gris, sin ruido)
+  //  · unidades de más de un artículo que está en la OC → se suman a esa OC (recomendado por Augusto)
+  //  · "Actualizar el costo" solo si hay diferencia de precio o se aceptaron unidades de más
+  const defaultsKey = useRef("");
+  const costosKey = useRef("");
+  useEffect(() => {
+    if (!resultado) return;
+    const k = `${proveedorId}|${resultado.sinAsignar.map(s => `${s.invoiceKey}:${s.tipo}`).join(",")}`;
+    if (defaultsKey.current === k) return;
+    defaultsKey.current = k;
+    const extra: string[] = [], deMas: string[] = [];
+    for (const l of lineasFactura) {
+      const sa = sinAsignarPorLinea.get(l.key);
+      if (!sa) continue;
+      if (sa.tipo === "sin_oc" && esEnvio(l.descripcion) && !manual[l.key]) extra.push(l.key);
+      else if (sa.tipo === "de_mas" && !manual[l.key]) deMas.push(l.key);
+    }
+    if (extra.length) setManual(p => { const n = { ...p }; for (const x of extra) n[x] = "__extra__"; return n; });
+    if (deMas.length) setAceptarDeMas(p => new Set([...p, ...deMas]));
+    if (extra.length || deMas.length) setRevisadas(p => new Set([...p, ...extra, ...deMas]));
+    const ck = `${proveedorId}|${lineasFactura.map(l => l.key).join(",")}`;
+    if (costosKey.current !== ck) {
+      costosKey.current = ck;
+      setAceptarCostos(resultado.asignaciones.some(a => Math.abs(a.diferencia) > 0.5) || deMas.length > 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resultado]);
   const ocById = useMemo(() => new Map(ocLineas.map(o => [o.id, o])), [ocLineas]);
 
   function semaforo(l: InvoiceLineInput) {
@@ -767,6 +799,24 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
                     className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-400 text-emerald-700 text-sm"><Check className="h-4 w-4" /> Aceptar todas las sugerencias</button>
                 )}
               </div>
+              {/* Resumen en palabras: qué cierra solo y qué hay que mirar */}
+              {(() => {
+                const cierran = lineasFactura.filter(l => semaforo(l) === "verde").length;
+                const notas: string[] = [];
+                for (const l of lineasFactura) {
+                  const sa = sinAsignarPorLinea.get(l.key); const s = semaforo(l);
+                  if (sa?.tipo === "de_mas" && manual[l.key] !== "__extra__") notas.push(`${sa.cantidad} de más de "${l.descripcion.slice(0, 40)}" (la ${sa.ocNumero} pedía menos): ${aceptarDeMas.has(l.key) ? "se suman a esa OC (recomendado)" : "van a OC aparte"}`);
+                  else if (manual[l.key] === "__extra__") notas.push(`${esEnvio(l.descripcion) ? "Envío" : `"${l.descripcion.slice(0, 40)}"`}: queda en la factura, fuera de OC`);
+                  else if (sa?.tipo === "sin_oc") notas.push(`"${l.descripcion.slice(0, 40)}" no está en ninguna OC: ${crearOcExtra ? "va a una OC complementaria" : "queda fuera de OC"}`);
+                  else if (s === "amarillo") notas.push(`"${l.descripcion.slice(0, 40)}": revisá la sugerencia`);
+                }
+                return (
+                  <div className="rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800/50">
+                    <p className="dark:text-zinc-200"><b>{cierran}</b> renglón(es) cierra(n) solo(s){notas.length ? ` · ${notas.length} para tener en cuenta:` : ". Listo para confirmar."}</p>
+                    {notas.length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-zinc-600 dark:text-zinc-300">{notas.map((n, i) => <li key={i}>{n}</li>)}</ul>}
+                  </div>
+                );
+              })()}
               {avisoMoneda ? <p className="text-sm text-amber-700 flex items-center gap-1"><AlertTriangle className="h-4 w-4" /> La factura está en {monedaFc.join("/")} y hay OC en {monedaOc.join("/")}: las diferencias de precio no son comparables.</p> : null}
 
               <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
@@ -912,11 +962,11 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
               <div className="flex flex-wrap justify-end gap-3 border-t border-zinc-200 dark:border-zinc-700 pt-4">
                 <button onClick={onClose} className="px-4 py-2 rounded-lg border border-zinc-300 dark:border-zinc-600 text-sm">Cancelar</button>
                 <button disabled={guardando} onClick={() => guardar(true)}
-                  className="px-4 py-2 rounded-lg border border-amber-400 text-amber-700 dark:text-amber-300 text-sm font-semibold disabled:opacity-40">
+                  className="px-3 py-2 text-xs text-amber-700 underline dark:text-amber-300 disabled:opacity-40">
                   Guardar como conciliación parcial
                 </button>
                 <button disabled={guardando} onClick={() => guardar(false)}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-40">
+                  className="flex items-center gap-2 px-6 py-3 rounded-lg bg-emerald-600 text-white text-base font-bold hover:bg-emerald-700 disabled:opacity-40">
                   {guardando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Confirmar y enviar a aprobación
                 </button>
               </div>
