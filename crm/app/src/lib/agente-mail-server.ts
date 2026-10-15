@@ -9,7 +9,7 @@ import {
 } from "@/lib/agente-mail";
 
 const MODELO = "claude-haiku-4-5-20251001";
-const PRESUPUESTO_MS = 50_000;
+const PRESUPUESTO_MS = 30_000; // la ruta corta a los 60 s; un mail con PDF puede tardar 15 s
 const MAX_ADJUNTO_BYTES = 4_500_000;
 const SOCIEDAD_LAZZARI = "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021";
 const SOCIEDAD_GRUPO_LA = "fee94607-747a-4e87-ba24-aff9032f7a56";
@@ -209,7 +209,12 @@ export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Prom
         if (info.leerAdjuntos && (hayAdjuntos || categoria === "pago_retencion" || clasif.tiene_pago)) {
           const bloques: any[] = [];
           let textoAdj = "";
-          for (const a of msg.adjuntos) {
+          // PDFs primero (lo importante); se ignoran logos y firmas ("image001.png", "noname", imágenes chicas).
+          const ordenados = [...msg.adjuntos]
+            .filter((a) => !(/^(image\d*|noname|logo.*)(\.(png|jpe?g|gif))?$/i.test(a.nombre.trim()) || (/image\//i.test(a.mime) && a.size < 40_000)))
+            .sort((x, y) => Number(/pdf/i.test(y.mime) || /\.pdf$/i.test(y.nombre)) - Number(/pdf/i.test(x.mime) || /\.pdf$/i.test(x.nombre)))
+            .slice(0, 4);
+          for (const a of ordenados) {
             const esPdf = /pdf/i.test(a.mime) || /\.pdf$/i.test(a.nombre);
             const esImg = /image\/(png|jpe?g)/i.test(a.mime);
             if (!esPdf && !esImg) continue;
