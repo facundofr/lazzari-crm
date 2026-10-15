@@ -28,5 +28,8 @@ assert.deepEqual(ids(filtrarCheques(cheques, { desde: "2026-10-10", hasta: "2026
   const cs = [{ id: 1, estado: "entregado" }, { id: 2, estado: "cobrado" }, { id: 3, estado: "en_cartera" }, { id: 4, estado: "anulado" }, { id: 5, estado: "depositado" }];
   assert.deepEqual(filtrarCheques(cs, { estado: ESTADO_PENDIENTES }).map((c) => c.id), [1, 3, 5]);
   assert.equal(filtrarCheques(cs, { estado: "" }).length, 5);
+  // Varios estados a la vez (botones): solo los prendidos; ninguno prendido = todos.
+  assert.deepEqual(filtrarCheques(cs, { estados: ["cobrado", "anulado"] }).map((c) => c.id), [2, 4]);
+  assert.equal(filtrarCheques(cs, { estados: [] }).length, 5);
 }
 console.log("cheques-filtro OK");

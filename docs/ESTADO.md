@@ -1,5 +1,7 @@
 # Estado del proyecto — CRM Lazzari
 
+**CHEQUES: BOTONES DE ESTADO (V1.1.487, 15/10/2026):** en lugar del desplegable, botones por estado con la cantidad (Entregado 111, En cartera 5, Cobrado 255…) que se prenden y apagan; arranca solo con los pendientes; "Solo pendientes" / "Ver todos". `estados` en lib/cheques-filtro.ts (+ prueba).
+
 **FINANZAS ORDENADA + CORREO INTEGRADO (V1.1.486, 15/10/2026):** menú Hoy (Resumen · Para confirmar · Correo) / Cobrar / Pagar (Cheques adentro) / Bancos; Cheques arranca solo con pendientes; "Mail y cobros" pasó a Finanzas > Hoy > Correo y cada mail dice si ya está cobrado, en el banco para confirmar, falta el extracto o falta cargar la factura. La IA nunca cierra sola (todo es propuesta). Detalle en `docs/FINANZAS-IA.md`.
 
 **ASISTENTE DE FINANZAS (V1.1.480, 15/10/2026):** botón flotante en Finanzas, chat con IA (Opus 5.5) que contesta con datos reales, manda al agente a leer los correos y carga el Excel del banco sin duplicar. Ver `docs/FINANZAS-IA.md`. **Cuenta corriente: falta el "Detalle_mov_cuenta" del 09/10 a hoy** (el "Movimientos (16)" no cierra por $ 793.925,51: el banco omite impuestos del 14/10).

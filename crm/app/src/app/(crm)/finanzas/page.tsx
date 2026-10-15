@@ -18,7 +18,7 @@ import { plazoCheque, rangoPlazo, resumenPlazos, type PlazoCheque } from "@/lib/
 import { descripcionVep, type DatosVep } from "@/lib/vep";
 import { FINANZAS_GRUPOS, esFinanzasTab, grupoDeTab, operacionVencimientos, pestanaInicial, type FinanzasGrupo, type FinanzasTab } from "@/lib/finanzas-grupos";
 import { clasificarMovimiento, esCobroDeCliente, sentidoAjuste, resumirCaja, TIPOS_RETENCION } from "@/lib/tipos-movimiento";
-import { filtrarCheques, MOTIVOS_RECHAZO_CHEQUE, ESTADO_PENDIENTES } from "@/lib/cheques-filtro";
+import { filtrarCheques, MOTIVOS_RECHAZO_CHEQUE, ESTADOS_PENDIENTES } from "@/lib/cheques-filtro";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { calcularSaldosProveedores, traerCreditosProveedores, pagosSobreFacturasAnuladas, type CreditoProveedor } from "@/lib/saldo-proveedores";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta } from "@/lib/saldo-clientes";
@@ -965,7 +965,8 @@ export default function FinanzasPage() {
   const [echeqDestinoId, setEcheqDestinoId] = useState("");
   const [echeqDestinoNombre, setEcheqDestinoNombre] = useState("");
   const [echeqProvSearch, setEcheqProvSearch] = useState("");
-  const [echeqFilterEstado, setEcheqFilterEstado] = useState<string>(ESTADO_PENDIENTES);
+  // Estados que se ven (botones). Por defecto solo lo pendiente: cobrados, anulados, etc. solo si se prenden.
+  const [echeqEstados, setEcheqEstados] = useState<string[]>(ESTADOS_PENDIENTES);
   const [echeqFilterDireccion, setEcheqFilterDireccion] = useState<"" | "emitido" | "recibido">("");
   const [echeqBusqueda, setEcheqBusqueda] = useState("");
   const [echeqFilterTipo, setEcheqFilterTipo] = useState<"" | "echeq" | "fisico">("");
@@ -3696,10 +3697,14 @@ export default function FinanzasPage() {
 
   // ── Echeq handlers ──
   const filteredEcheqs = filtrarCheques(echeqs, {
-    texto: echeqBusqueda, estado: echeqFilterEstado, direccion: echeqFilterDireccion,
+    texto: echeqBusqueda, estados: echeqEstados, direccion: echeqFilterDireccion,
     tipo: echeqFilterTipo, desde: echeqFilterDesde, hasta: echeqFilterHasta,
   });
-  const echeqFiltrosActivos = Boolean(echeqBusqueda || (echeqFilterEstado && echeqFilterEstado !== ESTADO_PENDIENTES) || echeqFilterDireccion || echeqFilterTipo || echeqFilterDesde || echeqFilterHasta);
+  const echeqEstadosDefault = echeqEstados.length === ESTADOS_PENDIENTES.length && ESTADOS_PENDIENTES.every((e) => echeqEstados.includes(e));
+  // Cuántos cheques hay en cada estado (con los demás filtros puestos, sin el de estado).
+  const echeqConteoEstados = filtrarCheques(echeqs, { texto: echeqBusqueda, direccion: echeqFilterDireccion, tipo: echeqFilterTipo, desde: echeqFilterDesde, hasta: echeqFilterHasta })
+    .reduce((m, c) => { const k = String(c.estado || ""); m[k] = (m[k] || 0) + 1; return m; }, {} as Record<string, number>);
+  const echeqFiltrosActivos = Boolean(echeqBusqueda || !echeqEstadosDefault || echeqFilterDireccion || echeqFilterTipo || echeqFilterDesde || echeqFilterHasta);
   const filteredEcheqsTotalARS = filteredEcheqs.filter(e => e.moneda !== "USD").reduce((s, e) => s + Number(e.monto || 0), 0);
   const filteredEcheqsTotalUSD = filteredEcheqs.filter(e => e.moneda === "USD").reduce((s, e) => s + Number(e.monto || 0), 0);
   const echeqsRecibidos = echeqs.filter(e => e.direccion === "recibido" || !e.direccion);
@@ -5118,7 +5123,7 @@ export default function FinanzasPage() {
                 const r = resumenPlazos(echeqs, direccion, hoyCh);
                 const caja = (p: PlazoCheque, titulo: string, nota: string, color: string) => {
                   const t = r[p];
-                  const filtrar = () => { const rg = rangoPlazo(p, hoyCh); setEcheqFilterDireccion(direccion); setEcheqFilterEstado(direccion === "emitido" ? "entregado" : "en_cartera"); setEcheqFilterDesde(rg.desde); setEcheqFilterHasta(rg.hasta); };
+                  const filtrar = () => { const rg = rangoPlazo(p, hoyCh); setEcheqFilterDireccion(direccion); setEcheqEstados(direccion === "emitido" ? ["pendiente", "entregado"] : ["en_cartera"]); setEcheqFilterDesde(rg.desde); setEcheqFilterHasta(rg.hasta); };
                   return (
                     <button key={p} type="button" onClick={filtrar} title="Ver estos cheques en la lista"
                       className={`rounded-lg border px-3 py-2 text-left transition-colors hover:border-orange-300 ${p === "en_fecha" && t.cantidad ? color : "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"}`}>
@@ -5165,12 +5170,6 @@ export default function FinanzasPage() {
                   <option value="recibido">Recibidos</option>
                   <option value="emitido">Emitidos (propios)</option>
                 </select>
-                <select value={echeqFilterEstado} onChange={(e) => setEcheqFilterEstado(e.target.value)}
-                  className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  <option value={ESTADO_PENDIENTES}>Pendientes (a pagar y en cartera)</option>
-                  <option value="">Todos (historial)</option>
-                  {Object.entries(echeqEstadoConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                </select>
                 <select value={echeqFilterTipo} onChange={(e) => setEcheqFilterTipo(e.target.value as "" | "echeq" | "fisico")}
                   className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
                   <option value="">E-Cheq y físicos</option>
@@ -5186,11 +5185,28 @@ export default function FinanzasPage() {
                     className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                 </label>
                 {echeqFiltrosActivos && (
-                  <button onClick={() => { setEcheqBusqueda(""); setEcheqFilterDireccion(""); setEcheqFilterEstado(ESTADO_PENDIENTES); setEcheqFilterTipo(""); setEcheqFilterDesde(""); setEcheqFilterHasta(""); }}
+                  <button onClick={() => { setEcheqBusqueda(""); setEcheqFilterDireccion(""); setEcheqEstados(ESTADOS_PENDIENTES); setEcheqFilterTipo(""); setEcheqFilterDesde(""); setEcheqFilterHasta(""); }}
                     className="rounded-lg px-2 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/30">
                     Limpiar filtros
                   </button>
                 )}
+                {/* Estados: botones que se prenden y apagan (por defecto, solo lo pendiente) */}
+                <div className="flex w-full flex-wrap items-center gap-1.5">
+                  <span className="text-xs text-zinc-500">Estado:</span>
+                  {["pendiente", "entregado", "en_cartera", "depositado", "cobrado", "endosado", "rechazado", "vencido", "anulado"]
+                    .filter((k) => echeqConteoEstados[k] || echeqEstados.includes(k))
+                    .map((k) => {
+                      const on = echeqEstados.includes(k);
+                      return (
+                        <button key={k} type="button" onClick={() => setEcheqEstados((prev) => (on ? prev.filter((x) => x !== k) : [...prev, k]))}
+                          className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${on ? "border-orange-500 bg-orange-500 text-white" : "border-zinc-200 text-zinc-500 hover:border-zinc-400 dark:border-zinc-700 dark:text-zinc-400"}`}>
+                          {echeqEstadoConfig[k]?.label || k} {echeqConteoEstados[k] || 0}
+                        </button>
+                      );
+                    })}
+                  <button type="button" onClick={() => setEcheqEstados(ESTADOS_PENDIENTES)} className="ml-1 text-xs text-orange-600 hover:underline">Solo pendientes</button>
+                  <button type="button" onClick={() => setEcheqEstados([])} className="text-xs text-zinc-500 hover:underline">Ver todos</button>
+                </div>
                 <span className="w-full text-xs text-zinc-500">
                   {filteredEcheqs.length} cheque{filteredEcheqs.length === 1 ? "" : "s"} — {formatCurrency(filteredEcheqsTotalARS)}{filteredEcheqsTotalUSD > 0 ? ` + ${formatCurrency(filteredEcheqsTotalUSD, "USD")}` : ""}
                 </span>

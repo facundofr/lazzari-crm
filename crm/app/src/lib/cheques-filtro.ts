@@ -20,6 +20,8 @@ export interface ChequeFiltrable {
 export interface FiltrosCheques {
   texto?: string;
   estado?: string;
+  /** Varios estados a la vez (botones de Cheques). Vacío = todos. */
+  estados?: string[];
   direccion?: string;
   tipo?: string;
   /** YYYY-MM-DD, fecha de pago del cheque */
@@ -53,6 +55,7 @@ export function filtrarCheques<T extends ChequeFiltrable>(cheques: T[], f: Filtr
   const importe = texto ? importeBuscado(texto) : null;
   const palabras = texto.split(/\s+/).filter(Boolean);
   return cheques.filter((c) => {
+    if (f.estados?.length && !f.estados.includes(String(c.estado))) return false;
     if (f.estado === ESTADO_PENDIENTES) { if (!ESTADOS_PENDIENTES.includes(String(c.estado))) return false; }
     else if (f.estado && c.estado !== f.estado) return false;
     if (f.direccion && (c.direccion || "recibido") !== f.direccion) return false;
