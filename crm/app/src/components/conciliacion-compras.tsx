@@ -19,6 +19,7 @@ import { traerTarjetas, tarjetaSugerida, movimientoPagoTarjeta, registrarPagoTar
 import { useToast } from "@/components/ui/toast";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { parseDecimalInput } from "@/lib/decimal-input";
+import { cargarLineasSinProveedor, coincidenciasSinProveedor, asignarRenglonesAProveedor, type CoincidenciaSinProveedor } from "@/lib/oc-sin-proveedor";
 import {
   matchPurchaseLines, parseVariant, puntajeParecido, citaOc,
   type Equivalencias, type InvoiceLineInput, type MatchResult, type Asignacion,
@@ -172,6 +173,9 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
   const [editando, setEditando] = useState<string | null>(null);
   const [aceptarCostos, setAceptarCostos] = useState(true);
   const [guardando, setGuardando] = useState(false);
+  // Renglones de OC SIN proveedor (o de Mercado Libre) que esta factura cubre: se pasan al proveedor real con un clic.
+  const [sinProv, setSinProv] = useState<CoincidenciaSinProveedor[]>([]);
+  const [asignandoSinProv, setAsignandoSinProv] = useState(false);
 
   // ── Proveedores ──
   useEffect(() => {
@@ -355,6 +359,42 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
     () => (conciliado ? matchPurchaseLines(lineasFactura, ocsUsables, equivalencias, manual, opcionesConRefs) : null),
     [conciliado, lineasFactura, ocsUsables, equivalencias, manual, opcionesConRefs],
   );
+
+  // Lo que la factura trae y no está en las OC de este proveedor: se busca en las OC sin proveedor (o con Mercado Libre).
+  const sinProvKey = useRef("");
+  useEffect(() => {
+    if (!resultado || !sociedadId || !proveedorId) { setSinProv([]); return; }
+    const keys = new Set(resultado.sinAsignar.filter(s => s.tipo === "sin_oc").map(s => s.invoiceKey));
+    if (!keys.size) { setSinProv([]); sinProvKey.current = ""; return; }
+    const k = `${proveedorId}|${[...keys].sort().join(",")}`;
+    if (sinProvKey.current === k) return;
+    sinProvKey.current = k;
+    let vivo = true;
+    (async () => {
+      try {
+        const cand = await cargarLineasSinProveedor(db, sociedadId);
+        const faltan = lineasFactura.filter(l => keys.has(l.key));
+        const c = coincidenciasSinProveedor(faltan, cand, opcionesConRefs);
+        if (vivo) setSinProv(c);
+      } catch { if (vivo) setSinProv([]); /* es una ayuda: si falla, no molesta */ }
+    })();
+    return () => { vivo = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resultado, sociedadId, proveedorId]);
+
+  async function asignarSinProveedor() {
+    if (!proveedor || !sinProv.length) return;
+    setAsignandoSinProv(true);
+    try {
+      const r = await asignarRenglonesAProveedor(db, { sociedadId, userId: profileId || null, itemIds: sinProv.map(s => s.ocLineId), proveedorId, proveedorNombre: proveedor.razon_social, nota: "asignado al conciliar la factura" });
+      for (const a of r.avisos) toast.warning(a);
+      toast.success(`${r.movidos} renglón(es) pasaron a ${proveedor.razon_social}`);
+      setSinProv([]); sinProvKey.current = "";
+      await conciliar();
+    } catch (e: any) {
+      toast.error(`No se pudo asignar: ${e?.message || "error"}`);
+    } finally { setAsignandoSinProv(false); }
+  }
 
   const asigPorLinea = useMemo(() => {
     const m = new Map<string, Asignacion[]>();
@@ -707,6 +747,15 @@ export default function ConciliacionCompras({ sociedadId, profileId, onClose, on
             <section className="space-y-3">
               <div className="flex flex-wrap items-center gap-3">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-orange-600">2. Revisión</h3>
+                {sinProv.length > 0 && (
+                  <div className="flex w-full flex-wrap items-center gap-2 rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-sm text-violet-900 dark:border-violet-800 dark:bg-violet-950/30 dark:text-violet-200">
+                    <Sparkles className="h-4 w-4" />
+                    <span className="min-w-0 flex-1">La factura trae {sinProv.length} renglón(es) que están en OC <b>sin proveedor</b> ({[...new Set(sinProv.map(s => s.ocNumero))].join(", ")}): {sinProv.slice(0, 2).map(s => s.descripcionOc.slice(0, 40)).join(" · ")}{sinProv.length > 2 ? "…" : ""}</span>
+                    <button disabled={asignandoSinProv} onClick={() => void asignarSinProveedor()} className="flex items-center gap-1 rounded-lg bg-violet-600 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">
+                      {asignandoSinProv ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Asignar {proveedor?.razon_social} y conciliar
+                    </button>
+                  </div>
+                )}
                 <span className="text-xs text-zinc-500">{iaInfo}</span>
                 <span className="flex items-center gap-1 text-sm"><span className="h-3 w-3 rounded-full bg-emerald-500" />{conteo.verde} ok</span>
                 <span className="flex items-center gap-1 text-sm"><span className="h-3 w-3 rounded-full bg-amber-400" />{conteo.amarillo} para revisar</span>
