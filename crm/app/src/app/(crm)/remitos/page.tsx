@@ -47,14 +47,15 @@ const transporteEstadoConfig: Record<string, { label: string; variant: "success"
 /** Tipo de remito según lo que realmente tiene: muestra, electrónico (ARCA), Remito R con CAI, manual (PR sin ARCA) o interno sin CAI. */
 type TipoRemitoClave = "muestra" | "arca" | "cai" | "manual" | "interno";
 function tipoRemitoClave(r: { tipo_remito?: string | null; cae?: string | null; cai_numero?: string | null; presupuesto_modalidad?: string | null }): TipoRemitoClave {
-  if (r.tipo_remito === "muestra") return "muestra";
+  // Los remitos de muestra salen como MANUAL (internos, sin CAI ni ARCA), pedido de Augusto 16/10/2026.
+  if (r.tipo_remito === "muestra") return "manual";
   if (r.tipo_remito === "electronico" || r.cae) return "arca";
   if (r.cai_numero) return "cai";
   if (r.presupuesto_modalidad === "manual") return "manual";
   return "interno";
 }
 const TIPO_REMITO_TEXTO: Record<TipoRemitoClave, string> = { muestra: "Muestra", arca: "Electrónico (ARCA)", cai: "Remito R (CAI)", manual: "Manual (sin ARCA)", interno: "Interno sin CAI" };
-const tipoRemitoTexto = (r: Parameters<typeof tipoRemitoClave>[0]) => TIPO_REMITO_TEXTO[tipoRemitoClave(r)];
+const tipoRemitoTexto = (r: Parameters<typeof tipoRemitoClave>[0]) => (r.tipo_remito === "muestra" ? "Manual (muestra)" : TIPO_REMITO_TEXTO[tipoRemitoClave(r)]);
 
 function remitoRequiereARCA(remito: Pick<RemitoRow, "observaciones" | "cae" | "tipo_remito">) {
   // Los remitos de muestras y los internos son constancias manuales. Solo se
@@ -248,10 +249,9 @@ export default function RemitosPage() {
       type: "select",
       options: [
         { value: "cai", label: "Remito R (CAI)" },
-        { value: "manual", label: "Manual (PR sin ARCA)" },
+        { value: "manual", label: "Manual (PR sin ARCA o muestra)" },
         { value: "interno", label: "Interno sin CAI" },
         { value: "arca", label: "Electrónico (ARCA)" },
-        { value: "muestra", label: "Muestra" },
       ],
     },
     {
