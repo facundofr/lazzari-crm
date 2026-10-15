@@ -17,3 +17,5 @@ Se anotan acá en el orden en que las pasa. Al arreglar una: marcarla con ✅ y 
    - **DECIDIDO 16/10:** en las compras de Mercado Libre el proveedor de la OC es SIEMPRE el vendedor real (el que factura). Augusto marca las compras de ML de otra manera (a definir: nota/etiqueta "Mercado Libre" + pagado con Visa) para identificarlas; no se pone "proveedor: Mercado Libre".
 
 3. **16/10/2026 — Ventana "Carga masiva de facturas de proveedores" (captura): se superponen columnas y no se entiende.** ✅ V1.1.469: tabla de columnas fijas, proveedor y archivo cortados con "…" (nombre completo al pasar el mouse), estado en varias líneas, botones que se acomodan, ventana más ancha. Probar con facturas de proveedor de nombre largo.
+
+4. **16/10/2026 — Presupuestos nuevo > Seguimiento (captura): mostrar vendedor y operador, y poder abrir el PR para ver qué es.** ✅ V1.1.470: cada fila muestra "Vendedor: … · Operador: …" (operador = quien cargó el PR) y el botón **Ver qué es** abre debajo los renglones (cantidad, descripción, precio), observaciones y fechas, sin salir de la pantalla; "abrir el PR completo" va al detalle de siempre.

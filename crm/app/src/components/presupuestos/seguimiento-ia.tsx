@@ -29,7 +29,9 @@ type PR = {
   clientes: { razon_social: string; email: string | null; telefono: string | null } | null;
   contacto: { nombre: string | null; email: string | null; telefono: string | null; whatsapp: string | null } | null;
   vendedor_profile: { full_name: string | null } | null;
-  presupuesto_items: Array<{ descripcion: string; cantidad: number }> | null;
+  creador: { full_name: string | null } | null;
+  observaciones: string | null;
+  presupuesto_items: Array<{ descripcion: string; cantidad: number; precio_venta: number | null }> | null;
 };
 type Mensaje = { asunto: string; cuerpo: string; whatsapp: string };
 
@@ -55,6 +57,7 @@ export default function SeguimientoIA() {
   const [verTodos, setVerTodos] = useState(esAdmin);
   const [verViejos, setVerViejos] = useState(false);
   const [abierto, setAbierto] = useState<string | null>(null);
+  const [detalle, setDetalle] = useState<string | null>(null);
   const [mensajes, setMensajes] = useState<Record<string, Mensaje>>({});
   const [generando, setGenerando] = useState<string | null>(null);
   const [panel, setPanel] = useState<{ id: string; tipo: "perdido" | "posponer" } | null>(null);
@@ -69,7 +72,7 @@ export default function SeguimientoIA() {
     setCargando(true); setError("");
     try {
       const filas = await traerTodo<PR>(() => db.from("presupuestos")
-        .select("id, numero, fecha, vencimiento, estado, enviado_at, total, moneda, cliente_id, vendedor_id, created_by, tipo_cambio, clientes(razon_social, email, telefono), contacto:contacto_id(nombre, email, telefono, whatsapp), vendedor_profile:vendedor_id(full_name), presupuesto_items(descripcion, cantidad)")
+        .select("id, numero, fecha, vencimiento, estado, enviado_at, total, moneda, cliente_id, vendedor_id, created_by, tipo_cambio, clientes(razon_social, email, telefono), contacto:contacto_id(nombre, email, telefono, whatsapp), vendedor_profile:vendedor_id(full_name), creador:created_by(full_name), observaciones, presupuesto_items(descripcion, cantidad, precio_venta)")
         .eq("sociedad_id", sociedadActiva.id).in("estado", ["pendiente", "vencido"]).or("eliminado.is.null,eliminado.eq.false").order("fecha", { ascending: true }));
       setPrs(filas);
       let evs: EventoSeg[] = [];
@@ -239,9 +242,10 @@ export default function SeguimientoIA() {
                     <span className={`whitespace-nowrap ${c.diasEnviado >= 7 ? "font-semibold text-red-600" : c.diasEnviado >= 5 ? "text-amber-600" : "text-zinc-500"}`}>enviado {haceDias(c.diasEnviado)}</span>
                     <span className="whitespace-nowrap text-zinc-500">{c.ultimoContacto ? `último: ${CANAL_TEXTO[c.ultimoContacto.canal || "otro"] || "contacto"} ${haceDias(c.diasDesdeContacto ?? 0)}` : "sin contactos"}</span>
                     {g.k === "vencido" ? <span className="whitespace-nowrap font-medium text-red-600">venció {haceDias(c.diasVencido)}</span> : g.k === "esperando" ? <span className="whitespace-nowrap text-zinc-500">toca {formatDate(c.proxima)}</span> : c.atraso > 0 ? <span className="whitespace-nowrap font-medium text-orange-600">{c.atraso} {c.atraso === 1 ? "día" : "días"} de atraso</span> : null}
-                    {verTodos && <span className="whitespace-nowrap text-zinc-400">{p.vendedor_profile?.full_name || ""}</span>}
+                    <span className="whitespace-nowrap text-zinc-500" title="Vendedor y operador (quien cargó el PR)">Vendedor: <b className="font-medium text-zinc-700 dark:text-zinc-200">{p.vendedor_profile?.full_name || "—"}</b> · Operador: <b className="font-medium text-zinc-700 dark:text-zinc-200">{p.creador?.full_name || "—"}</b></span>
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <button onClick={() => setDetalle(detalle === p.id ? null : p.id)} className={`rounded border px-2 py-1 ${detalle === p.id ? "border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-950/30" : "border-zinc-300 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-200"}`}>{detalle === p.id ? "Cerrar detalle" : "Ver qué es"}</button>
                     <button onClick={() => void abrirMensaje(p, c)} className={`flex items-center gap-1 rounded px-2 py-1 font-medium ${abierto === p.id ? "bg-orange-600 text-white" : "bg-orange-500 text-white hover:bg-orange-600"}`}>
                       {generando === p.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Mensaje con IA
                     </button>
@@ -257,6 +261,24 @@ export default function SeguimientoIA() {
                     {puedeDeshacer && <button onClick={() => void deshacerEvento(ultimo)} disabled={ocupado === ultimo.id} className="ml-auto flex items-center gap-1 text-zinc-500 hover:text-orange-600"><Undo2 className="h-3 w-3" /> Deshacer lo último</button>}
                   </div>
 
+                  {detalle === p.id && (
+                    <div className="mt-2 rounded-lg border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-700 dark:bg-zinc-800/50">
+                      <table className="w-full">
+                        <tbody>
+                          {(p.presupuesto_items || []).map((it, k) => (
+                            <tr key={k} className="border-b border-zinc-100 last:border-0 dark:border-zinc-700 dark:text-zinc-200">
+                              <td className="w-14 py-1 pr-2 text-right font-medium">{Number(it.cantidad).toLocaleString("es-AR")}</td>
+                              <td className="py-1">{it.descripcion}</td>
+                              <td className="whitespace-nowrap py-1 pl-2 text-right text-zinc-500">{it.precio_venta ? formatCurrency(Number(it.precio_venta), p.moneda === "USD" ? "USD" : "ARS") : "sin precio"}</td>
+                            </tr>
+                          ))}
+                          {!(p.presupuesto_items || []).length && <tr><td className="py-1 text-zinc-400">Sin renglones</td></tr>}
+                        </tbody>
+                      </table>
+                      {p.observaciones && <p className="mt-1 text-zinc-500">Obs.: {p.observaciones}</p>}
+                      <p className="mt-1 text-[10px] text-zinc-400">Enviado {p.enviado_at ? formatDate(p.enviado_at) : formatDate(p.fecha)} · vence {p.vencimiento ? formatDate(p.vencimiento) : "—"} · <button onClick={() => abrirPR(p.id)} className="text-orange-600 hover:underline">abrir el PR completo</button></p>
+                    </div>
+                  )}
                   {abierto === p.id && mensajes[p.id] && (
                     <div className="mt-2 space-y-2 rounded-lg border border-orange-200 bg-orange-50/50 p-2 dark:border-orange-900 dark:bg-orange-950/20">
                       <input value={mensajes[p.id].asunto} onChange={e => setMsg(p.id, { asunto: e.target.value })} className="w-full rounded border border-zinc-200 px-2 py-1 text-xs font-medium dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
