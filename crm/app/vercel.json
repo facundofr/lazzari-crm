@@ -16,6 +16,18 @@
     {
       "path": "/api/cron/bcra",
       "schedule": "30 10 * * *"
+    },
+    {
+      "path": "/api/cron/agente-mail",
+      "schedule": "30 11 * * 1-5"
+    },
+    {
+      "path": "/api/cron/agente-mail",
+      "schedule": "30 15 * * 1-5"
+    },
+    {
+      "path": "/api/cron/agente-mail",
+      "schedule": "0 19 * * 1-5"
     }
   ]
 }
