@@ -27,7 +27,7 @@ import { SmartFilters, type FilterConfig, type FilterValues } from "@/components
 import { useUser } from "@/lib/auth-context";
 import CatalogoPicker, { filaListaAItem, traerListaCompleta, buscarProveedorCRM, type FilaLista } from "@/components/presupuestos/catalogo-picker";
 import DescripcionLista from "@/components/presupuestos/descripcion-lista";
-import PreciosCostosIA, { type FilaPrecioAnterior, type LineaCosto, type MejorCosto } from "@/components/presupuestos/precios-costos-ia";
+import { type FilaPrecioAnterior, type LineaCosto, type MejorCosto } from "@/components/presupuestos/precios-costos-ia";
 import { claveArticulo, ultimosPrecios, filaPorCodigo, resumenPresupuesto, type PRVendido } from "@/lib/presupuesto-ayudas";
 import CotizacionExpress from "@/components/presupuestos/cotizacion-express";
 import { EmailComposeModal } from "@/components/email-compose-modal";
@@ -4153,10 +4153,6 @@ export default function PresupuestosPage() {
               >
                 <Search className="h-3.5 w-3.5" /> Lista de costos
               </button>
-              <button type="button" onClick={() => setShowPC(true)} title="Mantener el último precio que pagó el cliente y buscar el mismo artículo a mejor costo"
-                className="flex items-center gap-1.5 rounded-lg border border-violet-300 px-3 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-300 dark:hover:bg-violet-950/30">
-                <Sparkles className="h-3.5 w-3.5" /> Precios y costos (IA)
-              </button>
               {newPR.cliente_id && anterioresDelCliente.length > 0 && (
                 <div className="relative">
                   <button type="button" onClick={() => setVerRepetir((v) => !v)} disabled={repitiendo}
@@ -4185,26 +4181,20 @@ export default function PresupuestosPage() {
               onClick={() => { setExpressTexto(""); setShowExpress(true); }}
               className="flex items-center gap-1 rounded-lg border border-orange-200 bg-orange-50 px-2.5 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-400 dark:hover:bg-orange-950/50 transition-colors"
             >
-              <Sparkles className="h-3 w-3" /> Cotización express (IA)
+              <Sparkles className="h-3 w-3" /> Asistente IA
             </button>
           </div>
 
-          <PreciosCostosIA
-            open={showPC}
-            onClose={() => setShowPC(false)}
-            moneda={newPR.moneda}
-            tc={newPR.tipo_cambio}
-            tcDivisas={newPR.tipo_cambio_divisas}
-            precios={preciosAnteriores}
-            lineasPrecio={newPR.items.map((it, idx) => ({ idx, codigo: it.codigo, descripcion: it.descripcion, actual: precioNeto(it, descGeneral) }))}
-            sociedadId={sociedadActiva?.id}
-            clienteId={newPR.cliente_id}
-            lineas={newPR.items.map((it, idx): LineaCosto => ({ idx, codigo: it.codigo, descripcion: it.descripcion, cantidad: it.cantidad, costoPR: it.stock_propio ? 0 : convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas), proveedor: it.proveedor_nombre }))}
-            onAplicarPrecios={aplicarPreciosAnteriores}
-            onAplicarCostos={aplicarMejoresCostos}
-          />
-
           <CotizacionExpress
+            tabInicial={!expressTexto && newPR.items.some((it) => it.descripcion.trim()) ? "precios" : "pedido"}
+            pc={{
+              precios: preciosAnteriores,
+              lineasPrecio: newPR.items.map((it, idx) => ({ idx, codigo: it.codigo, descripcion: it.descripcion, actual: precioNeto(it, descGeneral) })),
+              lineas: newPR.items.map((it, idx): LineaCosto => ({ idx, codigo: it.codigo, descripcion: it.descripcion, cantidad: it.cantidad, costoPR: it.stock_propio ? 0 : convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas), proveedor: it.proveedor_nombre })),
+              clienteId: newPR.cliente_id,
+              onAplicarPrecios: aplicarPreciosAnteriores,
+              onAplicarCostos: aplicarMejoresCostos,
+            }}
             open={showExpress}
             onClose={() => setShowExpress(false)}
             textoInicial={expressTexto}

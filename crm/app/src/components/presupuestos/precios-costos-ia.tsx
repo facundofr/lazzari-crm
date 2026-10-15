@@ -33,13 +33,15 @@ interface Props {
   lineas: LineaCosto[];
   onAplicarPrecios: (cambios: Array<{ idx: number; precio: number }>) => void;
   onAplicarCostos: (cambios: MejorCosto[]) => void | Promise<void>;
+  /** true: se muestra adentro de otra ventana (el asistente unificado), sin su propia ventana ni encabezado. */
+  embebido?: boolean;
 }
 
 type Sugerencia = { l: LineaCosto; cand: Cand; costoNuevoPR: number; ahorroPct: number; ahorroTotal: number; nota: string };
 
 const fmt = (n: number, m: string) => `${m === "ARS" ? "$" : "US$"} ${n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, precios: preciosAuto, lineasPrecio, sociedadId, clienteId, lineas, onAplicarPrecios, onAplicarCostos }: Props) {
+export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, precios: preciosAuto, lineasPrecio, sociedadId, clienteId, lineas, onAplicarPrecios, onAplicarCostos, embebido = false }: Props) {
   const [tab, setTab] = useState<"precios" | "costos">("precios");
   const [marcaP, setMarcaP] = useState<Set<number>>(new Set());
   const [buscando, setBuscando] = useState(false);
@@ -148,19 +150,18 @@ export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, 
     finally { setBuscando(false); setProgreso(""); }
   }
 
-  if (!open || typeof document === "undefined") return null;
+  if (!open || (!embebido && typeof document === "undefined")) return null;
   const ahorroSel = (sug || []).filter(s => marcaC.has(s.l.idx)).reduce((t, s) => t + s.ahorroTotal, 0);
 
-  return createPortal(
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-3" onMouseDown={e => { if (e.target === e.currentTarget && !buscando) onClose(); }}>
-      <div className="flex max-h-[92vh] w-full max-w-5xl flex-col rounded-xl bg-white shadow-2xl dark:bg-zinc-900">
-        <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
+  const caja = (
+      <div className={embebido ? "flex min-h-0 flex-1 flex-col" : "flex max-h-[92vh] w-full max-w-5xl flex-col rounded-xl bg-white shadow-2xl dark:bg-zinc-900"}>
+        {!embebido && <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
           <div>
             <h2 className="flex items-center gap-2 text-lg font-bold dark:text-white"><Sparkles className="h-5 w-5 text-orange-500" /> Precios y costos (IA)</h2>
             <p className="text-xs text-zinc-500">Marcá lo que querés y aplicá. Solo propone: nada cambia hasta que apretás Aplicar.</p>
           </div>
           <button onClick={onClose} disabled={buscando}><X className="h-5 w-5 text-zinc-400" /></button>
-        </div>
+        </div>}
         <div className="space-y-1 border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
           <div className="flex gap-2">
             <Sparkles className="mt-2 h-4 w-4 shrink-0 text-orange-500" />
@@ -240,6 +241,11 @@ export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, 
             className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{aplicando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Aplicar {marcaC.size} costo(s)</button>}
         </div>
       </div>
+  );
+  if (embebido) return caja;
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-3" onMouseDown={e => { if (e.target === e.currentTarget && !buscando) onClose(); }}>
+      {caja}
     </div>,
     document.body,
   );

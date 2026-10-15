@@ -11,6 +11,7 @@ import { X, Loader2, Sparkles, Search, FileUp, Check, AlertTriangle } from "luci
 import { supabase } from "@/lib/supabase/client";
 import { convertirAMonedaPR, normalizarProveedor, buscarProveedorCRM, type CatalogoItemParaPR } from "@/components/presupuestos/catalogo-picker";
 import { Autocompletar } from "@/components/ui/autocompletar";
+import PreciosCostosIA, { type FilaPrecioAnterior, type LineaCosto, type LineaPrecio, type MejorCosto } from "@/components/presupuestos/precios-costos-ia";
 import { buscarCandidatos, normalizar, SIN_PREFS, type Prefs, type CatalogoCandidato as Cand } from "@/lib/catalogo-busqueda";
 
 const db = supabase as any;
@@ -33,6 +34,13 @@ interface Props {
   sociedadId?: string;
   /** Texto que ya escribió el vendedor (ej. la Solicitud): se precarga en el mensaje. */
   textoInicial?: string;
+  /** Asistente unificado: si se pasa, la ventana tiene dos pestañas (armar desde un pedido / precios y costos del PR). */
+  pc?: {
+    precios: FilaPrecioAnterior[]; lineasPrecio: LineaPrecio[]; lineas: LineaCosto[]; clienteId?: string;
+    onAplicarPrecios: (cambios: Array<{ idx: number; precio: number }>) => void;
+    onAplicarCostos: (cambios: MejorCosto[]) => void | Promise<void>;
+  };
+  tabInicial?: "pedido" | "precios";
 }
 
 export function separarTalle(desc: string): { descripcion: string; talle: string } {
@@ -88,7 +96,9 @@ const COLOR: Record<Confianza, string> = {
 };
 const ETIQUETA: Record<Confianza, string> = { alta: "Seguro", media: "Revisar", baja: "Alternativa", ninguna: "No está", manual: "Elegido" };
 
-export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivisas, onAgregar, onPedirTc, proveedoresCRM, sociedadId, textoInicial }: Props) {
+export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivisas, onAgregar, onPedirTc, proveedoresCRM, sociedadId, textoInicial, pc, tabInicial }: Props) {
+  const [asistente, setAsistente] = useState<"pedido" | "precios">("pedido");
+  useEffect(() => { if (open) setAsistente(pc && tabInicial === "precios" ? "precios" : "pedido"); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   const [mensaje, setMensaje] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
   const [imagen, setImagen] = useState<{ data: string; media_type: string; name: string } | null>(null);
@@ -396,11 +406,19 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
       <div className="flex max-h-[94vh] w-full max-w-6xl flex-col rounded-xl bg-white shadow-2xl dark:bg-zinc-900">
         <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
           <div>
-            <h2 className="flex items-center gap-2 text-lg font-bold dark:text-white"><Sparkles className="h-5 w-5 text-orange-500" /> Cotización express</h2>
+            <h2 className="flex items-center gap-2 text-lg font-bold dark:text-white"><Sparkles className="h-5 w-5 text-orange-500" /> {pc ? "Asistente IA" : "Cotización express"}</h2>
             <p className="text-xs text-zinc-500">Tirá un Excel, PDF o foto, o pegá el mensaje del cliente. Se busca cada artículo en la lista de costos y vos revisás antes de agregar.</p>
           </div>
           <button onClick={cerrar} disabled={!!progreso}><X className="h-5 w-5 text-zinc-400" /></button>
         </div>
+        {pc && <div className="flex gap-1 border-b border-zinc-200 px-4 dark:border-zinc-700">
+          {([["pedido", "Armar desde un pedido (Excel, foto, texto)"], ["precios", "Precios y costos del PR"]] as const).map(([k, t]) => (
+            <button key={k} onClick={() => setAsistente(k)} disabled={!!progreso} className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${asistente === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}>{t}</button>
+          ))}
+        </div>}
+        {pc && asistente === "precios" ? (
+          <PreciosCostosIA embebido open onClose={cerrar} moneda={prMoneda} tc={tc} tcDivisas={tcDivisas} sociedadId={sociedadId} {...pc} />
+        ) : (<>
 
         {fase === "entrada" && <div className="space-y-3 overflow-y-auto p-5">
           <label
@@ -596,6 +614,7 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
               </>}
           </div>
         </div>
+        </>)}
       </div>
     </div>,
     document.body,
