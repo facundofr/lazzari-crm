@@ -11,8 +11,11 @@ import { createPortal } from "react-dom";
 import { Check, Loader2, Sparkles, X } from "lucide-react";
 import { buscarCandidatos, type CatalogoCandidato as Cand } from "@/lib/catalogo-busqueda";
 import { convertirAMonedaPR } from "@/components/presupuestos/catalogo-picker";
+import { supabase } from "@/lib/supabase/client";
+import { claveArticulo } from "@/lib/presupuesto-ayudas";
 
 export interface FilaPrecioAnterior { idx: number; descripcion: string; actual: number; anterior: number; numero: string; fecha: string }
+export interface LineaPrecio { idx: number; codigo: string; descripcion: string; actual: number }
 export interface LineaCosto { idx: number; codigo: string; descripcion: string; cantidad: number; costoPR: number; proveedor: string }
 export interface MejorCosto { idx: number; cand: Cand; costoNuevoPR: number }
 
@@ -23,6 +26,10 @@ interface Props {
   tc: number;
   tcDivisas: number;
   precios: FilaPrecioAnterior[];
+  /** Renglones del PR con su precio neto actual (para compararlos con un PR de referencia que nombra el vendedor). */
+  lineasPrecio: LineaPrecio[];
+  sociedadId?: string;
+  clienteId?: string;
   lineas: LineaCosto[];
   onAplicarPrecios: (cambios: Array<{ idx: number; precio: number }>) => void;
   onAplicarCostos: (cambios: MejorCosto[]) => void | Promise<void>;
@@ -32,7 +39,7 @@ type Sugerencia = { l: LineaCosto; cand: Cand; costoNuevoPR: number; ahorroPct: 
 
 const fmt = (n: number, m: string) => `${m === "ARS" ? "$" : "US$"} ${n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, precios, lineas, onAplicarPrecios, onAplicarCostos }: Props) {
+export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, precios: preciosAuto, lineasPrecio, sociedadId, clienteId, lineas, onAplicarPrecios, onAplicarCostos }: Props) {
   const [tab, setTab] = useState<"precios" | "costos">("precios");
   const [marcaP, setMarcaP] = useState<Set<number>>(new Set());
   const [buscando, setBuscando] = useState(false);
@@ -42,6 +49,54 @@ export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, 
   const [yaMejores, setYaMejores] = useState(0);
   const [marcaC, setMarcaC] = useState<Set<number>>(new Set());
   const [aplicando, setAplicando] = useState(false);
+  // "Decile a la IA": instrucción libre (ej. "mantené el precio del PR 1203 si coincide el artículo").
+  type RefPR = { numero: string; moneda: string; fecha: string; clienteId: string | null; items: Array<{ codigo: string | null; descripcion: string; precio_venta: number }> };
+  const [instruccion, setInstruccion] = useState("");
+  const [entendiendo, setEntendiendo] = useState(false);
+  const [respuestaIA, setRespuestaIA] = useState("");
+  const [refs, setRefs] = useState<RefPR[]>([]);
+
+  async function decirleALaIA() {
+    const texto = instruccion.trim(); if (!texto) return;
+    setError(""); setRespuestaIA(""); setEntendiendo(true);
+    try {
+      const res = await fetch("/api/presupuestos/instruccion-precios", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruccion: texto }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || "La IA no pudo entender la instrucción");
+      if (d.pregunta) { setRespuestaIA(`❓ ${d.pregunta}`); return; }
+      let cargados: RefPR[] = [];
+      if (d.prs?.length) {
+        const rs = await Promise.all((d.prs as string[]).map(n => (supabase as any).from("presupuestos").select("numero, moneda, fecha, cliente_id, presupuesto_items(codigo, descripcion, precio_venta)").eq("sociedad_id", sociedadId).ilike("numero", `%-${n}`).limit(1)));
+        cargados = rs.flatMap((r: any) => (r.data || []).map((p: any) => ({ numero: p.numero, moneda: p.moneda, fecha: String(p.fecha || ""), clienteId: p.cliente_id, items: (p.presupuesto_items || []).map((i: any) => ({ codigo: i.codigo, descripcion: i.descripcion || "", precio_venta: Number(i.precio_venta) || 0 })) })));
+        const faltan = (d.prs as string[]).filter(n => !cargados.some(c => c.numero.endsWith(`-${n}`)));
+        if (faltan.length) setError(`No encontré el PR ${faltan.join(", ")}.`);
+      }
+      setRefs(cargados);
+      const otros = cargados.filter(c => clienteId && c.clienteId && c.clienteId !== clienteId);
+      setRespuestaIA(`${d.resumen || "Listo."}${otros.length ? ` ⚠️ ${otros.map(o => o.numero).join(", ")} es de otro cliente.` : ""}`);
+      if (d.mejores_costos) setTab("costos"); else setTab("precios");
+      setTocadoP(false);
+    } catch (e) { setError(e instanceof Error ? e.message : "Error inesperado"); }
+    finally { setEntendiendo(false); }
+  }
+
+  // Con PR de referencia nombrado por el vendedor: se comparan los renglones contra ESE PR (si no, contra el último precio del cliente).
+  const { precios, noCoinciden, otraMoneda } = useMemo(() => {
+    if (!refs.length) return { precios: preciosAuto, noCoinciden: 0, otraMoneda: [] as string[] };
+    const mapa = new Map<string, { precio: number; numero: string; fecha: string }>();
+    const otra: string[] = [];
+    for (const r of [...refs].sort((a, b) => a.fecha.localeCompare(b.fecha))) {
+      if (String(r.moneda) !== moneda) { otra.push(r.numero); continue; }
+      for (const it of r.items) { const k = claveArticulo(it.codigo, it.descripcion); if (k && it.precio_venta > 0) mapa.set(k, { precio: it.precio_venta, numero: r.numero, fecha: r.fecha }); }
+    }
+    const out: FilaPrecioAnterior[] = []; let no = 0;
+    for (const l of lineasPrecio) {
+      const u = mapa.get(claveArticulo(l.codigo, l.descripcion));
+      if (!u) { no++; continue; }
+      if (l.actual > 0 && Math.abs(l.actual - u.precio) > 0.004) out.push({ idx: l.idx, descripcion: l.descripcion, actual: l.actual, anterior: u.precio, numero: u.numero, fecha: u.fecha });
+    }
+    return { precios: out, noCoinciden: no, otraMoneda: otra };
+  }, [refs, preciosAuto, lineasPrecio, moneda]);
 
   // por defecto todo marcado; al tocar una casilla se pasa a la selección propia
   const [tocadoP, setTocadoP] = useState(false);
@@ -106,6 +161,18 @@ export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, 
           </div>
           <button onClick={onClose} disabled={buscando}><X className="h-5 w-5 text-zinc-400" /></button>
         </div>
+        <div className="space-y-1 border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
+          <div className="flex gap-2">
+            <Sparkles className="mt-2 h-4 w-4 shrink-0 text-orange-500" />
+            <textarea value={instruccion} onChange={e => setInstruccion(e.target.value)} rows={2}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void decirleALaIA(); } }}
+              placeholder='Decile a la IA, por ejemplo: "Hice el PR 1203 para este cliente en otra sucursal: si coincide el artículo, mantené el precio de ese PR" · "sugerime los mejores costos"'
+              className="min-w-0 flex-1 rounded border border-orange-200 px-2 py-1 text-sm dark:border-orange-800 dark:bg-zinc-800 dark:text-white" />
+            <button onClick={() => void decirleALaIA()} disabled={entendiendo || !instruccion.trim()} className="self-start rounded bg-orange-500 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">{entendiendo ? <Loader2 className="h-4 w-4 animate-spin" /> : "Enviar"}</button>
+          </div>
+          {respuestaIA && <p className="text-xs text-emerald-700 dark:text-emerald-400">✓ {respuestaIA}{refs.length > 0 && noCoinciden > 0 ? ` · ${noCoinciden} renglón(es) no coinciden con ese PR y quedan como están.` : ""}{otraMoneda.length ? ` ⚠️ ${otraMoneda.join(", ")} está en otra moneda y no se usa.` : ""}</p>}
+          {error && <p className="text-xs text-red-600">⚠️ {error}</p>}
+        </div>
         <div className="flex gap-1 border-b border-zinc-200 px-4 dark:border-zinc-700">
           {([["precios", `Mantener precios anteriores (${precios.length})`], ["costos", "Mejores costos"]] as const).map(([k, t]) => (
             <button key={k} onClick={() => setTab(k)} className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${tab === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500"}`}>{t}</button>
@@ -115,7 +182,7 @@ export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, 
         <div className="min-h-0 flex-1 overflow-auto p-4">
           {tab === "precios" && (
             precios.length === 0
-              ? <p className="py-8 text-center text-sm text-zinc-500">Ningún artículo de este presupuesto tiene un precio anterior distinto al actual (de PR aprobados o facturados de este cliente, en la misma moneda).</p>
+              ? <p className="py-8 text-center text-sm text-zinc-500">{refs.length ? "Ningún renglón coincide con ese PR con un precio distinto al actual." : "Ningún artículo de este presupuesto tiene un precio anterior distinto al actual (de PR aprobados o facturados de este cliente, en la misma moneda). Podés decirle a la IA de qué PR tomar los precios."}</p>
               : <table className="w-full text-xs">
                 <thead className="bg-zinc-100 text-left text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"><tr>
                   <th className="px-2 py-2"><input type="checkbox" checked={selP.size === precios.length} onChange={e => { setTocadoP(true); setMarcaP(new Set(e.target.checked ? precios.map(p => p.idx) : [])); }} /></th>

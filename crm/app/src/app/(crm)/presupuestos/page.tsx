@@ -4196,6 +4196,9 @@ export default function PresupuestosPage() {
             tc={newPR.tipo_cambio}
             tcDivisas={newPR.tipo_cambio_divisas}
             precios={preciosAnteriores}
+            lineasPrecio={newPR.items.map((it, idx) => ({ idx, codigo: it.codigo, descripcion: it.descripcion, actual: precioNeto(it, descGeneral) }))}
+            sociedadId={sociedadActiva?.id}
+            clienteId={newPR.cliente_id}
             lineas={newPR.items.map((it, idx): LineaCosto => ({ idx, codigo: it.codigo, descripcion: it.descripcion, cantidad: it.cantidad, costoPR: it.stock_propio ? 0 : convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas), proveedor: it.proveedor_nombre }))}
             onAplicarPrecios={aplicarPreciosAnteriores}
             onAplicarCostos={aplicarMejoresCostos}
@@ -4214,9 +4217,9 @@ export default function PresupuestosPage() {
               const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
               return fetchCotizBna(cli?.moneda_predeterminada === "USD" ? "billetes" : "divisas");
             }}
-            onAgregar={(nuevos) => setNewPR((p) => ({
+            onAgregar={(nuevos, reemplazar) => setNewPR((p) => ({
               ...p,
-              items: [...p.items.filter((it) => it.codigo.trim() || it.descripcion.trim()), ...nuevos],
+              items: reemplazar ? nuevos : [...p.items.filter((it) => it.codigo.trim() || it.descripcion.trim()), ...nuevos],
             }))}
           />
 

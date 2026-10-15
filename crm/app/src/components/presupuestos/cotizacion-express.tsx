@@ -26,7 +26,8 @@ interface Props {
   prMoneda: string;
   tc: number;
   tcDivisas: number;
-  onAgregar: (items: CatalogoItemParaPR[]) => void;
+  /** reemplazar = true: los renglones actuales del presupuesto se reemplazan por estos ("rehacer el PR" desde el Excel). */
+  onAgregar: (items: CatalogoItemParaPR[], reemplazar?: boolean) => void;
   onPedirTc?: () => void | Promise<boolean>;
   proveedoresCRM?: Array<{ id: string; razon_social: string }>;
   sociedadId?: string;
@@ -357,7 +358,7 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
 
   const upd = (id: string, cambios: Partial<Linea>) => setLineas(ls => ls.map(l => l.id === id ? { ...l, ...cambios } : l));
 
-  function agregar() {
+  function agregar(reemplazar = false) {
     const out: CatalogoItemParaPR[] = [];
     for (const l of lineas) {
       if (!l.incluir) continue;
@@ -377,7 +378,7 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
         stock_propio: false, lista_item_id: "", costo_moneda: c.moneda === "ARS" ? "ARS" : c.moneda === "USD divisa" ? "USD Divisa" : "USD",
       });
     }
-    onAgregar(out);
+    onAgregar(out, reemplazar);
     cerrar();
   }
 
@@ -589,7 +590,10 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
             </>}
             {fase === "preguntas" ? null : fase === "entrada"
               ? <button onClick={() => void armar()} disabled={!!progreso || (!mensaje.trim() && !archivo && !imagen)} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{progreso ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Armar cotización</button>
-              : <button onClick={agregar} disabled={!incluidas.length || sinTc} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><Check className="h-4 w-4" /> Agregar {incluidas.length} al presupuesto</button>}
+              : <>
+                <button onClick={() => { if (window.confirm("Se reemplazan TODOS los renglones actuales del presupuesto por estos. ¿Seguir?")) agregar(true); }} disabled={!incluidas.length || sinTc} className="rounded-lg border border-orange-400 px-3 py-2 text-sm font-medium text-orange-700 disabled:opacity-50 dark:text-orange-300" title="Rehace el presupuesto con lo que leyó (por ejemplo, de tu Excel)">Reemplazar los renglones del PR</button>
+                <button onClick={() => agregar(false)} disabled={!incluidas.length || sinTc} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><Check className="h-4 w-4" /> Agregar {incluidas.length} al presupuesto</button>
+              </>}
           </div>
         </div>
       </div>
