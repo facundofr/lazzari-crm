@@ -44,14 +44,17 @@ const transporteEstadoConfig: Record<string, { label: string; variant: "success"
   cancelado: { label: "Cancelado", variant: "danger" },
 };
 
-/** Tipo de remito: manual (interno, para los PR manuales sin ARCA), electrónico (ARCA) o muestra. */
-function tipoRemitoClave(r: { tipo_remito?: string | null }): "manual" | "arca" | "muestra" {
-  return r.tipo_remito === "electronico" ? "arca" : r.tipo_remito === "muestra" ? "muestra" : "manual";
+/** Tipo de remito según lo que realmente tiene: muestra, electrónico (ARCA), Remito R con CAI, manual (PR sin ARCA) o interno sin CAI. */
+type TipoRemitoClave = "muestra" | "arca" | "cai" | "manual" | "interno";
+function tipoRemitoClave(r: { tipo_remito?: string | null; cae?: string | null; cai_numero?: string | null; presupuesto_modalidad?: string | null }): TipoRemitoClave {
+  if (r.tipo_remito === "muestra") return "muestra";
+  if (r.tipo_remito === "electronico" || r.cae) return "arca";
+  if (r.cai_numero) return "cai";
+  if (r.presupuesto_modalidad === "manual") return "manual";
+  return "interno";
 }
-function tipoRemitoTexto(r: { tipo_remito?: string | null }): string {
-  const k = tipoRemitoClave(r);
-  return k === "arca" ? "Electrónico (ARCA)" : k === "muestra" ? "Muestra" : "Manual";
-}
+const TIPO_REMITO_TEXTO: Record<TipoRemitoClave, string> = { muestra: "Muestra", arca: "Electrónico (ARCA)", cai: "Remito R (CAI)", manual: "Manual (sin ARCA)", interno: "Interno sin CAI" };
+const tipoRemitoTexto = (r: Parameters<typeof tipoRemitoClave>[0]) => TIPO_REMITO_TEXTO[tipoRemitoClave(r)];
 
 function remitoRequiereARCA(remito: Pick<RemitoRow, "observaciones" | "cae" | "tipo_remito">) {
   // Los remitos de muestras y los internos son constancias manuales. Solo se
@@ -80,6 +83,8 @@ interface RemitoRow {
   clienteNombre: string;
   oc_cliente?: string | null;
   presupuesto_numero?: string | null;
+  presupuesto_modalidad?: string | null;
+  ocs_numeros?: string[];
   remito_items: { id: string }[];
   // CAI fields
   cai_numero?: string | null;
@@ -165,6 +170,8 @@ export default function RemitosPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [copiedSummary, setCopiedSummary] = useState(false);
   const [detailPRNumero, setDetailPRNumero] = useState<string | null>(null);
+  // Por renglón del PR: cuánto pide el PR y cuánto se remitó en total (todos los remitos del PR).
+  const [detailPRItems, setDetailPRItems] = useState<Record<string, { total: number; remitido: number }>>({});
   const [detailFacturas, setDetailFacturas] = useState<{ id: string; numero: string; tipo: string; total: number; estado: string }[]>([]);
   const [detailTransportes, setDetailTransportes] = useState<TransporteLinked[]>([]);
   const [detailOC, setDetailOC] = useState<{ id: string; numero: string } | null>(null);
@@ -240,7 +247,9 @@ export default function RemitosPage() {
       label: "Tipo",
       type: "select",
       options: [
+        { value: "cai", label: "Remito R (CAI)" },
         { value: "manual", label: "Manual (PR sin ARCA)" },
+        { value: "interno", label: "Interno sin CAI" },
         { value: "arca", label: "Electrónico (ARCA)" },
         { value: "muestra", label: "Muestra" },
       ],
@@ -291,7 +300,7 @@ export default function RemitosPage() {
       try {
         let q = (supabase as any)
           .from("remitos")
-          .select(`*, clientes(razon_social, email, cuit, direccion), presupuestos(numero), remito_items(id)`)
+          .select(`*, clientes(razon_social, email, cuit, direccion), presupuestos(numero, modalidad_emision), remito_items(id)`)
           .order("fecha", { ascending: false });
 
         if (!sociedadActiva?.id) { setRemitos([]); return; }
@@ -300,7 +309,16 @@ export default function RemitosPage() {
         const { data, error } = await q;
 
         if (!error && data) {
-          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "", presupuesto_numero: r.presupuestos?.numero || null })) as RemitoRow[]);
+          // N° de las OC (nuestras) de cada PR: una consulta por tandas.
+          const ocsPorPR = new Map<string, string[]>();
+          try {
+            const prIds = [...new Set((data as any[]).map(r => r.presupuesto_id).filter(Boolean))] as string[];
+            for (let i = 0; i < prIds.length; i += 150) {
+              const { data: ocs } = await (supabase as any).from("ordenes_compra").select("numero, presupuesto_origen_id").in("presupuesto_origen_id", prIds.slice(i, i + 150)).eq("sociedad_id", sociedadActiva.id).neq("estado", "cancelada").order("numero");
+              for (const o of ocs || []) ocsPorPR.set(o.presupuesto_origen_id, [...(ocsPorPR.get(o.presupuesto_origen_id) || []), o.numero]);
+            }
+          } catch { /* sin OC: la columna queda vacía */ }
+          setRemitos((data as any[]).map(r => ({ ...r, clienteNombre: r.clientes?.razon_social || "", presupuesto_numero: r.presupuestos?.numero || null, presupuesto_modalidad: r.presupuestos?.modalidad_emision || null, ocs_numeros: ocsPorPR.get(r.presupuesto_id) || [] })) as RemitoRow[]);
         } else if (error) {
           setRemitos(mockRemitos.map((r) => ({
             id: r.id, numero: r.numero, cliente_id: r.clienteId,
@@ -1000,6 +1018,7 @@ export default function RemitosPage() {
     setDetailRemito(row);
     setDetailLoading(true);
     setDetailPRNumero(null);
+    setDetailPRItems({});
     setDetailFacturas([]);
     setDetailTransportes([]);
     setDetailOC(null);
@@ -1034,6 +1053,21 @@ export default function RemitosPage() {
       ]);
 
       setDetailItems((itemsRes.data as unknown as RemitoDetailItem[]) || []);
+      // Lo que lleva el PR y lo que ya se remitó, para ver el pendiente de cada renglón.
+      if (row.presupuesto_id) {
+        try {
+          const [{ data: pis }, { data: rems }] = await Promise.all([
+            (supabase as any).from("presupuesto_items").select("id, cantidad").eq("presupuesto_id", row.presupuesto_id),
+            (supabase as any).from("remitos").select("id").eq("presupuesto_id", row.presupuesto_id),
+          ]);
+          const remitidos: Record<string, number> = {};
+          if (rems?.length) {
+            const { data: ris } = await (supabase as any).from("remito_items").select("presupuesto_item_id, cantidad").in("remito_id", rems.map((r: any) => r.id));
+            for (const ri of ris || []) if (ri.presupuesto_item_id) remitidos[ri.presupuesto_item_id] = (remitidos[ri.presupuesto_item_id] || 0) + Number(ri.cantidad);
+          }
+          setDetailPRItems(Object.fromEntries((pis || []).map((p: any) => [p.id, { total: Number(p.cantidad), remitido: remitidos[p.id] || 0 }])));
+        } catch { /* el detalle sigue sin la columna del PR */ }
+      }
       if (prRes?.data) {
         setDetailPRNumero((prRes.data as any).numero || null);
       }
@@ -1233,6 +1267,8 @@ export default function RemitosPage() {
         <Card className="p-0 overflow-hidden">
           <DataTable<RemitoRow>
             columns={[
+              { key: "presupuesto_id", label: "N° PR", sortable: true, sortValue: (row) => row.presupuesto_numero || "", render: (row) => row.presupuesto_id ? <Badge variant="info">{row.presupuesto_numero || "Vinculado"}</Badge> : <span className="text-zinc-400">{"—"}</span> },
+              { key: "ocs_numeros", label: "N° OC", sortable: true, sortValue: (row) => (row.ocs_numeros || []).join(" "), render: (row) => (row.ocs_numeros || []).length ? <span className="font-mono text-xs text-violet-700 dark:text-violet-300">{(row.ocs_numeros || []).join(", ")}</span> : <span className="text-zinc-400">{"—"}</span> },
               {
                 key: "numero", label: "N° Remito", sortable: true,
                 render: (row) => {
@@ -1256,9 +1292,8 @@ export default function RemitosPage() {
                   {row.remito_items.length === 0 ? "Sin items" : `${row.remito_items.length} productos`}
                 </span>
               ) },
-              { key: "tipo_remito", label: "Tipo", sortable: true, sortValue: (row) => tipoRemitoTexto(row), render: (row) => <Badge variant={row.tipo_remito === "electronico" ? "info" : row.tipo_remito === "muestra" ? "purple" : "default"}>{tipoRemitoTexto(row)}</Badge> },
+              { key: "tipo_remito", label: "Tipo", sortable: true, sortValue: (row) => tipoRemitoTexto(row), render: (row) => { const k = tipoRemitoClave(row); return <Badge variant={k === "arca" ? "info" : k === "muestra" ? "purple" : k === "cai" ? "success" : k === "manual" ? "orange" : "default"}>{tipoRemitoTexto(row)}</Badge>; } },
               { key: "oc_cliente", label: "OC Cliente", sortable: true, sortValue: (row) => row.oc_cliente || "", render: (row) => row.oc_cliente ? <span className="font-mono text-xs text-blue-600 dark:text-blue-400">{row.oc_cliente}</span> : <span className="text-zinc-400">{"\u2014"}</span> },
-              { key: "presupuesto_id", label: "PR Origen", sortable: true, sortValue: (row) => row.presupuesto_numero || "", render: (row) => row.presupuesto_id ? <Badge variant="info">{row.presupuesto_numero || "Vinculado"}</Badge> : <span className="text-zinc-400">{"\u2014"}</span> },
               {
                 key: "estado", label: "Estado", sortable: true,
                 render: (row) => {
@@ -1326,7 +1361,7 @@ export default function RemitosPage() {
           )}
           <div className={panelFullscreen
             ? "fixed inset-4 z-50 overflow-y-auto bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl animate-slide-in-right"
-            : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-xl"
+            : "fixed right-0 top-0 z-50 h-full w-full overflow-y-auto bg-white shadow-2xl dark:bg-zinc-900 animate-slide-in-right max-w-3xl"
           }>
             <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-700 sticky top-0 bg-white dark:bg-zinc-900 z-10">
               <div>
@@ -1385,8 +1420,58 @@ export default function RemitosPage() {
                 )}
               </div>
 
+              {/* Resumen: tipo, items, unidades y cuánto del PR está remitido */}
+              {(() => {
+                const unidades = detailItems.reduce((s, i) => s + Number(i.cantidad || 0), 0);
+                const pr = Object.values(detailPRItems);
+                const totalPR = pr.reduce((s, x) => s + x.total, 0), remitidoPR = pr.reduce((s, x) => s + Math.min(x.remitido, x.total), 0);
+                const k = tipoRemitoClave(detailRemito);
+                return (
+                  <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs dark:border-zinc-700 dark:bg-zinc-800/50">
+                    <Badge variant={k === "arca" ? "info" : k === "muestra" ? "purple" : k === "cai" ? "success" : k === "manual" ? "orange" : "default"}>{tipoRemitoTexto(detailRemito)}</Badge>
+                    <span className="dark:text-zinc-200"><b>{detailItems.length}</b> renglones · <b>{unidades.toLocaleString("es-AR")}</b> unidades</span>
+                    {totalPR > 0 && <span className={`font-medium ${remitidoPR >= totalPR ? "text-emerald-600" : "text-amber-600"}`}>PR remitido {remitidoPR.toLocaleString("es-AR")} de {totalPR.toLocaleString("es-AR")}{remitidoPR >= totalPR ? " · completo" : ` · faltan ${(totalPR - remitidoPR).toLocaleString("es-AR")}`}</span>}
+                    {detailRemito.valor_declarado ? <span className="ml-auto text-zinc-500">Valor declarado ${Number(detailRemito.valor_declarado).toLocaleString("es-AR")}</span> : null}
+                  </div>
+                );
+              })()}
+
+              {/* Items: lo que lleva este remito (arriba, para verlo de entrada) */}
+              <div>
+                <h3 className="text-sm font-semibold mb-1.5 dark:text-white">Detalle del remito ({detailItems.length})</h3>
+                {detailLoading ? (
+                  <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-orange-500" /></div>
+                ) : detailItems.length === 0 ? (
+                  <p className="text-sm text-zinc-400 text-center py-4 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700">Sin items cargados en este remito</p>
+                ) : (
+                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
+                          <th className="text-left px-2.5 py-1.5 w-10">#</th>
+                          <th className="text-left px-2.5 py-1.5">Descripción</th>
+                          <th className="text-right px-2.5 py-1.5 w-20">Este remito</th><th className="text-right px-2.5 py-1.5 w-16">Del PR</th><th className="text-right px-2.5 py-1.5 w-20">Ya remitido</th><th className="text-right px-2.5 py-1.5 w-20">Pendiente</th>
+                          <th className="text-left px-2.5 py-1.5 w-16">Unidad</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detailItems.map((item, i) => (
+                          <tr key={item.id} className="border-t border-zinc-100 dark:border-zinc-800">
+                            <td className="px-2.5 py-1.5 text-zinc-400">{i + 1}</td>
+                            <td className="px-2.5 py-1.5 dark:text-white">{item.descripcion}</td>
+                            <td className="px-2.5 py-1.5 text-right font-medium dark:text-white">{item.cantidad}</td>
+                            {(() => { const x = item.presupuesto_item_id ? detailPRItems[item.presupuesto_item_id] : undefined; const pend = x ? Math.max(0, x.total - x.remitido) : null; return <><td className="px-2.5 py-1.5 text-right text-zinc-500">{x ? x.total : "—"}</td><td className="px-2.5 py-1.5 text-right text-zinc-500">{x ? x.remitido : "—"}</td><td className={`px-2.5 py-1.5 text-right font-medium ${pend ? "text-amber-600" : "text-emerald-600"}`}>{pend === null ? "—" : pend}</td></>; })()}
+                            <td className="px-2.5 py-1.5 text-zinc-500">{item.unidad || "u"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
               {/* Info */}
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
                 <div>
                   <span className="text-zinc-400">Cliente</span>
                   <p className="font-medium dark:text-white">{detailRemito.clientes?.razon_social || "\u2014"}</p>
@@ -1685,38 +1770,6 @@ export default function RemitosPage() {
                 />
               </div>
 
-              {/* Items */}
-              <div>
-                <h3 className="text-sm font-semibold mb-1.5 dark:text-white">Items ({detailItems.length})</h3>
-                {detailLoading ? (
-                  <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-orange-500" /></div>
-                ) : detailItems.length === 0 ? (
-                  <p className="text-sm text-zinc-400 text-center py-4 rounded-lg border border-dashed border-zinc-200 dark:border-zinc-700">Sin items cargados en este remito</p>
-                ) : (
-                  <div className="rounded-lg border border-zinc-200 dark:border-zinc-700 overflow-hidden">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="bg-zinc-50 dark:bg-zinc-800/50 text-xs text-zinc-500">
-                          <th className="text-left px-2.5 py-1.5 w-10">#</th>
-                          <th className="text-left px-2.5 py-1.5">Descripción</th>
-                          <th className="text-right px-2.5 py-1.5 w-24">Cantidad</th>
-                          <th className="text-left px-2.5 py-1.5 w-20">Unidad</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {detailItems.map((item, i) => (
-                          <tr key={item.id} className="border-t border-zinc-100 dark:border-zinc-800">
-                            <td className="px-2.5 py-1.5 text-zinc-400">{i + 1}</td>
-                            <td className="px-2.5 py-1.5 dark:text-white">{item.descripcion}</td>
-                            <td className="px-2.5 py-1.5 text-right font-medium dark:text-white">{item.cantidad}</td>
-                            <td className="px-2.5 py-1.5 text-zinc-500">{item.unidad || "u"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         </>
