@@ -9,6 +9,7 @@ import {
 } from "@/lib/agente-mail";
 
 const MODELO = "claude-haiku-4-5-20251001";
+const EN_PARALELO = 3;
 const PRESUPUESTO_MS = 30_000; // la ruta corta a los 60 s; un mail con PDF puede tardar 15 s
 const MAX_ADJUNTO_BYTES = 4_500_000;
 const SOCIEDAD_LAZZARI = "eee2a3c8-fe6c-494d-bd2f-7a5d8067d021";
@@ -162,7 +163,7 @@ export type ResultadoCorrida = { ok: boolean; nuevos: number; faltan: number; co
 export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Promise<ResultadoCorrida> {
   const inicio = Date.now();
   const { data: corrida } = await db.from("agente_mail_corridas").insert({ origen }).select("id").single();
-  const uso: Uso = { costo: 0, entrada: 0, salida: 0 };
+  const total: Uso = { costo: 0, entrada: 0, salida: 0 };
   let nuevos = 0, faltan = 0, topeado = false, error: string | undefined;
   const porCategoria = new Map<string, number>();
   const urgentes: string[] = [];
@@ -189,10 +190,9 @@ export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Prom
     const entradas = await cargarEntradasBanco(db);
     let visionUsada = 0;
 
-    for (const id of pendientes) {
-      if (nuevos >= MAX_MAILS_POR_CORRIDA || Date.now() - inicio > PRESUPUESTO_MS) break;
-      if (superaTopeDiario(gastadoHoy + uso.costo)) { topeado = true; break; }
-      const antes = uso.costo;
+    const procesarUno = async (id: string) => {
+      const uso: Uso = { costo: 0, entrada: 0, salida: 0 }; // gasto de ESTE mail (se suma al total al final)
+      const antes = 0;
       let fila: any;
       try {
         const msg = await leerMensaje(token, id);
@@ -279,11 +279,18 @@ export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Prom
           accion_sugerida: "Revisarlo a mano en Gmail.", error: String(e?.message || e).slice(0, 300), costo_usd: Number((uso.costo - antes).toFixed(5)) };
       }
       const { error: eIns } = await db.from("agente_mail_procesados").insert(fila);
-      if (eIns) { error = `No se pudo guardar: ${eIns.message}`; break; }
+      total.costo += uso.costo; total.entrada += uso.entrada; total.salida += uso.salida;
+      if (eIns) { error = `No se pudo guardar: ${eIns.message}`; return; }
       nuevos++;
       porCategoria.set(fila.categoria, (porCategoria.get(fila.categoria) || 0) + 1);
       porSociedad.set(fila.sociedad_id, (porSociedad.get(fila.sociedad_id) || 0) + 1);
       if (fila.prioridad === "alta" && urgentes.length < 5) urgentes.push(`${fila.asunto || "(sin asunto)"}: ${fila.accion_sugerida || fila.resumen}`);
+    };
+    // De a EN_PARALELO mails a la vez: la ruta tiene 60 s y cada mail con PDF tarda varios segundos.
+    for (let k = 0; k < pendientes.length; k += EN_PARALELO) {
+      if (nuevos >= MAX_MAILS_POR_CORRIDA || Date.now() - inicio > PRESUPUESTO_MS || error) break;
+      if (superaTopeDiario(gastadoHoy + total.costo)) { topeado = true; break; }
+      await Promise.all(pendientes.slice(k, k + EN_PARALELO).map(procesarUno));
     }
     faltan = Math.max(0, pendientes.length - nuevos);
   } catch (e: any) {
@@ -297,11 +304,11 @@ export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Prom
 
   if (corrida?.id) {
     await db.from("agente_mail_corridas").update({
-      fin: new Date().toISOString(), mails_nuevos: nuevos, pendientes_restantes: faltan, costo_usd: Number(uso.costo.toFixed(5)), topeado, resumen, error: error || null,
+      fin: new Date().toISOString(), mails_nuevos: nuevos, pendientes_restantes: faltan, costo_usd: Number(total.costo.toFixed(5)), topeado, resumen, error: error || null,
     }).eq("id", corrida.id);
   }
-  if (uso.entrada || uso.salida) {
-    await db.from("ia_uso").insert({ funcion: "agente_mail", modelo: MODELO, tokens_entrada: uso.entrada, tokens_salida: uso.salida }).then(() => {}, () => {});
+  if (total.entrada || total.salida) {
+    await db.from("ia_uso").insert({ funcion: "agente_mail", modelo: MODELO, tokens_entrada: total.entrada, tokens_salida: total.salida }).then(() => {}, () => {});
   }
   // Aviso en la campana (solo si hay novedades). Es un aviso, nunca bloquea nada.
   if (nuevos) {
@@ -312,5 +319,5 @@ export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Prom
       }).then(() => {}, () => {});
     }
   }
-  return { ok: !error, nuevos, faltan, costo_usd: Number(uso.costo.toFixed(5)), topeado, resumen, error };
+  return { ok: !error, nuevos, faltan, costo_usd: Number(total.costo.toFixed(5)), topeado, resumen, error };
 }
