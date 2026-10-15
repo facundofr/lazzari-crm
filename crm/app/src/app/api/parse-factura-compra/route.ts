@@ -71,6 +71,8 @@ Reglas:
 - Si el documento es una NOTA DE PEDIDO, COTIZACIÓN, PRESUPUESTO o PROFORMA (no es factura fiscal), devolvé tipo_comprobante como "Nota de Pedido".
 - Devolvé SOLO el JSON, sin texto adicional ni markdown.`;
 
+export const maxDuration = 180;
+
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
@@ -140,21 +142,20 @@ export async function POST(request: NextRequest) {
       text: "Extraé los datos de esta factura de compra y devolvé el JSON según las instrucciones.",
     });
 
-    // Use streaming as required by the SDK for large max_tokens
-    const stream = client.messages.stream({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 8000,
-      system: EXTRACTION_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: contentBlocks,
-        },
-      ],
-    });
-
-    const response = await stream.finalMessage();
-    await registrarUsoIA("factura_compra", response.model, response.usage);
+    // Modelo más efectivo (Augusto 16/10/2026: Opus 5.5) para leer bien importes, IVA y renglones.
+    // Si no está disponible o falla, se prueba con los de respaldo. Streaming por el max_tokens grande.
+    let response: Anthropic.Message | null = null;
+    let ultimoError: unknown = null;
+    for (const model of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"]) {
+      try {
+        response = await client.messages.stream({
+          model, max_tokens: 8000, system: EXTRACTION_PROMPT, messages: [{ role: "user", content: contentBlocks }],
+        }).finalMessage();
+        await registrarUsoIA("factura_compra", response.model, response.usage);
+        break;
+      } catch (e) { ultimoError = e; }
+    }
+    if (!response) throw ultimoError instanceof Error ? ultimoError : new Error("La IA no respondió");
 
     const textBlock = response.content.find((block) => block.type === "text");
     const rawText = textBlock && textBlock.type === "text" ? textBlock.text : "";

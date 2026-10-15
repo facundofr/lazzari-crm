@@ -6,7 +6,9 @@ import { SISTEMA_CONCILIACION, leerRespuestaConciliacion, promptConciliacion } f
 
 // Modelo para decidir equivalencias de artículos. Se puede cambiar con CONCILIACION_MODEL.
 // Si el principal no responde, se usa el de respaldo; si ninguno responde, la similitud de palabras.
-const MODELOS = [process.env.CONCILIACION_MODEL || "claude-sonnet-4-5", "claude-haiku-4-5-20251001"];
+const MODELOS = [process.env.CONCILIACION_MODEL || "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"];
+
+export const maxDuration = 180;
 
 export async function POST(request: NextRequest) {
   try {
