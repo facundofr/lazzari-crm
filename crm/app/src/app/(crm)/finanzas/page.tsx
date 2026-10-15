@@ -18,7 +18,7 @@ import { plazoCheque, rangoPlazo, resumenPlazos, type PlazoCheque } from "@/lib/
 import { descripcionVep, type DatosVep } from "@/lib/vep";
 import { FINANZAS_GRUPOS, esFinanzasTab, grupoDeTab, operacionVencimientos, pestanaInicial, type FinanzasGrupo, type FinanzasTab } from "@/lib/finanzas-grupos";
 import { clasificarMovimiento, esCobroDeCliente, sentidoAjuste, resumirCaja, TIPOS_RETENCION } from "@/lib/tipos-movimiento";
-import { filtrarCheques, MOTIVOS_RECHAZO_CHEQUE } from "@/lib/cheques-filtro";
+import { filtrarCheques, MOTIVOS_RECHAZO_CHEQUE, ESTADO_PENDIENTES } from "@/lib/cheques-filtro";
 import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { calcularSaldosProveedores, traerCreditosProveedores, pagosSobreFacturasAnuladas, type CreditoProveedor } from "@/lib/saldo-proveedores";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta } from "@/lib/saldo-clientes";
@@ -39,6 +39,7 @@ import CoberturaFijos from "@/components/cobertura-fijos";
 import ExtractoBbva from "@/components/extracto-bbva";
 import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
 import AsistenteFinanzas from "@/components/asistente-finanzas";
+import FinanzasCorreo, { useAvisosCorreo } from "@/components/finanzas-correo";
 import ChequesTercero from "@/components/cheques-tercero";
 import FinanzasRevisar from "@/components/finanzas-revisar";
 import { InformesFinanzas } from "@/components/finanzas/informes";
@@ -614,6 +615,8 @@ export default function FinanzasPage() {
   const [inicioFinanzas] = useState(leerPestanaInicial);
   const [grupo, setGrupo] = useState<FinanzasGrupo>(inicioFinanzas.grupo);
   const [tab, setTabActual] = useState<FinanzasTab>(inicioFinanzas.tab);
+  // Avisos del correo de administración para "Para hacer hoy" (Resumen).
+  const avisosCorreo = useAvisosCorreo(sociedadActiva?.id);
   const [filterExtracto, setFilterExtracto] = useState<"todos" | "matcheado" | "pendiente">("todos");
   const [loading, setLoading] = useState(true);
   const [loadingTimedOut, setLoadingTimedOut] = useState(false);
@@ -962,7 +965,7 @@ export default function FinanzasPage() {
   const [echeqDestinoId, setEcheqDestinoId] = useState("");
   const [echeqDestinoNombre, setEcheqDestinoNombre] = useState("");
   const [echeqProvSearch, setEcheqProvSearch] = useState("");
-  const [echeqFilterEstado, setEcheqFilterEstado] = useState("");
+  const [echeqFilterEstado, setEcheqFilterEstado] = useState<string>(ESTADO_PENDIENTES);
   const [echeqFilterDireccion, setEcheqFilterDireccion] = useState<"" | "emitido" | "recibido">("");
   const [echeqBusqueda, setEcheqBusqueda] = useState("");
   const [echeqFilterTipo, setEcheqFilterTipo] = useState<"" | "echeq" | "fisico">("");
@@ -3696,7 +3699,7 @@ export default function FinanzasPage() {
     texto: echeqBusqueda, estado: echeqFilterEstado, direccion: echeqFilterDireccion,
     tipo: echeqFilterTipo, desde: echeqFilterDesde, hasta: echeqFilterHasta,
   });
-  const echeqFiltrosActivos = Boolean(echeqBusqueda || echeqFilterEstado || echeqFilterDireccion || echeqFilterTipo || echeqFilterDesde || echeqFilterHasta);
+  const echeqFiltrosActivos = Boolean(echeqBusqueda || (echeqFilterEstado && echeqFilterEstado !== ESTADO_PENDIENTES) || echeqFilterDireccion || echeqFilterTipo || echeqFilterDesde || echeqFilterHasta);
   const filteredEcheqsTotalARS = filteredEcheqs.filter(e => e.moneda !== "USD").reduce((s, e) => s + Number(e.monto || 0), 0);
   const filteredEcheqsTotalUSD = filteredEcheqs.filter(e => e.moneda === "USD").reduce((s, e) => s + Number(e.monto || 0), 0);
   const echeqsRecibidos = echeqs.filter(e => e.direccion === "recibido" || !e.direccion);
@@ -3930,7 +3933,7 @@ export default function FinanzasPage() {
   }), [recibosClientes, reciboSearch]);
 
   const tabsDelGrupo = FINANZAS_GRUPOS.find((g) => g.id === grupo)?.tabs ?? FINANZAS_GRUPOS[0].tabs;
-  const iconoGrupo: Record<FinanzasGrupo, typeof Wallet> = { hoy: CalendarDays, cobrar: ArrowDownLeft, pagar: ArrowUpRight, cheques: Receipt };
+  const iconoGrupo: Record<FinanzasGrupo, typeof Wallet> = { hoy: CalendarDays, cobrar: ArrowDownLeft, pagar: ArrowUpRight, bancos: Wallet };
   const tabsALaVista = tabsDelGrupo.filter((t) => !t.mas);
   const tabsEnMas = tabsDelGrupo.filter((t) => t.mas);
   const tabEnMas = tabsEnMas.find((t) => t.id === tab);
@@ -4105,6 +4108,7 @@ export default function FinanzasPage() {
             onIrACheques={() => setTab("echeqs")}
             onIr={(t) => { if (esFinanzasTab(t)) setTab(t, t === "vencimientos" ? "pagar" : undefined); }}
             pagosSemana={pagosSemana}
+            avisos={avisosCorreo}
             cobertura={<CoberturaFijos sociedadId={sociedadActiva?.id} compacto />}
             resumen={(t) => (
               <ResumenEconomico
@@ -5163,7 +5167,8 @@ export default function FinanzasPage() {
                 </select>
                 <select value={echeqFilterEstado} onChange={(e) => setEcheqFilterEstado(e.target.value)}
                   className="rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white">
-                  <option value="">Todos los estados</option>
+                  <option value={ESTADO_PENDIENTES}>Pendientes (a pagar y en cartera)</option>
+                  <option value="">Todos (historial)</option>
                   {Object.entries(echeqEstadoConfig).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                 </select>
                 <select value={echeqFilterTipo} onChange={(e) => setEcheqFilterTipo(e.target.value as "" | "echeq" | "fisico")}
@@ -5181,7 +5186,7 @@ export default function FinanzasPage() {
                     className="rounded-lg border border-zinc-200 px-2 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white" />
                 </label>
                 {echeqFiltrosActivos && (
-                  <button onClick={() => { setEcheqBusqueda(""); setEcheqFilterDireccion(""); setEcheqFilterEstado(""); setEcheqFilterTipo(""); setEcheqFilterDesde(""); setEcheqFilterHasta(""); }}
+                  <button onClick={() => { setEcheqBusqueda(""); setEcheqFilterDireccion(""); setEcheqFilterEstado(ESTADO_PENDIENTES); setEcheqFilterTipo(""); setEcheqFilterDesde(""); setEcheqFilterHasta(""); }}
                     className="rounded-lg px-2 py-1.5 text-xs font-medium text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/30">
                     Limpiar filtros
                   </button>
@@ -5527,6 +5532,8 @@ export default function FinanzasPage() {
         {tab === "revisar" && <FinanzasRevisar onIrATab={(t) => { if (esFinanzasTab(t)) setTab(t); }} />}
 
         {tab === "informes" && <InformesFinanzas />}
+
+        {tab === "correo" && <FinanzasCorreo onIrATab={(t) => { if (esFinanzasTab(t)) setTab(t); }} />}
 
         {tab === "para_confirmar" && <FinanzasParaConfirmar onIrATab={(t) => { if (esFinanzasTab(t)) setTab(t); }} />}
 

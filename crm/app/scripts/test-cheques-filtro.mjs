@@ -22,4 +22,11 @@ assert.deepEqual(ids(filtrarCheques(cheques, { direccion: "emitido" })), [3]);
 assert.deepEqual(ids(filtrarCheques(cheques, { tipo: "fisico" })), [3]);
 assert.deepEqual(ids(filtrarCheques(cheques, { desde: "2026-10-10", hasta: "2026-10-31" })), [3]);
 
+// Por defecto, solo pendientes (a pagar, en cartera, depositados): lo cobrado/anulado es historial.
+{
+  const { ESTADO_PENDIENTES } = await import("../src/lib/cheques-filtro.ts");
+  const cs = [{ id: 1, estado: "entregado" }, { id: 2, estado: "cobrado" }, { id: 3, estado: "en_cartera" }, { id: 4, estado: "anulado" }, { id: 5, estado: "depositado" }];
+  assert.deepEqual(filtrarCheques(cs, { estado: ESTADO_PENDIENTES }).map((c) => c.id), [1, 3, 5]);
+  assert.equal(filtrarCheques(cs, { estado: "" }).length, 5);
+}
 console.log("cheques-filtro OK");

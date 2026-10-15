@@ -41,12 +41,20 @@ function importeBuscado(texto: string): number | null {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : null;
 }
 
+/**
+ * Filtro por defecto de Cheques (16/10/2026): solo lo que falta mover (propios a pagar y recibidos en cartera o depositados).
+ * Lo cobrado, anulado, rechazado o endosado es historial: se ve eligiendo "Todos (historial)".
+ */
+export const ESTADO_PENDIENTES = "_pendientes";
+export const ESTADOS_PENDIENTES = ["pendiente", "entregado", "en_cartera", "depositado"];
+
 export function filtrarCheques<T extends ChequeFiltrable>(cheques: T[], f: FiltrosCheques): T[] {
   const texto = normalizar(f.texto).trim();
   const importe = texto ? importeBuscado(texto) : null;
   const palabras = texto.split(/\s+/).filter(Boolean);
   return cheques.filter((c) => {
-    if (f.estado && c.estado !== f.estado) return false;
+    if (f.estado === ESTADO_PENDIENTES) { if (!ESTADOS_PENDIENTES.includes(String(c.estado))) return false; }
+    else if (f.estado && c.estado !== f.estado) return false;
     if (f.direccion && (c.direccion || "recibido") !== f.direccion) return false;
     if (f.tipo && c.tipo_cheque !== f.tipo) return false;
     if (f.desde && (!c.fecha_pago || c.fecha_pago < f.desde)) return false;

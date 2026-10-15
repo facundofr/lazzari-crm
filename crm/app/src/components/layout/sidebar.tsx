@@ -5,7 +5,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
   Lightbulb,
-  Mail,
   LayoutDashboard,
   Users,
   FileText,
@@ -71,7 +70,6 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   ] },
   { grupo: "Plata", items: [
     { name: "Finanzas", href: "/finanzas", icon: Wallet, module: "finanzas" },
-    { name: "Mail y cobros", href: "/mail-cobros", icon: Mail, module: "finanzas" },
     { name: "Reportes", href: "/reportes", icon: BarChart3, module: "reportes" },
   ] },
 ];

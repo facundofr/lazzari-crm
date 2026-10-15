@@ -328,13 +328,13 @@ export default function CuentasFinancieras({ onIrACheques, resumen, cobertura, o
     }] : []),
     ...(sinCruzar && sinCruzar.creditos > 0 ? [{
       color: "ambar" as const,
-      texto: <><b>{sinCruzar.creditos} entradas del banco sin cruzar</b> ({formatCurrency(sinCruzar.montoCreditos)}): cobros a confirmar.</>,
-      tab: "extractos",
+      texto: <><b>{sinCruzar.creditos} entradas del banco sin cruzar</b> ({formatCurrency(sinCruzar.montoCreditos)}): el sistema ya armó los cruces, confirmalos.</>,
+      tab: "para_confirmar",
     }] : []),
     ...(sinCruzar && sinCruzar.debitos > 0 ? [{
       color: "gris" as const,
-      texto: <>{sinCruzar.debitos} salidas del banco sin cruzar ({formatCurrency(sinCruzar.montoDebitos)}).</>,
-      tab: "extractos",
+      texto: <>{sinCruzar.debitos} salidas del banco sin cruzar ({formatCurrency(sinCruzar.montoDebitos)}): confirmalas en Para confirmar.</>,
+      tab: "para_confirmar",
     }] : []),
     ...((sinARS.cantidad > 0 || sinUSD.cantidad > 0) ? [{
       color: "gris" as const,
@@ -358,7 +358,7 @@ export default function CuentasFinancieras({ onIrACheques, resumen, cobertura, o
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
           <Numero titulo="Bancos hoy" valor={formatCurrency(tARS.disponible)} extra={tUSD.disponible ? `+ ${formatCurrency(tUSD.disponible, "USD")}` : "bancos + FCI + efectivo"} />
           <Numero titulo="Para cubrir hoy" valor={paraCubrir > 0 ? formatCurrency(paraCubrir) : "Nada"} extra={paraCubrir > 0 ? "rescatar / transferir hoy" : "ninguna cuenta en rojo"} color={paraCubrir > 0 ? "text-red-600" : "text-emerald-600"} onClick={paraCubrir > 0 ? () => ir("echeqs") : undefined} />
-          <Numero titulo="Cobros a confirmar" valor={sinCruzar ? formatCurrency(sinCruzar.montoCreditos) : "—"} extra={sinCruzar ? `${sinCruzar.creditos} entrada${sinCruzar.creditos === 1 ? "" : "s"} del banco sin cruzar` : undefined} color={sinCruzar?.creditos ? "text-amber-600" : undefined} onClick={() => ir("extractos")} />
+          <Numero titulo="Cobros a confirmar" valor={sinCruzar ? formatCurrency(sinCruzar.montoCreditos) : "—"} extra={sinCruzar ? `${sinCruzar.creditos} entrada${sinCruzar.creditos === 1 ? "" : "s"} del banco sin cruzar` : undefined} color={sinCruzar?.creditos ? "text-amber-600" : undefined} onClick={() => ir("para_confirmar")} />
           <Numero titulo="Pagos de esta semana" valor={formatCurrency(chequesSemana + (pagosSemana?.ARS || 0))}
             extra={`cheques ${formatCurrency(chequesSemana)} · facturas ${formatCurrency(pagosSemana?.ARS || 0)}${pagosSemana?.USD ? ` + ${formatCurrency(pagosSemana.USD, "USD")}` : ""}${pagosSemana?.vencidas ? ` (${pagosSemana.vencidas} vencidas)` : ""}`}
             onClick={() => ir("vencimientos")} />

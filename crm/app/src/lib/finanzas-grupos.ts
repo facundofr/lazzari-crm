@@ -2,11 +2,11 @@
 // Solo navegación: cada pestaña sigue siendo la misma pantalla de antes.
 
 export type FinanzasTab =
-  | "cuentas" | "para_confirmar" | "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago"
+  | "cuentas" | "para_confirmar" | "correo" | "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago"
   | "gastos_manuales" | "echeqs" | "cheques_tercero" | "cc_clientes" | "cc_proveedores" | "extractos"
   | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones" | "revisar" | "informes";
 
-export type FinanzasGrupo = "hoy" | "cobrar" | "pagar" | "cheques";
+export type FinanzasGrupo = "hoy" | "cobrar" | "pagar" | "bancos";
 
 export interface FinanzasGrupoDef {
   id: FinanzasGrupo;
@@ -16,18 +16,17 @@ export interface FinanzasGrupoDef {
   tabs: { id: FinanzasTab; label: string; mas?: boolean }[];
 }
 
-// Orden de la pantalla (16/10/2026, aprobado por Augusto): 12 pestañas a la vista en 4 grupos.
-// CC y Vencimientos, Informes, Objetivos, Gastos fijos y Retenciones pasan a "Más". Cheques y Créditos juntos.
+// Orden de la pantalla (16/10/2026, segunda vuelta pedida por Augusto: "muestra todo junto, no se entiende nada").
+// 4 preguntas: Hoy (¿qué hago hoy?), Cobrar (¿quién me debe?), Pagar (¿qué pago?), Bancos (¿cuadra con el banco?).
+// El correo de administración vive en Hoy (antes era la pantalla suelta "Mail y cobros"). Lo de consulta va en "Más".
 export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
   {
-    id: "hoy", label: "Hoy", descripcion: "Cuentas, movimientos, conciliación con el banco y cosas para revisar",
+    id: "hoy", label: "Hoy", descripcion: "Qué hacer hoy: plata, cruces del banco para confirmar y correo",
     tabs: [
-      { id: "cuentas", label: "Cuentas" },
-      // Bandeja de la IA (16/10/2026): lo que el sistema dejó armado del extracto para confirmar con un clic.
+      { id: "cuentas", label: "Resumen" },
       { id: "para_confirmar", label: "Para confirmar" },
-      { id: "movimientos", label: "Movimientos" },
-      { id: "extractos", label: "Extractos" },
-      { id: "revisar", label: "Revisar" },
+      { id: "correo", label: "Correo" },
+      { id: "revisar", label: "Revisar", mas: true },
       { id: "informes", label: "Informes", mas: true },
       { id: "objetivos", label: "Objetivos", mas: true },
     ],
@@ -42,8 +41,9 @@ export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
     ],
   },
   {
-    id: "pagar", label: "Pagar", descripcion: "Facturas de compra, órdenes de pago y gastos",
+    id: "pagar", label: "Pagar", descripcion: "Cheques, facturas de compra, órdenes de pago y gastos",
     tabs: [
+      { id: "echeqs", label: "Cheques" },
       { id: "facturas_compra", label: "Facturas de compra" },
       { id: "ordenes_pago", label: "Órdenes de pago" },
       { id: "gastos_manuales", label: "Gastos" },
@@ -51,14 +51,15 @@ export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
       { id: "vencimientos", label: "Vencimientos", mas: true },
       { id: "gastos_fijos", label: "Gastos fijos", mas: true },
       { id: "retenciones", label: "Retenciones", mas: true },
+      { id: "lineas_credito", label: "Créditos y préstamos", mas: true },
+      { id: "cheques_tercero", label: "Cheques Martín F.", mas: true },
     ],
   },
   {
-    id: "cheques", label: "Cheques y créditos", descripcion: "Cheques propios y de terceros, créditos y préstamos",
+    id: "bancos", label: "Bancos", descripcion: "Extractos del banco y movimientos",
     tabs: [
-      { id: "echeqs", label: "Cheques" },
-      { id: "cheques_tercero", label: "Cheques Martín F." },
-      { id: "lineas_credito", label: "Créditos" },
+      { id: "extractos", label: "Extractos" },
+      { id: "movimientos", label: "Movimientos" },
     ],
   },
 ];
