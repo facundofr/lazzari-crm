@@ -58,6 +58,8 @@ export default function SeguimientoIA() {
   const [verViejos, setVerViejos] = useState(false);
   const [abierto, setAbierto] = useState<string | null>(null);
   const [detalle, setDetalle] = useState<string | null>(null);
+  const [vendedorF, setVendedorF] = useState("");
+  const [operadorF, setOperadorF] = useState("");
   const [mensajes, setMensajes] = useState<Record<string, Mensaje>>({});
   const [generando, setGenerando] = useState<string | null>(null);
   const [panel, setPanel] = useState<{ id: string; tipo: "perdido" | "posponer" } | null>(null);
@@ -100,6 +102,7 @@ export default function SeguimientoIA() {
     for (const e of eventos) { const l = porPR.get(e.presupuesto_id) || []; l.push(e); porPR.set(e.presupuesto_id, l); }
     return prs
       .filter(p => verTodos || p.created_by === profile?.id || p.vendedor_id === profile?.id)
+      .filter(p => (!vendedorF || p.vendedor_id === vendedorF) && (!operadorF || p.created_by === operadorF))
       .map(p => {
         const c = clasificarPR(p, porPR.get(p.id) || [], hoy);
         const montoPesos = p.moneda === "USD" ? Number(p.total) * (Number(p.tipo_cambio) > 0 ? Number(p.tipo_cambio) : tc || 1500) : Number(p.total);
@@ -107,7 +110,9 @@ export default function SeguimientoIA() {
       })
       .filter(x => verViejos || x.c.grupo !== "vencido" || x.c.diasVencido <= 60)
       .sort((a, b) => compararSeguimiento({ ...a.c, montoPesos: a.montoPesos }, { ...b.c, montoPesos: b.montoPesos }));
-  }, [prs, eventos, verTodos, verViejos, profile?.id, hoy, tc]);
+  }, [prs, eventos, verTodos, verViejos, vendedorF, operadorF, profile?.id, hoy, tc]);
+  const vendedoresOpc = useMemo(() => [...new Map(prs.filter(p => p.vendedor_id).map(p => [p.vendedor_id as string, p.vendedor_profile?.full_name || "Sin nombre"])).entries()].sort((a, b) => a[1].localeCompare(b[1], "es")), [prs]);
+  const operadoresOpc = useMemo(() => [...new Map(prs.filter(p => p.created_by).map(p => [p.created_by as string, p.creador?.full_name || "Sin nombre"])).entries()].sort((a, b) => a[1].localeCompare(b[1], "es")), [prs]);
   const viejosOcultos = useMemo(() => prs.filter(p => (p.estado === "vencido" || (p.vencimiento && p.vencimiento < hoy)) && fechaAR(p.vencimiento) && Math.round((Date.parse(hoy) - Date.parse(fechaAR(p.vencimiento))) / 86400000) > 60).length, [prs, hoy]);
 
   // ── anotar hechos ──
@@ -210,6 +215,8 @@ export default function SeguimientoIA() {
         <CalendarClock className="h-4 w-4 text-orange-500" />
         <span className="dark:text-zinc-200"><b className="text-orange-600">{total("hoy").length}</b> toca hoy · <b>{total("esperando").length}</b> esperando · <b className="text-red-600">{total("vencido").length}</b> vencidos</span>
         <span className="ml-auto flex items-center gap-3">
+          <select value={vendedorF} onChange={e => setVendedorF(e.target.value)} className="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"><option value="">Todos los vendedores</option>{vendedoresOpc.map(([id, n]) => <option key={id} value={id}>{n}</option>)}</select>
+          <select value={operadorF} onChange={e => setOperadorF(e.target.value)} className="rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:bg-zinc-800 dark:text-white"><option value="">Todos los operadores</option>{operadoresOpc.map(([id, n]) => <option key={id} value={id}>{n}</option>)}</select>
           <label className="flex items-center gap-1 text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={verTodos} onChange={e => setVerTodos(e.target.checked)} /> Ver los de todos</label>
           <button onClick={() => void cargar()} disabled={cargando} className="flex items-center gap-1 rounded border border-zinc-300 px-2 py-1 dark:border-zinc-600 dark:text-zinc-200"><RefreshCw className={`h-3 w-3 ${cargando ? "animate-spin" : ""}`} /> Actualizar</button>
         </span>
