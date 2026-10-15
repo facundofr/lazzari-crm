@@ -12,8 +12,9 @@ import { NextRequest } from "next/server";
  *    "cambiá los anteojos a Segufer", "sacá X") y devuelve agregar / cambiar / quitar / preguntas.
  * Nunca guarda nada: solo devuelve sugerencias para que el vendedor revise.
  */
-const MODEL = "claude-haiku-4-5-20251001";
-export const maxDuration = 60;
+// Modelo más efectivo (Augusto 16/10/2026: Opus 5.5). Si no está disponible o falla, se prueba con los de respaldo.
+const MODELOS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"];
+export const maxDuration = 120;
 
 function parseJson(raw: string) {
   let s = raw.replace(/^```json?\n?/i, "").replace(/\n?```\s*$/i, "").trim();
@@ -23,10 +24,18 @@ function parseJson(raw: string) {
 }
 
 async function ask(client: Anthropic, system: string, content: Anthropic.MessageParam["content"]) {
-  const res = await client.messages.stream({ model: MODEL, max_tokens: 16000, system, messages: [{ role: "user", content }] }).finalMessage();
-  await registrarUsoIA("cotizacion_express", MODEL, res.usage);
-  const t = res.content.find(b => b.type === "text");
-  return parseJson(t && t.type === "text" ? t.text : "{}");
+  let ultimoError: unknown = null;
+  for (const model of MODELOS) {
+    try {
+      const res = await client.messages.stream({ model, max_tokens: 16000, system, messages: [{ role: "user", content }] }).finalMessage();
+      await registrarUsoIA("cotizacion_express", model, res.usage);
+      const t = res.content.find(b => b.type === "text");
+      return parseJson(t && t.type === "text" ? t.text : "{}");
+    } catch (e) {
+      ultimoError = e; // modelo no disponible, saturado o respuesta ilegible: se prueba con el siguiente
+    }
+  }
+  throw ultimoError instanceof Error ? ultimoError : new Error("La IA no respondió");
 }
 
 const SYS_EXTRAER = `Sos asistente de ventas de Lazzari (EPP, ropa de trabajo, seguridad industrial e insumos, Argentina).
@@ -40,7 +49,10 @@ Te pasan el pedido de un cliente (mensaje, captura, PDF o planilla). Extraé TOD
   cuando el cliente no lo dice, modelo o marca cuando el pedido es ambiguo, cantidad cuando no se entiende), agregá una
   pregunta corta en "preguntas" con la línea a la que se refiere. No preguntes lo que ya está claro ni lo que ya respondió el vendedor.
   Igual devolvé la línea con lo que sí sabés (cantidad 1 si no figura).
-Respondé SOLO JSON: {"lineas":[{"descripcion":"","cantidad":1,"talle":"","codigo":""}],"preguntas":[{"linea":"","pregunta":""}],"notas":""}`;
+- "cliente": quién pide, SOLO si se lee en el pedido (firma, membrete, CUIT, mail, "somos de X"). Si no figura, dejá vacío cada dato. No inventes.
+- "moneda_pedida": "USD" o "ARS" solo si el cliente la indica; si no, "".
+- "resumen": una frase corta de lo que pide el cliente (ej "10 botines y 20 anteojos para planta Pergamino, urgente").
+Respondé SOLO JSON: {"lineas":[{"descripcion":"","cantidad":1,"talle":"","codigo":""}],"preguntas":[{"linea":"","pregunta":""}],"cliente":{"empresa":"","cuit":"","email":"","contacto":""},"moneda_pedida":"","resumen":"","notas":""}`;
 
 const SYS_AJUSTAR = `Sos asistente de ventas de Lazzari (EPP, ropa de trabajo, seguridad industrial, Argentina).
 Te paso las líneas de una cotización ya armada (id, pedido, cantidad, talle, artículo elegido) y lo que pide el vendedor.
@@ -60,6 +72,7 @@ Elegí el candidato que sea EL MISMO artículo. Reglas:
 - Respetá marca y modelo cuando el pedido los nombra (3M H700 ≠ Libus; H520 ≠ H540; Tychem 2000 ≠ Tyvek).
 - Atributos que cambian el artículo: reflectivo, con/sin válvula, carbón activado, claro/oscuro, para químicos/polvo, material (vaqueta, nitrilo, PU), dieléctrico, ignífugo.
 - El talle NO cambia el artículo si el candidato no indica talle; si los candidatos vienen por talle, elegí el talle pedido.
+- Si el pedido trae "ya le vendimos" (artículos que ESTE cliente ya compró antes), y alguno es el mismo artículo que pide, elegí ese: el cliente ya lo conoce.
 - Si vienen PREFERENCIAS DEL VENDEDOR (proveedores, marcas, indicaciones), respetalas primero.
 - Si un pedido trae "proveedor preferido", elegí el candidato de ese proveedor cuando sea el mismo artículo o uno equivalente aceptable; si no lo tiene, decilo en "nota".
 - Si no hay preferencia que decida, y el MISMO artículo lo tienen varios proveedores, elegí el de menor "comparable" (costo ya pasado a la moneda del presupuesto). Nunca compares costos en monedas distintas. En "nota" poné el proveedor alternativo y su comparable (ej "también Segufer US$ 9,08").
@@ -83,7 +96,14 @@ export async function POST(request: NextRequest) {
       content.push({ type: "text", text: String(mensaje || "").trim() ? `Pedido del cliente:\n\n${String(mensaje).slice(0, 60000)}` : "Extraé los artículos del archivo adjunto." });
       if (String(respuestas || "").trim()) content.push({ type: "text", text: `Respuestas del vendedor a tus preguntas (usalas y no vuelvas a preguntar lo ya respondido; si dejó algo sin responder, no lo inventes):\n${String(respuestas).slice(0, 4000)}` });
       const out = await ask(client, SYS_EXTRAER, content);
-      return Response.json({ lineas: Array.isArray(out.lineas) ? out.lineas : [], preguntas: Array.isArray(out.preguntas) ? out.preguntas.filter((p: any) => p && p.pregunta) : [], notas: out.notas || "" });
+      const cli = out.cliente && typeof out.cliente === "object" ? out.cliente : {};
+      return Response.json({
+        lineas: Array.isArray(out.lineas) ? out.lineas : [],
+        preguntas: Array.isArray(out.preguntas) ? out.preguntas.filter((p: any) => p && p.pregunta) : [],
+        cliente: { empresa: String(cli.empresa || ""), cuit: String(cli.cuit || ""), email: String(cli.email || ""), contacto: String(cli.contacto || "") },
+        moneda_pedida: out.moneda_pedida === "USD" || out.moneda_pedida === "ARS" ? out.moneda_pedida : "",
+        resumen: String(out.resumen || ""), notas: out.notas || "",
+      });
     }
 
     if (body.modo === "ajustar") {
@@ -103,7 +123,7 @@ export async function POST(request: NextRequest) {
       for (let i = 0; i < conCandidatos.length; i += 25) tandas.push(conCandidatos.slice(i, i + 25));
       const resultados = await Promise.all(tandas.map(async t => {
         const texto = t.map(p => [
-          `### id=${p.id} | PEDIDO: ${p.descripcion}${p.talle ? ` | talle ${p.talle}` : ""}${p.codigo ? ` | código ${p.codigo}` : ""}${p.proveedor_preferido ? ` | proveedor preferido ${p.proveedor_preferido}` : ""}`,
+          `### id=${p.id} | PEDIDO: ${p.descripcion}${p.talle ? ` | talle ${p.talle}` : ""}${p.codigo ? ` | código ${p.codigo}` : ""}${p.proveedor_preferido ? ` | proveedor preferido ${p.proveedor_preferido}` : ""}${Array.isArray(p.ya_vendido) && p.ya_vendido.length ? ` | ya le vendimos: ${p.ya_vendido.slice(0, 5).map((x: any) => String(x).slice(0, 90)).join(" // ")}` : ""}`,
           ...p.candidatos.map((c: any, i: number) => `${i}. [${c.proveedor}] ${c.codigo || ""} | ${c.descripcion}${c.marca ? ` | marca ${c.marca}` : ""} | costo ${c.moneda} ${c.costo}${c.costo_comparable != null ? ` | comparable ${body.moneda_comparable || ""} ${c.costo_comparable}` : ""}`),
         ].join("\n")).join("\n\n");
         const pr = body.preferencias || {};

@@ -1,0 +1,3 @@
+select email, prueba_presupuestos_nuevo from public.profiles where prueba_presupuestos_nuevo or email like '%jero%' or email like '%seba%' or email like '%augusto%';
+select table_name, column_name from information_schema.columns where table_schema='public' and ((table_name='presupuestos' and column_name in ('origen_pedido','origen_ref','ia_armado_at','ia_resumen')) or (table_name='presupuesto_items' and column_name in ('pedido_texto','catalogo_id','proveedor_sugerido_id','ia_confianza','ia_nota'))) order by 1,2;
+select count(*) as presupuestos, (select count(*) from public.presupuesto_items) as items from public.presupuestos;

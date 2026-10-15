@@ -34,12 +34,12 @@ interface Props {
   textoInicial?: string;
 }
 
-function separarTalle(desc: string): { descripcion: string; talle: string } {
+export function separarTalle(desc: string): { descripcion: string; talle: string } {
   const m = String(desc).match(/^(.*?)[\s\-–,]*\btalle\s*:?\s*([A-Za-z0-9/]+)\s*$/i);
   return m ? { descripcion: m[1].trim(), talle: m[2].toUpperCase() } : { descripcion: String(desc).trim(), talle: "" };
 }
 
-async function leerExcel(file: File): Promise<{ lineas: Array<{ descripcion: string; cantidad: number; talle: string; codigo: string }>; texto: string }> {
+export async function leerExcel(file: File): Promise<{ lineas: Array<{ descripcion: string; cantidad: number; talle: string; codigo: string }>; texto: string }> {
   const XLSX: any = await import("xlsx");
   const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
   const lineas: Array<{ descripcion: string; cantidad: number; talle: string; codigo: string }> = [];
@@ -70,7 +70,7 @@ async function leerExcel(file: File): Promise<{ lineas: Array<{ descripcion: str
   return { lineas, texto: texto.trim() };
 }
 
-const leerBase64 = (file: File) => new Promise<string>((ok, mal) => {
+export const leerBase64 = (file: File) => new Promise<string>((ok, mal) => {
   const r = new FileReader();
   r.onload = () => ok(String(r.result).split(",")[1] || "");
   r.onerror = () => mal(new Error("No se pudo leer el archivo"));

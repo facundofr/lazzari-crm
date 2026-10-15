@@ -106,6 +106,7 @@ export interface User {
   createdAt: string;
   /** Casilla "Prueba: Compras nueva" (Configuración → Usuarios). */
   pruebaComprasNueva?: boolean;
+  pruebaPresupuestosNuevo?: boolean;
 }
 
 // ── Clientes ─────────────────────────────────────────────────────

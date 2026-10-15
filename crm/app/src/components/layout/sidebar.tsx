@@ -31,6 +31,7 @@ import {
   Scissors,
   FileSearch,
   ListChecks,
+  Sparkles,
 } from "lucide-react";
 import { useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -51,6 +52,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   { grupo: "Vender", items: [
     { name: "Clientes", href: "/clientes", icon: Users, module: "clientes" },
     { name: "Oportunidades", href: "/oportunidades", icon: Lightbulb, module: "clientes" },
+    { name: "Presupuestos nuevo", href: "/presupuestos-nuevo", icon: Sparkles, module: "presupuestos_nuevo" },
     { name: "Presupuestos", href: "/presupuestos", icon: FileText, module: "presupuestos" },
     { name: "Muestras", href: "/muestras", icon: Shirt, module: "muestras" },
     { name: "Ventas", href: "/ventas", icon: ArrowRightLeft, module: "presupuestos" },
@@ -177,7 +179,7 @@ export function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navigation.map((g) => {
-          const visibles = g.items.filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : hasModuleAccess(role, item.module));
+          const visibles = g.items.filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : item.module === "presupuestos_nuevo" ? !!profile?.prueba_presupuestos_nuevo : hasModuleAccess(role, item.module));
           if (!visibles.length) return null;
           const showLabel = !collapsed || mobileSidebarOpen;
           return (
