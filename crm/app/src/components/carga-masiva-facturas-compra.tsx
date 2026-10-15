@@ -340,7 +340,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
 
 
   return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4">
-    <div className="w-full max-w-5xl rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900">
+    <div className="w-full max-w-6xl rounded-xl bg-white p-4 shadow-2xl dark:bg-zinc-900">
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h2 className="text-lg font-bold dark:text-white">Carga masiva de facturas de proveedores</h2>
@@ -365,7 +365,8 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
       </div>}
 
       <div className="max-h-[52vh] overflow-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
-        <table className="w-full text-xs">
+        <table className="w-full table-fixed text-xs">
+          <colgroup><col style={{ width: "15%" }} /><col style={{ width: "6%" }} /><col style={{ width: "11%" }} /><col style={{ width: "9%" }} /><col style={{ width: "21%" }} /><col style={{ width: "12%" }} /><col style={{ width: "14%" }} /><col style={{ width: "12%" }} /></colgroup>
           <thead className="sticky top-0 bg-zinc-100 text-left text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
             <tr><th className="px-2 py-2">Archivo</th><th className="px-2">Tipo</th><th className="px-2">Número</th><th className="px-2">Fecha</th><th className="px-2">Proveedor</th><th className="px-2 text-right">Total</th><th className="px-2">Estado</th><th className="px-2"></th></tr>
           </thead>
@@ -374,13 +375,13 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
               const d = row.data || {};
               const sinProv = row.state === "ready" && !row.provider;
               return <tr key={row.id} className={`${i % 2 ? "bg-zinc-50 dark:bg-zinc-800/40" : ""} border-t border-zinc-100 dark:border-zinc-800 dark:text-zinc-200`}>
-                <td className="max-w-[180px] truncate px-2 py-2" title={row.file.name}>{row.file.name}</td>
+                <td className="truncate px-2 py-2" title={row.file.name}>{row.file.name}</td>
                 <td className="px-2">{row.data ? tipoLabel(row.file, d) : ""}</td>
                 <td className="px-2 whitespace-nowrap">{d.numero_factura || ""}</td>
                 <td className="px-2 whitespace-nowrap">{d.fecha || ""}</td>
-                <td className="max-w-[200px] px-2">{row.provider ? <span className="truncate">{row.provider.razon_social}</span> : row.data ? <span className="text-amber-700 dark:text-amber-400">{d.proveedor?.razon_social || "?"} {d.proveedor?.cuit ? `(${d.proveedor.cuit})` : ""}</span> : ""}</td>
+                <td className="px-2"><div className={`truncate ${row.provider ? "" : "text-amber-700 dark:text-amber-400"}`} title={row.provider ? row.provider.razon_social : `${d.proveedor?.razon_social || "?"} ${d.proveedor?.cuit ? `(${d.proveedor.cuit})` : ""}`}>{row.provider ? row.provider.razon_social : row.data ? `${d.proveedor?.razon_social || "?"} ${d.proveedor?.cuit ? `(${d.proveedor.cuit})` : ""}` : ""}</div></td>
                 <td className="px-2 text-right whitespace-nowrap">{row.data ? formatCurrency(Number(d.total || 0), d.moneda === "USD" ? "USD" : "ARS") : ""}</td>
-                <td className="px-2 whitespace-nowrap">
+                <td className="px-2 leading-tight">
                   {row.state === "pending" && <span className="text-zinc-400">En cola</span>}
                   {row.state === "parsing" && <span className="flex items-center gap-1 text-orange-600"><Loader2 className="h-3 w-3 animate-spin" /> Leyendo</span>}
                   {row.state === "saved" && <span className="flex items-center gap-1 text-sky-600"><CheckCircle2 className="h-3 w-3" /> Guardada</span>}
@@ -397,7 +398,7 @@ export default function CargaMasivaFacturasCompra({ sociedadId, sociedadNombre, 
                       return <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" /> Lista{row.oc ? ` · ${row.oc.numero}` : ""}{c?.estado === "sin_renglones" ? " · carga simple" : ""}</span>;
                     })())}
                 </td>
-                <td className="px-2 whitespace-nowrap text-right">
+                <td className="px-2 text-right">
                   {sinProv && <button disabled={saving} onClick={() => abrirNuevoProv(row)} className="mr-1 inline-flex items-center gap-1 rounded bg-amber-500 px-2 py-1 text-white"><UserPlus className="h-3 w-3" /> Crear proveedor</button>}
                   {row.state === "ready" && <button disabled={saving} onClick={() => openReview(row)} className="rounded bg-orange-500 px-2 py-1 text-white" title="Si el proveedor tiene OC con renglones, se concilia línea por línea">{row.duplicada ? "Ver igual" : "Revisar"}</button>}
                   {row.state === "ready" && row.provider && !row.duplicada && <button disabled={saving} onClick={() => openReview(row, true)} className="ml-1 text-[10px] text-zinc-500 underline hover:text-orange-600" title="Cargar sin conciliar por renglón (vinculando la OC por importe)">simple</button>}
