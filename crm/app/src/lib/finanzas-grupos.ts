@@ -1,4 +1,4 @@
-// Finanzas ordenada en 5 grupos (Etapa A, 12/10/2026): Hoy / Cobrar / Pagar / Cheques / Deudas.
+// Finanzas ordenada en grupos (12/10/2026; desde el 16/10: Hoy / Cobrar / Pagar / Cheques y créditos).
 // Solo navegación: cada pestaña sigue siendo la misma pantalla de antes.
 
 export type FinanzasTab =
@@ -6,15 +6,18 @@ export type FinanzasTab =
   | "gastos_manuales" | "echeqs" | "cheques_tercero" | "cc_clientes" | "cc_proveedores" | "extractos"
   | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones" | "revisar" | "informes";
 
-export type FinanzasGrupo = "hoy" | "cobrar" | "pagar" | "cheques" | "deudas";
+export type FinanzasGrupo = "hoy" | "cobrar" | "pagar" | "cheques";
 
 export interface FinanzasGrupoDef {
   id: FinanzasGrupo;
   label: string;
   descripcion: string;
-  tabs: { id: FinanzasTab; label: string }[];
+  /** `mas`: va dentro del botón "Más" del grupo (menos pestañas a la vista; orden 16/10/2026). */
+  tabs: { id: FinanzasTab; label: string; mas?: boolean }[];
 }
 
+// Orden de la pantalla (16/10/2026, aprobado por Augusto): 12 pestañas a la vista en 4 grupos.
+// CC y Vencimientos, Informes, Objetivos, Gastos fijos y Retenciones pasan a "Más". Cheques y Créditos juntos.
 export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
   {
     id: "hoy", label: "Hoy", descripcion: "Cuentas, movimientos, conciliación con el banco y cosas para revisar",
@@ -23,17 +26,17 @@ export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
       { id: "movimientos", label: "Movimientos" },
       { id: "extractos", label: "Extractos" },
       { id: "revisar", label: "Revisar" },
-      { id: "informes", label: "Informes" },
-      { id: "objetivos", label: "Objetivos" },
+      { id: "informes", label: "Informes", mas: true },
+      { id: "objetivos", label: "Objetivos", mas: true },
     ],
   },
   {
     id: "cobrar", label: "Cobrar", descripcion: "Facturas de venta, clientes y recibos",
     tabs: [
       { id: "facturacion", label: "Facturas de venta" },
-      { id: "cc_clientes", label: "CC Clientes" },
       { id: "recibos", label: "Recibos" },
-      { id: "vencimientos", label: "Vencimientos" },
+      { id: "cc_clientes", label: "CC Clientes", mas: true },
+      { id: "vencimientos", label: "Vencimientos", mas: true },
     ],
   },
   {
@@ -41,23 +44,18 @@ export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
     tabs: [
       { id: "facturas_compra", label: "Facturas de compra" },
       { id: "ordenes_pago", label: "Órdenes de pago" },
-      { id: "cc_proveedores", label: "CC Proveedores" },
       { id: "gastos_manuales", label: "Gastos" },
-      { id: "gastos_fijos", label: "Gastos fijos" },
-      { id: "retenciones", label: "Retenciones" },
-      { id: "vencimientos", label: "Vencimientos" },
+      { id: "cc_proveedores", label: "CC Proveedores", mas: true },
+      { id: "vencimientos", label: "Vencimientos", mas: true },
+      { id: "gastos_fijos", label: "Gastos fijos", mas: true },
+      { id: "retenciones", label: "Retenciones", mas: true },
     ],
   },
   {
-    id: "cheques", label: "Cheques", descripcion: "Cheques propios y de terceros",
+    id: "cheques", label: "Cheques y créditos", descripcion: "Cheques propios y de terceros, créditos y préstamos",
     tabs: [
       { id: "echeqs", label: "Cheques" },
       { id: "cheques_tercero", label: "Cheques Martín F." },
-    ],
-  },
-  {
-    id: "deudas", label: "Deudas", descripcion: "Créditos y préstamos",
-    tabs: [
       { id: "lineas_credito", label: "Créditos" },
     ],
   },

@@ -21,13 +21,15 @@ export interface ResumenEconomicoProps {
   notas?: Partial<Record<ClaveResumen, string>>;
   /** Adónde lleva cada renglón al tocarlo. */
   onIr?: Partial<Record<ClaveResumen, () => void>>;
+  /** Finanzas → Hoy: versión chica (misma franja que "¿Cubro los gastos fijos?"). */
+  compacto?: boolean;
 }
 
 function leerGuardado(): string | null {
   try { return localStorage.getItem(CLAVE_TILDADOS); } catch { return null; }
 }
 
-export default function ResumenEconomico({ sociedadId, montos, notas, onIr }: ResumenEconomicoProps) {
+export default function ResumenEconomico({ sociedadId, montos, notas, onIr, compacto }: ResumenEconomicoProps) {
   const [tildados, setTildados] = useState<Set<ClaveResumen>>(() => leerTildados(null));
   const [elegir, setElegir] = useState(false);
   const [dolar, setDolar] = useState<number | null>(null);
@@ -128,10 +130,10 @@ export default function ResumenEconomico({ sociedadId, montos, notas, onIr }: Re
   const positivo = (r.netoEnPesos ?? r.neto.ARS) >= 0;
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/40">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+    <div className="h-full rounded-xl border border-zinc-200 bg-zinc-50/60 p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-900/40">
+      <div className={`${compacto ? "mb-2" : "mb-3"} flex flex-wrap items-center justify-between gap-2`}>
         <h3 className="flex items-center gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-200">
-          <Scale className="h-4 w-4 text-orange-500" /> Resumen: cómo estoy hoy
+          <Scale className="h-4 w-4 text-orange-500" /> {compacto ? "Cómo estoy hoy" : "Resumen: cómo estoy hoy"}
         </h3>
         <button type="button" onClick={() => setElegir((v) => !v)} aria-expanded={elegir}
           className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 hover:border-orange-300 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
@@ -154,17 +156,17 @@ export default function ResumenEconomico({ sociedadId, montos, notas, onIr }: Re
 
       {/* A primera vista: tengo, debo y posición neta. El detalle por renglón queda plegado. */}
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <div className="rounded-xl border border-emerald-200 bg-white p-3 dark:border-emerald-900 dark:bg-zinc-900">
+        <div className={`rounded-xl border border-emerald-200 bg-white dark:border-emerald-900 dark:bg-zinc-900 ${compacto ? "p-2" : "p-3"}`}>
           <p className="text-xs font-semibold uppercase tracking-wide text-emerald-600">Lo que tengo</p>
-          <p className="font-mono text-base font-bold text-zinc-800 dark:text-zinc-100">{monto(r.tengo)}</p>
+          <p className={`font-mono font-bold ${compacto ? "text-sm" : "text-base"} text-zinc-800 dark:text-zinc-100`}>{monto(r.tengo)}</p>
         </div>
-        <div className="rounded-xl border border-orange-200 bg-white p-3 dark:border-orange-900 dark:bg-zinc-900">
+        <div className={`rounded-xl border border-orange-200 bg-white dark:border-orange-900 dark:bg-zinc-900 ${compacto ? "p-2" : "p-3"}`}>
           <p className="text-xs font-semibold uppercase tracking-wide text-orange-600">Lo que debo</p>
-          <p className="font-mono text-base font-bold text-zinc-800 dark:text-zinc-100">{monto(r.debo)}</p>
+          <p className={`font-mono font-bold ${compacto ? "text-sm" : "text-base"} text-zinc-800 dark:text-zinc-100`}>{monto(r.debo)}</p>
         </div>
-        <div className={`rounded-xl border-2 p-3 ${positivo ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30" : "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"}`}>
+        <div className={`rounded-xl border-2 ${compacto ? "p-2" : "p-3"} ${positivo ? "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30" : "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"}`}>
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Posición neta (tengo − debo)</p>
-          <p className={`font-mono text-xl font-bold ${r.neto.ARS >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(r.neto.ARS)}</p>
+          <p className={`font-mono font-bold ${compacto ? "text-base" : "text-xl"} ${r.neto.ARS >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(r.neto.ARS)}</p>
           {Math.abs(r.neto.USD) >= 0.01 && (
             <p className={`font-mono text-sm font-bold ${r.neto.USD >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}>{formatCurrency(r.neto.USD, "USD")}</p>
           )}

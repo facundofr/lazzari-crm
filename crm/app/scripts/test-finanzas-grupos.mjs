@@ -2,8 +2,14 @@
 import assert from "node:assert/strict";
 import { FINANZAS_GRUPOS, grupoDeTab, operacionVencimientos, pestanaInicial } from "../src/lib/finanzas-grupos.ts";
 
-// Los 5 grupos, en orden.
-assert.deepEqual(FINANZAS_GRUPOS.map((g) => g.id), ["hoy", "cobrar", "pagar", "cheques", "deudas"]);
+// Los 4 grupos, en orden (Cheques y Créditos juntos desde el 16/10/2026).
+assert.deepEqual(FINANZAS_GRUPOS.map((g) => g.id), ["hoy", "cobrar", "pagar", "cheques"]);
+
+// A la vista quedan 12 pestañas; el resto va en "Más".
+assert.equal(FINANZAS_GRUPOS.flatMap((g) => g.tabs.filter((t) => !t.mas)).length, 12);
+assert.equal(grupoDeTab("lineas_credito"), "cheques");
+// Lo último guardado con el grupo viejo "deudas" abre igual.
+assert.deepEqual(pestanaInicial({}, { grupo: "deudas", tab: "lineas_credito" }), { grupo: "cheques", tab: "lineas_credito" });
 
 // Ninguna pestaña quedó afuera (incluye Gastos fijos, que antes estaba oculta).
 const todas = new Set(FINANZAS_GRUPOS.flatMap((g) => g.tabs.map((t) => t.id)));

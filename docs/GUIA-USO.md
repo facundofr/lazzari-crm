@@ -45,6 +45,11 @@ Guía corta de cada pantalla para el equipo. La usa también el asistente ✨ pa
 **Cómo se hace:** 1) Filtrá: Le toca reponer, Temporada, Volver a cotizar, Complementario, Cliente dormido. 2) "Buscar cliente o artículo…" o vendedor (el vendedor arranca con sus clientes). 3) Tocá el cliente para abrir su ficha.
 **Ojo:** clientes con alerta BCRA salen marcados (informe en Finanzas → Informes). Muestra 200; usá filtros para el resto.
 
+### Presupuestos nuevo — /presupuestos-nuevo — solo con la casilla "Prueba: Presupuestos nuevo" (Configuración → Usuarios)
+**Para qué sirve:** la IA arma el presupuesto desde el pedido del cliente y después te recuerda a quién seguirle.
+**Cómo se hace:** 1) Pestaña **Armar presupuesto**: pegá el mail o WhatsApp (con la firma), o arrastrá foto, PDF o Excel → **Armar presupuesto con IA**. La IA busca al cliente, elige artículo y proveedor de la lista de costos y propone el precio (el último que le cobraste si deja margen; si no, el de la lista). Si le falta un dato (talle, modelo, marca) pregunta: respondé o **Seguir sin responder**. 2) Revisá el semáforo (Listo / Revisar / Falta), cambiá artículo con **Buscar** o el precio a mano, y usá "Decile a la IA qué cambiar" (**Deshacer** vuelve atrás). 3) **Crear presupuesto**: queda en Presupuestos para mandarlo. 4) Pestaña **Seguimiento**: **Hoy toca / Esperando / Vencidos**; **Mensaje con IA** escribe el mail o WhatsApp (sale desde tu correo o tu WhatsApp), y anotás **Aprobó / Pidió cambios / No contestó / Se perdió / Posponer**; en vencidos, **Extender 15 días** o **Actualizar precios**.
+**Ojo:** todo es sugerencia: margen menor a 15 %, renglones sin precio o dólar del cliente distinto = aviso, nunca frena. El precio nunca cambia solo.
+
 ### Presupuestos — /presupuestos — todos (viewer solo mira)
 **Para qué sirve:** armar, enviar y seguir los presupuestos (PR).
 **Cómo se hace:** 1) **Nuevo PR** → cliente → **Agregar item**, **Lista de costos** o **Repetir presupuesto anterior** → **Crear Presupuesto**. 2) Pedido largo: **Cotización express (IA)** (Excel, PDF, imagen o mensaje) → **Armar cotización** (si a la IA le falta un dato como talle, modelo o marca, pregunta: respondé o **Seguir sin responder**) → revisá; en "Decile a la IA qué cambiar" podés pedir "agregame 20 guantes nitrilo T9", "cambiá los anteojos a Segufer" o "sacá X" → **Aplicar** → **Agregar … al presupuesto**. 3) Si todavía no se cotiza: **Crear como Solicitud** → escribí lo que pide el cliente y/o **Elegir productos (como en un PR)** o **Armar con IA** → después **Convertir**. 4) Enviar: **Descargar PDF**, **Enviar por email**, **Copiar resumen** (para WhatsApp). 5) Estado: Solicitud, Pendiente, Aprobado, Rechazado (dentro: Rechazado o Postergado, con motivo). 6) **Seguimiento**: renglones apretados con días sin respuesta por colores, estado y **Llamar**. 7) Arriba, la franja roja "X vencidos (últimos 30 días)" → **Ver**; el botón **Vencido** está al lado de Pendiente. 8) En el detalle: franja con ítems, total, ganancia y margen; **Ocultar costos** (para mostrarle la pantalla al cliente) y la pantalla completa se recuerdan en la compu. 9) **Eliminar** (papelera): el admin cualquiera; el vendedor solo los suyos sin aprobar. Pide motivo (puede ir vacío) y queda en notas internas; el admin los ve en **Papelera** y los puede restaurar.
@@ -111,10 +116,10 @@ Guía corta de cada pantalla para el equipo. La usa también el asistente ✨ pa
 ---
 
 ## Plata — Finanzas (/finanzas) — super_admin, admin, administrativo
-Se ordena en 5 grupos: **Hoy, Cobrar, Pagar, Cheques, Deudas**. Abre en la última pestaña usada. **Nuevo movimiento** carga un cobro o pago suelto. Vendedor y viewer ven "No tenés acceso a Finanzas".
+Se ordena en 4 grupos: **Hoy, Cobrar, Pagar, Cheques y créditos**, con 12 pestañas a la vista; las demás (CC Clientes, CC Proveedores, Vencimientos, Informes, Objetivos, Gastos fijos, Retenciones) están en el botón **Más** de cada grupo. Abre en la última pestaña usada. **Nuevo movimiento** carga un cobro o pago suelto. Vendedor y viewer ven "No tenés acceso a Finanzas".
 
 ### Hoy → Cuentas
-Cuánta plata hay y qué está comprometido; arriba "¿Cubro los gastos fijos?". Tarjetas: Disponible, Cheques en cartera, Comprometido en cheques emitidos, A cobrar, A pagar, Deudas (tocá para ir). **Ver movimientos**, **Nueva cuenta** / **Editar cuenta**. **Ojo:** sin el extracto del día, el saldo es el del sistema.
+Arriba 4 números: **Bancos hoy**, **Para cubrir hoy** (rescatar o transferir), **Cobros a confirmar** (entradas del banco sin cruzar) y **Pagos de esta semana** (cheques propios hasta el domingo + facturas de compra que vencen). Debajo **Para hacer hoy**: todos los avisos juntos, cada uno con **Ir**. Después "¿Cubro los gastos fijos?" y "Cómo estoy hoy" (tengo / debo / posición neta) con **Ver detalle**. Las cuentas van en una tabla (saldo hoy, según el banco y su fecha, lo sumado desde el extracto): tocá una cuenta para ver el detalle y sus movimientos; **Nueva cuenta**, lápiz = editar. **Ojo:** sin el extracto del día, el saldo es el del sistema (la fecha del banco sale en ámbar).
 
 ### Hoy → Movimientos
 Todos los cobros y pagos (Pendiente, Conciliado, Anulado). **Conciliar** / **Desconciliar**, **Editar**, **Anular**. **Ojo:** mejor Anular que Eliminar. Los que vienen de una factura de compra no se editan acá.
@@ -150,18 +155,18 @@ Deuda por proveedor: **Crear OP**, **Ajuste manual** (no mueve caja), **Exportar
 Gastos sin factura de proveedor (impuestos con VEP, débitos, sueldos). **Nuevo gasto**; **Leer VEP / impuesto (IA)** completa y adjunta (no guarda solo); "Es el pago del gasto fijo"; **Crear gasto**.
 
 ### Pagar → Gastos fijos
-**Nuevo gasto** (descripción, categoría, monto, moneda). "Proveedor que lo factura" → avisa "Falta la factura de [mes]"; sin proveedor espera el pago en Gastos ("Falta pagar [mes]"). "Vence el día". "Monto automático SICORE" = retenciones de Ganancias de las OP del mes anterior. Se desactivan sin borrar.
+**Nuevo gasto** (descripción, categoría, monto, moneda). "Proveedor que lo factura" → avisa "Falta la factura de [mes]" (si ya está el pago en Gastos dice "Pagado · falta la factura"); sin proveedor espera el pago en Gastos ("Falta pagar [mes]"). Gasto en US$ sin dólar propio: se calcula al dólar BNA billete del día. "Vence el día". "Monto automático SICORE" = retenciones de Ganancias de las OP del mes anterior. Se desactivan sin borrar.
 
 ### Pagar → Retenciones (SICORE)
 Desde/Hasta → **CSV**, **Excel** o **SICORE** (archivo para el aplicativo).
 
-### Cheques → Cheques
-**Registrar cheque** (Recibido/Emitido, Físico/E-Cheq). En cartera: **Endosar**, **Depositar**, **Cobrado**, **Rechazar** (motivo → **Rechazar cheque**). Depositado que volvió: "¿Vino rechazado?". **Ojo:** rechazar anula el cobro (queda registro), la factura vuelve a pendiente y deja un aviso.
+### Cheques y créditos → Cheques
+Arriba, propios a pagar y recibidos en cartera en tres cajas: **En fecha** (propios: ya llegó la fecha, el banco los puede debitar hoy, tiene que haber plata; recibidos: ya se pueden depositar), **Esta semana** (hasta el domingo) y **Más adelante**. Tocá una caja para ver esos cheques; en la lista cada uno dice "en fecha" o "esta semana". **Registrar cheque** (Recibido/Emitido, Físico/E-Cheq). En cartera: **Endosar**, **Depositar**, **Cobrado**, **Rechazar** (motivo → **Rechazar cheque**). Depositado que volvió: "¿Vino rechazado?". **Ojo:** rechazar anula el cobro (queda registro), la factura vuelve a pendiente y deja un aviso.
 
-### Cheques → Cheques Martín F.
+### Cheques y créditos → Cheques Martín F.
 Cheques propios que cubre Martín Fernández: **Copiar mensaje para mandarle**, **Cubrió ✓**. La campana avisa 3 días antes.
 
-### Deudas → Créditos
+### Cheques y créditos → Créditos
 Líneas de crédito: usado, disponible, vencimiento, TNA (consulta).
 
 ---

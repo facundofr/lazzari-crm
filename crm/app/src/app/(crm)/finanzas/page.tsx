@@ -14,6 +14,7 @@ import CobroMasivoLiquidacion, { type LiquidacionFactura } from "@/components/co
 import { traerTodo } from "@/lib/paginar";
 import { Autocompletar } from "@/components/ui/autocompletar";
 import { facturaDelMes, pagoDelMes, sugerirGastoFijo, montoSicore } from "@/lib/gasto-fijo-factura";
+import { plazoCheque, rangoPlazo, resumenPlazos, type PlazoCheque } from "@/lib/cheques-plazo";
 import { descripcionVep, type DatosVep } from "@/lib/vep";
 import { FINANZAS_GRUPOS, esFinanzasTab, grupoDeTab, operacionVencimientos, pestanaInicial, type FinanzasGrupo, type FinanzasTab } from "@/lib/finanzas-grupos";
 import { clasificarMovimiento, esCobroDeCliente, sentidoAjuste, resumirCaja, TIPOS_RETENCION } from "@/lib/tipos-movimiento";
@@ -22,7 +23,7 @@ import { estadoVisibleFactura } from "@/lib/estado-factura-venta";
 import { calcularSaldosProveedores, traerCreditosProveedores, pagosSobreFacturasAnuladas, type CreditoProveedor } from "@/lib/saldo-proveedores";
 import { calcularSaldosClientes, cobradoPorFactura, saldoFacturaVenta } from "@/lib/saldo-clientes";
 import type { Movimiento, ExtractoMovimiento, LineaCredito, GastoFijo, Objetivo } from "@/lib/types";
-import { Wallet, ArrowDownLeft, ArrowUpRight, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles, Mail, MailCheck, Send } from "lucide-react";
+import { Wallet, ArrowDownLeft, ArrowUpRight, ChevronDown, Landmark, CreditCard, Upload, CheckCircle2, AlertTriangle, Link2, Factory, Loader2, X, Trash2, CalendarDays, Clock, Plus, Pencil, Target, FileText, Receipt, Ban, Search, Printer, Download, Paperclip, Eye, ShieldCheck, ShoppingCart, Package, DollarSign, Minimize2, Maximize2, Square, Sparkles, Mail, MailCheck, Send } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
@@ -3927,7 +3928,24 @@ export default function FinanzasPage() {
   }), [recibosClientes, reciboSearch]);
 
   const tabsDelGrupo = FINANZAS_GRUPOS.find((g) => g.id === grupo)?.tabs ?? FINANZAS_GRUPOS[0].tabs;
-  const iconoGrupo: Record<FinanzasGrupo, typeof Wallet> = { hoy: CalendarDays, cobrar: ArrowDownLeft, pagar: ArrowUpRight, cheques: Receipt, deudas: Landmark };
+  const iconoGrupo: Record<FinanzasGrupo, typeof Wallet> = { hoy: CalendarDays, cobrar: ArrowDownLeft, pagar: ArrowUpRight, cheques: Receipt };
+  const tabsALaVista = tabsDelGrupo.filter((t) => !t.mas);
+  const tabsEnMas = tabsDelGrupo.filter((t) => t.mas);
+  const tabEnMas = tabsEnMas.find((t) => t.id === tab);
+  // Finanzas → Hoy: facturas de compra que vencen hasta el domingo (incluye vencidas), para "Pagos de esta semana".
+  const pagosSemana = useMemo(() => {
+    const hoyStr = todayAR();
+    const d = new Date(`${hoyStr}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + ((7 - d.getUTCDay()) % 7));
+    const domingo = d.toISOString().slice(0, 10);
+    const deEstaSemana = deudasCompra.filter((x) => x.vencimiento.slice(0, 10) <= domingo);
+    return {
+      ARS: deEstaSemana.filter((x) => x.moneda !== "USD").reduce((a, x) => a + x.saldo, 0),
+      USD: deEstaSemana.filter((x) => x.moneda === "USD").reduce((a, x) => a + x.saldo, 0),
+      cantidad: deEstaSemana.length,
+      vencidas: deEstaSemana.filter((x) => x.vencimiento.slice(0, 10) < hoyStr).length,
+    };
+  }, [deudasCompra]);
 
   // Filtros de retenciones
   const [retFilterDesde, setRetFilterDesde] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`; });
@@ -4047,8 +4065,8 @@ export default function FinanzasPage() {
             })}
           </div>
           {tabsDelGrupo.length > 1 && (
-            <div className="flex gap-0.5 overflow-x-auto rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
-              {tabsDelGrupo.map((t) => (
+            <div className="flex items-center gap-0.5 rounded-lg bg-zinc-100 p-0.5 dark:bg-zinc-800">
+              {tabsALaVista.map((t) => (
                 <button key={t.id} onClick={() => { setTab(t.id, grupo); setCcDetailCliente(null); setCcDetailProveedor(null); fetchData(); }}
                   className={`rounded-md px-2.5 py-1 text-[13px] font-medium transition-colors whitespace-nowrap ${
                     tab === t.id ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
@@ -4056,19 +4074,39 @@ export default function FinanzasPage() {
                   {t.label}
                 </button>
               ))}
+              {tabsEnMas.length > 0 && (
+                <details key={grupo} className="relative" open={false}>
+                  <summary className={`flex cursor-pointer list-none items-center gap-1 rounded-md px-2.5 py-1 text-[13px] font-medium whitespace-nowrap [&::-webkit-details-marker]:hidden ${
+                    tabEnMas ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                  }`}>
+                    {tabEnMas ? tabEnMas.label : "Más"} <ChevronDown className="h-3.5 w-3.5" />
+                  </summary>
+                  <div className="absolute left-0 z-30 mt-1 min-w-[11rem] rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                    {tabsEnMas.map((t) => (
+                      <button key={t.id} type="button"
+                        onClick={(e) => { (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open"); setTab(t.id, grupo); setCcDetailCliente(null); setCcDetailProveedor(null); fetchData(); }}
+                        className={`block w-full rounded-md px-2.5 py-1.5 text-left text-[13px] ${tab === t.id ? "bg-orange-50 font-semibold text-orange-700 dark:bg-orange-950/40 dark:text-orange-300" : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"}`}>
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              )}
             </div>
           )}
         </div>
 
         {/* ── Cobertura de gastos fijos + ventas del mes (arriba de todo en Hoy) ── */}
-        {tab === "cuentas" && <div className="mb-4"><CoberturaFijos sociedadId={sociedadActiva?.id} /></div>}
-
-        {/* ── Cuentas ── */}
+        {/* ── Hoy → Cuentas: 4 números, Para hacer hoy, franja chica (fijos + resumen) y cuentas en tabla ── */}
         {tab === "cuentas" && (
           <CuentasFinancieras
             onIrACheques={() => setTab("echeqs")}
+            onIr={(t) => { if (esFinanzasTab(t)) setTab(t, t === "vencimientos" ? "pagar" : undefined); }}
+            pagosSemana={pagosSemana}
+            cobertura={<CoberturaFijos sociedadId={sociedadActiva?.id} compacto />}
             resumen={(t) => (
               <ResumenEconomico
+                compacto
                 sociedadId={sociedadActiva?.id}
                 montos={{
                   disponible: { ARS: t.ARS.disponible, USD: t.USD.disponible },
@@ -5067,12 +5105,46 @@ export default function FinanzasPage() {
         {/* ── Echeqs ── */}
         {tab === "echeqs" && (
           <>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-4 mb-4">
-              <StatCard title="Recibidos en cartera" value={`${echeqsEnCartera.length} — ${formatCurrency(echeqsMontoCarteraARS)}${echeqsMontoCarteraUSD > 0 ? ` + ${formatCurrency(echeqsMontoCarteraUSD, "USD")}` : ""}`} icon={Wallet} iconColor="text-blue-600" />
-              <StatCard title="Propios pendientes" value={`${echeqsEmitidosPendientes.length} — ${formatCurrency(echeqsMontoEmitidosPendARS)}${echeqsMontoEmitidosPendUSD > 0 ? ` + ${formatCurrency(echeqsMontoEmitidosPendUSD, "USD")}` : ""}`} icon={CreditCard} iconColor="text-orange-500" />
-              <StatCard title="Por vencer (7 días)" value={String(echeqsPorVencer)} icon={Clock} iconColor="text-amber-500" />
-              <StatCard title="Endosados / Entregados" value={String(echeqs.filter(e => e.estado === "endosado" || e.estado === "entregado").length)} icon={ArrowUpRight} iconColor="text-purple-500" />
-            </div>
+            {/* En fecha / Esta semana / Más adelante: propios a pagar y recibidos para depositar (16/10/2026) */}
+            {(() => {
+              const hoyCh = todayAR();
+              const fila = (direccion: "emitido" | "recibido") => {
+                const r = resumenPlazos(echeqs, direccion, hoyCh);
+                const caja = (p: PlazoCheque, titulo: string, nota: string, color: string) => {
+                  const t = r[p];
+                  const filtrar = () => { const rg = rangoPlazo(p, hoyCh); setEcheqFilterDireccion(direccion); setEcheqFilterEstado(direccion === "emitido" ? "entregado" : "en_cartera"); setEcheqFilterDesde(rg.desde); setEcheqFilterHasta(rg.hasta); };
+                  return (
+                    <button key={p} type="button" onClick={filtrar} title="Ver estos cheques en la lista"
+                      className={`rounded-lg border px-3 py-2 text-left transition-colors hover:border-orange-300 ${p === "en_fecha" && t.cantidad ? color : "border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-900"}`}>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">{titulo}</p>
+                      <p className="font-mono text-base font-bold text-zinc-900 dark:text-white">{formatCurrency(t.ARS)}{t.USD > 0 ? <span className="ml-1 text-xs text-zinc-500">+ {formatCurrency(t.USD, "USD")}</span> : null}</p>
+                      <p className="text-[11px] text-zinc-500">{t.cantidad} cheque{t.cantidad === 1 ? "" : "s"} · {nota}</p>
+                    </button>
+                  );
+                };
+                return direccion === "emitido" ? [
+                  caja("en_fecha", "En fecha", "el banco los puede debitar hoy: tiene que haber plata", "border-red-300 bg-red-50 dark:border-red-800 dark:bg-red-950/30"),
+                  caja("esta_semana", "Esta semana", "hasta el domingo", ""),
+                  caja("mas_adelante", "Más adelante", "desde el lunes", ""),
+                ] : [
+                  caja("en_fecha", "En fecha", "ya se pueden depositar", "border-emerald-300 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30"),
+                  caja("esta_semana", "Esta semana", "hasta el domingo", ""),
+                  caja("mas_adelante", "Más adelante", "desde el lunes", ""),
+                ];
+              };
+              return (
+                <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                  <div>
+                    <p className="mb-1 text-xs font-semibold text-orange-600">Cheques propios a pagar (sin debitar)</p>
+                    <div className="grid grid-cols-3 gap-2">{fila("emitido")}</div>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-xs font-semibold text-blue-600">Cheques recibidos en cartera</p>
+                    <div className="grid grid-cols-3 gap-2">{fila("recibido")}</div>
+                  </div>
+                </div>
+              );
+            })()}
             <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
               <div className="flex flex-1 flex-wrap items-center gap-2">
                 <div className="relative min-w-[220px] flex-1 max-w-sm">
@@ -5139,7 +5211,16 @@ export default function FinanzasPage() {
                       { key: "numero", label: "Número", sortable: true, render: (row) => <span className="font-mono font-medium">{row.numero}</span> },
                       { key: "banco_emisor", label: "Banco", sortable: true, render: (row) => <span className="text-zinc-500">{row.banco_emisor || "—"}</span> },
                       { key: "monto", label: "Monto", className: "text-right", sortable: true, render: (row) => <span className="font-mono font-semibold block text-right">{formatCurrency(row.monto, row.moneda)}</span> },
-                      { key: "fecha_pago", label: "Fecha pago", sortable: true, render: (row) => <span className="text-zinc-500">{formatDate(row.fecha_pago)}</span> },
+                      { key: "fecha_pago", label: "Fecha pago", sortable: true, render: (row) => {
+                        const plazo = plazoCheque(row, todayAR());
+                        return (
+                          <span className="text-zinc-500">
+                            {formatDate(row.fecha_pago)}
+                            {plazo === "en_fecha" && <span className={`ml-1.5 rounded px-1 py-0.5 text-[10px] font-semibold ${row.direccion === "emitido" ? "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"}`}>en fecha</span>}
+                            {plazo === "esta_semana" && <span className="ml-1.5 rounded bg-amber-50 px-1 py-0.5 text-[10px] font-semibold text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">esta semana</span>}
+                          </span>
+                        );
+                      } },
                       { key: "estado", label: "Estado", sortable: true, render: (row) => {
                         const cfg = echeqEstadoConfig[row.estado] || { label: row.estado, variant: "outline" as const };
                         return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
@@ -5806,6 +5887,8 @@ export default function FinanzasPage() {
                 const fm = g.activo && g.proveedorId ? facturaDelMes(g.proveedorId, facturasCompra, todayAR()) : null;
                 // Sin proveedor (impuestos, sueldos, débitos): espera el pago del mes en la pestaña Gastos
                 const pm = g.activo && !g.proveedorId ? pagoDelMes(g.id, gastosManuales, todayAR(), g.diaVencimiento) : null;
+                // Con proveedor: si ya se pagó (gasto del mes cargado) y falta la factura, se avisa en gris, sin alarma.
+                const pagadoSinFactura = Boolean(fm?.falta) && !pagoDelMes(g.id, gastosManuales, todayAR(), g.diaVencimiento).falta;
                 const venceTxt = pm?.diasAlVencimiento == null ? "" : pm.diasAlVencimiento < 0 ? ` (venció el ${g.diaVencimiento})` : pm.diasAlVencimiento === 0 ? " (vence hoy)" : ` (vence el ${g.diaVencimiento})`;
                 return (
                 <div key={g.id} className={`flex items-center gap-3 rounded-lg border px-3 py-1.5 ${g.activo ? "border-zinc-200 dark:border-zinc-700" : "border-zinc-100 dark:border-zinc-800 opacity-50"}`}>
@@ -5814,7 +5897,10 @@ export default function FinanzasPage() {
                     <Badge variant="outline">{g.categoria}</Badge>
                     {prov && <span className="text-xs text-zinc-500">· {prov.razon_social}</span>}
                     {!g.activo && <Badge variant="danger">Inactivo</Badge>}
-                    {fm?.falta && (
+                    {pagadoSinFactura && (
+                      <span className="text-xs text-zinc-500">✓ Pagado {fm!.mesNombre} · falta la factura</span>
+                    )}
+                    {fm?.falta && !pagadoSinFactura && (
                       <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">⚠️ Falta la factura de {fm.mesNombre}</span>
                     )}
                     {fm?.factura && (
