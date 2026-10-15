@@ -15,6 +15,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, Check, FileUp, Loader2, Search, Sparkles, Undo2, X } from "lucide-react";
 import { Header } from "@/components/layout/header";
 import SeguimientoIA from "@/components/presupuestos/seguimiento-ia";
+import PresupuestosLista from "../presupuestos/page";
 import { useToast } from "@/components/ui/toast";
 import { Autocompletar } from "@/components/ui/autocompletar";
 import { useUser } from "@/lib/auth-context";
@@ -67,7 +68,7 @@ export default function PresupuestosNuevoPage() {
   const { toast } = useToast();
 
   // ── entrada ──
-  const [pestana, setPestana] = useState<"armar" | "seguimiento">("armar");
+  const [pestana, setPestana] = useState<"armar" | "lista" | "seguimiento">("armar");
   const [fase, setFase] = useState<Fase>("entrada");
   const [mensaje, setMensaje] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
@@ -487,15 +488,22 @@ export default function PresupuestosNuevoPage() {
     return <div><Header title="Presupuestos nuevo" subtitle="" /><div className="p-6 text-sm text-zinc-500">Esta pantalla está en prueba y todavía no está activada para tu usuario.</div></div>;
   }
 
+  const pestanas = (
+    <div className="flex gap-1 border-b border-zinc-200 bg-white px-4 dark:border-zinc-700 dark:bg-zinc-950 md:px-6">
+      {([["armar", "Armar presupuesto"], ["lista", "Presupuestos"], ["seguimiento", "Seguimiento"]] as const).map(([k, t]) => (
+        <button key={k} onClick={() => setPestana(k)} className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${pestana === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}>{t}</button>
+      ))}
+    </div>
+  );
+
+  // "Presupuestos": la pantalla de siempre (lista, filtros, detalle), adentro de esta, con las pestañas arriba.
+  if (pestana === "lista") return <div>{pestanas}<PresupuestosLista /></div>;
+
   return (
     <div>
       <Header title="Presupuestos nuevo" subtitle="Pegá el pedido del cliente y la IA arma el presupuesto: artículo, proveedor y precio. Vos revisás y lo creás con un clic." />
       <div className="mx-auto max-w-7xl space-y-3 p-4 md:p-6">
-        <div className="flex gap-1 border-b border-zinc-200 dark:border-zinc-700">
-          {([["armar", "Armar presupuesto"], ["seguimiento", "Seguimiento"]] as const).map(([k, t]) => (
-            <button key={k} onClick={() => setPestana(k)} className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${pestana === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}>{t}</button>
-          ))}
-        </div>
+        {pestanas}
         {pestana === "seguimiento" && <SeguimientoIA />}
         {pestana === "armar" && <>
 
