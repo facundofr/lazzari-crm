@@ -20,7 +20,7 @@ import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate, todayAR } from "@/lib/utils";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import { htmlToPdfBase64 } from "@/lib/pdf-templates";
-import { textoOCParaProveedor, linkWhatsAppOC, htmlOCParaProveedor, cuerpoMailConAviso, contactoVentas, type OCEnvio, type OCEnvioItem } from "@/lib/oc-envio";
+import { textoOCParaProveedor, textoReclamoOC, linkWhatsAppOC, htmlOCParaProveedor, cuerpoMailConAviso, contactoVentas, type OCEnvio, type OCEnvioItem } from "@/lib/oc-envio";
 import {
   sugerirProveedores, sugerirCentralizar, proveedoresSinStock, costoAlDia, diasDesde, normalizarTexto,
   DIAS_AVISO_ESPERANDO, MARGEN_MINIMO_COMPRAS, type FilaCatalogo, type CompraAnterior, type ProveedorSugerido,
@@ -95,6 +95,8 @@ export default function ComprasNuevaPage() {
   const [pensando, setPensando] = useState(false);
   const [propuesta, setPropuesta] = useState<{ explicacion: string; movimientos: Movimiento[] } | null>(null);
   const [enviarIds, setEnviarIds] = useState<string[] | null>(null);
+  // Reclamo de lo que falta (sin precios): OC abierta y texto editable.
+  const [reclamo, setReclamo] = useState<{ id: string; texto: string } | null>(null);
   const [eligiendo, setEligiendo] = useState<string | null>(null);
 
   const cargar = useCallback(async () => {
@@ -619,8 +621,20 @@ export default function ComprasNuevaPage() {
                   </summary>
                   <div className="mt-1 flex flex-wrap gap-2">
                     <button onClick={() => setEnviarIds([o.id])} className={`${btn} border border-zinc-300 dark:border-zinc-600`}><Send className="h-3.5 w-3.5" /> Reenviar / reclamar</button>
+                    {pend.length > 0 && <button onClick={() => setReclamo(reclamo?.id === o.id ? null : { id: o.id, texto: textoReclamoOC(o, pend.map((i) => ({ codigo: i.codigo, descripcion: i.descripcion, falta: Number(i.cantidad) - Number(i.cantidad_recibida || 0), unidad: i.unidad })), pend.length < its.length) })} className={`${btn} border border-sky-300 text-sky-700 dark:border-sky-800 dark:text-sky-300`} title="Mensaje con solo lo que falta llegar, sin precios"><Send className="h-3.5 w-3.5" /> Reclamar lo que falta ({pend.length})</button>}
                     <button onClick={() => void deshacerPedido(o)} className={`${btn} border border-zinc-300 dark:border-zinc-600`} title="No se mandó: vuelve a Para pedir"><Undo2 className="h-3.5 w-3.5" /> Deshacer pedido</button>
                   </div>
+                  {reclamo?.id === o.id && (
+                    <div className="mt-2 space-y-1.5 rounded-lg border border-sky-200 bg-sky-50/50 p-2 dark:border-sky-900 dark:bg-sky-950/20">
+                      <textarea value={reclamo.texto} onChange={(e) => setReclamo({ id: o.id, texto: e.target.value })} rows={Math.min(14, 8 + pend.length * 2)} className="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-600 dark:bg-zinc-900" />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button onClick={() => { const link = linkWhatsAppOC(contactos[o.proveedor_id || ""]?.whatsapp, reclamo.texto); if (!link) { toast.error("Este proveedor no tiene WhatsApp cargado: copiá el texto"); return; } window.open(link, "_blank"); }} className={`${btn} bg-emerald-600 text-white`}><MessageCircle className="h-3.5 w-3.5" /> WhatsApp</button>
+                        <button onClick={() => { const para = contactos[o.proveedor_id || ""]?.email || ""; window.open(`mailto:${para}?subject=${encodeURIComponent(`Seguimiento ${o.numero}`)}&body=${encodeURIComponent(reclamo.texto.replace(/\*/g, ""))}`, "_self"); }} className={`${btn} bg-sky-600 text-white`}><Mail className="h-3.5 w-3.5" /> Mail (se abre tu correo)</button>
+                        <button onClick={async () => { try { await navigator.clipboard.writeText(reclamo.texto); toast.success("Copiado, sin precios"); } catch { toast.error("No se pudo copiar"); } }} className={`${btn} border border-zinc-300 dark:border-zinc-600`}>Copiar</button>
+                        <span className="text-[10px] text-zinc-400">Solo lo que falta, sin precios.</span>
+                      </div>
+                    </div>
+                  )}
                   <ul className="mt-1 space-y-0.5">
                     {its.map((it) => (
                       <li key={it.id} className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">

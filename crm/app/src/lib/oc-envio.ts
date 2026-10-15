@@ -21,25 +21,37 @@ export interface OCEnvioItem { codigo?: string | null; descripcion: string; cant
 
 const ESTADOS: Record<string, string> = { pendiente: "Pendiente", enviada: "Enviada", confirmada: "Confirmada", recibida_parcial: "Recibida parcial", recibida: "Recibida", cancelada: "Cancelada" };
 
-/** Texto para WhatsApp o para copiar: datos de la OC, renglones, total y el aviso del N° de OC. */
+/** Texto para WhatsApp o para copiar: datos de la OC y renglones, SIN precios (Augusto 16/10/2026) y el aviso del N° de OC. */
 export function textoOCParaProveedor(oc: OCEnvio, items: OCEnvioItem[]): string {
-  const mon = (oc.moneda === "USD" ? "USD" : "ARS") as "ARS" | "USD";
   const lineas = [
     `*ORDEN DE COMPRA ${oc.numero}*`,
     "",
     `Fecha: ${formatDate(oc.fecha)}`,
     oc.fecha_entrega_estimada ? `Entrega estimada: ${formatDate(oc.fecha_entrega_estimada)}` : null,
-    `Moneda: ${mon}`,
     "",
     "*Items:*",
-    ...(items.length ? items.map((it, i) => `${i + 1}. ${it.codigo ? `${it.codigo} - ` : ""}${it.descripcion}\n   ${it.cantidad}${it.unidad ? ` ${it.unidad}` : ""} x ${formatCurrency(Number(it.precio_unitario), mon)}`) : ["(sin items)"]),
-    "",
-    `*Total: ${formatCurrency(Number(oc.total), mon)}*`,
+    ...(items.length ? items.map((it, i) => `${i + 1}. ${it.codigo ? `${it.codigo} - ` : ""}${it.descripcion}\n   ${it.cantidad}${it.unidad ? ` ${it.unidad}` : ""}`) : ["(sin items)"]),
     oc.observaciones ? `\nObs: ${oc.observaciones}` : null,
     "",
     `⚠️ *${avisoNumeroOC(oc.numero)}*`,
   ];
   return lineas.filter((l) => l !== null).join("\n");
+}
+
+/** Reclamo de lo que falta de una OC (recibida en parte o sin recibir): solo lo pendiente, SIN precios. */
+export function textoReclamoOC(oc: { numero: string; fecha: string }, pendientes: Array<{ codigo?: string | null; descripcion: string; falta: number; unidad?: string | null }>, parcial: boolean): string {
+  return [
+    `*Seguimiento de la orden de compra ${oc.numero}* (${formatDate(oc.fecha)})`,
+    "",
+    "Hola, ¿cómo están?",
+    parcial ? "Ya recibimos una parte del pedido. Nos falta recibir:" : "Todavía no recibimos el pedido. Nos falta recibir:",
+    "",
+    ...pendientes.map((it, i) => `${i + 1}. ${it.codigo ? `${it.codigo} - ` : ""}${it.descripcion}\n   Falta: ${it.falta}${it.unidad ? ` ${it.unidad}` : ""}`),
+    "",
+    "¿Me confirmás cuándo llegan? Gracias.",
+    "",
+    `⚠️ ${avisoNumeroOC(oc.numero)}`,
+  ].join("\n");
 }
 
 /** Link de WhatsApp con la OC escrita (null si el número no sirve). */
