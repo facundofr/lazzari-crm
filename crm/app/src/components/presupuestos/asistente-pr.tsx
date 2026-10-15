@@ -12,7 +12,7 @@ import { AlertTriangle, FileUp, Loader2, Paperclip, Send, Sparkles, Undo2, X } f
 import { supabase } from "@/lib/supabase/client";
 import { convertirAMonedaPR, type CatalogoItemParaPR } from "@/components/presupuestos/catalogo-picker";
 import { leerExcel, leerBase64, separarTalle } from "@/components/presupuestos/cotizacion-express";
-import { buscarCandidatos, normalizar, type CatalogoCandidato as Cand } from "@/lib/catalogo-busqueda";
+import { buscarCandidatos, normalizar, tokens, esCodigo, type CatalogoCandidato as Cand } from "@/lib/catalogo-busqueda";
 import { claveArticulo } from "@/lib/presupuesto-ayudas";
 import { proponerPrecio, semaforoLinea, margenSobreCosto, redondear2, MARGEN_MINIMO_IA, type Confianza, type Semaforo } from "@/lib/presupuesto-ia";
 
@@ -26,7 +26,7 @@ type Linea = {
   precioFijo: number | null; markupFijo: number | null; fuente: Fuente | null;
 };
 type Pregunta = { pregunta: string; opciones: string[]; respondida?: string };
-type Msg = { id: string; rol: "yo" | "ia"; texto: string; preguntas?: Pregunta[]; resumen?: string[]; adjunto?: string };
+type Msg = { id: string; rol: "yo" | "ia"; texto: string; preguntas?: Pregunta[]; resumen?: string[]; avisos?: string[]; adjunto?: string };
 type Archivo = { nombre: string; lineas: Array<{ descripcion: string; cantidad: number; talle: string; codigo: string }>; preguntas: Array<{ linea?: string; pregunta: string }> };
 type Accion = { tipo: string; [k: string]: any };
 
@@ -56,6 +56,15 @@ const COLOR: Record<Semaforo, string> = {
 };
 const SEMAFORO_TXT: Record<Semaforo, string> = { verde: "Listo", amarillo: "Revisar", rojo: "Falta" };
 const uid = () => Math.random().toString(36).slice(2, 9);
+/** Parecido entre dos descripciones (0 a 1): palabras en común; si las dos traen código/modelo (H520, 66596…), tiene que coincidir alguno. */
+function parecido(a: string, b: string): number {
+  const A = new Set(tokens(a)), B = new Set(tokens(b));
+  if (!A.size || !B.size) return 0;
+  const comunes = [...A].filter(x => B.has(x));
+  const cA = [...A].filter(esCodigo), cB = [...B].filter(esCodigo);
+  if (cA.length && cB.length && !cA.some(x => B.has(x))) return 0;
+  return (2 * comunes.length) / (A.size + B.size);
+}
 const SUGERENCIAS = [
   "Armame el presupuesto con el Excel que adjunto",
   "Si un artículo ya está en un PR anterior de este cliente, mantené ese precio",
@@ -74,6 +83,8 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
   const [trabajando, setTrabajando] = useState(false);
   const [progreso, setProgreso] = useState("");
   const [error, setError] = useState("");
+  const [soloRevisar, setSoloRevisar] = useState(false);
+  const [margenGlobal, setMargenGlobal] = useState("");
   const finRef = useRef<HTMLDivElement>(null);
   useEffect(() => { lineasRef.current = lineas; }, [lineas]);
   useEffect(() => { finRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [msgs, progreso]);
@@ -100,6 +111,17 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
   const filas = lineas.map(l => ({ l, c: calc(l) }));
   const incluidas = filas.filter(f => f.l.incluir);
   const totalVenta = incluidas.reduce((s, f) => s + f.c.precio * f.l.cantidad, 0);
+  const cuentaSem = (k: Semaforo) => incluidas.filter(f => f.c.sem === k).length;
+  const margenTotal = (() => { let v = 0, c = 0; for (const f of incluidas) if (f.c.costo && f.c.costo > 0 && f.c.precio > 0) { v += f.c.precio * f.l.cantidad; c += f.c.costo * f.l.cantidad; } return c > 0 ? margenSobreCosto(v, c) : null; })();
+  function aplicarMargen(a: "todos" | "sin_pr") {
+    const pct = Number(margenGlobal);
+    if (!(pct >= 0)) return;
+    setDeshacer(p => [...p.slice(-9), { lineas: lineasRef.current.map(l => ({ ...l })), mensajeId: uid() }]);
+    const nuevas = lineasRef.current.map(l => ((!l.incluir || (a === "sin_pr" && l.fuente?.tipo === "pr")) ? l : { ...l, markupFijo: pct, precioFijo: null, fuente: { tipo: "markup" as const, pct } }));
+    lineasRef.current = nuevas;
+    setLineas(nuevas);
+    setMsgs(m => [...m, { id: uid(), rol: "ia", texto: `Margen ${pct}% aplicado${a === "sin_pr" ? " a los que no toman precio de un PR" : " a todos"}.` }]);
+  }
 
   // ── búsqueda y elección de artículos (misma IA de la Cotización express) ──
   async function buscarYElegir(base: Linea[], indicaciones = "") {
@@ -173,15 +195,22 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
           const prs = rs.flatMap((r: any) => r.data || []).sort((x: any, y: any) => String(x.fecha).localeCompare(String(y.fecha)));
           if (!prs.length) { resumen.push(`No encontré el PR ${nums.join(", ")}.`); continue; }
           const mapa = new Map<string, { precio: number; numero: string; fecha: string }>();
-          for (const p of prs) { if (p.moneda !== prMoneda) { resumen.push(`${p.numero} está en otra moneda: no lo usé.`); continue; } for (const it of p.presupuesto_items || []) { const k = claveArticulo(it.codigo, it.descripcion); const pr = Number(it.precio_venta) || 0; if (k && pr > 0) mapa.set(k, { precio: pr, numero: p.numero, fecha: String(p.fecha || "") }); } }
+          const todos: Array<{ desc: string; precio: number; numero: string; fecha: string }> = [];
+          for (const p of prs) { if (p.moneda !== prMoneda) { resumen.push(`${p.numero} está en otra moneda: no lo usé.`); continue; } for (const it of p.presupuesto_items || []) { const k = claveArticulo(it.codigo, it.descripcion); const pr = Number(it.precio_venta) || 0; if (k && pr > 0) { mapa.set(k, { precio: pr, numero: p.numero, fecha: String(p.fecha || "") }); todos.push({ desc: String(it.descripcion || ""), precio: pr, numero: p.numero, fecha: String(p.fecha || "") }); } } }
           const objetivos = new Set(objetivo(cur, a.lineas).map(l => l.id));
           let ok = 0, no = 0;
           publicar(cur.map(l => {
             if (!objetivos.has(l.id)) return l;
             const cand = l.elegido !== null ? l.candidatos[l.elegido] : null;
-            const u = mapa.get(claveArticulo(cand?.codigo_interno || cand?.codigo || l.codigo, cand?.descripcion || l.descripcion)) || mapa.get(claveArticulo(l.codigo, l.descripcion));
+            let u = mapa.get(claveArticulo(cand?.codigo_interno || cand?.codigo || l.codigo, cand?.descripcion || l.descripcion)) || mapa.get(claveArticulo(l.codigo, l.descripcion));
+            let porNombre = false;
+            if (!u) { // sin código en común: se busca el artículo más parecido por nombre (≥ 70 %)
+              let mejor = 0;
+              for (const t of todos) { const sc = Math.max(parecido(t.desc, l.descripcion), cand ? parecido(t.desc, cand.descripcion) : 0); if (sc > mejor) { mejor = sc; u = { precio: t.precio, numero: t.numero, fecha: t.fecha }; } }
+              if (mejor < 0.7) u = undefined; else porNombre = true;
+            }
             if (!u) { no++; return l; }
-            ok++; return { ...l, precioFijo: u.precio, markupFijo: null, fuente: { tipo: "pr", numero: u.numero, fecha: u.fecha } };
+            ok++; return { ...l, precioFijo: u.precio, markupFijo: null, fuente: { tipo: "pr", numero: u.numero, fecha: u.fecha }, nota: porNombre ? `Precio de ${u.numero} (coincide por nombre)` : l.nota };
           }));
           resumen.push(`${ok} renglón(es) toman el precio de ${[...new Set(prs.map((p: any) => p.numero))].join(", ")}${no ? `; ${no} no coinciden` : ""}.`);
         } else if (a.tipo === "mejores_costos") {
@@ -284,7 +313,7 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
       const respId = uid();
       if ((d.acciones || []).length) setDeshacer(p => [...p.slice(-9), { lineas: lineasRef.current.map(l => ({ ...l })), mensajeId: respId }]);
       const resumen = (d.acciones || []).length ? await ejecutar(d.acciones, arch) : [];
-      setMsgs(m => [...m, { id: respId, rol: "ia", texto: d.respuesta || (resumen.length ? "Listo." : "…"), preguntas: (d.preguntas || []).length ? d.preguntas : undefined, resumen: resumen.length ? resumen : undefined }]);
+      setMsgs(m => [...m, { id: respId, rol: "ia", texto: d.respuesta || (resumen.length ? "Listo." : "…"), preguntas: (d.preguntas || []).length ? d.preguntas : undefined, resumen: resumen.length ? resumen : undefined, avisos: (d.avisos || []).length ? d.avisos : undefined }]);
     } catch (e) { setError(e instanceof Error ? e.message : "Error inesperado"); }
     finally { setTrabajando(false); setProgreso(""); }
   }
@@ -343,7 +372,8 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
         <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(340px,2fr)_3fr]">
           {/* CHAT */}
           <div className="flex min-h-0 flex-col border-b border-zinc-200 md:border-b-0 md:border-r dark:border-zinc-700">
-            <div className="min-h-[200px] flex-1 space-y-3 overflow-y-auto p-4">
+            <div className="min-h-[200px] flex-1 space-y-2 overflow-y-auto p-3">
+              {!clienteId && <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">⚠️ Todavía no elegiste el cliente en el PR: sin cliente no puedo usar sus PR anteriores ni su último precio. Elegilo y volvé a abrir el asistente.</p>}
               {!msgs.length && (
                 <div className="space-y-2 text-sm text-zinc-500">
                   <p>Contame qué necesitás. Algunos ejemplos:</p>
@@ -352,10 +382,11 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
               )}
               {msgs.map(m => (
                 <div key={m.id} className={m.rol === "yo" ? "flex justify-end" : "flex justify-start"}>
-                  <div className={`max-w-[92%] space-y-1.5 rounded-2xl px-3 py-2 text-sm ${m.rol === "yo" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100"}`}>
+                  <div className={`max-w-[94%] space-y-1 rounded-2xl px-3 py-1.5 text-[13px] leading-snug ${m.rol === "yo" ? "bg-orange-500 text-white" : "bg-zinc-100 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-100"}`}>
                     {m.adjunto && <p className="flex items-center gap-1 text-[11px] opacity-80"><Paperclip className="h-3 w-3" /> {m.adjunto}</p>}
                     <p className="whitespace-pre-wrap">{m.texto}</p>
                     {m.resumen?.map((r, i) => <p key={i} className="text-xs text-emerald-700 dark:text-emerald-400">✓ {r}</p>)}
+                    {m.avisos?.map((r, i) => <p key={i} className="text-xs text-amber-700 dark:text-amber-400">⚠ {r}</p>)}
                     {m.preguntas?.map((p, i) => (
                       <div key={i} className="rounded-lg border border-sky-200 bg-sky-50 p-2 text-xs text-sky-900 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-200">
                         <p className="font-medium">{p.pregunta}</p>
@@ -389,36 +420,55 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
 
           {/* BORRADOR */}
           <div className="flex min-h-0 flex-col">
-            <div className="flex items-center gap-2 px-4 py-2 text-xs">
-              <span className="font-semibold dark:text-white">Borrador del presupuesto</span>
-              <span className="text-zinc-500">{incluidas.length} renglones · {fmt(totalVenta, prMoneda)} sin IVA</span>
+            <div className="flex flex-wrap items-center gap-2 px-4 py-2 text-xs">
+              <span className="font-semibold dark:text-white">Borrador</span>
+              <span className="text-zinc-500">{incluidas.length} renglones · <b className="text-zinc-800 dark:text-zinc-100">{fmt(totalVenta, prMoneda)}</b> sin IVA{margenTotal !== null && <> · margen <b className={margenTotal < MARGEN_MINIMO_IA ? "text-red-600" : "text-zinc-800 dark:text-zinc-100"}>{margenTotal.toLocaleString("es-AR", { maximumFractionDigits: 1 })}%</b></>}</span>
+              {(["verde", "amarillo", "rojo"] as Semaforo[]).filter(k => cuentaSem(k)).map(k => <span key={k} className={`rounded-full px-2 py-0.5 font-medium ${COLOR[k]}`}>{cuentaSem(k)} {SEMAFORO_TXT[k].toLowerCase()}</span>)}
               {sinTc && <span className="text-amber-600">⚠️ falta el dólar del PR</span>}
+              <label className="flex items-center gap-1 text-zinc-600 dark:text-zinc-300"><input type="checkbox" checked={soloRevisar} onChange={e => setSoloRevisar(e.target.checked)} /> Solo lo que hay que revisar</label>
               <button onClick={deshacerUltimo} disabled={!deshacer.length || trabajando} className="ml-auto flex items-center gap-1 rounded border border-zinc-300 px-2 py-1 disabled:opacity-40 dark:border-zinc-600 dark:text-zinc-200"><Undo2 className="h-3 w-3" /> Deshacer lo último</button>
             </div>
+            {filas.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 px-4 pb-2 text-xs">
+                <span className="text-zinc-500">Margen para</span>
+                <input type="number" min={0} step="0.5" value={margenGlobal} onChange={e => setMargenGlobal(e.target.value)} placeholder="25" className="w-16 rounded border border-zinc-300 px-1.5 py-1 text-right dark:border-zinc-600 dark:bg-zinc-800 dark:text-white" /><span className="text-zinc-500">%</span>
+                <button disabled={!(Number(margenGlobal) >= 0) || margenGlobal === ""} onClick={() => aplicarMargen("todos")} className="rounded border border-orange-300 px-2 py-1 text-orange-700 disabled:opacity-40 dark:text-orange-300">todos</button>
+                <button disabled={!(Number(margenGlobal) >= 0) || margenGlobal === ""} onClick={() => aplicarMargen("sin_pr")} className="rounded border border-orange-300 px-2 py-1 text-orange-700 disabled:opacity-40 dark:text-orange-300" title="Los que tomaron el precio de un PR anterior no se tocan">los que no tienen precio de un PR</button>
+                <span className="text-[10px] text-zinc-400">También podés editar el margen o el precio de cada renglón.</span>
+              </div>
+            )}
             <div className="min-h-[200px] flex-1 overflow-auto px-4 pb-2">
               {!filas.length ? <p className="py-10 text-center text-sm text-zinc-400">Todavía no hay renglones. Adjuntá el pedido o decile qué armar.</p> : (
                 <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-zinc-100 text-left text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"><tr>
-                    <th className="px-1.5 py-1.5"><input type="checkbox" checked={lineas.every(l => l.incluir)} onChange={e => setLineas(ls => ls.map(l => ({ ...l, incluir: e.target.checked })))} /></th>
-                    <th className="px-1.5">Pedido</th><th className="w-14 px-1.5">Cant.</th><th className="px-1.5">Artículo y proveedor</th><th className="px-1.5 text-right">Costo</th><th className="w-24 px-1.5 text-right">Precio</th><th className="px-1.5 text-right">Margen</th><th className="px-1.5">Estado</th>
+                  <thead className="sticky top-0 z-10 bg-zinc-100 text-left text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"><tr>
+                    <th className="w-6 px-1.5 py-1.5"><input type="checkbox" checked={lineas.every(l => l.incluir)} onChange={e => setLineas(ls => ls.map(l => ({ ...l, incluir: e.target.checked })))} /></th>
+                    <th className="px-1.5">Artículo (lo que pidió → lo que elegí)</th><th className="w-14 px-1.5">Cant.</th><th className="w-24 px-1.5 text-right">Costo</th><th className="w-16 px-1.5 text-right">Margen %</th><th className="w-24 px-1.5 text-right">Precio</th><th className="w-14 px-1.5" />
                   </tr></thead>
-                  <tbody>{filas.map(({ l, c }) => (
-                    <tr key={l.id} className={`border-t border-zinc-100 align-top dark:border-zinc-800 dark:text-zinc-200 ${l.incluir ? "" : "opacity-40"}`}>
-                      <td className="px-1.5 py-1.5"><input type="checkbox" checked={l.incluir} onChange={e => setLineas(ls => ls.map(x => (x.id === l.id ? { ...x, incluir: e.target.checked } : x)))} /></td>
-                      <td className="max-w-[170px] px-1.5 py-1.5">{l.descripcion}{l.talle && <span className="ml-1 rounded bg-zinc-200 px-1 text-[10px] dark:bg-zinc-700">T {l.talle}</span>}</td>
-                      <td className="px-1.5 py-1"><input type="number" min={0} step="any" value={l.cantidad} onChange={e => setLineas(ls => ls.map(x => (x.id === l.id ? { ...x, cantidad: Number(e.target.value) || 0 } : x)))} className="w-14 rounded border border-zinc-200 px-1 py-0.5 text-right dark:border-zinc-700 dark:bg-zinc-800" /></td>
-                      <td className="max-w-[260px] px-1.5 py-1.5">
-                        {c.cand ? <><span className="font-medium">{c.cand.proveedor}</span> · {c.cand.codigo_interno || c.cand.codigo}<span className="block text-zinc-500">{c.cand.descripcion}{c.cand.marca ? ` · ${c.cand.marca}` : ""}</span></> : <span className="text-red-600">Sin artículo en la lista</span>}
-                        {(l.nota || c.nota) && <span className="block text-[10px] text-amber-700 dark:text-amber-400">{[l.nota, c.nota].filter(Boolean).join(" · ")}</span>}
+                  <tbody>{filas.filter(f => !soloRevisar || f.c.sem !== "verde").map(({ l, c }) => (
+                    <tr key={l.id} className={`border-t border-zinc-100 align-middle dark:border-zinc-800 dark:text-zinc-200 ${l.incluir ? "" : "opacity-40"}`}>
+                      <td className="px-1.5 py-1"><input type="checkbox" checked={l.incluir} onChange={e => setLineas(ls => ls.map(x => (x.id === l.id ? { ...x, incluir: e.target.checked } : x)))} /></td>
+                      <td className="max-w-0 px-1.5 py-1">
+                        <div className="truncate" title={`${l.descripcion}${l.talle ? ` T${l.talle}` : ""}`}><span className="font-medium">{l.descripcion}</span>{l.talle && <span className="ml-1 rounded bg-zinc-200 px-1 text-[10px] dark:bg-zinc-700">T {l.talle}</span>}</div>
+                        <div className="truncate text-[11px] text-zinc-500" title={c.cand ? `${c.cand.proveedor} · ${c.cand.codigo_interno || c.cand.codigo} · ${c.cand.descripcion}${c.cand.marca ? ` · ${c.cand.marca}` : ""}` : ""}>
+                          {c.cand ? <>→ <b className="font-medium text-zinc-700 dark:text-zinc-300">{c.cand.proveedor}</b> · {c.cand.descripcion}{c.cand.marca ? ` · ${c.cand.marca}` : ""}</> : <span className="text-red-600">→ sin artículo en la lista</span>}
+                        </div>
                       </td>
-                      <td className="whitespace-nowrap px-1.5 py-1.5 text-right">{c.costo !== null && c.cand ? fmt(c.costo, prMoneda) : "—"}</td>
+                      <td className="px-1.5 py-1"><input type="number" min={0} step="any" value={l.cantidad} onChange={e => setLineas(ls => ls.map(x => (x.id === l.id ? { ...x, cantidad: Number(e.target.value) || 0 } : x)))} className="w-14 rounded border border-zinc-200 px-1 py-0.5 text-right dark:border-zinc-700 dark:bg-zinc-800" /></td>
+                      <td className="whitespace-nowrap px-1.5 py-1 text-right">{c.costo !== null && c.cand ? fmt(c.costo, prMoneda) : "—"}</td>
+                      <td className="px-1.5 py-1 text-right">
+                        <input type="number" step="0.5" value={c.margen !== null ? Number(c.margen.toFixed(1)) : ""} disabled={!c.costo} placeholder="—"
+                          onChange={e => setLineas(ls => ls.map(x => (x.id === l.id ? { ...x, markupFijo: e.target.value === "" ? null : Number(e.target.value), precioFijo: null, fuente: e.target.value === "" ? null : { tipo: "markup" as const, pct: Number(e.target.value) } } : x)))}
+                          className={`w-16 rounded border px-1 py-0.5 text-right dark:bg-zinc-800 ${c.bajo ? "border-red-300 font-semibold text-red-600" : "border-zinc-200 dark:border-zinc-700"} disabled:opacity-40`} />
+                      </td>
                       <td className="px-1.5 py-1 text-right">
                         <input type="number" min={0} step="0.01" value={c.precio || ""} placeholder="0" onChange={e => setLineas(ls => ls.map(x => (x.id === l.id ? { ...x, precioFijo: e.target.value === "" ? null : Number(e.target.value), markupFijo: null, fuente: { tipo: "manual" } } : x)))}
-                          className="w-24 rounded border border-zinc-200 px-1 py-0.5 text-right font-semibold dark:border-zinc-700 dark:bg-zinc-800" />
-                        <span className="block text-[10px] text-zinc-400">{c.origen}</span>
+                          className="w-24 rounded border border-zinc-200 px-1 py-0.5 text-right font-semibold dark:border-zinc-700 dark:bg-zinc-800" title={`Origen del precio: ${c.origen}`} />
+                        <div className="truncate text-[10px] text-zinc-400">{c.origen}</div>
                       </td>
-                      <td className={`whitespace-nowrap px-1.5 py-1.5 text-right ${c.bajo ? "font-semibold text-red-600" : ""}`}>{c.margen !== null ? `${c.margen.toLocaleString("es-AR", { maximumFractionDigits: 1 })}%` : "—"}</td>
-                      <td className="px-1.5 py-1.5"><span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-medium ${COLOR[c.sem]}`}>{SEMAFORO_TXT[c.sem]}</span></td>
+                      <td className="px-1.5 py-1 text-center">
+                        <span className={`inline-block h-2.5 w-2.5 rounded-full ${c.sem === "verde" ? "bg-emerald-500" : c.sem === "amarillo" ? "bg-amber-400" : "bg-red-500"}`} title={SEMAFORO_TXT[c.sem]} />
+                        {(l.nota || c.nota) && <span className="ml-1 cursor-help text-amber-600" title={[l.nota, c.nota].filter(Boolean).join(" · ")}>ⓘ</span>}
+                      </td>
                     </tr>
                   ))}</tbody>
                 </table>

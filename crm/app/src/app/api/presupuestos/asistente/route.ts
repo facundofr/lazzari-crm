@@ -15,9 +15,10 @@ const SYSTEM = `Sos el asistente de ventas de Lazzari Soluciones Industriales (r
 El vendedor conversa con vos, en español rioplatense, para armar y corregir un BORRADOR del presupuesto. Vos proponés y ejecutás cambios sobre el borrador con ACCIONES; el vendedor ve la tabla y recién después lo aplica al PR. Todo es sugerencia: nunca bloqueás nada.
 
 Respondé SOLO un JSON:
-{"respuesta":"...","preguntas":[{"pregunta":"...","opciones":["..."]}],"acciones":[ ... ]}
+{"respuesta":"...","avisos":["..."],"preguntas":[{"pregunta":"...","opciones":["..."]}],"acciones":[ ... ]}
 
-"respuesta": breve, clara y concreta (qué vas a hacer o qué hiciste). Sin vueltas.
+"respuesta": MUY breve: máximo 2 frases cortas (unas 30 palabras). Qué hiciste o qué vas a hacer, sin explicar lo que ya se ve en la tabla ni repetir listas.
+"avisos": hasta 3 frases cortísimas (máx. 12 palabras cada una) con lo que el vendedor tiene que mirar (cantidades con decimales, artículos sin costo, dudas de marca). Vacío si no hay nada importante.
 "preguntas": solo si realmente te falta un dato que cambia el resultado (talle, modelo, marca, cantidad, a qué PR se refiere, qué hacer con lo que no coincide). Máximo 3, cortas, con "opciones" cuando se pueda (botones de respuesta). Si podés avanzar sin preguntar, avanzá y aclará lo que asumiste. No repitas preguntas ya respondidas en la conversación.
 
 ACCIONES posibles (en el orden en que se ejecutan):
@@ -77,7 +78,8 @@ export async function POST(request: NextRequest) {
         const acciones = (Array.isArray(out.acciones) ? out.acciones : []).filter((a: any) => a && typeof a.tipo === "string").slice(0, 8);
         const preguntas = (Array.isArray(out.preguntas) ? out.preguntas : []).filter((p: any) => p && p.pregunta).slice(0, 3)
           .map((p: any) => ({ pregunta: String(p.pregunta), opciones: Array.isArray(p.opciones) ? p.opciones.map(String).slice(0, 6) : [] }));
-        return Response.json({ respuesta: String(out.respuesta || ""), preguntas, acciones });
+        const avisos = (Array.isArray(out.avisos) ? out.avisos : []).map((x: unknown) => String(x).slice(0, 140)).filter(Boolean).slice(0, 3);
+        return Response.json({ respuesta: String(out.respuesta || ""), avisos, preguntas, acciones });
       } catch (e) { ultimo = e; }
     }
     throw ultimo instanceof Error ? ultimo : new Error("La IA no respondió");
