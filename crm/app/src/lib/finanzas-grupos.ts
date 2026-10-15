@@ -2,7 +2,7 @@
 // Solo navegación: cada pestaña sigue siendo la misma pantalla de antes.
 
 export type FinanzasTab =
-  | "cuentas" | "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago"
+  | "cuentas" | "para_confirmar" | "movimientos" | "recibos" | "vencimientos" | "facturas_compra" | "ordenes_pago"
   | "gastos_manuales" | "echeqs" | "cheques_tercero" | "cc_clientes" | "cc_proveedores" | "extractos"
   | "lineas_credito" | "gastos_fijos" | "objetivos" | "facturacion" | "retenciones" | "revisar" | "informes";
 
@@ -23,6 +23,8 @@ export const FINANZAS_GRUPOS: FinanzasGrupoDef[] = [
     id: "hoy", label: "Hoy", descripcion: "Cuentas, movimientos, conciliación con el banco y cosas para revisar",
     tabs: [
       { id: "cuentas", label: "Cuentas" },
+      // Bandeja de la IA (16/10/2026): lo que el sistema dejó armado del extracto para confirmar con un clic.
+      { id: "para_confirmar", label: "Para confirmar" },
       { id: "movimientos", label: "Movimientos" },
       { id: "extractos", label: "Extractos" },
       { id: "revisar", label: "Revisar" },

@@ -35,6 +35,16 @@ export const SUBTIPO_LABEL: Record<string, string> = {
   reintegro: "Reintegros",
   extraccion_efectivo: "Extracción de efectivo",
   deposito_efectivo: "Depósito de efectivo",
+  // Los que puede sugerir la IA (bandeja Para confirmar, 16/10/2026).
+  percepcion_iva: "Percepción de IVA",
+  percepcion_iibb: "Percepción de IIBB",
+  iibb: "Ingresos Brutos (pago)",
+  afip: "AFIP / ARCA (VEP, plan de pagos)",
+  otro_impuesto: "Otro impuesto",
+  seguro: "Seguro",
+  servicio: "Servicio (luz, internet, teléfono…)",
+  sueldo: "Sueldo",
+  retiro_socio: "Retiro del dueño",
 };
 
 // ─── Lectura de números y fechas ─────────────────────────────────────────────
@@ -110,6 +120,28 @@ export interface ExtractoLeido {
 
 export function claveLinea(l: Pick<LineaBanco, "fecha" | "importe" | "saldo" | "concepto">): string {
   return `${l.fecha}|${l.importe.toFixed(2)}|${l.saldo === null ? "" : l.saldo.toFixed(2)}|${l.concepto.trim().toUpperCase()}`;
+}
+
+/**
+ * Huella de una línea sin el texto del concepto: fecha|importe|saldo. Los dos Excel del BBVA escriben distinto el
+ * concepto de la misma línea ("CUENTA VISA NRO. …" vs "PAGO VISA-IN …"), pero fecha, importe y saldo coinciden.
+ */
+export function huellaLinea(clave: string): string {
+  const [fecha, importe, saldo] = String(clave || "").split("|");
+  return saldo ? `${fecha}|${importe}|${saldo}` : String(clave || "");
+}
+
+/** Líneas que todavía no están cargadas (ni con la misma clave ni con la misma fecha, importe y saldo). */
+export function lineasNuevas<T extends { clave: string }>(lineas: T[], clavesCargadas: Iterable<string>): T[] {
+  const ya = new Set<string>();
+  for (const c of clavesCargadas) { ya.add(c); ya.add(huellaLinea(c)); }
+  const vistas = new Set<string>();
+  return lineas.filter((l) => {
+    const h = huellaLinea(l.clave);
+    if (ya.has(l.clave) || ya.has(h) || vistas.has(h)) return false;
+    vistas.add(h);
+    return true;
+  });
 }
 
 /** Lee las filas (array de arrays de texto) del Excel "Detalle_mov_cuenta" del BBVA. */

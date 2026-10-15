@@ -1,0 +1,448 @@
+// Bandeja "Para confirmar" (Finanzas con IA, Etapa A — docs/FINANZAS-IA.md). Lógica pura, sin red ni base.
+// Toma las líneas del banco sin cerrar y deja armado qué es cada una, para confirmar con un clic:
+//  - lo que ya cruza solo (cruzarExtracto: impuestos, comisiones, cheques, FCI, entre cuentas, cobros/pagos ya cargados),
+//  - cobros nuevos armados completos (mail de aviso de pago o suma exacta de facturas abiertas del cliente),
+//  - pagos de gastos ya cargados sin pago (ej. sueldos de octubre),
+//  - pagos a proveedores identificados por CUIT (quedan "a cargar" con el proveedor anotado),
+//  - lo demás, con la sugerencia de la IA (si la hay) o "sin resolver".
+// Nunca traba: todo es sugerencia; si algo no cierra, se avisa en el renglón.
+// Prueba: scripts/test-finanzas-propuestas.ts (npx tsx scripts/test-finanzas-propuestas.ts)
+import {
+  cruzarExtracto, CLASIFICACION_LABEL, SUBTIPO_LABEL,
+  type ClasificacionLinea, type LineaCruce, type MovCruce, type ChequeCruce, type CuentaCruce, type ReglaCruce, type Propuesta,
+} from "./extracto-bbva";
+import { cruzarPago, mismoCliente, etiquetaFactura, type FacturaAbierta, type PagoExtraido } from "./agente-mail";
+
+export type Confianza = "alta" | "media" | "baja";
+export type TipoItem = "cruce" | "cobro_nuevo" | "pago_gasto" | "a_cargar" | "sin_resolver";
+
+export interface FacturaBandeja extends FacturaAbierta { fecha: string }
+export interface Tercero { id: string; razon_social: string | null; cuit: string | null }
+export interface PagoMail { id: string; fecha_mail: string | null; asunto: string | null; pago: PagoExtraido & { retenciones?: { tipo?: string | null; monto?: number | null }[] | null; referencia?: string | null } }
+export interface GastoSinPago { id: string; fecha: string; descripcion: string; monto: number; moneda: string; proveedor_cuit: string | null }
+export interface SugerenciaIA { clasificacion: ClasificacionLinea | null; subtipo?: string | null; nota?: string | null; confianza?: Confianza | null; explicacion?: string | null }
+
+export interface CobroArmado {
+  cliente_id: string;
+  cliente_nombre: string;
+  facturas: { id: string; numero: string; fecha: string; saldo: number; moneda: string }[];
+  /** Tipos de movimiento de la base: retencion_iva, retencion_ganancias, retencion_iibb, retencion_suss, ajuste. */
+  retenciones: { tipo: string; monto: number; descripcion: string }[];
+  neto: number;
+  /** Solo si las facturas son en dólares: pesos por dólar con que se cancelan. */
+  tipo_cambio: number | null;
+  referencia: string | null;
+  mail_id: string | null;
+}
+
+export interface ItemBandeja {
+  linea_id: string;
+  fecha: string;
+  concepto: string;
+  importe: number;
+  cuenta_id: string | null;
+  tipo: TipoItem;
+  confianza: Confianza;
+  origen: "extracto" | "regla" | "mail" | "ia" | "facturas" | "gastos" | "cuit";
+  /** Una línea legible: "Impuesto al cheque (Ley 25.413)", "Cobro de Corteva → 5 facturas". */
+  titulo: string;
+  detalle: string[];
+  avisos: string[];
+  /** Para aplicar_cruces_extracto (tipo cruce y a_cargar). */
+  cruce?: { clasificacion: ClasificacionLinea; subtipo?: string | null; movimiento_id?: string | null; cheque_id?: string | null; contra_cuenta_id?: string | null; nota?: string | null };
+  cobro?: CobroArmado;
+  gasto?: { id: string; descripcion: string };
+  /** Clasificación que se puede recordar como regla al confirmar. */
+  regla?: { texto: string; clasificacion: ClasificacionLinea; subtipo?: string | null; contra_cuenta_id?: string | null };
+}
+
+const r2 = (n: number) => Math.round(n * 100) / 100;
+const cent = (n: number) => Math.round(n * 100);
+const soloDigitos = (s: string | null | undefined) => String(s || "").replace(/\D/g, "");
+const diasEntre = (a: string, b: string) => Math.round((Date.parse(`${b.slice(0, 10)}T12:00:00Z`) - Date.parse(`${a.slice(0, 10)}T12:00:00Z`)) / 86400000);
+const fmt = (n: number) => `$ ${Math.abs(n).toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** CUIT de 11 dígitos (20/23/24/27/30/33/34) dentro del concepto. */
+export function cuitEnTexto(texto: string): string | null {
+  const m = String(texto || "").match(/\b((?:20|23|24|27|30|33|34)\d{9})\b/);
+  return m ? m[1] : null;
+}
+
+/** Nombre que trae el detalle del Excel "Movimientos" ("TRANSFERENCIA · CTE 007875 285-… FUNDACION CARGI"). */
+export function nombreEnTexto(texto: string): string {
+  const det = String(texto || "").split("·").slice(1).join(" ");
+  return det.replace(/[\d\-/.:]+/g, " ").replace(/\b(CTE|CTA|CBU|CUIT|NRO|TRANSF|TRANSFERENCIA|VAR|VARIOS)\b/gi, " ").replace(/\s+/g, " ").trim();
+}
+
+const GENERICOS = /^(TRANSFERENCIA|TRANSFERENCIA INMEDIATA|TRANSF\.? INM COE|DEBITO DIRECTO|PAGO A PROVEEDORES OP\.?|GESTION PAGO|TRANSF\.? CLIENTE CTA\.?.*|TRANSFERENCIA CAP|COBRO DE PROVEEDORES CR MIN|DEPOSITO .*|PAGO DE SERVICIOS TARJETA.*)$/i;
+
+/**
+ * Texto para la regla "Recordar". Si el concepto trae un CUIT, la regla es el CUIT (identifica a la persona o empresa).
+ * Si es un concepto genérico ("TRANSFERENCIA", "DEBITO DIRECTO"), no se arma regla: agarraría cualquier cosa.
+ */
+export function textoParaRegla(concepto: string): string | null {
+  const cuit = cuitEnTexto(concepto);
+  if (cuit) return cuit;
+  const t = String(concepto || "").split("·")[0].replace(/\d[\d/.:]*/g, " ").replace(/\s+/g, " ").trim();
+  if (t.length < 6 || GENERICOS.test(t)) return null;
+  return t;
+}
+
+const TIPO_RETENCION: Record<string, string> = { iva: "retencion_iva", ganancias: "retencion_ganancias", iibb: "retencion_iibb", suss: "retencion_suss" };
+const LABEL_RETENCION: Record<string, string> = {
+  retencion_iva: "Retención de IVA", retencion_ganancias: "Retención de Ganancias", retencion_iibb: "Retención de IIBB", retencion_suss: "Retención SUSS", ajuste: "Otra retención",
+};
+
+export function etiquetaClasificacion(c: ClasificacionLinea | null | undefined, subtipo?: string | null): string {
+  if (!c) return "Sin clasificar";
+  return (subtipo && SUBTIPO_LABEL[subtipo]) || CLASIFICACION_LABEL[c] || c;
+}
+
+/** Arma el cobro completo a partir del cruce del aviso (o de la suma exacta) contra las facturas abiertas. */
+function armarCobro(
+  facturasElegidas: FacturaBandeja[], neto: number, totalAviso: number | null, retencionesAviso: { tipo?: string | null; monto?: number | null }[],
+  referencia: string | null, mailId: string | null,
+): { cobro: CobroArmado; avisos: string[] } | null {
+  if (!facturasElegidas.length) return null;
+  const clienteIds = [...new Set(facturasElegidas.map((f) => f.cliente_id).filter(Boolean))] as string[];
+  if (clienteIds.length !== 1) return null;
+  const avisos: string[] = [];
+  const monedas = [...new Set(facturasElegidas.map((f) => f.moneda || "ARS"))];
+  if (monedas.length > 1) return null;
+  const usd = monedas[0] === "USD";
+
+  let retenciones = (retencionesAviso || [])
+    .filter((r) => Number(r.monto) > 0)
+    .map((r) => {
+      const tipo = TIPO_RETENCION[String(r.tipo || "").toLowerCase()] || "ajuste";
+      return { tipo, monto: r2(Number(r.monto)), descripcion: LABEL_RETENCION[tipo] };
+    });
+  const totalRet = r2(retenciones.reduce((s, r) => s + r.monto, 0));
+  const total = r2(neto + totalRet);
+  if (totalAviso && Math.abs(totalAviso - total) > 0.05) {
+    const dif = r2(totalAviso - total);
+    if (dif > 0) {
+      retenciones = [...retenciones, { tipo: "ajuste", monto: dif, descripcion: "Retención sin detalle en el aviso" }];
+      avisos.push(`${mailId ? "El aviso paga" : "Las facturas suman"} ${fmt(totalAviso)} y llegan ${fmt(neto)}: ${fmt(dif)} quedan como retención sin detalle (cargá el certificado).`);
+    }
+  }
+  const totalFinal = r2(neto + retenciones.reduce((s, r) => s + r.monto, 0));
+  let tipo_cambio: number | null = null;
+  if (usd) {
+    const saldoUsd = facturasElegidas.reduce((s, f) => s + f.saldo, 0);
+    if (saldoUsd <= 0) return null;
+    tipo_cambio = r2(totalFinal / saldoUsd);
+    const ref = facturasElegidas[0].tipo_cambio;
+    avisos.push(`Facturas en dólares: se cancelan a $ ${tipo_cambio.toLocaleString("es-AR")} por dólar${ref ? ` (la factura se hizo a ${ref.toLocaleString("es-AR")})` : ""}.`);
+    if (tipo_cambio < 300 || tipo_cambio > 5000) return null;
+  } else {
+    const saldo = r2(facturasElegidas.reduce((s, f) => s + f.saldo, 0));
+    if (cent(saldo) !== cent(totalFinal)) {
+      avisos.push(totalFinal < saldo
+        ? `Las facturas deben ${fmt(saldo)} y se cancelan ${fmt(totalFinal)}: queda saldo ${fmt(saldo - totalFinal)} en la más nueva.`
+        : `Pagó ${fmt(totalFinal - saldo)} de más: queda a favor del cliente.`);
+    }
+  }
+  const f0 = facturasElegidas[0];
+  return {
+    cobro: {
+      cliente_id: clienteIds[0],
+      cliente_nombre: f0.cliente_nombre || "Cliente",
+      facturas: facturasElegidas.map((f) => ({ id: f.id, numero: etiquetaFactura(f), fecha: f.fecha, saldo: f.saldo, moneda: f.moneda || "ARS" })),
+      retenciones, neto: r2(neto), tipo_cambio, referencia, mail_id: mailId,
+    },
+    avisos,
+  };
+}
+
+/** Subconjunto de facturas (hasta 12) cuyo saldo suma exacto el objetivo. Si hay más de una forma, null (que decida una persona). */
+function sumaExactaUnica(fs: FacturaBandeja[], objetivo: number): FacturaBandeja[] | null {
+  const lista = fs.slice(0, 12);
+  let encontrada: FacturaBandeja[] | null = null;
+  for (let mask = 1; mask < 1 << lista.length; mask++) {
+    let s = 0;
+    for (let i = 0; i < lista.length; i++) if (mask & (1 << i)) s += cent(lista[i].saldo);
+    if (s === cent(objetivo)) {
+      if (encontrada) return null;
+      encontrada = lista.filter((_, i) => mask & (1 << i));
+    }
+  }
+  return encontrada;
+}
+
+/**
+ * Cobro con retenciones sin aviso: facturas en pesos de un mismo cliente (hasta 8 por cliente) cuya suma S cumple
+ * importe < S ≤ importe / 0,94 (retenciones de hasta 6 %). Si hay más de una opción en total, null (decide una persona).
+ */
+function combinacionConRetenciones(fs: FacturaBandeja[], importe: number): FacturaBandeja[] | null {
+  const porCliente = new Map<string, FacturaBandeja[]>();
+  for (const f of fs) if (f.cliente_id) porCliente.set(f.cliente_id, [...(porCliente.get(f.cliente_id) || []), f]);
+  let unica: FacturaBandeja[] | null = null;
+  const tope = cent(importe / 0.94);
+  for (const lista of porCliente.values()) {
+    const xs = lista.slice(0, 8);
+    for (let mask = 1; mask < 1 << xs.length; mask++) {
+      let s = 0;
+      for (let i = 0; i < xs.length; i++) if (mask & (1 << i)) s += cent(xs[i].saldo);
+      if (s > cent(importe) && s <= tope) {
+        if (unica) return null;
+        unica = xs.filter((_, i) => mask & (1 << i));
+      }
+    }
+  }
+  return unica;
+}
+
+export interface DatosBandeja {
+  lineas: LineaCruce[];
+  movimientos: MovCruce[];
+  cheques: ChequeCruce[];
+  cuentas: CuentaCruce[];
+  reglas: ReglaCruce[];
+  chequesUsados: Set<string>;
+  facturas: FacturaBandeja[];
+  clientes: Tercero[];
+  proveedores: Tercero[];
+  pagosMail: PagoMail[];
+  gastos: GastoSinPago[];
+  ia: Map<string, SugerenciaIA>;
+  descartadas: Set<string>;
+}
+
+export function armarBandeja(d: DatosBandeja): ItemBandeja[] {
+  const lineas = d.lineas.filter((l) => !d.descartadas.has(l.id));
+  const propuestas = cruzarExtracto(lineas, d.movimientos, d.cheques, d.cuentas, d.reglas, d.chequesUsados);
+  const porLinea = new Map(propuestas.map((p) => [p.linea_id, p]));
+  const cuentaPorId = new Map(d.cuentas.map((c) => [c.id, c]));
+  const movPorId = new Map(d.movimientos.map((m) => [m.id, m]));
+  const abiertas = d.facturas.filter((f) => f.saldo >= 1 && f.estado !== "pagada");
+  const cliPorCuit = new Map(d.clientes.filter((c) => soloDigitos(c.cuit).length === 11).map((c) => [soloDigitos(c.cuit), c]));
+  const provPorCuit = new Map(d.proveedores.filter((p) => soloDigitos(p.cuit).length === 11).map((p) => [soloDigitos(p.cuit), p]));
+  const mailsUsados = new Set<string>();
+  const facturasUsadas = new Set<string>();
+  const gastosUsados = new Set<string>();
+  const out: ItemBandeja[] = [];
+
+  // Para cada movimiento que es candidato único de varias líneas: la línea de fecha más cercana.
+  const movsUsados = new Set<string>();
+  const movCandidato = new Map<string, string>();
+  for (const l of lineas) {
+    const p = porLinea.get(l.id);
+    if (!p || p.auto || p.candidatos.length !== 1) continue;
+    const m = movPorId.get(p.candidatos[0]);
+    if (!m) continue;
+    const actual = movCandidato.get(m.id);
+    const dist = (id: string) => Math.abs(diasEntre(String(m.fecha), lineas.find((x) => x.id === id)!.fecha));
+    if (!actual || dist(l.id) < dist(actual)) movCandidato.set(m.id, l.id);
+  }
+
+  const base = (l: LineaCruce) => ({ linea_id: l.id, fecha: l.fecha, concepto: l.concepto, importe: l.importe, cuenta_id: l.cuenta_id, detalle: [] as string[], avisos: [] as string[] });
+
+  // Las automáticas primero: así sus movimientos y cheques no se ofrecen a otras líneas.
+  const orden = [...lineas].sort((a, b) => Number(Boolean(porLinea.get(b.id)?.auto)) - Number(Boolean(porLinea.get(a.id)?.auto)) || a.fecha.localeCompare(b.fecha));
+
+  for (const l of orden) {
+    const p: Propuesta | undefined = porLinea.get(l.id);
+    const credito = l.importe > 0;
+    // Ya confirmada como cobro/pago "a cargar": solo vuelve a la bandeja si ahora se puede cerrar (movimiento o cobro armado).
+    const yaMarcada = l.clasificacion === "cobro" || l.clasificacion === "pago";
+
+    // 1) Lo que ya cruza solo.
+    if (p?.auto && p.clasificacion) {
+      const mov = p.movimiento_id ? movPorId.get(p.movimiento_id) : undefined;
+      const otra = p.contra_cuenta_id ? cuentaPorId.get(p.contra_cuenta_id)?.nombre : null;
+      out.push({
+        ...base(l), tipo: "cruce", confianza: "alta", origen: p.motivo.startsWith("Regla") ? "regla" : "extracto",
+        titulo: `${etiquetaClasificacion(p.clasificacion, p.subtipo)}${otra ? ` → ${otra}` : ""}${mov ? ` → ${mov.descripcion || mov.tipo}` : ""}`,
+        detalle: [p.motivo], avisos: p.nota ? [p.nota] : [],
+        cruce: { clasificacion: p.clasificacion, subtipo: p.subtipo, movimiento_id: p.movimiento_id, cheque_id: p.cheque_id, contra_cuenta_id: p.contra_cuenta_id, nota: p.nota },
+      });
+      continue;
+    }
+
+    // 2) Cobro o pago ya cargado en el CRM con un solo candidato: cruce de confianza media.
+    //    Cada movimiento se ofrece a una sola línea (la de fecha más cercana) y, si la línea trae CUIT, tiene que ser el mismo.
+    if (p && (p.clasificacion === "cobro" || p.clasificacion === "pago") && p.candidatos.length === 1) {
+      const mov = movPorId.get(p.candidatos[0]);
+      const cuitLinea = cuitEnTexto(l.concepto);
+      const cuitOk = !cuitLinea || !mov?.cuit || soloDigitos(mov.cuit) === cuitLinea;
+      const masCerca = mov ? movCandidato.get(mov.id) === l.id : false;
+      if (mov && cuitOk && masCerca && !movsUsados.has(mov.id)) {
+        movsUsados.add(mov.id);
+        out.push({
+          ...base(l), tipo: "cruce", confianza: "media", origen: "extracto",
+          titulo: `${credito ? "Cobro" : "Pago"} ya cargado → ${mov.descripcion || mov.tipo}`,
+          detalle: [`Mismo importe, ${Math.abs(diasEntre(String(mov.fecha), l.fecha))} días de diferencia`],
+          avisos: [], cruce: { clasificacion: p.clasificacion, movimiento_id: mov.id },
+        });
+        continue;
+      }
+    }
+
+    // 3) Cheques (propios, depositados, devueltos) que no cruzan solos: los resuelve una persona con los candidatos.
+    if (p && p.clasificacion && ["cheque_emitido", "cheque_acreditado", "cheque_devuelto"].includes(p.clasificacion)) {
+      out.push({ ...base(l), tipo: "sin_resolver", confianza: "baja", origen: "extracto", titulo: etiquetaClasificacion(p.clasificacion), detalle: [p.motivo], avisos: [] });
+      continue;
+    }
+
+    if (credito) {
+      // 4) Cobro con aviso de pago por mail: neto exacto y fecha cercana.
+      const mail = d.pagosMail.find((m) => !mailsUsados.has(m.id) && m.pago?.direccion !== "emitido"
+        && m.pago?.monto_neto && cent(Number(m.pago.monto_neto)) === cent(l.importe)
+        && Math.abs(diasEntre(String(m.pago.fecha_pago || m.fecha_mail || l.fecha), l.fecha)) <= 7);
+      if (mail) {
+        const cruce = cruzarPago(mail.pago, d.facturas, []);
+        const elegidas = cruce.facturas.filter((f) => !f.cobrada && !facturasUsadas.has(f.id))
+          .map((f) => d.facturas.find((x) => x.id === f.id)).filter(Boolean) as FacturaBandeja[];
+        const armado = armarCobro(elegidas, l.importe, mail.pago.monto_total ?? null, mail.pago.retenciones || [], mail.pago.referencia || null, mail.id);
+        if (armado) {
+          mailsUsados.add(mail.id);
+          armado.cobro.facturas.forEach((f) => facturasUsadas.add(f.id));
+          const ret = armado.cobro.retenciones.reduce((s, r) => s + r.monto, 0);
+          out.push({
+            ...base(l), tipo: "cobro_nuevo", confianza: armado.avisos.some((a) => /saldo|de más|sin detalle/.test(a)) ? "media" : "alta", origen: "mail",
+            titulo: `Cobro de ${armado.cobro.cliente_nombre} → ${armado.cobro.facturas.length} factura${armado.cobro.facturas.length > 1 ? "s" : ""}`,
+            detalle: [
+              armado.cobro.facturas.map((f) => f.numero).join(", "),
+              ret > 0 ? `Retenciones ${fmt(ret)} (${armado.cobro.retenciones.map((r) => `${r.descripcion} ${fmt(r.monto)}`).join(", ")})` : "Sin retenciones",
+              `Aviso por mail: ${mail.asunto || "pago"}`,
+              ...cruce.notas.filter((n) => !/entrada|extracto/i.test(n)),
+            ],
+            avisos: armado.avisos, cobro: armado.cobro,
+          });
+          continue;
+        }
+      }
+
+      // 5) Cobro sin mail: cliente por CUIT o nombre del concepto, o suma exacta única entre todas las facturas abiertas.
+      const cuit = cuitEnTexto(l.concepto);
+      const nombre = nombreEnTexto(l.concepto);
+      const cliente = (cuit && cliPorCuit.get(cuit)) || (nombre ? d.clientes.find((c) => mismoCliente(c.razon_social, nombre)) : undefined);
+      // Sin aviso: solo facturas emitidas hasta el día del pago.
+      const libres = abiertas.filter((f) => !facturasUsadas.has(f.id) && (f.moneda || "ARS") === "ARS" && f.fecha <= l.fecha);
+      let elegidas: FacturaBandeja[] | null = null;
+      let como = "";
+      if (cliente) {
+        const delCliente = libres.filter((f) => f.cliente_id === cliente.id).sort((a, b) => a.fecha.localeCompare(b.fecha));
+        elegidas = sumaExactaUnica(delCliente, l.importe);
+        como = `Cliente por ${cuit && cliPorCuit.get(cuit) ? "CUIT" : "nombre"}; saldo exacto de sus facturas`;
+      } else {
+        const exactas = libres.filter((f) => cent(f.saldo) === cent(l.importe));
+        if (exactas.length === 1) { elegidas = exactas; como = "Única factura abierta con ese saldo exacto"; }
+      }
+      // Con retenciones: facturas de UN cliente que, descontando hasta un 6 %, dan el importe. Solo si hay una única opción.
+      let retencionEstimada = 0;
+      if (!elegidas?.length) {
+        const conRet = combinacionConRetenciones(cliente ? libres.filter((f) => f.cliente_id === cliente.id) : libres, l.importe);
+        if (conRet) {
+          elegidas = conRet;
+          retencionEstimada = r2(conRet.reduce((s, f) => s + f.saldo, 0) - l.importe);
+          como = `${cliente ? "Cliente por CUIT o nombre" : "Única combinación de facturas de un cliente"}: las facturas suman ${fmt(l.importe + retencionEstimada)} y llegan ${fmt(l.importe)} → ${fmt(retencionEstimada)} serían retenciones`;
+        }
+      }
+      if (elegidas?.length) {
+        const armado = armarCobro(elegidas, l.importe, retencionEstimada ? r2(l.importe + retencionEstimada) : null, [], null, null);
+        if (armado) {
+          armado.cobro.facturas.forEach((f) => facturasUsadas.add(f.id));
+          out.push({
+            ...base(l), tipo: "cobro_nuevo", confianza: cliente && !retencionEstimada ? "alta" : "media", origen: "facturas",
+            titulo: `Cobro de ${armado.cobro.cliente_nombre} → ${armado.cobro.facturas.length} factura${armado.cobro.facturas.length > 1 ? "s" : ""}`,
+            detalle: [armado.cobro.facturas.map((f) => f.numero).join(", "), como],
+            avisos: armado.avisos, cobro: armado.cobro,
+          });
+          continue;
+        }
+      }
+      if (cliente && !yaMarcada) {
+        const deuda = r2(libres.filter((f) => f.cliente_id === cliente.id).reduce((s, f) => s + f.saldo, 0));
+        out.push({
+          ...base(l), tipo: "a_cargar", confianza: "media", origen: "cuit",
+          titulo: `Cobro de ${cliente.razon_social} (falta cargarlo)`,
+          detalle: [deuda > 0 ? `Tiene ${fmt(deuda)} en facturas abiertas, pero ninguna combinación da justo ${fmt(l.importe)}: ¿retenciones?` : "No tiene facturas abiertas en pesos"],
+          avisos: [], cruce: { clasificacion: "cobro", nota: `Cliente: ${cliente.razon_social}` },
+        });
+        continue;
+      }
+    } else {
+      // 6) Pago de un gasto ya cargado sin pago (sueldos, consultores…): por CUIT del proveedor del gasto o por importe exacto.
+      const cuit = cuitEnTexto(l.concepto);
+      const libresG = d.gastos.filter((g) => !gastosUsados.has(g.id) && diasEntre(g.fecha, l.fecha) >= -20 && diasEntre(g.fecha, l.fecha) <= 25);
+      const porCuit = cuit ? libresG.filter((g) => soloDigitos(g.proveedor_cuit) === cuit) : [];
+      // Solo por importe: tiene que ser del mismo mes que el gasto (un sueldo de octubre no se paga en septiembre).
+      const porImporte = libresG.filter((g) => g.moneda === "ARS" && cent(g.monto) === cent(-l.importe) && g.fecha.slice(0, 7) === l.fecha.slice(0, 7));
+      const gasto = porCuit.length === 1 ? porCuit[0] : porImporte[0];
+      if (gasto) {
+        gastosUsados.add(gasto.id);
+        const dudas = porCuit.length === 1 ? 0 : porImporte.length - 1;
+        out.push({
+          ...base(l), tipo: "pago_gasto", confianza: porCuit.length === 1 ? "alta" : "media", origen: "gastos",
+          titulo: `Pago de ${gasto.descripcion}`,
+          detalle: [porCuit.length === 1 ? "Mismo CUIT que el proveedor del gasto" : `Mismo importe (${gasto.moneda} ${gasto.monto.toLocaleString("es-AR")}) que un gasto cargado sin pago`],
+          avisos: [
+            ...(dudas > 0 ? [`Hay ${dudas + 1} gastos por el mismo importe: fijate que sea la persona correcta (si no, Corregir).`] : []),
+            ...(gasto.moneda !== "ARS" ? [`El gasto es en ${gasto.moneda}: el pago queda en pesos por ${fmt(l.importe)}.`] : []),
+          ],
+          gasto: { id: gasto.id, descripcion: gasto.descripcion },
+        });
+        continue;
+      }
+      // 7) Transferencia a un proveedor por CUIT: queda "a cargar" con el proveedor anotado (la OP se arma en Órdenes de pago).
+      const prov = cuit ? provPorCuit.get(cuit) : undefined;
+      if (prov && !yaMarcada) {
+        out.push({
+          ...base(l), tipo: "a_cargar", confianza: "alta", origen: "cuit",
+          titulo: `Pago a ${prov.razon_social} (falta la orden de pago)`,
+          detalle: ["CUIT de la transferencia = proveedor del CRM"],
+          avisos: [], cruce: { clasificacion: "pago", nota: `Proveedor: ${prov.razon_social}` },
+        });
+        continue;
+      }
+    }
+
+    if (yaMarcada) continue;
+
+    // 8) Sugerencia de la IA.
+    const ia = d.ia.get(l.id);
+    if (ia?.clasificacion) {
+      const esCobroPago = ia.clasificacion === "cobro" || ia.clasificacion === "pago";
+      const texto = textoParaRegla(l.concepto);
+      out.push({
+        ...base(l), tipo: esCobroPago ? "a_cargar" : "cruce", confianza: ia.confianza || "media", origen: "ia",
+        titulo: `${etiquetaClasificacion(ia.clasificacion, ia.subtipo)}${esCobroPago ? " (falta cargarlo)" : ""}`,
+        detalle: [ia.explicacion || "Sugerido por la IA"].filter(Boolean),
+        avisos: [], cruce: { clasificacion: ia.clasificacion, subtipo: ia.subtipo || null, nota: ia.nota || null },
+        regla: !esCobroPago && texto ? { texto, clasificacion: ia.clasificacion, subtipo: ia.subtipo || null } : undefined,
+      });
+      continue;
+    }
+
+    out.push({
+      ...base(l), tipo: "sin_resolver", confianza: "baja", origen: "extracto",
+      titulo: credito ? "Entrada sin identificar" : "Salida sin identificar",
+      detalle: [p?.motivo || "Ninguna regla la reconoce"], avisos: [],
+    });
+  }
+
+  const peso: Record<Confianza, number> = { alta: 0, media: 1, baja: 2 };
+  return out.sort((a, b) => peso[a.confianza] - peso[b.confianza] || b.fecha.localeCompare(a.fecha) || Math.abs(b.importe) - Math.abs(a.importe));
+}
+
+/** Líneas que conviene mandarle a la IA: las que quedaron sin resolver y todavía no tienen sugerencia. */
+export function lineasParaIA(items: ItemBandeja[], ia: Map<string, SugerenciaIA>): ItemBandeja[] {
+  return items.filter((i) => i.tipo === "sin_resolver" && !ia.has(i.linea_id) && !/cheque/i.test(i.titulo));
+}
+
+/** Totales de lo que se va a confirmar, por tipo (para el resumen de arriba). */
+export function resumenBandeja(items: ItemBandeja[]) {
+  const por = (t: TipoItem) => items.filter((i) => i.tipo === t);
+  const suma = (xs: ItemBandeja[]) => r2(xs.reduce((s, i) => s + i.importe, 0));
+  const impuestos = items.filter((i) => i.cruce && ["impuesto", "gasto_bancario"].includes(i.cruce.clasificacion));
+  return {
+    total: items.length,
+    alta: items.filter((i) => i.confianza === "alta" && i.tipo !== "sin_resolver").length,
+    cobros: { n: por("cobro_nuevo").length, importe: suma(por("cobro_nuevo")) },
+    gastos: { n: por("pago_gasto").length, importe: suma(por("pago_gasto")) },
+    impuestos: { n: impuestos.length, importe: suma(impuestos) },
+    sinResolver: por("sin_resolver").length,
+  };
+}

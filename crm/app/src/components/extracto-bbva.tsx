@@ -11,7 +11,7 @@ import { traerTodo } from "@/lib/paginar";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import {
-  leerExtractoBbva, leerMovimientosBbva, leerListadoCheques, chequesParaCompletar, unirListados, cruzarExtracto, totalesBancoPorMes, numeroCheque,
+  leerExtractoBbva, leerMovimientosBbva, lineasNuevas, leerListadoCheques, chequesParaCompletar, unirListados, cruzarExtracto, totalesBancoPorMes, numeroCheque,
   CLASIFICACION_LABEL, SUBTIPO_LABEL,
   type ExtractoLeido, type ChequeListado, type ClasificacionLinea, type MovCruce, type ChequeCruce, type ReglaCruce, type Propuesta,
   digitosCuenta,
@@ -19,7 +19,7 @@ import {
 import { montoCuentaDeOp } from "@/lib/saldo-cuentas";
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, Loader2, RotateCcw, Upload, Wand2 } from "lucide-react";
 
-interface CuentaRow {
+export interface CuentaRow {
   id: string;
   nombre: string;
   tipo: string;
@@ -61,11 +61,13 @@ interface ChequeRow extends ChequeCruce {
   destino_nombre: string | null;
 }
 
-interface ArchivoPreview {
+export interface ArchivoPreview {
   nombre: string;
   leido: ExtractoLeido;
   cuenta: CuentaRow | null;
   desdeCorte: ExtractoLeido["lineas"];
+  /** Las que no están cargadas (ni por clave ni por fecha+importe+saldo): solo esas se mandan a guardar. */
+  aGuardar: ExtractoLeido["lineas"];
   nuevas: number;
   guardado?: string;
 }
@@ -88,6 +90,46 @@ async function leerHojas(file: File): Promise<unknown[][][]> {
   const XLSX: any = await import("xlsx");
   const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
   return wb.SheetNames.map((n: string) => XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: false, defval: "" }));
+}
+
+/**
+ * Lee un Excel del BBVA ("Detalle_mov_cuenta" o "Movimientos") y lo deja listo para guardar.
+ * El "Movimientos" no trae saldo por línea: se calcula y se verifica contra el último saldo cargado (si no cierra, tira error).
+ * También lo usa la bandeja "Para confirmar".
+ */
+export async function leerArchivoExtracto(f: File, cuentas: CuentaRow[], clavesPorCuenta: Map<string, Set<string>>): Promise<ArchivoPreview> {
+  const hojas = await leerHojas(f);
+  let leido;
+  try {
+    leido = leerExtractoBbva(hojas[0] || []);
+  } catch {
+    const prueba = leerMovimientosBbva(hojas, null);
+    const c0 = cuentas.find((c) => digitosCuenta(c.numero) === prueba.cuentaDigitos);
+    const ancla = c0 && c0.saldo_banco !== null && c0.saldo_banco !== undefined && c0.saldo_banco_fecha
+      ? { fecha: String(c0.saldo_banco_fecha).slice(0, 10), saldo: Number(c0.saldo_banco) }
+      : null;
+    leido = leerMovimientosBbva(hojas, ancla);
+  }
+  const cuenta = cuentas.find((c) => digitosCuenta(c.numero) === leido.cuentaDigitos) || null;
+  const desdeCorte = cuenta ? leido.lineas.filter((l) => l.fecha > cuenta.fecha_corte) : leido.lineas;
+  const claves = cuenta ? clavesPorCuenta.get(cuenta.id) || new Set<string>() : new Set<string>();
+  const aGuardar = lineasNuevas(desdeCorte, claves);
+  return { nombre: f.name, leido, cuenta, desdeCorte, aGuardar, nuevas: aGuardar.length };
+}
+
+/** Guarda las líneas nuevas del extracto (las repetidas se saltean) y el saldo según el banco. */
+export async function guardarArchivoExtracto(sociedadId: string, a: ArchivoPreview): Promise<{ insertadas: number; repetidas: number }> {
+  if (!a.cuenta) throw new Error("No hay una cuenta con ese número (cargala en Cuentas).");
+  const { data, error: e } = await (supabase as any).rpc("importar_extracto_bbva", {
+    p_sociedad_id: sociedadId,
+    p_cuenta_id: a.cuenta.id,
+    p_archivo: a.nombre,
+    p_lineas: a.aGuardar.map((l) => ({ fecha: l.fecha, concepto: l.concepto, sucursal: l.sucursal, importe: l.importe, saldo: l.saldo, clave: l.clave })),
+    p_saldo_final: a.leido.saldoFinal,
+    p_saldo_fecha: a.leido.saldoFecha,
+  });
+  if (e) throw e;
+  return { insertadas: Number(data?.insertadas ?? 0), repetidas: Number(data?.repetidas ?? 0) + (a.desdeCorte.length - a.aGuardar.length) };
 }
 
 export default function ExtractoBbva({ onIrACheques }: { onIrACheques?: () => void }) {
@@ -252,23 +294,7 @@ export default function ExtractoBbva({ onIrACheques }: { onIrACheques?: () => vo
     const out: ArchivoPreview[] = [];
     for (const f of Array.from(files)) {
       try {
-        const hojas = await leerHojas(f);
-        let leido;
-        try {
-          leido = leerExtractoBbva(hojas[0] || []);
-        } catch {
-          // Excel "Movimientos" del home banking (sin saldo por línea): se calcula y se verifica contra el último saldo cargado.
-          const prueba = leerMovimientosBbva(hojas, null);
-          const c0 = cuentas.find((c) => digitosCuenta(c.numero) === prueba.cuentaDigitos);
-          const ancla = c0 && c0.saldo_banco !== null && c0.saldo_banco !== undefined && c0.saldo_banco_fecha
-            ? { fecha: String(c0.saldo_banco_fecha).slice(0, 10), saldo: Number(c0.saldo_banco) }
-            : null;
-          leido = leerMovimientosBbva(hojas, ancla);
-        }
-        const cuenta = cuentas.find((c) => digitosCuenta(c.numero) === leido.cuentaDigitos) || null;
-        const desdeCorte = cuenta ? leido.lineas.filter((l) => l.fecha > cuenta.fecha_corte) : leido.lineas;
-        const claves = cuenta ? clavesPorCuenta.get(cuenta.id) || new Set<string>() : new Set<string>();
-        out.push({ nombre: f.name, leido, cuenta, desdeCorte, nuevas: desdeCorte.filter((l) => !claves.has(l.clave)).length });
+        out.push(await leerArchivoExtracto(f, cuentas, clavesPorCuenta));
       } catch (e) {
         setAviso(`${f.name}: ${errorTexto(e)}`);
       }
@@ -281,16 +307,8 @@ export default function ExtractoBbva({ onIrACheques }: { onIrACheques?: () => vo
     if (!sociedadId || !a.cuenta) return;
     setGuardando(a.nombre);
     try {
-      const { data, error: e } = await (supabase as any).rpc("importar_extracto_bbva", {
-        p_sociedad_id: sociedadId,
-        p_cuenta_id: a.cuenta.id,
-        p_archivo: a.nombre,
-        p_lineas: a.desdeCorte.map((l) => ({ fecha: l.fecha, concepto: l.concepto, sucursal: l.sucursal, importe: l.importe, saldo: l.saldo, clave: l.clave })),
-        p_saldo_final: a.leido.saldoFinal,
-        p_saldo_fecha: a.leido.saldoFecha,
-      });
-      if (e) throw e;
-      setArchivos((prev) => prev.map((x) => x.nombre === a.nombre ? { ...x, guardado: `Guardado: ${data?.insertadas ?? 0} líneas nuevas${data?.repetidas ? `, ${data.repetidas} ya estaban` : ""}.` } : x));
+      const data = await guardarArchivoExtracto(sociedadId, a);
+      setArchivos((prev) => prev.map((x) => x.nombre === a.nombre ? { ...x, guardado: `Guardado: ${data.insertadas} líneas nuevas${data.repetidas ? `, ${data.repetidas} ya estaban` : ""}.` } : x));
       await cargar();
     } catch (e) {
       alert(`No se pudo guardar el extracto: ${errorTexto(e)}`);

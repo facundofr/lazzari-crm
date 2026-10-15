@@ -5,15 +5,16 @@ import { FINANZAS_GRUPOS, grupoDeTab, operacionVencimientos, pestanaInicial } fr
 // Los 4 grupos, en orden (Cheques y Créditos juntos desde el 16/10/2026).
 assert.deepEqual(FINANZAS_GRUPOS.map((g) => g.id), ["hoy", "cobrar", "pagar", "cheques"]);
 
-// A la vista quedan 12 pestañas; el resto va en "Más".
-assert.equal(FINANZAS_GRUPOS.flatMap((g) => g.tabs.filter((t) => !t.mas)).length, 12);
+// A la vista quedan 13 pestañas (12 + "Para confirmar" desde el 16/10/2026); el resto va en "Más".
+assert.equal(FINANZAS_GRUPOS.flatMap((g) => g.tabs.filter((t) => !t.mas)).length, 13);
+assert.equal(grupoDeTab("para_confirmar"), "hoy");
 assert.equal(grupoDeTab("lineas_credito"), "cheques");
 // Lo último guardado con el grupo viejo "deudas" abre igual.
 assert.deepEqual(pestanaInicial({}, { grupo: "deudas", tab: "lineas_credito" }), { grupo: "cheques", tab: "lineas_credito" });
 
 // Ninguna pestaña quedó afuera (incluye Gastos fijos, que antes estaba oculta).
 const todas = new Set(FINANZAS_GRUPOS.flatMap((g) => g.tabs.map((t) => t.id)));
-for (const t of ["cuentas", "movimientos", "recibos", "vencimientos", "facturas_compra", "ordenes_pago", "gastos_manuales", "echeqs",
+for (const t of ["cuentas", "para_confirmar", "movimientos", "recibos", "vencimientos", "facturas_compra", "ordenes_pago", "gastos_manuales", "echeqs",
   "cheques_tercero", "cc_clientes", "cc_proveedores", "extractos", "lineas_credito", "gastos_fijos", "objetivos", "facturacion", "retenciones", "revisar"]) {
   assert.ok(todas.has(t), `falta la pestaña ${t}`);
 }

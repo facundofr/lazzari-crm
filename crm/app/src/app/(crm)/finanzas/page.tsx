@@ -37,6 +37,7 @@ import PlanPagos from "@/components/plan-pagos";
 import CuentasFinancieras from "@/components/cuentas-financieras";
 import CoberturaFijos from "@/components/cobertura-fijos";
 import ExtractoBbva from "@/components/extracto-bbva";
+import FinanzasParaConfirmar from "@/components/finanzas-para-confirmar";
 import ChequesTercero from "@/components/cheques-tercero";
 import FinanzasRevisar from "@/components/finanzas-revisar";
 import { InformesFinanzas } from "@/components/finanzas/informes";
@@ -5525,6 +5526,8 @@ export default function FinanzasPage() {
         {tab === "revisar" && <FinanzasRevisar onIrATab={(t) => { if (esFinanzasTab(t)) setTab(t); }} />}
 
         {tab === "informes" && <InformesFinanzas />}
+
+        {tab === "para_confirmar" && <FinanzasParaConfirmar onIrATab={(t) => { if (esFinanzasTab(t)) setTab(t); }} />}
 
         {/* ── Extractos bancarios ── */}
         {tab === "extractos" && (

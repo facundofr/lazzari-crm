@@ -169,4 +169,17 @@ assert.deepEqual(tot, { "2026-10": { iva: -5921.82, ley_25413: 1829.52 }, "2026-
   assert.equal(r.contra_cuenta_id ?? null, null);
 }
 
+
+// Sin duplicar: la misma línea con otro texto (Excel "Movimientos" vs "Detalle_mov_cuenta") ya está cargada.
+{
+  const { lineasNuevas } = await import("../src/lib/extracto-bbva.ts");
+  const cargadas = ["2026-10-09|-4694598.40|-1575636.31|CUENTA VISA NRO. 79099672253398"];
+  const nuevas = lineasNuevas([
+    { clave: "2026-10-09|-4694598.40|-1575636.31|PAGO VISA-IN 79099672253398" },
+    { clave: "2026-10-13|3247761.58|-50000.00|DNET CREDITO" },
+    { clave: "2026-10-13|3247761.58|-50000.00|DNET CREDITO · FUNDACION" },
+  ], cargadas);
+  assert.deepEqual(nuevas.map((l) => l.clave), ["2026-10-13|3247761.58|-50000.00|DNET CREDITO"]);
+}
+
 console.log("extracto-bbva OK");
