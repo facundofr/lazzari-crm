@@ -1,3 +1,4 @@
+import { limpiarPdfBuffer } from "@/lib/pdf-limpiar";
 // Agente de correo y cobros (SOLO servidor). Lee la casilla administracion@ con la API de Gmail (solo lectura),
 // clasifica cada mail con IA barata, lee adjuntos (texto primero, visión si hace falta) y cruza avisos de pago con facturas abiertas.
 // Solo SUGIERE: no responde mails, no registra cobros, no toca facturas ni movimientos. Escribe únicamente en sus 2 tablas y en notificaciones.
@@ -229,7 +230,7 @@ export async function correrAgenteMail(db: any, origen: "cron" | "manual"): Prom
             } else if (visionUsada < MAX_PDF_VISION_POR_CORRIDA) {
               visionUsada++;
               bloques.push(esPdf
-                ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: buf.toString("base64") } }
+                ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: limpiarPdfBuffer(buf).toString("base64") } }
                 : { type: "image", source: { type: "base64", media_type: /png/i.test(a.mime) ? "image/png" : "image/jpeg", data: buf.toString("base64") } });
               adjuntosInfo.push({ nombre: a.nombre, metodo: "vision" });
             } else {

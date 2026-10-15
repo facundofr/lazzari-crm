@@ -1,3 +1,4 @@
+import { limpiarPdfBase64 } from "@/lib/pdf-limpiar";
 import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
@@ -123,7 +124,7 @@ export async function POST(request: NextRequest) {
         source: {
           type: "base64",
           media_type: "application/pdf",
-          data: base64,
+          data: limpiarPdfBase64(base64),
         },
       });
     } else {

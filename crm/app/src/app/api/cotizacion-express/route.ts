@@ -1,3 +1,4 @@
+import { limpiarPdfBase64 } from "@/lib/pdf-limpiar";
 import { registrarUsoIA } from "@/lib/ia-uso";
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
@@ -92,7 +93,7 @@ export async function POST(request: NextRequest) {
       if (!String(mensaje || "").trim() && !imagen && !pdf) return Response.json({ error: "Pegá un mensaje, una imagen o un archivo" }, { status: 400 });
       const content: any[] = [];
       if (imagen) content.push({ type: "image", source: { type: "base64", media_type: imagen.media_type || "image/jpeg", data: imagen.data } });
-      if (pdf) content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf.data } });
+      if (pdf) content.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: limpiarPdfBase64(pdf.data) } });
       content.push({ type: "text", text: String(mensaje || "").trim() ? `Pedido del cliente:\n\n${String(mensaje).slice(0, 60000)}` : "Extraé los artículos del archivo adjunto." });
       if (String(respuestas || "").trim()) content.push({ type: "text", text: `Respuestas del vendedor a tus preguntas (usalas y no vuelvas a preguntar lo ya respondido; si dejó algo sin responder, no lo inventes):\n${String(respuestas).slice(0, 4000)}` });
       const out = await ask(client, SYS_EXTRAER, content);

@@ -889,7 +889,9 @@ export default function CargarFacturaOC({
     try {
       const lectura = await leerFacturaLocal(f);
       if (!lectura) {
-        setParseError("No se encontró el QR de ARCA ni los datos en el texto (puede ser una foto o un PDF escaneado). Cargala a mano o usá \"Leer con IA\".");
+        // Sin QR ni texto legible (foto, PDF escaneado o con la tipografía rota): la IA lo lee sola, sin pedirte otro clic.
+        setParseError("");
+        await handleParseFileIA(f);
         return;
       }
       await applyImportedData(lectura.data);

@@ -85,6 +85,29 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
   const [error, setError] = useState("");
   const [soloRevisar, setSoloRevisar] = useState(false);
   const [margenGlobal, setMargenGlobal] = useState("");
+  // Acceso a TODOS los presupuestos aprobados/facturados (de cualquier cliente): a qué precio se vendió cada artículo y qué PR hay para usar de referencia.
+  type Venta = { precio: number; moneda: string; fecha: string; numero: string; cliente: string; clienteId: string | null };
+  const [ventas, setVentas] = useState<Map<string, Venta[]>>(new Map());
+  const [todosPR, setTodosPR] = useState<Array<{ numero: string; fecha: string; estado: string; cliente: string }>>([]);
+  useEffect(() => {
+    if (!open || !sociedadId) return;
+    let vivo = true;
+    (async () => {
+      try {
+        const { data } = await db.from("presupuestos").select("numero, fecha, moneda, estado, cliente_id, clientes(razon_social), presupuesto_items(codigo, descripcion, precio_venta)")
+          .eq("sociedad_id", sociedadId).in("estado", ["aprobado", "facturar", "facturado"]).or("eliminado.is.null,eliminado.eq.false").order("fecha", { ascending: false }).limit(400);
+        if (!vivo) return;
+        const m = new Map<string, Venta[]>();
+        for (const p of data || []) for (const it of p.presupuesto_items || []) {
+          const k = claveArticulo(it.codigo, it.descripcion); const pr = Number(it.precio_venta) || 0; if (!k || !(pr > 0)) continue;
+          const arr = m.get(k) || []; if (arr.length < 4) arr.push({ precio: pr, moneda: p.moneda, fecha: String(p.fecha || ""), numero: p.numero, cliente: p.clientes?.razon_social || "", clienteId: p.cliente_id || null }); m.set(k, arr);
+        }
+        setVentas(m);
+        setTodosPR((data || []).slice(0, 70).map((p: any) => ({ numero: p.numero, fecha: String(p.fecha || ""), estado: p.estado, cliente: p.clientes?.razon_social || "" })));
+      } catch { /* sin historial general: sigue con lo del cliente */ }
+    })();
+    return () => { vivo = false; };
+  }, [open, sociedadId]);
   const finRef = useRef<HTMLDivElement>(null);
   useEffect(() => { lineasRef.current = lineas; }, [lineas]);
   useEffect(() => { finRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [msgs, progreso]);
@@ -303,10 +326,10 @@ export default function AsistentePR({ open, onClose, prMoneda, tc, tcDivisas, cl
       let arch = leido;
       if (archivo || imagen) { arch = await leerAdjunto(); setLeido(arch); setArchivo(null); setImagen(null); }
       setProgreso("La IA está pensando…");
-      const resumenBorrador = lineasRef.current.map(l => { const c = calc(l); return { id: l.id, descripcion: l.descripcion, talle: l.talle, cantidad: l.cantidad, articulo: c.cand ? `${c.cand.proveedor} · ${c.cand.descripcion}${c.cand.marca ? ` · ${c.cand.marca}` : ""}` : "", costo: c.costo !== null ? Number(c.costo.toFixed(2)) : null, precio: Number(c.precio.toFixed(2)), fuente: c.origen, nota: l.nota }; });
+      const resumenBorrador = lineasRef.current.map(l => { const c = calc(l); return { id: l.id, descripcion: l.descripcion, talle: l.talle, cantidad: l.cantidad, articulo: c.cand ? `${c.cand.proveedor} · ${c.cand.descripcion}${c.cand.marca ? ` · ${c.cand.marca}` : ""}` : "", costo: c.costo !== null ? Number(c.costo.toFixed(2)) : null, precio: Number(c.precio.toFixed(2)), fuente: c.origen, nota: l.nota, vendido_a_otros: c.cand ? (ventas.get(claveArticulo(c.cand.codigo_interno || c.cand.codigo, c.cand.descripcion)) || []).filter(v => v.moneda === prMoneda && v.clienteId !== (clienteId || null)).slice(0, 2).map(v => `${v.precio.toFixed(2)} (${v.cliente}, ${v.numero}, ${v.fecha.slice(0, 10)})`).join("; ") : "" }; });
       const res = await fetch("/api/presupuestos/asistente", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
         mensajes: [...previos, yo].map(m => ({ rol: m.rol === "ia" ? "ia" : "yo", texto: `${m.texto}${m.preguntas?.length ? `\n[Preguntas: ${m.preguntas.map(p => `${p.pregunta}${p.respondida ? ` → ${p.respondida}` : ""}`).join(" | ")}]` : ""}${m.resumen?.length ? `\n[Hecho: ${m.resumen.join(" ")}]` : ""}` })),
-        borrador: resumenBorrador, archivo: arch, contexto: { cliente: clienteNombre, moneda: prMoneda, renglonesPR, prsCliente },
+        borrador: resumenBorrador, archivo: arch, contexto: { cliente: clienteNombre, moneda: prMoneda, renglonesPR, prsCliente, otrosPR: todosPR },
       }) });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.error || "La IA no pudo responder");

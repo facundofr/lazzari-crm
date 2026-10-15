@@ -37,6 +37,7 @@ Reglas importantes:
 - "Lo más barato / mejores costos": acción mejores_costos, siempre respetando las marcas o proveedores que pidió.
 - Si pregunta algo, respondé en "respuesta" sin acciones.
 - Si el vendedor corrige algo que hiciste, deshacé o cambiá solo eso con una acción puntual; no rehagas todo.
+- Tenés acceso a los precios a los que se vendió cada artículo a OTROS clientes ("vendido a otros clientes a") y a los PR de cualquier cliente: usalos para avisar o sugerir cuando haga falta (ej. "a este cliente le vendimos más caro que a Corteva"), sin cambiar nada por tu cuenta.
 - Nunca inventes números de PR, artículos, precios ni marcas. Si no sabés, preguntá.
 - Los ids de renglón son los del borrador que te paso.
 - No tenés que repetir la tabla en la respuesta: el vendedor ya la ve.`;
@@ -57,12 +58,14 @@ export async function POST(request: NextRequest) {
     if (!mensajes.length) return Response.json({ error: "Escribí algo" }, { status: 400 });
     const ctx = b.contexto || {};
     const borrador: any[] = Array.isArray(b.borrador) ? b.borrador.slice(0, 80) : [];
+    const otrosPR: any[] = Array.isArray(ctx.otrosPR) ? ctx.otrosPR.slice(0, 70) : [];
     const archivo = b.archivo && Array.isArray(b.archivo.lineas) ? b.archivo : null;
     const partes = [
       `CONTEXTO: cliente "${String(ctx.cliente || "sin elegir").slice(0, 120)}", moneda del PR ${ctx.moneda || "?"}${ctx.modalidad ? ` (${ctx.modalidad})` : ""}. Renglones que ya tiene el PR en el editor: ${Number(ctx.renglonesPR) || 0}.`,
       ctx.prsCliente?.length ? `PR anteriores de este cliente (podés usarlos como referencia): ${ctx.prsCliente.slice(0, 25).map((p: any) => `${p.numero} (${String(p.fecha || "").slice(0, 10)}, ${p.estado})`).join("; ")}` : "No hay PR anteriores de este cliente.",
+      otrosPR.length ? `Otros PR recientes (de cualquier cliente; también podés usarlos como referencia con precio_pr): ${otrosPR.map((p: any) => `${p.numero} ${String(p.fecha || "").slice(0, 10)} ${String(p.cliente || "").slice(0, 28)}`).join("; ")}` : "",
       `BORRADOR ACTUAL (${borrador.length} renglones):`,
-      borrador.length ? borrador.map(l => `id=${l.id} | ${l.descripcion}${l.talle ? ` T${l.talle}` : ""} | cant ${l.cantidad} | artículo: ${l.articulo || "sin artículo"} | costo ${l.costo ?? "?"} | precio ${l.precio ?? "?"} (${l.fuente || "automático"})${l.nota ? ` | nota: ${l.nota}` : ""}`).join("\n") : "(vacío)",
+      borrador.length ? borrador.map(l => `id=${l.id} | ${l.descripcion}${l.talle ? ` T${l.talle}` : ""} | cant ${l.cantidad} | artículo: ${l.articulo || "sin artículo"} | costo ${l.costo ?? "?"} | precio ${l.precio ?? "?"} (${l.fuente || "automático"})${l.vendido_a_otros ? ` | vendido a otros clientes a: ${l.vendido_a_otros}` : ""}${l.nota ? ` | nota: ${l.nota}` : ""}`).join("\n") : "(vacío)",
       archivo ? `ARCHIVO ADJUNTO "${String(archivo.nombre || "").slice(0, 80)}": ${archivo.lineas.length} renglones leídos:\n${archivo.lineas.slice(0, 80).map((l: any) => `- ${l.descripcion}${l.talle ? ` T${l.talle}` : ""} × ${l.cantidad}${l.codigo ? ` (cód ${l.codigo})` : ""}`).join("\n")}${archivo.preguntas?.length ? `\nDudas que la lectura dejó: ${archivo.preguntas.map((p: any) => p.pregunta).join(" | ")}` : ""}` : "Sin archivo adjunto.",
       "CONVERSACIÓN:",
       mensajes.map(m => `${m.rol === "ia" ? "ASISTENTE" : "VENDEDOR"}: ${String(m.texto).slice(0, 2500)}`).join("\n"),
