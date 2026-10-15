@@ -29,7 +29,7 @@ import CatalogoPicker, { filaListaAItem, traerListaCompleta, buscarProveedorCRM,
 import DescripcionLista from "@/components/presupuestos/descripcion-lista";
 import { type FilaPrecioAnterior, type LineaCosto, type MejorCosto } from "@/components/presupuestos/precios-costos-ia";
 import { claveArticulo, ultimosPrecios, filaPorCodigo, resumenPresupuesto, type PRVendido } from "@/lib/presupuesto-ayudas";
-import CotizacionExpress from "@/components/presupuestos/cotizacion-express";
+import AsistentePR from "@/components/presupuestos/asistente-pr";
 import { EmailComposeModal } from "@/components/email-compose-modal";
 import { useRefrescarAlVolver } from "@/lib/use-refrescar";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
@@ -4185,29 +4185,25 @@ export default function PresupuestosPage() {
             </button>
           </div>
 
-          <CotizacionExpress
-            tabInicial={!expressTexto && newPR.items.some((it) => it.descripcion.trim()) ? "precios" : "pedido"}
-            pc={{
-              precios: preciosAnteriores,
-              lineasPrecio: newPR.items.map((it, idx) => ({ idx, codigo: it.codigo, descripcion: it.descripcion, actual: precioNeto(it, descGeneral) })),
-              lineas: newPR.items.map((it, idx): LineaCosto => ({ idx, codigo: it.codigo, descripcion: it.descripcion, cantidad: it.cantidad, costoPR: it.stock_propio ? 0 : convertCosto(it.precio_costo, it.costo_moneda, newPR.moneda, newPR.tipo_cambio, newPR.tipo_cambio_divisas), proveedor: it.proveedor_nombre })),
-              clienteId: newPR.cliente_id,
-              onAplicarPrecios: aplicarPreciosAnteriores,
-              onAplicarCostos: aplicarMejoresCostos,
-            }}
+          <AsistentePR
             open={showExpress}
             onClose={() => setShowExpress(false)}
             textoInicial={expressTexto}
             prMoneda={newPR.moneda}
             tc={newPR.tipo_cambio}
             tcDivisas={newPR.tipo_cambio_divisas}
-            proveedoresCRM={proveedoresOptions}
+            clienteNombre={(clientes.find((c) => c.id === newPR.cliente_id) as any)?.razon_social || ""}
+            clienteId={newPR.cliente_id}
             sociedadId={sociedadActiva?.id}
-            onPedirTc={() => {
-              const cli = clientes.find((c) => c.id === newPR.cliente_id) as any;
-              return fetchCotizBna(cli?.moneda_predeterminada === "USD" ? "billetes" : "divisas");
-            }}
-            onAgregar={(nuevos, reemplazar) => setNewPR((p) => ({
+            renglonesPR={newPR.items.filter((it) => it.descripcion.trim()).length}
+            prsCliente={presupuestos
+              .filter((p) => !!newPR.cliente_id && p.clienteId === newPR.cliente_id && p.id !== editingPRId && !(p as any).eliminado && p.estado !== "solicitud")
+              .sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "") || b.numero.localeCompare(a.numero))
+              .slice(0, 40)
+              .map((p) => ({ numero: p.numero, fecha: p.fecha || "", estado: p.estado }))}
+            ultimos={ultimosDelCliente}
+            proveedorDeLista={proveedorDeLista}
+            onAplicar={(nuevos, reemplazar) => setNewPR((p) => ({
               ...p,
               items: reemplazar ? nuevos : [...p.items.filter((it) => it.codigo.trim() || it.descripcion.trim()), ...nuevos],
             }))}

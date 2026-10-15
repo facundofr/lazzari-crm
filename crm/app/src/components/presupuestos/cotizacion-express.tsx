@@ -98,7 +98,9 @@ const ETIQUETA: Record<Confianza, string> = { alta: "Seguro", media: "Revisar", 
 
 export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivisas, onAgregar, onPedirTc, proveedoresCRM, sociedadId, textoInicial, pc, tabInicial }: Props) {
   const [asistente, setAsistente] = useState<"pedido" | "precios">("pedido");
-  useEffect(() => { if (open) setAsistente(pc && tabInicial === "precios" ? "precios" : "pedido"); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Texto que el vendedor escribió y el router entendió como instrucción de precios/costos (se manda solo al panel de precios).
+  const [instruccionPC, setInstruccionPC] = useState("");
+  useEffect(() => { if (open) { setAsistente(pc && tabInicial === "precios" ? "precios" : "pedido"); setInstruccionPC(""); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
   const [mensaje, setMensaje] = useState("");
   const [archivo, setArchivo] = useState<File | null>(null);
   const [imagen, setImagen] = useState<{ data: string; media_type: string; name: string } | null>(null);
@@ -280,6 +282,19 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
     }
   }
 
+  /** Una sola caja: si hay archivo o es un pedido → se arma la cotización; si es una instrucción sobre precios/costos del PR → panel de precios y costos. */
+  async function enviar() {
+    if (!pc || archivo || imagen || !mensaje.trim()) { void armar(); return; }
+    setError(""); setProgreso("La IA está entendiendo qué necesitás…");
+    try {
+      const res = await fetch("/api/presupuestos/instruccion-precios", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruccion: mensaje }) });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.intencion === "precios") { setProgreso(""); setInstruccionPC(mensaje); setAsistente("precios"); return; }
+    } catch { /* si no se puede decidir, se trata como pedido */ }
+    setProgreso("");
+    await armar();
+  }
+
   async function seguirSinResponder() {
     setError("");
     try { await armarDesdePedidos(pedidosPend); } catch (e) { setProgreso(""); setError(e instanceof Error ? e.message : "Error inesperado"); }
@@ -407,17 +422,12 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
         <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3 dark:border-zinc-700">
           <div>
             <h2 className="flex items-center gap-2 text-lg font-bold dark:text-white"><Sparkles className="h-5 w-5 text-orange-500" /> {pc ? "Asistente IA" : "Cotización express"}</h2>
-            <p className="text-xs text-zinc-500">Tirá un Excel, PDF o foto, o pegá el mensaje del cliente. Se busca cada artículo en la lista de costos y vos revisás antes de agregar.</p>
+            <p className="text-xs text-zinc-500">{pc ? "Una sola caja: arrastrá el Excel, PDF o foto del pedido, o escribile a la IA qué necesitás (armar, mantener precios de otro PR, mejores costos). Si le falta algo, te pregunta." : "Tirá un Excel, PDF o foto, o pegá el mensaje del cliente. Se busca cada artículo en la lista de costos y vos revisás antes de agregar."}</p>
           </div>
           <button onClick={cerrar} disabled={!!progreso}><X className="h-5 w-5 text-zinc-400" /></button>
         </div>
-        {pc && <div className="flex gap-1 border-b border-zinc-200 px-4 dark:border-zinc-700">
-          {([["pedido", "Armar desde un pedido (Excel, foto, texto)"], ["precios", "Precios y costos del PR"]] as const).map(([k, t]) => (
-            <button key={k} onClick={() => setAsistente(k)} disabled={!!progreso} className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${asistente === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}>{t}</button>
-          ))}
-        </div>}
         {pc && asistente === "precios" ? (
-          <PreciosCostosIA embebido open onClose={cerrar} moneda={prMoneda} tc={tc} tcDivisas={tcDivisas} sociedadId={sociedadId} {...pc} />
+          <PreciosCostosIA embebido open onClose={cerrar} onVolver={() => setAsistente("pedido")} instruccionInicial={instruccionPC || undefined} moneda={prMoneda} tc={tc} tcDivisas={tcDivisas} sociedadId={sociedadId} {...pc} />
         ) : (<>
 
         {fase === "entrada" && <div className="space-y-3 overflow-y-auto p-5">
@@ -436,7 +446,7 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
             onChange={e => setMensaje(e.target.value)}
             onPaste={e => { const it = Array.from(e.clipboardData.items).find(i => i.type.startsWith("image/")); const f = it?.getAsFile(); if (f) { e.preventDefault(); void tomarImagen(f); } }}
             rows={6}
-            placeholder="…o pegá acá el mensaje / mail / WhatsApp del cliente, o una captura (Ctrl+V)"
+            placeholder={pc ? "Pegá el pedido del cliente (o arrastrá el Excel, PDF o foto), o decile algo: «hice el PR 1203 para este cliente en otra sucursal, si coincide el artículo mantené ese precio» · «sugerime los mejores costos»" : "…o pegá acá el mensaje / mail / WhatsApp del cliente, o una captura (Ctrl+V)"}
             className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
           />
           {(archivo || imagen) && <button onClick={() => { setArchivo(null); setImagen(null); }} className="text-xs text-zinc-500 hover:text-red-600">Quitar archivo</button>}
@@ -607,7 +617,7 @@ export default function CotizacionExpress({ open, onClose, prMoneda, tc, tcDivis
               <button onClick={() => void armar(textoRespuestas(preguntas, respuestas))} disabled={!!progreso} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{progreso ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Seguir con mis respuestas</button>
             </>}
             {fase === "preguntas" ? null : fase === "entrada"
-              ? <button onClick={() => void armar()} disabled={!!progreso || (!mensaje.trim() && !archivo && !imagen)} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{progreso ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} Armar cotización</button>
+              ? <button onClick={() => void enviar()} disabled={!!progreso || (!mensaje.trim() && !archivo && !imagen)} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{progreso ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {pc ? "Enviar a la IA" : "Armar cotización"}</button>
               : <>
                 <button onClick={() => { if (window.confirm("Se reemplazan TODOS los renglones actuales del presupuesto por estos. ¿Seguir?")) agregar(true); }} disabled={!incluidas.length || sinTc} className="rounded-lg border border-orange-400 px-3 py-2 text-sm font-medium text-orange-700 disabled:opacity-50 dark:text-orange-300" title="Rehace el presupuesto con lo que leyó (por ejemplo, de tu Excel)">Reemplazar los renglones del PR</button>
                 <button onClick={() => agregar(false)} disabled={!incluidas.length || sinTc} className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><Check className="h-4 w-4" /> Agregar {incluidas.length} al presupuesto</button>

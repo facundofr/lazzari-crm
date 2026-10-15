@@ -6,7 +6,7 @@
  *  2) Mejores costos: la IA (Opus 5.5) busca en la lista de costos el MISMO artículo más barato y muestra el ahorro.
  * Solo propone: se marca lo que se quiere y se aplica. El precio de venta nunca cambia por buscar mejores costos (sube el margen).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Loader2, Sparkles, X } from "lucide-react";
 import { buscarCandidatos, type CatalogoCandidato as Cand } from "@/lib/catalogo-busqueda";
@@ -35,15 +35,17 @@ interface Props {
   onAplicarCostos: (cambios: MejorCosto[]) => void | Promise<void>;
   /** true: se muestra adentro de otra ventana (el asistente unificado), sin su propia ventana ni encabezado. */
   embebido?: boolean;
+  /** Instrucción que ya escribió el vendedor en el asistente: se manda sola al abrir. */
+  instruccionInicial?: string;
+  onVolver?: () => void;
 }
 
 type Sugerencia = { l: LineaCosto; cand: Cand; costoNuevoPR: number; ahorroPct: number; ahorroTotal: number; nota: string };
 
 const fmt = (n: number, m: string) => `${m === "ARS" ? "$" : "US$"} ${n.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, precios: preciosAuto, lineasPrecio, sociedadId, clienteId, lineas, onAplicarPrecios, onAplicarCostos, embebido = false }: Props) {
-  const [tab, setTab] = useState<"precios" | "costos">("precios");
-  const [marcaP, setMarcaP] = useState<Set<number>>(new Set());
+export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, precios: preciosAuto, lineasPrecio, sociedadId, clienteId, lineas, onAplicarPrecios, onAplicarCostos, embebido = false, instruccionInicial, onVolver }: Props) {
+    const [marcaP, setMarcaP] = useState<Set<number>>(new Set());
   const [buscando, setBuscando] = useState(false);
   const [progreso, setProgreso] = useState("");
   const [error, setError] = useState("");
@@ -58,8 +60,8 @@ export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, 
   const [respuestaIA, setRespuestaIA] = useState("");
   const [refs, setRefs] = useState<RefPR[]>([]);
 
-  async function decirleALaIA() {
-    const texto = instruccion.trim(); if (!texto) return;
+  async function decirleALaIA(textoDirecto?: string) {
+    const texto = (textoDirecto ?? instruccion).trim(); if (!texto) return;
     setError(""); setRespuestaIA(""); setEntendiendo(true);
     try {
       const res = await fetch("/api/presupuestos/instruccion-precios", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruccion: texto }) });
@@ -76,11 +78,20 @@ export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, 
       setRefs(cargados);
       const otros = cargados.filter(c => clienteId && c.clienteId && c.clienteId !== clienteId);
       setRespuestaIA(`${d.resumen || "Listo."}${otros.length ? ` ⚠️ ${otros.map(o => o.numero).join(", ")} es de otro cliente.` : ""}`);
-      if (d.mejores_costos) setTab("costos"); else setTab("precios");
+      if (d.mejores_costos) void buscarMejores();
       setTocadoP(false);
     } catch (e) { setError(e instanceof Error ? e.message : "Error inesperado"); }
     finally { setEntendiendo(false); }
   }
+
+  const enviadaSola = useRef(false);
+  useEffect(() => {
+    if (!open || !instruccionInicial || enviadaSola.current) return;
+    enviadaSola.current = true;
+    setInstruccion(instruccionInicial);
+    void decirleALaIA(instruccionInicial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, instruccionInicial]);
 
   // Con PR de referencia nombrado por el vendedor: se comparan los renglones contra ESE PR (si no, contra el último precio del cliente).
   const { precios, noCoinciden, otraMoneda } = useMemo(() => {
@@ -174,14 +185,9 @@ export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, 
           {respuestaIA && <p className="text-xs text-emerald-700 dark:text-emerald-400">✓ {respuestaIA}{refs.length > 0 && noCoinciden > 0 ? ` · ${noCoinciden} renglón(es) no coinciden con ese PR y quedan como están.` : ""}{otraMoneda.length ? ` ⚠️ ${otraMoneda.join(", ")} está en otra moneda y no se usa.` : ""}</p>}
           {error && <p className="text-xs text-red-600">⚠️ {error}</p>}
         </div>
-        <div className="flex gap-1 border-b border-zinc-200 px-4 dark:border-zinc-700">
-          {([["precios", `Mantener precios anteriores (${precios.length})`], ["costos", "Mejores costos"]] as const).map(([k, t]) => (
-            <button key={k} onClick={() => setTab(k)} className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium ${tab === k ? "border-orange-500 text-orange-600" : "border-transparent text-zinc-500"}`}>{t}</button>
-          ))}
-        </div>
 
         <div className="min-h-0 flex-1 overflow-auto p-4">
-          {tab === "precios" && (
+          {(precios.length > 0 || refs.length > 0) && (
             precios.length === 0
               ? <p className="py-8 text-center text-sm text-zinc-500">{refs.length ? "Ningún renglón coincide con ese PR con un precio distinto al actual." : "Ningún artículo de este presupuesto tiene un precio anterior distinto al actual (de PR aprobados o facturados de este cliente, en la misma moneda). Podés decirle a la IA de qué PR tomar los precios."}</p>
               : <table className="w-full text-xs">
@@ -202,7 +208,7 @@ export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, 
                 })}</tbody></table>
           )}
 
-          {tab === "costos" && (
+          {(
             <div className="space-y-3">
               {!sug && !buscando && <div className="py-6 text-center">
                 <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-300">La IA busca, para cada renglón, el <b>mismo artículo</b> (misma marca y modelo) más barato en la lista de costos. El precio de venta no se toca: sube el margen.</p>
@@ -234,10 +240,11 @@ export default function PreciosCostosIA({ open, onClose, moneda, tc, tcDivisas, 
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-zinc-200 px-5 py-3 dark:border-zinc-700">
+          {onVolver && <button onClick={onVolver} disabled={buscando || aplicando} className="mr-auto rounded-lg border px-4 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">← Volver a cargar un pedido</button>}
           <button onClick={onClose} disabled={buscando || aplicando} className="rounded-lg border px-4 py-2 text-sm dark:border-zinc-700 dark:text-zinc-200">Cerrar</button>
-          {tab === "precios" && <button disabled={!selP.size} onClick={() => { onAplicarPrecios(precios.filter(p => selP.has(p.idx)).map(p => ({ idx: p.idx, precio: p.anterior }))); onClose(); }}
+          {precios.length > 0 && <button disabled={!selP.size} onClick={() => { onAplicarPrecios(precios.filter(p => selP.has(p.idx)).map(p => ({ idx: p.idx, precio: p.anterior }))); onClose(); }}
             className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"><Check className="h-4 w-4" /> Usar el precio anterior en {selP.size}</button>}
-          {tab === "costos" && sug && sug.length > 0 && <button disabled={!marcaC.size || aplicando} onClick={async () => { setAplicando(true); await onAplicarCostos(sug.filter(s => marcaC.has(s.l.idx)).map(s => ({ idx: s.l.idx, cand: s.cand, costoNuevoPR: s.costoNuevoPR }))); setAplicando(false); onClose(); }}
+          {sug && sug.length > 0 && <button disabled={!marcaC.size || aplicando} onClick={async () => { setAplicando(true); await onAplicarCostos(sug.filter(s => marcaC.has(s.l.idx)).map(s => ({ idx: s.l.idx, cand: s.cand, costoNuevoPR: s.costoNuevoPR }))); setAplicando(false); onClose(); }}
             className="flex items-center gap-2 rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{aplicando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Aplicar {marcaC.size} costo(s)</button>}
         </div>
       </div>

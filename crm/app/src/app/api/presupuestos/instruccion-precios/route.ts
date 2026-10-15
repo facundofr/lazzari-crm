@@ -12,8 +12,9 @@ export const maxDuration = 60;
 
 const SYSTEM = `Sos asistente de ventas de una empresa argentina de ropa de trabajo, EPP y seguridad industrial.
 El vendedor está editando un presupuesto (PR) y te escribe una instrucción sobre precios o costos. Interpretala y devolvé SOLO JSON:
-{"prs":["1203"],"mantener_precio":true,"mejores_costos":false,"resumen":"","pregunta":""}
+{"intencion":"precios","prs":["1203"],"mantener_precio":true,"mejores_costos":false,"resumen":"","pregunta":""}
 Reglas:
+- "intencion": "pedido" si el texto es un PEDIDO de un cliente (una lista de artículos con cantidades para cotizar, un mail o WhatsApp de un cliente); "precios" si es una instrucción sobre los precios o costos de los renglones que el PR YA tiene (mantener precios de otro PR, mejores costos, etc.). Ante la duda entre las dos, si trae varios artículos con cantidades es "pedido".
 - "prs": números de los PR de referencia que nombra (solo el número final: "PR-2026-1203", "pr 1203" o "1203" → "1203"). [] si no nombra ninguno.
 - "mantener_precio": true si pide mantener/usar/copiar los precios de PR anteriores (los nombrados, o los últimos que pagó el cliente si no nombra ninguno) para los artículos que coinciden.
 - "mejores_costos": true si pide sugerir/buscar mejores costos, más baratos o mejores proveedores.
@@ -43,7 +44,7 @@ export async function POST(request: NextRequest) {
         const t = res.content.find(x => x.type === "text");
         const out = parseJson(t && t.type === "text" ? t.text : "{}");
         const prs = (Array.isArray(out.prs) ? out.prs : []).map((x: unknown) => String(x).replace(/\D/g, "").slice(-5)).filter((x: string) => x.length >= 3);
-        return Response.json({ prs, mantener_precio: !!out.mantener_precio, mejores_costos: !!out.mejores_costos, resumen: String(out.resumen || ""), pregunta: String(out.pregunta || "") });
+        return Response.json({ intencion: out.intencion === "pedido" ? "pedido" : "precios", prs, mantener_precio: !!out.mantener_precio, mejores_costos: !!out.mejores_costos, resumen: String(out.resumen || ""), pregunta: String(out.pregunta || "") });
       } catch (e) { ultimo = e; }
     }
     throw ultimo instanceof Error ? ultimo : new Error("La IA no respondió");
