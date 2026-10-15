@@ -127,7 +127,6 @@ export default function StockPage() {
       let q = supabase
         .from("productos")
         .select(`*, proveedores(razon_social)`)
-        .neq("activo" as any, false)
         .order("codigo");
       if (sociedadActiva?.id) q = q.eq("sociedad_id" as any, sociedadActiva.id);
       const { data, error } = await q;
