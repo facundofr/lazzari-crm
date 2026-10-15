@@ -89,12 +89,13 @@ export default function EnviarOCProveedor({ ocIds, titulo, onClose }: { ocIds: s
   async function marcarPedida(f: Fila, medio: string) {
     actualizar(f.id, { enviadoPor: [...new Set([...f.enviadoPor, medio])] });
     if (f.pedido) return;
-    const { error: e } = await db.from("ordenes_compra").update({ pedido: true }).eq("id", f.id).eq("sociedad_id", sociedadActiva?.id);
+    const via = medio === "WhatsApp" ? "whatsapp" : medio === "mail" ? "mail" : "manual";
+    const { error: e } = await db.from("ordenes_compra").update({ pedido: true, pedido_at: new Date().toISOString(), pedido_via: via, pedido_por: profile?.id || null }).eq("id", f.id).eq("sociedad_id", sociedadActiva?.id);
     if (!e) actualizar(f.id, { pedido: true, enviadoPor: [...new Set([...f.enviadoPor, medio])] });
   }
 
   async function desmarcarPedida(f: Fila) {
-    const { error: e } = await db.from("ordenes_compra").update({ pedido: false }).eq("id", f.id).eq("sociedad_id", sociedadActiva?.id);
+    const { error: e } = await db.from("ordenes_compra").update({ pedido: false, pedido_at: null, pedido_via: null, pedido_por: null }).eq("id", f.id).eq("sociedad_id", sociedadActiva?.id);
     if (!e) actualizar(f.id, { pedido: false, enviadoPor: [] });
   }
 

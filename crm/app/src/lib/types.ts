@@ -104,6 +104,8 @@ export interface User {
   avatar?: string;
   active: boolean;
   createdAt: string;
+  /** Casilla "Prueba: Compras nueva" (Configuración → Usuarios). */
+  pruebaComprasNueva?: boolean;
 }
 
 // ── Clientes ─────────────────────────────────────────────────────

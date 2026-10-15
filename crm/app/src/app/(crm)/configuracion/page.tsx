@@ -170,7 +170,7 @@ export default function ConfiguracionPage() {
       try {
         const { data: profiles } = await supabase
           .from("profiles")
-          .select("id, full_name, email, role, active, created_at")
+          .select("id, full_name, email, role, active, created_at, prueba_compras_nueva")
           .eq("active", true)
           .order("created_at", { ascending: false });
         if (profiles) {
@@ -181,6 +181,7 @@ export default function ConfiguracionPage() {
             role: p.role || "viewer",
             active: p.active ?? true,
             createdAt: p.created_at ? new Date(p.created_at).toLocaleDateString("es-AR") : "—",
+            pruebaComprasNueva: !!p.prueba_compras_nueva,
           })));
         } else {
           setDbUsers(mockUsers);
@@ -222,7 +223,7 @@ export default function ConfiguracionPage() {
       // Refresh users list
       const { data: profiles } = await supabase
         .from("profiles")
-        .select("id, full_name, email, role, active, created_at")
+        .select("id, full_name, email, role, active, created_at, prueba_compras_nueva")
         .eq("active", true)
         .order("created_at", { ascending: false });
       if (profiles) {
@@ -230,6 +231,7 @@ export default function ConfiguracionPage() {
           id: p.id, name: p.full_name || p.email || "—", email: p.email || "",
           role: p.role || "viewer", active: p.active ?? true,
           createdAt: p.created_at ? new Date(p.created_at).toLocaleDateString("es-AR") : "—",
+          pruebaComprasNueva: !!p.prueba_compras_nueva,
         })));
       }
       alert(json.invite_sent
@@ -242,7 +244,7 @@ export default function ConfiguracionPage() {
     }
   }
 
-  async function updateSystemUser(id: string, changes: { full_name?: string; role?: Role }) {
+  async function updateSystemUser(id: string, changes: { full_name?: string; role?: Role; prueba_compras_nueva?: boolean }) {
     const response = await fetch("/api/users", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -765,6 +767,27 @@ export default function ConfiguracionPage() {
                     ),
                   },
                   { key: "active", label: "Estado", sortable: true, render: (row) => <Badge variant={row.active ? "success" : "outline"}>{row.active ? "Activo" : "Inactivo"}</Badge> },
+                  {
+                    key: "pruebaComprasNueva", label: "Prueba: Compras nueva", sortable: false,
+                    render: (row) => (
+                      <label className="inline-flex items-center gap-1.5 text-xs text-zinc-500" title="Ve la pantalla Compras nueva y se encarga de mandar los pedidos a los proveedores">
+                        <input
+                          type="checkbox"
+                          checked={!!row.pruebaComprasNueva}
+                          disabled={!canManageUsers}
+                          onChange={async (e) => {
+                            const valor = e.target.checked;
+                            try {
+                              await updateSystemUser(row.id, { prueba_compras_nueva: valor });
+                              setDbUsers(prev => prev.map(u => u.id === row.id ? { ...u, pruebaComprasNueva: valor } : u));
+                            } catch (updateError) { alert(updateError instanceof Error ? updateError.message : "No se pudo cambiar la casilla"); }
+                          }}
+                          className="h-4 w-4 accent-orange-600"
+                        />
+                        {row.pruebaComprasNueva ? "Sí" : "No"}
+                      </label>
+                    ),
+                  },
                   { key: "createdAt", label: "Registrado", sortable: true, render: (row) => <span className="text-zinc-400 text-xs">{row.createdAt}</span> },
                   {
                     key: "actions", label: "", sortable: false,

@@ -58,6 +58,7 @@ const navigation: { grupo: string; items: { name: string; href: string; icon: ty
   ] },
   { grupo: "Comprar", items: [
     { name: "Proveedores", href: "/proveedores", icon: Factory, module: "proveedores" },
+    { name: "Compras nueva", href: "/compras-nueva", icon: ShoppingCart, module: "compras_nueva" },
     { name: "Compras", href: "/ordenes-compra", icon: ShoppingCart, module: "ordenes_compra" },
     { name: "Personalización", href: "/personalizacion", icon: Scissors, module: "ordenes_compra" },
   ] },
@@ -176,7 +177,7 @@ export function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
         {navigation.map((g) => {
-          const visibles = g.items.filter((item) => hasModuleAccess(role, item.module));
+          const visibles = g.items.filter((item) => item.module === "compras_nueva" ? !!profile?.prueba_compras_nueva : hasModuleAccess(role, item.module));
           if (!visibles.length) return null;
           const showLabel = !collapsed || mobileSidebarOpen;
           return (

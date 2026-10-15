@@ -1778,12 +1778,22 @@ export default function PresupuestosPage() {
         .eq("presupuesto_id", prId);
       if (!prItems) return 0;
 
+      // Renglones del PR ya atados a un renglón de alguna OC viva (Compras nueva los puede mover de proveedor).
+      const ocDeRenglon = new Map<string, string>();
+      try {
+        const { data: atados } = await (supabase as any).from("orden_compra_items")
+          .select("presupuesto_item_id, orden_id, ordenes_compra!inner(estado)")
+          .in("presupuesto_item_id", prItems.map((it: any) => it.id)).neq("ordenes_compra.estado", "cancelada");
+        for (const a of (atados || []) as { presupuesto_item_id: string; orden_id: string }[]) ocDeRenglon.set(a.presupuesto_item_id, a.orden_id);
+      } catch { /* sin el dato, se arma como siempre */ }
+
       for (const oc of ocs) {
         // Match PR items to this OC by proveedor_id
         const isStockOwnOC = !oc.proveedor_id && String((oc as any).observaciones || "").includes("Stock propio");
-        const matchingItems = prItems.filter((it: any) => isStockOwnOC
+        const enOtraOC = (it: any) => { const o = ocDeRenglon.get(it.id); return !!o && o !== oc.id; };
+        const matchingItems = prItems.filter((it: any) => ocDeRenglon.get(it.id) === oc.id || (!enOtraOC(it) && (isStockOwnOC
           ? Boolean(it.stock_propio) && normalizePurchaseCurrency(it.costo_moneda) === normalizePurchaseCurrency(oc.moneda)
-          : it.proveedor_id === oc.proveedor_id && !it.stock_propio);
+          : it.proveedor_id === oc.proveedor_id && !it.stock_propio)));
         if (matchingItems.length === 0) continue;
 
         // Delete old OC items and recreate from PR
@@ -1799,6 +1809,7 @@ export default function PresupuestosPage() {
           iva_porcentaje: isManual ? 0 : Number(it.iva_porcentaje ?? 21),
           orden: idx + 1,
           cantidad_recibida: 0,
+          presupuesto_item_id: it.id,
         }));
         await supabase.from("orden_compra_items").insert(ocItems as any);
 
@@ -1941,6 +1952,7 @@ export default function PresupuestosPage() {
           iva_porcentaje: compraSinIva ? 0 : Number(it.iva_porcentaje ?? 21),
           orden: idx + 1,
           cantidad_recibida: 0,
+          presupuesto_item_id: it.id,
         }));
         const { error: itemsErr } = await supabase.from("orden_compra_items").insert(ocItems as any);
         if (itemsErr) {
@@ -1995,6 +2007,7 @@ export default function PresupuestosPage() {
             iva_porcentaje: compraSinIva ? 0 : Number(it.iva_porcentaje ?? 21),
             orden: idx + 1,
             cantidad_recibida: 0,
+            presupuesto_item_id: it.id,
           }));
           const { error: stockItemsErr } = await supabase.from("orden_compra_items").insert(stockOCItems as any);
           if (stockItemsErr) {
@@ -2052,6 +2065,7 @@ export default function PresupuestosPage() {
             iva_porcentaje: compraSinIva ? 0 : Number(it.iva_porcentaje ?? 21),
             orden: idx + 1,
             cantidad_recibida: 0,
+            presupuesto_item_id: it.id,
           }));
           const { error: itemsSPError } = await supabase.from("orden_compra_items").insert(ocItemsSP as any);
           if (itemsSPError) {
@@ -2141,6 +2155,18 @@ export default function PresupuestosPage() {
         } catch { /* ignore */ }
 
         await generateOCsFromPresupuesto(id);
+        // Compras nueva: si alguien se encarga de compras (casilla en Configuración → Usuarios),
+        // el vendedor no manda nada: los pedidos quedan en "Compras nueva → Para pedir".
+        let comprasSeEncarga = !!profile?.prueba_compras_nueva;
+        if (!comprasSeEncarga && profile?.role === "vendedor") {
+          try {
+            const { data: compradores } = await (supabase as any).from("profiles").select("id").eq("prueba_compras_nueva", true).eq("active", true).limit(1);
+            comprasSeEncarga = !!compradores?.length;
+          } catch { /* si no se puede saber, sigue como siempre */ }
+        }
+        if (comprasSeEncarga) {
+          toast.info(profile?.prueba_compras_nueva ? "Pedidos armados: mandalos desde Compras nueva → Para pedir." : "Listo: Compras se encarga de pedirle a los proveedores.");
+        } else
         // Propuesta: enviar ya las OC con proveedor que todavía no se pidieron (sugerencia, se puede cerrar).
         try {
           const { data: ocsPR } = await (supabase as any).from("ordenes_compra").select("id, numero")

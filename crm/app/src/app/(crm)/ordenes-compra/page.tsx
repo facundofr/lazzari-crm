@@ -1472,7 +1472,7 @@ export default function OrdenesCompraPage() {
     try {
       const { error } = await (supabase as any)
         .from("ordenes_compra")
-        .update({ pedido: newVal } as any)
+        .update((newVal ? { pedido: true, pedido_at: new Date().toISOString(), pedido_via: "manual", pedido_por: profile?.id || null } : { pedido: false, pedido_at: null, pedido_via: null, pedido_por: null }) as any)
         .eq("id", oc.id)
         .eq("sociedad_id", sociedadActiva.id);
       if (error) throw error;

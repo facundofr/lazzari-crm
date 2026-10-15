@@ -22,7 +22,7 @@ export async function PATCH(request: NextRequest) {
   try {
     const context = await getAdminContext();
     if (context.error) return context.error;
-    const { id, full_name, role } = await request.json();
+    const { id, full_name, role, prueba_compras_nueva } = await request.json();
     if (!id) return Response.json({ error: "Falta el usuario" }, { status: 400 });
     if (role && !VALID_ROLES.includes(role)) return Response.json({ error: "Rol inválido" }, { status: 400 });
     if (role === "super_admin" && context.profile!.role !== "super_admin") {
@@ -33,18 +33,19 @@ export async function PATCH(request: NextRequest) {
     if (target.role === "super_admin" && context.profile!.role !== "super_admin") {
       return Response.json({ error: "Solo un super admin puede modificar a otro super admin" }, { status: 403 });
     }
-    const changes: Record<string, string> = {};
+    const changes: Record<string, string | boolean> = {};
     if (typeof full_name === "string") {
       if (!full_name.trim()) return Response.json({ error: "El nombre no puede quedar vacío" }, { status: 400 });
       changes.full_name = full_name.trim();
     }
     if (role) changes.role = role;
+    if (typeof prueba_compras_nueva === "boolean") changes.prueba_compras_nueva = prueba_compras_nueva;
     if (!Object.keys(changes).length) return Response.json({ error: "No hay cambios" }, { status: 400 });
 
     const { error } = await context.admin!.from("profiles").update(changes).eq("id", id);
     if (error) throw error;
     if (changes.full_name) {
-      const { error: metadataError } = await context.admin!.auth.admin.updateUserById(id, { user_metadata: { full_name: changes.full_name } });
+      const { error: metadataError } = await context.admin!.auth.admin.updateUserById(id, { user_metadata: { full_name: changes.full_name as string } });
       if (metadataError) throw metadataError;
     }
     return Response.json({ success: true });
