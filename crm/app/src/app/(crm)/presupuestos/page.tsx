@@ -36,7 +36,7 @@ import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalize
 import { calculateNetPrice, parseQuantityRange, type PriceListRule } from "@/lib/price-list-rules";
 import { observacionesParaCliente } from "@/lib/observaciones-cliente";
 import { margenPR, MARGEN_MINIMO_PR } from "@/lib/presupuesto-margen";
-import { parseNumeroAR, textoNumeroValido, numeroAEditable, formatCantidad, avisosRenglon } from "@/lib/numero-ar";
+import { parseCantidadAR, textoCantidadValido, numeroAEditable, formatCantidad, avisosRenglon, renglonesSinPrecio } from "@/lib/numero-ar";
 import { convertirCostoPR, leerDolaresGuardados, fechaDolarPresupuesto, dolarAtrasado, etiquetaDolar, esCostoUsd, esCostoDivisa, tcParaCosto, type DolaresGuardados } from "@/lib/dolar-presupuesto";
 
 /** Number input that allows typing decimals (e.g. "10.") without losing the dot.
@@ -52,13 +52,19 @@ function NumInput({ value, onChange, className, miles, ...props }: { value: numb
       inputMode="decimal"
       value={raw}
       onFocus={() => { focused.current = true; }}
-      onBlur={() => { focused.current = false; const n = parseNumeroAR(raw) || 0; setRaw(numeroAEditable(n)); onChange(n); }}
+      onBlur={() => {
+        focused.current = false;
+        // Cantidad sin coma: si quedó algo que no es entero ("29.9"), vuelve al valor anterior.
+        const n = raw.trim() === "" ? 0 : parseCantidadAR(raw);
+        if (isNaN(n)) { setRaw(mostrar(value)); return; }
+        setRaw(numeroAEditable(n)); onChange(n);
+      }}
       onChange={(e) => {
-        const v = e.target.value;
-        if (!textoNumeroValido(v)) return;
+        const v = e.target.value.replace(/,/g, "");
+        if (!textoCantidadValido(v)) return;
         setRaw(v);
-        const n = parseNumeroAR(v);
-        if (!isNaN(n) && !/[.,]$/.test(v)) onChange(n);
+        const n = parseCantidadAR(v);
+        if (!isNaN(n)) onChange(n);
       }}
       className={className}
       {...props}
@@ -499,7 +505,16 @@ export default function PresupuestosPage() {
   // Email modal
   const [emailModal, setEmailModal] = useState<{ open: boolean; id: string; to: string; subject: string; body: string; filename: string }>({ open: false, id: "", to: "", subject: "", body: "", filename: "" });
 
+  /** Aviso (nunca frena) antes de enviar o descargar: renglones sin precio. true = seguir. */
+  function seguirConFaltantesDePrecio(pr: Presupuesto, accion: string): boolean {
+    const faltan = renglonesSinPrecio((pr.items || []).map((it) => ({ cantidad: it.cantidad, precio: it.precioVenta, descripcion: it.descripcion })));
+    if (faltan.length === 0) return true;
+    const lista = faltan.slice(0, 10).map((r) => `• ${r.descripcion}`).join("\n") + (faltan.length > 10 ? `\n… y ${faltan.length - 10} más` : "");
+    return window.confirm(`⚠️ ${pr.numero}: ${faltan.length} renglón(es) sin precio:\n\n${lista}\n\n¿${accion} igual?`);
+  }
+
   async function openEmailModal(pr: Presupuesto) {
+    if (!seguirConFaltantesDePrecio(pr, "Enviar")) return;
     const contactoEmail = (pr as any).contactoEmail || "";
     const clientEmail = (pr as any).clienteEmail || "";
     const emailFact = (pr as any).clienteEmailFacturacion || "";
@@ -2612,6 +2627,7 @@ export default function PresupuestosPage() {
   async function handlePrint(pr: Presupuesto) {
     const p = pr as any;
     if (!sociedadActiva) return;
+    if (!seguirConFaltantesDePrecio(pr, "Descargar")) return;
     const sucursalPDF = await loadSucursalForPDF(pr);
     const soc = getSociedadPDF(sociedadActiva);
     const estadoLabel = (statusConfig[pr.estado] || { label: pr.estado }).label;

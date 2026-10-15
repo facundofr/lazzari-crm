@@ -22,6 +22,25 @@ export function textoNumeroValido(texto: string): boolean {
   return /^-?[\d.,]*$/.test(String(texto ?? "").replace(/\s/g, ""));
 }
 
+/** Cantidad (Augusto 14/10/2026: las cantidades no llevan coma): solo enteros, el punto es de miles.
+ *  "1.000" = mil · "300" = 300 · "29.9", "1,5" → NaN (no es una cantidad válida). */
+export function parseCantidadAR(texto: string): number {
+  const s = String(texto ?? "").trim().replace(/\s/g, "");
+  if (/^\d+$/.test(s)) return Number(s);
+  if (/^\d{1,3}(\.\d{3})+$/.test(s)) return Number(s.replace(/\./g, ""));
+  return NaN;
+}
+
+/** Mientras se escribe una cantidad: solo números y puntos de miles (la coma no entra). */
+export function textoCantidadValido(texto: string): boolean {
+  return /^[\d.]*$/.test(String(texto ?? "").replace(/\s/g, ""));
+}
+
+/** Renglones con descripción y cantidad pero sin precio (para avisar antes de enviar o descargar; nunca frena). */
+export function renglonesSinPrecio<T extends { cantidad: number; precio: number; descripcion?: string }>(items: T[]): T[] {
+  return (items || []).filter((r) => String(r.descripcion ?? "").trim() && Number(r.cantidad) > 0 && !(Number(r.precio) > 0));
+}
+
 /** Número → texto con coma decimal, sin separador de miles (para un casillero que se edita). */
 export function numeroAEditable(n: number, maxDecimales = 4): string {
   if (!Number.isFinite(n) || n === 0) return "";

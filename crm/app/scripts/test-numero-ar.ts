@@ -1,4 +1,4 @@
-import { parseNumeroAR, formatCantidad, numeroAEditable, avisosRenglon, textoNumeroValido } from "../src/lib/numero-ar";
+import { parseNumeroAR, formatCantidad, numeroAEditable, avisosRenglon, textoNumeroValido, parseCantidadAR, textoCantidadValido, renglonesSinPrecio } from "../src/lib/numero-ar";
 const ok = (c: boolean, m: string) => { if (!c) { console.error("FALLA", m); process.exit(1); } console.log("ok", m); };
 
 ok(parseNumeroAR("1.000") === 1000, '"1.000" = mil');
@@ -19,4 +19,8 @@ ok(avisosRenglon({ cantidad: 1.5, unidad: "M", precio: 10 }).length === 1, "deci
 ok(avisosRenglon({ cantidad: 1000, unidad: "UN", precio: 10 }).length === 0, "1000 entero → sin aviso");
 ok(avisosRenglon({ cantidad: 3, unidad: "UN", precio: 0, descripcion: "Guante" })[0] === "precio en 0", "precio 0 → aviso");
 ok(avisosRenglon({ cantidad: 3, unidad: "UN", precio: 0, descripcion: "" }).length === 0, "renglón vacío → sin aviso");
+ok(parseCantidadAR("1.000") === 1000 && parseCantidadAR("300") === 300 && parseCantidadAR("1.250.000") === 1250000, "cantidad: entero y punto de miles");
+ok(Number.isNaN(parseCantidadAR("29.9")) && Number.isNaN(parseCantidadAR("1,5")) && Number.isNaN(parseCantidadAR("100.05")), "cantidad: decimales/coma no valen");
+ok(!textoCantidadValido("1,") && textoCantidadValido("1.0"), "cantidad: la coma no entra al escribir");
+ok(renglonesSinPrecio([{ cantidad: 2, precio: 0, descripcion: "Guante" }, { cantidad: 2, precio: 5, descripcion: "Casco" }, { cantidad: 0, precio: 0, descripcion: "x" }]).length === 1, "sin precio: solo el que tiene cantidad y descripcion");
 console.log("TODO OK");
