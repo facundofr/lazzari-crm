@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, CalendarClock, Check, ExternalLink, Loader2, Mail, MessageCircle, RefreshCw, Sparkles, Undo2 } from "lucide-react";
 import { useToast } from "@/components/ui/toast";
+import { useRefrescarAlVolver } from "@/lib/use-refrescar";
 import { useUser } from "@/lib/auth-context";
 import { supabase } from "@/lib/supabase/client";
 import { traerTodo } from "@/lib/paginar";
@@ -97,6 +98,7 @@ export default function SeguimientoIA() {
     } finally { setCargando(false); }
   }, [sociedadActiva?.id]);
   useEffect(() => { void cargar(); }, [cargar]);
+  useRefrescarAlVolver(cargar);
 
   const items = useMemo(() => {
     const porPR = new Map<string, EventoSeg[]>();

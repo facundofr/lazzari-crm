@@ -27,6 +27,7 @@ import {
   ArrowRight, Clock, Package, ClipboardList, Search, Download, Mail, MailCheck, Ban, Inbox,
 } from "lucide-react";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useRefrescarAlVolver } from "@/lib/use-refrescar";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -218,6 +219,7 @@ export default function VentasPage() {
   }, [sociedadActiva?.id]);
 
   useEffect(() => { setLoading(true); void fetchData(); }, [fetchData]);
+  useRefrescarAlVolver(fetchData);
 
   // Los cambios de Presupuestos y Facturación actualizan Ventas.
   useEffect(() => {

@@ -153,6 +153,9 @@ export default function RemitosPage() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
   const [valorDeclaradoSugerido, setValorDeclaradoSugerido] = useState("");
+  // PR de origen manual (sin ARCA): el remito sale interno, SIN número de CAI (igual que al remitar desde el PR).
+  const [createPRManual, setCreatePRManual] = useState(false);
+  const [createPROc, setCreatePROc] = useState("");
   const [loadingPRItems, setLoadingPRItems] = useState(false);
 
   // Detail panel
@@ -551,6 +554,7 @@ export default function RemitosPage() {
     });
     setCreateItems([]);
     setCreateError("");
+    setCreatePRManual(false); setCreatePROc("");
     setValorDeclaradoSugerido("");
     setClienteSucursales([]);
     setPresupuestosAprobados([]);
@@ -630,6 +634,7 @@ export default function RemitosPage() {
 
     if (!prId) {
       setCreateItems([]);
+      setCreatePRManual(false); setCreatePROc("");
       return;
     }
 
@@ -638,9 +643,11 @@ export default function RemitosPage() {
     try {
       const [itemsRes, prHeaderRes] = await Promise.all([
         supabase.from("presupuesto_items").select("id, descripcion, cantidad, unidad, orden").eq("presupuesto_id", prId).order("orden"),
-        supabase.from("presupuestos").select("sucursal_id").eq("id", prId).single(),
+        supabase.from("presupuestos").select("sucursal_id, modalidad_emision, oc_cliente").eq("id", prId).single(),
       ]);
       const prSucursalId = (prHeaderRes.data as any)?.sucursal_id || "";
+      setCreatePRManual((prHeaderRes.data as any)?.modalidad_emision === "manual");
+      setCreatePROc((prHeaderRes.data as any)?.oc_cliente || "");
 
       // Fetch sucursales if client changed via PR and we don't have them
       const clienteId = pr?.cliente_id || createForm.cliente_id;
@@ -764,7 +771,8 @@ export default function RemitosPage() {
 
         // Get next CAI number if tipo is not "muestra" (muestras are internal, no CAI)
         let caiData: { cai_numero: string; punto_venta: number; nro_comprobante: number; fecha_vencimiento: string } | null = null;
-        if (createTipoRemito !== "muestra") {
+        // Un PR manual (sin ARCA) no usa números de CAI: el remito sale interno, igual que al remitar desde el PR.
+        if (createTipoRemito !== "muestra" && !createPRManual) {
           const { data: caiRows, error: caiErr } = await (supabase as any).rpc("next_cai_number", {
             p_sociedad_id: sociedadActiva.id,
             p_tipo: "remito_r",
@@ -787,6 +795,7 @@ export default function RemitosPage() {
           sociedad_id: sociedadActiva.id,
           sucursal_id: sucursalId,
           created_by: profile?.id || null,
+          oc_cliente: createPROc || null,
         };
         if (caiData) {
           remitoInsert.cai_numero = caiData.cai_numero;
@@ -796,7 +805,7 @@ export default function RemitosPage() {
         let { data: remitoData, error } = await (supabase.from("remitos") as any).insert(remitoInsert).select("id").single();
         // Compatibilidad transitoria con una base que todavía no aplicó la migración.
         if (error && /tipo_remito|cai_numero|punto_venta_cai|nro_comprobante_cai|column/i.test(error.message || "")) {
-          const { tipo_remito: _tipo, cai_numero: _c, punto_venta_cai: _p, nro_comprobante_cai: _n, ...legacyInsert } = remitoInsert;
+          const { tipo_remito: _tipo, cai_numero: _c, punto_venta_cai: _p, nro_comprobante_cai: _n, oc_cliente: _oc, ...legacyInsert } = remitoInsert;
           ({ data: remitoData, error } = await (supabase.from("remitos") as any).insert(legacyInsert).select("id").single());
         }
 
@@ -1942,6 +1951,7 @@ export default function RemitosPage() {
                 />
               </div>
             </div>
+            {createPRManual && <p className="rounded border border-sky-200 bg-sky-50 p-2 text-xs text-sky-800 dark:border-sky-900 dark:bg-sky-950/30 dark:text-sky-200">Este PR es <b>manual (sin ARCA)</b>: el remito sale <b>interno, sin número de CAI</b>.</p>}
             {createError && (
               <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg px-3 py-2">{createError}</p>
             )}

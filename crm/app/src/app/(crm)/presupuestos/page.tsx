@@ -30,6 +30,7 @@ import DescripcionLista from "@/components/presupuestos/descripcion-lista";
 import { claveArticulo, ultimosPrecios, filaPorCodigo, resumenPresupuesto, type PRVendido } from "@/lib/presupuesto-ayudas";
 import CotizacionExpress from "@/components/presupuestos/cotizacion-express";
 import { EmailComposeModal } from "@/components/email-compose-modal";
+import { useRefrescarAlVolver } from "@/lib/use-refrescar";
 import { loadEmailTemplate, applyTemplateVars } from "@/lib/email-templates";
 import EnviarOCProveedor from "@/components/enviar-oc-proveedor";
 import { calculateOwnStockPurchaseOrder, groupOwnStockItemsByCurrency, normalizePurchaseCurrency } from "@/lib/own-stock-purchase-orders";
@@ -1026,6 +1027,8 @@ export default function PresupuestosPage() {
   useEffect(() => {
     fetchPresupuestos();
   }, [fetchPresupuestos]);
+  // Si la pantalla quedó abierta, al volver se actualizan los estados (ej. un PR que ya se facturó).
+  useRefrescarAlVolver(fetchPresupuestos);
 
   // Auto-select PR from URL ?selected=UUID. El buscador de arriba avisa con "lz-abrir-pr" (si ya estás en esta pantalla la URL cambia pero la página no se vuelve a cargar).
   const [abrirPedido, setAbrirPedido] = useState<{ id: string } | null>(null);
